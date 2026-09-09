@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": false,
+    "outDir": "dist-cli",
+    "rewriteRelativeImportExtensions": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/cli.ts",
+    "src/cli/**/*.ts",
+    "src/domain/profile.ts",
+    "src/ui/dom.ts"
+  ]
+}
