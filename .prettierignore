@@ -1,0 +1,8 @@
+node_modules
+dist
+verifold-website
+brand
+verifold-context.md
+verifold-research.md
+
+dist-cli

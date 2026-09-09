@@ -1,0 +1,19 @@
+.DS_Store
+.idea/
+**/node_modules/
+**/dist/
+**/.env
+**/.env.*
+!**/.env.example
+**/coverage/
+**/test-results/
+# Existing independent website repository.
+/verifold-website/
+
+/.verifold/
+/dist-cli/
+
+# Local founder background and full design export archive.
+/verifold-context.md
+/verifold-research.md
+/brand/

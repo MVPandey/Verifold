@@ -1,0 +1,133 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runCli } from '../src/cli/commands.ts';
+import { parseCandidates } from '../src/cli/contracts.ts';
+
+await test('private CLI workflow preserves explicit selection and host ownership', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-cli-'));
+  const results: string[] = [];
+  const io = {
+    interactive: false,
+    ask: (): Promise<string> => {
+      return Promise.reject(new Error('Unexpected prompt'));
+    },
+    out: (text: string): void => {
+      results.push(text);
+    },
+  };
+  try {
+    await assert.rejects(runCli(['init'], root, io), /requires --profile/);
+    await writeFile(
+      join(root, 'profile.json'),
+      JSON.stringify({
+        name: 'Researcher',
+        interests: ['Math', 'Security'],
+        scholar: '',
+        github: '',
+        session: '',
+      }),
+    );
+    await runCli(
+      ['init', '--profile', 'profile.json', '--host', 'my-host'],
+      root,
+      io,
+    );
+    const state = await readFile(
+      join(root, '.verifold', 'workspace.json'),
+      'utf8',
+    );
+    assert.match(state, /"visibility": "private"/);
+    assert.match(
+      await readFile(join(root, '.gitignore'), 'utf8'),
+      /\/\.verifold\//,
+    );
+    await assert.rejects(
+      runCli(['init', '--profile', 'profile.json'], root, io),
+      /already exists/,
+    );
+    await assert.rejects(runCli(['handoff'], root, io), /Select an idea/);
+    await writeFile(
+      join(root, 'ideas.json'),
+      JSON.stringify([
+        {
+          id: 'proof',
+          title: 'Proof search',
+          recommendation: 'Try a bounded formalization pilot',
+          gates: ['Proof kernel checks the theorem; no seed requirement'],
+        },
+      ]),
+    );
+    await runCli(['ideas', '--from', 'ideas.json'], root, io);
+    await assert.rejects(runCli(['select'], root, io), /requires --id/);
+    await assert.rejects(
+      runCli(['select', '--id', 'missing'], root, io),
+      /Choose an ID/,
+    );
+    await runCli(['select', '--id', 'proof'], root, io);
+    await runCli(['handoff'], root, io);
+    assert.match(results.at(-1) ?? '', /"executionAuthorized":false/);
+    await runCli(['view'], root, io);
+    assert.match(
+      await readFile(join(root, '.verifold', 'workspace.html'), 'utf8'),
+      /Proof search/,
+    );
+    await assert.rejects(
+      runCli(['ideas', '--from', 'ideas.json'], root, io),
+      /selected idea already exists/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+await test('host recommendations require unique IDs and gates', () => {
+  assert.throws(
+    () =>
+      parseCandidates([
+        { id: 'x', title: 'x', recommendation: 'x', gates: [] },
+      ]),
+    /verification gates/,
+  );
+  const item = { id: 'x', title: 'x', recommendation: 'x', gates: ['check'] };
+  assert.throws(() => parseCandidates([item, item]), /unique/);
+});
+await test('interactive questionnaire and recommendation choice use injected prompts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-prompts-'));
+  const answers = ['Ada', 'Math,CS', '', '', '', 'existing-host'];
+  try {
+    await runCli(['init'], root, {
+      interactive: true,
+      ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
+      out: (): void => {},
+    });
+    assert.equal(answers.length, 0);
+    await writeFile(
+      join(root, 'ideas.json'),
+      JSON.stringify([
+        {
+          id: 'a',
+          title: 'Theorem',
+          recommendation: 'Mechanically checkable',
+          gates: ['Kernel acceptance'],
+        },
+      ]),
+    );
+    await runCli(['ideas', '--from', 'ideas.json'], root, {
+      interactive: false,
+      ask: (): Promise<string> => Promise.resolve(''),
+      out: (): void => {},
+    });
+    await runCli(['select'], root, {
+      interactive: true,
+      ask: (prompt): Promise<string> => {
+        assert.match(prompt, /Mechanically checkable/);
+        return Promise.resolve('a');
+      },
+      out: (): void => {},
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
