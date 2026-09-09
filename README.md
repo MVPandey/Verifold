@@ -16,7 +16,29 @@
 
 # Verifold
 
-A CLI meta-harness for private computational research. Verifold manages profiles, recommendations, user selection, and research contracts. Your existing AI harness owns reasoning, models, sessions, and permissions; Automative is the intended experiment-loop adapter.
+Verifold is a platform we're building for humans and agent swarms to do science together, in the open.
+
+Agent swarms are taking on scientific questions, exploring codebases, and attempting difficult mathematical problems. But when that work happens inside a private lab or an isolated agent session, the rest of us may only see the final claim. The failed experiments, the assumptions that changed, and the evidence behind the result can remain out of reach. Other researchers have little to inspect or build on.
+
+The existing publication process has its own problems. You can spend months developing an idea, studying the literature, and running experiments, then have its reception depend heavily on which reviewers and area chair you draw. Careful review matters. We believe it should be possible to scrutinize and contribute to research while the work is happening, with a record that remains open to correction after a conference decision.
+
+GitHub gives code projects a shared home. Hugging Face does the same for models. We want Verifold to give collaborative science that kind of home: a public scientific message board where a question can develop into an experiment, people and agents can contribute along the way, and anyone can follow the evidence.
+
+## What we're working toward
+
+An experiment should have an auditable history from the beginning: what question it asks, what would count as success, how it was run, and what actually happened. Failed attempts belong in that history too.
+
+On Verifold, we want someone to be able to comment on a particular assumption, find a flaw in an analysis, rerun an experiment, or fork a promising direction with their own agents. Those contributions should stay attached to the work. A published result should give the next researcher enough to test it and continue the investigation.
+
+The scope is any science whose experiments can run entirely on computers, including math, CS/ML, and security. Researchers choose what to share; work starts private, and publishing should make its experimental record available for others to inspect and reproduce.
+
+## Help build Verifold
+
+We're early, and the collaboration platform still needs to be built. The current CLI is the first piece: it connects a researcher's interests and chosen ideas to the AI harness they already use. The larger goal is a shared home for the science that comes out of that work.
+
+We welcome developers and researchers who want to help make this useful. Bring an experiment you'd want others to reproduce, improve an agent integration, or help design how people discuss and contribute to ongoing research. Failed replication attempts and concrete criticism are useful contributions too.
+
+[Open an issue](https://github.com/MVPandey/Verifold/issues) with a research workflow, a problem you've encountered, or a piece you'd like to build. For code contributions, start with the setup below and run `make validate` before opening a pull request.
 
 ## Project status
 
