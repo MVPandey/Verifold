@@ -42,7 +42,11 @@ We welcome developers and researchers who want to help make this useful. Bring a
 
 ## Project status
 
-The CLI questionnaire, private workspace, recommendation import, explicit idea selection, planning handoff, and local HTML view are implemented. Host-specific plugins, automated paper ingestion, live Automative execution, and cloud synchronization are still in development. The package is not published to npm.
+The CLI now runs planning and landscape research through installed Claude Code or Codex. It stores source links, research directions, and feedback locally. The user selects an idea explicitly.
+
+This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
+
+Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. The collaboration platform, daily ingestion, Automative execution, and cloud synchronization remain future work. The package is not published to npm.
 
 ## Run locally
 
@@ -56,35 +60,76 @@ npm ci
 npm run build:cli
 ```
 
-The executable is `node dist-cli/cli.js`; a locally packed and installed package exposes `verifold`. The package is not published to npm.
+Use `node dist-cli/cli.js` in this checkout. A locally packed and installed package exposes `verifold`.
 
 ```sh
 node dist-cli/cli.js init
+node dist-cli/cli.js research --feedback "Focus on methods that run on one GPU."
+node dist-cli/cli.js research --approve
+node dist-cli/cli.js status
+node dist-cli/cli.js select
+```
+
+`init` asks for the profile, installed harness, research topic, and autonomy mode. Optional references include Scholar, GitHub, and a coding-session reference. Verifold does not scan session directories.
+
+The coordinator proposes a search scope and personas. Guided mode pauses for approval. Use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
+
+After directions are available, use `research --feedback` to refine them through the saved coordinator session. `select` asks for an explicit idea ID. Noninteractive selection requires `select --id <idea-id>`. Selection does not start a pilot or experiment.
+
+Autonomous mode proceeds through planning and research, then stops at directions. It preserves the host's tool permissions.
+
+Noninteractive initialization requires explicit research inputs:
+
+```sh
+node dist-cli/cli.js init --profile profile.json --host claude --topic "Efficient graph algorithms" --autonomy autonomous
+```
+
+Use `--host codex` to select Codex. Paths resolve against the current directory. Add `--workspace <path>` to select another project directory.
+
+### Setup and request commands
+
+Use `init --setup-only` to create a profile without launching research. This preserves the earlier request-file workflow:
+
+```sh
+node dist-cli/cli.js init --setup-only --profile profile.json --host codex
 node dist-cli/cli.js recommend
 node dist-cli/cli.js ideas --from ideas.json
 node dist-cli/cli.js select
+node dist-cli/cli.js literature --memory
 node dist-cli/cli.js handoff
 node dist-cli/cli.js view
 ```
 
-`init` asks the questionnaire in the terminal: researcher name, scientific interests, optional Scholar/GitHub links, a selected coding-session reference, and existing harness name. It never scans session directories. Noninteractive hosts supply `--profile profile.json` and optionally `--host name`. Paths resolve against the current directory; `--workspace` selects a workspace.
+`recommend` prints a host request. `ideas --from` imports an array with `id`, `title`, `recommendation`, and a nonempty `gates` array.
 
-`recommend` emits a JSON request for the existing host to act on. The host returns an idea array containing `id`, `title`, `recommendation`, and `gates` (a nonempty array of proposed task-specific checks). `ideas --from` validates and imports that file. `select` displays the options, agent recommendations, and proposed gates before asking for an ID; noninteractive use requires explicit `--id`. No automatic choice or experiment launch occurs.
+After selection, `literature` prints an optional retention request. `--memory` also requests a Markdown memory file with source-to-file mappings. Both forms only print instructions. They do not invoke the harness or verify downloads. Official citation exports must remain separate from generated summaries.
 
-`handoff` returns a structured pilot-planning request for the host and Automative. It does not install a host plugin, generate a validated Automative specification, or execute Automative yet. The host must obtain approval of the pilot scope, evaluator, budget, and task-specific gates before launching. Math, CS/ML, security, and any other fully computational research are in scope. Agent opinions on verification remain proposals until accepted.
+`handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and gates before execution. Verifold does not execute Automative in this version.
 
 ## Privacy and website
 
-State is stored in `.verifold/workspace.json` with private permissions; initialization adds `/.verifold/` to the workspace's `.gitignore`. This prevents accidental normal Git staging, not intentional publication or access by other processes under the same account. No remote profile, cloud connection, or publication is created.
+Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, and reports under `.verifold/runs/<attempt-id>/`. These files can contain private research information.
 
-`view` generates `.verifold/workspace.html` from the CLI-owned state. It is a read-only local snapshot with no external assets or network requests. The Vite website is now an entry-point explanation, not a second onboarding form. Remote website profile synchronization remains a future CLI adapter. The nested `verifold-website/` landing-page repository remains independent and unchanged.
+Initialization adds `/.verifold/` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
+
+The selected harness uses its configured model services and research tools. Local state does not imply that those services run offline. Verifold creates no remote profile or publication.
+
+`view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
 
 ## Engineering
 
-`src/cli.ts` owns process lifecycle, signals, and terminal streams. `src/cli/commands.ts` orchestrates commands with injected terminal I/O. `contracts.ts` validates host data; `storage.ts` owns private atomic state changes under an exclusive lock. Host commands emit JSON to stdout; prompts and diagnostics use stderr. An interrupted write may leave a `write.lock`; inspect the workspace and confirm no writer is active before removing that lock. Initialization and existing selections are not silently overwritten.
+`src/cli.ts` owns process lifecycle and terminal streams. CLI command handlers coordinate research and profile operations. The harness adapter owns subprocess arguments and response parsing. Research contracts validate returned data, and storage owns atomic state changes.
 
-`make validate` checks formatting, type-aware lint, strict types, tests, both builds, and a real packed CLI installed offline into an isolated consumer. It tests help/errors and a representative host recommendation → selection → handoff flow. Pre-commit and pre-push use this same gate; enable per clone with `git config --local core.hooksPath .githooks` (already active here).
+Structured results use stdout. Prompts, diagnostics, and the interactive violet ASCII logo use stderr. Color respects `NO_COLOR` and stays disabled for noninteractive output.
 
-The software package is currently marked `UNLICENSED`; public visibility does not grant an open-source license. The bundled Manrope font retains its included SIL Open Font License.
+Normal research failures preserve the saved checkpoint. Inspect `status` and the attempt files before continuing. A forced termination such as SIGKILL can leave `.verifold/research.lock`. Confirm that no research process remains active before removing it. Apply the same check to a stale `write.lock` before another state write.
 
-See [product direction](docs/product-direction.md) and [repository reviews](docs/research/). Live paper ingestion, host-specific plugin registration, Automative execution, and cloud synchronization are not implemented yet.
+`make validate` runs formatting, type-aware linting, strict types, tests, both builds, and a packed CLI consumer check. Enable the commit and push hooks in each clone:
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+See [validation scope](docs/validation.md), the [landscape CLI plan](docs/landscape-cli-plan.md), and [repository reviews](docs/research/). Source-link validation does not verify scientific claims or establish citation provenance.
+
+The software package is marked `UNLICENSED`. Public visibility does not grant an open-source license. The bundled Manrope font retains its SIL Open Font License.
