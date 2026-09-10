@@ -1,9 +1,10 @@
 import { stripVTControlCharacters } from 'node:util';
 
-const logo = String.raw`       /\
-      /  \      V E R I F O L D
-     / /\ \
-    /_/  \_\    Research beyond the paper plane.`;
+const logo = String.raw`    \\        /========
+     \\      //          V E R I F O L D
+      \\    /======
+       \\  //
+        \\//             Research beyond the paper plane.`;
 
 /** Render terminal decoration only when stderr and input are interactive. */
 export function terminalBanner(interactive: boolean, noColor: boolean): string {
