@@ -8,6 +8,10 @@ concurrency:
   group: npm-release
   cancel-in-progress: false
 jobs:
+  compatibility:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/compatibility.yml
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -55,7 +59,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   publish:
-    needs: build
+    needs: [build, compatibility]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
