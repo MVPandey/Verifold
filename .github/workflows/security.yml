@@ -1,12 +1,16 @@
-name: Validate
+name: Dependency audit
 on:
   push:
+    branches:
+      - main
   pull_request:
-  merge_group:
+  schedule:
+    - cron: '31 8 * * 1'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  validate:
+  audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -16,7 +20,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm install --global npm@11.19.1
-      - run: npm ci
-      - run: make validate
+      - run: npm audit --audit-level=high

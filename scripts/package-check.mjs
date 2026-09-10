@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -30,8 +30,17 @@ try {
   assert.ok(
     manifest.files.every(
       (file) =>
-        file.path.startsWith('dist-cli/') ||
-        ['package.json', 'README.md'].includes(file.path),
+        /^dist-cli\/cli\/[a-z-]+\.js$/.test(file.path) ||
+        [
+          'dist-cli/cli.js',
+          'dist-cli/domain/profile.js',
+          'dist-cli/ui/dom.js',
+          'package.json',
+          'README.md',
+          'LICENSE',
+          'LICENSING.md',
+          'SECURITY.md',
+        ].includes(file.path),
     ),
   );
   await writeFile(
@@ -51,10 +60,24 @@ try {
     directory,
   );
   assert.equal(installed.status, 0, installed.stderr);
+  const metadata = JSON.parse(
+    await readFile(
+      join(directory, 'node_modules', 'verifold', 'package.json'),
+      'utf8',
+    ),
+  );
+  assert.equal(metadata.license, 'MIT');
+  assert.equal(metadata.private, undefined);
+  assert.equal(metadata.publishConfig.registry, 'https://registry.npmjs.org/');
+  assert.deepEqual(Object.keys(metadata.dependencies ?? {}), []);
+  for (const script of ['preinstall', 'install', 'postinstall', 'prepare'])
+    assert.equal(metadata.scripts[script], undefined);
+  for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
+    assert.ok(manifest.files.some((file) => file.path === required));
   const invoke = (...args) =>
     run(join(directory, 'node_modules', '.bin', 'verifold'), args, directory);
   assert.equal(invoke('--help').status, 0);
-  assert.equal(invoke('--version').stdout.trim(), '0.1.0');
+  assert.equal(invoke('--version').stdout.trim(), metadata.version);
   assert.notEqual(invoke('bad-command').status, 0);
   assert.notEqual(invoke('init').status, 0);
   await writeFile(

@@ -4,6 +4,7 @@
 **/dist/
 **/.env
 **/.env.*
+**/.npmrc
 !**/.env.example
 **/coverage/
 **/test-results/

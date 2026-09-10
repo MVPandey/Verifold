@@ -1,7 +1,25 @@
 {
   "name": "verifold",
   "version": "0.1.0",
-  "private": true,
+  "description": "A research project CLI for coordinating existing AI agent harnesses.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MVPandey/Verifold.git"
+  },
+  "homepage": "https://github.com/MVPandey/Verifold#readme",
+  "bugs": "https://github.com/MVPandey/Verifold/issues",
+  "author": "Manav Pandey",
+  "keywords": [
+    "research",
+    "agents",
+    "cli",
+    "claude",
+    "codex"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -16,7 +34,9 @@
     "test": "node scripts/test.mjs",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:package",
     "build:cli": "node -e \"require('node:fs').rmSync('dist-cli', { recursive: true, force: true })\" && tsc -p tsconfig.cli.json",
-    "test:package": "node scripts/package-check.mjs"
+    "test:package": "node scripts/package-check.mjs",
+    "audit:security": "npm audit --audit-level=high && npm audit signatures",
+    "prepublishOnly": "npm run validate && npm run audit:security"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -33,7 +53,12 @@
     "verifold": "dist-cli/cli.js"
   },
   "files": [
-    "dist-cli"
+    "dist-cli/cli.js",
+    "dist-cli/cli/",
+    "dist-cli/domain/profile.js",
+    "dist-cli/ui/dom.js",
+    "LICENSING.md",
+    "SECURITY.md"
   ],
-  "license": "UNLICENSED"
+  "license": "MIT"
 }
