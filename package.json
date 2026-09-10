@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:package",
-    "build:cli": "tsc -p tsconfig.cli.json",
+    "build:cli": "node -e \"require('node:fs').rmSync('dist-cli', { recursive: true, force: true })\" && tsc -p tsconfig.cli.json",
     "test:package": "node scripts/package-check.mjs"
   },
   "devDependencies": {

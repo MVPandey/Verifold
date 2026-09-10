@@ -2,35 +2,44 @@ import { parseArgs } from 'node:util';
 import { resolve, join } from 'node:path';
 import { writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { parseProfile } from '../domain/profile.ts';
 import { escapeHtml as e } from '../ui/dom.ts';
 import { parseCandidates } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
+import { initializeProject, parseAutonomy } from './initialization.ts';
+import { runResearch } from './research.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
   readonly out: (value: string) => void;
+  readonly progress?: (value: string) => void;
 }
-const help = `Verifold — private research workspace for your existing AI harness
+const help = `Verifold - private research with your existing agent harness
 
-verifold init [--profile profile.json] [--host name] [--workspace path]
-verifold recommend [--workspace path]   Print a research request for your host
-verifold ideas --from ideas.json       Import host recommendations; never execute
+verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
+verifold init --setup-only [--profile profile.json] [--host name]
+verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
+verifold recommend                    Print a research request for your host
+verifold ideas --from ideas.json       Import host recommendations
 verifold select [--id idea-id]         Choose an idea explicitly
-verifold handoff                       Print the selected task for Automative + host
-verifold view                          Generate a private local HTML workspace
-verifold status                        Print workspace JSON
+verifold literature [--memory]        Print an optional paper/context request
+verifold handoff                      Print a pilot request for Automative + host
+verifold view                         Generate a private local HTML workspace
+verifold status                       Print workspace JSON
 
 Options: --workspace path (default: current directory), --help, --version
-Interactive init asks the questionnaire; noninteractive init requires --profile.
-All research stays in .verifold/ and defaults private. No cloud sync or compute
-is started. The host owns models, permissions, sessions, and execution.
+Init asks for your profile, harness, topic, and research mode, then starts research.
+Noninteractive init requires --profile. Research also requires --host, --topic,
+and --autonomy autonomous. Use --setup-only to initialize without research.
+The harness searches web sources and proposes ideas. PDF retention is optional
+and follows idea selection. No experiments run during initial research.
+Research stays private in .verifold/. The host owns its permissions and sessions.
 `;
 /** Subprocess CLI contract: machine commands return JSON; prompts are delegated to stderr I/O. */
 export async function runCli(
   argv: readonly string[],
   cwd: string,
   io: CliIO,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
   const { values, positionals } = parseArgs({
     args: [...argv],
@@ -41,6 +50,12 @@ export async function runCli(
       workspace: { type: 'string' },
       profile: { type: 'string' },
       host: { type: 'string' },
+      topic: { type: 'string' },
+      feedback: { type: 'string' },
+      approve: { type: 'boolean' },
+      memory: { type: 'boolean' },
+      autonomy: { type: 'string' },
+      'setup-only': { type: 'boolean' },
       from: { type: 'string' },
       id: { type: 'string' },
     },
@@ -57,7 +72,9 @@ export async function runCli(
   if (!command || positionals.length !== 1)
     throw new Error('Provide one command. Use --help.');
   const allowed: Record<string, readonly string[]> = {
-    init: ['profile', 'host'],
+    init: ['profile', 'host', 'topic', 'autonomy', 'setup-only'],
+    research: ['topic', 'feedback', 'autonomy', 'approve'],
+    literature: ['memory'],
     recommend: [],
     ideas: ['from'],
     select: ['id'],
@@ -71,41 +88,41 @@ export async function runCli(
     if (key !== 'workspace' && !allowed[command]?.includes(key))
       throw new Error(`--${key} is not valid for ${command}.`);
   const root = resolve(cwd, values.workspace ?? '.');
+  signal.throwIfAborted();
   if (command === 'init') {
-    if (!values.profile && !io.interactive)
-      throw new Error('Noninteractive init requires --profile profile.json.');
-    const profile = values.profile
-      ? parseProfile(await readJson(resolve(cwd, values.profile)))
-      : parseProfile({
-          name: await io.ask('Your name: '),
-          interests: (
-            await io.ask(
-              'What do you publish or want to research? (comma-separated; math, CS/ML, security, etc.): ',
-            )
-          ).split(','),
-          scholar: await io.ask('Google Scholar URL (optional): '),
-          github: await io.ask('GitHub URL (optional): '),
-          session: await io.ask(
-            'Coding session reference (optional; no automatic import): ',
-          ),
-        });
-    const host =
-      values.host ??
-      (io.interactive
-        ? await io.ask('Existing AI harness name: ')
-        : 'existing-harness');
-    const result = await changeWorkspace(root, (current) => {
-      if (current)
-        throw new Error('Workspace already exists; refusing to overwrite it.');
-      return {
-        schemaVersion: 1,
-        visibility: 'private',
-        profile,
-        host,
-        candidates: [],
-        selectedId: null,
-      };
-    });
+    const initialized = await initializeProject(
+      root,
+      cwd,
+      {
+        ...(values.profile !== undefined ? { profile: values.profile } : {}),
+        ...(values.host !== undefined ? { host: values.host } : {}),
+        ...(values.topic !== undefined ? { topic: values.topic } : {}),
+        ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
+        setupOnly: values['setup-only'] ?? false,
+      },
+      io,
+      signal,
+    );
+    const result = initialized.research
+      ? await runResearch(root, initialized.research, io, signal)
+      : initialized.workspace;
+    io.out(JSON.stringify(result));
+    return;
+  }
+  if (command === 'research') {
+    const result = await runResearch(
+      root,
+      {
+        ...(values.topic !== undefined ? { topic: values.topic } : {}),
+        ...(values.approve !== undefined ? { approve: values.approve } : {}),
+        ...(values.feedback !== undefined ? { feedback: values.feedback } : {}),
+        ...(values.autonomy !== undefined
+          ? { autonomy: parseAutonomy(values.autonomy) }
+          : {}),
+      },
+      io,
+      signal,
+    );
     io.out(JSON.stringify(result));
     return;
   }
@@ -172,6 +189,14 @@ export async function runCli(
     const result = await changeWorkspace(root, (current) => {
       if (!current || current.selectedId)
         throw new Error('Workspace missing or selection already locked.');
+      if (
+        JSON.stringify(current.candidates) !==
+        JSON.stringify(workspace.candidates)
+      ) {
+        throw new Error(
+          'The ideas changed during selection. Review the updated list before choosing.',
+        );
+      }
       if (!current.candidates.some((idea) => idea.id === selectedId))
         throw new Error('Choose an ID from the recommendation list.');
       return { ...current, selectedId };
@@ -181,6 +206,36 @@ export async function runCli(
         selectedId: result.selectedId,
         status: 'awaiting-pilot-plan',
         visibility: 'private',
+      }),
+    );
+    return;
+  }
+  if (command === 'literature') {
+    const idea = workspace.candidates.find(
+      (candidate) => candidate.id === workspace.selectedId,
+    );
+    if (!idea)
+      throw new Error(
+        'Select an idea before requesting optional literature retention.',
+      );
+    io.out(
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'literature-retention-request',
+        host: workspace.host,
+        idea,
+        optional: true,
+        mode: values.memory ? 'pdfs-and-markdown-context' : 'pdfs',
+        executionStarted: false,
+        outputDirectory: '.verifold/literature/',
+        instructions:
+          'Use the selected harness to fetch relevant PDFs after the user accepts this request. Preserve official source citation responses unchanged. Record source URLs, citation URLs, retrieval times, file hashes, and relative local paths in an index. Map each citation to its PDF. Report unavailable files or official citations. Do not replace missing official citations with generated text.',
+        ...(values.memory
+          ? {
+              memoryInstructions:
+                'Read each retrieved PDF before writing its Markdown synthesis. Label the synthesis as agent-written context. Include findings, methods, limitations, relevant page or section references, and relevance to the selected idea. Link each Markdown file to its local PDF and official source URL. Preserve the original PDF and official citation separately. Record partial reading or extraction failures. Never describe a synthesis as an official citation or a full substitute for the paper.',
+            }
+          : {}),
       }),
     );
     return;
