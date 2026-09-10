@@ -1,10 +1,17 @@
 import { parseProfile } from '../domain/profile.ts';
 import type { Profile } from '../domain/profile.ts';
+import {
+  object as record,
+  parseResearchState,
+  sourceUrl,
+} from './research-contracts.ts';
+import type { ResearchState } from './research-contracts.ts';
 export interface Candidate {
   readonly id: string;
   readonly title: string;
   readonly recommendation: string;
   readonly gates: readonly string[];
+  readonly sources?: readonly string[];
 }
 export interface Workspace {
   readonly schemaVersion: 1;
@@ -13,11 +20,7 @@ export interface Workspace {
   readonly host: string;
   readonly candidates: readonly Candidate[];
   readonly selectedId: string | null;
-}
-function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('Expected a JSON object.');
-  return Object.fromEntries(Object.entries(value));
+  readonly research?: ResearchState;
 }
 function string(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 4000)
@@ -46,11 +49,19 @@ export function parseCandidates(value: unknown): readonly Candidate[] {
       title: string(data.title, 'title'),
       recommendation: string(data.recommendation, 'recommendation'),
       gates: data.gates.map((gate: unknown) => string(gate, 'gate')),
+      ...(data.sources === undefined
+        ? {}
+        : { sources: parseSources(data.sources) }),
     };
   });
   if (new Set(candidates.map((idea) => idea.id)).size !== candidates.length)
     throw new Error('Idea IDs must be unique.');
   return candidates;
+}
+function parseSources(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || !value.length || value.length > 30)
+    throw new Error('Supply 1 to 30 source links per idea.');
+  return [...new Set(value.map((item: unknown) => sourceUrl(item)))];
 }
 export function parseWorkspace(value: unknown): Workspace {
   const data = record(value);
@@ -74,5 +85,8 @@ export function parseWorkspace(value: unknown): Workspace {
     host: string(data.host, 'host'),
     candidates,
     selectedId,
+    ...(data.research === undefined
+      ? {}
+      : { research: parseResearchState(data.research) }),
   };
 }

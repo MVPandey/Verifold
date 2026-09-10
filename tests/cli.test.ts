@@ -19,7 +19,10 @@ await test('private CLI workflow preserves explicit selection and host ownership
     },
   };
   try {
-    await assert.rejects(runCli(['init'], root, io), /requires --profile/);
+    await assert.rejects(
+      runCli(['init', '--setup-only'], root, io),
+      /requires --profile/,
+    );
     await writeFile(
       join(root, 'profile.json'),
       JSON.stringify({
@@ -31,7 +34,14 @@ await test('private CLI workflow preserves explicit selection and host ownership
       }),
     );
     await runCli(
-      ['init', '--profile', 'profile.json', '--host', 'my-host'],
+      [
+        'init',
+        '--setup-only',
+        '--profile',
+        'profile.json',
+        '--host',
+        'my-host',
+      ],
       root,
       io,
     );
@@ -45,10 +55,11 @@ await test('private CLI workflow preserves explicit selection and host ownership
       /\/\.verifold\//,
     );
     await assert.rejects(
-      runCli(['init', '--profile', 'profile.json'], root, io),
+      runCli(['init', '--setup-only', '--profile', 'profile.json'], root, io),
       /already exists/,
     );
     await assert.rejects(runCli(['handoff'], root, io), /Select an idea/);
+    await assert.rejects(runCli(['literature'], root, io), /Select an idea/);
     await writeFile(
       join(root, 'ideas.json'),
       JSON.stringify([
@@ -67,8 +78,17 @@ await test('private CLI workflow preserves explicit selection and host ownership
       /Choose an ID/,
     );
     await runCli(['select', '--id', 'proof'], root, io);
+    await runCli(['literature'], root, io);
+    assert.match(results.at(-1) ?? '', /literature-retention-request/);
     await runCli(['handoff'], root, io);
     assert.match(results.at(-1) ?? '', /"executionAuthorized":false/);
+    await runCli(['literature', '--memory'], root, io);
+    assert.match(results.at(-1) ?? '', /pdfs-and-markdown-context/);
+    assert.match(results.at(-1) ?? '', /"executionStarted":false/);
+    assert.match(
+      results.at(-1) ?? '',
+      /Link each Markdown file to its local PDF/,
+    );
     await runCli(['view'], root, io);
     assert.match(
       await readFile(join(root, '.verifold', 'workspace.html'), 'utf8'),
@@ -97,7 +117,7 @@ await test('interactive questionnaire and recommendation choice use injected pro
   const root = await mkdtemp(join(tmpdir(), 'verifold-prompts-'));
   const answers = ['Ada', 'Math,CS', '', '', '', 'existing-host'];
   try {
-    await runCli(['init'], root, {
+    await runCli(['init', '--setup-only'], root, {
       interactive: true,
       ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
       out: (): void => {},

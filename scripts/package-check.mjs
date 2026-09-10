@@ -1,6 +1,6 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
@@ -8,7 +8,11 @@ const run = (command, args, cwd) => {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, npm_config_cache: join(directory, 'cache') },
+    env: {
+      ...process.env,
+      PATH: `${join(directory, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+      npm_config_cache: join(directory, 'cache'),
+    },
     timeout: 30000,
   });
   if (result.error) throw result.error;
@@ -63,7 +67,10 @@ try {
       session: '',
     }),
   );
-  assert.equal(invoke('init', '--profile', 'profile.json').status, 0);
+  assert.equal(
+    invoke('init', '--setup-only', '--profile', 'profile.json').status,
+    0,
+  );
   const request = invoke('recommend');
   assert.equal(request.status, 0);
   assert.equal(JSON.parse(request.stdout).kind, 'recommendation-request');
@@ -85,8 +92,85 @@ try {
   assert.equal(handoff.status, 0);
   assert.equal(JSON.parse(handoff.stdout).executionAuthorized, false);
   assert.equal(invoke('view').status, 0);
+  await mkdir(join(directory, 'bin'));
+  const plan = {
+    scope: 'Compare proof search.',
+    personas: [
+      { name: 'Prior art', task: 'Review prior art.' },
+      { name: 'Skeptic', task: 'Challenge novelty.' },
+    ],
+  };
+  const report = {
+    summary: 'A bounded comparison is feasible.',
+    delegation: 'Test host fixture, no real subagents.',
+    sources: [
+      { title: 'A', url: 'https://example.org/a' },
+      { title: 'B', url: 'https://example.org/b' },
+    ],
+    candidates: [
+      {
+        id: 'comparison',
+        title: 'Compare proof search',
+        recommendation: 'Use a small reproducible baseline.',
+        gates: ['Check proofs.'],
+        sources: ['https://example.org/a'],
+      },
+    ],
+  };
+  await writeFile(
+    join(directory, 'bin', 'claude'),
+    `#!/usr/bin/env node
+let prompt = '';
+for await (const chunk of process.stdin) prompt += chunk;
+const result = prompt.includes('Plan the research now.') ? ${JSON.stringify(plan)} : ${JSON.stringify(report)};
+console.log(JSON.stringify({result: JSON.stringify(result), session_id: 'package-session'}));
+`,
+    { mode: 0o700 },
+  );
+  const research = invoke(
+    'init',
+    '--workspace',
+    'research-project',
+    '--profile',
+    'profile.json',
+    '--host',
+    'claude',
+    '--topic',
+    'Proof search',
+    '--autonomy',
+    'autonomous',
+  );
+  assert.equal(research.status, 0, research.stderr);
+  const state = JSON.parse(research.stdout);
+  assert.equal(state.research.phase, 'directions');
+  assert.equal(state.research.sessionId, 'package-session');
+  assert.equal(state.selectedId, null);
+  assert.equal(state.candidates[0].sources[0], 'https://example.org/a');
+  assert.equal(
+    invoke(
+      'research',
+      '--workspace',
+      'research-project',
+      '--feedback',
+      'Prefer deterministic baselines.',
+    ).status,
+    0,
+  );
+  assert.equal(
+    invoke('select', '--workspace', 'research-project', '--id', 'comparison')
+      .status,
+    0,
+  );
+  const literature = invoke(
+    'literature',
+    '--workspace',
+    'research-project',
+    '--memory',
+  );
+  assert.equal(literature.status, 0, literature.stderr);
+  assert.equal(JSON.parse(literature.stdout).executionStarted, false);
   console.log(
-    'Packed CLI installed offline; help, errors, private profile, host request, selection, handoff, and view passed.',
+    'Packed CLI installed offline; legacy flow, fake-host research, session resume, selection, and memory request passed.',
   );
 } finally {
   await rm(directory, { recursive: true, force: true });
