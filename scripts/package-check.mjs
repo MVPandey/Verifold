@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, delimiter } from 'node:path';
+import { join, delimiter, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
@@ -10,7 +10,7 @@ const run = (command, args, cwd) => {
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${join(directory, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+      PATH: `${join(directory, 'bin')}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
       npm_config_cache: join(directory, 'cache'),
     },
     timeout: 30000,
@@ -52,6 +52,7 @@ try {
     [
       'install',
       '--offline',
+      '--engine-strict',
       '--ignore-scripts',
       '--no-audit',
       '--no-fund',
@@ -143,10 +144,13 @@ try {
   await writeFile(
     join(directory, 'bin', 'claude'),
     `#!/usr/bin/env node
+async function main() {
 let prompt = '';
 for await (const chunk of process.stdin) prompt += chunk;
 const result = prompt.includes('Plan the research now.') ? ${JSON.stringify(plan)} : ${JSON.stringify(report)};
 console.log(JSON.stringify({result: JSON.stringify(result), session_id: 'package-session'}));
+}
+main().catch(() => { process.exitCode = 1; });
 `,
     { mode: 0o700 },
   );
@@ -193,7 +197,7 @@ console.log(JSON.stringify({result: JSON.stringify(result), session_id: 'package
   assert.equal(literature.status, 0, literature.stderr);
   assert.equal(JSON.parse(literature.stdout).executionStarted, false);
   console.log(
-    'Packed CLI installed offline; legacy flow, fake-host research, session resume, selection, and memory request passed.',
+    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, selection, and memory request passed.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

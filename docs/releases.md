@@ -4,7 +4,7 @@ The npm package is `verifold`. The initial owner is `mvpandey`.
 
 ## Local checks
 
-Use Node 24. Install dependencies from the lockfile with `npm ci`.
+Use Node 24 for development and builds. The installed CLI supports Node 22, 24, and 26. Compatibility checks run the packed CLI on the first and latest release of each supported major, including a fake-host research flow. Install dependencies from the lockfile with `npm ci`.
 
 Run `make validate` and `npm run audit:security`. Review the packed file list. Never include local research, credentials, or evaluation records.
 
