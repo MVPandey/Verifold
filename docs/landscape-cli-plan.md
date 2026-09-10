@@ -93,7 +93,7 @@ Cancellation and deadlines apply to host requests. Model spending limits remain 
 
 Initial research requires a source list and a research report. It does not require a local PDF library.
 
-Current source records contain a title and HTTPS URL. Each direction references URLs from the returned source list.
+Current source records contain a title and HTTP or HTTPS URL. Each direction references URLs from the returned source list.
 
 Structured reading status and DOI fields are possible later additions. A source link alone does not establish full-paper review.
 

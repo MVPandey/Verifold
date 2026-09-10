@@ -7,6 +7,7 @@ import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
 import { runResearch } from '../src/cli/research.ts';
 import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
 import { runCli } from '../src/cli/commands.ts';
+import { sourceUrl } from '../src/cli/research-contracts.ts';
 
 const plan = {
   scope: 'Study proof search under fixed compute.',
@@ -39,6 +40,22 @@ const io = {
   out: (): void => {},
 };
 const signal = (): AbortSignal => new AbortController().signal;
+
+await test('source links preserve academic HTTP references but reject executable schemes and credentials', () => {
+  assert.equal(
+    sourceUrl('http://example.edu/paper'),
+    'http://example.edu/paper',
+  );
+  assert.equal(
+    sourceUrl('https://example.edu/paper'),
+    'https://example.edu/paper',
+  );
+  assert.throws(() => sourceUrl('javascript:alert(1)'), /HTTP or HTTPS/);
+  assert.throws(
+    () => sourceUrl('https://user:secret@example.edu/paper'),
+    /credentials/,
+  );
+});
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-research-'));

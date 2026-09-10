@@ -101,7 +101,11 @@ export function parseResearchState(value: unknown): ResearchState {
 export function sourceUrl(value: unknown): string {
   const input = text(value, 'source URL', 2000);
   const url = new URL(input);
-  if (url.protocol !== 'https:' || url.username || url.password)
-    throw new Error('Sources require HTTPS URLs without credentials.');
+  if (
+    !['https:', 'http:'].includes(url.protocol) ||
+    url.username ||
+    url.password
+  )
+    throw new Error('Sources require HTTP or HTTPS URLs without credentials.');
   return url.href;
 }
