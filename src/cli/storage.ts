@@ -62,9 +62,15 @@ export async function changeWorkspace(
         throw error;
     }
     const next = parseWorkspace(update(current));
+    const serialized = `${JSON.stringify(next, null, 2)}\n`;
+    if (Buffer.byteLength(serialized) > 1_000_000) {
+      throw new Error(
+        'Workspace exceeds the 1 MB storage limit. Reduce the imported research output.',
+      );
+    }
     const file = await open(temporary, 'wx', 0o600);
     try {
-      await file.writeFile(`${JSON.stringify(next, null, 2)}\n`);
+      await file.writeFile(serialized);
       await file.sync();
     } finally {
       await file.close();
