@@ -1,8 +1,9 @@
 name: CLI compatibility
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
+  merge_group:
   workflow_call:
 permissions:
   contents: read
