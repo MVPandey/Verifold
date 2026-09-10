@@ -1,14 +1,16 @@
-import { mkdir, open, readFile, rename, rm, lstat } from 'node:fs/promises';
+import { mkdir, open, rename, rm, lstat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseWorkspace } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
 
 export async function readJson(path: string): Promise<unknown> {
-  const handle = await open(path, 'r');
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
-    if ((await handle.stat()).size > 1_000_000)
-      throw new Error('JSON input exceeds 1 MB.');
+    const stats = await handle.stat();
+    if (!stats.isFile()) throw new Error('JSON input must be a regular file.');
+    if (stats.size > 1_000_000) throw new Error('JSON input exceeds 1 MB.');
     const value: unknown = JSON.parse(await handle.readFile('utf8'));
     return value;
   } finally {
@@ -16,6 +18,8 @@ export async function readJson(path: string): Promise<unknown> {
   }
 }
 export async function loadWorkspace(root: string): Promise<Workspace> {
+  if ((await lstat(join(root, '.verifold'))).isSymbolicLink())
+    throw new Error('.verifold must not be a symbolic link.');
   return parseWorkspace(
     await readJson(join(root, '.verifold', 'workspace.json')),
   );
@@ -31,22 +35,26 @@ export async function changeWorkspace(
     throw new Error('.verifold must not be a symbolic link.');
   // Protect research data before creating it, including inside an existing Git repo.
   const ignore = join(root, '.gitignore');
-  let rules = '';
+  const ignoreFile = await open(
+    ignore,
+    constants.O_RDWR |
+      constants.O_CREAT |
+      constants.O_APPEND |
+      constants.O_NOFOLLOW,
+    0o600,
+  );
   try {
-    rules = await readFile(ignore, 'utf8');
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-      throw error;
-  }
-  if (!rules.split('\n').includes('/.verifold/')) {
-    const file = await open(ignore, 'a', 0o600);
-    try {
-      await file.write(
+    const stats = await ignoreFile.stat();
+    if (!stats.isFile()) throw new Error('.gitignore must be a regular file.');
+    if (stats.size > 1_000_000) throw new Error('.gitignore exceeds 1 MB.');
+    const rules = await ignoreFile.readFile('utf8');
+    if (!rules.split('\n').includes('/.verifold/')) {
+      await ignoreFile.write(
         `${rules.endsWith('\n') || !rules ? '' : '\n'}/.verifold/\n`,
       );
-    } finally {
-      await file.close();
     }
+  } finally {
+    await ignoreFile.close();
   }
   const lockPath = join(directory, 'write.lock');
   const lock = await open(lockPath, 'wx', 0o600);

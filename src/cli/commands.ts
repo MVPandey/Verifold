@@ -2,11 +2,13 @@ import { parseArgs } from 'node:util';
 import { resolve, join } from 'node:path';
 import { writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { escapeHtml as e } from '../ui/dom.ts';
 import { parseCandidates } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { initializeProject, parseAutonomy } from './initialization.ts';
 import { runResearch } from './research.ts';
+import { object, text } from './research-contracts.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
@@ -65,7 +67,12 @@ export async function runCli(
     return;
   }
   if (values.version) {
-    io.out('0.1.0');
+    const metadata = object(
+      await readJson(
+        fileURLToPath(new URL('../../package.json', import.meta.url)),
+      ),
+    );
+    io.out(text(metadata.version, 'package version', 100));
     return;
   }
   const command = positionals[0];
