@@ -57,6 +57,30 @@ await test('source links preserve academic HTTP references but reject executable
   );
 });
 
+await test('oversized research cannot make the saved workspace unreadable', async () => {
+  const root = await project();
+  try {
+    await assert.rejects(
+      changeWorkspace(root, (current) => {
+        assert.ok(current);
+        return {
+          ...current,
+          candidates: Array.from({ length: 20 }, (_, index) => ({
+            id: `idea-${index}`,
+            title: 'Idea',
+            recommendation: 'Review this idea.',
+            gates: Array.from({ length: 20 }, () => 'x'.repeat(4000)),
+          })),
+        };
+      }),
+      /1 MB storage limit/,
+    );
+    assert.deepEqual((await loadWorkspace(root)).candidates, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-research-'));
   await changeWorkspace(root, () => ({
