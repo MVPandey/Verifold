@@ -46,7 +46,20 @@ The CLI now runs planning and landscape research through installed Claude Code o
 
 This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
 
-Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. The collaboration platform, daily ingestion, Automative execution, and cloud synchronization remain future work. The package is not published to npm.
+Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. The collaboration platform, daily ingestion, Automative execution, and cloud synchronization remain future work.
+
+## Install the CLI
+
+Use Node 24 and an installed, authenticated Claude Code or Codex harness:
+
+```sh
+npm install -g verifold
+verifold init
+```
+
+You can also run `npx verifold init` or install locally with `npm install verifold`. A local installation runs through `npx verifold`.
+
+Verifold starts the selected harness with its existing configuration and permissions. See [security boundaries](SECURITY.md).
 
 ## Run locally
 
@@ -132,4 +145,4 @@ git config --local core.hooksPath .githooks
 
 See [validation scope](docs/validation.md), the [landscape CLI plan](docs/landscape-cli-plan.md), and [repository reviews](docs/research/). Source-link validation does not verify scientific claims or establish citation provenance.
 
-The software package is marked `UNLICENSED`. Public visibility does not grant an open-source license. The bundled Manrope font retains its SIL Open Font License.
+The harness package is MIT licensed. The website and visual brand assets are outside that grant. See [license scope](LICENSING.md). The bundled Manrope font retains its SIL Open Font License.
