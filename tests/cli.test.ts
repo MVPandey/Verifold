@@ -116,6 +116,7 @@ await test('host recommendations require unique IDs and gates', () => {
 await test('harness-first onboarding and recommendation choice use injected prompts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-prompts-'));
   const answers = ['claude', '', 'skip'];
+  const messages: string[] = [];
   try {
     await runCli(
       [
@@ -128,10 +129,15 @@ await test('harness-first onboarding and recommendation choice use injected prom
       {
         interactive: true,
         ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
-        out: (): void => {},
+        out: (message): void => {
+          messages.push(message);
+        },
       },
     );
     assert.equal(answers.length, 0);
+    assert.match(messages.join('\n'), /Private workspace:/);
+    assert.match(messages.join('\n'), /Harness: claude/);
+    assert.doesNotMatch(messages.join('\n'), /schemaVersion|scholar/);
     await writeFile(
       join(root, 'ideas.json'),
       JSON.stringify([

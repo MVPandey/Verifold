@@ -97,6 +97,8 @@ After directions are available, use `research --feedback` to refine them through
 
 Autonomous mode proceeds through planning and research, then stops at directions. It preserves the host's tool permissions.
 
+Interactive `init` and `research` show readable results and next steps. Noninteractive runs and `status` return JSON. Interactive mode requires a terminal on stdin and stderr; use `status` when piping saved state to another tool.
+
 Noninteractive initialization requires explicit research inputs:
 
 ```sh
