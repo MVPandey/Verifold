@@ -1,10 +1,11 @@
-import { parseArgs } from 'node:util';
+import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { resolve, join } from 'node:path';
 import { writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { escapeHtml as e } from '../ui/dom.ts';
 import { parseCandidates } from './contracts.ts';
+import type { Workspace } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { initializeProject, parseAutonomy } from './initialization.ts';
 import { runResearch } from './research.ts';
@@ -37,6 +38,27 @@ The harness searches web sources and proposes ideas. PDF retention is optional
 and follows idea selection. No experiments run during initial research.
 Research stays private in .verifold/. The host owns its permissions and sessions.
 `;
+
+function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
+  if (!io.interactive) {
+    io.out(JSON.stringify(workspace));
+    return;
+  }
+  const phase = workspace.research?.phase;
+  const next =
+    phase === 'directions'
+      ? 'Use research --feedback to refine a direction, or select to choose one.'
+      : phase === 'awaiting-plan-review'
+        ? 'Use research --feedback to revise the plan, or research --approve to continue.'
+        : phase
+          ? 'Use research to resume the saved research session.'
+          : 'Use research --topic "your question" to begin.';
+  io.out(
+    stripVTControlCharacters(
+      `Private workspace: ${root}\nHarness: ${workspace.host} (${workspace.model ?? 'host default model'})\n${next}`,
+    ),
+  );
+}
 /** Subprocess CLI contract: machine commands return JSON; prompts are delegated to stderr I/O. */
 export async function runCli(
   argv: readonly string[],
@@ -128,7 +150,7 @@ export async function runCli(
     const result = initialized.research
       ? await runResearch(root, initialized.research, io, signal)
       : initialized.workspace;
-    io.out(JSON.stringify(result));
+    showWorkspace(root, result, io);
     return;
   }
   if (command === 'research') {
@@ -145,7 +167,7 @@ export async function runCli(
       io,
       signal,
     );
-    io.out(JSON.stringify(result));
+    showWorkspace(root, result, io);
     return;
   }
   if (command === 'ideas') {
