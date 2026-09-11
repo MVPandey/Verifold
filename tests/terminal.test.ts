@@ -3,21 +3,23 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { terminalBanner, terminalPrompt } from '../src/cli/terminal.ts';
+import { terminalBanner, tint } from '../src/cli/terminal.ts';
+import { visibleWidth } from '../src/cli/terminal-layout.ts';
+import { paragraph, terminalMenu } from '../src/cli/terminal.ts';
 import { initializeProject, parseAutonomy } from '../src/cli/initialization.ts';
 
 await test('terminal branding respects noninteractive output and NO_COLOR', () => {
   assert.equal(terminalBanner(false, false), '');
-  assert.match(terminalBanner(true, true), /V E R I F O L D/);
+  assert.match(terminalBanner(true, true), /verifold/);
   assert.equal(terminalBanner(true, true).includes('\u001b'), false);
   assert.equal(
-    terminalBanner(true, false).startsWith('\u001b[38;5;141m'),
+    terminalBanner(true, false).includes('\u001b[38;2;124;58;237m'),
     true,
   );
-  assert.equal(terminalPrompt('Topic: ', false), 'Topic: ');
-  assert.match(terminalPrompt('Topic: ', true), /Topic: /);
+  assert.equal(tint('Topic: ', false), 'Topic: ');
+  assert.match(tint('Topic: ', true), /Topic: /);
   assert.equal(
-    terminalPrompt('\u001b[2JApprove?\u001b]0;hidden\u0007', false),
+    tint('\u001b[2JApprove?\u001b]0;hidden\u0007', false),
     'Approve?',
   );
 });
@@ -108,4 +110,53 @@ await test('noninteractive research requires explicit launch settings', async ()
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+await test('welcome and paragraphs fit narrow and wide terminal widths', () => {
+  for (const columns of [20, 39, 40, 60, 80, 120]) {
+    for (const line of terminalBanner(true, false, columns).split('\n'))
+      assert.ok(visibleWidth(line) < columns, line);
+    for (const line of paragraph(
+      '研究 👩‍💻 ' + 'long-path/'.repeat(30),
+      columns,
+    ).split('\n'))
+      assert.ok(visibleWidth(line) < columns, line);
+  }
+  assert.ok(terminalBanner(true, true, 80).split('\n').length <= 12);
+});
+
+await test('menus fit short viewports and keep the current choice in place', () => {
+  const choices = [
+    {
+      value: 'a',
+      label: 'Claude Code',
+      description: 'Uses your existing native harness tools and permissions.',
+    },
+    {
+      value: 'b',
+      label: 'Codex',
+      description: 'Uses your existing native harness tools and permissions.',
+    },
+  ];
+  for (const columns of [20, 40, 80])
+    for (const rows of [6, 12, 24]) {
+      const output = terminalMenu(
+        'Choose your agent harness',
+        choices,
+        1,
+        true,
+        columns,
+        rows,
+      );
+      assert.ok(output.split('\n').length <= rows - 2);
+      for (const line of output.split('\n'))
+        assert.ok(visibleWidth(line) < columns);
+      assert.match(output, /Codex/);
+    }
+  const output = terminalMenu('Choose your agent harness', choices, 1, false);
+  assert.match(output, /○ Claude Code\n {2}◆ Codex/);
+  assert.ok(
+    terminalBanner(true, true).split('\n').length + output.split('\n').length <=
+      24,
+  );
 });
