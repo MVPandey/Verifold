@@ -85,7 +85,9 @@ node dist-cli/cli.js select
 
 `init` starts with your harness: Claude Code or Codex, using its default model or a model you choose. It remembers that choice in a private agency directory. There is no name, Scholar, or GitHub questionnaire.
 
-You can import a selected memory or conversation-export text file, write a short introduction, or skip personalization. Before reading an import, Verifold explains which file and model it will use and asks for permission. Your harness drafts a research profile; you review a summary and the full Markdown, edit it if needed, and choose whether to save it. Declining or a failed import does not block research.
+Use the arrow keys or number keys to choose from the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
+
+Choose **Build a profile with my agent** for a short interview about your interests, goals, and working constraints. With your permission, the selected harness turns those answers into a research profile. You can also import a selected memory or conversation-export text file, write a short introduction without an AI call, or skip personalization. Before reading an import, Verifold explains which file and model it will use and asks for permission. You review a summary and the full Markdown, edit it if needed, and choose whether to save it. Declining or a failed profile draft does not block research.
 
 Approved context lives in `~/.verifold/agency/USER.md`, with harness preferences in `settings.json`. `--agency-dir path` selects a separate profile in an empty directory or an existing Verifold agency. Verifold reuses the approved Markdown on later projects without rereading its source. Edit `USER.md` to correct it, or delete it to stop future reuse. Existing projects retain their private context snapshot. The selected model provider may process imported text and research context under your harness settings; private storage does not mean offline processing.
 
@@ -142,7 +144,7 @@ The selected harness uses its configured model services and research tools. Loca
 
 `src/cli.ts` owns process lifecycle and terminal streams. CLI command handlers coordinate research and profile operations. The harness adapter owns subprocess arguments and response parsing. Research contracts validate returned data, and storage owns atomic state changes.
 
-Structured results use stdout. Prompts, diagnostics, and the interactive violet ASCII logo use stderr. Color respects `NO_COLOR` and stays disabled for noninteractive output.
+Structured results use stdout. Prompts, diagnostics, the violet/lavender folded VF welcome, and activity indicators use stderr. The welcome has a brief fold highlight; selected menu rows update in place and completed choices collapse into a short transcript. Text wraps to the terminal width, including long paths and common wide Unicode characters. Short windows show a compact selector. Indicators show time spent waiting for a real harness response; they do not claim individual subagent progress. Set `VERIFOLD_REDUCED_MOTION=1` for static activity messages. `NO_COLOR` disables color and animation; `TERM=dumb` also uses numbered text menus. Noninteractive commands keep their machine-readable output.
 
 Normal research failures preserve the saved checkpoint. Inspect `status` and the attempt files before continuing. A forced termination such as SIGKILL can leave `.verifold/research.lock`. Confirm that no research process remains active before removing it. Apply the same check to a stale `write.lock` before another state write.
 
