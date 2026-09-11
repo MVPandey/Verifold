@@ -10,11 +10,18 @@ import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { initializeProject, parseAutonomy } from './initialization.ts';
 import { runResearch } from './research.ts';
 import { object, text } from './research-contracts.ts';
+import type { Choice } from './choices.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
   readonly out: (value: string) => void;
   readonly progress?: (value: string) => void;
+  readonly select?: (
+    question: string,
+    choices: readonly Choice[],
+    initial: string,
+  ) => Promise<string>;
+  readonly busy?: <T>(label: string, work: () => Promise<T>) => Promise<T>;
 }
 const help = `Verifold - private research with your existing agent harness
 

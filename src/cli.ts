@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { createInterface } from 'node:readline/promises';
 import { stdin, stdout, stderr } from 'node:process';
 import { runCli } from './cli/commands.ts';
-import { terminalBanner, terminalPrompt } from './cli/terminal.ts';
+import { paragraph } from './cli/terminal.ts';
+import { TerminalSession } from './cli/terminal-session.ts';
 import { stripVTControlCharacters } from 'node:util';
 const controller = new AbortController();
 const cancel = (): void => {
@@ -19,19 +19,25 @@ stdout.on('error', (error: NodeJS.ErrnoException) => {
     process.exitCode = 1;
   }
 });
-const terminal =
-  stdin.isTTY && stderr.isTTY
-    ? createInterface({ input: stdin, output: stderr })
-    : null;
-const color = terminal !== null && process.env.NO_COLOR === undefined;
-terminal?.on('SIGINT', cancel);
-if (
-  ['init', 'research'].includes(process.argv[2] ?? '') &&
-  !process.argv.includes('--help')
-) {
-  stderr.write(terminalBanner(terminal !== null, !color));
-}
+const interactive = Boolean(stdin.isTTY && stderr.isTTY);
+const color =
+  interactive &&
+  process.env.NO_COLOR === undefined &&
+  process.env.TERM !== 'dumb';
+const terminal = interactive
+  ? new TerminalSession(
+      controller,
+      color,
+      color && process.env.VERIFOLD_REDUCED_MOTION !== '1',
+    )
+  : null;
 try {
+  if (
+    terminal &&
+    ['init', 'research'].includes(process.argv[2] ?? '') &&
+    !process.argv.includes('--help')
+  )
+    await terminal.welcome();
   await runCli(
     process.argv.slice(2),
     process.cwd(),
@@ -39,15 +45,21 @@ try {
       interactive: terminal !== null,
       ask: async (question) => {
         if (!terminal) throw new Error('Interactive terminal required.');
-        return terminal.question(terminalPrompt(question, color), {
-          signal: controller.signal,
-        });
+        return terminal.ask(question);
       },
+      ...(terminal && process.env.TERM !== 'dumb'
+        ? {
+            select: terminal.select.bind(terminal),
+            busy: terminal.busy.bind(terminal),
+          }
+        : {}),
       progress: (value) => {
-        if (terminal) stderr.write(`${stripVTControlCharacters(value)}\n`);
+        terminal?.progress(value);
       },
       out: (value) => {
-        stdout.write(`${value}\n`);
+        stdout.write(
+          `${terminal && stdout.isTTY && ['init', 'research'].includes(process.argv[2] ?? '') ? paragraph(value, stdout.columns) : value}\n`,
+        );
       },
     },
     controller.signal,
@@ -58,8 +70,6 @@ try {
   );
   process.exitCode = controller.signal.aborted ? 130 : 1;
 } finally {
-  terminal?.removeListener('SIGINT', cancel);
-  terminal?.close();
   process.removeListener('SIGINT', cancel);
   process.removeListener('SIGTERM', cancel);
 }

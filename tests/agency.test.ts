@@ -319,3 +319,45 @@ await test('an invalid agency ownership marker does not authorize file replaceme
     assert.deepEqual(await readdir(root), ['.verifold-agency', 'USER.md']);
   });
 });
+
+for (const approved of [false, true]) {
+  await test(`agent interview requires consent and reviewed adoption (consent: ${approved})`, async () => {
+    await temporary(async (root, directory) => {
+      let calls = 0;
+      const answers = [
+        'chat',
+        'Graph search',
+        'A reproducible tool',
+        'CPU only; ask before experiments',
+        approved ? 'yes' : 'no',
+        ...(approved ? ['yes'] : []),
+      ];
+      const result = await personalize(
+        directory,
+        root,
+        { host: 'codex', model: 'test-model' },
+        prompts(answers),
+        new AbortController().signal,
+        (request) => {
+          calls++;
+          assert.equal(request.host, 'codex');
+          assert.equal(request.model, 'test-model');
+          assert.match(request.prompt, /Graph search/);
+          assert.match(request.prompt, /Do not use tools, read files, browse/);
+          return Promise.resolve({
+            text: 'Studies graph search and prefers CPU experiments.',
+          });
+        },
+      );
+      assert.equal(calls, approved ? 1 : 0);
+      assert.equal(
+        result,
+        approved
+          ? 'Studies graph search and prefers CPU experiments.'
+          : undefined,
+      );
+      assert.equal(await loadMemory(directory), result);
+      assert.deepEqual(answers, []);
+    });
+  });
+}
