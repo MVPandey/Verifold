@@ -1,10 +1,11 @@
-import { parseArgs } from 'node:util';
+import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { resolve, join } from 'node:path';
 import { writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { escapeHtml as e } from '../ui/dom.ts';
 import { parseCandidates } from './contracts.ts';
+import type { Workspace } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { initializeProject, parseAutonomy } from './initialization.ts';
 import { runResearch } from './research.ts';
@@ -29,13 +30,35 @@ verifold view                         Generate a private local HTML workspace
 verifold status                       Print workspace JSON
 
 Options: --workspace path (default: current directory), --help, --version
-Init asks for your profile, harness, topic, and research mode, then starts research.
-Noninteractive init requires --profile. Research also requires --host, --topic,
+Init chooses a harness and optional --model, then offers reviewed research memory.
+Use --agency-dir path to isolate preferences and USER.md (default: ~/.verifold/agency).
+No name or external profile links are required. Noninteractive research requires --host, --topic,
 and --autonomy autonomous. Use --setup-only to initialize without research.
 The harness searches web sources and proposes ideas. PDF retention is optional
 and follows idea selection. No experiments run during initial research.
 Research stays private in .verifold/. The host owns its permissions and sessions.
 `;
+
+function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
+  if (!io.interactive) {
+    io.out(JSON.stringify(workspace));
+    return;
+  }
+  const phase = workspace.research?.phase;
+  const next =
+    phase === 'directions'
+      ? 'Use research --feedback to refine a direction, or select to choose one.'
+      : phase === 'awaiting-plan-review'
+        ? 'Use research --feedback to revise the plan, or research --approve to continue.'
+        : phase
+          ? 'Use research to resume the saved research session.'
+          : 'Use research --topic "your question" to begin.';
+  io.out(
+    stripVTControlCharacters(
+      `Private workspace: ${root}\nHarness: ${workspace.host} (${workspace.model ?? 'host default model'})\n${next}`,
+    ),
+  );
+}
 /** Subprocess CLI contract: machine commands return JSON; prompts are delegated to stderr I/O. */
 export async function runCli(
   argv: readonly string[],
@@ -52,6 +75,8 @@ export async function runCli(
       workspace: { type: 'string' },
       profile: { type: 'string' },
       host: { type: 'string' },
+      model: { type: 'string' },
+      'agency-dir': { type: 'string' },
       topic: { type: 'string' },
       feedback: { type: 'string' },
       approve: { type: 'boolean' },
@@ -79,7 +104,15 @@ export async function runCli(
   if (!command || positionals.length !== 1)
     throw new Error('Provide one command. Use --help.');
   const allowed: Record<string, readonly string[]> = {
-    init: ['profile', 'host', 'topic', 'autonomy', 'setup-only'],
+    init: [
+      'profile',
+      'host',
+      'model',
+      'agency-dir',
+      'topic',
+      'autonomy',
+      'setup-only',
+    ],
     research: ['topic', 'feedback', 'autonomy', 'approve'],
     literature: ['memory'],
     recommend: [],
@@ -103,6 +136,10 @@ export async function runCli(
       {
         ...(values.profile !== undefined ? { profile: values.profile } : {}),
         ...(values.host !== undefined ? { host: values.host } : {}),
+        ...(values.model !== undefined ? { model: values.model } : {}),
+        ...(values['agency-dir'] !== undefined
+          ? { agencyDir: values['agency-dir'] }
+          : {}),
         ...(values.topic !== undefined ? { topic: values.topic } : {}),
         ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
         setupOnly: values['setup-only'] ?? false,
@@ -113,7 +150,7 @@ export async function runCli(
     const result = initialized.research
       ? await runResearch(root, initialized.research, io, signal)
       : initialized.workspace;
-    io.out(JSON.stringify(result));
+    showWorkspace(root, result, io);
     return;
   }
   if (command === 'research') {
@@ -130,7 +167,7 @@ export async function runCli(
       io,
       signal,
     );
-    io.out(JSON.stringify(result));
+    showWorkspace(root, result, io);
     return;
   }
   if (command === 'ideas') {
@@ -163,6 +200,8 @@ export async function runCli(
         schemaVersion: 1,
         kind: 'recommendation-request',
         profile: workspace.profile,
+        ...(workspace.context ? { context: workspace.context } : {}),
+        ...(workspace.model ? { model: workspace.model } : {}),
         host: workspace.host,
         scope: 'Any research whose end-to-end experimentation is computational',
         instructions:

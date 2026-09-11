@@ -33,12 +33,31 @@ export function text(value: unknown, label: string, limit = 12000): string {
   return value.trim();
 }
 
-/** Accept JSON or a single JSON code block. Do not guess where a result starts. */
+/** Accept JSON or one leading code block with optional plain commentary. */
 export function parseHostJson(value: string): unknown {
+  if (Buffer.byteLength(value) > 2 * 1024 * 1024)
+    throw new Error('Host JSON response exceeds the 2 MiB limit.');
   const input = value.trim();
-  return JSON.parse(
-    input.replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'),
-  ) as unknown;
+  if (!input.startsWith('```')) return JSON.parse(input) as unknown;
+  const lines = input.split(/\r?\n/);
+  if (lines[0] !== '```json' && lines[0] !== '```')
+    throw new Error('Host response must start with JSON or a JSON code block.');
+  const closing = lines.indexOf('```', 1);
+  if (closing === -1) throw new Error('Host JSON code block is not closed.');
+  const body = lines.slice(1, closing).join('\n');
+  const commentary = lines
+    .slice(closing + 1)
+    .join('\n')
+    .trim();
+  if (
+    body.includes('```') ||
+    commentary.includes('```') ||
+    commentary.includes('~~~') ||
+    commentary.startsWith('{') ||
+    commentary.startsWith('[')
+  )
+    throw new Error('Host response must contain only one JSON code block.');
+  return JSON.parse(body) as unknown;
 }
 
 export function parseResearchPlan(value: unknown): ResearchPlan {

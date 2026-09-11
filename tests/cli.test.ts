@@ -21,7 +21,7 @@ await test('private CLI workflow preserves explicit selection and host ownership
   try {
     await assert.rejects(
       runCli(['init', '--setup-only'], root, io),
-      /requires --profile/,
+      /requires --host/,
     );
     await writeFile(
       join(root, 'profile.json'),
@@ -113,16 +113,31 @@ await test('host recommendations require unique IDs and gates', () => {
   const item = { id: 'x', title: 'x', recommendation: 'x', gates: ['check'] };
   assert.throws(() => parseCandidates([item, item]), /unique/);
 });
-await test('interactive questionnaire and recommendation choice use injected prompts', async () => {
+await test('harness-first onboarding and recommendation choice use injected prompts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-prompts-'));
-  const answers = ['Ada', 'Math,CS', '', '', '', 'existing-host'];
+  const answers = ['claude', '', 'skip'];
+  const messages: string[] = [];
   try {
-    await runCli(['init', '--setup-only'], root, {
-      interactive: true,
-      ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
-      out: (): void => {},
-    });
+    await runCli(
+      [
+        'init',
+        '--setup-only',
+        '--agency-dir',
+        join(root, '.verifold', 'agency'),
+      ],
+      root,
+      {
+        interactive: true,
+        ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
+        out: (message): void => {
+          messages.push(message);
+        },
+      },
+    );
     assert.equal(answers.length, 0);
+    assert.match(messages.join('\n'), /Private workspace:/);
+    assert.match(messages.join('\n'), /Harness: claude/);
+    assert.doesNotMatch(messages.join('\n'), /schemaVersion|scholar/);
     await writeFile(
       join(root, 'ideas.json'),
       JSON.stringify([

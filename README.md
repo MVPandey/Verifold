@@ -83,7 +83,13 @@ node dist-cli/cli.js status
 node dist-cli/cli.js select
 ```
 
-`init` asks for the profile, installed harness, research topic, and autonomy mode. Optional references include Scholar, GitHub, and a coding-session reference. Verifold does not scan session directories.
+`init` starts with your harness: Claude Code or Codex, using its default model or a model you choose. It remembers that choice in a private agency directory. There is no name, Scholar, or GitHub questionnaire.
+
+You can import a selected memory or conversation-export text file, write a short introduction, or skip personalization. Before reading an import, Verifold explains which file and model it will use and asks for permission. Your harness drafts a research profile; you review a summary and the full Markdown, edit it if needed, and choose whether to save it. Declining or a failed import does not block research.
+
+Approved context lives in `~/.verifold/agency/USER.md`, with harness preferences in `settings.json`. `--agency-dir path` selects a separate profile in an empty directory or an existing Verifold agency. Verifold reuses the approved Markdown on later projects without rereading its source. Edit `USER.md` to correct it, or delete it to stop future reuse. Existing projects retain their private context snapshot. The selected model provider may process imported text and research context under your harness settings; private storage does not mean offline processing.
+
+Then tell the harness what you want to investigate and choose guided or autonomous exploration. Names and external accounts can wait until the community platform has a use for them. See the [onboarding research and decision](docs/research/onboarding-review.md).
 
 The coordinator proposes a search scope and personas. Guided mode pauses for approval. Use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
 
@@ -91,17 +97,20 @@ After directions are available, use `research --feedback` to refine them through
 
 Autonomous mode proceeds through planning and research, then stops at directions. It preserves the host's tool permissions.
 
+Interactive `init` and `research` show readable results and next steps. Noninteractive runs and `status` return JSON. Interactive mode requires a terminal on stdin and stderr; use `status` when piping saved state to another tool.
+
 Noninteractive initialization requires explicit research inputs:
 
 ```sh
-node dist-cli/cli.js init --profile profile.json --host claude --topic "Efficient graph algorithms" --autonomy autonomous
+node dist-cli/cli.js init --host claude --topic "Efficient graph algorithms" --autonomy autonomous
+# Optional: --model <host-model-id> --agency-dir <private-directory>
 ```
 
 Use `--host codex` to select Codex. Paths resolve against the current directory. Add `--workspace <path>` to select another project directory.
 
 ### Setup and request commands
 
-Use `init --setup-only` to create a profile without launching research. This preserves the earlier request-file workflow:
+Use `init --setup-only` to save harness preferences and optionally review context without starting research. Existing `--profile profile.json` imports remain supported as project-scoped legacy profiles:
 
 ```sh
 node dist-cli/cli.js init --setup-only --profile profile.json --host codex

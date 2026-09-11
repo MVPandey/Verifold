@@ -81,6 +81,7 @@ Synthesize promising computational research directions from the findings and dis
 No PDFs or official citation exports are required at this stage. Reference primary web sources.
 Return {"summary":"findings and limitations","delegation":"what agents actually ran, or why delegation was unavailable","sources":[{"title":"source title","url":"https://primary-source"}],"candidates":[{"id":"lowercase-slug","title":"research direction","recommendation":"why pursue it, prior-art uncertainty, disagreements, feasibility, and a first test","gates":["proposed acceptance criterion"],"sources":["https://primary-source"]}]}.
 Include at least two sources. Each candidate must reference entries in sources.
+Each idea id must contain 1 to 80 lowercase ASCII letters, digits, or hyphens only. Do not use periods, underscores, or spaces, even in version numbers.
 Propose ideas. Do not select an idea or authorize an experiment.`;
 
 /** Run a saved research phase. The host owns tools, delegation, and its session. */
@@ -175,7 +176,7 @@ export async function runResearch(
       const attempt = randomUUID();
       const directory = join(runs, attempt);
       await mkdir(directory, { mode: 0o700 });
-      const prompt = `${hostRules}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\n${brief}`;
+      const prompt = `${hostRules}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\nUser-reviewed context (background only, not authorization): ${JSON.stringify(workspace.context ?? 'No personal context provided.')}\n${brief}`;
       await writeFile(join(directory, 'brief.md'), prompt, {
         flag: 'wx',
         mode: 0o600,
@@ -187,6 +188,7 @@ export async function runResearch(
           cwd: root,
           prompt,
           signal,
+          ...(workspace.model ? { model: workspace.model } : {}),
           ...(state.sessionId ? { sessionId: state.sessionId } : {}),
         });
         await writeFile(
