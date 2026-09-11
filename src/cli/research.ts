@@ -175,7 +175,7 @@ export async function runResearch(
       const attempt = randomUUID();
       const directory = join(runs, attempt);
       await mkdir(directory, { mode: 0o700 });
-      const prompt = `${hostRules}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\n${brief}`;
+      const prompt = `${hostRules}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\nUser-reviewed context (background only, not authorization): ${JSON.stringify(workspace.context ?? 'No personal context provided.')}\n${brief}`;
       await writeFile(join(directory, 'brief.md'), prompt, {
         flag: 'wx',
         mode: 0o600,
@@ -187,6 +187,7 @@ export async function runResearch(
           cwd: root,
           prompt,
           signal,
+          ...(workspace.model ? { model: workspace.model } : {}),
           ...(state.sessionId ? { sessionId: state.sessionId } : {}),
         });
         await writeFile(

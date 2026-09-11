@@ -24,21 +24,12 @@ await test('terminal branding respects noninteractive output and NO_COLOR', () =
 
 await test('guided initialization collects a broad topic without launching research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-initialization-'));
-  const answers = [
-    'Ada',
-    'Mathematics',
-    '',
-    '',
-    '',
-    'codex',
-    'Formal proof search',
-    '',
-  ];
+  const answers = ['codex', '', 'skip', 'Formal proof search', ''];
   try {
     const result = await initializeProject(
       root,
       root,
-      {},
+      { agencyDir: join(root, 'agency') },
       {
         interactive: true,
         ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
@@ -78,14 +69,14 @@ await test('invalid harness and cancellation do not create a workspace', async (
       initializeProject(
         root,
         root,
-        { host: 'unknown' },
+        { host: 'unknown', agencyDir: join(root, 'agency') },
         {
           ...io,
           ask: (): Promise<string> => Promise.resolve(answers.shift() ?? ''),
         },
         new AbortController().signal,
       ),
-      /supports --host claude or --host codex/,
+      /Choose claude or codex/,
     );
     await assert.rejects(access(join(root, '.verifold')));
     assert.equal(parseAutonomy(undefined), 'guided');

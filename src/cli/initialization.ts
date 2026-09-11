@@ -1,12 +1,24 @@
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import {
+  loadAgency,
+  loadMemory,
+  saveAgencyFile,
+  personalize,
+  memorySummary,
+  type Agency,
+} from './agency.ts';
+import { validateModel, runHarness } from './harness.ts';
 import { parseProfile } from '../domain/profile.ts';
 import type { CliIO } from './commands.ts';
 import type { Workspace } from './contracts.ts';
-import { changeWorkspace, readJson } from './storage.ts';
+import { changeWorkspace, readJson, loadWorkspace } from './storage.ts';
 
 export interface InitializationOptions {
   readonly profile?: string;
   readonly host?: string;
+  readonly model?: string;
+  readonly agencyDir?: string;
   readonly topic?: string;
   readonly autonomy?: string;
   readonly setupOnly?: boolean;
@@ -30,17 +42,27 @@ export function parseAutonomy(
   return autonomy;
 }
 
-/** Collect project settings before writing private state. This does not launch a harness. */
+/** Choose a harness, review optional context, then collect the research brief. */
 export async function initializeProject(
   root: string,
   cwd: string,
   options: InitializationOptions,
   io: CliIO,
   signal: AbortSignal,
+  harness: typeof runHarness = runHarness,
 ): Promise<Initialization> {
   signal.throwIfAborted();
-  if (!options.profile && !io.interactive)
-    throw new Error('Noninteractive init requires --profile profile.json.');
+  try {
+    await loadWorkspace(root);
+    throw new Error('Workspace already exists; refusing to overwrite it.');
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+      throw error;
+  }
+  if (!io.interactive && !options.host && !options.profile)
+    throw new Error(
+      'Noninteractive init requires --host claude|codex or a legacy --profile.',
+    );
   if (
     !options.setupOnly &&
     !io.interactive &&
@@ -52,37 +74,88 @@ export async function initializeProject(
       'Noninteractive research requires --topic, --host claude|codex, and --autonomy autonomous. Use --setup-only to create a workspace without research.',
     );
   }
-  const profile = options.profile
-    ? parseProfile(await readJson(resolve(cwd, options.profile)))
-    : parseProfile({
-        name: await io.ask('Your name: '),
-        interests: (
-          await io.ask(
-            'What do you publish or want to research? (comma-separated; math, CS/ML, security, etc.): ',
-          )
-        ).split(','),
-        scholar: await io.ask('Google Scholar URL (optional): '),
-        github: await io.ask('GitHub URL (optional): '),
-        session: await io.ask(
-          'Coding session reference (optional; no automatic import): ',
-        ),
-      });
+  // Legacy JSON imports remain project-scoped and do not change agency settings.
+  const directory = resolve(
+    cwd,
+    options.agencyDir ?? join(homedir(), '.verifold', 'agency'),
+  );
+  const saved = options.profile ? undefined : await loadAgency(directory);
   const host = (
     options.host ??
     (io.interactive
-      ? await io.ask(
-          options.setupOnly
-            ? 'Existing AI harness name: '
-            : 'Choose your agent harness (claude or codex): ',
-        )
+      ? (
+          await io.ask(
+            `Choose your agent harness (claude or codex)${saved ? ` [${saved.host}]` : ''}: `,
+          )
+        ).trim() ||
+        saved?.host ||
+        ''
       : 'existing-harness')
   ).trim();
+  if (
+    (!options.profile || !options.setupOnly) &&
+    host !== 'claude' &&
+    host !== 'codex'
+  )
+    throw new Error(
+      'Choose claude or codex. Install and authenticate it before starting research.',
+    );
+  const defaultModel = saved?.host === host ? saved.model : undefined;
+  const modelInput =
+    options.model ??
+    (io.interactive && !options.profile
+      ? (
+          await io.ask(
+            `Model [${defaultModel ?? 'host default'}]; enter default to use host settings: `,
+          )
+        ).trim() || defaultModel
+      : defaultModel);
+  const model = modelInput === 'default' ? undefined : modelInput;
+  validateModel(model);
+  let context: string | undefined;
+  if (!options.profile && (host === 'claude' || host === 'codex')) {
+    const agency: Agency = { host, ...(model ? { model } : {}) };
+    context = await loadMemory(directory);
+    await saveAgencyFile(
+      directory,
+      'settings.json',
+      JSON.stringify(agency, null, 2),
+    );
+    if (!context && io.interactive) {
+      try {
+        context = await personalize(
+          directory,
+          cwd,
+          agency,
+          io,
+          signal,
+          harness,
+        );
+      } catch {
+        signal.throwIfAborted();
+        io.progress?.(
+          'Profile setup did not finish. No new memory was adopted. You can continue research without it.',
+        );
+        // File and host errors can contain private source data. Do not print them.
+      }
+    }
+    io.progress?.(
+      context
+        ? `Research profile: ${memorySummary(context)}\nFull profile: ${join(directory, 'USER.md')}`
+        : `Agency ready: ${directory}\nNo personal research context saved. You can start with a topic.`,
+    );
+  }
+  const profile = options.profile
+    ? parseProfile(await readJson(resolve(cwd, options.profile)))
+    : {
+        name: 'Researcher',
+        interests: ['Computational research'],
+        scholar: '',
+        github: '',
+        session: '',
+      };
   let research: Initialization['research'] = null;
   if (!options.setupOnly) {
-    if (host !== 'claude' && host !== 'codex')
-      throw new Error(
-        'Research currently supports --host claude or --host codex.',
-      );
     const topic = (
       options.topic ?? (await io.ask('Research topic or broad field: '))
     ).trim();
@@ -107,6 +180,8 @@ export async function initializeProject(
       visibility: 'private',
       profile,
       host,
+      ...(model ? { model } : {}),
+      ...(context ? { context } : {}),
       candidates: [],
       selectedId: null,
     };
