@@ -322,3 +322,82 @@ await test('invalid session IDs cannot become host flags', async () => {
     /invalid format/,
   );
 });
+
+for (const host of ['claude', 'codex'] as const) {
+  for (const resume of [false, true]) {
+    await test(`${host} forwards the selected model for ${resume ? 'resumed' : 'new'} sessions`, async () => {
+      await fixture(
+        `process.stdin.resume();
+         const text = JSON.stringify(process.argv.slice(2));
+         console.log(JSON.stringify(${host === 'claude' ? '{ result: text }' : "{ type: 'item.completed', item: { type: 'agent_message', text } }"}));`,
+        async (executable, cwd) => {
+          const model = 'provider/model-v1.2:variant@latest';
+          const result = await runHarness(
+            {
+              host,
+              cwd,
+              prompt: 'A small research question',
+              signal: new AbortController().signal,
+              model,
+              ...(resume ? { sessionId: 'session-123' } : {}),
+            },
+            { executable },
+          );
+          const args: unknown = JSON.parse(result.text);
+          assert.deepEqual(
+            args,
+            host === 'claude'
+              ? [
+                  '-p',
+                  '--output-format',
+                  'json',
+                  '--model',
+                  model,
+                  ...(resume ? ['--resume', 'session-123'] : []),
+                ]
+              : [
+                  '--search',
+                  'exec',
+                  '--skip-git-repo-check',
+                  '--color',
+                  'never',
+                  '--json',
+                  ...(resume ? ['resume'] : []),
+                  '--model',
+                  model,
+                  ...(resume ? ['session-123'] : []),
+                  '-',
+                ],
+          );
+        },
+      );
+    });
+  }
+}
+
+await test('invalid models fail before launching a host', async () => {
+  for (const model of [
+    '',
+    '--last',
+    'two words',
+    'opus\n',
+    'opus\r',
+    'a\u0000b',
+    'a\u001bb',
+    'a'.repeat(201),
+  ]) {
+    await assert.rejects(
+      runHarness(
+        {
+          host: 'codex',
+          cwd: '/',
+          prompt: '',
+          signal: new AbortController().signal,
+          model,
+        },
+        { executable: '/missing-verifold-host' },
+      ),
+      /Harness model must be a valid identifier/,
+    );
+  }
+});
