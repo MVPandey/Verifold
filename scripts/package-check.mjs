@@ -158,10 +158,12 @@ main().catch(() => { process.exitCode = 1; });
     'init',
     '--workspace',
     'research-project',
-    '--profile',
-    'profile.json',
+    '--agency-dir',
+    join(directory, 'private-agency'),
     '--host',
     'claude',
+    '--model',
+    'fixture-model',
     '--topic',
     'Proof search',
     '--autonomy',
@@ -170,6 +172,17 @@ main().catch(() => { process.exitCode = 1; });
   assert.equal(research.status, 0, research.stderr);
   const state = JSON.parse(research.stdout);
   assert.equal(state.research.phase, 'directions');
+  assert.equal(state.model, 'fixture-model');
+  assert.equal(state.context, undefined);
+  assert.equal(
+    JSON.parse(
+      await readFile(
+        join(directory, 'private-agency', 'settings.json'),
+        'utf8',
+      ),
+    ).host,
+    'claude',
+  );
   assert.equal(state.research.sessionId, 'package-session');
   assert.equal(state.selectedId, null);
   assert.equal(state.candidates[0].sources[0], 'https://example.org/a');

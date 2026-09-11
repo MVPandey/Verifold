@@ -9,6 +9,8 @@ export interface HarnessRequest {
   readonly signal: AbortSignal;
   readonly timeoutMs?: number;
   readonly sessionId?: string;
+  /** Host model identifier or alias. Omit to use the host's default. */
+  readonly model?: string;
 }
 
 export interface HarnessResult {
@@ -73,6 +75,20 @@ function parseResult(host: HarnessName, output: string): HarnessResult {
   return { text: result, ...(id ? { sessionId: id } : {}) };
 }
 
+/** Validate a host identifier without selecting or resolving a model for the user. */
+export function validateModel(
+  model: unknown,
+): asserts model is string | undefined {
+  if (
+    model !== undefined &&
+    (typeof model !== 'string' ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,199}$/.test(model))
+  )
+    throw new Error(
+      'Harness model must be a valid identifier of at most 200 characters.',
+    );
+}
+
 /**
  * Run one host request with the user's host configuration and permissions.
  * Prompts use stdin. Output and input are limited to 2 MiB each. The default
@@ -87,6 +103,7 @@ export async function runHarness(
   if (request.sessionId !== undefined && !sessionId(request.sessionId)) {
     throw new Error('Harness session ID has an invalid format.');
   }
+  validateModel(request.model);
   const timeoutMs = request.timeoutMs ?? 600_000;
   if (
     !Number.isSafeInteger(timeoutMs) ||
@@ -106,6 +123,7 @@ export async function runHarness(
           '-p',
           '--output-format',
           'json',
+          ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
       : [
@@ -115,7 +133,9 @@ export async function runHarness(
           '--color',
           'never',
           '--json',
-          ...(request.sessionId ? ['resume', request.sessionId, '-'] : ['-']),
+          ...(request.sessionId ? ['resume'] : []),
+          ...(request.model ? ['--model', request.model] : []),
+          ...(request.sessionId ? [request.sessionId, '-'] : ['-']),
         ];
   const output = await new Promise<string>((resolve, reject) => {
     const child = spawn(options.executable ?? request.host, args, {

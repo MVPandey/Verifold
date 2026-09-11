@@ -1,3 +1,4 @@
+import { validateModel } from './harness.ts';
 import { parseProfile } from '../domain/profile.ts';
 import type { Profile } from '../domain/profile.ts';
 import {
@@ -18,6 +19,8 @@ export interface Workspace {
   readonly visibility: 'private';
   readonly profile: Profile;
   readonly host: string;
+  readonly model?: string;
+  readonly context?: string;
   readonly candidates: readonly Candidate[];
   readonly selectedId: string | null;
   readonly research?: ResearchState;
@@ -78,15 +81,32 @@ export function parseWorkspace(value: unknown): Workspace {
     !candidates.some((candidate) => candidate.id === selectedId)
   )
     throw new Error('Selected idea is missing.');
+  validateModel(data.model);
   return {
     schemaVersion: 1,
     visibility: 'private',
     profile: parseProfile(data.profile),
     host: string(data.host, 'host'),
+    ...(data.model ? { model: data.model } : {}),
+    ...(data.context === undefined
+      ? {}
+      : { context: parseContext(data.context) }),
     candidates,
     selectedId,
     ...(data.research === undefined
       ? {}
       : { research: parseResearchState(data.research) }),
   };
+}
+
+function parseContext(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    Buffer.byteLength(value) > 12000
+  )
+    throw new Error(
+      'Research context must be nonempty text of at most 12000 bytes.',
+    );
+  return value;
 }
