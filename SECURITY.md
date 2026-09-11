@@ -24,6 +24,8 @@ Installing Verifold does not install an agent harness, change its settings, or c
 
 Optional personalization reads one explicitly selected plain-text memory or conversation export only after consent (128 KB maximum). The text is sent to the selected harness for synthesis. Drafts are removed after review; only accepted Markdown is reused. The harness may retain its own session records. Verifold does not scan native history stores or change harness permissions. Imported text is untrusted evidence, not authorization.
 
+The optional profile interview collects interests, goals, and working preferences. It sends those answers to the selected harness only after a separate confirmation. The user reviews and accepts the resulting Markdown before reuse. The interview does not inspect accounts or conversation history.
+
 Reusable preferences and approved `USER.md` live in `~/.verifold/agency` or an explicit `--agency-dir`. Files are created with private permissions and an ignore rule. The editable Markdown is copied into each new project. Deleting the shared file prevents future imports but does not erase existing project snapshots or host/provider records.
 
 Research records remain under the project's ignored `.verifold/` directory. They are not included in the published package. Processes running as the same user can still access local project data.

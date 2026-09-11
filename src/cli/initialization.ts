@@ -9,6 +9,7 @@ import {
   type Agency,
 } from './agency.ts';
 import { validateModel, runHarness } from './harness.ts';
+import { choose } from './choices.ts';
 import { parseProfile } from '../domain/profile.ts';
 import type { CliIO } from './commands.ts';
 import type { Workspace } from './contracts.ts';
@@ -83,13 +84,25 @@ export async function initializeProject(
   const host = (
     options.host ??
     (io.interactive
-      ? (
-          await io.ask(
-            `Choose your agent harness (claude or codex)${saved ? ` [${saved.host}]` : ''}: `,
-          )
-        ).trim() ||
-        saved?.host ||
-        ''
+      ? await choose(
+          io,
+          '01 / Connect · Choose your agent harness',
+          [
+            {
+              value: 'claude',
+              label: 'Claude Code',
+              description:
+                'Use your Claude tools, permissions, and native agents.',
+            },
+            {
+              value: 'codex',
+              label: 'Codex',
+              description:
+                'Use your Codex tools, permissions, and native agents.',
+            },
+          ],
+          saved?.host ?? 'claude',
+        )
       : 'existing-harness')
   ).trim();
   if (
@@ -100,6 +113,9 @@ export async function initializeProject(
     throw new Error(
       'Choose claude or codex. Install and authenticate it before starting research.',
     );
+  io.progress?.(
+    'Your harness runs the AI work using its existing login. Verifold keeps the research record.',
+  );
   const defaultModel = saved?.host === host ? saved.model : undefined;
   const modelInput =
     options.model ??
@@ -157,7 +173,10 @@ export async function initializeProject(
   let research: Initialization['research'] = null;
   if (!options.setupOnly) {
     const topic = (
-      options.topic ?? (await io.ask('Research topic or broad field: '))
+      options.topic ??
+      (await io.ask(
+        '03 / Explore · What question or field would you like to work on?\nTry: Can a tiny graph benchmark reveal when search heuristics fail?\nYour question: ',
+      ))
     ).trim();
     if (!topic || topic.length > 4000)
       throw new Error(
@@ -166,7 +185,25 @@ export async function initializeProject(
     const autonomy = parseAutonomy(
       options.autonomy ??
         (io.interactive
-          ? await io.ask('Research mode (guided or autonomous) [guided]: ')
+          ? await choose(
+              io,
+              'How should your agents explore?',
+              [
+                {
+                  value: 'guided',
+                  label: 'Collaborate with me',
+                  description:
+                    'Review the agent plan before it searches the field.',
+                },
+                {
+                  value: 'autonomous',
+                  label: 'Explore independently',
+                  description:
+                    'Plan and search now; bring back ideas for me to choose.',
+                },
+              ],
+              'guided',
+            )
           : undefined),
     );
     research = { topic, autonomy };

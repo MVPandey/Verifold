@@ -2,6 +2,7 @@ import { mkdir, open, writeFile, rm, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { CliIO } from './commands.ts';
+import { withActivity } from './choices.ts';
 import { parseCandidates } from './contracts.ts';
 import type { Candidate, Workspace } from './contracts.ts';
 import { runHarness } from './harness.ts';
@@ -181,16 +182,20 @@ export async function runResearch(
         flag: 'wx',
         mode: 0o600,
       });
-      io.progress?.(`Running ${initial.host}. Attempt: ${attempt}`);
       try {
-        const result = await host({
-          host: initial.host === 'claude' ? 'claude' : 'codex',
-          cwd: root,
-          prompt,
-          signal,
-          ...(workspace.model ? { model: workspace.model } : {}),
-          ...(state.sessionId ? { sessionId: state.sessionId } : {}),
-        });
+        const result = await withActivity(
+          io,
+          `${initial.host} · ${state.phase === 'needs-plan' || state.phase === 'awaiting-plan-review' ? 'Planning research roles and scope' : 'Searching sources and comparing research directions'}`,
+          () =>
+            host({
+              host: initial.host === 'claude' ? 'claude' : 'codex',
+              cwd: root,
+              prompt,
+              signal,
+              ...(workspace.model ? { model: workspace.model } : {}),
+              ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+            }),
+        );
         await writeFile(
           join(directory, 'response.json'),
           JSON.stringify(result, null, 2),
