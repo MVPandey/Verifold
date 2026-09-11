@@ -327,10 +327,8 @@ for (const approved of [false, true]) {
       const answers = [
         'chat',
         'Graph search',
-        'A reproducible tool',
-        'CPU only; ask before experiments',
         approved ? 'yes' : 'no',
-        ...(approved ? ['yes'] : []),
+        ...(approved ? ['', 'yes'] : []),
       ];
       const result = await personalize(
         directory,
@@ -345,7 +343,10 @@ for (const approved of [false, true]) {
           assert.match(request.prompt, /Graph search/);
           assert.match(request.prompt, /Do not use tools, read files, browse/);
           return Promise.resolve({
-            text: 'Studies graph search and prefers CPU experiments.',
+            text: JSON.stringify({
+              question: null,
+              brief: 'Studies graph search and prefers CPU experiments.',
+            }),
           });
         },
       );

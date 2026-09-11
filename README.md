@@ -83,15 +83,31 @@ node dist-cli/cli.js status
 node dist-cli/cli.js select
 ```
 
-`init` starts with your harness: Claude Code or Codex, using its default model or a model you choose. It remembers that choice in a private agency directory. There is no name, Scholar, or GitHub questionnaire.
+`init` starts with **“What do you want to work on?”**, then connects to Claude Code or Codex with its default model or one you choose. Verifold remembers the harness preference in a private agency directory.
 
-Use the arrow keys or number keys to choose from the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
+The selected harness asks one follow-up at a time, using your answers and any saved background. Its prompt asks it to reason from first principles: why the problem matters, what assumptions need testing, what evidence would change your mind, and what scope is feasible. It asks about experience and constraints when needed. There is no fixed research questionnaire. The conversation is limited to six harness calls; type `/finish` at a follow-up to request the brief early.
 
-Choose **Build a profile with my agent** for a short interview about your interests, goals, and working constraints. With your permission, the selected harness turns those answers into a research profile. You can also import a selected memory or conversation-export text file, write a short introduction without an AI call, or skip personalization. Before reading an import, Verifold explains which file and model it will use and asks for permission. You review a summary and the full Markdown, edit it if needed, and choose whether to save it. Declining or a failed profile draft does not block research.
+Review the full research brief, press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. Then specify your project directory and choose guided or autonomous exploration. `--workspace path` supplies the directory directly. Relative paths resolve against the directory where you launched Verifold; the interactive path also accepts `~/`. Missing directories are created. Existing folder contents are preserved; conflicting files, a preexisting `.verifold.md`, and linked scaffold directories are rejected.
 
-Approved context lives in `~/.verifold/agency/USER.md`, with harness preferences in `settings.json`. `--agency-dir path` selects a separate profile in an empty directory or an existing Verifold agency. Verifold reuses the approved Markdown on later projects without rereading its source. Edit `USER.md` to correct it, or delete it to stop future reuse. Existing projects retain their private context snapshot. The selected model provider may process imported text and research context under your harness settings; private storage does not mean offline processing.
+Every initialized project receives:
 
-Then tell the harness what you want to investigate and choose guided or autonomous exploration. Names and external accounts can wait until the community platform has a use for them. See the [onboarding research and decision](docs/research/onboarding-review.md).
+```text
+project/
+  .verifold.md   Research brief, folder guide, and continuation commands
+  .verifold/     Private state, research attempts, and source reports
+  literature/   Papers, source notes, and provenance
+  experiments/  Reproducible code and configurations
+  results/      Raw outputs, metrics, and negative results
+  figures/      Plots and regeneration scripts
+  docs/         Plans, decisions, methods, and write-ups
+  agents/       Project agent briefs and review notes
+```
+
+The approved brief feeds planning and research in the selected directory. It stays project-scoped; onboarding does not automatically turn it into a reusable personal profile. Run subsequent commands from that directory or pass `--workspace path`.
+
+Use arrow keys or number keys in the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
+
+Optional reusable background remains available through `init --setup-only`: interview with your agent, import one selected memory or conversation-export text file, write an introduction locally, or skip. Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency. Normal onboarding reuses this approved background without rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain. Local storage does not imply offline model processing.
 
 The coordinator proposes a search scope and personas. Guided mode pauses for approval. Use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
 
@@ -101,7 +117,7 @@ Autonomous mode proceeds through planning and research, then stops at directions
 
 Interactive `init` and `research` show readable results and next steps. Noninteractive runs and `status` return JSON. Interactive mode requires a terminal on stdin and stderr; use `status` when piping saved state to another tool.
 
-Noninteractive initialization requires explicit research inputs:
+Noninteractive initialization requires explicit research inputs. The harness drafts a brief with unknowns from these inputs, then plans and researches without an interview or brief-review prompt:
 
 ```sh
 node dist-cli/cli.js init --host claude --topic "Efficient graph algorithms" --autonomy autonomous
@@ -134,7 +150,7 @@ After selection, `literature` prints an optional retention request. `--memory` a
 
 Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, and reports under `.verifold/runs/<attempt-id>/`. These files can contain private research information.
 
-Initialization adds `/.verifold/` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
+Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
 
 The selected harness uses its configured model services and research tools. Local state does not imply that those services run offline. Verifold creates no remote profile or publication.
 

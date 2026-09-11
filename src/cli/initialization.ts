@@ -13,7 +13,9 @@ import { choose } from './choices.ts';
 import { parseProfile } from '../domain/profile.ts';
 import type { CliIO } from './commands.ts';
 import type { Workspace } from './contracts.ts';
-import { changeWorkspace, readJson, loadWorkspace } from './storage.ts';
+import { readJson } from './storage.ts';
+import { researchInterview } from './onboarding.ts';
+import { checkProjectDirectory, createProject } from './project.ts';
 
 export interface InitializationOptions {
   readonly profile?: string;
@@ -23,8 +25,10 @@ export interface InitializationOptions {
   readonly topic?: string;
   readonly autonomy?: string;
   readonly setupOnly?: boolean;
+  readonly workspaceSpecified?: boolean;
 }
 export interface Initialization {
+  readonly root: string;
   readonly workspace: Workspace;
   readonly research: {
     readonly topic: string;
@@ -53,13 +57,7 @@ export async function initializeProject(
   harness: typeof runHarness = runHarness,
 ): Promise<Initialization> {
   signal.throwIfAborted();
-  try {
-    await loadWorkspace(root);
-    throw new Error('Workspace already exists; refusing to overwrite it.');
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-      throw error;
-  }
+  if (options.autonomy !== undefined) parseAutonomy(options.autonomy);
   if (!io.interactive && !options.host && !options.profile)
     throw new Error(
       'Noninteractive init requires --host claude|codex or a legacy --profile.',
@@ -75,6 +73,13 @@ export async function initializeProject(
       'Noninteractive research requires --topic, --host claude|codex, and --autonomy autonomous. Use --setup-only to create a workspace without research.',
     );
   }
+  const topic = options.setupOnly
+    ? undefined
+    : (options.topic ?? (await io.ask('What do you want to work on? '))).trim();
+  if (topic !== undefined && (!topic || topic.length > 4000))
+    throw new Error('Provide a research topic between 1 and 4000 characters.');
+  if (options.workspaceSpecified || !io.interactive || options.setupOnly)
+    await checkProjectDirectory(root);
   // Legacy JSON imports remain project-scoped and do not change agency settings.
   const directory = resolve(
     cwd,
@@ -137,7 +142,7 @@ export async function initializeProject(
       'settings.json',
       JSON.stringify(agency, null, 2),
     );
-    if (!context && io.interactive) {
+    if (!context && io.interactive && options.setupOnly) {
       try {
         context = await personalize(
           directory,
@@ -172,16 +177,29 @@ export async function initializeProject(
       };
   let research: Initialization['research'] = null;
   if (!options.setupOnly) {
-    const topic = (
-      options.topic ??
-      (await io.ask(
-        '03 / Explore · What question or field would you like to work on?\nTry: Can a tiny graph benchmark reveal when search heuristics fail?\nYour question: ',
-      ))
-    ).trim();
-    if (!topic || topic.length > 4000)
-      throw new Error(
-        'Provide a research topic between 1 and 4000 characters.',
-      );
+    if (topic === undefined || (host !== 'claude' && host !== 'codex'))
+      throw new Error('Research requires a topic and supported harness.');
+    io.progress?.(
+      'Your harness will use your answers and saved background to refine the research scope. Review the brief before project creation.',
+    );
+    const brief = await researchInterview(
+      topic,
+      context ?? (options.profile ? JSON.stringify(profile) : undefined),
+      { host, ...(model ? { model } : {}) },
+      cwd,
+      io,
+      signal,
+      harness,
+    );
+    context = brief;
+    if (io.interactive && !options.workspaceSpecified) {
+      const selected = (await io.ask(`Project directory [${root}]: `)).trim();
+      if (selected)
+        root = selected.startsWith('~/')
+          ? resolve(homedir(), selected.slice(2))
+          : resolve(cwd, selected);
+    }
+    await checkProjectDirectory(root);
     const autonomy = parseAutonomy(
       options.autonomy ??
         (io.interactive
@@ -209,10 +227,9 @@ export async function initializeProject(
     research = { topic, autonomy };
   }
   signal.throwIfAborted();
-  const workspace = await changeWorkspace(root, (current) => {
-    if (current)
-      throw new Error('Workspace already exists; refusing to overwrite it.');
-    return {
+  const workspace = await createProject(
+    root,
+    {
       schemaVersion: 1,
       visibility: 'private',
       profile,
@@ -221,7 +238,10 @@ export async function initializeProject(
       ...(context ? { context } : {}),
       candidates: [],
       selectedId: null,
-    };
-  });
-  return { workspace, research };
+    },
+    topic,
+    context,
+    signal,
+  );
+  return { root, workspace, research };
 }

@@ -11,6 +11,7 @@ import { initializeProject, parseAutonomy } from './initialization.ts';
 import { runResearch } from './research.ts';
 import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
+import { runHarness } from './harness.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
@@ -37,7 +38,10 @@ verifold view                         Generate a private local HTML workspace
 verifold status                       Print workspace JSON
 
 Options: --workspace path (default: current directory), --help, --version
-Init chooses a harness and optional --model, then offers reviewed research memory.
+Init asks what you want to work on, then uses your harness for an adaptive interview.
+Review the brief and choose a project directory (or use --workspace).
+Creates literature/, experiments/, results/, figures/, docs/, agents/, and .verifold.md.
+Use --model for a host model; --setup-only offers optional reusable research memory.
 Use --agency-dir path to isolate preferences and USER.md (default: ~/.verifold/agency).
 No name or external profile links are required. Noninteractive research requires --host, --topic,
 and --autonomy autonomous. Use --setup-only to initialize without research.
@@ -72,6 +76,7 @@ export async function runCli(
   cwd: string,
   io: CliIO,
   signal: AbortSignal = new AbortController().signal,
+  harness: typeof runHarness = runHarness,
 ): Promise<void> {
   const { values, positionals } = parseArgs({
     args: [...argv],
@@ -150,14 +155,22 @@ export async function runCli(
         ...(values.topic !== undefined ? { topic: values.topic } : {}),
         ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
         setupOnly: values['setup-only'] ?? false,
+        workspaceSpecified: values.workspace !== undefined,
       },
       io,
       signal,
+      harness,
     );
     const result = initialized.research
-      ? await runResearch(root, initialized.research, io, signal)
+      ? await runResearch(
+          initialized.root,
+          initialized.research,
+          io,
+          signal,
+          harness,
+        )
       : initialized.workspace;
-    showWorkspace(root, result, io);
+    showWorkspace(initialized.root, result, io);
     return;
   }
   if (command === 'research') {
@@ -173,6 +186,7 @@ export async function runCli(
       },
       io,
       signal,
+      harness,
     );
     showWorkspace(root, result, io);
     return;
@@ -280,7 +294,7 @@ export async function runCli(
         optional: true,
         mode: values.memory ? 'pdfs-and-markdown-context' : 'pdfs',
         executionStarted: false,
-        outputDirectory: '.verifold/literature/',
+        outputDirectory: 'literature/',
         instructions:
           'Use the selected harness to fetch relevant PDFs after the user accepts this request. Preserve official source citation responses unchanged. Record source URLs, citation URLs, retrieval times, file hashes, and relative local paths in an index. Map each citation to its PDF. Report unavailable files or official citations. Do not replace missing official citations with generated text.',
         ...(values.memory
