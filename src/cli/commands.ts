@@ -29,8 +29,9 @@ verifold view                         Generate a private local HTML workspace
 verifold status                       Print workspace JSON
 
 Options: --workspace path (default: current directory), --help, --version
-Init asks for your profile, harness, topic, and research mode, then starts research.
-Noninteractive init requires --profile. Research also requires --host, --topic,
+Init chooses a harness and optional --model, then offers reviewed research memory.
+Use --agency-dir path to isolate preferences and USER.md (default: ~/.verifold/agency).
+No name or external profile links are required. Noninteractive research requires --host, --topic,
 and --autonomy autonomous. Use --setup-only to initialize without research.
 The harness searches web sources and proposes ideas. PDF retention is optional
 and follows idea selection. No experiments run during initial research.
@@ -52,6 +53,8 @@ export async function runCli(
       workspace: { type: 'string' },
       profile: { type: 'string' },
       host: { type: 'string' },
+      model: { type: 'string' },
+      'agency-dir': { type: 'string' },
       topic: { type: 'string' },
       feedback: { type: 'string' },
       approve: { type: 'boolean' },
@@ -79,7 +82,15 @@ export async function runCli(
   if (!command || positionals.length !== 1)
     throw new Error('Provide one command. Use --help.');
   const allowed: Record<string, readonly string[]> = {
-    init: ['profile', 'host', 'topic', 'autonomy', 'setup-only'],
+    init: [
+      'profile',
+      'host',
+      'model',
+      'agency-dir',
+      'topic',
+      'autonomy',
+      'setup-only',
+    ],
     research: ['topic', 'feedback', 'autonomy', 'approve'],
     literature: ['memory'],
     recommend: [],
@@ -103,6 +114,10 @@ export async function runCli(
       {
         ...(values.profile !== undefined ? { profile: values.profile } : {}),
         ...(values.host !== undefined ? { host: values.host } : {}),
+        ...(values.model !== undefined ? { model: values.model } : {}),
+        ...(values['agency-dir'] !== undefined
+          ? { agencyDir: values['agency-dir'] }
+          : {}),
         ...(values.topic !== undefined ? { topic: values.topic } : {}),
         ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
         setupOnly: values['setup-only'] ?? false,
@@ -163,6 +178,8 @@ export async function runCli(
         schemaVersion: 1,
         kind: 'recommendation-request',
         profile: workspace.profile,
+        ...(workspace.context ? { context: workspace.context } : {}),
+        ...(workspace.model ? { model: workspace.model } : {}),
         host: workspace.host,
         scope: 'Any research whose end-to-end experimentation is computational',
         instructions:

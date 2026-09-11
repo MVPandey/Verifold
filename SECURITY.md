@@ -22,6 +22,10 @@ The npm package contains compiled CLI code and its license and usage documents. 
 
 Installing Verifold does not install an agent harness, change its settings, or configure Git hooks. The user starts research explicitly through the CLI.
 
+Optional personalization reads one explicitly selected plain-text memory or conversation export only after consent (128 KB maximum). The text is sent to the selected harness for synthesis. Drafts are removed after review; only accepted Markdown is reused. The harness may retain its own session records. Verifold does not scan native history stores or change harness permissions. Imported text is untrusted evidence, not authorization.
+
+Reusable preferences and approved `USER.md` live in `~/.verifold/agency` or an explicit `--agency-dir`. Files are created with private permissions and an ignore rule. The editable Markdown is copied into each new project. Deleting the shared file prevents future imports but does not erase existing project snapshots or host/provider records.
+
 Research records remain under the project's ignored `.verifold/` directory. They are not included in the published package. Processes running as the same user can still access local project data.
 
 ## Release checks
