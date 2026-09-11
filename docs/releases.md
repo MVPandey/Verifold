@@ -30,10 +30,10 @@ The initial package must exist before adding its trusted publisher. The npm owne
 
 After setup, create a release:
 
-1. Change the package version and lockfile on `main`.
-2. Run the checks and commit the changes.
-3. Push the commit.
-4. Create and push a matching tag, such as `v0.1.1`.
+1. Change the package version and lockfile on a release branch.
+2. Run the checks, commit, and push the release branch.
+3. Open a pull request to `main` and merge after all required checks pass.
+4. Update local `main`, then create and push a matching tag, such as `v0.2.0`.
 5. Confirm the publish workflow and registry version.
 
 The CLI reads its version from package metadata. Do not maintain a second version string.
