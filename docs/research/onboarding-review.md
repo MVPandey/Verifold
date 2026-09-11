@@ -81,3 +81,15 @@ Verifold should not build a competing chat-history database, inference client, m
 - Automated tests cover the consent boundary, profile reuse, draft decisions, and failure recovery. Real session records remain local and are not committed.
 
 The first version should prove this short flow before adding automatic source discovery or richer community profiles.
+
+## CLI interface follow-up
+
+The interface now explains the research workflow before setup. Harness, profile method, and autonomy choices use keyboard menus with descriptions. A numbered text fallback keeps simple terminals usable. Activity indicators cover actual native-harness calls, not simulated subagent events.
+
+The profile flow now includes a short interview about interests, desired results, and working constraints. The selected harness synthesizes the answers only after consent. The existing Markdown review and adoption step still controls persistent context. Import, local writing, and skipping remain available.
+
+This follows the connection-first sequence documented by [OpenClaw onboarding](https://docs.openclaw.ai/cli/onboard), the distinct editable user profile documented by [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/which-file-does-what), and explicit memory management in [Claude Code](https://code.claude.com/docs/en/memory). These are design references, not a popularity ranking. Verifold currently supports Claude Code and Codex; the references do not imply that OpenClaw or Hermes are executable adapters.
+
+### Terminal design consensus
+
+Two independent reviewers inspected the Verifold v2 logo, [OpenCode's terminal screenshot](https://opencode.ai/docs/), [Gum's selector demonstration](https://github.com/charmbracelet/gum), and [Clack's prompt guidance](https://bomb.sh/docs/clack/packages/prompts/). The resulting design uses the approved violet, lavender, and deep-purple palette with neutral body text. The welcome and first selector fit an 80×24 terminal. Selection appears on the active row, only its description is expanded, and a completed menu collapses to a checkmark summary. Animation belongs to the brief logo reveal and pending harness operations. Body text wraps at terminal cell boundaries; short viewports use a compact selector. These are Verifold design choices informed by the references, not claims of identical behavior in those tools.
