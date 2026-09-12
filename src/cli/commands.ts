@@ -15,6 +15,11 @@ import type { Choice } from './choices.ts';
 import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser } from './desk.ts';
+import {
+  agencyDirectory,
+  ensureGlobalProfile,
+  profileCommand,
+} from './profile.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
@@ -41,6 +46,7 @@ verifold handoff                      Print a pilot request for Automative + hos
 verifold view                         Generate a private local HTML workspace
 verifold ui [--no-open]               Open the read-only live research desk
 verifold status                       Print workspace JSON
+verifold profile [--setup]            Inspect or configure your global profile
 
 Options: --workspace path (default: current directory), --help, --version
 Init connects your harness and profile, then asks for a project directory and context.
@@ -118,6 +124,7 @@ export async function runCli(
       memory: { type: 'boolean' },
       autonomy: { type: 'string' },
       'setup-only': { type: 'boolean' },
+      setup: { type: 'boolean' },
       from: { type: 'string' },
       id: { type: 'string' },
       'no-open': { type: 'boolean' },
@@ -176,18 +183,56 @@ export async function runCli(
     view: [],
     status: [],
     ui: ['no-open'],
+    profile: ['setup', 'agency-dir', 'host', 'model'],
   };
   if (!Object.hasOwn(allowed, command))
     throw new Error(`Unknown command: ${command}. Use --help.`);
   for (const key of Object.keys(values))
     if (
       key !== 'workspace' &&
-      !(launch && key === 'no-open') &&
+      !(launch && (key === 'no-open' || key === 'agency-dir')) &&
       !allowed[command]?.includes(key)
     )
       throw new Error(`--${key} is not valid for ${command}.`);
   signal.throwIfAborted();
+  if (command === 'profile') {
+    if (values.workspace !== undefined)
+      throw new Error(
+        'Profile is global. Use --agency-dir instead of --workspace.',
+      );
+    await profileCommand(
+      {
+        ...(values['agency-dir'] !== undefined
+          ? { agencyDir: values['agency-dir'] }
+          : {}),
+        ...(values.host !== undefined ? { host: values.host } : {}),
+        ...(values.model !== undefined ? { model: values.model } : {}),
+        setup: values.setup ?? false,
+      },
+      cwd,
+      io,
+      signal,
+      harness,
+    );
+    return;
+  }
   if (command === 'ui') {
+    if (launch) {
+      const workspace = await loadWorkspace(root);
+      await ensureGlobalProfile(
+        agencyDirectory(cwd, values['agency-dir']),
+        cwd,
+        workspace.host === 'claude' || workspace.host === 'codex'
+          ? {
+              host: workspace.host,
+              ...(workspace.model ? { model: workspace.model } : {}),
+            }
+          : undefined,
+        io,
+        signal,
+        harness,
+      );
+    }
     await serveDesk(root, values['no-open'] ?? false, io, signal);
     return;
   }

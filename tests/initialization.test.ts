@@ -371,7 +371,7 @@ for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
           /Profile setup did not finish/,
         );
       if (outcome === 'failure')
-        assert.match(ui.messages.join('\n'), /continue research without it/);
+        assert.match(ui.messages.join('\n'), /verifold profile --setup/);
     }
   });
 }
@@ -400,7 +400,7 @@ await test('a failed memory import leaves a usable project without leaking the h
   assert.equal(initialized.workspace.context, undefined);
   assert.equal(initialized.research, null);
   assert.ok(!(await readdir(agencyDir)).includes('USER.md'));
-  assert.match(ui.messages.join('\n'), /No new memory was adopted/);
+  assert.match(ui.messages.join('\n'), /Profile setup did not finish/);
   assert.doesNotMatch(ui.messages.join('\n'), /PRIVATE_SOURCE_CONTENT/);
   assert.equal((await loadWorkspace(root)).host, 'claude');
 });
