@@ -1,6 +1,6 @@
 {
   "name": "verifold",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A research project CLI for coordinating existing AI agent harnesses.",
   "repository": {
     "type": "git",
