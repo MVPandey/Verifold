@@ -169,7 +169,8 @@ export async function runResearch(
 
     async function invoke(
       brief: string,
-    ): Promise<{ value: unknown; attempt: string }> {
+      accept: (value: unknown, directory: string) => Promise<void>,
+    ): Promise<void> {
       const runs = join(root, '.verifold', 'runs');
       await mkdir(runs, { recursive: true, mode: 0o700 });
       if ((await lstat(runs)).isSymbolicLink())
@@ -206,7 +207,7 @@ export async function runResearch(
           latestAttempt: attempt,
           ...(result.sessionId ? { sessionId: result.sessionId } : {}),
         });
-        return { value: parseHostJson(result.text), attempt };
+        await accept(parseHostJson(result.text), directory);
       } catch (error) {
         await writeFile(
           join(directory, 'failure.txt'),
@@ -222,14 +223,16 @@ export async function runResearch(
       state.phase === 'needs-plan' ||
       (state.phase === 'awaiting-plan-review' && feedback)
     ) {
-      const result = await invoke(
+      await invoke(
         `${planShape}\n${state.plan ? `Previous plan: ${JSON.stringify(state.plan)}` : ''}\nUser feedback: ${feedback ?? 'None.'}`,
+        async (value) => {
+          await save({
+            ...state,
+            plan: parseResearchPlan(value),
+            phase: 'awaiting-plan-review',
+          });
+        },
       );
-      await save({
-        ...state,
-        plan: parseResearchPlan(result.value),
-        phase: 'awaiting-plan-review',
-      });
     }
     if (state.phase === 'awaiting-plan-review') {
       io.progress?.(
@@ -254,18 +257,20 @@ export async function runResearch(
       state.phase === 'needs-research' ||
       (state.phase === 'directions' && feedback)
     ) {
-      const result = await invoke(
+      await invoke(
         `${reportShape}\nApproved plan: ${JSON.stringify(state.plan)}\nPrevious directions: ${JSON.stringify(workspace.candidates)}\nUser feedback: ${feedback ?? 'None.'}`,
-      );
-      const report = parseReport(result.value);
-      await writeFile(
-        join(root, '.verifold', 'runs', result.attempt, 'report.json'),
-        JSON.stringify(report, null, 2),
-        { flag: 'wx', mode: 0o600 },
-      );
-      await save({ ...state, phase: 'directions' }, report.candidates);
-      io.progress?.(
-        `${report.summary}\nDelegation reported by host: ${report.delegation}\n\n${report.candidates.map((idea) => `${idea.id}: ${idea.title}\n${idea.recommendation}\n${idea.sources?.join('\n')}`).join('\n\n')}\n\nUse research --feedback to refine these ideas. Use select to choose one.`,
+        async (value, directory) => {
+          const report = parseReport(value);
+          await writeFile(
+            join(directory, 'report.json'),
+            JSON.stringify(report, null, 2),
+            { flag: 'wx', mode: 0o600 },
+          );
+          await save({ ...state, phase: 'directions' }, report.candidates);
+          io.progress?.(
+            `${report.summary}\nDelegation reported by host: ${report.delegation}\n\n${report.candidates.map((idea) => `${idea.id}: ${idea.title}\n${idea.recommendation}\n${idea.sources?.join('\n')}`).join('\n\n')}\n\nUse research --feedback to refine these ideas. Use select to choose one.`,
+          );
+        },
       );
     }
     return workspace;
