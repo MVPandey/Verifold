@@ -616,7 +616,7 @@ await test('failed preparation rolls back before releasing the workspace lock', 
   await assert.rejects(stat(join(base, '.verifold', 'write.lock')), /ENOENT/);
 });
 
-await test('an invalid onboarding response does not create project state or scaffold', async (t) => {
+await test('cancelling recovery leaves project state and scaffold absent', async (t) => {
   const base = await mkdtemp(join(tmpdir(), 'verifold-bad-interview-'));
   t.after(() => rm(base, { recursive: true, force: true }));
   const root = join(base, 'project');
@@ -631,9 +631,9 @@ await test('an invalid onboarding response does not create project state or scaf
         workspaceSpecified: true,
         agencyDir: join(base, 'agency'),
       },
-      prompts(['skip']).io,
+      prompts(['skip', 'cancel']).io,
       signal(),
-      () => Promise.resolve({ text: 'invalid JSON' }),
+      () => Promise.resolve({ text: '' }),
     ),
   );
   await assert.rejects(stat(root), /ENOENT/);
