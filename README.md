@@ -209,6 +209,10 @@ Structured results use stdout. Prompts, diagnostics, the violet/lavender folded 
 
 Normal research failures preserve the saved checkpoint. Inspect `status` and the attempt files before continuing. A forced termination such as SIGKILL can leave `.verifold/research.lock`. Confirm that no research process remains active before removing it. Apply the same check to a stale `write.lock` before another state write.
 
+New research attempts save `attempt.json` beside their evidence. It records the Verifold attempt ID, harness, requested model, starting phase, timestamps, requested session, and returned native session separately. A null model means the harness default was requested. It does not identify the resolved model.
+
+`succeeded` means the response passed Verifold validation and the phase checkpoint was saved, not that its scientific claims were verified. `failed` and `cancelled` preserve available evidence. Inspect the checkpoint before retrying. A record left at `started` has an unknown final outcome and does not prove that a process remains alive. Older attempts have no record. The live browser UI and process recovery remain planned work.
+
 `make validate` runs formatting, type-aware linting, strict types, tests, both builds, and a packed CLI consumer check. Enable the commit and push hooks in each clone:
 
 ```sh

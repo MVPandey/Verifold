@@ -211,6 +211,24 @@ main().catch(() => { process.exitCode = 1; });
     'claude',
   );
   assert.equal(state.research.sessionId, 'package-session');
+  const attempt = JSON.parse(
+    await readFile(
+      join(
+        directory,
+        'research-project',
+        '.verifold',
+        'runs',
+        state.research.latestAttempt,
+        'attempt.json',
+      ),
+      'utf8',
+    ),
+  );
+  assert.equal(attempt.attemptId, state.research.latestAttempt);
+  assert.equal(attempt.status, 'succeeded');
+  assert.equal(attempt.model, 'fixture-model');
+  assert.equal(attempt.requestedSessionId, 'package-session');
+  assert.equal(attempt.nativeSessionId, 'package-session');
   assert.equal(state.selectedId, null);
   assert.equal(state.candidates[0].sources[0], 'https://example.org/a');
   assert.equal(
