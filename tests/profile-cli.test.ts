@@ -371,3 +371,36 @@ await test('deleted approved memory is reported missing without automatic import
     );
   });
 });
+
+await test('cancelling the profile interview preserves the previous setup outcome', async () => {
+  await temporary(async (root, agency) => {
+    await saveAgencyFile(
+      agency,
+      'settings.json',
+      JSON.stringify({ host: 'codex' }),
+    );
+    await saveAgencyFile(
+      agency,
+      'profile-state.json',
+      JSON.stringify({ schemaVersion: 1, status: 'skipped' }),
+    );
+    await assert.rejects(
+      runCli(
+        ['profile', '--setup', '--agency-dir', agency],
+        root,
+        io(['chat', 'Graphs', 'yes', '/cancel']),
+        signal(),
+        () => Promise.resolve({ text: 'Why does this question matter?' }),
+      ),
+      { name: 'AbortError' },
+    );
+    assert.equal(
+      object(
+        JSON.parse(await readFile(join(agency, 'profile-state.json'), 'utf8')),
+      ).status,
+      'skipped',
+    );
+    await assert.rejects(readFile(join(agency, 'USER.md')), { code: 'ENOENT' });
+    assert.ok(!(await readdir(agency)).includes('profile.lock'));
+  });
+});

@@ -2,6 +2,7 @@ import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import {
   loadAgency,
+  agencyDirectory,
   loadMemory,
   loadProfileState,
   readMemory,
@@ -83,10 +84,7 @@ export async function initializeProject(
   if (options.workspaceSpecified || !io.interactive || options.setupOnly)
     await checkProjectDirectory(root);
   // Legacy JSON imports remain project-scoped and do not change agency settings.
-  const directory = resolve(
-    cwd,
-    options.agencyDir ?? join(homedir(), '.verifold', 'agency'),
-  );
+  const directory = agencyDirectory(cwd, options.agencyDir);
   const saved = options.profile ? undefined : await loadAgency(directory);
   const host = (
     options.host ??

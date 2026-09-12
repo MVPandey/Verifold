@@ -1,8 +1,8 @@
-import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import {
   loadAgency,
+  agencyDirectory,
   loadMemory,
   loadProfileState,
   saveAgencyPreferences,
@@ -18,10 +18,6 @@ export interface ProfileOptions {
   readonly host?: string;
   readonly model?: string;
   readonly setup?: boolean;
-}
-
-export function agencyDirectory(cwd: string, path?: string): string {
-  return resolve(cwd, path ?? join(homedir(), '.verifold', 'agency'));
 }
 
 /** Configure global background without creating or changing a research project. */
@@ -111,7 +107,6 @@ export async function ensureGlobalProfile(
   const agency = await loadAgency(directory);
   const memory = await loadMemory(directory);
   const state = await loadProfileState(directory);
-  if (agency && (memory || state)) return;
   if (memory || state) {
     // An existing setup outcome must not trigger another history import.
     if (!agency && suggested)

@@ -15,11 +15,8 @@ import type { Choice } from './choices.ts';
 import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser } from './desk.ts';
-import {
-  agencyDirectory,
-  ensureGlobalProfile,
-  profileCommand,
-} from './profile.ts';
+import { ensureGlobalProfile, profileCommand } from './profile.ts';
+import { agencyDirectory } from './agency.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;

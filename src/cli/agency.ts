@@ -30,6 +30,10 @@ export interface ProfileState {
   readonly status: 'accepted' | 'skipped' | 'failed';
 }
 
+export function agencyDirectory(cwd: string, path?: string): string {
+  return resolve(cwd, path ?? join(homedir(), '.verifold', 'agency'));
+}
+
 /** Create only Verifold-owned private storage. Refuse redirected directories. */
 export async function prepareAgency(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -265,8 +269,9 @@ export async function setupProfile(
         offerInterview,
       );
       status = approved === undefined ? 'skipped' : 'accepted';
-    } catch {
+    } catch (error) {
       signal.throwIfAborted();
+      if (error instanceof Error && error.name === 'AbortError') throw error;
       status = 'failed';
     }
     signal.throwIfAborted();
