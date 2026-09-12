@@ -2,13 +2,13 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 if [ -n "$(git status --porcelain)" ]; then
-  echo 'Commit or set aside local changes before pushing so validation checks committed code.' >&2
+  echo 'The working tree contains local changes. Commit the intended changes or preserve unrelated files before pushing.' >&2
   exit 1
 fi
 while read -r local_ref local_sha remote_ref remote_sha; do
   case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac
   if [ "$local_sha" != "$(git rev-parse HEAD)" ]; then
-    echo 'Push the checked-out HEAD separately; this hook cannot validate another revision.' >&2
+    echo 'Push the checked-out HEAD separately. This hook cannot validate another revision.' >&2
     exit 1
   fi
 done

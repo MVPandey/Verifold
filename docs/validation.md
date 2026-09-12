@@ -4,11 +4,25 @@ Updated 2026-09-11. This document describes required checks and their limits.
 
 ## Repository gate
 
-`make validate` runs formatting, type-aware ESLint, strict TypeScript, tests, CLI and website builds, and the packed CLI consumer check.
+`make validate` checks for tracked private files, then runs formatting, type-aware ESLint, strict TypeScript, tests, CLI and website builds, and the packed CLI consumer check.
+
+`npm run check:private` rejects agent research and coordination records in the Git index, including force-staged ignored files. Keep these records under `.local/agents/`. Ordinary public documentation remains in `docs/`.
 
 The consumer check installs the packed executable in a temporary project. It checks the package boundary independently of source imports.
 
 Pre-commit and pre-push run this gate. Enable them in each clone with `git config --local core.hooksPath .githooks`.
+
+Pre-commit rejects unstaged and untracked files before validation. This ensures that validation checks the staged snapshot.
+Pre-push requires a clean working tree and the checked-out HEAD. It validates the committed code before the push.
+Preserve unrelated files separately when necessary. Do not stage them merely to satisfy a hook.
+Restore any temporarily preserved files after the Git operation.
+
+Hook tests use temporary Git repositories and a small fixture validation command.
+They check accepted snapshots, rejected local changes, rejected revisions, and validation failures without network access.
+The main gate still runs the real build and package checks.
+
+Code simplicity and writing quality require review under [AGENTS.md](../AGENTS.md) and the repository skills.
+Passing automated checks does not establish that code is simple or that prose is clear.
 
 Routine tests use controlled fixtures. They must not require live model credentials or network access.
 
