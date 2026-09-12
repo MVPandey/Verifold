@@ -142,7 +142,7 @@ export async function initializeProject(
       'settings.json',
       JSON.stringify(agency, null, 2),
     );
-    if (!context && io.interactive && options.setupOnly) {
+    if (!context && io.interactive) {
       try {
         context = await personalize(
           directory,
@@ -151,6 +151,7 @@ export async function initializeProject(
           io,
           signal,
           harness,
+          options.setupOnly === true,
         );
       } catch {
         signal.throwIfAborted();
