@@ -5,6 +5,27 @@ import type { CliIO } from '../src/cli/commands.ts';
 import type { HarnessRequest } from '../src/cli/harness.ts';
 
 const signal = (): AbortSignal => new AbortController().signal;
+
+await test('accepted project context enables native clarification tools explicitly', async () => {
+  const result = await researchInterview(
+    'Graphs',
+    'Reviewed project context',
+    { host: 'codex' },
+    '.',
+    { interactive: false, out: () => {}, ask: () => Promise.resolve('') },
+    signal(),
+    (request) => {
+      assert.match(request.prompt, /Use your native tools, web search/);
+      assert.doesNotMatch(request.prompt, /Do not use tools/);
+      assert.match(request.prompt, /Do not edit files/);
+      return Promise.resolve({
+        text: '# Research brief\n\nA bounded graph question.',
+      });
+    },
+    'project',
+  );
+  assert.match(result, /bounded graph question/);
+});
 function io(answers: string[]): CliIO {
   return {
     interactive: true,
@@ -197,4 +218,25 @@ await test('local recovery preserves user answers when an agent reply contains l
   );
   assert.match(result, /Use deterministic CPU experiments/);
   assert.ok(Buffer.byteLength(result) < 2000);
+});
+
+await test('local recovery retains supplied project evidence before a long conversation', async () => {
+  const evidence =
+    'Study deterministic graph matching. The supplied project uses a CPU baseline.';
+  let calls = 0;
+  const result = await researchInterview(
+    'Help choose a direction from this project.',
+    evidence,
+    { host: 'claude' },
+    '.',
+    io(['More detail. '.repeat(300), 'local', '']),
+    signal(),
+    () =>
+      ++calls === 1
+        ? Promise.resolve({ text: 'What constraints apply?' })
+        : Promise.reject(new Error('Harness unavailable')),
+  );
+  assert.ok(result.includes(evidence));
+  assert.match(result, /no agent review was completed/);
+  assert.ok(Buffer.byteLength(result) <= 12000);
 });

@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import {
   loadAgency,
   loadMemory,
+  readMemory,
   saveAgencyFile,
   personalize,
   memorySummary,
@@ -17,6 +18,7 @@ import { readJson } from './storage.ts';
 import { researchInterview } from './onboarding.ts';
 import { checkProjectDirectory, createProject } from './project.ts';
 import { investigateProject } from './project-context.ts';
+import { loadPrompt } from './prompts.ts';
 
 export interface InitializationOptions {
   readonly profile?: string;
@@ -48,7 +50,7 @@ export function parseAutonomy(
   return autonomy;
 }
 
-/** Choose a harness, review optional context, then collect the research brief. */
+/** Review personal and project context before the harness asks research questions. */
 export async function initializeProject(
   root: string,
   cwd: string,
@@ -74,9 +76,7 @@ export async function initializeProject(
       'Noninteractive research requires --topic, --host claude|codex, and --autonomy autonomous. Use --setup-only to create a workspace without research.',
     );
   }
-  const topic = options.setupOnly
-    ? undefined
-    : (options.topic ?? (await io.ask('What do you want to work on? '))).trim();
+  let topic = options.setupOnly ? undefined : options.topic?.trim();
   if (topic !== undefined && (!topic || topic.length > 4000))
     throw new Error('Provide a research topic between 1 and 4000 characters.');
   if (options.workspaceSpecified || !io.interactive || options.setupOnly)
@@ -179,21 +179,9 @@ export async function initializeProject(
       };
   let research: Initialization['research'] = null;
   if (!options.setupOnly) {
-    if (topic === undefined || (host !== 'claude' && host !== 'codex'))
-      throw new Error('Research requires a topic and supported harness.');
-    io.progress?.(
-      'Your harness will use your answers and saved background to refine the research scope. Review the brief before project creation.',
-    );
-    const brief = await researchInterview(
-      topic,
-      context ?? (options.profile ? JSON.stringify(profile) : undefined),
-      { host, ...(model ? { model } : {}) },
-      cwd,
-      io,
-      signal,
-      harness,
-    );
-    context = brief;
+    let projectReviewed = false;
+    if (host !== 'claude' && host !== 'codex')
+      throw new Error('Research requires a supported harness.');
     if (io.interactive && !options.workspaceSpecified) {
       const selected = (await io.ask(`Project directory [${root}]: `)).trim();
       if (selected)
@@ -202,15 +190,65 @@ export async function initializeProject(
           : resolve(cwd, selected);
     }
     await checkProjectDirectory(root);
-    if (io.interactive)
-      context = await investigateProject(
+    if (io.interactive) {
+      const initialContext = topic ?? (await loadPrompt('project-intake'));
+      const projectContext = await investigateProject(
         root,
-        brief,
+        initialContext,
         { host, ...(model ? { model } : {}) },
         io,
         signal,
         harness,
       );
+      if (projectContext !== initialContext) {
+        projectReviewed = true;
+        context = JSON.stringify({
+          personalBackground:
+            context ?? (options.profile ? JSON.stringify(profile) : undefined),
+          projectContext,
+        });
+      }
+      topic ??= (
+        await io.ask(
+          'Add a direction, question, or notes; /file <path> imports a written brief (optional; Enter lets your harness help): ',
+        )
+      ).trim();
+      if (topic.startsWith('/file ')) {
+        const selected = topic.slice(6).trim();
+        if (!selected) throw new Error('Provide a path after /file.');
+        const source = selected.startsWith('~/')
+          ? resolve(homedir(), selected.slice(2))
+          : resolve(cwd, selected);
+        const consent = await io.ask(
+          `Read only ${source} (up to 12000 bytes) and send its text to ${host} (${model ?? 'host default model'}) as project context? Your model provider may process it under your harness settings. [y/N]: `,
+        );
+        signal.throwIfAborted();
+        if (/^(y|yes)$/i.test(consent.trim()))
+          context = JSON.stringify({
+            background: context,
+            source,
+            projectNotes: await readMemory(source),
+          });
+        topic = '';
+      }
+      if (topic.length > 4000)
+        throw new Error('Provide research notes of at most 4000 characters.');
+      topic ||= await loadPrompt('project-direction');
+    }
+    if (topic === undefined) throw new Error('Research requires a topic.');
+    io.progress?.(
+      'Your harness will use this context and your answers to refine the research scope. Review the brief before project creation.',
+    );
+    context = await researchInterview(
+      topic,
+      context ?? (options.profile ? JSON.stringify(profile) : undefined),
+      { host, ...(model ? { model } : {}) },
+      projectReviewed ? root : cwd,
+      io,
+      signal,
+      harness,
+      projectReviewed ? 'project' : 'profile',
+    );
     const autonomy = parseAutonomy(
       options.autonomy ??
         (io.interactive

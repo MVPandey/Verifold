@@ -1,0 +1,1 @@
+Use the existing host session. Draft a task-specific Automative goal, protected evaluator, scope, budget and guards. Explain the purpose and proposed verification gates; obtain user approval before execution. Preserve failed attempts and evidence. Do not edit host permissions or install hooks automatically.

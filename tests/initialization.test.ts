@@ -64,11 +64,11 @@ const plan = {
   ],
 };
 
-await test('init asks the research question first and carries its adaptive brief into research', async (t) => {
+await test('init reviews personal context and selects a folder before asking for research notes', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-init-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const agencyDir = join(root, 'agency');
-  const ui = prompts(['Tiny graph search', 'codex', '', 'skip', '', '', '']);
+  const ui = prompts(['codex', '', 'skip', '', 'Tiny graph search', '', '']);
   const initialized = await initializeProject(
     root,
     root,
@@ -77,7 +77,10 @@ await test('init asks the research question first and carries its adaptive brief
     signal(),
     readyHost,
   );
-  assert.match(ui.questions[0] ?? '', /^What do you want to work on\? $/);
+  assert.match(ui.questions[0] ?? '', /Choose your agent harness/);
+  assert.match(ui.questions[2] ?? '', /Personalize/);
+  assert.match(ui.questions[3] ?? '', /Project directory/);
+  assert.match(ui.questions[4] ?? '', /direction, question, or notes/);
   assert.doesNotMatch(
     ui.questions.join('\n'),
     /your name|scholar|openreview|github profile/i,
@@ -134,7 +137,7 @@ await test('reviewed context and model are reused in another project and reach i
   assert.deepEqual(onboarding.remaining, []);
   assert.equal(await readFile(join(agencyDir, 'USER.md'), 'utf8'), context);
   assert.match(onboarding.messages.join('\n'), /Full profile:/);
-  const returning = prompts(['Tiny graph search', '', '', '', '', 'guided']);
+  const returning = prompts(['', '', '', 'Tiny graph search', '', 'guided']);
   const initialized = await initializeProject(
     second,
     root,
@@ -149,8 +152,8 @@ await test('reviewed context and model are reused in another project and reach i
     },
   );
   assert.deepEqual(returning.remaining, []);
-  assert.match(returning.questions[1] ?? '', /\[claude\]/);
-  assert.match(returning.questions[2] ?? '', /\[sonnet\]/);
+  assert.match(returning.questions[0] ?? '', /\[claude\]/);
+  assert.match(returning.questions[1] ?? '', /\[sonnet\]/);
   assert.doesNotMatch(returning.questions.join('\n'), /Personalize/);
   assert.equal(initialized.workspace.context, context);
   assert.equal(initialized.workspace.model, 'sonnet');
@@ -171,6 +174,121 @@ await test('reviewed context and model are reused in another project and reach i
   assert.match(requests[0]?.prompt ?? '', /background only, not authorization/);
 });
 
+await test('reviewed folder evidence reaches the interview before an optional research direction', async (t) => {
+  const base = await mkdtemp(join(tmpdir(), 'verifold-folder-first-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, 'project');
+  await mkdir(root);
+  await writeFile(join(root, 'README.md'), 'A graph search baseline.');
+  const ui = prompts([
+    'codex',
+    '',
+    'skip',
+    'project',
+    'yes',
+    'yes',
+    '',
+    '',
+    'guided',
+  ]);
+  const requests: HarnessRequest[] = [];
+  const initialized = await initializeProject(
+    base,
+    base,
+    { agencyDir: join(base, 'agency') },
+    ui.io,
+    signal(),
+    (request) => {
+      requests.push(request);
+      assert.equal(request.cwd, root);
+      if (requests.length === 1) {
+        assert.match(request.prompt, /A graph search baseline/);
+        assert.match(request.prompt, /No research direction has been selected/);
+        return Promise.resolve({ text: 'Reviewed graph project evidence.' });
+      }
+      assert.match(request.prompt, /Reviewed graph project evidence/);
+      assert.match(request.prompt, /Use your native tools/);
+      return readyHost();
+    },
+  );
+  assert.equal(requests.length, 2);
+  assert.deepEqual(ui.remaining, []);
+  assert.equal(initialized.workspace.context, brief);
+  assert.match(
+    initialized.research?.topic ?? '',
+    /no research goal is approved yet/,
+  );
+  await assert.rejects(readFile(join(base, 'agency', 'USER.md')), {
+    code: 'ENOENT',
+  });
+});
+
+for (const consent of ['yes', 'no']) {
+  await test(`written project context is read only with consent: ${consent}`, async (t) => {
+    const base = await mkdtemp(join(tmpdir(), 'verifold-written-context-'));
+    t.after(() => rm(base, { recursive: true, force: true }));
+    const source = join(base, 'brief.txt');
+    if (consent === 'yes')
+      await writeFile(source, 'Compare CPU graph search baselines.');
+    const ui = prompts([
+      'codex',
+      '',
+      'skip',
+      'project',
+      '/file brief.txt',
+      consent,
+      '',
+      'guided',
+    ]);
+    const initialized = await initializeProject(
+      base,
+      base,
+      { agencyDir: join(base, 'agency') },
+      ui.io,
+      signal(),
+      (request) => {
+        assert.equal(request.cwd, base);
+        assert.equal(
+          request.prompt.includes('Compare CPU graph search baselines.'),
+          consent === 'yes',
+        );
+        return readyHost();
+      },
+    );
+    assert.deepEqual(ui.remaining, []);
+    assert.equal(initialized.workspace.context, brief);
+    await assert.rejects(readFile(join(base, 'agency', 'USER.md')), {
+      code: 'ENOENT',
+    });
+  });
+}
+
+await test('declining folder investigation keeps its contents and working directory out of the interview', async (t) => {
+  const base = await mkdtemp(join(tmpdir(), 'verifold-declined-folder-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, 'project');
+  await mkdir(root);
+  await writeFile(join(root, 'README.md'), 'PRIVATE_PROJECT_EVIDENCE');
+  const ui = prompts(['codex', '', 'skip', 'project', 'no', '', '', 'guided']);
+  let calls = 0;
+  await initializeProject(
+    base,
+    base,
+    { agencyDir: join(base, 'agency') },
+    ui.io,
+    signal(),
+    (request) => {
+      calls++;
+      assert.equal(request.cwd, base);
+      assert.doesNotMatch(request.prompt, /PRIVATE_PROJECT_EVIDENCE/);
+      assert.match(request.prompt, /Do not use tools/);
+      return readyHost();
+    },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(ui.remaining, []);
+});
+
 for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
   await test(`normal onboarding profile import: ${outcome}`, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'verifold-init-import-'));
@@ -181,7 +299,6 @@ for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
     // A declined source stays absent, so an attempted read would fail.
     if (outcome !== 'decline') await writeFile(source, background);
     const ui = prompts([
-      'Graph search',
       'codex',
       'chosen-model',
       'import',
@@ -191,6 +308,7 @@ for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
         ? [outcome === 'accept' ? 'yes' : 'no']
         : []),
       '',
+      'Graph search',
       '',
       'guided',
     ]);
@@ -220,7 +338,7 @@ for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
       },
     );
     assert.deepEqual(ui.remaining, []);
-    assert.match(ui.questions[0] ?? '', /^What do you want to work on\?/);
+    assert.match(ui.questions[0] ?? '', /Choose your agent harness/);
     assert.doesNotMatch(
       ui.questions.join('\n'),
       /Build a profile with my agent/,
@@ -347,14 +465,14 @@ await test('adaptive onboarding creates a selected nested project and preserves 
   await mkdir(join(root, 'literature'), { recursive: true });
   await writeFile(join(root, 'literature', 'existing.md'), 'Prior notes');
   const ui = prompts([
-    'Graph search',
     'codex',
     'chosen-model',
     'skip',
+    'research projects/graph',
+    'Graph search',
     'Understand heuristic failures',
     'CPU only',
     '',
-    'research projects/graph',
     'guided',
   ]);
   const requests: HarnessRequest[] = [];
@@ -475,12 +593,12 @@ await test('the CLI researches in the interactively selected directory using the
   t.after(() => rm(base, { recursive: true, force: true }));
   const root = join(base, 'chosen project');
   const ui = prompts([
-    'Tiny graph search',
     'codex',
     '',
     'skip',
-    '',
     'chosen project',
+    'Tiny graph search',
+    '',
     'autonomous',
   ]);
   const requests: HarnessRequest[] = [];

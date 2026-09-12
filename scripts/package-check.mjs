@@ -12,6 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
 const run = (command, args, cwd) => {
   const result = spawnSync(command, args, {
@@ -40,6 +41,7 @@ try {
     manifest.files.every(
       (file) =>
         /^dist-cli\/cli\/[a-z-]+\.js$/.test(file.path) ||
+        /^dist-cli\/cli\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         [
           'dist-cli/cli.js',
           'dist-cli/domain/profile.js',
@@ -88,6 +90,74 @@ try {
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
     assert.ok(manifest.files.some((file) => file.path === required));
+  const { runCli } = await import(
+    pathToFileURL(
+      join(directory, 'node_modules/verifold/dist-cli/cli/commands.js'),
+    ).href
+  );
+  const root = join(directory, 'bare-launch');
+  await mkdir(root);
+  const agency = join(root, 'agency');
+  for (const args of [
+    [
+      '--setup-only',
+      '--host',
+      'codex',
+      '--model',
+      'default',
+      '--agency-dir',
+      agency,
+      '--no-open',
+    ],
+    ['--no-open'],
+  ]) {
+    const owner = new AbortController();
+    const results = [];
+    await runCli(
+      args,
+      root,
+      {
+        interactive: true,
+        ask: () => Promise.resolve('skip'),
+        out: (value) => {
+          results.push(value);
+          if (value.startsWith('{')) {
+            const desk = JSON.parse(value);
+            assert.equal(new URL(desk.url).hostname, '127.0.0.1');
+            assert.equal(desk.readOnly, true);
+            owner.abort();
+          }
+        },
+      },
+      owner.signal,
+      () =>
+        Promise.reject(
+          new Error(
+            'Launch must not call a harness in setup-only or existing projects.',
+          ),
+        ),
+    );
+    assert.ok(results.some((value) => value.includes('"url":')));
+  }
+  assert.match(await readFile(join(agency, 'settings.json'), 'utf8'), /codex/);
+  const launchState = await readFile(
+    join(root, '.verifold', 'workspace.json'),
+    'utf8',
+  );
+  await writeFile(join(root, '.verifold', 'workspace.json'), 'broken');
+  await assert.rejects(
+    runCli(['--no-open'], root, {
+      interactive: true,
+      ask: () => Promise.reject(new Error('No reinitialization')),
+      out: () => {},
+    }),
+  );
+  assert.equal(
+    await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
+    'broken',
+  );
+  assert.match(launchState, /codex/);
+
   const invoke = (...args) =>
     run(join(directory, 'node_modules', '.bin', 'verifold'), args, directory);
   assert.equal(invoke('--help').status, 0);
