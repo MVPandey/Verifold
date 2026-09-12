@@ -1,27 +1,41 @@
 # Validation scope
 
-Updated 2026-09-10. This document describes required checks and their limits.
+Updated 2026-09-11. This document describes required checks and their limits.
 
 ## Repository gate
 
-`make validate` runs formatting, type-aware ESLint, strict TypeScript, tests, CLI and website builds, and the packed CLI consumer check.
+`make validate` checks for tracked private files, then runs formatting, type-aware ESLint, strict TypeScript, tests, CLI and website builds, and the packed CLI consumer check.
+
+`npm run check:private` rejects agent research and coordination records in the Git index, including force-staged ignored files. Keep these records under `.local/agents/`. Ordinary public documentation remains in `docs/`.
 
 The consumer check installs the packed executable in a temporary project. It checks the package boundary independently of source imports.
 
 Pre-commit and pre-push run this gate. Enable them in each clone with `git config --local core.hooksPath .githooks`.
 
+Pre-commit rejects unstaged and untracked files before validation. This ensures that validation checks the staged snapshot.
+Pre-push requires a clean working tree and the checked-out HEAD. It validates the committed code before the push.
+Preserve unrelated files separately when necessary. Do not stage them merely to satisfy a hook.
+Restore any temporarily preserved files after the Git operation.
+
+Hook tests use temporary Git repositories and a small fixture validation command.
+They check accepted snapshots, rejected local changes, rejected revisions, and validation failures without network access.
+The main gate still runs the real build and package checks.
+
+Code simplicity and writing quality require review under [AGENTS.md](../AGENTS.md) and the repository skills.
+Passing automated checks does not establish that code is simple or that prose is clear.
+
 Routine tests use controlled fixtures. They must not require live model credentials or network access.
 
 ## Research behavior
 
-The implementation has two host stages:
+Initialization first runs a bounded adaptive interview (or a single automated brief request), saves the accepted brief and scaffold, and then runs two research stages:
 
 1. Propose a research scope and personas.
 2. Research the approved plan and return sources and directions.
 
 Guided mode pauses between these stages. Feedback revises the plan or directions through a saved host session when available.
 
-Required behavioral checks cover approval, feedback, explicit selection, invalid source mappings, malformed responses, and state preservation after failure.
+Required behavioral checks cover the exact first question, adaptive answers and session reuse, revision without a session ID, selected-directory propagation, scaffold preservation and collisions, concurrent creation, preparation rollback under lock, approval, feedback, explicit selection, invalid source mappings, malformed responses, and state preservation after failure. The packed consumer exercises onboarding through a subprocess harness fixture and verifies the scaffold and sourced research directions. These fixtures validate integration behavior, not live authentication, model quality, or scientific correctness.
 
 Adapter checks cover process errors, host-reported failure, bounded output, cancellation, deadlines, and session references.
 

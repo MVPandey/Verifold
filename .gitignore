@@ -18,3 +18,10 @@
 /verifold-context.md
 /verifold-research.md
 /brand/
+
+# Private agent research, planning, reviews, and coordination memory.
+/.local/agents/
+/docs/research/
+/docs/agent/
+/docs/product-direction.md
+/docs/landscape-cli-plan.md
