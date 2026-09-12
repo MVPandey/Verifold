@@ -11,6 +11,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { request } from 'node:http';
+import { startDesk, openDeskBrowser } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { readDeskSnapshot, readDeskReport } from '../src/cli/desk-records.ts';
 
@@ -124,8 +127,160 @@ await test('desk history has an explicit scan limit', async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
   const runs = join(root, '.verifold', 'runs');
   await mkdir(runs);
-  for (let i = 0; i < 201; i++) await mkdir(join(runs, randomUUID()));
+  const ids = Array.from({ length: 201 }, () => randomUUID());
+  for (const id of ids) await mkdir(join(runs, id));
   const snapshot = await readDeskSnapshot(root);
   assert.equal(snapshot.attempts.length, 200);
   assert.equal(snapshot.historyLimited, true);
+  const latest = ids.find(
+    (id) => !snapshot.attempts.some((entry) => entry.id === id),
+  );
+  assert.ok(latest);
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Graphs',
+      autonomy: 'guided',
+      phase: 'needs-plan',
+      latestAttempt: latest,
+    },
+  }));
+  const updated = await readDeskSnapshot(root);
+  assert.equal(updated.attempts.length, 201);
+  assert.ok(updated.attempts.some((entry) => entry.id === latest));
+});
+
+await test('desk restricts private reads, serves escaped records, and stops with its owner', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    context: '<script>alert("private")</script>',
+  }));
+  const assets = join(root, 'assets');
+  await mkdir(join(assets, 'cli'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const owner = new AbortController();
+  const server = await startDesk(
+    root,
+    owner.signal,
+    pathToFileURL(`${assets}/cli/`),
+  );
+  t.after(async () => {
+    owner.abort();
+    await server.closed;
+  });
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const api = `${url.origin}/api/view`;
+  const before = await readFile(join(root, '.verifold', 'workspace.json'));
+  const shell = await fetch(url.origin);
+  assert.equal(shell.status, 200);
+  assert.equal(shell.headers.get('cache-control'), 'no-store');
+  assert.match(
+    shell.headers.get('content-security-policy') ?? '',
+    /frame-ancestors 'none'/,
+  );
+  assert.doesNotMatch(await shell.text(), /alert|Researcher/);
+  assert.equal((await fetch(api)).status, 401);
+  assert.equal(
+    (await fetch(api, { headers: { Authorization: 'Bearer wrong' } })).status,
+    401,
+  );
+  for (const extra of [
+    { Origin: 'https://example.org' },
+    { Host: 'example.org' },
+    { 'Sec-Fetch-Site': 'cross-site' },
+  ])
+    assert.equal(
+      await new Promise<number | undefined>((resolve, reject) => {
+        request(api, { headers: { ...headers, ...extra } }, (response) => {
+          response.resume();
+          resolve(response.statusCode);
+        })
+          .on('error', reject)
+          .end();
+      }),
+      403,
+    );
+  assert.equal((await fetch(api, { method: 'POST', headers })).status, 405);
+  for (const query of [
+    '?attempt=../../secret',
+    '?file=workspace.json',
+    `?attempt=${randomUUID()}&attempt=${randomUUID()}`,
+  ])
+    assert.equal((await fetch(api + query, { headers })).status, 400);
+  assert.equal(
+    (await fetch(`${api}?attempt=${randomUUID()}`, { headers })).status,
+    404,
+  );
+  assert.equal(
+    (await fetch(`${url.origin}/workspace.json`, { headers })).status,
+    404,
+  );
+  const view = await (await fetch(api, { headers })).text();
+  assert.match(view, /&lt;script&gt;/);
+  assert.doesNotMatch(view, /<script>alert/);
+  const id = await attempt(root, { observedAt: new Date().toISOString() });
+  assert.match(
+    await (await fetch(`${api}?attempt=${id}`, { headers })).text(),
+    /Recently active/,
+  );
+  const recordPath = join(root, '.verifold', 'runs', id, 'attempt.json');
+  const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  for (const [status, label] of [
+    ['succeeded', 'Response accepted'],
+    ['failed', 'Failed'],
+    ['cancelled', 'Cancelled'],
+    ['started', 'Outcome unknown'],
+  ] as const) {
+    await writeFile(
+      recordPath,
+      JSON.stringify({
+        ...record,
+        status,
+        observedAt: '2020-01-01T00:00:00.000Z',
+        finishedAt: status === 'started' ? null : new Date().toISOString(),
+      }),
+    );
+    const updated = await (
+      await fetch(`${api}?attempt=${id}`, { headers })
+    ).text();
+    assert.ok(updated.includes(label));
+    assert.ok(updated.includes(id));
+  }
+  assert.deepEqual(
+    await readFile(join(root, '.verifold', 'workspace.json')),
+    before,
+  );
+  for (const path of [
+    '/desk.css',
+    '/desk-client.js',
+    '/manrope.ttf',
+    '/symbol.webp',
+    '/ui/dom.js',
+  ])
+    assert.equal((await fetch(url.origin + path)).status, 200);
+  assert.equal(
+    await openDeskBrowser(
+      server.url,
+      owner.signal,
+      join(root, 'missing-browser'),
+    ),
+    false,
+  );
+  owner.abort();
+  await server.closed;
+  await assert.rejects(fetch(api, { headers }));
 });

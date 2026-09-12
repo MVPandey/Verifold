@@ -145,6 +145,7 @@ await test('attempt identity precedes the harness call and survives successful a
     async () => {
       [id = ''] = await readdir(join(root, '.verifold', 'runs'));
       started = await savedAttempt(root, id);
+      assert.equal((await loadWorkspace(root)).research?.latestAttempt, id);
       assert.deepEqual(started, {
         schemaVersion: 1,
         attemptId: id,

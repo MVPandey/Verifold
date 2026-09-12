@@ -13,4 +13,4 @@ The website implementation and visual brand assets are not covered by this MIT g
 
 The Manrope font in `public/fonts/` retains its SIL Open Font License. Third-party components retain their own licenses.
 
-The MIT grant does not grant rights to Verifold trademarks. The published npm package excludes the website and raster brand assets.
+The MIT grant does not grant rights to Verifold trademarks. The published npm package excludes the website and includes the research desk's bundled brand symbol. That symbol remains reserved. The bundled Manrope font includes its SIL Open Font License.
