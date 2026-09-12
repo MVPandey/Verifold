@@ -1,6 +1,7 @@
+import { loadPrompt } from './prompts.ts';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { resolve, join } from 'node:path';
-import { writeFile, rename, rm } from 'node:fs/promises';
+import { writeFile, rename, rm, lstat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { escapeHtml as e } from '../ui/dom.ts';
@@ -14,6 +15,8 @@ import type { Choice } from './choices.ts';
 import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser } from './desk.ts';
+import { ensureGlobalProfile, profileCommand } from './profile.ts';
+import { agencyDirectory } from './agency.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
@@ -28,6 +31,7 @@ export interface CliIO {
 }
 const help = `Verifold - private research with your existing agent harness
 
+verifold [--no-open]                  Set up a project or open its research desk
 verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
 verifold init --setup-only [--profile profile.json] [--host name]
 verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
@@ -39,10 +43,11 @@ verifold handoff                      Print a pilot request for Automative + hos
 verifold view                         Generate a private local HTML workspace
 verifold ui [--no-open]               Open the read-only live research desk
 verifold status                       Print workspace JSON
+verifold profile [--setup]            Inspect or configure your global profile
 
 Options: --workspace path (default: current directory), --help, --version
-Init asks what you want to work on, then uses your harness for an adaptive interview.
-Review the brief and choose a project directory (or use --workspace).
+Init connects your harness and profile, then asks for a project directory and context.
+Your harness drafts a research brief for review before project creation.
 Creates literature/, experiments/, results/, figures/, docs/, agents/, and .verifold.md.
 Use --model for a host model; --setup-only offers optional reusable research memory.
 Use --agency-dir path to isolate preferences and USER.md (default: ~/.verifold/agency).
@@ -64,6 +69,32 @@ function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
       `Private workspace: ${root}\nHarness: ${workspace.host} (${workspace.model ?? 'host default model'})\n${next}`,
     ),
   );
+}
+
+async function serveDesk(
+  root: string,
+  noOpen: boolean,
+  io: CliIO,
+  signal: AbortSignal,
+  research?: () => Promise<void>,
+): Promise<void> {
+  const owner = new AbortController();
+  const deskSignal = AbortSignal.any([signal, owner.signal]);
+  const desk = await startDesk(root, deskSignal);
+  try {
+    io.out(
+      JSON.stringify({ url: desk.url, visibility: 'private', readOnly: true }),
+    );
+    if (!noOpen && !(await openDeskBrowser(desk.url, deskSignal)))
+      io.progress?.(
+        'The browser could not open. Open the printed URL manually.',
+      );
+    await research?.();
+    await desk.closed;
+  } finally {
+    owner.abort();
+    await desk.closed;
+  }
 }
 /** Subprocess CLI contract: machine commands return JSON; prompts are delegated to stderr I/O. */
 export async function runCli(
@@ -90,6 +121,7 @@ export async function runCli(
       memory: { type: 'boolean' },
       autonomy: { type: 'string' },
       'setup-only': { type: 'boolean' },
+      setup: { type: 'boolean' },
       from: { type: 'string' },
       id: { type: 'string' },
       'no-open': { type: 'boolean' },
@@ -108,8 +140,26 @@ export async function runCli(
     io.out(text(metadata.version, 'package version', 100));
     return;
   }
-  const command = positionals[0];
-  if (!command || positionals.length !== 1)
+  const launch = positionals.length === 0;
+  if (launch && !io.interactive)
+    throw new Error(
+      'Interactive launch requires a terminal. Use an explicit command or --help.',
+    );
+  let command = positionals[0];
+  const root = resolve(cwd, values.workspace ?? '.');
+  if (launch) {
+    command = 'init';
+    try {
+      await lstat(join(root, '.verifold', 'workspace.json'));
+      command = 'ui';
+    } catch (error) {
+      if (
+        !(error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      )
+        throw error;
+    }
+  }
+  if (!command || positionals.length > 1)
     throw new Error('Provide one command. Use --help.');
   const allowed: Record<string, readonly string[]> = {
     init: [
@@ -130,35 +180,57 @@ export async function runCli(
     view: [],
     status: [],
     ui: ['no-open'],
+    profile: ['setup', 'agency-dir', 'host', 'model'],
   };
   if (!Object.hasOwn(allowed, command))
     throw new Error(`Unknown command: ${command}. Use --help.`);
   for (const key of Object.keys(values))
-    if (key !== 'workspace' && !allowed[command]?.includes(key))
+    if (
+      key !== 'workspace' &&
+      !(launch && (key === 'no-open' || key === 'agency-dir')) &&
+      !allowed[command]?.includes(key)
+    )
       throw new Error(`--${key} is not valid for ${command}.`);
-  const root = resolve(cwd, values.workspace ?? '.');
   signal.throwIfAborted();
-  if (command === 'ui') {
-    const owner = new AbortController();
-    const deskSignal = AbortSignal.any([signal, owner.signal]);
-    const desk = await startDesk(root, deskSignal);
-    try {
-      io.out(
-        JSON.stringify({
-          url: desk.url,
-          visibility: 'private',
-          readOnly: true,
-        }),
+  if (command === 'profile') {
+    if (values.workspace !== undefined)
+      throw new Error(
+        'Profile is global. Use --agency-dir instead of --workspace.',
       );
-      if (!values['no-open'] && !(await openDeskBrowser(desk.url, deskSignal)))
-        io.progress?.(
-          'The browser could not open. Open the printed URL manually.',
-        );
-      await desk.closed;
-    } finally {
-      owner.abort();
-      await desk.closed;
+    await profileCommand(
+      {
+        ...(values['agency-dir'] !== undefined
+          ? { agencyDir: values['agency-dir'] }
+          : {}),
+        ...(values.host !== undefined ? { host: values.host } : {}),
+        ...(values.model !== undefined ? { model: values.model } : {}),
+        setup: values.setup ?? false,
+      },
+      cwd,
+      io,
+      signal,
+      harness,
+    );
+    return;
+  }
+  if (command === 'ui') {
+    if (launch) {
+      const workspace = await loadWorkspace(root);
+      await ensureGlobalProfile(
+        agencyDirectory(cwd, values['agency-dir']),
+        cwd,
+        workspace.host === 'claude' || workspace.host === 'codex'
+          ? {
+              host: workspace.host,
+              ...(workspace.model ? { model: workspace.model } : {}),
+            }
+          : undefined,
+        io,
+        signal,
+        harness,
+      );
     }
+    await serveDesk(root, values['no-open'] ?? false, io, signal);
     return;
   }
   if (command === 'init') {
@@ -181,16 +253,27 @@ export async function runCli(
       signal,
       harness,
     );
-    const result = initialized.research
-      ? await runResearch(
-          initialized.root,
-          initialized.research,
-          io,
-          signal,
-          harness,
-        )
-      : initialized.workspace;
-    showWorkspace(initialized.root, result, io);
+    const research = async (): Promise<void> => {
+      const result = initialized.research
+        ? await runResearch(
+            initialized.root,
+            initialized.research,
+            io,
+            signal,
+            harness,
+          )
+        : initialized.workspace;
+      showWorkspace(initialized.root, result, io);
+    };
+    if (launch)
+      await serveDesk(
+        initialized.root,
+        values['no-open'] ?? false,
+        io,
+        signal,
+        research,
+      );
+    else await research();
     return;
   }
   if (command === 'research') {
@@ -245,8 +328,7 @@ export async function runCli(
         ...(workspace.model ? { model: workspace.model } : {}),
         host: workspace.host,
         scope: 'Any research whose end-to-end experimentation is computational',
-        instructions:
-          'Propose promising falsifiable ideas grounded in sources. Explain recommendation, uncertainty, feasibility, and task-specific verification gates. Do not execute or select an idea. Return a JSON array of {id,title,recommendation,gates:string[]}; gates are proposals for human review, not approvals.',
+        instructions: await loadPrompt('recommendation-request'),
       }),
     );
     return;
@@ -315,12 +397,10 @@ export async function runCli(
         mode: values.memory ? 'pdfs-and-markdown-context' : 'pdfs',
         executionStarted: false,
         outputDirectory: 'literature/',
-        instructions:
-          'Use the selected harness to fetch relevant PDFs after the user accepts this request. Preserve official source citation responses unchanged. Record source URLs, citation URLs, retrieval times, file hashes, and relative local paths in an index. Map each citation to its PDF. Report unavailable files or official citations. Do not replace missing official citations with generated text.',
+        instructions: await loadPrompt('literature-request'),
         ...(values.memory
           ? {
-              memoryInstructions:
-                'Read each retrieved PDF before writing its Markdown synthesis. Label the synthesis as agent-written context. Include findings, methods, limitations, relevant page or section references, and relevance to the selected idea. Link each Markdown file to its local PDF and official source URL. Preserve the original PDF and official citation separately. Record partial reading or extraction failures. Never describe a synthesis as an official citation or a full substitute for the paper.',
+              memoryInstructions: await loadPrompt('literature-memory'),
             }
           : {}),
       }),
@@ -341,8 +421,7 @@ export async function runCli(
         visibility: 'private',
         idea,
         executionAuthorized: false,
-        instructions:
-          'Use the existing host session. Draft a task-specific Automative goal, protected evaluator, scope, budget and guards. Explain the purpose and proposed verification gates; obtain user approval before execution. Preserve failed attempts and evidence. Do not edit host permissions or install hooks automatically.',
+        instructions: await loadPrompt('pilot-request'),
         nextSteps: [
           'Review AUTOMATIVE.md with the user',
           'automative doctor',

@@ -12,6 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
 const run = (command, args, cwd) => {
   const result = spawnSync(command, args, {
@@ -40,6 +41,7 @@ try {
     manifest.files.every(
       (file) =>
         /^dist-cli\/cli\/[a-z-]+\.js$/.test(file.path) ||
+        /^dist-cli\/cli\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         [
           'dist-cli/cli.js',
           'dist-cli/domain/profile.js',
@@ -88,10 +90,102 @@ try {
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
     assert.ok(manifest.files.some((file) => file.path === required));
+  const { runCli } = await import(
+    pathToFileURL(
+      join(directory, 'node_modules/verifold/dist-cli/cli/commands.js'),
+    ).href
+  );
+  const root = join(directory, 'bare-launch');
+  await mkdir(root);
+  const agency = join(root, 'agency');
+  for (const args of [
+    [
+      '--setup-only',
+      '--host',
+      'codex',
+      '--model',
+      'default',
+      '--agency-dir',
+      agency,
+      '--no-open',
+    ],
+    ['--no-open', '--agency-dir', agency],
+    ['--no-open', '--agency-dir', join(root, 'legacy-agency')],
+  ]) {
+    const previousWorkspace =
+      args[0] === '--setup-only'
+        ? undefined
+        : await readFile(join(root, '.verifold', 'workspace.json'));
+    const owner = new AbortController();
+    const results = [];
+    await runCli(
+      args,
+      root,
+      {
+        interactive: true,
+        ask: () => Promise.resolve('skip'),
+        out: (value) => {
+          results.push(value);
+          if (value.startsWith('{')) {
+            const desk = JSON.parse(value);
+            assert.equal(new URL(desk.url).hostname, '127.0.0.1');
+            assert.equal(desk.readOnly, true);
+            owner.abort();
+          }
+        },
+      },
+      owner.signal,
+      () =>
+        Promise.reject(
+          new Error(
+            'Launch must not call a harness in setup-only or existing projects.',
+          ),
+        ),
+    );
+    assert.ok(results.some((value) => value.includes('"url":')));
+    if (previousWorkspace)
+      assert.deepEqual(
+        await readFile(join(root, '.verifold', 'workspace.json')),
+        previousWorkspace,
+      );
+  }
+  assert.equal(
+    JSON.parse(
+      await readFile(join(root, 'legacy-agency', 'settings.json'), 'utf8'),
+    ).host,
+    'codex',
+  );
+  assert.match(await readFile(join(agency, 'settings.json'), 'utf8'), /codex/);
+  const launchState = await readFile(
+    join(root, '.verifold', 'workspace.json'),
+    'utf8',
+  );
+  await writeFile(join(root, '.verifold', 'workspace.json'), 'broken');
+  await assert.rejects(
+    runCli(['--no-open'], root, {
+      interactive: true,
+      ask: () => Promise.reject(new Error('No reinitialization')),
+      out: () => {},
+    }),
+  );
+  assert.equal(
+    await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
+    'broken',
+  );
+  assert.match(launchState, /codex/);
+
   const invoke = (...args) =>
     run(join(directory, 'node_modules', '.bin', 'verifold'), args, directory);
   assert.equal(invoke('--help').status, 0);
   assert.equal(invoke('--version').stdout.trim(), metadata.version);
+  const profileStatus = invoke('profile', '--agency-dir', agency);
+  assert.equal(profileStatus.status, 0, profileStatus.stderr);
+  assert.equal(JSON.parse(profileStatus.stdout).status, 'skipped');
+  assert.equal(JSON.parse(profileStatus.stdout).markdown, null);
+  assert.notEqual(
+    invoke('profile', '--setup', '--agency-dir', agency).status,
+    0,
+  );
   assert.notEqual(invoke('bad-command').status, 0);
   assert.notEqual(invoke('init').status, 0);
   await writeFile(

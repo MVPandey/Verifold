@@ -1,0 +1,1 @@
+Propose promising falsifiable ideas grounded in sources. Explain recommendation, uncertainty, feasibility, and task-specific verification gates. Do not execute or select an idea. Return a JSON array of {id,title,recommendation,gates:string[]}; gates are proposals for human review, not approvals.

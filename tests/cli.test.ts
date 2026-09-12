@@ -6,6 +6,22 @@ import { join } from 'node:path';
 import { runCli } from '../src/cli/commands.ts';
 import { parseCandidates } from '../src/cli/contracts.ts';
 
+await test('bare noninteractive launch requires an explicit command and does not create files', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-launch-pipe-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await assert.rejects(
+    runCli([], root, {
+      interactive: false,
+      ask: () => Promise.reject(new Error('Unexpected prompt')),
+      out: () => {},
+    }),
+    /explicit command/,
+  );
+  await assert.rejects(readFile(join(root, '.verifold', 'workspace.json')), {
+    code: 'ENOENT',
+  });
+});
+
 await test('private CLI workflow preserves explicit selection and host ownership', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-cli-'));
   const results: string[] = [];
