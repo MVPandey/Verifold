@@ -404,3 +404,32 @@ await test('cancelling the profile interview preserves the previous setup outcom
     assert.ok(!(await readdir(agency)).includes('profile.lock'));
   });
 });
+
+await test('an existing project can establish missing global setup without running a harness', async () => {
+  await temporary(async (root, agency) => {
+    const project = join(root, 'project-record.txt');
+    await writeFile(project, 'Existing project evidence.');
+    await ensureGlobalProfile(
+      agency,
+      root,
+      { host: 'codex', model: 'fixture-model' },
+      io(['skip']),
+      signal(),
+      noHost,
+    );
+    assert.equal(
+      parseObject(await readFile(join(agency, 'profile-state.json'), 'utf8'))
+        .status,
+      'skipped',
+    );
+    assert.deepEqual(
+      parseObject(await readFile(join(agency, 'settings.json'), 'utf8')),
+      { host: 'codex', model: 'fixture-model' },
+    );
+    assert.equal(await readFile(project, 'utf8'), 'Existing project evidence.');
+    assert.deepEqual((await readdir(root)).sort(), [
+      'agency',
+      'project-record.txt',
+    ]);
+  });
+});

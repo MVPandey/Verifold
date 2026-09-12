@@ -56,7 +56,7 @@ verifold select
 
 The selected harness asks one follow-up at a time, using your answers and any saved background. Its prompt asks it to reason from first principles: why the problem matters, what assumptions need testing, what evidence would change your mind, and what scope is feasible. It asks about experience and constraints when needed. There is no fixed research questionnaire. The agent writes Markdown, not a required JSON brief. The conversation has up to six turns, with one explicit retry per failed turn. Press Enter or type `/finish` at a follow-up to request the brief early. If a reply fails, retry with your answers intact or review a local brief made from those answers.
 
-Choose your project directory before the interview. `--workspace path` supplies the directory directly. After any directory investigation, add a direction, question, or notes, or enter `/file <path>` to supply a written brief. File import asks permission before reading up to 12000 bytes and sending them to the selected harness. Press Enter without notes to let your harness help identify a direction from the available context.
+Choose your project directory before the interview. `--workspace path` supplies the directory directly. After any directory investigation, add a direction, question, or notes, or enter `/file <path>` to supply a written brief. File import asks permission before reading up to 12000 bytes and sending them to the selected harness. An unreadable file produces a diagnostic, then setup continues with the available context. Press Enter without notes to let your harness help identify a direction from the available context.
 
 Review the full research brief, press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. Then choose guided or autonomous exploration. Relative paths resolve against the directory where you launched Verifold; the interactive path also accepts `~/`. Missing directories are created. Existing folder contents are preserved; conflicting files, a preexisting `.verifold.md`, and linked scaffold directories are rejected.
 
@@ -131,9 +131,9 @@ Run `verifold profile` to inspect the full approved Markdown, its path, and its 
 
 Run `verifold profile --setup` to create, retry, or revise a profile without initializing a project. Setup requires an interactive terminal for source consent and review. Use `--host claude|codex`, `--model <id>`, or `--agency-dir <path>` when needed. These settings apply globally; existing project settings remain unchanged.
 
-`USER.md` determines which background can be reused. `profile-state.json` records the last completed setup outcome separately. Declining a replacement or a failed synthesis preserves the approved profile. Profile inspection reports a missing approved file if it was deleted. Cancelled setup does not record a new outcome.
+`USER.md` determines which background can be reused. `profile-state.json` records the last completed setup outcome separately. Declining a replacement or a failed synthesis preserves the approved profile. Profile inspection reports a missing approved file if it was deleted. The harness preference is saved when setup starts. Cancelling preserves the previous profile and setup outcome; it does not undo that preference.
 
-Only one profile setup can run in an agency at a time. If its process is killed, the error identifies `profile.lock`; confirm no setup is running before removing it. Drafts still require review before adoption. Profile editing in the browser and selecting several history sources remain planned work.
+Profile setup and initialization share a lock for global settings. Only one can update an agency at a time. If its process is killed, the error identifies `profile.lock`; confirm no setup is running before removing it. Drafts still require review before adoption. Profile editing in the browser and selecting several history sources remain planned work.
 
 ### Editable harness prompts
 

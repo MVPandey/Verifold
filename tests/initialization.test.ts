@@ -214,8 +214,9 @@ await test('reviewed folder evidence reaches the interview before an optional re
   assert.equal(requests.length, 2);
   assert.deepEqual(ui.remaining, []);
   assert.equal(initialized.workspace.context, brief);
-  assert.match(
-    initialized.research?.topic ?? '',
+  assert.equal(initialized.research?.topic, brief);
+  assert.doesNotMatch(
+    await readFile(join(root, '.verifold.md'), 'utf8'),
     /no research goal is approved yet/,
   );
   await assert.rejects(readFile(join(base, 'agency', 'USER.md')), {
@@ -223,7 +224,7 @@ await test('reviewed folder evidence reaches the interview before an optional re
   });
 });
 
-for (const consent of ['yes', 'no']) {
+for (const consent of ['yes', 'no', 'missing']) {
   await test(`written project context is read only with consent: ${consent}`, async (t) => {
     const base = await mkdtemp(join(tmpdir(), 'verifold-written-context-'));
     t.after(() => rm(base, { recursive: true, force: true }));
@@ -236,7 +237,7 @@ for (const consent of ['yes', 'no']) {
       'skip',
       'project',
       '/file brief.txt',
-      consent,
+      consent === 'missing' ? 'yes' : consent,
       '',
       'guided',
     ]);
@@ -257,6 +258,9 @@ for (const consent of ['yes', 'no']) {
     );
     assert.deepEqual(ui.remaining, []);
     assert.equal(initialized.workspace.context, brief);
+    assert.equal(initialized.research?.topic, brief);
+    if (consent === 'missing')
+      assert.match(ui.messages.join('\n'), /context file could not be read/);
     await assert.rejects(readFile(join(base, 'agency', 'USER.md')), {
       code: 'ENOENT',
     });

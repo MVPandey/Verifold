@@ -110,7 +110,12 @@ try {
       '--no-open',
     ],
     ['--no-open', '--agency-dir', agency],
+    ['--no-open', '--agency-dir', join(root, 'legacy-agency')],
   ]) {
+    const previousWorkspace =
+      args[0] === '--setup-only'
+        ? undefined
+        : await readFile(join(root, '.verifold', 'workspace.json'));
     const owner = new AbortController();
     const results = [];
     await runCli(
@@ -138,7 +143,18 @@ try {
         ),
     );
     assert.ok(results.some((value) => value.includes('"url":')));
+    if (previousWorkspace)
+      assert.deepEqual(
+        await readFile(join(root, '.verifold', 'workspace.json')),
+        previousWorkspace,
+      );
   }
+  assert.equal(
+    JSON.parse(
+      await readFile(join(root, 'legacy-agency', 'settings.json'), 'utf8'),
+    ).host,
+    'codex',
+  );
   assert.match(await readFile(join(agency, 'settings.json'), 'utf8'), /codex/);
   const launchState = await readFile(
     join(root, '.verifold', 'workspace.json'),
