@@ -55,7 +55,7 @@ await test('follow-ups are bounded and /finish requests a final brief', async ()
     (request) => {
       calls++;
       if (calls === 2)
-        assert.match(request.prompt, /Return question: null now/);
+        assert.match(request.prompt, /Write the research brief now/);
       return Promise.resolve({
         text: JSON.stringify({
           question: calls === 1 ? 'Why?' : null,
@@ -68,26 +68,67 @@ await test('follow-ups are bounded and /finish requests a final brief', async ()
   assert.equal(result, 'Unknowns remain explicit.');
 });
 
-for (const value of [
-  'not json',
-  '{"brief":"ok"}',
-  JSON.stringify({ question: null, brief: 'é'.repeat(6000) }),
-  JSON.stringify({ question: [], brief: 'ok' }),
-]) {
-  await test('invalid onboarding output is rejected before review', async () => {
-    await assert.rejects(
-      researchInterview(
-        'Graphs',
-        undefined,
-        { host: 'codex' },
-        '.',
-        io([]),
-        signal(),
-        () => Promise.resolve({ text: value }),
-      ),
+await test('Markdown and missing legacy brief fields do not fail onboarding', async () => {
+  for (const response of [
+    'What would you like to learn about J-Lens/SHAPley?',
+    '{"question":"What would you like to test?"}',
+  ]) {
+    let calls = 0;
+    const result = await researchInterview(
+      'J-Lens/SHAPley',
+      undefined,
+      { host: 'claude' },
+      '.',
+      io(['/finish', '']),
+      signal(),
+      () =>
+        Promise.resolve({
+          text:
+            ++calls === 1
+              ? response
+              : '# Research brief\n\nInvestigate attribution stability.',
+        }),
     );
-  });
-}
+    assert.match(result, /attribution stability/);
+  }
+});
+
+await test('failed and oversized replies offer local recovery without losing the topic', async () => {
+  for (const response of ['', 'é'.repeat(6000)]) {
+    const result = await researchInterview(
+      'J-Lens/SHAPley',
+      undefined,
+      { host: 'claude' },
+      '.',
+      io(['local', '']),
+      signal(),
+      () => Promise.resolve({ text: response }),
+    );
+    assert.match(result, /J-Lens\/SHAPley/);
+    assert.match(result, /no agent review/);
+  }
+});
+
+await test('an explicit retry keeps previous answers and uses Markdown', async () => {
+  let calls = 0;
+  const result = await researchInterview(
+    'Graphs',
+    undefined,
+    { host: 'claude' },
+    '.',
+    io(['retry', '']),
+    signal(),
+    (request) => {
+      assert.match(request.prompt, /Graphs/);
+      if (++calls === 1) throw new Error('Private provider diagnostics');
+      return Promise.resolve({
+        text: '# Research brief\n\nUse controlled graphs.',
+      });
+    },
+  );
+  assert.equal(calls, 2);
+  assert.match(result, /controlled graphs/);
+});
 
 await test('noninteractive onboarding returns a brief without asking questions', async () => {
   const result = await researchInterview(
@@ -98,7 +139,7 @@ await test('noninteractive onboarding returns a brief without asking questions',
     { ...io([]), interactive: false },
     signal(),
     (request) => {
-      assert.match(request.prompt, /Return question: null now/);
+      assert.match(request.prompt, /Write the research brief now/);
       return Promise.resolve({
         text: '{"question":null,"brief":"Unreviewed automation brief; constraints unknown."}',
       });
@@ -138,4 +179,22 @@ await test('cancellation and declined brief stop onboarding', async () => {
     ),
     /abort/i,
   );
+});
+
+await test('local recovery preserves user answers when an agent reply contains long prose', async () => {
+  let calls = 0;
+  const result = await researchInterview(
+    'Graphs',
+    undefined,
+    { host: 'claude' },
+    '.',
+    io(['Use deterministic CPU experiments.', 'local', '']),
+    signal(),
+    () =>
+      Promise.resolve({
+        text: ++calls === 1 ? 'Long model explanation.\n'.repeat(300) : '',
+      }),
+  );
+  assert.match(result, /Use deterministic CPU experiments/);
+  assert.ok(Buffer.byteLength(result) < 2000);
 });

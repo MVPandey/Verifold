@@ -6,7 +6,8 @@ import { wrapText } from './terminal-layout.ts';
 export const palette = {
   violet: '124;58;237',
   lavender: '183;148;246',
-  deep: '76;29;149',
+  sky: '96;165;250',
+  mint: '52;211;153',
 } as const;
 export type Tone = keyof typeof palette;
 
@@ -35,6 +36,24 @@ export function paragraph(value: string, columns = 80, indent = '  '): string {
     .join('\n');
 }
 
+/** Give Markdown headings and completed actions hierarchy without interpreting escapes. */
+export function terminalMessage(
+  value: string,
+  color: boolean,
+  columns = 80,
+): string {
+  return stripVTControlCharacters(value)
+    .split('\n')
+    .map((line) => {
+      const heading = /^#{1,6}\s+(.+)$/.exec(line);
+      if (heading)
+        return tint(paragraph(heading[1] ?? '', columns), color, 'sky');
+      const row = paragraph(line, columns);
+      return line.startsWith('✓ ') ? tint(row, color, 'mint') : row;
+    })
+    .join('\n');
+}
+
 /** Compact folded VF silhouette with the approved wordmark and tagline. */
 export function terminalBanner(
   interactive: boolean,
@@ -53,7 +72,7 @@ export function terminalBanner(
           .map(
             (line, index) =>
               '  ' +
-              tint(line, color, 'deep') +
+              tint(line, color, 'sky') +
               tint(
                 right[index] ?? '',
                 color,
@@ -83,7 +102,7 @@ export function terminalMenu(
   choices.forEach((choice, position) => {
     wrapText(choice.label, Math.max(1, width - 2)).forEach((line, i) => {
       const row = (i ? '    ' : position === index ? '  ◆ ' : '  ○ ') + line;
-      lines.push(position === index ? tint(row, color) : row);
+      lines.push(position === index ? tint(row, color, 'sky') : row);
     });
   });
   lines.push(
