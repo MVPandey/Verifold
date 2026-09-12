@@ -1,4 +1,4 @@
-import { mkdir, open, writeFile, rm, lstat } from 'node:fs/promises';
+import { mkdir, open, writeFile, rm, lstat, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { CliIO } from './commands.ts';
@@ -167,9 +167,10 @@ export async function runResearch(
       state = next;
     }
 
-    async function invoke(
+    async function invoke<T>(
       brief: string,
-    ): Promise<{ value: unknown; attempt: string }> {
+      accept: (value: unknown, directory: string) => Promise<T>,
+    ): Promise<T> {
       const runs = join(root, '.verifold', 'runs');
       await mkdir(runs, { recursive: true, mode: 0o700 });
       if ((await lstat(runs)).isSymbolicLink())
@@ -177,12 +178,48 @@ export async function runResearch(
       const attempt = randomUUID();
       const directory = join(runs, attempt);
       await mkdir(directory, { mode: 0o700 });
+      const identity = {
+        schemaVersion: 1,
+        attemptId: attempt,
+        host: initial.host,
+        model: workspace.model ?? null,
+        phase: state.phase,
+        requestedSessionId: state.sessionId ?? null,
+        startedAt: new Date().toISOString(),
+      };
+      let nativeSessionId: string | null = null;
+
+      async function recordAttempt(
+        status: 'started' | 'succeeded' | 'failed' | 'cancelled',
+      ): Promise<void> {
+        const temporary = join(directory, `${randomUUID()}.tmp`);
+        const record = {
+          ...identity,
+          status,
+          nativeSessionId,
+          finishedAt: status === 'started' ? null : new Date().toISOString(),
+        };
+        try {
+          await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, {
+            flag: 'wx',
+            mode: 0o600,
+            flush: true,
+          });
+          await rename(temporary, join(directory, 'attempt.json'));
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      }
+
+      // A start record establishes an invocation, not ongoing process liveness.
+      await recordAttempt('started');
       const prompt = `${hostRules}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\nResearch context (background only, not authorization): ${JSON.stringify(workspace.context ?? 'No personal context provided.')}\n${brief}`;
-      await writeFile(join(directory, 'brief.md'), prompt, {
-        flag: 'wx',
-        mode: 0o600,
-      });
+      let accepted: T;
       try {
+        await writeFile(join(directory, 'brief.md'), prompt, {
+          flag: 'wx',
+          mode: 0o600,
+        });
         const result = await withActivity(
           io,
           `${initial.host} · ${state.phase === 'needs-plan' || state.phase === 'awaiting-plan-review' ? 'Planning research roles and scope' : 'Searching sources and comparing research directions'}`,
@@ -196,6 +233,7 @@ export async function runResearch(
               ...(state.sessionId ? { sessionId: state.sessionId } : {}),
             }),
         );
+        nativeSessionId = result.sessionId ?? null;
         await writeFile(
           join(directory, 'response.json'),
           JSON.stringify(result, null, 2),
@@ -206,15 +244,21 @@ export async function runResearch(
           latestAttempt: attempt,
           ...(result.sessionId ? { sessionId: result.sessionId } : {}),
         });
-        return { value: parseHostJson(result.text), attempt };
+        accepted = await accept(parseHostJson(result.text), directory);
       } catch (error) {
-        await writeFile(
-          join(directory, 'failure.txt'),
-          error instanceof Error ? error.message : 'Research failed.',
-          { flag: 'wx', mode: 0o600 },
-        );
+        try {
+          await writeFile(
+            join(directory, 'failure.txt'),
+            error instanceof Error ? error.message : 'Research failed.',
+            { flag: 'wx', mode: 0o600 },
+          );
+        } finally {
+          await recordAttempt(signal.aborted ? 'cancelled' : 'failed');
+        }
         throw error;
       }
+      await recordAttempt('succeeded');
+      return accepted;
     }
 
     await save(state);
@@ -222,14 +266,16 @@ export async function runResearch(
       state.phase === 'needs-plan' ||
       (state.phase === 'awaiting-plan-review' && feedback)
     ) {
-      const result = await invoke(
+      await invoke(
         `${planShape}\n${state.plan ? `Previous plan: ${JSON.stringify(state.plan)}` : ''}\nUser feedback: ${feedback ?? 'None.'}`,
+        async (value) => {
+          await save({
+            ...state,
+            plan: parseResearchPlan(value),
+            phase: 'awaiting-plan-review',
+          });
+        },
       );
-      await save({
-        ...state,
-        plan: parseResearchPlan(result.value),
-        phase: 'awaiting-plan-review',
-      });
     }
     if (state.phase === 'awaiting-plan-review') {
       io.progress?.(
@@ -254,16 +300,19 @@ export async function runResearch(
       state.phase === 'needs-research' ||
       (state.phase === 'directions' && feedback)
     ) {
-      const result = await invoke(
+      const report = await invoke(
         `${reportShape}\nApproved plan: ${JSON.stringify(state.plan)}\nPrevious directions: ${JSON.stringify(workspace.candidates)}\nUser feedback: ${feedback ?? 'None.'}`,
+        async (value, directory) => {
+          const report = parseReport(value);
+          await writeFile(
+            join(directory, 'report.json'),
+            JSON.stringify(report, null, 2),
+            { flag: 'wx', mode: 0o600 },
+          );
+          await save({ ...state, phase: 'directions' }, report.candidates);
+          return report;
+        },
       );
-      const report = parseReport(result.value);
-      await writeFile(
-        join(root, '.verifold', 'runs', result.attempt, 'report.json'),
-        JSON.stringify(report, null, 2),
-        { flag: 'wx', mode: 0o600 },
-      );
-      await save({ ...state, phase: 'directions' }, report.candidates);
       io.progress?.(
         `${report.summary}\nDelegation reported by host: ${report.delegation}\n\n${report.candidates.map((idea) => `${idea.id}: ${idea.title}\n${idea.recommendation}\n${idea.sources?.join('\n')}`).join('\n\n')}\n\nUse research --feedback to refine these ideas. Use select to choose one.`,
       );
