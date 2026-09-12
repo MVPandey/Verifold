@@ -132,11 +132,19 @@ project/
   agents/       Project agent briefs and review notes
 ```
 
+If the selected directory contains supported top-level documentation, Verifold offers an investigation before project creation. With consent, the agent receives a bounded selection of top-level README, agent-instruction, and manifest files. You review the resulting brief; declining or a failed investigation preserves your original brief. Accepted context stays in the project’s `.verifold.md` and workspace state, not your personal profile. This is documentation-based context, not a source-code audit.
+
 The approved brief feeds planning and research in the selected directory. It stays project-scoped; onboarding does not automatically turn it into a reusable personal profile. Run subsequent commands from that directory or pass `--workspace path`.
 
 Use arrow keys or number keys in the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
 
-When no approved background exists, interactive `init` offers an optional profile step after your research question and harness selection. Import one selected memory or conversation-export text file, write an introduction locally, or skip. `init --setup-only` also offers an agent interview to build a reusable profile. Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency. Later onboarding reuses this approved background without repeating profile questions or rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain. Local storage does not imply offline model processing.
+When no approved background exists, interactive `init` offers an optional profile step after your research question and harness selection. Choose “Learn from my chats” to select a local chat file or folder, import one memory file, write an introduction locally, or skip. The chat option suggests the selected harness’s usual local session folder; you can choose a narrower folder or an export instead. `init --setup-only` also offers an agent interview to build a reusable profile.
+
+Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency.
+
+Later onboarding reuses this approved background without repeating profile questions or rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain.
+
+Chat sampling inspects at most 200 directory entries and ten files, with a 256 KB per-file limit and 512 KB total. It skips links, hidden subdirectories, oversized files, and unsupported native records. Native JSONL imports retain recognized user-role messages, excluding model responses, tool results, and subagent folders. User-role records can still include harness-injected context; review the profile’s inferences. Ordinary text and JSON exports are supplied as selected. Local storage does not imply offline model processing.
 
 The coordinator proposes a search scope and personas. Guided mode pauses for approval. Use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
 

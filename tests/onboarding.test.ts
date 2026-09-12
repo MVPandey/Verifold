@@ -180,3 +180,21 @@ await test('cancellation and declined brief stop onboarding', async () => {
     /abort/i,
   );
 });
+
+await test('local recovery preserves user answers when an agent reply contains long prose', async () => {
+  let calls = 0;
+  const result = await researchInterview(
+    'Graphs',
+    undefined,
+    { host: 'claude' },
+    '.',
+    io(['Use deterministic CPU experiments.', 'local', '']),
+    signal(),
+    () =>
+      Promise.resolve({
+        text: ++calls === 1 ? 'Long model explanation.\n'.repeat(300) : '',
+      }),
+  );
+  assert.match(result, /Use deterministic CPU experiments/);
+  assert.ok(Buffer.byteLength(result) < 2000);
+});

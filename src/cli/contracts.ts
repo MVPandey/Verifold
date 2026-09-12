@@ -99,7 +99,7 @@ export function parseWorkspace(value: unknown): Workspace {
   };
 }
 
-function parseContext(value: unknown): string {
+export function parseContext(value: unknown): string {
   if (
     typeof value !== 'string' ||
     !value.trim() ||

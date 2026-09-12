@@ -37,3 +37,7 @@ Research attempts remain under the project's ignored `.verifold/` directory; the
 `npm run audit:security` checks dependency advisories and available registry signatures and attestations. It requires network access. It runs before publication.
 
 GitHub publishing uses a designated workflow and short-lived OIDC credentials. Release checks reduce risk but do not prove that software or dependencies are free from vulnerabilities.
+
+Chat-folder import requires consent before scanning or reading the selected path. It scans at most 200 entries and reads at most ten files, 256 KB per file and 512 KB total. Native JSONL imports keep recognized user text; they exclude model responses and tool results. Ordinary text and JSON exports may include private code or third-party material. Review the selected scope before allowing provider processing. No browser account or cloud chat API is accessed.
+
+Existing-project investigation requires consent before file contents are read. It supplies selected top-level documentation and manifest files to the chosen harness, which retains its normal configuration and permissions. Verifold requests no additional tool use. The user reviews the draft before project-local adoption; it does not update personal memory.

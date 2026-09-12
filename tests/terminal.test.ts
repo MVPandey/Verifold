@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { terminalBanner, tint } from '../src/cli/terminal.ts';
+import { terminalBanner, tint, terminalMessage } from '../src/cli/terminal.ts';
 import { visibleWidth } from '../src/cli/terminal-layout.ts';
 import { paragraph, terminalMenu } from '../src/cli/terminal.ts';
 import { initializeProject, parseAutonomy } from '../src/cli/initialization.ts';
@@ -22,6 +22,17 @@ await test('terminal branding respects noninteractive output and NO_COLOR', () =
     tint('\u001b[2JApprove?\u001b]0;hidden\u0007', false),
     'Approve?',
   );
+});
+
+await test('terminal messages distinguish headings and success without trusting escape sequences', () => {
+  const message = '# Research brief\n\nPlain body\n✓ Accepted\u001b[2J';
+  assert.equal(terminalMessage(message, false).includes('\u001b'), false);
+  const styled = terminalMessage(message, true);
+  assert.match(styled, /96;165;250/);
+  assert.match(styled, /52;211;153/);
+  assert.equal(styled.includes('\u001b[2J'), false);
+  for (const line of terminalMessage(message, true, 24).split('\n'))
+    assert.ok(visibleWidth(line) < 24);
 });
 
 await test('guided initialization collects a broad topic without launching research', async () => {

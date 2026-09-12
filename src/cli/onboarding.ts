@@ -148,7 +148,7 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
       if (!answer || answer === '/finish' || answer === '/brief') finish = true;
       else
         answers.push({
-          question: response.body,
+          question: response.body.slice(0, 300).replace(/\s+/g, ' '),
           answer: text(answer, 'onboarding answer', 4000),
         });
       continue;

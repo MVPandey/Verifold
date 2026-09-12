@@ -8,6 +8,7 @@ import {
   paragraph,
   terminalBanner,
   terminalMenu,
+  terminalMessage,
   tint,
 } from './terminal.ts';
 import { visibleWidth } from './terminal-layout.ts';
@@ -64,19 +65,17 @@ export class TerminalSession {
   }
 
   progress(value: string): void {
-    stderr.write(`${paragraph(value, stderr.columns)}\n\n`);
+    stderr.write(`${terminalMessage(value, this.color, stderr.columns)}\n\n`);
   }
 
   async ask(question: string): Promise<string> {
     this.signal.throwIfAborted();
-    stderr.write(
-      `${tint(paragraph(question.trim(), stderr.columns), this.color)}\n`,
-    );
+    stderr.write(`${paragraph(question.trim(), stderr.columns)}\n`);
     const input = createInterface({ input: stdin, output: stderr });
     input.on('SIGINT', this.cancel);
     input.on('close', this.cancel);
     try {
-      return await input.question(tint('  › ', this.color), {
+      return await input.question(tint('  › ', this.color, 'sky'), {
         signal: this.signal,
       });
     } finally {
@@ -164,10 +163,7 @@ export class TerminalSession {
       stderr.write('\u001b[?25h');
       stdin.setRawMode(wasRaw);
       stdin.pause();
-      if (accepted)
-        stderr.write(
-          `${tint(paragraph(`✓ ${choices[index]?.label ?? ''}`, stderr.columns), this.color)}\n\n`,
-        );
+      if (accepted) this.progress(`✓ ${choices[index]?.label ?? ''}`);
     }
   }
 

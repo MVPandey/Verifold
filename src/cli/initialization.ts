@@ -16,6 +16,7 @@ import type { Workspace } from './contracts.ts';
 import { readJson } from './storage.ts';
 import { researchInterview } from './onboarding.ts';
 import { checkProjectDirectory, createProject } from './project.ts';
+import { investigateProject } from './project-context.ts';
 
 export interface InitializationOptions {
   readonly profile?: string;
@@ -201,6 +202,15 @@ export async function initializeProject(
           : resolve(cwd, selected);
     }
     await checkProjectDirectory(root);
+    if (io.interactive)
+      context = await investigateProject(
+        root,
+        brief,
+        { host, ...(model ? { model } : {}) },
+        io,
+        signal,
+        harness,
+      );
     const autonomy = parseAutonomy(
       options.autonomy ??
         (io.interactive

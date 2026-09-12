@@ -35,7 +35,7 @@ Initialization first runs a bounded adaptive interview (or a single automated br
 
 Guided mode pauses between these stages. Feedback revises the plan or directions through a saved host session when available.
 
-Required behavioral checks cover the exact first question, adaptive answers and session reuse, revision without a session ID, selected-directory propagation, scaffold preservation and collisions, concurrent creation, preparation rollback under lock, approval, feedback, explicit selection, invalid source mappings, malformed responses, and state preservation after failure. The packed consumer exercises onboarding through a subprocess harness fixture and verifies the scaffold and sourced research directions. These fixtures validate integration behavior, not live authentication, model quality, or scientific correctness.
+Required behavioral checks cover Markdown replies, legacy reply compatibility, missing brief fields, explicit retry, local recovery, consented chat sampling, user-message filtering, reviewed existing-project context, the exact first question, adaptive answers and session reuse, revision without a session ID, selected-directory propagation, scaffold preservation and collisions, concurrent creation, preparation rollback under lock, approval, feedback, explicit selection, invalid source mappings, malformed responses, and state preservation after failure. The packed consumer exercises onboarding through a subprocess harness fixture and verifies the scaffold and sourced research directions. These fixtures validate integration behavior, not live authentication, model quality, or scientific correctness.
 
 Adapter checks cover process errors, host-reported failure, bounded output, cancellation, deadlines, and session references.
 
