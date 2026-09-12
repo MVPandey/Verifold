@@ -41,6 +41,12 @@ Adapter checks cover process errors, host-reported failure, bounded output, canc
 
 A host response that reports subagents is evidence of the host's report. Verifold does not independently verify native delegation.
 
+## Local research desk
+
+Desk tests check recent and stale owner observations, malformed records, symlink rejection, bounded history, escaped project content, token authentication, host and origin checks, read-only HTTP behavior, browser-launch failure, and server cancellation. The packed consumer starts the installed desk, reads a controlled research report, checks the bundled assets, and stops the server.
+
+These checks do not establish browser layout, keyboard interaction, automatic browser refresh, or light/dark appearance. Verify those behaviors separately in a browser before closing the desk issue.
+
 ## Optional literature requests
 
 Initial research does not require PDFs. After selection, `literature` prints a retention request. `literature --memory` also requests Markdown memory and file mappings.

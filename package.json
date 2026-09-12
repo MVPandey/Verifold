@@ -1,6 +1,6 @@
 {
   "name": "verifold",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A research project CLI for coordinating existing AI agent harnesses.",
   "repository": {
     "type": "git",
@@ -34,7 +34,7 @@
     "test": "node scripts/test.mjs",
     "check:private": "node scripts/check-private-files.mjs",
     "validate": "npm run check:private && npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:package",
-    "build:cli": "node -e \"require('node:fs').rmSync('dist-cli', { recursive: true, force: true })\" && tsc -p tsconfig.cli.json",
+    "build:cli": "node -e \"require('node:fs').rmSync('dist-cli', { recursive: true, force: true })\" && tsc -p tsconfig.cli.json && node scripts/build-cli-assets.mjs",
     "test:package": "node scripts/package-check.mjs",
     "audit:security": "npm audit --audit-level=high && npm audit signatures",
     "prepublishOnly": "npm run validate && npm run audit:security"

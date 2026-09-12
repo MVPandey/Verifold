@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -115,6 +116,22 @@ async function savedAttempt(
   );
 }
 
+await test('a pending request refreshes observations before recording its final outcome', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let id = '';
+  await runResearch(root, { topic: 'Math' }, io, signal(), async () => {
+    [id = ''] = await readdir(join(root, '.verifold', 'runs'));
+    const first = await savedAttempt(root, id);
+    await delay(2200);
+    const refreshed = await savedAttempt(root, id);
+    assert.equal(refreshed.status, 'started');
+    assert.notEqual(refreshed.observedAt, first.observedAt);
+    return { text: JSON.stringify(plan) };
+  });
+  assert.equal((await savedAttempt(root, id)).status, 'succeeded');
+});
+
 await test('attempt identity precedes the harness call and survives successful acceptance', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -128,6 +145,7 @@ await test('attempt identity precedes the harness call and survives successful a
     async () => {
       [id = ''] = await readdir(join(root, '.verifold', 'runs'));
       started = await savedAttempt(root, id);
+      assert.equal((await loadWorkspace(root)).research?.latestAttempt, id);
       assert.deepEqual(started, {
         schemaVersion: 1,
         attemptId: id,
@@ -137,6 +155,7 @@ await test('attempt identity precedes the harness call and survives successful a
         requestedSessionId: null,
         nativeSessionId: null,
         startedAt: started.startedAt,
+        observedAt: started.observedAt,
         finishedAt: null,
         status: 'started',
       });
@@ -159,6 +178,7 @@ await test('attempt identity precedes the harness call and survives successful a
     status: 'succeeded',
     nativeSessionId: 'native-session',
     finishedAt: finished.finishedAt,
+    observedAt: finished.observedAt,
   });
   assert.equal(
     (await stat(join(root, '.verifold', 'runs', id, 'attempt.json'))).mode &

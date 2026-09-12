@@ -175,6 +175,14 @@ After selection, `literature` prints an optional retention request. `--memory` a
 
 `handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and gates before execution. Verifold does not execute Automative in this version.
 
+### Local research desk
+
+Run `verifold ui --workspace <path>` to open a read-only browser desk for an initialized project. Keep that terminal open; Ctrl+C stops the server. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect.
+
+The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Run research in another terminal; opening or refreshing the desk does not launch a harness. Research controls remain in the CLI.
+
+Recent activity means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. The adapters expose lifecycle and final output, not live tool output. Requested models, returned session IDs, and host-reported delegation remain distinct from independently observed behavior.
+
 ## Privacy and website
 
 Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, and reports under `.verifold/runs/<attempt-id>/`. These files can contain private research information.
@@ -183,11 +191,11 @@ Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitig
 
 The selected harness uses its configured model services and research tools. Local state does not imply that those services run offline. Verifold creates no remote profile or publication.
 
-`view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
+`ui` serves only the selected project on loopback, with authenticated project reads and bundled assets. It rejects unexpected hosts and origins. It does not expose raw harness transcripts or arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
 
 ## Help build Verifold
 
-Start with [the local research desk #15](https://github.com/MVPandey/Verifold/issues/15). Profile import and scoped memory are smaller parallel contributions. Each issue defines its prerequisites and acceptance criteria.
+See [open issues](https://github.com/MVPandey/Verifold/issues) for current contributions. Each issue defines its prerequisites and acceptance criteria.
 
 The wider goal is a shared home for computational science, including math, CS/ML, and security. Researchers should be able to inspect assumptions, critique an analysis, rerun an experiment, or contribute an adjacent investigation. Failed attempts and unresolved objections belong beside successful results.
 
@@ -211,7 +219,7 @@ Normal research failures preserve the saved checkpoint. Inspect `status` and the
 
 New research attempts save `attempt.json` beside their evidence. It records the Verifold attempt ID, harness, requested model, starting phase, timestamps, requested session, and returned native session separately. A null model means the harness default was requested. It does not identify the resolved model.
 
-`succeeded` means the response passed Verifold validation and the phase checkpoint was saved, not that its scientific claims were verified. `failed` and `cancelled` preserve available evidence. Inspect the checkpoint before retrying. A record left at `started` has an unknown final outcome and does not prove that a process remains alive. Older attempts have no record. The live browser UI and process recovery remain planned work.
+`succeeded` means the response passed Verifold validation and the phase checkpoint was saved, not that its scientific claims were verified. `failed` and `cancelled` preserve available evidence. Inspect the checkpoint before retrying. A record left at `started` has an unknown final outcome and does not prove that a process remains alive. Older attempts have no record. The desk scans at most 200 history entries, includes the latest recorded attempt separately, and marks unreadable records as unknown. Process recovery remains manual.
 
 `make validate` runs formatting, type-aware linting, strict types, tests, both builds, and a packed CLI consumer check. Enable the commit and push hooks in each clone:
 
