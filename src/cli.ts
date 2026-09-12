@@ -34,7 +34,8 @@ const terminal = interactive
 try {
   if (
     terminal &&
-    ['init', 'research'].includes(process.argv[2] ?? '') &&
+    (process.argv.length === 2 ||
+      ['init', 'research'].includes(process.argv[2] ?? '')) &&
     !process.argv.includes('--help')
   )
     await terminal.welcome();

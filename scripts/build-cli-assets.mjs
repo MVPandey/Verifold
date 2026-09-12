@@ -1,4 +1,6 @@
-import { copyFile } from 'node:fs/promises';
+import { copyFile, cp } from 'node:fs/promises';
+
+await cp('src/cli/prompts', 'dist-cli/cli/prompts', { recursive: true });
 
 for (const [source, target] of [
   ['src/cli/desk.css', 'desk.css'],
