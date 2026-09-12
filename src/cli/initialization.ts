@@ -166,6 +166,7 @@ export async function initializeProject(
   let research: Initialization['research'] = null;
   if (!options.setupOnly) {
     let projectReviewed = false;
+    let topicFromBrief = false;
     if (host !== 'claude' && host !== 'codex')
       throw new Error('Research requires a supported harness.');
     if (io.interactive && !options.workspaceSpecified) {
@@ -209,16 +210,25 @@ export async function initializeProject(
           `Read only ${source} (up to 12000 bytes) and send its text to ${host} (${model ?? 'host default model'}) as project context? Your model provider may process it under your harness settings. [y/N]: `,
         );
         signal.throwIfAborted();
-        if (/^(y|yes)$/i.test(consent.trim()))
-          context = JSON.stringify({
-            background: context,
-            source,
-            projectNotes: await readMemory(source),
-          });
+        if (/^(y|yes)$/i.test(consent.trim())) {
+          try {
+            context = JSON.stringify({
+              background: context,
+              source,
+              projectNotes: await readMemory(source),
+            });
+          } catch {
+            signal.throwIfAborted();
+            io.progress?.(
+              'The selected context file could not be read. It must be a regular text file of at most 12000 bytes. Setup will continue with the available context.',
+            );
+          }
+        }
         topic = '';
       }
       if (topic.length > 4000)
         throw new Error('Provide research notes of at most 4000 characters.');
+      topicFromBrief = !topic;
       topic ||= await loadPrompt('project-direction');
     }
     if (topic === undefined) throw new Error('Research requires a topic.');
@@ -235,6 +245,7 @@ export async function initializeProject(
       harness,
       projectReviewed ? 'project' : 'profile',
     );
+    if (topicFromBrief) topic = memorySummary(context);
     const autonomy = parseAutonomy(
       options.autonomy ??
         (io.interactive

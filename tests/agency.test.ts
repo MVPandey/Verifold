@@ -366,11 +366,11 @@ await test('profile setup rejects concurrent changes and releases its lock for a
               signal,
               noHost,
             ),
-            /Profile setup is locked/,
+            /Agency settings are locked/,
           );
           await assert.rejects(
             saveAgencyPreferences(directory, { host: 'claude' }, signal),
-            /Profile setup is locked/,
+            /Agency settings are locked/,
           );
           assert.deepEqual(await loadAgency(directory), { host: 'codex' });
           return 'skip';

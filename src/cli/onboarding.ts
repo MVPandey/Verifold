@@ -7,10 +7,7 @@ import { runHarness } from './harness.ts';
 import { text, parseHostJson } from './research-contracts.ts';
 
 function cancelOnboarding(): never {
-  throw new DOMException(
-    'Onboarding cancelled. No project was initialized.',
-    'AbortError',
-  );
+  throw new DOMException('Onboarding cancelled.', 'AbortError');
 }
 
 function localBrief(value: string): string {

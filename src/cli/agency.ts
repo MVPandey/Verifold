@@ -152,7 +152,9 @@ export async function loadProfileState(
         data.status !== 'skipped' &&
         data.status !== 'failed')
     )
-      throw new Error('Invalid profile setup state.');
+      throw new Error(
+        `Invalid profile setup state: ${join(directory, 'profile-state.json')}.`,
+      );
     return { schemaVersion: 1, status: data.status };
   } catch (error) {
     if (missing(error)) return undefined;
@@ -211,7 +213,7 @@ async function withProfileLock<T>(
   const lock = await open(lockPath, 'wx', 0o600).catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'EEXIST')
       throw new Error(
-        `Profile setup is locked. Confirm no profile setup is running before removing ${lockPath}.`,
+        `Agency settings are locked. Confirm no profile setup or initialization is running before removing ${lockPath}.`,
       );
     throw error;
   });
