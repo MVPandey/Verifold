@@ -173,16 +173,21 @@ export async function personalize(
   io: CliIO,
   signal: AbortSignal,
   host: typeof runHarness = runHarness,
+  offerInterview = true,
 ): Promise<string | undefined> {
   const choice = await choose(
     io,
     '02 / Personalize · Give your agents useful research context',
     [
-      {
-        value: 'chat',
-        label: 'Build a profile with my agent',
-        description: 'A short interview, then an AI draft you review.',
-      },
+      ...(offerInterview
+        ? [
+            {
+              value: 'chat',
+              label: 'Build a profile with my agent',
+              description: 'A short interview, then an AI draft you review.',
+            },
+          ]
+        : []),
       {
         value: 'import',
         label: 'Use existing memory',

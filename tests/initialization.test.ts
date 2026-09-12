@@ -68,7 +68,7 @@ await test('init asks the research question first and carries its adaptive brief
   const root = await mkdtemp(join(tmpdir(), 'verifold-init-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const agencyDir = join(root, 'agency');
-  const ui = prompts(['Tiny graph search', 'codex', '', '', '', '']);
+  const ui = prompts(['Tiny graph search', 'codex', '', 'skip', '', '', '']);
   const initialized = await initializeProject(
     root,
     root,
@@ -151,7 +151,7 @@ await test('reviewed context and model are reused in another project and reach i
   assert.deepEqual(returning.remaining, []);
   assert.match(returning.questions[1] ?? '', /\[claude\]/);
   assert.match(returning.questions[2] ?? '', /\[sonnet\]/);
-  assert.doesNotMatch(returning.questions.join('\n'), /import\/write\/skip/);
+  assert.doesNotMatch(returning.questions.join('\n'), /Personalize/);
   assert.equal(initialized.workspace.context, context);
   assert.equal(initialized.workspace.model, 'sonnet');
   const requests: HarnessRequest[] = [];
@@ -170,6 +170,93 @@ await test('reviewed context and model are reused in another project and reach i
   assert.ok(requests[0]?.prompt.includes(context));
   assert.match(requests[0]?.prompt ?? '', /background only, not authorization/);
 });
+
+for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
+  await test(`normal onboarding profile import: ${outcome}`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'verifold-init-import-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const agencyDir = join(root, 'agency');
+    const source = join(root, 'memory.txt');
+    const background = 'I prefer deterministic graph experiments.';
+    // A declined source stays absent, so an attempted read would fail.
+    if (outcome !== 'decline') await writeFile(source, background);
+    const ui = prompts([
+      'Graph search',
+      'codex',
+      'chosen-model',
+      'import',
+      source,
+      outcome === 'decline' ? 'no' : 'yes',
+      ...(outcome === 'accept' || outcome === 'reject'
+        ? [outcome === 'accept' ? 'yes' : 'no']
+        : []),
+      '',
+      '',
+      'guided',
+    ]);
+    const requests: HarnessRequest[] = [];
+    const initialized = await initializeProject(
+      root,
+      root,
+      { agencyDir },
+      ui.io,
+      signal(),
+      (request) => {
+        requests.push(request);
+        if (outcome !== 'decline' && requests.length === 1) {
+          assert.ok(request.prompt.includes(background));
+          assert.equal(request.model, 'chosen-model');
+          if (outcome === 'failure')
+            return Promise.reject(new Error('PRIVATE_SOURCE_CONTENT'));
+          return Promise.resolve({ text: background });
+        }
+        assert.equal(request.prompt.includes(background), outcome === 'accept');
+        return Promise.resolve({
+          text: JSON.stringify({
+            question: null,
+            brief: outcome === 'accept' ? `${brief} ${background}` : brief,
+          }),
+        });
+      },
+    );
+    assert.deepEqual(ui.remaining, []);
+    assert.match(ui.questions[0] ?? '', /^What do you want to work on\?/);
+    assert.doesNotMatch(
+      ui.questions.join('\n'),
+      /Build a profile with my agent/,
+    );
+    assert.equal(requests.length, outcome === 'decline' ? 1 : 2);
+    assert.doesNotMatch(ui.messages.join('\n'), /PRIVATE_SOURCE_CONTENT/);
+    if (outcome === 'accept') {
+      assert.equal(
+        await readFile(join(agencyDir, 'USER.md'), 'utf8'),
+        background,
+      );
+      await runResearch(
+        root,
+        initialized.research ?? {},
+        prompts(['n']).io,
+        signal(),
+        (request) => {
+          assert.ok(request.prompt.includes(background));
+          return Promise.resolve({ text: JSON.stringify(plan) });
+        },
+      );
+    } else {
+      await assert.rejects(readFile(join(agencyDir, 'USER.md')), {
+        code: 'ENOENT',
+      });
+      assert.equal(initialized.workspace.context, brief);
+      if (outcome === 'decline')
+        assert.doesNotMatch(
+          ui.messages.join('\n'),
+          /Profile setup did not finish/,
+        );
+      if (outcome === 'failure')
+        assert.match(ui.messages.join('\n'), /continue research without it/);
+    }
+  });
+}
 
 await test('a failed memory import leaves a usable project without leaking the host error', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-init-failure-'));
@@ -263,6 +350,7 @@ await test('adaptive onboarding creates a selected nested project and preserves 
     'Graph search',
     'codex',
     'chosen-model',
+    'skip',
     'Understand heuristic failures',
     'CPU only',
     '',
@@ -390,6 +478,7 @@ await test('the CLI researches in the interactively selected directory using the
     'Tiny graph search',
     'codex',
     '',
+    'skip',
     '',
     'chosen project',
     'autonomous',
@@ -542,7 +631,7 @@ await test('an invalid onboarding response does not create project state or scaf
         workspaceSpecified: true,
         agencyDir: join(base, 'agency'),
       },
-      prompts([]).io,
+      prompts(['skip']).io,
       signal(),
       () => Promise.resolve({ text: 'invalid JSON' }),
     ),

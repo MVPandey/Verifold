@@ -26,7 +26,7 @@ await test('terminal branding respects noninteractive output and NO_COLOR', () =
 
 await test('guided initialization collects a broad topic without launching research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-initialization-'));
-  const answers = ['Formal proof search', 'codex', '', '', '', ''];
+  const answers = ['Formal proof search', 'codex', '', 'skip', '', '', ''];
   try {
     const result = await initializeProject(
       root,
