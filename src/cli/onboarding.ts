@@ -6,6 +6,13 @@ import { withActivity, choose } from './choices.ts';
 import { runHarness } from './harness.ts';
 import { text, parseHostJson } from './research-contracts.ts';
 
+function cancelOnboarding(): never {
+  throw new DOMException(
+    'Onboarding cancelled. No project was initialized.',
+    'AbortError',
+  );
+}
+
 function localBrief(value: string): string {
   const plain = value.replaceAll('\0', '');
   return Buffer.byteLength(plain) <= 11000
@@ -89,6 +96,7 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
         break;
       } catch (error) {
         signal.throwIfAborted();
+        if (error instanceof Error && error.name === 'AbortError') throw error;
         if (!io.interactive) throw error;
         io.progress?.(
           'Your agent could not complete this reply. Your answers are still here.',
@@ -119,10 +127,7 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
           ],
           'local',
         );
-        if (recovery === 'cancel')
-          throw new Error('Onboarding cancelled. No project was initialized.', {
-            cause: error,
-          });
+        if (recovery === 'cancel') cancelOnboarding();
         if (recovery === 'retry') continue;
         response = {
           ready: true,
@@ -142,8 +147,7 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
         )
       ).trim();
       signal.throwIfAborted();
-      if (answer === '/cancel')
-        throw new Error('Onboarding cancelled. No project was initialized.');
+      if (answer === '/cancel') cancelOnboarding();
       if (!answer || answer === '/finish' || answer === '/brief') finish = true;
       else
         answers.push({
@@ -162,8 +166,7 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
       )
     ).trim();
     signal.throwIfAborted();
-    if (feedback === '/cancel')
-      throw new Error('Onboarding cancelled. No project was initialized.');
+    if (feedback === '/cancel') cancelOnboarding();
     if (!feedback) return response.body;
     const note = text(feedback, 'brief feedback', 4000);
     if (turn === 5) {
@@ -174,7 +177,7 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
       const accepted = await io.ask('Save this brief with your note? [y/N]: ');
       signal.throwIfAborted();
       if (/^(y|yes)$/i.test(accepted.trim())) return finalBrief;
-      throw new Error('Onboarding cancelled. No project was initialized.');
+      cancelOnboarding();
     }
     answers.push({ question: 'Review feedback', answer: note });
     finish = true;
