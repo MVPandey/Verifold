@@ -1,13 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
+import {
+  changeWorkspace,
+  loadWorkspace,
+  readJson,
+} from '../src/cli/storage.ts';
 import { runResearch } from '../src/cli/research.ts';
 import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
 import { runCli } from '../src/cli/commands.ts';
-import { sourceUrl } from '../src/cli/research-contracts.ts';
+import { object, sourceUrl } from '../src/cli/research-contracts.ts';
 
 const plan = {
   scope: 'Study proof search under fixed compute.',
@@ -99,6 +105,149 @@ async function project(): Promise<string> {
   }));
   return root;
 }
+
+async function savedAttempt(
+  root: string,
+  id: string,
+): Promise<Record<string, unknown>> {
+  return object(
+    await readJson(join(root, '.verifold', 'runs', id, 'attempt.json')),
+  );
+}
+
+await test('attempt identity precedes the harness call and survives successful acceptance', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let id = '';
+  let started: Record<string, unknown> = {};
+  const workspace = await runResearch(
+    root,
+    { topic: 'Math' },
+    io,
+    signal(),
+    async () => {
+      [id = ''] = await readdir(join(root, '.verifold', 'runs'));
+      started = await savedAttempt(root, id);
+      assert.deepEqual(started, {
+        schemaVersion: 1,
+        attemptId: id,
+        host: 'claude',
+        model: null,
+        phase: 'needs-plan',
+        requestedSessionId: null,
+        nativeSessionId: null,
+        startedAt: started.startedAt,
+        finishedAt: null,
+        status: 'started',
+      });
+      return { text: JSON.stringify(plan), sessionId: 'native-session' };
+    },
+  );
+  const finished = await savedAttempt(root, id);
+  assert.equal(workspace.research?.latestAttempt, id);
+  assert.equal(workspace.research.phase, 'awaiting-plan-review');
+  assert.ok(
+    typeof finished.startedAt === 'string' &&
+      Number.isFinite(Date.parse(finished.startedAt)),
+  );
+  assert.ok(
+    typeof finished.finishedAt === 'string' &&
+      Date.parse(finished.finishedAt) >= Date.parse(String(finished.startedAt)),
+  );
+  assert.deepEqual(finished, {
+    ...started,
+    status: 'succeeded',
+    nativeSessionId: 'native-session',
+    finishedAt: finished.finishedAt,
+  });
+  assert.equal(
+    (await stat(join(root, '.verifold', 'runs', id, 'attempt.json'))).mode &
+      0o777,
+    0o600,
+  );
+});
+
+await test(
+  'a killed research owner leaves an unfinished record without inventing an outcome',
+  { timeout: 10000 },
+  async (t) => {
+    const root = await project();
+    const child = spawn(
+      process.execPath,
+      [
+        '--experimental-strip-types',
+        '--input-type=module',
+        '-e',
+        `
+    import { runResearch } from ${JSON.stringify(new URL('../src/cli/research.ts', import.meta.url).href)};
+    await runResearch(${JSON.stringify(root)}, { topic: 'Math' },
+      { interactive: false, ask: async () => '', out: () => {} },
+      new AbortController().signal, async () => {
+        process.stdout.write('ready');
+        await new Promise(() => setInterval(() => {}, 1000));
+      });
+  `,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    const closed = once(child, 'close');
+    t.after(async () => {
+      child.kill('SIGKILL');
+      await closed;
+      await rm(root, { recursive: true, force: true });
+    });
+    await Promise.race([
+      once(child.stdout, 'data', { signal: t.signal }),
+      closed.then(() => {
+        throw new Error('Research fixture exited before readiness.');
+      }),
+    ]);
+    child.kill('SIGKILL');
+    await closed;
+    const [id = ''] = await readdir(join(root, '.verifold', 'runs'));
+    const record = await savedAttempt(root, id);
+    assert.equal(record.status, 'started');
+    assert.equal(record.finishedAt, null);
+    assert.ok(
+      (await readdir(join(root, '.verifold'))).includes('research.lock'),
+    );
+    assert.equal((await loadWorkspace(root)).research?.phase, 'needs-plan');
+  },
+);
+
+await test('a display error cannot mark accepted research as failed', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let calls = 0;
+  await assert.rejects(
+    runResearch(
+      root,
+      { topic: 'Math', autonomy: 'autonomous' },
+      {
+        ...io,
+        progress: (message) => {
+          if (message.includes(report.summary))
+            throw new Error('Display unavailable');
+        },
+      },
+      signal(),
+      () =>
+        Promise.resolve({
+          text: JSON.stringify(++calls === 1 ? plan : report),
+        }),
+    ),
+    /Display unavailable/,
+  );
+  const workspace = await loadWorkspace(root);
+  assert.equal(workspace.research?.phase, 'directions');
+  const id = workspace.research.latestAttempt ?? '';
+  assert.equal((await savedAttempt(root, id)).status, 'succeeded');
+  assert.ok(
+    !(await readdir(join(root, '.verifold', 'runs', id))).includes(
+      'failure.txt',
+    ),
+  );
+});
 
 await test('guided exploration saves checkpoints, resumes host, and needs no PDFs', async () => {
   const root = await project();
@@ -214,6 +363,10 @@ await test('invalid report preserves checkpoint and session without replacing id
     assert.equal(state.research?.phase, 'needs-research');
     assert.equal(state.research.sessionId, 'saved-session');
     assert.deepEqual(state.candidates, []);
+    assert.equal(
+      (await savedAttempt(root, state.research.latestAttempt ?? '')).status,
+      'failed',
+    );
     assert.match(
       await readFile(
         join(
@@ -282,6 +435,10 @@ await test('research cancellation retains the brief and releases its lock', asyn
     );
     const attempts = await readdir(join(root, '.verifold', 'runs'));
     assert.equal(attempts.length, 1);
+    assert.equal(
+      (await savedAttempt(root, attempts[0] ?? '')).status,
+      'cancelled',
+    );
     assert.match(
       await readFile(
         join(root, '.verifold', 'runs', attempts[0] ?? '', 'brief.md'),
