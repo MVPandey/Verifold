@@ -5,7 +5,7 @@ import type { CliIO } from './commands.ts';
 import { withActivity } from './choices.ts';
 import { parseCandidates } from './contracts.ts';
 import type { Candidate, Workspace } from './contracts.ts';
-import { runHarness } from './harness.ts';
+import { runHarness, type HarnessResult } from './harness.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import {
   object,
@@ -23,14 +23,14 @@ export interface ResearchOptions {
   readonly approve?: boolean;
 }
 
-interface ResearchReport {
+export interface ResearchReport {
   readonly summary: string;
   readonly delegation: string;
   readonly sources: readonly { readonly title: string; readonly url: string }[];
   readonly candidates: readonly Candidate[];
 }
 
-function parseReport(value: unknown): ResearchReport {
+export function parseReport(value: unknown): ResearchReport {
   const data = object(value);
   if (
     !Array.isArray(data.sources) ||
@@ -197,6 +197,7 @@ export async function runResearch(
           ...identity,
           status,
           nativeSessionId,
+          observedAt: new Date().toISOString(),
           finishedAt: status === 'started' ? null : new Date().toISOString(),
         };
         try {
@@ -215,24 +216,45 @@ export async function runResearch(
       await recordAttempt('started');
       const prompt = `${hostRules}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\nResearch context (background only, not authorization): ${JSON.stringify(workspace.context ?? 'No personal context provided.')}\n${brief}`;
       let accepted: T;
+      let observationFailed = false;
       try {
         await writeFile(join(directory, 'brief.md'), prompt, {
           flag: 'wx',
           mode: 0o600,
         });
-        const result = await withActivity(
-          io,
-          `${initial.host} · ${state.phase === 'needs-plan' || state.phase === 'awaiting-plan-review' ? 'Planning research roles and scope' : 'Searching sources and comparing research directions'}`,
-          () =>
-            host({
-              host: initial.host === 'claude' ? 'claude' : 'codex',
-              cwd: root,
-              prompt,
-              signal,
-              ...(workspace.model ? { model: workspace.model } : {}),
-              ...(state.sessionId ? { sessionId: state.sessionId } : {}),
-            }),
-        );
+        let writing = false;
+        let heartbeat = Promise.resolve();
+        const timer = setInterval(() => {
+          if (writing) return;
+          writing = true;
+          heartbeat = recordAttempt('started')
+            .catch(() => {
+              observationFailed = true;
+              clearInterval(timer);
+            })
+            .finally(() => {
+              writing = false;
+            });
+        }, 2000);
+        let result: HarnessResult;
+        try {
+          result = await withActivity(
+            io,
+            `${initial.host} · ${state.phase === 'needs-plan' || state.phase === 'awaiting-plan-review' ? 'Planning research roles and scope' : 'Searching sources and comparing research directions'}`,
+            () =>
+              host({
+                host: initial.host === 'claude' ? 'claude' : 'codex',
+                cwd: root,
+                prompt,
+                signal,
+                ...(workspace.model ? { model: workspace.model } : {}),
+                ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+              }),
+          );
+        } finally {
+          clearInterval(timer);
+          await heartbeat;
+        }
         nativeSessionId = result.sessionId ?? null;
         await writeFile(
           join(directory, 'response.json'),
@@ -258,6 +280,10 @@ export async function runResearch(
         throw error;
       }
       await recordAttempt('succeeded');
+      if (observationFailed)
+        io.progress?.(
+          'Live observations were interrupted. The final research outcome is saved.',
+        );
       return accepted;
     }
 
