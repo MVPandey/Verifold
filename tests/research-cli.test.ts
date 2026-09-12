@@ -214,6 +214,19 @@ await test('invalid report preserves checkpoint and session without replacing id
     assert.equal(state.research?.phase, 'needs-research');
     assert.equal(state.research.sessionId, 'saved-session');
     assert.deepEqual(state.candidates, []);
+    assert.match(
+      await readFile(
+        join(
+          root,
+          '.verifold',
+          'runs',
+          state.research.latestAttempt ?? '',
+          'failure.txt',
+        ),
+        'utf8',
+      ),
+      /web sources/,
+    );
     assert.ok(
       !(await readdir(join(root, '.verifold'))).includes('research.lock'),
     );
@@ -224,6 +237,36 @@ await test('invalid report preserves checkpoint and session without replacing id
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+await test('an invalid plan retains the response and records the failed attempt', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await assert.rejects(
+    runResearch(root, { topic: 'Math' }, io, signal(), () =>
+      Promise.resolve({ text: JSON.stringify({ ...plan, personas: [] }) }),
+    ),
+    /personas/,
+  );
+  const state = await loadWorkspace(root);
+  assert.equal(state.research?.phase, 'needs-plan');
+  const directory = join(
+    root,
+    '.verifold',
+    'runs',
+    state.research?.latestAttempt ?? '',
+  );
+  assert.match(
+    await readFile(join(directory, 'response.json'), 'utf8'),
+    /personas/,
+  );
+  assert.match(
+    await readFile(join(directory, 'failure.txt'), 'utf8'),
+    /personas/,
+  );
+  assert.ok(
+    !(await readdir(join(root, '.verifold'))).includes('research.lock'),
+  );
 });
 
 await test('research cancellation retains the brief and releases its lock', async () => {
