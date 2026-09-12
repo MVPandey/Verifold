@@ -8,7 +8,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter, dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
 const run = (command, args, cwd) => {
@@ -42,6 +44,10 @@ try {
           'dist-cli/cli.js',
           'dist-cli/domain/profile.js',
           'dist-cli/ui/dom.js',
+          'dist-cli/cli/desk.css',
+          'dist-cli/cli/manrope.ttf',
+          'dist-cli/cli/OFL-Manrope.txt',
+          'dist-cli/cli/symbol.webp',
           'package.json',
           'README.md',
           'LICENSE',
@@ -254,8 +260,62 @@ main().catch(() => { process.exitCode = 1; });
   );
   assert.equal(literature.status, 0, literature.stderr);
   assert.equal(JSON.parse(literature.stdout).executionStarted, false);
+  const desk = spawn(
+    process.execPath,
+    [
+      join(directory, 'node_modules', 'verifold', 'dist-cli', 'cli.js'),
+      'ui',
+      '--workspace',
+      'research-project',
+      '--no-open',
+    ],
+    { cwd: directory, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  const closed = once(desk, 'close');
+  const lines = createInterface({ input: desk.stdout });
+  let diagnostics = '';
+  desk.stderr.setEncoding('utf8').on('data', (chunk) => {
+    diagnostics += chunk;
+  });
+  try {
+    const output = await Promise.race([
+      once(lines, 'line', { signal: AbortSignal.timeout(10000) }).then(
+        ([line]) => line,
+      ),
+      closed.then(() => {
+        throw new Error(`Desk exited before startup: ${diagnostics}`);
+      }),
+    ]);
+    const url = new URL(JSON.parse(output).url);
+    const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+    assert.equal((await fetch(`${url.origin}/api/view`)).status, 401);
+    const view = await (
+      await fetch(`${url.origin}/api/view`, { headers })
+    ).json();
+    assert.match(view.html, /Compare proof search/);
+    assert.match(view.html, /package-session/);
+    for (const path of [
+      '/',
+      '/desk-client.js',
+      '/ui/dom.js',
+      '/desk.css',
+      '/manrope.ttf',
+      '/symbol.webp',
+    ]) {
+      const asset = await fetch(url.origin + path);
+      assert.equal(asset.status, 200, path);
+      assert.ok((await asset.arrayBuffer()).byteLength > 0, path);
+    }
+  } finally {
+    lines.close();
+    desk.kill('SIGTERM');
+    const force = setTimeout(() => desk.kill('SIGKILL'), 5000);
+    const [code] = await closed;
+    clearTimeout(force);
+    assert.equal(code, 0, diagnostics);
+  }
   console.log(
-    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, selection, and memory request passed.`,
+    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, selection, memory request, and local desk passed.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

@@ -136,14 +136,25 @@ export async function readDeskSnapshot(root: string): Promise<DeskSnapshot> {
       break;
     }
     if (!validAttemptId(entry.name)) continue;
+    await appendAttempt(entry.name);
+  }
+  const latest = workspace.research?.latestAttempt;
+  if (
+    latest &&
+    validAttemptId(latest) &&
+    !attempts.some((attempt) => attempt.id === latest)
+  )
+    await appendAttempt(latest);
+
+  async function appendAttempt(id: string): Promise<void> {
     let record: AttemptRecord | null = null;
     try {
-      const path = await attemptDirectory(root, entry.name);
+      const path = await attemptDirectory(root, id);
       record = parseAttempt(
         JSON.parse(
           await readMemory(join(path, 'attempt.json'), 4000),
         ) as unknown,
-        entry.name,
+        id,
       );
     } catch {
       // Old, incomplete, or inaccessible records cannot establish an outcome.
@@ -152,7 +163,7 @@ export async function readDeskSnapshot(root: string): Promise<DeskSnapshot> {
       ? Date.now() - Date.parse(record.observedAt)
       : Infinity;
     attempts.push({
-      id: entry.name,
+      id,
       record,
       activity:
         record && record.status !== 'started'

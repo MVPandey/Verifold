@@ -12,6 +12,8 @@ import { runResearch } from './research.ts';
 import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
 import { runHarness } from './harness.ts';
+import { nextResearchAction } from './desk-view.ts';
+import { startDesk, openDeskBrowser } from './desk.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
@@ -35,6 +37,7 @@ verifold select [--id idea-id]         Choose an idea explicitly
 verifold literature [--memory]        Print an optional paper/context request
 verifold handoff                      Print a pilot request for Automative + host
 verifold view                         Generate a private local HTML workspace
+verifold ui [--no-open]               Open the read-only live research desk
 verifold status                       Print workspace JSON
 
 Options: --workspace path (default: current directory), --help, --version
@@ -55,15 +58,7 @@ function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
     io.out(JSON.stringify(workspace));
     return;
   }
-  const phase = workspace.research?.phase;
-  const next =
-    phase === 'directions'
-      ? 'Use research --feedback to refine a direction, or select to choose one.'
-      : phase === 'awaiting-plan-review'
-        ? 'Use research --feedback to revise the plan, or research --approve to continue.'
-        : phase
-          ? 'Use research to resume the saved research session.'
-          : 'Use research --topic "your question" to begin.';
+  const next = nextResearchAction(workspace).instruction;
   io.out(
     stripVTControlCharacters(
       `Private workspace: ${root}\nHarness: ${workspace.host} (${workspace.model ?? 'host default model'})\n${next}`,
@@ -97,6 +92,7 @@ export async function runCli(
       'setup-only': { type: 'boolean' },
       from: { type: 'string' },
       id: { type: 'string' },
+      'no-open': { type: 'boolean' },
     },
   });
   if (values.help) {
@@ -133,6 +129,7 @@ export async function runCli(
     handoff: [],
     view: [],
     status: [],
+    ui: ['no-open'],
   };
   if (!Object.hasOwn(allowed, command))
     throw new Error(`Unknown command: ${command}. Use --help.`);
@@ -141,6 +138,29 @@ export async function runCli(
       throw new Error(`--${key} is not valid for ${command}.`);
   const root = resolve(cwd, values.workspace ?? '.');
   signal.throwIfAborted();
+  if (command === 'ui') {
+    const owner = new AbortController();
+    const deskSignal = AbortSignal.any([signal, owner.signal]);
+    const desk = await startDesk(root, deskSignal);
+    try {
+      io.out(
+        JSON.stringify({
+          url: desk.url,
+          visibility: 'private',
+          readOnly: true,
+        }),
+      );
+      if (!values['no-open'] && !(await openDeskBrowser(desk.url, deskSignal)))
+        io.progress?.(
+          'The browser could not open. Open the printed URL manually.',
+        );
+      await desk.closed;
+    } finally {
+      owner.abort();
+      await desk.closed;
+    }
+    return;
+  }
   if (command === 'init') {
     const initialized = await initializeProject(
       root,

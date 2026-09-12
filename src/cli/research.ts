@@ -218,6 +218,7 @@ export async function runResearch(
       let accepted: T;
       let observationFailed = false;
       try {
+        await save({ ...state, latestAttempt: attempt });
         await writeFile(join(directory, 'brief.md'), prompt, {
           flag: 'wx',
           mode: 0o600,
