@@ -25,6 +25,11 @@ export interface Agency {
   readonly model?: string;
 }
 
+export interface ProfileState {
+  readonly schemaVersion: 1;
+  readonly status: 'accepted' | 'skipped' | 'failed';
+}
+
 /** Create only Verifold-owned private storage. Refuse redirected directories. */
 export async function prepareAgency(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -128,10 +133,33 @@ export async function loadMemory(
   }
 }
 
+export async function loadProfileState(
+  directory: string,
+): Promise<ProfileState | undefined> {
+  try {
+    if (!(await lstat(directory)).isDirectory())
+      throw new Error('Agency directory must not be a symbolic link.');
+    const data = object(
+      JSON.parse(await readMemory(join(directory, 'profile-state.json'))),
+    );
+    if (
+      data.schemaVersion !== 1 ||
+      (data.status !== 'accepted' &&
+        data.status !== 'skipped' &&
+        data.status !== 'failed')
+    )
+      throw new Error('Invalid profile setup state.');
+    return { schemaVersion: 1, status: data.status };
+  } catch (error) {
+    if (missing(error)) return undefined;
+    throw error;
+  }
+}
+
 /** Replace one owned file atomically. Existing symlink targets are never written. */
 export async function saveAgencyFile(
   directory: string,
-  name: 'settings.json' | 'USER.md',
+  name: 'settings.json' | 'USER.md' | 'profile-state.json',
   content: string,
 ): Promise<void> {
   await prepareAgency(directory);
@@ -165,6 +193,94 @@ export function memorySummary(markdown: string): string {
   return paragraph.length <= 600
     ? paragraph
     : `${paragraph.slice(0, 597).trimEnd()}…`;
+}
+
+async function withProfileLock<T>(
+  directory: string,
+  signal: AbortSignal,
+  work: () => Promise<T>,
+): Promise<T> {
+  signal.throwIfAborted();
+  await prepareAgency(directory);
+  signal.throwIfAborted();
+  const lockPath = join(directory, 'profile.lock');
+  const lock = await open(lockPath, 'wx', 0o600).catch((error: unknown) => {
+    if (error instanceof Error && 'code' in error && error.code === 'EEXIST')
+      throw new Error(
+        `Profile setup is locked. Confirm no profile setup is running before removing ${lockPath}.`,
+      );
+    throw error;
+  });
+  try {
+    await lock.writeFile(`${process.pid}\n`);
+    await loadProfileState(directory);
+    await loadMemory(directory);
+    signal.throwIfAborted();
+    return await work();
+  } finally {
+    try {
+      await lock.close();
+    } finally {
+      await rm(lockPath, { force: true });
+    }
+  }
+}
+
+/** Preference updates share ownership with profile setup. */
+export async function saveAgencyPreferences(
+  directory: string,
+  agency: Agency,
+  signal: AbortSignal,
+): Promise<void> {
+  await withProfileLock(directory, signal, () =>
+    saveAgencyFile(directory, 'settings.json', JSON.stringify(agency, null, 2)),
+  );
+}
+
+/** Serialize reviewed profile changes and record outcomes separately from approved memory. */
+export async function setupProfile(
+  directory: string,
+  cwd: string,
+  agency: Agency,
+  io: CliIO,
+  signal: AbortSignal,
+  host: typeof runHarness = runHarness,
+  offerInterview = true,
+): Promise<string | undefined> {
+  return withProfileLock(directory, signal, async () => {
+    await saveAgencyFile(
+      directory,
+      'settings.json',
+      JSON.stringify(agency, null, 2),
+    );
+    let status: ProfileState['status'];
+    try {
+      const approved = await personalize(
+        directory,
+        cwd,
+        agency,
+        io,
+        signal,
+        host,
+        offerInterview,
+      );
+      status = approved === undefined ? 'skipped' : 'accepted';
+    } catch {
+      signal.throwIfAborted();
+      status = 'failed';
+    }
+    signal.throwIfAborted();
+    await saveAgencyFile(
+      directory,
+      'profile-state.json',
+      JSON.stringify({ schemaVersion: 1, status }, null, 2),
+    );
+    if (status === 'failed')
+      io.progress?.(
+        'Profile setup did not finish. Any previously approved memory remains available. Run verifold profile --setup to try again.',
+      );
+    return loadMemory(directory);
+  });
 }
 
 /** Consent precedes source access. Only reviewed Markdown becomes reusable memory. */

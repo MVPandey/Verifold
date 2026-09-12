@@ -39,7 +39,7 @@ Verifold starts the selected harness with its existing configuration and permiss
 
 ## Start a research project
 
-Run `verifold` from your terminal. An existing Verifold project opens its desk. Otherwise, setup connects your harness, loads your global profile if available, and offers profile creation before selecting a project folder. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open; Ctrl+C stops its work and server.
+Run `verifold` from your terminal. An existing Verifold project checks for unfinished global setup, then opens its desk. This setup does not change the project’s saved harness or research. Otherwise, setup connects your harness, loads your global profile if available, and offers profile creation before selecting a project folder. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open; Ctrl+C stops its work and server.
 
 Use `verifold init` for setup and research entirely in the CLI. Bare launch requires an interactive terminal. `verifold --no-open` prints the desk URL without opening a browser.
 
@@ -80,11 +80,11 @@ The approved brief feeds planning and research in the selected directory. It sta
 
 Use arrow keys or number keys in the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
 
-When no approved background exists, interactive setup offers an optional profile step after harness selection and before project selection. Choose “Learn from my chats” to select a local chat file or folder, import one memory file, write an introduction locally, or skip. The chat option suggests the selected harness’s usual local session folder; you can choose a narrower folder or an export instead. `init --setup-only` also offers an agent interview to build a reusable profile.
+When no approved background or previous setup outcome exists, interactive setup offers an optional profile step after harness selection and before project selection. Verifold remembers skipped, declined, and failed setup, so subsequent launches do not repeat it automatically. Choose “Learn from my chats” to select a local chat file or folder, import one memory file, write an introduction locally, or skip. The chat option suggests the selected harness’s usual local session folder; you can choose a narrower folder or an export instead. `init --setup-only` also offers an agent interview to build a reusable profile.
 
 Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency.
 
-Later onboarding reuses this approved background without repeating profile questions or rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain.
+Later onboarding reuses this approved background without repeating profile questions or rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain. Deleting `USER.md` stops future reuse and does not trigger another history import.
 
 Chat sampling inspects at most 200 directory entries and ten files, with a 256 KB per-file limit and 512 KB total. It skips links, hidden subdirectories, oversized files, and unsupported native records. Native JSONL imports retain recognized user-role messages, excluding model responses, tool results, and subagent folders. User-role records can still include harness-injected context; review the profile’s inferences. Ordinary text and JSON exports are supplied as selected. Local storage does not imply offline model processing.
 
@@ -124,6 +124,16 @@ verifold view
 After selection, `literature` prints an optional retention request. `--memory` also requests a Markdown memory file with source-to-file mappings. Both forms only print instructions. They do not invoke the harness or verify downloads. Official citation exports must remain separate from generated summaries.
 
 `handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and gates before execution. Verifold does not execute Automative in this version.
+
+### Manage your global profile
+
+Run `verifold profile` to inspect the full approved Markdown, its path, and its current status. Outside an interactive terminal, the command returns JSON. Inspection reads only Verifold’s global records; it does not create a directory or invoke a harness.
+
+Run `verifold profile --setup` to create, retry, or revise a profile without initializing a project. Setup requires an interactive terminal for source consent and review. Use `--host claude|codex`, `--model <id>`, or `--agency-dir <path>` when needed. These settings apply globally; existing project settings remain unchanged.
+
+`USER.md` determines which background can be reused. `profile-state.json` records the last completed setup outcome separately. Declining a replacement or a failed synthesis preserves the approved profile. Profile inspection reports a missing approved file if it was deleted. Cancelled setup does not record a new outcome.
+
+Only one profile setup can run in an agency at a time. If its process is killed, the error identifies `profile.lock`; confirm no setup is running before removing it. Drafts still require review before adoption. Profile editing in the browser and selecting several history sources remain planned work.
 
 ### Editable harness prompts
 

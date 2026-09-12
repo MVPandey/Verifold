@@ -3,9 +3,10 @@ import { homedir } from 'node:os';
 import {
   loadAgency,
   loadMemory,
+  loadProfileState,
   readMemory,
-  saveAgencyFile,
-  personalize,
+  saveAgencyPreferences,
+  setupProfile,
   memorySummary,
   type Agency,
 } from './agency.ts';
@@ -138,34 +139,21 @@ export async function initializeProject(
   if (!options.profile && (host === 'claude' || host === 'codex')) {
     const agency: Agency = { host, ...(model ? { model } : {}) };
     context = await loadMemory(directory);
-    await saveAgencyFile(
-      directory,
-      'settings.json',
-      JSON.stringify(agency, null, 2),
-    );
-    if (!context && io.interactive) {
-      try {
-        context = await personalize(
-          directory,
-          cwd,
-          agency,
-          io,
-          signal,
-          harness,
-          options.setupOnly === true,
-        );
-      } catch {
-        signal.throwIfAborted();
-        io.progress?.(
-          'Profile setup did not finish. No new memory was adopted. You can continue research without it.',
-        );
-        // File and host errors can contain private source data. Do not print them.
-      }
-    }
+    if (!context && io.interactive && !(await loadProfileState(directory))) {
+      context = await setupProfile(
+        directory,
+        cwd,
+        agency,
+        io,
+        signal,
+        harness,
+        options.setupOnly === true,
+      );
+    } else await saveAgencyPreferences(directory, agency, signal);
     io.progress?.(
       context
         ? `Research profile: ${memorySummary(context)}\nFull profile: ${join(directory, 'USER.md')}`
-        : `Agency ready: ${directory}\nNo personal research context saved. You can start with a topic.`,
+        : `Agency ready: ${directory}\nNo personal research context saved. Use verifold profile --setup to create or retry a profile.`,
     );
   }
   const profile = options.profile

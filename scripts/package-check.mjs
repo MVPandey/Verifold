@@ -109,7 +109,7 @@ try {
       agency,
       '--no-open',
     ],
-    ['--no-open'],
+    ['--no-open', '--agency-dir', agency],
   ]) {
     const owner = new AbortController();
     const results = [];
@@ -162,6 +162,14 @@ try {
     run(join(directory, 'node_modules', '.bin', 'verifold'), args, directory);
   assert.equal(invoke('--help').status, 0);
   assert.equal(invoke('--version').stdout.trim(), metadata.version);
+  const profileStatus = invoke('profile', '--agency-dir', agency);
+  assert.equal(profileStatus.status, 0, profileStatus.stderr);
+  assert.equal(JSON.parse(profileStatus.stdout).status, 'skipped');
+  assert.equal(JSON.parse(profileStatus.stdout).markdown, null);
+  assert.notEqual(
+    invoke('profile', '--setup', '--agency-dir', agency).status,
+    0,
+  );
   assert.notEqual(invoke('bad-command').status, 0);
   assert.notEqual(invoke('init').status, 0);
   await writeFile(

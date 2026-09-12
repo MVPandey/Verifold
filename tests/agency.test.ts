@@ -16,10 +16,13 @@ import { promisify } from 'node:util';
 import {
   loadAgency,
   loadMemory,
+  loadProfileState,
   personalize,
   prepareAgency,
   readMemory,
   saveAgencyFile,
+  saveAgencyPreferences,
+  setupProfile,
 } from '../src/cli/agency.ts';
 import type { CliIO } from '../src/cli/commands.ts';
 import type { runHarness } from '../src/cli/harness.ts';
@@ -280,6 +283,7 @@ await test('agency reads reject redirected directories and files', async () => {
     await symlink(target, directory);
     await assert.rejects(loadAgency(directory), /symbolic link/);
     await assert.rejects(loadMemory(directory), /symbolic link/);
+    await assert.rejects(loadProfileState(directory), /symbolic link/);
     await assert.rejects(prepareAgency(directory), /symbolic link/);
     const source = join(root, 'source.txt');
     await writeFile(source, 'Private context.');
@@ -287,6 +291,223 @@ await test('agency reads reject redirected directories and files', async () => {
     await assert.rejects(readMemory(join(target, 'USER.md')));
   });
 });
+
+for (const existing of [false, true]) {
+  for (const outcome of ['accepted', 'skipped', 'failed'] as const) {
+    await test(`profile setup records ${outcome} independently of existing memory: ${existing}`, async () => {
+      await temporary(async (root, directory) => {
+        if (existing)
+          await saveAgencyFile(directory, 'USER.md', 'Approved prior memory.');
+        const messages: string[] = [];
+        const answers =
+          outcome === 'accepted'
+            ? ['write', 'New approved context.', 'yes']
+            : outcome === 'skipped'
+              ? ['write', 'Unapproved replacement.', 'no']
+              : ['import', 'missing.txt', 'yes'];
+        const memory = await setupProfile(
+          directory,
+          root,
+          { host: 'codex' },
+          prompts(answers, messages),
+          new AbortController().signal,
+          noHost,
+        );
+        assert.equal(
+          memory,
+          outcome === 'accepted'
+            ? 'New approved context.'
+            : existing
+              ? 'Approved prior memory.'
+              : undefined,
+        );
+        assert.equal(await loadMemory(directory), memory);
+        assert.deepEqual(await loadProfileState(directory), {
+          schemaVersion: 1,
+          status: outcome,
+        });
+        assert.equal(
+          (await stat(join(directory, 'profile-state.json'))).mode & 0o777,
+          0o600,
+        );
+        assert.deepEqual(answers, []);
+        assert.equal(
+          messages.some((message) => message.includes('did not finish')),
+          outcome === 'failed',
+        );
+        await assert.rejects(stat(join(directory, 'profile.lock')), {
+          code: 'ENOENT',
+        });
+      });
+    });
+  }
+}
+
+await test('profile setup rejects concurrent changes and releases its lock for a later retry', async () => {
+  await temporary(async (root, directory) => {
+    const signal = new AbortController().signal;
+    await setupProfile(
+      directory,
+      root,
+      { host: 'codex' },
+      {
+        ...prompts([]),
+        ask: async () => {
+          assert.equal(
+            await readFile(join(directory, 'profile.lock'), 'utf8'),
+            `${process.pid}\n`,
+          );
+          await assert.rejects(
+            setupProfile(
+              directory,
+              root,
+              { host: 'claude' },
+              prompts([]),
+              signal,
+              noHost,
+            ),
+            /Profile setup is locked/,
+          );
+          await assert.rejects(
+            saveAgencyPreferences(directory, { host: 'claude' }, signal),
+            /Profile setup is locked/,
+          );
+          assert.deepEqual(await loadAgency(directory), { host: 'codex' });
+          return 'skip';
+        },
+      },
+      signal,
+      noHost,
+    );
+    assert.deepEqual(await loadProfileState(directory), {
+      schemaVersion: 1,
+      status: 'skipped',
+    });
+    assert.equal(
+      await setupProfile(
+        directory,
+        root,
+        { host: 'codex' },
+        prompts(['write', 'Retry approved.', 'yes']),
+        signal,
+        noHost,
+      ),
+      'Retry approved.',
+    );
+    await saveAgencyPreferences(directory, { host: 'claude' }, signal);
+    assert.deepEqual(await loadAgency(directory), { host: 'claude' });
+  });
+});
+
+await test('profile cancellation preserves its previous outcome and releases the setup lock', async () => {
+  await temporary(async (root, directory) => {
+    const state = { schemaVersion: 1, status: 'skipped' };
+    await saveAgencyFile(
+      directory,
+      'profile-state.json',
+      JSON.stringify(state),
+    );
+    const controller = new AbortController();
+    await assert.rejects(
+      setupProfile(
+        directory,
+        root,
+        { host: 'codex' },
+        {
+          ...prompts([]),
+          ask: () => {
+            controller.abort();
+            return Promise.resolve('skip');
+          },
+        },
+        controller.signal,
+        noHost,
+      ),
+      { name: 'AbortError' },
+    );
+    assert.deepEqual(await loadProfileState(directory), state);
+    await assert.rejects(stat(join(directory, 'profile.lock')), {
+      code: 'ENOENT',
+    });
+  });
+});
+
+await test('profile failures do not expose private harness errors', async () => {
+  await temporary(async (root, directory) => {
+    await writeFile(join(root, 'source.txt'), 'Private source evidence.');
+    const messages: string[] = [];
+    await setupProfile(
+      directory,
+      root,
+      { host: 'codex' },
+      prompts(['import', 'source.txt', 'yes'], messages),
+      new AbortController().signal,
+      () => Promise.reject(new Error('PRIVATE_ERROR_CONTENT')),
+    );
+    assert.doesNotMatch(messages.join('\n'), /PRIVATE_ERROR_CONTENT/);
+    assert.equal((await loadProfileState(directory))?.status, 'failed');
+  });
+});
+
+await test('profile state inspection is read-only and rejects invalid or redirected records', async () => {
+  await temporary(async (root, directory) => {
+    assert.equal(await loadProfileState(directory), undefined);
+    assert.deepEqual(await readdir(root), []);
+    for (const record of [
+      { schemaVersion: 2, status: 'accepted' },
+      { schemaVersion: 1, status: 'unknown' },
+    ]) {
+      await saveAgencyFile(
+        directory,
+        'profile-state.json',
+        JSON.stringify(record),
+      );
+      await assert.rejects(
+        loadProfileState(directory),
+        /Invalid profile setup state/,
+      );
+    }
+    await rm(join(directory, 'profile-state.json'));
+    const source = join(root, 'source.json');
+    await writeFile(source, '{"schemaVersion":1,"status":"accepted"}');
+    await symlink(source, join(directory, 'profile-state.json'));
+    await assert.rejects(loadProfileState(directory));
+  });
+});
+
+for (const invalid of ['state', 'state-link', 'memory-link'] as const) {
+  await test(`profile setup preserves invalid existing data: ${invalid}`, async () => {
+    await temporary(async (root, directory) => {
+      await prepareAgency(directory);
+      const source = join(root, 'preserved.txt');
+      await writeFile(source, 'User-owned content.');
+      const path = join(
+        directory,
+        invalid === 'memory-link' ? 'USER.md' : 'profile-state.json',
+      );
+      if (invalid === 'state') await writeFile(path, '{"schemaVersion":999}');
+      else await symlink(source, path);
+      await assert.rejects(
+        setupProfile(
+          directory,
+          root,
+          { host: 'codex' },
+          prompts([]),
+          new AbortController().signal,
+          noHost,
+        ),
+      );
+      assert.equal(
+        await readFile(path, 'utf8'),
+        invalid === 'state' ? '{"schemaVersion":999}' : 'User-owned content.',
+      );
+      assert.equal(await loadAgency(directory), undefined);
+      await assert.rejects(stat(join(directory, 'profile.lock')), {
+        code: 'ENOENT',
+      });
+    });
+  });
+}
 
 await test('an unrelated nonempty agency directory is rejected without modifying its files', async () => {
   await temporary(async (root) => {
