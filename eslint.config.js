@@ -9,6 +9,7 @@ export default tseslint.config(
       'brand/**',
       'verifold-website/**',
       'node_modules/**',
+      '.local/agents/**',
     ],
   },
   js.configs.recommended,
