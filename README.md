@@ -16,37 +16,29 @@
 
 # Verifold
 
-Verifold is a platform we're building for humans and agent swarms to do science together, in the open.
+Verifold coordinates computational research through the coding harnesses you already use.
 
-Agent swarms are taking on scientific questions, exploring codebases, and attempting difficult mathematical problems. But when that work happens inside a private lab or an isolated agent session, the rest of us may only see the final claim. The failed experiments, the assumptions that changed, and the evidence behind the result can remain out of reach. Other researchers have little to inspect or build on.
+Start with **“What do you want to work on?”** Your installed Claude Code or Codex asks follow-up questions, drafts a brief for review, and researches the approved scope. Verifold creates a project in your chosen directory and saves the brief, sources, research directions, and feedback.
 
-The existing publication process has its own problems. You can spend months developing an idea, studying the literature, and running experiments, then have its reception depend heavily on which reviewers and area chair you draw. Careful review matters. We believe it should be possible to scrutinize and contribute to research while the work is happening, with a record that remains open to correction after a conference decision.
+We're building toward a research **meta-harness**: a shared workspace that coordinates several harness instances from ideation to a paper, repository, figure, proof, or other deliverable. Each harness keeps its models, credentials, tools, and permissions. Verifold will connect their tasks, discussions, memory, and evidence across sessions.
 
-GitHub gives code projects a shared home. Hugging Face does the same for models. We want Verifold to give collaborative science that kind of home: a public scientific message board where a question can develop into an experiment, people and agents can contribute along the way, and anyone can follow the evidence.
-
-## What we're working toward
-
-An experiment should have an auditable history from the beginning: what question it asks, what would count as success, how it was run, and what actually happened. Failed attempts belong in that history too.
-
-On Verifold, we want someone to be able to comment on a particular assumption, find a flaw in an analysis, rerun an experiment, or fork a promising direction with their own agents. Those contributions should stay attached to the work. A published result should give the next researcher enough to test it and continue the investigation.
-
-The scope is any science whose experiments can run entirely on computers, including math, CS/ML, and security. Researchers choose what to share; work starts private, and publishing should make its experimental record available for others to inspect and reproduce.
-
-## Help build Verifold
-
-We're early, and the collaboration platform still needs to be built. The current CLI is the first piece: it connects a researcher's interests and chosen ideas to the AI harness they already use. The larger goal is a shared home for the science that comes out of that work.
-
-We welcome developers and researchers who want to help make this useful. Bring an experiment you'd want others to reproduce, improve an agent integration, or help design how people discuss and contribute to ongoing research. Failed replication attempts and concrete criticism are useful contributions too.
-
-[Open an issue](https://github.com/MVPandey/Verifold/issues) with a research workflow, a problem you've encountered, or a piece you'd like to build. For code contributions, start with the setup below and run `make validate` before opening a pull request.
+[Install](#install-the-cli) · [Current capabilities](#project-status) · [Roadmap](#development-plan) · [Contribute](#help-build-verifold)
 
 ## Project status
 
-The CLI now runs planning and landscape research through installed Claude Code or Codex. It stores source links, research directions, and feedback locally. The user selects an idea explicitly.
+The checked-out CLI supports the following workflow. Onboarding changes are tracked in [PR #13](https://github.com/MVPandey/Verifold/pull/13); use the [source setup](#run-locally) to evaluate this branch. The published npm package can lag this checkout.
+
+| Available in this checkout | What it does                                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| Adaptive onboarding        | Asks one question at a time through your chosen harness and lets you review the research brief.     |
+| Project initialization     | Creates `.verifold.md` and folders for literature, experiments, results, figures, docs, and agents. |
+| Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
+| Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
+| Local research records     | Retains attempt files and provides CLI status plus a read-only HTML snapshot.                       |
 
 This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
 
-Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. The collaboration platform, daily ingestion, Automative execution, and cloud synchronization remain future work.
+Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Live multi-agent supervision, scheduled memory, public collaboration, Automative execution, and cloud synchronization remain planned work.
 
 ## Install the CLI
 
@@ -60,6 +52,43 @@ verifold init
 You can also run `npx verifold init` or install locally with `npm install verifold`. A local installation runs through `npx verifold`.
 
 Verifold starts the selected harness with its existing configuration and permissions. See [security boundaries](SECURITY.md).
+
+## Development plan
+
+Start with a local Node app that opens a browser tab, then add coordination. CLI and browser will use the same project operations. Native desktop packaging is outside the current plan.
+
+| Priority                    | Planned outcome                                                                                                   | Work                                                                                                                                                                                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First                       | Watch one real harness run, inspect its evidence, and recover its recorded state after reconnecting.              | [Local research desk #15](https://github.com/MVPandey/Verifold/issues/15)                                                                                                                                                                                             |
+| Small parallel improvements | Offer reviewed background, inspect scoped Markdown context, and diagnose installed harnesses without model calls. | [Profile import #16](https://github.com/MVPandey/Verifold/issues/16), [memory #17](https://github.com/MVPandey/Verifold/issues/17), [harness diagnostics #28](https://github.com/MVPandey/Verifold/issues/28)                                                         |
+| Next                        | Choose “Continue onboarding in the CLI” or “Open the web UI” and retain the same interview.                       | [Shared onboarding #18](https://github.com/MVPandey/Verifold/issues/18)                                                                                                                                                                                               |
+| Coordination                | Assign adjacent tasks, exchange evidence-linked messages, and supervise two independent harness instances.        | [Task records #19](https://github.com/MVPandey/Verifold/issues/19), [discussions #20](https://github.com/MVPandey/Verifold/issues/20), [workers #21](https://github.com/MVPandey/Verifold/issues/21), [team view #22](https://github.com/MVPandey/Verifold/issues/22) |
+| Complete the research loop  | Assemble a reviewed memo, reproducible repository, and report from retained evidence.                             | [Deliverables #23](https://github.com/MVPandey/Verifold/issues/23)                                                                                                                                                                                                    |
+| Inspect evidence            | Preview registered outputs and flag changed or missing files without altering the cited version.                  | [Evidence inspector #29](https://github.com/MVPandey/Verifold/issues/29), after #20/#22; does not block #23                                                                                                                                                           |
+| Learn from completed work   | Propose sourced memory changes, schedule bounded maintenance, and evaluate reversible procedure improvements.     | [Memory review #24](https://github.com/MVPandey/Verifold/issues/24), [scheduling #25](https://github.com/MVPandey/Verifold/issues/25), [procedure evaluation #26](https://github.com/MVPandey/Verifold/issues/26)                                                     |
+| Share selected research     | Design a public board where people and swarms can critique evidence and contribute with owner review.             | [Public board design #27](https://github.com/MVPandey/Verifold/issues/27)                                                                                                                                                                                             |
+
+The intended coordinated workflow below is a plan, not a recorded execution:
+
+```mermaid
+flowchart LR
+  Q[Research question] --> B[Reviewed brief]
+  B --> L[Literature task]
+  B --> E[Baseline or experiment task]
+  L --> D[Evidence and discussion]
+  E --> D
+  D --> R[Critique and revision]
+  R --> A[Reviewed deliverable]
+  D --> M[Proposed memory update]
+  M --> H[Human review]
+  H --> B
+```
+
+For a small-model training competition, the target workflow connects prior work, baseline reproduction, evaluator review, ablations, negative results, and the final repo. A literature-gap memo or a proof project can use the same task and evidence model without a training score.
+
+Memory will separate approved personal background, project decisions, and task notes. Markdown summaries will reference original evidence. Pruning active context will preserve that evidence; accepting a project summary will not silently update a personal profile. Procedure changes will require evaluation and rollback before adoption.
+
+See the [ordered roadmap #14](https://github.com/MVPandey/Verifold/issues/14) for dependencies and acceptance criteria.
 
 ## Run locally
 
@@ -83,15 +112,31 @@ node dist-cli/cli.js status
 node dist-cli/cli.js select
 ```
 
-`init` starts with your harness: Claude Code or Codex, using its default model or a model you choose. It remembers that choice in a private agency directory. There is no name, Scholar, or GitHub questionnaire.
+`init` starts with **“What do you want to work on?”**, then connects to Claude Code or Codex with its default model or one you choose. Verifold remembers the harness preference in a private agency directory.
 
-Use the arrow keys or number keys to choose from the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
+The selected harness asks one follow-up at a time, using your answers and any saved background. Its prompt asks it to reason from first principles: why the problem matters, what assumptions need testing, what evidence would change your mind, and what scope is feasible. It asks about experience and constraints when needed. There is no fixed research questionnaire. The conversation is limited to six harness calls; type `/finish` at a follow-up to request the brief early.
 
-Choose **Build a profile with my agent** for a short interview about your interests, goals, and working constraints. With your permission, the selected harness turns those answers into a research profile. You can also import a selected memory or conversation-export text file, write a short introduction without an AI call, or skip personalization. Before reading an import, Verifold explains which file and model it will use and asks for permission. You review a summary and the full Markdown, edit it if needed, and choose whether to save it. Declining or a failed profile draft does not block research.
+Review the full research brief, press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. Then specify your project directory and choose guided or autonomous exploration. `--workspace path` supplies the directory directly. Relative paths resolve against the directory where you launched Verifold; the interactive path also accepts `~/`. Missing directories are created. Existing folder contents are preserved; conflicting files, a preexisting `.verifold.md`, and linked scaffold directories are rejected.
 
-Approved context lives in `~/.verifold/agency/USER.md`, with harness preferences in `settings.json`. `--agency-dir path` selects a separate profile in an empty directory or an existing Verifold agency. Verifold reuses the approved Markdown on later projects without rereading its source. Edit `USER.md` to correct it, or delete it to stop future reuse. Existing projects retain their private context snapshot. The selected model provider may process imported text and research context under your harness settings; private storage does not mean offline processing.
+Every initialized project receives:
 
-Then tell the harness what you want to investigate and choose guided or autonomous exploration. Names and external accounts can wait until the community platform has a use for them. See the [onboarding research and decision](docs/research/onboarding-review.md).
+```text
+project/
+  .verifold.md   Research brief, folder guide, and continuation commands
+  .verifold/     Private state, research attempts, and source reports
+  literature/   Papers, source notes, and provenance
+  experiments/  Reproducible code and configurations
+  results/      Raw outputs, metrics, and negative results
+  figures/      Plots and regeneration scripts
+  docs/         Plans, decisions, methods, and write-ups
+  agents/       Project agent briefs and review notes
+```
+
+The approved brief feeds planning and research in the selected directory. It stays project-scoped; onboarding does not automatically turn it into a reusable personal profile. Run subsequent commands from that directory or pass `--workspace path`.
+
+Use arrow keys or number keys in the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
+
+Optional reusable background remains available through `init --setup-only`: interview with your agent, import one selected memory or conversation-export text file, write an introduction locally, or skip. Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency. Normal onboarding reuses this approved background without rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain. Local storage does not imply offline model processing.
 
 The coordinator proposes a search scope and personas. Guided mode pauses for approval. Use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
 
@@ -101,7 +146,7 @@ Autonomous mode proceeds through planning and research, then stops at directions
 
 Interactive `init` and `research` show readable results and next steps. Noninteractive runs and `status` return JSON. Interactive mode requires a terminal on stdin and stderr; use `status` when piping saved state to another tool.
 
-Noninteractive initialization requires explicit research inputs:
+Noninteractive initialization requires explicit research inputs. The harness drafts a brief with unknowns from these inputs, then plans and researches without an interview or brief-review prompt:
 
 ```sh
 node dist-cli/cli.js init --host claude --topic "Efficient graph algorithms" --autonomy autonomous
@@ -134,13 +179,29 @@ After selection, `literature` prints an optional retention request. `--memory` a
 
 Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, and reports under `.verifold/runs/<attempt-id>/`. These files can contain private research information.
 
-Initialization adds `/.verifold/` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
+Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
 
 The selected harness uses its configured model services and research tools. Local state does not imply that those services run offline. Verifold creates no remote profile or publication.
 
 `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
 
+## Help build Verifold
+
+Start with [the local research desk #15](https://github.com/MVPandey/Verifold/issues/15). Profile import and scoped memory are smaller parallel contributions. Each issue defines its prerequisites and acceptance criteria.
+
+The wider goal is a shared home for computational science, including math, CS/ML, and security. Researchers should be able to inspect assumptions, critique an analysis, rerun an experiment, or contribute an adjacent investigation. Failed attempts and unresolved objections belong beside successful results.
+
+Work starts private. The planned public board will share only what the owner selects, with enough evidence for others to test and continue the investigation. Publication should preserve an inspectable record of how a conclusion was reached.
+
+[Open an issue](https://github.com/MVPandey/Verifold/issues) with a workflow, a reproducible problem, or a contribution you want to make. Use public examples and keep private research out of the issue. For code changes, read the engineering rules below and run `make validate` before opening a pull request.
+
 ## Engineering
+
+Internal agent research, planning notes, and coordination records belong in `.local/agents/`, which Git ignores. Keep public documentation in `docs/`. Do not publish private notes through commits, issue bodies, or pull request descriptions.
+
+Read [AGENTS.md](AGENTS.md) before contributing.
+It defines the required Node.js, technical-English, and ponytail skills, plus review and validation rules.
+The skill editions live in `.agents/skills/` and require no personal skill installation.
 
 `src/cli.ts` owns process lifecycle and terminal streams. CLI command handlers coordinate research and profile operations. The harness adapter owns subprocess arguments and response parsing. Research contracts validate returned data, and storage owns atomic state changes.
 
@@ -154,6 +215,6 @@ Normal research failures preserve the saved checkpoint. Inspect `status` and the
 git config --local core.hooksPath .githooks
 ```
 
-See [validation scope](docs/validation.md), the [landscape CLI plan](docs/landscape-cli-plan.md), and [repository reviews](docs/research/). Source-link validation does not verify scientific claims or establish citation provenance.
+See [validation scope](docs/validation.md). Source-link validation does not verify scientific claims or establish citation provenance.
 
 The harness package is MIT licensed. The website and visual brand assets are outside that grant. See [license scope](LICENSING.md). The bundled Manrope font retains its SIL Open Font License.

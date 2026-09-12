@@ -1,4 +1,11 @@
-import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  rm,
+  readFile,
+  writeFile,
+  stat,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -141,13 +148,18 @@ try {
       },
     ],
   };
+  const onboarding = {
+    question: null,
+    brief:
+      'Compare proof search under fixed CPU compute; motivation: understand baseline failures. Background unknown.',
+  };
   await writeFile(
     join(directory, 'bin', 'claude'),
     `#!/usr/bin/env node
 async function main() {
 let prompt = '';
 for await (const chunk of process.stdin) prompt += chunk;
-const result = prompt.includes('Plan the research now.') ? ${JSON.stringify(plan)} : ${JSON.stringify(report)};
+const result = prompt.includes("research onboarding agent") ? ${JSON.stringify(onboarding)} : prompt.includes('Plan the research now.') ? ${JSON.stringify(plan)} : ${JSON.stringify(report)};
 console.log(JSON.stringify({result: JSON.stringify(result), session_id: 'package-session'}));
 }
 main().catch(() => { process.exitCode = 1; });
@@ -173,7 +185,22 @@ main().catch(() => { process.exitCode = 1; });
   const state = JSON.parse(research.stdout);
   assert.equal(state.research.phase, 'directions');
   assert.equal(state.model, 'fixture-model');
-  assert.equal(state.context, undefined);
+  assert.equal(state.context, onboarding.brief);
+  for (const name of [
+    'literature',
+    'experiments',
+    'results',
+    'figures',
+    'docs',
+    'agents',
+  ])
+    assert.ok(
+      (await stat(join(directory, 'research-project', name))).isDirectory(),
+    );
+  assert.match(
+    await readFile(join(directory, 'research-project', '.verifold.md'), 'utf8'),
+    /baseline failures/,
+  );
   assert.equal(
     JSON.parse(
       await readFile(

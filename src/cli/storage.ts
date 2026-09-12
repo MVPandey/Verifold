@@ -28,6 +28,10 @@ export async function loadWorkspace(root: string): Promise<Workspace> {
 export async function changeWorkspace(
   root: string,
   update: (current: Workspace | null) => Workspace,
+  preparation?: {
+    readonly apply: () => Promise<void>;
+    readonly rollback: () => Promise<void>;
+  },
 ): Promise<Workspace> {
   const directory = join(root, '.verifold');
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -48,9 +52,12 @@ export async function changeWorkspace(
     if (!stats.isFile()) throw new Error('.gitignore must be a regular file.');
     if (stats.size > 1_000_000) throw new Error('.gitignore exceeds 1 MB.');
     const rules = await ignoreFile.readFile('utf8');
-    if (!rules.split('\n').includes('/.verifold/')) {
+    const missingRules = ['/.verifold/', '/.verifold.md'].filter(
+      (rule) => !rules.split('\n').includes(rule),
+    );
+    if (missingRules.length) {
       await ignoreFile.write(
-        `${rules.endsWith('\n') || !rules ? '' : '\n'}/.verifold/\n`,
+        `${rules.endsWith('\n') || !rules ? '' : '\n'}${missingRules.join('\n')}\n`,
       );
     }
   } finally {
@@ -59,6 +66,7 @@ export async function changeWorkspace(
   const lockPath = join(directory, 'write.lock');
   const lock = await open(lockPath, 'wx', 0o600);
   const temporary = join(directory, `${randomUUID()}.tmp`);
+  let preparing = false;
   try {
     let current: Workspace | null = null;
     try {
@@ -76,6 +84,8 @@ export async function changeWorkspace(
         'Workspace exceeds the 1 MB storage limit. Reduce the imported research output.',
       );
     }
+    preparing = preparation !== undefined;
+    await preparation?.apply();
     const file = await open(temporary, 'wx', 0o600);
     try {
       await file.writeFile(serialized);
@@ -85,6 +95,9 @@ export async function changeWorkspace(
     }
     await rename(temporary, join(directory, 'workspace.json'));
     return next;
+  } catch (error) {
+    if (preparing) await preparation?.rollback();
+    throw error;
   } finally {
     await rm(temporary, { force: true });
     await lock.close();
