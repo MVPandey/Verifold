@@ -37,7 +37,7 @@ await test('terminal messages distinguish headings and success without trusting 
 
 await test('guided initialization collects a broad topic without launching research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-initialization-'));
-  const answers = ['Formal proof search', 'codex', '', 'skip', '', '', ''];
+  const answers = ['codex', '', 'skip', '', 'Formal proof search', '', ''];
   try {
     const result = await initializeProject(
       root,

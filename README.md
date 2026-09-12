@@ -18,7 +18,7 @@
 
 Verifold coordinates computational research through the coding harnesses you already use.
 
-Start with **“What do you want to work on?”** Your installed Claude Code or Codex asks follow-up questions, drafts a brief for review, and researches the approved scope. Verifold creates a project in your chosen directory and saves the brief, sources, research directions, and feedback.
+Run `verifold` to connect your installed Claude Code or Codex, review optional personal background, and choose a project folder. Supply existing work, a written brief, or notes before your harness asks follow-up questions. Verifold saves the reviewed brief and research records, then opens a local browser desk to follow research.
 
 We're building toward a research **meta-harness**: a shared workspace that coordinates several harness instances from ideation to a paper, repository, figure, proof, or other deliverable. Each harness keeps its models, credentials, tools, and permissions. Verifold will connect their tasks, discussions, memory, and evidence across sessions.
 
@@ -30,16 +30,18 @@ Use Node 22, 24, or 26 and an installed, authenticated Claude Code or Codex harn
 
 ```sh
 npm install -g verifold
-verifold init
+verifold
 ```
 
-You can also run `npx verifold init` or install locally with `npm install verifold`. A local installation runs through `npx verifold`.
+You can also run `npx verifold` or install locally with `npm install verifold`. A local installation runs through `npx verifold`.
 
 Verifold starts the selected harness with its existing configuration and permissions. See [security boundaries](SECURITY.md).
 
 ## Start a research project
 
-Run `verifold init` from your terminal. Follow the prompts to choose a harness, review your research brief, and select a project directory.
+Run `verifold` from your terminal. An existing Verifold project opens its desk. Otherwise, setup connects your harness, loads your global profile if available, and offers profile creation before selecting a project folder. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open; Ctrl+C stops its work and server.
+
+Use `verifold init` for setup and research entirely in the CLI. Bare launch requires an interactive terminal. `verifold --no-open` prints the desk URL without opening a browser.
 
 Run subsequent commands from that project directory, or add `--workspace <path>`:
 
@@ -50,11 +52,13 @@ verifold status
 verifold select
 ```
 
-`init` starts with **“What do you want to work on?”**, then connects to Claude Code or Codex with its default model or one you choose. Verifold remembers the harness preference in a private agency directory.
+`init` connects to Claude Code or Codex with its default model or one you choose. Verifold remembers the harness preference in a global private agency directory. It shows the saved profile summary and Markdown path before collecting project context.
 
 The selected harness asks one follow-up at a time, using your answers and any saved background. Its prompt asks it to reason from first principles: why the problem matters, what assumptions need testing, what evidence would change your mind, and what scope is feasible. It asks about experience and constraints when needed. There is no fixed research questionnaire. The agent writes Markdown, not a required JSON brief. The conversation has up to six turns, with one explicit retry per failed turn. Press Enter or type `/finish` at a follow-up to request the brief early. If a reply fails, retry with your answers intact or review a local brief made from those answers.
 
-Review the full research brief, press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. Then specify your project directory and choose guided or autonomous exploration. `--workspace path` supplies the directory directly. Relative paths resolve against the directory where you launched Verifold; the interactive path also accepts `~/`. Missing directories are created. Existing folder contents are preserved; conflicting files, a preexisting `.verifold.md`, and linked scaffold directories are rejected.
+Choose your project directory before the interview. `--workspace path` supplies the directory directly. After any directory investigation, add a direction, question, or notes, or enter `/file <path>` to supply a written brief. File import asks permission before reading up to 12000 bytes and sending them to the selected harness. Press Enter without notes to let your harness help identify a direction from the available context.
+
+Review the full research brief, press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. Then choose guided or autonomous exploration. Relative paths resolve against the directory where you launched Verifold; the interactive path also accepts `~/`. Missing directories are created. Existing folder contents are preserved; conflicting files, a preexisting `.verifold.md`, and linked scaffold directories are rejected.
 
 Every initialized project receives:
 
@@ -70,13 +74,13 @@ project/
   agents/       Project agent briefs and review notes
 ```
 
-If the selected directory contains supported top-level documentation, Verifold offers an investigation before project creation. With consent, the agent receives a bounded selection of top-level README, agent-instruction, and manifest files. You review the resulting brief; declining or a failed investigation preserves your original brief. Accepted context stays in the project’s `.verifold.md` and workspace state, not your personal profile. This is documentation-based context, not a source-code audit.
+If the selected directory contains supported top-level documentation, Verifold offers an investigation before the interview. With consent, the agent receives a bounded selection of top-level README, agent-instruction, and manifest files. You review the resulting brief; declining or a failed investigation preserves your original brief. Accepted context stays in the project’s `.verifold.md` and workspace state, not your personal profile. The initial summary uses documentation. After you accept that context, the interview prompt permits native read and search tools and delegation within the selected project scope. It prohibits edits, experiments, and downloads before scope review. These prompts guide the harness; its own permissions remain the enforcement boundary. Without accepted directory context, the interview uses supplied evidence only.
 
 The approved brief feeds planning and research in the selected directory. It stays project-scoped; onboarding does not automatically turn it into a reusable personal profile. Run subsequent commands from that directory or pass `--workspace path`.
 
 Use arrow keys or number keys in the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
 
-When no approved background exists, interactive `init` offers an optional profile step after your research question and harness selection. Choose “Learn from my chats” to select a local chat file or folder, import one memory file, write an introduction locally, or skip. The chat option suggests the selected harness’s usual local session folder; you can choose a narrower folder or an export instead. `init --setup-only` also offers an agent interview to build a reusable profile.
+When no approved background exists, interactive setup offers an optional profile step after harness selection and before project selection. Choose “Learn from my chats” to select a local chat file or folder, import one memory file, write an introduction locally, or skip. The chat option suggests the selected harness’s usual local session folder; you can choose a narrower folder or an export instead. `init --setup-only` also offers an agent interview to build a reusable profile.
 
 Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency.
 
@@ -121,9 +125,15 @@ After selection, `literature` prints an optional retention request. `--memory` a
 
 `handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and gates before execution. Verifold does not execute Automative in this version.
 
+### Editable harness prompts
+
+Harness instructions live in `src/cli/prompts/*.md`. Each filename is a prompt ID loaded by `src/cli/prompts.ts`. Edit these files to change interview, profile, project-context, research, or handoff instructions. Dynamic user evidence is appended separately by the caller.
+
+Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the CLI package. Installed commands load these bundled files independently of the working directory. No template engine or per-user override directory is configured.
+
 ### Local research desk
 
-Run `verifold ui --workspace <path>` to open a read-only browser desk for an initialized project. Keep that terminal open; Ctrl+C stops the server. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect.
+Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its read-only browser desk. Keep that terminal open; Ctrl+C stops the server. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect.
 
 The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Run research in another terminal; opening or refreshing the desk does not launch a harness. Research controls remain in the CLI.
 
@@ -145,7 +155,7 @@ This README describes the current source checkout. The published npm package can
 
 | Available in this checkout | What it does                                                                                        |
 | -------------------------- | --------------------------------------------------------------------------------------------------- |
-| Adaptive onboarding        | Asks one question at a time through your chosen harness and lets you review the research brief.     |
+| Context-first onboarding   | Reviews optional personal background and project context before your harness interviews you.        |
 | Project initialization     | Creates `.verifold.md` and folders for literature, experiments, results, figures, docs, and agents. |
 | Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
 | Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
