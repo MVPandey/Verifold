@@ -22,23 +22,7 @@ Start with **“What do you want to work on?”** Your installed Claude Code or 
 
 We're building toward a research **meta-harness**: a shared workspace that coordinates several harness instances from ideation to a paper, repository, figure, proof, or other deliverable. Each harness keeps its models, credentials, tools, and permissions. Verifold will connect their tasks, discussions, memory, and evidence across sessions.
 
-[Install](#install-the-cli) · [Current capabilities](#project-status) · [Roadmap](#development-plan) · [Contribute](#help-build-verifold)
-
-## Project status
-
-The checked-out CLI supports the following workflow. Onboarding changes are tracked in [PR #13](https://github.com/MVPandey/Verifold/pull/13); use the [source setup](#run-locally) to evaluate this branch. The published npm package can lag this checkout.
-
-| Available in this checkout | What it does                                                                                        |
-| -------------------------- | --------------------------------------------------------------------------------------------------- |
-| Adaptive onboarding        | Asks one question at a time through your chosen harness and lets you review the research brief.     |
-| Project initialization     | Creates `.verifold.md` and folders for literature, experiments, results, figures, docs, and agents. |
-| Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
-| Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
-| Local research records     | Retains attempt files and provides CLI status plus a read-only HTML snapshot.                       |
-
-This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
-
-Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Live multi-agent supervision, scheduled memory, public collaboration, Automative execution, and cloud synchronization remain planned work.
+[Install](#install-the-cli) · [Usage](#start-a-research-project) · [Current capabilities](#project-status) · [Roadmap](#development-plan) · [Contribute](#help-build-verifold)
 
 ## Install the CLI
 
@@ -53,63 +37,17 @@ You can also run `npx verifold init` or install locally with `npm install verifo
 
 Verifold starts the selected harness with its existing configuration and permissions. See [security boundaries](SECURITY.md).
 
-## Development plan
+## Start a research project
 
-Start with a local Node app that opens a browser tab, then add coordination. CLI and browser will use the same project operations. Native desktop packaging is outside the current plan.
+Run `verifold init` from your terminal. Follow the prompts to choose a harness, review your research brief, and select a project directory.
 
-| Priority                    | Planned outcome                                                                                                   | Work                                                                                                                                                                                                                                                                  |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| First                       | Watch one real harness run, inspect its evidence, and recover its recorded state after reconnecting.              | [Local research desk #15](https://github.com/MVPandey/Verifold/issues/15)                                                                                                                                                                                             |
-| Small parallel improvements | Offer reviewed background, inspect scoped Markdown context, and diagnose installed harnesses without model calls. | [Profile import #16](https://github.com/MVPandey/Verifold/issues/16), [memory #17](https://github.com/MVPandey/Verifold/issues/17), [harness diagnostics #28](https://github.com/MVPandey/Verifold/issues/28)                                                         |
-| Next                        | Choose “Continue onboarding in the CLI” or “Open the web UI” and retain the same interview.                       | [Shared onboarding #18](https://github.com/MVPandey/Verifold/issues/18)                                                                                                                                                                                               |
-| Coordination                | Assign adjacent tasks, exchange evidence-linked messages, and supervise two independent harness instances.        | [Task records #19](https://github.com/MVPandey/Verifold/issues/19), [discussions #20](https://github.com/MVPandey/Verifold/issues/20), [workers #21](https://github.com/MVPandey/Verifold/issues/21), [team view #22](https://github.com/MVPandey/Verifold/issues/22) |
-| Complete the research loop  | Assemble a reviewed memo, reproducible repository, and report from retained evidence.                             | [Deliverables #23](https://github.com/MVPandey/Verifold/issues/23)                                                                                                                                                                                                    |
-| Inspect evidence            | Preview registered outputs and flag changed or missing files without altering the cited version.                  | [Evidence inspector #29](https://github.com/MVPandey/Verifold/issues/29), after #20/#22; does not block #23                                                                                                                                                           |
-| Learn from completed work   | Propose sourced memory changes, schedule bounded maintenance, and evaluate reversible procedure improvements.     | [Memory review #24](https://github.com/MVPandey/Verifold/issues/24), [scheduling #25](https://github.com/MVPandey/Verifold/issues/25), [procedure evaluation #26](https://github.com/MVPandey/Verifold/issues/26)                                                     |
-| Share selected research     | Design a public board where people and swarms can critique evidence and contribute with owner review.             | [Public board design #27](https://github.com/MVPandey/Verifold/issues/27)                                                                                                                                                                                             |
-
-The intended coordinated workflow below is a plan, not a recorded execution:
-
-```mermaid
-flowchart LR
-  Q[Research question] --> B[Reviewed brief]
-  B --> L[Literature task]
-  B --> E[Baseline or experiment task]
-  L --> D[Evidence and discussion]
-  E --> D
-  D --> R[Critique and revision]
-  R --> A[Reviewed deliverable]
-  D --> M[Proposed memory update]
-  M --> H[Human review]
-  H --> B
-```
-
-For a small-model training competition, the target workflow connects prior work, baseline reproduction, evaluator review, ablations, negative results, and the final repo. A literature-gap memo or a proof project can use the same task and evidence model without a training score.
-
-Memory will separate approved personal background, project decisions, and task notes. Markdown summaries will reference original evidence. Pruning active context will preserve that evidence; accepting a project summary will not silently update a personal profile. Procedure changes will require evaluation and rollback before adoption.
-
-See the [ordered roadmap #14](https://github.com/MVPandey/Verifold/issues/14) for dependencies and acceptance criteria.
-
-## Run locally
-
-Clone and build with Node 24:
+Run subsequent commands from that project directory, or add `--workspace <path>`:
 
 ```sh
-git clone https://github.com/MVPandey/Verifold.git
-cd Verifold
-nvm use
-npm ci
-npm run build:cli
-```
-
-Use `node dist-cli/cli.js` in this checkout. A locally packed and installed package exposes `verifold`.
-
-```sh
-node dist-cli/cli.js init
-node dist-cli/cli.js research --feedback "Focus on methods that run on one GPU."
-node dist-cli/cli.js research --approve
-node dist-cli/cli.js status
-node dist-cli/cli.js select
+verifold research --feedback "Focus on methods that run on one GPU."
+verifold research --approve
+verifold status
+verifold select
 ```
 
 `init` starts with **“What do you want to work on?”**, then connects to Claude Code or Codex with its default model or one you choose. Verifold remembers the harness preference in a private agency directory.
@@ -157,7 +95,7 @@ Interactive `init` and `research` show readable results and next steps. Noninter
 Noninteractive initialization requires explicit research inputs. The harness drafts a brief with unknowns from these inputs, then plans and researches without an interview or brief-review prompt:
 
 ```sh
-node dist-cli/cli.js init --host claude --topic "Efficient graph algorithms" --autonomy autonomous
+verifold init --host claude --topic "Efficient graph algorithms" --autonomy autonomous
 # Optional: --model <host-model-id> --agency-dir <private-directory>
 ```
 
@@ -168,13 +106,13 @@ Use `--host codex` to select Codex. Paths resolve against the current directory.
 Use `init --setup-only` to save harness preferences and optionally review context without starting research. Existing `--profile profile.json` imports remain supported as project-scoped legacy profiles:
 
 ```sh
-node dist-cli/cli.js init --setup-only --profile profile.json --host codex
-node dist-cli/cli.js recommend
-node dist-cli/cli.js ideas --from ideas.json
-node dist-cli/cli.js select
-node dist-cli/cli.js literature --memory
-node dist-cli/cli.js handoff
-node dist-cli/cli.js view
+verifold init --setup-only --profile profile.json --host codex
+verifold recommend
+verifold ideas --from ideas.json
+verifold select
+verifold literature --memory
+verifold handoff
+verifold view
 ```
 
 `recommend` prints a host request. `ideas --from` imports an array with `id`, `title`, `recommendation`, and a nonempty `gates` array.
@@ -201,6 +139,59 @@ The selected harness uses its configured model services and research tools. Loca
 
 `ui` serves only the selected project on loopback, with authenticated project reads and bundled assets. It rejects unexpected hosts and origins. It does not expose raw harness transcripts or arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
 
+## Project status
+
+This README describes the current source checkout. The published npm package can lag changes that have not been released.
+
+| Available in this checkout | What it does                                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| Adaptive onboarding        | Asks one question at a time through your chosen harness and lets you review the research brief.     |
+| Project initialization     | Creates `.verifold.md` and folders for literature, experiments, results, figures, docs, and agents. |
+| Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
+| Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
+| Local research records     | Retains attempt files and provides CLI status plus a read-only HTML snapshot.                       |
+
+This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
+
+Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Live multi-agent supervision, scheduled memory, public collaboration, Automative execution, and cloud synchronization remain planned work.
+
+## Development plan
+
+Start with a local Node app that opens a browser tab, then add coordination. CLI and browser will use the same project operations. Native desktop packaging is outside the current plan.
+
+| Priority                    | Planned outcome                                                                                                   | Work                                                                                                                                                                                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First                       | Watch one real harness run, inspect its evidence, and recover its recorded state after reconnecting.              | [Local research desk #15](https://github.com/MVPandey/Verifold/issues/15)                                                                                                                                                                                             |
+| Small parallel improvements | Offer reviewed background, inspect scoped Markdown context, and diagnose installed harnesses without model calls. | [Profile import #16](https://github.com/MVPandey/Verifold/issues/16), [memory #17](https://github.com/MVPandey/Verifold/issues/17), [harness diagnostics #28](https://github.com/MVPandey/Verifold/issues/28)                                                         |
+| Next                        | Choose “Continue onboarding in the CLI” or “Open the web UI” and retain the same interview.                       | [Shared onboarding #18](https://github.com/MVPandey/Verifold/issues/18)                                                                                                                                                                                               |
+| Coordination                | Assign adjacent tasks, exchange evidence-linked messages, and supervise two independent harness instances.        | [Task records #19](https://github.com/MVPandey/Verifold/issues/19), [discussions #20](https://github.com/MVPandey/Verifold/issues/20), [workers #21](https://github.com/MVPandey/Verifold/issues/21), [team view #22](https://github.com/MVPandey/Verifold/issues/22) |
+| Complete the research loop  | Assemble a reviewed memo, reproducible repository, and report from retained evidence.                             | [Deliverables #23](https://github.com/MVPandey/Verifold/issues/23)                                                                                                                                                                                                    |
+| Inspect evidence            | Preview registered outputs and flag changed or missing files without altering the cited version.                  | [Evidence inspector #29](https://github.com/MVPandey/Verifold/issues/29), after #20/#22; does not block #23                                                                                                                                                           |
+| Learn from completed work   | Propose sourced memory changes, schedule bounded maintenance, and evaluate reversible procedure improvements.     | [Memory review #24](https://github.com/MVPandey/Verifold/issues/24), [scheduling #25](https://github.com/MVPandey/Verifold/issues/25), [procedure evaluation #26](https://github.com/MVPandey/Verifold/issues/26)                                                     |
+| Share selected research     | Design a public board where people and swarms can critique evidence and contribute with owner review.             | [Public board design #27](https://github.com/MVPandey/Verifold/issues/27)                                                                                                                                                                                             |
+
+The intended coordinated workflow below is a plan, not a recorded execution:
+
+```mermaid
+flowchart LR
+  Q[Research question] --> B[Reviewed brief]
+  B --> L[Literature task]
+  B --> E[Baseline or experiment task]
+  L --> D[Evidence and discussion]
+  E --> D
+  D --> R[Critique and revision]
+  R --> A[Reviewed deliverable]
+  D --> M[Proposed memory update]
+  M --> H[Human review]
+  H --> B
+```
+
+For a small-model training competition, the target workflow connects prior work, baseline reproduction, evaluator review, ablations, negative results, and the final repo. A literature-gap memo or a proof project can use the same task and evidence model without a training score.
+
+Memory will separate approved personal background, project decisions, and task notes. Markdown summaries will reference original evidence. Pruning active context will preserve that evidence; accepting a project summary will not silently update a personal profile. Procedure changes will require evaluation and rollback before adoption.
+
+See the [ordered roadmap #14](https://github.com/MVPandey/Verifold/issues/14) for dependencies and acceptance criteria.
+
 ## Help build Verifold
 
 See [open issues](https://github.com/MVPandey/Verifold/issues) for current contributions. Each issue defines its prerequisites and acceptance criteria.
@@ -210,6 +201,21 @@ The wider goal is a shared home for computational science, including math, CS/ML
 Work starts private. The planned public board will share only what the owner selects, with enough evidence for others to test and continue the investigation. Publication should preserve an inspectable record of how a conclusion was reached.
 
 [Open an issue](https://github.com/MVPandey/Verifold/issues) with a workflow, a reproducible problem, or a contribution you want to make. Use public examples and keep private research out of the issue. For code changes, read the engineering rules below and run `make validate` before opening a pull request.
+
+## Build from source
+
+For development or unreleased changes, clone the repository and use its pinned Node version. With `nvm` installed:
+
+```sh
+git clone https://github.com/MVPandey/Verifold.git
+cd Verifold
+nvm use
+npm ci
+npm run build:cli
+node dist-cli/cli.js init
+```
+
+In this checkout, replace `verifold` in the examples above with `node dist-cli/cli.js`. Rebuild after source changes.
 
 ## Engineering
 
