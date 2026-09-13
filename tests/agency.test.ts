@@ -130,6 +130,8 @@ for (const answers of [
   ['skip'],
   ['import', ''],
   ['import', 'missing.txt', 'no'],
+  ['harness-history', '/skip'],
+  ['harness-history', 'missing-chats', 'no'],
 ]) {
   await test(`onboarding ${JSON.stringify(answers)} does not read a source or invoke the host`, async () => {
     await temporary(async (root, directory) => {
@@ -149,6 +151,59 @@ for (const answers of [
     });
   });
 }
+
+await test('the harness reviews selected history only after consent and the user reviews the full draft', async () => {
+  await temporary(async (root, directory) => {
+    const source = join(root, 'chats.txt');
+    await writeFile(source, 'USER_EVIDENCE_ONLY_THE_HARNESS_SHOULD_READ');
+    const messages: string[] = [];
+    const answers = ['harness-history', source, 'yes', 'yes'];
+    const draft =
+      'Prefers falsifiable pilots.\n\n## Unknowns\nCompute budget is unknown.';
+    const approved = await personalize(
+      directory,
+      root,
+      { host: 'claude' },
+      prompts(answers, messages),
+      new AbortController().signal,
+      (request) => {
+        assert.ok(request.prompt.includes(JSON.stringify(source)));
+        assert.doesNotMatch(
+          request.prompt,
+          /USER_EVIDENCE_ONLY_THE_HARNESS_SHOULD_READ/,
+        );
+        assert.match(request.prompt, /native read tools/);
+        assert.match(request.prompt, /selected local source only/);
+        assert.match(request.prompt, /Do not search other history roots/);
+        request.onActivity?.('Claude Code requested Read.');
+        return Promise.resolve({ text: draft });
+      },
+    );
+    assert.equal(approved, draft);
+    assert.equal(await loadMemory(directory), draft);
+    assert.ok(messages.some((message) => message.includes(draft)));
+    assert.ok(messages.includes('Claude Code requested Read.'));
+    assert.deepEqual(answers, []);
+  });
+});
+
+await test('harness history rejects a redirected source before launching the harness', async () => {
+  await temporary(async (root, directory) => {
+    await writeFile(join(root, 'source.txt'), 'Context');
+    await symlink(join(root, 'source.txt'), join(root, 'link'));
+    await assert.rejects(
+      personalize(
+        directory,
+        root,
+        { host: 'claude' },
+        prompts(['harness-history', 'link', 'yes']),
+        new AbortController().signal,
+        noHost,
+      ),
+      /not a symbolic link/,
+    );
+  });
+});
 
 await test('the reviewed file is reread so user edits replace the model draft', async () => {
   await temporary(async (root, directory) => {

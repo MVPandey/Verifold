@@ -36,19 +36,90 @@ export function paragraph(value: string, columns = 80, indent = '  '): string {
     .join('\n');
 }
 
-/** Give Markdown headings and completed actions hierarchy without interpreting escapes. */
+/** Render common agent Markdown while keeping code and terminal controls inert. */
 export function terminalMessage(
   value: string,
   color: boolean,
   columns = 80,
 ): string {
+  let fence: string | undefined;
+  let headers: string[] | undefined;
+  let separator = -1;
+  const cells = (line: string): string[] =>
+    line
+      .trim()
+      .replace(/^\||(?<!\\)\|$/g, '')
+      .split(/(?<!\\)\|/)
+      .map((cell) => cell.trim().replaceAll('\\|', '|'));
+  const inline = (line: string): string =>
+    line.replace(
+      /`([^`\n]+)`|\*\*([^*\n]+)\*\*/g,
+      (_match: string, code: string | undefined, strong: string) =>
+        code ?? strong,
+    );
   return stripVTControlCharacters(value)
+    .replace(/\r\n?/g, '\n')
     .split('\n')
-    .map((line) => {
-      const heading = /^#{1,6}\s+(.+)$/.exec(line);
+    .flatMap((line, index, lines) => {
+      const marker = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+      if (
+        marker &&
+        (!fence || (marker[1]?.startsWith(fence) && !marker[2]?.trim()))
+      ) {
+        headers = undefined;
+        fence = fence ? undefined : marker[1];
+        return '';
+      }
+      if (!line.trim()) {
+        headers = undefined;
+        return '';
+      }
+      const spaces = line.match(/^\s*/)?.[0].replace(/\t/g, '  ').length ?? 0;
+      const indent = ' '.repeat(Math.min(spaces, Math.max(0, columns - 8)));
+      if (fence) return paragraph(line.trimStart(), columns, '    ' + indent);
+      if (index === separator) return [];
+      const rowCells = cells(line);
+      const nextCells = cells(lines[index + 1] ?? '');
+      if (
+        rowCells.length > 1 &&
+        nextCells.length === rowCells.length &&
+        nextCells.every((cell) => /^:?-{3,}:?$/.test(cell))
+      ) {
+        headers = rowCells;
+        separator = index + 1;
+        return [];
+      }
+      const labels = headers;
+      if (labels && rowCells.length === labels.length)
+        return (
+          rowCells
+            .map((cell, position) =>
+              paragraph(inline(`${labels[position]}: ${cell}`), columns),
+            )
+            .join('\n') + '\n'
+        );
+      headers = undefined;
+      const heading = /^\s*#{1,6}\s+(.+?)(?:\s+#+)?$/.exec(line);
       if (heading)
-        return tint(paragraph(heading[1] ?? '', columns), color, 'sky');
-      const row = paragraph(line, columns);
+        return tint(paragraph(inline(heading[1] ?? ''), columns), color, 'sky');
+      const list = /^\s*([-+*]|\d+[.)])\s+(.+)$/.exec(line);
+      if (list) {
+        const marker = /^[-+*]$/.test(list[1] ?? '') ? '• ' : `${list[1]} `;
+        const prefix = '  ' + indent;
+        return wrapText(
+          inline(list[2] ?? ''),
+          Math.max(
+            1,
+            Math.min(72, columns - prefix.length - marker.length - 1),
+          ),
+        )
+          .map(
+            (text, index) =>
+              prefix + (index ? ' '.repeat(marker.length) : marker) + text,
+          )
+          .join('\n');
+      }
+      const row = paragraph(inline(line), columns, '  ' + indent);
       return line.startsWith('✓ ') ? tint(row, color, 'mint') : row;
     })
     .join('\n');
