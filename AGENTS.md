@@ -27,11 +27,15 @@ Read each applicable SKILL.md before the first relevant change.
 | Implementation and refactoring                                            | [ponytail](.agents/skills/ponytail/SKILL.md)               |
 | Complexity review after correctness review                                | [ponytail-review](.agents/skills/ponytail-review/SKILL.md) |
 
-These are versioned repository editions, not automatic mirrors of personal skills.
-The Node.js and English editions derive from the owner's installed skills.
+These are versioned snapshots of the full operating skills, not shortened summaries or automatic mirrors of personal installations.
+The English snapshot includes the installed `asd-ste100` v0.4.0 instructions, rule reference, examples, README, and MIT license.
+The Node.js snapshot includes the installed `node-typescript` v1.1 instructions, engineering references, and complete validation template.
+Its source reference retains official documentation links. Private research comparisons and the personal Python-skill review remain outside the repository snapshot.
 Ponytail and ponytail-review are unmodified upstream skills from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail/tree/356918eba965ee1eac64bd3a7f0dd02108350de5/skills).
 Both are pinned to commit `356918eba965ee1eac64bd3a7f0dd02108350de5`, with the upstream MIT license included.
-Preserve upstream content when updating these two skills. Do not replace them with local summaries.
+Preserve imported skill content when updating it. Do not replace full instructions with local summaries.
+Keep repository-specific requirements in this file and document any necessary snapshot adjustments here.
+The Node.js validation template is a reference package. It does not replace this repository's runtime pins, dependencies, validation gate, or hooks.
 Update these files through ordinary review when the shared standard changes.
 Do not require a contributor's home directory or a globally installed skill.
 
@@ -69,6 +73,7 @@ Remove unused scaffolding, duplicate state, generic wrappers, placeholder featur
 Do not add marketing language, repeated summaries, or invented measurements.
 Do not delete useful explanation merely to meet a word or line count.
 The English skill governs technical prose. The ponytail skill governs code simplicity.
+Preserve code syntax, command names, and protocol literals when applying the English rules.
 
 ## Validation and Git hooks
 

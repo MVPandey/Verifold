@@ -1,57 +1,50 @@
 ---
 name: node-typescript
-description: Apply Verifold's Node.js and TypeScript standards when changing JavaScript, TypeScript, CLI behavior, subprocess adapters, or validation tooling.
+description: Production engineering standards for Node.js and TypeScript services, libraries, and CLIs. Use when writing, refactoring, or reviewing server-side JavaScript/TypeScript, designing async APIs, packaging npm/npx CLIs, integrating with host tools, or configuring tests and commit validation.
 metadata:
-  source: Adapted from the installed node-typescript skill v1.1
+  version: "1.1"
 ---
 
-# Node.js and TypeScript
+# Node.js and TypeScript Engineering
 
-Use the repository's existing runtime, dependencies, module system, and formatter.
-Read package.json, the lockfile, TypeScript settings, and affected tests before changing them.
-Do not copy a new project template into this repository.
+MUST means required for new or modified code; SHOULD means the default unless repository constraints justify another approach. Apply standards to the task's scope; do not rewrite unrelated code.
 
-## Boundaries and types
+## Start with the repository
 
-- Keep research rules separate from terminal, filesystem, and subprocess operations.
-- Keep command handlers responsible for input validation and coordination.
-- Give external operations narrow interfaces when the code needs substitution or isolated tests.
-- Use explicit parameter and return types at exported boundaries.
-- Treat parsed JSON, model output, and configuration as unknown until validation succeeds.
-- Preserve strict TypeScript settings. Do not suppress errors to make a check pass.
-- Preserve the current import convention and emitted JavaScript behavior.
-- Keep mutable state with its owner. Copy caller data when retaining it.
+Inspect local instructions, package.json, lockfile, runtime pins, tsconfig, lint/format configuration, tests, hooks, and CI before editing. Preserve established framework, module system, package manager, and coverage requirements. Surface conflicting requirements; do not silently weaken checks or upgrade runtimes.
 
-## Processes and storage
+For a new project, use a supported Node LTS, TypeScript strict mode, ESM, npm with a committed package-lock.json, and src/ plus tests/. Verify current compatibility before installing tools. Node 24 is the LTS baseline researched on 2026-09-07; this is a dated default, not a permanent version rule. Match @types/node to the target runtime major. Framework conventions can own the directory layout.
 
-- Await promises. Give background work an owner and a shutdown path.
-- Bound process output, input, execution time, retries, and concurrency.
-- Propagate cancellation. Release files, locks, listeners, and owned processes in finally blocks.
-- Use argument arrays with spawn or execFile. Disable shell interpretation for user input.
-- Validate file paths at the intended access boundary. Account for symbolic links and concurrent writes.
-- Validate data before committing it. Preserve the previous checkpoint when an operation fails.
-- Retain error causes without exposing credentials, raw private prompts, or source text in diagnostics.
-- Prefer Node built-ins. Add a dependency only when its concrete benefit justifies its cost.
+Prefer built-in Node APIs: node:test, node:assert/strict, node:fs/promises, node:stream/promises, fetch, AbortController, URL, node:crypto, and node:worker_threads. Node has no built-in linter, formatter, or static TypeScript checker. Use ESLint + typescript-eslint, Prettier, and the official typescript package's tsc. No Rust tooling is required. Do not add a second tool stack to an established project.
 
-## Harness integration
+## Engineering contract
 
-- Keep models, credentials, tools, and permissions with the selected harness.
-- Verify the current official host contract before changing adapter arguments or event parsing.
-- Report observed process state separately from delegation reported by a model.
-- Reserve stdout for command results. Send prompts and diagnostics to stderr.
-- Keep noninteractive commands bounded and machine-readable.
-- Preserve resume behavior only when the selected host supports it.
+- Keep domain logic independent of HTTP, databases, environment variables, and framework objects. Inject narrow dependency interfaces; assemble real resources at the application entrypoint.
+- Keep handlers thin: decode and validate input, authorize, invoke a use case, map the result. Services own orchestration and transaction boundaries; adapters own I/O details. Add layers when they isolate a real responsibility, not for every function.
+- Use explicit parameter types and return types for exported functions and architectural boundaries. Allow inference for local variables and contextually typed callbacks. Treat untrusted values as unknown until runtime validation succeeds. Never use assertions as validation.
+- Prefer immutable domain values and readonly collection interfaces. readonly and Object.freeze are shallow; neither guarantees deep immutability. Copy mutable inputs when retaining them and avoid exposing live internal collections. Keep intentional state explicit and lifecycle-owned.
+- Await or return every promise; intentional background work needs an owner, rejection handling, and shutdown behavior. Bound concurrency, queues, retries, and I/O time. Propagate cancellation and release resources in finally.
+- Libraries return values or throw typed errors; services own log configuration and boundary logging. Optional injected diagnostic callbacks are acceptable when explicitly part of a library contract. Preserve causes, redact sensitive data, and do not log and rethrow at every layer.
+- Parse configuration once at startup and inject validated settings. Avoid I/O, listeners, mutable singletons, and process exits at import time. Bootstrap and CLI boundaries own process lifecycle.
+- Validate public behavior with meaningful tests: edge cases, errors, authorization, cancellation, and integration contracts. Keep network services out of unit tests; use isolated fixtures and clean up resources.
+- Follow the repository formatter. Defaults: two spaces, single quotes, semicolons, camelCase functions/variables, PascalCase types/classes, descriptive filenames. Document public contracts, side effects, units, errors, and cancellation with concise JSDoc; explain decisions rather than narrating code.
 
-## Verification
+Read [architecture and types](references/architecture-types.md) when designing modules, contracts, or configuration. Read [async and security](references/async-security.md) when implementing I/O or production request handling.
 
-Test public behavior, invalid inputs, cancellation, and failure recovery at the affected boundary.
-Use isolated fixtures for routine tests. Do not require a live login or network service.
-Avoid tests that only repeat the implementation or match internal wording.
-Keep tests in the repository's type checks.
+Read [CLI packaging and host integration](references/cli-packaging.md) for executable entrypoints, package layout, npm/npx delivery, machine-readable CLI behavior, and adapters for existing agent harnesses. Keep host-owned lifecycle, permissions, and sessions with the host unless the feature explicitly needs otherwise.
 
-Run npm run validate after the final change.
-The gate includes formatting, lint, types, tests, builds, and the packed CLI consumer check.
-Do not weaken checks, suppress failures, or bypass Git hooks.
-Report what passed and what remains unverified.
+## Required validation workflow
 
-For code size and extension decisions, apply the repository's ponytail skill.
+Before committing task changes, run the repository's complete validation command after the final edit and require a zero exit status. For a new setup, expose npm run validate and optionally make validate as an alias. Validation MUST include formatting checks, linting, type checking, and unit tests, including test-file types. Include build/integration checks when the repository requires them. For distributable CLIs, also build, pack, install the tarball into an isolated consumer, and test the installed executable; follow the CLI packaging reference.
+
+Checks MUST NOT auto-fix code, silently skip missing commands/tests, or weaken thresholds. Use separate fix commands, review changes, and rerun validation. Never bypass hooks or disable checks to make a commit succeed. If validation cannot run or fails, report the actual blocker and do not claim the changes passed.
+
+Use the [validation reference](references/validation.md) and [runnable template](assets/validation/) when setting up or repairing validation. The template runs all four checks concurrently with Node APIs, waits for every result, and fails if any check fails. A plain sequential npm script is also valid; a single reliable gate matters more than concurrency.
+
+Use the same command in local hooks and CI. Local hooks can be bypassed; required GitHub status checks enforce the merge gate. Creating this skill does not activate hooks or modify GitHub settings in any application repository.
+
+## Review before completion
+
+Check responsibility boundaries, type/runtime agreement, resource ownership, cancellation, bounded work, error causes, authorization, sensitive logging, and meaningful tests. Report the validation command and outcome, plus material limitations. Review the build output for deployable services and the package exports/declarations for libraries.
+
+Official documentation links are in [sources](references/sources.md).

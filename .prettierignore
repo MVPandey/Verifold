@@ -7,7 +7,9 @@ verifold-research.md
 
 dist-cli
 
-# Preserve the pinned upstream Ponytail skills without formatting changes.
+# Preserve imported skill snapshots without formatting changes.
+.agents/skills/asd-ste100/
+.agents/skills/node-typescript/
 .agents/skills/ponytail/
 .agents/skills/ponytail-review/
 
