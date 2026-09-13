@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+# Validate the same tracked contents that Git will commit. Do not stash user work.
+if ! git diff --quiet --; then
+  echo 'Commit validation requires no unstaged tracked changes. Stage intended changes or use an isolated checkout.' >&2
+  exit 1
+fi
+if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  echo 'Commit validation requires no untracked non-ignored files. Stage intended files or move unrelated work safely.' >&2
+  exit 1
+fi
+npm run validate
+if ! git diff --quiet --; then
+  echo 'Validation changed tracked files. Review the changes and rerun validation.' >&2
+  exit 1
+fi
