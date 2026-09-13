@@ -10,6 +10,8 @@ export default tseslint.config(
       'verifold-website/**',
       'node_modules/**',
       '.local/agents/**',
+      // The imported reference package uses its own dependencies and validation gate.
+      '.agents/skills/node-typescript/assets/validation/**',
     ],
   },
   js.configs.recommended,
