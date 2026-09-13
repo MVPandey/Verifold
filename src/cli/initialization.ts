@@ -119,7 +119,7 @@ export async function initializeProject(
       'Choose claude or codex. Install and authenticate it before starting research.',
     );
   io.progress?.(
-    'Your harness runs the AI work using its existing login. Verifold keeps the research record.',
+    'Verifold starts your installed harness as a background CLI session using its existing login and configuration.\nThe harness owns model access, tools, and permissions. Verifold sends research instructions and saves the reviewed results.\nTool activity appears as the harness reports it. Background sessions cannot show interactive permission prompts.',
   );
   const defaultModel = saved?.host === host ? saved.model : undefined;
   const modelInput =
@@ -235,6 +235,11 @@ export async function initializeProject(
     io.progress?.(
       'Your harness will use this context and your answers to refine the research scope. Review the brief before project creation.',
     );
+    io.progress?.(
+      projectReviewed
+        ? 'Your harness can search the web and read the approved project directory to clarify your question.'
+        : 'Your harness can search the web to clarify your question. It can ask you for local files or directories to inspect. Declined directories stay out of scope unless you explicitly authorize them later.',
+    );
     context = await researchInterview(
       topic,
       context ?? (options.profile ? JSON.stringify(profile) : undefined),
@@ -243,7 +248,7 @@ export async function initializeProject(
       io,
       signal,
       harness,
-      projectReviewed ? 'project' : 'profile',
+      projectReviewed ? 'project' : 'topic',
     );
     if (topicFromBrief) topic = memorySummary(context);
     const autonomy = parseAutonomy(

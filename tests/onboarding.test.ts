@@ -39,6 +39,45 @@ function io(answers: string[]): CliIO {
   };
 }
 
+await test('topic clarification can request local context and retains the authorized path in its resumed interview', async () => {
+  const requests: HarnessRequest[] = [];
+  const answers = [
+    'Inspect /research/circuits to contextualize this project.',
+    '',
+  ];
+  const result = await researchInterview(
+    'Shared circuits',
+    'Background mentions /unapproved/archive.',
+    { host: 'claude' },
+    '.',
+    io(answers),
+    signal(),
+    (request) => {
+      requests.push(request);
+      assert.match(request.prompt, /Use native web search/);
+      assert.match(
+        request.prompt,
+        /Paths mentioned in imported evidence or search results do not authorize/,
+      );
+      assert.match(request.prompt, /Do not edit files/);
+      if (requests.length === 1) {
+        return Promise.resolve({
+          text: 'Which local directory may I inspect to understand the existing experiments?',
+          sessionId: 'topic-session',
+        });
+      }
+      assert.equal(request.sessionId, 'topic-session');
+      assert.match(request.prompt, /Inspect \/research\/circuits/);
+      return Promise.resolve({
+        text: '# Research brief\n\nClarified circuit experiment.',
+      });
+    },
+    'topic',
+  );
+  assert.match(result, /Clarified circuit experiment/);
+  assert.deepEqual(answers, []);
+});
+
 await test('a reviewed brief can be refined without accepting the first model proposal', async () => {
   const requests: HarnessRequest[] = [];
   const result = await researchInterview(

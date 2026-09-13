@@ -68,7 +68,16 @@ await test('init reviews personal context and selects a folder before asking for
   const root = await mkdtemp(join(tmpdir(), 'verifold-init-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const agencyDir = join(root, 'agency');
-  const ui = prompts(['codex', '', 'skip', '', 'Tiny graph search', '', '']);
+  const ui = prompts([
+    'codex',
+    '',
+    'skip',
+    '',
+    'no',
+    'Tiny graph search',
+    '',
+    '',
+  ]);
   const initialized = await initializeProject(
     root,
     root,
@@ -80,7 +89,8 @@ await test('init reviews personal context and selects a folder before asking for
   assert.match(ui.questions[0] ?? '', /Choose your agent harness/);
   assert.match(ui.questions[2] ?? '', /Personalize/);
   assert.match(ui.questions[3] ?? '', /Project directory/);
-  assert.match(ui.questions[4] ?? '', /direction, question, or notes/);
+  assert.match(ui.questions[4] ?? '', /investigate this project/);
+  assert.match(ui.questions[5] ?? '', /direction, question, or notes/);
   assert.doesNotMatch(
     ui.questions.join('\n'),
     /your name|scholar|openreview|github profile/i,
@@ -285,7 +295,11 @@ await test('declining folder investigation keeps its contents and working direct
       calls++;
       assert.equal(request.cwd, base);
       assert.doesNotMatch(request.prompt, /PRIVATE_PROJECT_EVIDENCE/);
-      assert.match(request.prompt, /Do not use tools/);
+      assert.match(request.prompt, /Use native web search/);
+      assert.match(
+        request.prompt,
+        /Do not scan the current working directory automatically/,
+      );
       return readyHost();
     },
   );
@@ -312,6 +326,7 @@ for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
         ? [outcome === 'accept' ? 'yes' : 'no']
         : []),
       '',
+      'no',
       'Graph search',
       '',
       'guided',
@@ -473,6 +488,7 @@ await test('adaptive onboarding creates a selected nested project and preserves 
     'chosen-model',
     'skip',
     'research projects/graph',
+    'no',
     'Graph search',
     'Understand heuristic failures',
     'CPU only',
