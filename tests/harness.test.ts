@@ -47,7 +47,7 @@ for (const host of ['claude', 'codex'] as const) {
           input: 'Research $(must remain literal)\nnext line',
           args:
             host === 'claude'
-              ? ['-p', '--output-format', 'json']
+              ? ['-p', '--output-format', 'stream-json', '--verbose']
               : [
                   '--search',
                   'exec',
@@ -292,7 +292,14 @@ for (const host of ['claude', 'codex'] as const) {
         assert.deepEqual(
           args,
           host === 'claude'
-            ? ['-p', '--output-format', 'json', '--resume', id]
+            ? [
+                '-p',
+                '--output-format',
+                'stream-json',
+                '--verbose',
+                '--resume',
+                id,
+              ]
             : [
                 '--search',
                 'exec',
@@ -350,7 +357,8 @@ for (const host of ['claude', 'codex'] as const) {
               ? [
                   '-p',
                   '--output-format',
-                  'json',
+                  'stream-json',
+                  '--verbose',
                   '--model',
                   model,
                   ...(resume ? ['--resume', 'session-123'] : []),
@@ -400,4 +408,190 @@ await test('invalid models fail before launching a host', async () => {
       /Harness model must be a valid identifier/,
     );
   }
+});
+
+await test('Claude streams observed activity and denials without private tool payloads', async () => {
+  const events = [
+    {
+      type: 'system',
+      subtype: 'init',
+      session_id: 'session-123',
+      model: 'claude-fixture-model',
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'private model thoughts' },
+          {
+            type: 'tool_use',
+            name: 'WebSearch',
+            input: { query: 'private query' },
+          },
+          { type: 'tool_use', name: '\u001b[31mprivate tool name', input: {} },
+        ],
+      },
+    },
+    {
+      type: 'assistant',
+      parent_tool_use_id: 'call-1',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            name: 'Read',
+            input: { file_path: '/private/path' },
+          },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call-1',
+            content: 'private tool result',
+          },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      parent_tool_use_id: 'call-1',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call-2',
+            is_error: true,
+            content: 'private error',
+          },
+        ],
+      },
+    },
+    {
+      type: 'result',
+      result: 'A reviewed answer',
+      session_id: 'session-123',
+      permission_denials: [
+        { tool_name: 'Bash', tool_input: { command: 'private command' } },
+      ],
+    },
+  ];
+  await fixture(
+    `process.stdin.resume();
+     const events = ${JSON.stringify(events)};
+     console.log(JSON.stringify(events.shift()));
+     const timer = setInterval(() => {
+       const event = events.shift();
+       if (!event) { clearInterval(timer); return; }
+       const line = JSON.stringify(event);
+       process.stdout.write(line.slice(0, 13));
+       process.stdout.write(line.slice(13) + (events.length ? '\\n' : ''));
+     }, 10);`,
+    async (executable, cwd) => {
+      const messages: string[] = [];
+      const result = await runHarness(
+        {
+          host: 'claude',
+          cwd,
+          prompt: '',
+          signal: new AbortController().signal,
+          onActivity: (message) => messages.push(message),
+        },
+        { executable },
+      );
+      assert.deepEqual(result, {
+        text: 'A reviewed answer',
+        sessionId: 'session-123',
+      });
+      assert.ok(messages.some((message) => message.includes('WebSearch')));
+      assert.ok(
+        messages.some((message) => message.includes('native subagent')),
+      );
+      assert.ok(messages.some((message) => message.includes('denied 1')));
+      assert.ok(
+        messages.some((message) =>
+          message.includes(
+            'Model: claude-fixture-model. Session: session-123.',
+          ),
+        ),
+      );
+      assert.ok(messages.includes('Claude Code tool returned a result.'));
+      assert.ok(
+        messages.includes(
+          'Claude Code tool returned an error in a native subagent.',
+        ),
+      );
+      assert.doesNotMatch(messages.join('\n'), /private/);
+      assert.ok(!messages.join('\n').includes('\u001b'));
+    },
+  );
+});
+
+await test('Codex reports native tool activity without command or search content', async () => {
+  const events = [
+    { type: 'thread.started', thread_id: 'session-123' },
+    {
+      type: 'item.started',
+      item: { type: 'web_search', query: 'private query' },
+    },
+    {
+      type: 'item.completed',
+      item: {
+        type: 'command_execution',
+        command: 'private command',
+        aggregated_output: 'private output',
+      },
+    },
+    { type: 'item.completed', item: { type: 'agent_message', text: 'Done' } },
+  ];
+  await fixture(
+    `process.stdin.resume(); for (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));`,
+    async (executable, cwd) => {
+      const messages: string[] = [];
+      const result = await runHarness(
+        {
+          host: 'codex',
+          cwd,
+          prompt: '',
+          signal: new AbortController().signal,
+          onActivity: (message) => messages.push(message),
+        },
+        { executable },
+      );
+      assert.equal(result.text, 'Done');
+      assert.deepEqual(messages, [
+        'Codex session connected.',
+        'Codex started web search.',
+        'Codex finished a command.',
+      ]);
+    },
+  );
+});
+
+await test('activity is delivered before completion and callback failures stop the child', async () => {
+  await fixture(
+    `process.stdin.resume(); console.log(JSON.stringify({type: 'system', subtype: 'init'})); setInterval(() => {}, 1000);`,
+    async (executable, cwd) => {
+      await assert.rejects(
+        runHarness(
+          {
+            host: 'claude',
+            cwd,
+            prompt: '',
+            signal: new AbortController().signal,
+            timeoutMs: 2000,
+            onActivity: () => {
+              throw new Error('private callback failure');
+            },
+          },
+          { executable },
+        ),
+        /Could not report harness activity/,
+      );
+    },
+  );
 });

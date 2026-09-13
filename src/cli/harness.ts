@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 export type HarnessName = 'claude' | 'codex';
 
@@ -11,6 +12,8 @@ export interface HarnessRequest {
   readonly sessionId?: string;
   /** Host model identifier or alias. Omit to use the host's default. */
   readonly model?: string;
+  /** Observed host activity only. Excludes prompts, tool inputs, and tool results. */
+  readonly onActivity?: (message: string) => void;
 }
 
 export interface HarnessResult {
@@ -38,7 +41,14 @@ function sessionId(value: unknown): string | undefined {
 
 function parseResult(host: HarnessName, output: string): HarnessResult {
   if (host === 'claude') {
-    const result: unknown = JSON.parse(output);
+    const events: unknown[] = output
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as unknown);
+    const result = events.findLast(
+      (event) =>
+        record(event) && (event.type === 'result' || 'result' in event),
+    );
     if (!record(result) || result.is_error === true) {
       throw new Error(
         'Claude reported a failed request. Check the host session.',
@@ -73,6 +83,80 @@ function parseResult(host: HarnessName, output: string): HarnessResult {
   }
   if (!result?.trim()) throw new Error('Codex returned no result text.');
   return { text: result, ...(id ? { sessionId: id } : {}) };
+}
+
+/** Only protocol identifiers can appear in activity messages, never private payloads. */
+function activity(host: HarnessName, event: unknown): string[] {
+  if (!record(event)) return [];
+  const label = (value: unknown): string | undefined =>
+    typeof value === 'string' &&
+    /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,199}$/.test(value)
+      ? value
+      : undefined;
+  if (host === 'claude') {
+    if (event.type === 'system' && event.subtype === 'init') {
+      const model = label(event.model);
+      const id = sessionId(event.session_id);
+      return [
+        `Claude Code session connected.${model ? ` Model: ${model}.` : ''}${id ? ` Session: ${id}.` : ''}`,
+      ];
+    }
+    if (event.type === 'system' && event.subtype === 'permission_denied')
+      return [
+        'Claude Code denied a tool request. Review permissions in Claude Code; Verifold cannot answer native approval prompts.',
+      ];
+    if (
+      Array.isArray(event.permission_denials) &&
+      event.permission_denials.length
+    ) {
+      const id = sessionId(event.session_id);
+      return [
+        `Claude Code denied ${event.permission_denials.length} tool request(s). ${id ? `Open claude --resume ${id} to review permissions.` : 'Review permissions in Claude Code.'} Verifold cannot answer native approval prompts.`,
+      ];
+    }
+    if (
+      (event.type === 'assistant' || event.type === 'user') &&
+      record(event.message) &&
+      Array.isArray(event.message.content)
+    )
+      return event.message.content.flatMap((block: unknown) =>
+        record(block) && event.type === 'assistant' && block.type === 'tool_use'
+          ? [
+              `Claude Code requested ${label(block.name) ?? 'tool'}${event.parent_tool_use_id ? ' in a native subagent' : ''}.`,
+            ]
+          : record(block) &&
+              event.type === 'user' &&
+              block.type === 'tool_result'
+            ? [
+                `Claude Code tool returned${block.is_error === true ? ' an error' : ' a result'}${event.parent_tool_use_id ? ' in a native subagent' : ''}.`,
+              ]
+            : [],
+      );
+  } else {
+    if (event.type === 'thread.started') return ['Codex session connected.'];
+    if (
+      (event.type === 'item.started' || event.type === 'item.completed') &&
+      record(event.item)
+    ) {
+      const labels: Record<string, string> = {
+        command_execution: 'a command',
+        web_search: 'web search',
+        mcp_tool_call: 'an MCP tool',
+        collab_tool_call: 'native agent coordination',
+        file_change: 'a file change',
+      };
+      const tool =
+        typeof event.item.type === 'string' &&
+        Object.hasOwn(labels, event.item.type)
+          ? labels[event.item.type]
+          : undefined;
+      if (tool)
+        return [
+          `Codex ${event.type === 'item.started' ? 'started' : 'finished'} ${tool}.`,
+        ];
+    }
+  }
+  return [];
 }
 
 /** Validate a host identifier without selecting or resolving a model for the user. */
@@ -122,7 +206,8 @@ export async function runHarness(
       ? [
           '-p',
           '--output-format',
-          'json',
+          'stream-json',
+          '--verbose',
           ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
@@ -148,6 +233,21 @@ export async function runHarness(
     let size = 0;
     let failure: Error | undefined;
     let killTimer: NodeJS.Timeout | undefined;
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+
+    function report(line: string): void {
+      if (!request.onActivity || !line.trim()) return;
+      let event: unknown;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        // Final parsing reports malformed output after the process closes.
+        return;
+      }
+      for (const message of activity(request.host, event))
+        request.onActivity(message);
+    }
 
     function kill(signal: NodeJS.Signals): void {
       if (child.pid === undefined) return;
@@ -189,7 +289,19 @@ export async function runHarness(
       size += chunk.length;
       if (size > maxBytes)
         stop(new Error('Harness output exceeds the 2 MiB limit.'));
-      else if (retain) chunks.push(chunk);
+      else if (retain) {
+        chunks.push(chunk);
+        if (request.onActivity) {
+          pending += decoder.write(chunk);
+          const lines = pending.split('\n');
+          pending = lines.pop() ?? '';
+          try {
+            for (const line of lines) report(line);
+          } catch {
+            stop(new Error('Could not report harness activity.'));
+          }
+        }
+      }
     }
 
     child.stdout.on('data', (chunk: Buffer) => consume(chunk, true));
@@ -204,6 +316,11 @@ export async function runHarness(
       );
     });
     child.on('close', (code) => {
+      try {
+        if (!failure) report(pending + decoder.end());
+      } catch {
+        failure ??= new Error('Could not report harness activity.');
+      }
       clearTimeout(deadline);
       clearTimeout(killTimer);
       request.signal.removeEventListener('abort', abort);

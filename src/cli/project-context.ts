@@ -2,7 +2,7 @@ import { loadPrompt } from './prompts.ts';
 import { opendir } from 'node:fs/promises';
 import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
-import { contextFiles, projectContextFile } from './context-files.ts';
+import { contextFiles } from './context-files.ts';
 import { withActivity } from './choices.ts';
 import { runHarness } from './harness.ts';
 import { parseContext } from './contracts.ts';
@@ -25,7 +25,10 @@ export async function investigateProject(
     for await (const entry of directory) {
       signal.throwIfAborted();
       if (inspected++ >= 200) break;
-      if (entry.isFile() && projectContextFile(entry.name)) {
+      if (
+        !entry.name.startsWith('.') &&
+        (entry.isFile() || entry.isDirectory())
+      ) {
         populated = true;
         break;
       }
@@ -36,13 +39,19 @@ export async function investigateProject(
     throw error;
   }
   if (!populated) return brief;
+  io.progress?.(
+    `## Understand your project\n\nDirectory: ${root}\nHarness: ${agency.host} (${agency.model ?? 'host default model'})\n\n- Verifold supplies up to 10 top-level documentation and manifest files (256 KB each, 512 KB total).\n- Your harness can read project files, search the web, and use native agents to clarify this work.\n- Its existing configuration and permissions apply. Tools that need interactive approval can be denied in this background session.\n- The request forbids edits, installations, and experiments. You review the context and final brief before Verifold saves project memory.\n\nYour harness and model provider may process this context and retain session records.`,
+  );
   const consent = await io.ask(
-    `This directory already contains work: ${root}\nWould you like your agent to investigate its context? Verifold will read up to 10 top-level README, AGENTS.md, CLAUDE.md, and project manifest files (256 KB each, 512 KB total), then send them to ${agency.host} (${agency.model ?? 'host default model'}). Verifold’s evidence excludes source code, hidden files, and linked files. Your harness runs in this directory with its own project configuration, tools, and permissions. You review this context before the interview. The accepted final research brief is saved as project memory in .verifold.md. If you accept this context, the following conversation may use your harness to read files within this project, search the web, and delegate to native agents under its existing permissions. The conversation must not edit files, install software, or run experiments. [y/N]: `,
+    'Let your harness investigate this project? [y/N]: ',
   );
   if (!/^(y|yes)$/i.test(consent.trim())) return brief;
   signal.throwIfAborted();
   try {
-    const evidence = await contextFiles(root, 'project', signal);
+    const evidence = await contextFiles(root, 'project', signal).catch(() => {
+      signal.throwIfAborted();
+      return 'Verifold could not supply readable top-level documentation. Use native read tools to inspect the selected project.';
+    });
     const result = await withActivity(
       io,
       `${agency.host} · Understanding this project`,
@@ -51,6 +60,7 @@ export async function investigateProject(
           ...agency,
           cwd: root,
           signal,
+          ...(io.progress ? { onActivity: io.progress } : {}),
           prompt: `${await loadPrompt('project-context')}\nInitial project direction: ${JSON.stringify(brief)}\nProject evidence:\n${evidence}`,
         }),
     );
