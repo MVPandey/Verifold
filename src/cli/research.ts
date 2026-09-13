@@ -230,6 +230,7 @@ export async function runResearch(
                 cwd: root,
                 prompt,
                 signal,
+                ...(io.progress ? { onActivity: io.progress } : {}),
                 ...(workspace.model ? { model: workspace.model } : {}),
                 ...(state.sessionId ? { sessionId: state.sessionId } : {}),
               }),

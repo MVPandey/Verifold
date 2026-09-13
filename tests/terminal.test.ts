@@ -7,6 +7,7 @@ import { terminalBanner, tint, terminalMessage } from '../src/cli/terminal.ts';
 import { visibleWidth } from '../src/cli/terminal-layout.ts';
 import { paragraph, terminalMenu } from '../src/cli/terminal.ts';
 import { initializeProject, parseAutonomy } from '../src/cli/initialization.ts';
+import { TerminalSession } from '../src/cli/terminal-session.ts';
 
 await test('terminal branding respects noninteractive output and NO_COLOR', () => {
   assert.equal(terminalBanner(false, false), '');
@@ -35,9 +36,98 @@ await test('terminal messages distinguish headings and success without trusting 
     assert.ok(visibleWidth(line) < 24);
 });
 
+await test('agent Markdown keeps list hierarchy and readable emphasis in narrow terminals', () => {
+  const message = [
+    '## **Research brief**',
+    '',
+    '- **Question:** assess the shared circuit with a controlled comparison.',
+    '  - Keep `baseline_score` for each condition.',
+    '1. Review the proposed experiment before running it.',
+    '',
+    '```python',
+    'if ready:',
+    '    run("**literal**")',
+    '```',
+  ].join('\n');
+  const rendered = terminalMessage(message, false, 36);
+  assert.match(rendered, /^ {2}Research brief\n\n {2}• Question:/);
+  assert.match(rendered, /\n {4}• Keep baseline_score/);
+  assert.match(
+    rendered,
+    /\n {2}1\. Review the proposed experiment\n {5}before/,
+  );
+  assert.match(rendered, /\n {4}if ready:\n {8}run\("\*\*literal\*\*"\)/);
+  assert.equal(rendered.includes('```'), false);
+  for (const line of rendered.split('\n'))
+    assert.ok(visibleWidth(line) < 36, line);
+});
+
+await test('wide Markdown tables become labeled records without losing research evidence', () => {
+  const table = [
+    '| Source | Script | Head set | Prompts | Uncertainty | Headline |',
+    '| :--- | --- | ---: | --- | --- | --- |',
+    '| [paper](https://example.org/paper) | `pilot.py` | A \\| B | 40 | Not measured | Shared circuit |',
+    '| replication | `check.py` | control | 80 | Bootstrap | Pending |',
+  ].join('\n');
+  for (const columns of [24, 40, 80]) {
+    const rendered = terminalMessage(table, false, columns);
+    const joined = rendered.replace(/\s/g, '');
+    assert.ok(joined.includes('Source:[paper](https://example.org/paper)'));
+    assert.ok(joined.includes('Script:pilot.py'));
+    assert.ok(joined.includes('Headset:A|B'));
+    assert.ok(joined.includes('Uncertainty:Notmeasured'));
+    assert.match(rendered, /\n\n {2}Source: replication/);
+    assert.doesNotMatch(rendered, /:---|---:/);
+    for (const line of rendered.split('\n'))
+      assert.ok(visibleWidth(line) < columns, line);
+  }
+  const literal = terminalMessage(
+    '```markdown\n' + table + '\n```',
+    false,
+    120,
+  );
+  assert.match(literal, /\| Source \| Script \|/);
+  assert.match(literal, /\| :--- \| --- \|/);
+  assert.doesNotMatch(literal, /Source:/);
+});
+
+await test('harness events remain in scrollback when an active indicator completes', async (context) => {
+  const output: string[] = [];
+  context.mock.method(process.stderr, 'write', (value: string): boolean => {
+    output.push(value);
+    return true;
+  });
+  const terminal = new TerminalSession(new AbortController(), false, true);
+  await terminal.busy('Claude Code', async () => {
+    terminal.progress('Observed tool request: WebSearch');
+    return Promise.resolve();
+  });
+  const transcript = output.join('');
+  const event = transcript.indexOf('Observed tool request: WebSearch');
+  assert.ok(event > 0);
+  assert.match(
+    transcript.slice(0, event).replaceAll('\u001b', 'ESC'),
+    /ESC\[\d+A/,
+  );
+  assert.doesNotMatch(
+    transcript.slice(event).replaceAll('\u001b', 'ESC'),
+    /ESC\[\d+A/,
+  );
+  assert.match(transcript.slice(event), /response received/);
+});
+
 await test('guided initialization collects a broad topic without launching research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-initialization-'));
-  const answers = ['codex', '', 'skip', '', 'Formal proof search', '', ''];
+  const answers = [
+    'codex',
+    '',
+    'skip',
+    '',
+    'no',
+    'Formal proof search',
+    '',
+    '',
+  ];
   try {
     const result = await initializeProject(
       root,

@@ -305,8 +305,14 @@ export async function personalize(
     '02 / Personalize · Give your agents useful research context',
     [
       {
+        value: 'harness-history',
+        label: 'Ask my harness to review my chats',
+        description:
+          'Your harness reads a selected local history folder and drafts context for review.',
+      },
+      {
         value: 'history',
-        label: 'Learn from my chats',
+        label: 'Import a sample of my chats',
         description:
           'Review a profile from selected local chats or an export folder.',
       },
@@ -339,16 +345,20 @@ export async function personalize(
   );
   if (choice === 'skip') return undefined;
   let draft: string;
-  if (choice === 'import' || choice === 'history') {
+  if (
+    choice === 'harness-history' ||
+    choice === 'import' ||
+    choice === 'history'
+  ) {
     const defaultSource = join(
       homedir(),
       agency.host === 'claude' ? '.claude/projects' : '.codex/sessions',
     );
     const selected = (
       await io.ask(
-        choice === 'history'
-          ? `Chat file or folder [${defaultSource}]; /skip to continue without import: `
-          : 'Path to one plain-text memory file or conversation export (blank to skip): ',
+        choice === 'import'
+          ? 'Path to one plain-text memory file or conversation export (blank to skip): '
+          : `Local chat file or folder [${defaultSource}]; /skip to skip: `,
       )
     ).trim();
     if (selected === '/skip' || (!selected && choice === 'import'))
@@ -358,27 +368,57 @@ export async function personalize(
         ? resolve(homedir(), selected.slice(2))
         : resolve(cwd, selected)
       : defaultSource;
-    const consent = await io.ask(
-      `Verifold will read ${choice === 'history' ? `a bounded sample from ${source}: up to 200 directory entries, 10 text/chat files, 256 KB per file and 512 KB total; no links or hidden subdirectories` : `only the selected file, ${source} (up to 128 KB)`}, and send its text to ${agency.host} (${agency.model ?? 'host default model'}) to summarize your research interests and working preferences. The model provider may process this content under your harness settings. Your harness keeps its own permissions and session records. Verifold will not copy the source archive. Native user-role messages can include harness-injected context; the reviewed profile must distinguish it from your own statements. You will review a private Markdown draft under ${directory} before reuse; accepted context is saved as USER.md there. Allow this? [y/N]: `,
-    );
-    if (!/^(y|yes)$/i.test(consent.trim())) return undefined;
-    signal.throwIfAborted();
-    const content =
-      choice === 'history'
-        ? await contextFiles(source, 'chats', signal)
-        : await readMemory(source, 128000);
-    const result = await withActivity(
-      io,
-      `Asking ${agency.host} to draft your research context.`,
-      async () =>
-        host({
-          ...agency,
-          cwd,
-          signal,
-          prompt: `${await loadPrompt('profile-summary')}\nSource path: ${JSON.stringify(source)}\nSource text (JSON string): ${JSON.stringify(content)}`,
-        }),
-    );
-    draft = text(result.text, 'profile draft', 12000);
+    if (choice === 'harness-history') {
+      io.progress?.(
+        `## Let your harness build your profile\n\nSource: ${source}\nHarness: ${agency.host} (${agency.model ?? 'host default model'})\n\n- Your harness chooses and reads relevant local chats using its own tools and permissions.\n- It chooses how much context to read within this source and reports its coverage. The scope is a prompt instruction, not a filesystem sandbox.\n- This does not grant access to cloud chats or guarantee that earlier conversations are available.\n- Your model provider may process the text, and your harness may retain session records.\n- You review the full draft before Verifold saves reusable context in ${directory}/USER.md.`,
+      );
+      const consent = await io.ask(
+        'Ask your harness to read this source and draft your profile? [y/N]: ',
+      );
+      if (!/^(y|yes)$/i.test(consent.trim())) return undefined;
+      signal.throwIfAborted();
+      const sourceStat = await lstat(source);
+      if (!sourceStat.isFile() && !sourceStat.isDirectory())
+        throw new Error(
+          'Choose a regular chat file or directory, not a symbolic link.',
+        );
+      const result = await withActivity(
+        io,
+        `${agency.host} · Reviewing selected chat history`,
+        async () =>
+          host({
+            ...agency,
+            cwd,
+            signal,
+            ...(io.progress ? { onActivity: io.progress } : {}),
+            prompt: `${await loadPrompt('profile-history')}\nSelected source: ${JSON.stringify(source)}`,
+          }),
+      );
+      draft = text(result.text, 'profile draft', 12000);
+    } else {
+      const consent = await io.ask(
+        `Verifold will read ${choice === 'history' ? `a bounded sample from ${source}: up to 200 directory entries, 10 text/chat files, 256 KB per file and 512 KB total; no links or hidden subdirectories` : `only the selected file, ${source} (up to 128 KB)`}.\n\nIt sends this text to ${agency.host} (${agency.model ?? 'host default model'}) to summarize research interests and working preferences. Your model provider may process this content. Your harness keeps its own permissions and session records.\n\nVerifold will not copy the source archive. Native user-role messages can include harness-injected context. Review which statements are yours.\n\nYou will review the full draft before reuse. Accepted context is saved in ${directory}/USER.md.\n\nAllow this import? [y/N]: `,
+      );
+      if (!/^(y|yes)$/i.test(consent.trim())) return undefined;
+      signal.throwIfAborted();
+      const content =
+        choice === 'history'
+          ? await contextFiles(source, 'chats', signal)
+          : await readMemory(source, 128000);
+      const result = await withActivity(
+        io,
+        `Asking ${agency.host} to draft your research context.`,
+        async () =>
+          host({
+            ...agency,
+            cwd,
+            signal,
+            ...(io.progress ? { onActivity: io.progress } : {}),
+            prompt: `${await loadPrompt('profile-summary')}\nSource path: ${JSON.stringify(source)}\nSource text (JSON string): ${JSON.stringify(content)}`,
+          }),
+      );
+      draft = text(result.text, 'profile draft', 12000);
+    }
   } else if (choice === 'chat') {
     io.progress?.(
       'Your answers help your agent tailor research directions and experiments. No accounts or history are read.',
@@ -422,7 +462,7 @@ export async function personalize(
       await file.close();
     }
     io.progress?.(
-      `Draft summary: ${memorySummary(draft)}\nFull draft: ${path}\nYou can edit this Markdown file before accepting. The draft is removed after this prompt.`,
+      `## Profile draft for review\n\n${draft}\n\nFull draft: ${path}\nYou can edit this Markdown file before accepting. The draft is removed after this prompt.`,
     );
     const accepted = await io.ask(
       'Save this profile for future research with your chosen harness and model provider? [y/N]: ',

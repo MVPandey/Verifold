@@ -123,6 +123,10 @@ await test('existing project investigation requires consent and review and prese
       ui(['yes', accepted]),
       signal(),
       (request) => {
+        assert.equal(request.cwd, root);
+        assert.match(request.prompt, /native read tools/);
+        assert.match(request.prompt, /web search and native subagents/);
+        assert.match(request.prompt, /Do not edit files, install software/);
         assert.match(request.prompt, /attribution stability/);
         assert.match(request.prompt, /J-Lens\/SHAPley/);
         return Promise.resolve({ text: draft });
@@ -141,6 +145,32 @@ await test('existing project investigation requires consent and review and prese
     ),
     original,
   );
+});
+
+await test('a project without top-level documentation can still ask its harness to inspect existing work', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-code-context-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'paper'));
+  await writeFile(join(root, 'paper', 'main.tex'), 'Paper evidence');
+  let called = false;
+  const draft = 'The paper needs a causal control.';
+  assert.equal(
+    await investigateProject(
+      root,
+      'Find a pilot',
+      { host: 'claude' },
+      ui(['yes', 'yes']),
+      signal(),
+      (request) => {
+        called = true;
+        assert.equal(request.cwd, root);
+        assert.match(request.prompt, /native read tools/);
+        return Promise.resolve({ text: draft });
+      },
+    ),
+    draft,
+  );
+  assert.equal(called, true);
 });
 
 await test('native chat evidence retains user text and excludes model and tool messages', async (t) => {

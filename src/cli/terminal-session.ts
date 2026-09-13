@@ -43,6 +43,7 @@ export class TerminalSession {
   private readonly cancel: () => void;
   private readonly color: boolean;
   private readonly motion: boolean;
+  private activity: LiveRegion | undefined;
   constructor(controller: AbortController, color: boolean, motion: boolean) {
     this.signal = controller.signal;
     this.cancel = () => controller.abort();
@@ -65,6 +66,7 @@ export class TerminalSession {
   }
 
   progress(value: string): void {
+    this.activity?.clear();
     stderr.write(`${terminalMessage(value, this.color, stderr.columns)}\n\n`);
   }
 
@@ -171,6 +173,7 @@ export class TerminalSession {
     const started = Date.now();
     const frames = ['▱▱▱', '▰▱▱', '▰▰▱', '▰▰▰', '▱▰▰', '▱▱▰'];
     const region = new LiveRegion();
+    this.activity = region;
     let frame = 0;
     const content = (): string =>
       [
@@ -207,6 +210,7 @@ export class TerminalSession {
     } finally {
       clearInterval(timer);
       region.clear();
+      this.activity = undefined;
     }
   }
 }

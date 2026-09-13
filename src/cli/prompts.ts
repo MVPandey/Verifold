@@ -2,9 +2,11 @@ import { readFile } from 'node:fs/promises';
 
 const promptIds = [
   'profile-summary',
+  'profile-history',
   'research-interview',
   'interview-scope',
   'project-interview-scope',
+  'topic-interview-scope',
   'project-context',
   'project-intake',
   'project-direction',
