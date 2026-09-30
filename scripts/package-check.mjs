@@ -129,7 +129,7 @@ try {
           if (value.startsWith('{')) {
             const desk = JSON.parse(value);
             assert.equal(new URL(desk.url).hostname, '127.0.0.1');
-            assert.equal(desk.readOnly, true);
+            assert.equal(desk.readOnly, false);
             owner.abort();
           }
         },
@@ -354,6 +354,50 @@ main().catch(() => { process.exitCode = 1; });
   );
   assert.equal(literature.status, 0, literature.stderr);
   assert.equal(JSON.parse(literature.stdout).executionStarted, false);
+  await writeFile(
+    join(directory, 'bin', 'codex'),
+    `#!/usr/bin/env node
+const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') out({ id: message.id, result: {} });
+  if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'package-thread' }, approvalsReviewer: message.params.approvalsReviewer } });
+  if (message.method === 'turn/start') {
+    out({ id: message.id, result: { turn: { id: 'turn-1' } } });
+    out({ method: 'item/started', params: { item: { type: 'commandExecution', id: 'exec-1', command: 'curl -sI https://example.org', status: 'inProgress' } } });
+    out({ method: 'item/autoApprovalReview/completed', params: { targetItemId: 'exec-1', review: { status: 'approved', riskLevel: 'low', rationale: 'Read-only request.' } } });
+    out({ method: 'item/completed', params: { item: { type: 'commandExecution', id: 'exec-1', command: 'curl -sI https://example.org', status: 'completed', exitCode: 0 } } });
+    out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
+  }
+});
+`,
+    { mode: 0o700 },
+  );
+  const session = invoke(
+    'session',
+    '--workspace',
+    'research-project',
+    '--host',
+    'codex',
+    '--mode',
+    'auto',
+    '--prompt',
+    'Check the example page.',
+    '--no-open',
+  );
+  assert.equal(session.status, 0, session.stderr);
+  const [deskLine, summaryLine] = session.stdout.trim().split('\n');
+  assert.equal(JSON.parse(deskLine).readOnly, false);
+  const summary = JSON.parse(summaryLine);
+  assert.equal(summary.status, 'ended');
+  assert.equal(summary.commands, 1);
+  const sessionRecord = JSON.parse(await readFile(summary.record, 'utf8'));
+  assert.equal(sessionRecord.nativeSessionId, 'package-thread');
+  assert.equal(
+    sessionRecord.commands[0].review.rationale,
+    'Read-only request.',
+  );
+  assert.deepEqual(sessionRecord.commands[0].risk, ['Network']);
   const desk = spawn(
     process.execPath,
     [
@@ -383,6 +427,10 @@ main().catch(() => { process.exitCode = 1; });
     const url = new URL(JSON.parse(output).url);
     const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
     assert.equal((await fetch(`${url.origin}/api/view`)).status, 401);
+    assert.equal(
+      (await fetch(`${url.origin}/api/action`, { method: 'POST' })).status,
+      401,
+    );
     const view = await (
       await fetch(`${url.origin}/api/view`, { headers })
     ).json();
@@ -409,7 +457,7 @@ main().catch(() => { process.exitCode = 1; });
     assert.equal(code, 0, diagnostics);
   }
   console.log(
-    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, selection, memory request, and local desk passed.`,
+    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, selection, memory request, and local desk passed.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });
