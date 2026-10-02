@@ -209,11 +209,14 @@ async function act(button: HTMLElement): Promise<void> {
             }
           : action === 'review'
             ? { action, command: button.dataset.command }
-            : { action };
+            : action === 'resume'
+              ? { action, session: button.dataset.session }
+              : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
     ['command', button.dataset.command],
+    ['session', button.dataset.session],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)

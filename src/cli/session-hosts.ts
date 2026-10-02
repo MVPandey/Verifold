@@ -65,7 +65,12 @@ export interface HostOptions {
   readonly cwd: string;
   readonly mode: SessionMode;
   readonly model?: string;
-  readonly prompt: string;
+  /** The first request. A resumed session has none and waits for a follow-up. */
+  readonly prompt?: string;
+  /** Claude Code only: the session ID for a new conversation, chosen before launch. */
+  readonly sessionId?: string;
+  /** The native session or thread to continue in this new process. */
+  readonly resume?: string;
   /** Override the executable for an isolated host installation or a test fixture. */
   readonly executable?: string;
   readonly clientVersion: string;
@@ -229,6 +234,11 @@ function claude(options: HostOptions): HostSession {
       '--permission-mode',
       options.mode === 'auto' ? 'auto' : 'default',
       ...(options.model ? ['--model', options.model] : []),
+      ...(options.resume
+        ? ['--resume', options.resume]
+        : options.sessionId
+          ? ['--session-id', options.sessionId]
+          : []),
     ],
     options,
   );
@@ -372,7 +382,13 @@ function claude(options: HostOptions): HostSession {
     request_id: `verifold-${randomUUID()}`,
     request: { subtype: 'initialize' },
   });
-  user(options.prompt);
+  if (options.prompt) user(options.prompt);
+  else if (options.resume) {
+    const id = options.resume;
+    // Claude Code reports its session only after the next message, so the resumed ID is the one Verifold asked for.
+    // The event waits until the caller holds this session.
+    queueMicrotask(() => emit({ type: 'session', id }));
+  }
   return {
     send: user,
     interrupt(pending) {
@@ -588,7 +604,8 @@ function codex(options: HostOptions): HostSession {
           // Without a thread, the session cannot continue. A rejected turn ends that turn.
           if (
             pending?.method === 'initialize' ||
-            pending?.method === 'thread/start'
+            pending?.method === 'thread/start' ||
+            pending?.method === 'thread/resume'
           )
             stop(child);
           else if (pending?.method === 'turn/start')
@@ -659,8 +676,9 @@ function codex(options: HostOptions): HostSession {
     () => {
       write(child, { method: 'initialized', params: {} });
       call(
-        'thread/start',
+        options.resume ? 'thread/resume' : 'thread/start',
         {
+          ...(options.resume ? { threadId: options.resume } : {}),
           cwd: options.cwd,
           approvalPolicy: 'on-request',
           sandbox: 'workspace-write',
@@ -685,7 +703,7 @@ function codex(options: HostOptions): HostSession {
           });
           // A cancel can arrive before the thread exists. Then the first turn never starts.
           if (cancelled) emit({ type: 'turn-end', status: 'interrupted' });
-          else startTurn(options.prompt);
+          else if (options.prompt) startTurn(options.prompt);
         },
       );
     },

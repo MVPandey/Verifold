@@ -20,8 +20,8 @@ import { SessionActionError, type SessionManager } from './session.ts';
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
   readonly url: string;
-  /** A URL with a one-time code for the browser launch. The code works once. */
-  readonly launchUrl: string;
+  /** A URL with a one-time code for a browser launch. Each code works once, for two minutes. */
+  launchUrl(): string;
   readonly closed: Promise<void>;
 }
 
@@ -49,15 +49,21 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /** Run one desk action on the session owner. Returns 200, or 400 for an unknown action. */
-function act(sessions: SessionManager, body: Record<string, unknown>): number {
+async function act(
+  sessions: SessionManager,
+  body: Record<string, unknown>,
+): Promise<number> {
   switch (body.action) {
     case 'start':
-      sessions.start({
+      await sessions.start({
         host: body.host,
         mode: body.mode,
         model: body.model,
         prompt: body.prompt,
       });
+      return 200;
+    case 'resume':
+      await sessions.resume(body.session);
       return 200;
     case 'send':
       sessions.send(body.text);
@@ -96,9 +102,8 @@ export async function startDesk(
   await readDeskSnapshot(root);
   const token = randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
-  // The browser launch command line can be visible to other local users, so it carries a one-time code.
-  const launchCode = Buffer.from(randomBytes(24).toString('hex'));
-  let launched = false;
+  // A browser launch command line can be visible to other local users, so it carries a one-time code.
+  const launchCodes = new Map<string, number>();
   const assets = new Map<string, { type: string; body: Buffer | string }>([
     ['/', { type: 'text/html; charset=utf-8', body: deskPage }],
   ]);
@@ -176,11 +181,14 @@ export async function startDesk(
       const code = Buffer.from(
         record(body) && typeof body.code === 'string' ? body.code : '',
       );
-      const valid =
-        !launched &&
-        code.length === launchCode.length &&
-        timingSafeEqual(code, launchCode);
-      if (valid) launched = true;
+      let valid = false;
+      for (const [candidate, expires] of launchCodes) {
+        const known = Buffer.from(candidate);
+        if (known.length === code.length && timingSafeEqual(known, code)) {
+          launchCodes.delete(candidate);
+          valid = expires > Date.now();
+        }
+      }
       response
         .writeHead(valid ? 200 : 403, {
           'Content-Type': 'application/json; charset=utf-8',
@@ -207,7 +215,7 @@ export async function startDesk(
       let message = 'The desk sent an unreadable action.';
       if (record(body))
         try {
-          status = act(sessions, body);
+          status = await act(sessions, body);
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
           status = 409;
@@ -278,6 +286,7 @@ export async function startDesk(
         renderDesk(snapshot, selected, report, {
           session: sessions?.view() ?? null,
           controllable: sessions !== undefined,
+          paused: sessions?.paused() ?? [],
           ...(sessions?.blockedReason
             ? { blocked: sessions.blockedReason }
             : {}),
@@ -313,7 +322,13 @@ export async function startDesk(
   if (signal.aborted) stop();
   return {
     url: `${origin}/#${token}`,
-    launchUrl: `${origin}/#launch-${launchCode.toString()}`,
+    launchUrl: () => {
+      for (const [code, expires] of launchCodes)
+        if (expires <= Date.now()) launchCodes.delete(code);
+      const code = randomBytes(24).toString('hex');
+      launchCodes.set(code, Date.now() + 120_000);
+      return `${origin}/#launch-${code}`;
+    },
     closed,
   };
 }

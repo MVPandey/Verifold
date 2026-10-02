@@ -9,6 +9,7 @@ import {
   modeLabel,
   needsReview,
   type CommandEntry,
+  type PausedSession,
   type SessionEvent,
   type SessionView,
 } from './session.ts';
@@ -19,6 +20,8 @@ export interface DeskSession {
   readonly controllable: boolean;
   /** Why the session owner refuses a new session now, for example while research runs. */
   readonly blocked?: string;
+  /** Sessions that an earlier owner paused. */
+  readonly paused?: readonly PausedSession[];
 }
 
 export function nextResearchAction(workspace: Workspace): {
@@ -177,6 +180,17 @@ function renderSession(live: DeskSession, defaultHost: string): string {
       : ''
   }
   ${!running && record.nativeSessionId ? `<p class="fine">Native session: ${e(record.nativeSessionId)}. The record is in .verifold/sessions/${e(record.id)}.json.</p>` : ''}`
+      : ''
+  }
+  ${
+    start && live.paused?.length
+      ? `<div class="paused"><h3>Paused sessions</h3><p class="fine">Verifold stopped while these sessions were open. Resume one to continue its conversation in a new harness process.</p><ul class="paused-list">${live.paused
+          .slice(0, 10)
+          .map(
+            (paused) =>
+              `<li><span class="paused-meta">${e(hostName(paused.host))} · ${e(time(paused.startedAt))}</span><span class="paused-request">${e(paused.request.length > 160 ? `${paused.request.slice(0, 160)}…` : paused.request)}</span><span class="actions"><button type="button" data-action="resume" data-session="${e(paused.id)}"${live.blocked ? ' disabled' : ''}>Resume</button></span></li>`,
+          )
+          .join('')}</ul></div>`
       : ''
   }
   ${
