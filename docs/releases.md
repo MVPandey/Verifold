@@ -8,7 +8,7 @@ Use Node 24 for development and builds. The installed CLI supports Node 22, 24, 
 
 Run `make validate` and `npm run audit:security`. Review the packed file list. Never include local research, credentials, or evaluation records.
 
-The npm package contains compiled harness code and its usage and license documents. It contains no runtime dependencies or install scripts.
+The npm package contains compiled harness code and its usage and license documents. Its one runtime dependency is `marked`, which renders harness Markdown for the desk. The package includes a copy of DOMPurify for the desk page. It contains no install scripts.
 
 Pre-commit and pre-push use `make validate`. Enable them in each clone with `git config --local core.hooksPath .githooks`.
 

@@ -104,7 +104,9 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     reviewer = message.params.approvalsReviewer;
     scenario = message.params.model ?? '';
     if (scenario === 'reject-thread') return out({ id: message.id, error: { code: -32000, message: 'Unknown model' } });
-    out({ id: message.id, result: { thread: { id: 'thread-1' }, model: 'fake-codex', approvalsReviewer: reviewer } });
+    const started = () => out({ id: message.id, result: { thread: { id: 'thread-1' }, model: 'fake-codex', approvalsReviewer: reviewer } });
+    if (scenario === 'slow-thread') return setTimeout(started, 300);
+    started();
   } else if (message.method === 'turn/start') {
     if (scenario === 'slow-turn') return setTimeout(() => out({ id: message.id, result: { turn: { id: 'turn-1' } } }), 300);
     out({ id: message.id, result: { turn: { id: 'turn-1' } } });
@@ -521,8 +523,9 @@ await test('Codex Auto records the reviewer decision and its reason', async () =
 await test('desk actions need the token and a JSON body, and report state errors', async () => {
   await project(async (root, executables, create) => {
     const assets = join(root, 'assets');
-    await mkdir(join(assets, 'cli'), { recursive: true });
+    await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
     await mkdir(join(assets, 'ui'));
+    await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
     for (const name of [
       'desk.css',
       'desk-client.js',
@@ -727,6 +730,37 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
       /"method":"turn\/interrupt"/,
     );
     await slow.close();
+
+    // A cancel before the thread exists must stop the first turn, not only log it.
+    const early = create();
+    early.start({
+      host: 'codex',
+      mode: 'ask',
+      model: 'slow-thread',
+      prompt: 'x',
+    });
+    assert.equal(early.view()?.record.status, 'starting');
+    early.cancel();
+    const stopped = await until(early, (current) => current.status === 'idle');
+    assert.ok(
+      stopped.events.some((event) => event.text.includes('was cancelled')),
+    );
+    const sent = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as { method?: string; params?: { model?: string } },
+      );
+    const slowThread = sent.findIndex(
+      (message) => message.params?.model === 'slow-thread',
+    );
+    assert.ok(slowThread >= 0);
+    assert.equal(
+      sent.slice(slowThread).some((message) => message.method === 'turn/start'),
+      false,
+    );
+    await early.close();
 
     const other = create();
     other.start({
