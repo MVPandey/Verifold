@@ -108,6 +108,7 @@ export async function startDesk(
     ['/manrope.ttf', 'manrope.ttf', 'font/ttf'],
     ['/symbol.webp', 'symbol.webp', 'image/webp'],
     ['/ui/dom.js', '../ui/dom.js', 'text/javascript; charset=utf-8'],
+    ['/vendor/purify.js', 'vendor/purify.js', 'text/javascript; charset=utf-8'],
   ] as const) {
     assets.set(path, { type, body: await readFile(new URL(file, assetsRoot)) });
   }
@@ -277,6 +278,9 @@ export async function startDesk(
         renderDesk(snapshot, selected, report, {
           session: sessions?.view() ?? null,
           controllable: sessions !== undefined,
+          ...(sessions?.blockedReason
+            ? { blocked: sessions.blockedReason }
+            : {}),
         }),
       );
       if (Buffer.byteLength(body) > 2_000_000)

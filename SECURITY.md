@@ -18,7 +18,7 @@ Source links and model reports are untrusted data. Valid JSON and a successful s
 
 ## Package contents
 
-The npm package contains compiled CLI code and its license and usage documents. It has no runtime dependencies and no install lifecycle scripts.
+The npm package contains compiled CLI code and its license and usage documents. Its one runtime dependency is `marked`, which renders harness Markdown for the desk. The desk page also loads a bundled copy of DOMPurify. The package has no install lifecycle scripts.
 
 Installing Verifold does not install an agent harness, change its settings, or configure Git hooks. The user starts research explicitly through the CLI.
 

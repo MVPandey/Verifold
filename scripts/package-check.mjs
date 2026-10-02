@@ -50,6 +50,8 @@ try {
           'dist-cli/cli/manrope.ttf',
           'dist-cli/cli/OFL-Manrope.txt',
           'dist-cli/cli/symbol.webp',
+          'dist-cli/cli/vendor/purify.js',
+          'dist-cli/cli/vendor/purify.LICENSE.txt',
           'package.json',
           'README.md',
           'LICENSE',
@@ -58,6 +60,28 @@ try {
         ].includes(file.path),
     ),
   );
+  // Runtime dependencies come from the locked node_modules, so the install stays offline.
+  const dependencies = [];
+  for (const name of Object.keys(
+    JSON.parse(await readFile('package.json', 'utf8')).dependencies ?? {},
+  )) {
+    const dependency = run(
+      'npm',
+      [
+        'pack',
+        '--json',
+        '--pack-destination',
+        directory,
+        '--ignore-scripts',
+        join(process.cwd(), 'node_modules', name),
+      ],
+      process.cwd(),
+    );
+    assert.equal(dependency.status, 0, dependency.stderr);
+    dependencies.push(
+      join(directory, JSON.parse(dependency.stdout)[0].filename),
+    );
+  }
   await writeFile(
     join(directory, 'package.json'),
     '{"name":"consumer","private":true}',
@@ -72,6 +96,7 @@ try {
       '--no-audit',
       '--no-fund',
       join(directory, manifest.filename),
+      ...dependencies,
     ],
     directory,
   );
@@ -85,7 +110,8 @@ try {
   assert.equal(metadata.license, 'MIT');
   assert.equal(metadata.private, undefined);
   assert.equal(metadata.publishConfig.registry, 'https://registry.npmjs.org/');
-  assert.deepEqual(Object.keys(metadata.dependencies ?? {}), []);
+  // The desk renders harness Markdown with marked. DOMPurify ships as a vendored file.
+  assert.deepEqual(Object.keys(metadata.dependencies ?? {}), ['marked']);
   for (const script of ['preinstall', 'install', 'postinstall', 'prepare'])
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
@@ -443,6 +469,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
       '/desk.css',
       '/manrope.ttf',
       '/symbol.webp',
+      '/vendor/purify.js',
     ]) {
       const asset = await fetch(url.origin + path);
       assert.equal(asset.status, 200, path);

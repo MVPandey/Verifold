@@ -1,3 +1,4 @@
+import DOMPurify from './vendor/purify.js';
 import { requiredElement } from '../ui/dom.ts';
 
 const main = requiredElement(document, '#content', HTMLElement);
@@ -22,6 +23,20 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let loading = false;
 let stopped = false;
 let request: AbortController | undefined;
+/** The last failed action, shown beside its control until the next action succeeds. */
+let failure:
+  | { readonly selector: string; readonly message: string }
+  | undefined;
+
+function showFailure(): void {
+  main.querySelector('.action-error')?.remove();
+  const control = failure ? main.querySelector(failure.selector) : null;
+  if (!failure || !control) return;
+  const note = document.createElement('p');
+  note.className = 'action-error';
+  note.textContent = failure.message;
+  (control.closest('.actions') ?? control).after(note);
+}
 
 async function refresh(): Promise<void> {
   if (loading || stopped) return;
@@ -93,8 +108,16 @@ async function refresh(): Promise<void> {
         focused instanceof HTMLInputElement
           ? [focused.selectionStart, focused.selectionEnd]
           : undefined;
-      // This markup comes from the authenticated local renderer, which escapes research text.
-      main.innerHTML = view.html;
+      // The local renderer escapes research text. Harness Markdown is sanitized
+      // again in an inert template, before it reaches the live page.
+      const template = document.createElement('template');
+      template.innerHTML = view.html;
+      for (const fragment of template.content.querySelectorAll('.md'))
+        fragment.innerHTML = DOMPurify.sanitize(fragment.innerHTML, {
+          ADD_ATTR: ['target'],
+        });
+      main.replaceChildren(template.content);
+      showFailure();
       for (const [id, value] of typed) {
         const field = document.getElementById(id);
         if (
@@ -187,6 +210,14 @@ async function act(button: HTMLElement): Promise<void> {
           : action === 'review'
             ? { action, command: button.dataset.command }
             : { action };
+  const selector = [
+    ['action', action],
+    ['request', button.dataset.request],
+    ['command', button.dataset.command],
+  ]
+    .filter(([, value]) => value)
+    .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
+    .join('');
   if (button instanceof HTMLButtonElement) button.disabled = true;
   actionLabel.textContent = 'Sending…';
   try {
@@ -211,6 +242,7 @@ async function act(button: HTMLElement): Promise<void> {
           : 'The action failed. Refresh and try again.',
       );
     actionLabel.textContent = 'Done';
+    failure = undefined;
     for (const id of ['session-prompt', 'follow-up']) {
       const element = document.getElementById(id);
       if (element instanceof HTMLTextAreaElement && body.action !== 'answer')
@@ -221,7 +253,9 @@ async function act(button: HTMLElement): Promise<void> {
       error instanceof Error && error.name !== 'TimeoutError'
         ? error.message
         : 'The desk did not answer. Check that Verifold still runs in your terminal.';
+    failure = { selector, message: actionLabel.textContent };
   } finally {
+    showFailure();
     if (button instanceof HTMLButtonElement) button.disabled = false;
     void refresh();
   }

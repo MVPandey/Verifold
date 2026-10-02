@@ -1,6 +1,6 @@
 {
   "name": "verifold",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A research project CLI for coordinating existing AI agent harnesses.",
   "repository": {
     "type": "git",
@@ -42,6 +42,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.2",
+    "dompurify": "3.4.16",
     "eslint": "10.10.0",
     "globals": "16.5.0",
     "node": "24.20.0",
@@ -61,5 +62,8 @@
     "LICENSING.md",
     "SECURITY.md"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "marked": "18.0.14"
+  }
 }
