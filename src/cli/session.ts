@@ -1,6 +1,14 @@
-import { lstat, mkdir, open, rename, rm } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+} from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { stripVTControlCharacters } from 'node:util';
 import { validateModel, type HarnessName } from './harness.ts';
 import {
@@ -14,8 +22,19 @@ export type SessionStatus =
   | 'starting'
   | 'running'
   | 'idle'
+  /** The owner stopped. A later owner can resume the native session. */
+  | 'paused'
   | 'ended'
   | 'failed';
+
+const statuses: readonly SessionStatus[] = [
+  'starting',
+  'running',
+  'idle',
+  'paused',
+  'ended',
+  'failed',
+];
 
 export interface SessionEvent {
   readonly at: string;
@@ -65,8 +84,16 @@ export interface PendingRequest {
   readonly at: string;
 }
 
+/** One process start for a session. A resume adds a launch. */
+export interface SessionLaunch {
+  readonly id: string;
+  readonly ownerId: string;
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+}
+
 export interface SessionRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly id: string;
   readonly host: HarnessName;
   readonly model: string | null;
@@ -82,6 +109,8 @@ export interface SessionRecord {
   readonly events: readonly SessionEvent[];
   readonly commands: readonly CommandEntry[];
   readonly requests: readonly PendingRequest[];
+  /** Oldest first. The last launch is the current or the latest process. */
+  readonly launches: readonly SessionLaunch[];
 }
 
 export interface SessionView {
@@ -90,8 +119,18 @@ export interface SessionView {
   readonly saveFailed: boolean;
 }
 
+/** A paused session that a person can resume. */
+export interface PausedSession {
+  readonly id: string;
+  readonly host: HarnessName;
+  readonly startedAt: string;
+  readonly request: string;
+}
+
 export interface SessionManagerOptions {
   readonly clientVersion: string;
+  /** The project owner that launches sessions. Each launch records it. */
+  readonly ownerId: string;
   /** Override host executables for an isolated installation or a test fixture. */
   readonly executables?: Partial<Record<HarnessName, string>>;
   readonly onEvent?: (event: SessionEvent) => void;
@@ -244,6 +283,226 @@ async function writeRecord(root: string, record: SessionRecord): Promise<void> {
   }
 }
 
+const eventKinds: readonly SessionEvent['kind'][] = [
+  'you',
+  'agent',
+  'tool',
+  'request',
+  'decision',
+  'status',
+  'notice',
+];
+const outcomes: readonly CommandEntry['outcome'][] = [
+  'running',
+  'ok',
+  'failed',
+  'declined',
+  'denied',
+];
+const answers = ['pending', 'allowed', 'denied', 'unanswered'] as const;
+
+function object(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function list(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function parseEvent(value: unknown): SessionEvent[] {
+  const event = object(value);
+  const kind = eventKinds.find((entry) => entry === event?.kind);
+  return event &&
+    kind &&
+    typeof event.at === 'string' &&
+    typeof event.text === 'string'
+    ? [{ at: event.at, kind, text: clean(event.text, 4000) }]
+    : [];
+}
+
+function parseCommand(value: unknown): CommandEntry[] {
+  const command = object(value);
+  const outcome = outcomes.find((entry) => entry === command?.outcome);
+  if (
+    !command ||
+    !outcome ||
+    typeof command.id !== 'string' ||
+    typeof command.at !== 'string' ||
+    typeof command.tool !== 'string' ||
+    typeof command.action !== 'string' ||
+    typeof command.auto !== 'boolean' ||
+    !Array.isArray(command.risk) ||
+    !command.risk.every((tag) => typeof tag === 'string')
+  )
+    return [];
+  const asked = answers.find((entry) => entry === command.asked);
+  const review = object(command.review);
+  return [
+    {
+      id: clean(command.id, 200),
+      at: command.at,
+      tool: clean(command.tool, 80),
+      action: clean(command.action, 2000),
+      risk: command.risk.map((tag) => clean(tag, 40)),
+      auto: command.auto,
+      outcome,
+      ...(asked ? { asked } : {}),
+      ...(typeof command.harnessDenied === 'string'
+        ? { harnessDenied: clean(command.harnessDenied, 80) }
+        : {}),
+      ...(review && typeof review.approved === 'boolean'
+        ? {
+            review: {
+              approved: review.approved,
+              ...(typeof review.risk === 'string'
+                ? { risk: clean(review.risk, 40) }
+                : {}),
+              ...(typeof review.rationale === 'string'
+                ? { rationale: clean(review.rationale, 1000) }
+                : {}),
+            },
+          }
+        : {}),
+      ...(typeof command.exitCode === 'number'
+        ? { exitCode: command.exitCode }
+        : {}),
+      ...(typeof command.reviewedAt === 'string'
+        ? { reviewedAt: command.reviewedAt }
+        : {}),
+    },
+  ];
+}
+
+function parseLaunch(value: unknown): SessionLaunch[] {
+  const launch = object(value);
+  return launch &&
+    typeof launch.id === 'string' &&
+    typeof launch.ownerId === 'string' &&
+    typeof launch.startedAt === 'string' &&
+    (launch.endedAt === null || typeof launch.endedAt === 'string')
+    ? [
+        {
+          id: launch.id,
+          ownerId: launch.ownerId,
+          startedAt: launch.startedAt,
+          endedAt: launch.endedAt,
+        },
+      ]
+    : [];
+}
+
+/** A saved record. Harness processes can write in the project folder, so each field is checked. */
+function parseRecord(value: unknown): SessionRecord | null {
+  const record = object(value);
+  if (!record || record.schemaVersion !== 2) return null;
+  const id =
+    typeof record.id === 'string' && validSessionId(record.id)
+      ? record.id
+      : null;
+  const host =
+    record.host === 'claude' || record.host === 'codex' ? record.host : null;
+  const mode =
+    record.mode === 'ask' || record.mode === 'auto' ? record.mode : null;
+  const status = statuses.find((entry) => entry === record.status);
+  const model =
+    record.model === null || typeof record.model === 'string'
+      ? record.model
+      : undefined;
+  if (
+    !id ||
+    !host ||
+    !mode ||
+    !status ||
+    model === undefined ||
+    typeof record.startedAt !== 'string'
+  )
+    return null;
+  try {
+    validateModel(model ?? undefined);
+  } catch {
+    return null;
+  }
+  return {
+    schemaVersion: 2,
+    id,
+    host,
+    model,
+    mode,
+    reportedMode:
+      typeof record.reportedMode === 'string'
+        ? clean(record.reportedMode, 40)
+        : null,
+    nativeSessionId:
+      typeof record.nativeSessionId === 'string'
+        ? nativeId(record.nativeSessionId)
+        : null,
+    status,
+    startedAt: record.startedAt,
+    endedAt: typeof record.endedAt === 'string' ? record.endedAt : null,
+    costUsd:
+      typeof record.costUsd === 'number' && Number.isFinite(record.costUsd)
+        ? record.costUsd
+        : null,
+    events: list(record.events).flatMap(parseEvent).slice(-400),
+    commands: list(record.commands).flatMap(parseCommand).slice(-1000),
+    requests: [],
+    launches: list(record.launches).flatMap(parseLaunch).slice(-50),
+  };
+}
+
+async function readRecord(
+  root: string,
+  id: string,
+): Promise<SessionRecord | null> {
+  try {
+    const path = join(root, '.verifold', 'sessions', `${id}.json`);
+    const stats = await lstat(path);
+    if (!stats.isFile() || stats.size > 16_000_000) return null;
+    return parseRecord(JSON.parse(await readFile(path, 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+/** Paused sessions among the latest 50 records, newest first. */
+async function loadPaused(root: string): Promise<PausedSession[]> {
+  let names: string[];
+  try {
+    names = await readdir(join(root, '.verifold', 'sessions'));
+  } catch {
+    return [];
+  }
+  const ids = names
+    .filter((name) => /^\d{8}T\d{9}Z-[a-f0-9]{8}\.json$/.test(name))
+    .map((name) => name.slice(0, -5))
+    .sort()
+    .reverse()
+    .slice(0, 50);
+  const paused: PausedSession[] = [];
+  for (const id of ids) {
+    const record = await readRecord(root, id);
+    if (record?.status === 'paused' && record.nativeSessionId)
+      paused.push({
+        id,
+        host: record.host,
+        startedAt: record.startedAt,
+        request:
+          record.events.find((event) => event.kind === 'you')?.text ?? '',
+      });
+  }
+  return paused;
+}
+
+/** Close the current launch. */
+function ended(launches: readonly SessionLaunch[]): readonly SessionLaunch[] {
+  const last = launches.at(-1);
+  return last && last.endedAt === null
+    ? launches.with(-1, { ...last, endedAt: new Date().toISOString() })
+    : launches;
+}
+
 /** Requests that close without an answer, when a turn or the process ends. */
 function unanswered(record: SessionRecord): SessionRecord {
   return {
@@ -273,6 +532,11 @@ export class SessionManager {
   /** Request IDs continue across sessions, so an old desk button cannot answer a new request. */
   private nextRequest = 1;
   private blocked: string | null = null;
+  /** A launch is saving its record. No second start can begin. */
+  private launching = false;
+  /** The current launch sent a first request, so a turn runs when the harness reports its session. */
+  private prompted = false;
+  private pausedList: PausedSession[] = [];
   private dirty = false;
   private writing: Promise<void> | null = null;
   private saveFailed = false;
@@ -292,6 +556,15 @@ export class SessionManager {
       : null;
   }
 
+  /** Read paused sessions from earlier owners. Call this once before clients attach. */
+  async load(): Promise<void> {
+    this.pausedList = await loadPaused(this.root);
+  }
+
+  paused(): readonly PausedSession[] {
+    return this.pausedList;
+  }
+
   /** Refuse new sessions while other work in this process uses the project. */
   block(reason: string | null): void {
     this.blocked = reason;
@@ -302,15 +575,13 @@ export class SessionManager {
     return this.blocked;
   }
 
-  start(input: {
+  async start(input: {
     readonly host: unknown;
     readonly mode: unknown;
     readonly model?: unknown;
     readonly prompt: unknown;
-  }): void {
-    if (this.blocked) fail(this.blocked);
-    if (this.host)
-      fail('A session is already running. End it before you start another.');
+  }): Promise<void> {
+    this.ready();
     const host =
       input.host === 'claude' || input.host === 'codex'
         ? input.host
@@ -328,15 +599,15 @@ export class SessionManager {
     }
     const prompt = this.text(input.prompt);
     const now = new Date();
-    const id = `${now.toISOString().replace(/[-:.]/g, '')}-${randomBytes(4).toString('hex')}`;
     this.current = {
-      schemaVersion: 1,
-      id,
+      schemaVersion: 2,
+      id: `${now.toISOString().replace(/[-:.]/g, '')}-${randomBytes(4).toString('hex')}`,
       host,
       model: model ?? null,
       mode,
       reportedMode: null,
-      nativeSessionId: null,
+      // Claude Code takes its session ID at launch, so the record names it before the process starts.
+      nativeSessionId: host === 'claude' ? randomUUID() : null,
       status: 'starting',
       startedAt: now.toISOString(),
       endedAt: null,
@@ -344,20 +615,30 @@ export class SessionManager {
       events: [],
       commands: [],
       requests: [],
+      launches: [],
     };
-    const executable = this.options.executables?.[host];
-    this.host = startHostSession({
-      host,
-      cwd: this.root,
-      mode,
-      prompt,
-      clientVersion: this.options.clientVersion,
-      ...(model ? { model } : {}),
-      ...(executable ? { executable } : {}),
-      onEvent: (event) => this.onHost(id, event),
-    });
-    // Host events arrive asynchronously, so the prompt is still the first event.
     this.event('you', prompt);
+    await this.launch(prompt);
+  }
+
+  /** Continue a paused session in a new harness process. */
+  async resume(id: unknown): Promise<void> {
+    this.ready();
+    const saved =
+      typeof id === 'string' && validSessionId(id)
+        ? await readRecord(this.root, id)
+        : null;
+    if (saved?.status !== 'paused' || !saved.nativeSessionId)
+      fail('That session cannot resume. Choose a paused session.');
+    // Another start can begin while the record loads.
+    this.ready();
+    this.current = { ...saved, status: 'starting', endedAt: null };
+    this.event(
+      'status',
+      'Verifold resumes this session in a new process. The events above come from the earlier launch.',
+    );
+    await this.launch();
+    this.pausedList = this.pausedList.filter((entry) => entry.id !== saved.id);
   }
 
   send(value: unknown): void {
@@ -391,6 +672,7 @@ export class SessionManager {
       ...unanswered(record),
       status: 'ended',
       endedAt: new Date().toISOString(),
+      launches: ended(record.launches),
     }));
     this.event('status', reason);
   }
@@ -428,11 +710,86 @@ export class SessionManager {
     );
   }
 
-  /** End a live session and wait for its record. Returns false when the last save failed. */
+  /** Pause a live session and wait for its record. Returns false when the last save failed. */
   async close(): Promise<boolean> {
-    if (this.host) this.end('Verifold closed, so the session ended.');
+    this.pause();
     while (this.writing) await this.writing;
     return !this.saveFailed;
+  }
+
+  /** Stop the harness and keep the native session, so a later owner can resume it. */
+  private pause(): void {
+    const record = this.current;
+    if (!this.host || !record) return;
+    this.host.close();
+    this.host = null;
+    const resumable = record.nativeSessionId !== null;
+    this.patch((current) => ({
+      ...unanswered(current),
+      status: resumable ? 'paused' : 'ended',
+      endedAt: new Date().toISOString(),
+      launches: ended(current.launches),
+    }));
+    this.event(
+      'status',
+      `${record.status === 'running' ? 'The current turn stopped with Verifold. Its outcome is unknown. ' : ''}${resumable ? 'Verifold stopped, so the session paused. Run verifold in this folder to resume it.' : 'Verifold stopped before the harness reported a session, so the session ended.'}`,
+    );
+  }
+
+  private ready(): void {
+    if (this.blocked) fail(this.blocked);
+    if (this.host || this.launching)
+      fail('A session is already running. End it before you start another.');
+  }
+
+  /** Save the launch, then start the harness. A launch that cannot be saved does not start. */
+  private async launch(prompt?: string): Promise<void> {
+    const record = this.current;
+    if (!record) return;
+    const launch: SessionLaunch = {
+      id: randomBytes(4).toString('hex'),
+      ownerId: this.options.ownerId,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    };
+    this.launching = true;
+    try {
+      this.patch((current) => ({
+        ...current,
+        launches: [...current.launches, launch].slice(-50),
+      }));
+      while (this.writing) await this.writing;
+      if (this.saveFailed) {
+        this.current = {
+          ...record,
+          status: 'failed',
+          endedAt: new Date().toISOString(),
+        };
+        fail(
+          'Verifold could not save the session record, so the harness did not start. Check .verifold/sessions/ and try again.',
+        );
+      }
+      const executable = this.options.executables?.[record.host];
+      const native = record.nativeSessionId;
+      this.prompted = prompt !== undefined;
+      this.host = startHostSession({
+        host: record.host,
+        cwd: this.root,
+        mode: record.mode,
+        clientVersion: this.options.clientVersion,
+        ...(record.model ? { model: record.model } : {}),
+        ...(prompt === undefined ? {} : { prompt }),
+        ...(native && prompt === undefined
+          ? { resume: native }
+          : native
+            ? { sessionId: native }
+            : {}),
+        ...(executable ? { executable } : {}),
+        onEvent: (event) => this.onHost(record.id, launch.id, event),
+      });
+    } finally {
+      this.launching = false;
+    }
   }
 
   private text(value: unknown): string {
@@ -492,9 +849,11 @@ export class SessionManager {
     };
   }
 
-  private onHost(id: string, event: HostEvent): void {
+  private onHost(id: string, launch: string, event: HostEvent): void {
     const record = this.current;
-    if (!record || record.id !== id) return;
+    // An event from an earlier launch cannot change the current one.
+    if (!record || record.id !== id || record.launches.at(-1)?.id !== launch)
+      return;
     if (event.type === 'exit') {
       if (!this.host) return;
       this.host = null;
@@ -502,6 +861,7 @@ export class SessionManager {
         ...unanswered(current),
         status: event.code === 0 ? 'ended' : 'failed',
         endedAt: new Date().toISOString(),
+        launches: ended(current.launches),
       }));
       this.event(
         'status',
@@ -512,18 +872,30 @@ export class SessionManager {
     if (!this.host) return;
     const name = hostName(record.host);
     switch (event.type) {
-      case 'session':
+      case 'session': {
+        const first = record.status === 'starting';
         this.patch((current) => ({
           ...current,
           nativeSessionId: nativeId(event.id),
-          reportedMode: event.mode ? clean(event.mode, 40) : null,
-          status: 'running',
+          reportedMode: event.mode
+            ? clean(event.mode, 40)
+            : current.reportedMode,
+          status: first ? (this.prompted ? 'running' : 'idle') : current.status,
         }));
-        this.event(
-          'status',
-          `${name} session started${event.model ? ` with ${event.model}` : ''}. Mode: ${modeLabel(this.current ?? record)}.`,
-        );
+        if (first)
+          this.event(
+            'status',
+            this.prompted
+              ? `${name} session started${event.model ? ` with ${event.model}` : ''}. Mode: ${modeLabel(this.current ?? record)}.`
+              : `${name} is ready to continue the session. Send a follow-up.`,
+          );
+        else if (event.mode && event.mode !== record.reportedMode)
+          this.event(
+            'status',
+            `${name} now reports the mode ${modeLabel(this.current ?? record)}.`,
+          );
         break;
+      }
       case 'mode':
         this.patch((current) => ({
           ...current,
