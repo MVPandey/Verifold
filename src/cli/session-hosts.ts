@@ -79,6 +79,8 @@ export interface HostOptions {
 
 /** One live harness process. Every method is safe to call after the process exits. */
 export interface HostSession {
+  /** The harness process. It leads its own process group on POSIX. */
+  readonly pid: number | undefined;
   /** Start a new turn. The caller sends a follow-up only after the previous turn ends. */
   send(text: string): void;
   /** Deny the listed open requests and stop the current turn. */
@@ -390,6 +392,7 @@ function claude(options: HostOptions): HostSession {
     queueMicrotask(() => emit({ type: 'session', id }));
   }
   return {
+    pid: child.pid,
     send: user,
     interrupt(pending) {
       interrupting = true;
@@ -709,6 +712,7 @@ function codex(options: HostOptions): HostSession {
     },
   );
   return {
+    pid: child.pid,
     send(text) {
       cancelled = false;
       startTurn(text);
