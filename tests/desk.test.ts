@@ -363,3 +363,95 @@ await test('desk lists paused sessions with a Resume control', async (t) => {
   }).html;
   assert.match(busy, /data-action="resume" data-session="[^"]+" disabled>/);
 });
+
+await test('desk shows one research decision for each phase', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const idle = {
+    running: false,
+    step: null,
+    startedAt: null,
+    events: [],
+  };
+  const html = async (research: object, live = false): Promise<string> =>
+    renderDesk(await readDeskSnapshot(root), undefined, null, {
+      session: live
+        ? ({
+            live: true,
+            saveFailed: false,
+            record: {
+              requests: [],
+              events: [],
+              commands: [],
+              host: 'claude',
+              status: 'idle',
+              mode: 'ask',
+              reportedMode: null,
+              model: null,
+              costUsd: null,
+              nativeSessionId: null,
+              id: '20261002T120000000Z-abcdef12',
+            },
+          } as never)
+        : null,
+      controllable: true,
+      research: { ...idle, ...research },
+    }).html;
+  const start = await html({});
+  assert.match(start, /Start research/);
+  assert.match(start, /id="research-topic"/);
+  assert.match(
+    await html({
+      running: true,
+      step: 'Planning research roles and scope',
+      startedAt: new Date().toISOString(),
+      events: [
+        {
+          at: new Date().toISOString(),
+          kind: 'tool',
+          text: 'Claude Code requested <WebSearch>.',
+        },
+      ],
+    }),
+    /Research is running[\s\S]*data-action="cancel-research"/,
+  );
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Proof search',
+      autonomy: 'guided',
+      phase: 'awaiting-plan-review',
+      plan: {
+        scope: 'Scope',
+        personas: [
+          { name: 'Historian', task: 'Find prior art.' },
+          { name: 'Skeptic', task: 'Find counterexamples.' },
+        ],
+      },
+    },
+  }));
+  const review = await html({});
+  assert.match(review, /Review the plan/);
+  assert.match(
+    review,
+    /class="primary" data-action="research" data-research="approve">/,
+  );
+  const busy = await html({}, true);
+  assert.match(
+    busy,
+    /data-research="approve" disabled aria-describedby="decision-busy"/,
+  );
+  assert.match(busy, /A harness session is running/);
+  const events = await html({
+    step: 'Planning research roles and scope',
+    events: [
+      {
+        at: new Date().toISOString(),
+        kind: 'tool',
+        text: 'Claude Code requested <WebSearch>.',
+      },
+    ],
+  });
+  assert.match(events, /Claude Code requested &lt;WebSearch&gt;\./);
+  assert.match(events, /data-detail="details"/);
+});

@@ -570,6 +570,11 @@ export class SessionManager {
     this.blocked = reason;
   }
 
+  /** A session runs or is starting. */
+  get active(): boolean {
+    return this.host !== null || this.launching;
+  }
+
   /** Why a new session is refused now, or null. */
   get blockedReason(): string | null {
     return this.blocked;
