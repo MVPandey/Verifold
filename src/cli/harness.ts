@@ -14,6 +14,8 @@ export interface HarnessRequest {
   readonly model?: string;
   /** Observed host activity only. Excludes prompts, tool inputs, and tool results. */
   readonly onActivity?: (message: string) => void;
+  /** The harness process started. It leads its own process group on POSIX. */
+  readonly onSpawn?: (pid: number) => void;
 }
 
 export interface HarnessResult {
@@ -229,6 +231,7 @@ export async function runHarness(
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    if (child.pid !== undefined) request.onSpawn?.(child.pid);
     const chunks: Buffer[] = [];
     let size = 0;
     let failure: Error | undefined;

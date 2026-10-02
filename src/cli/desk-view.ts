@@ -85,6 +85,8 @@ function outcome(attempt: DeskAttempt): string {
       return 'Failed';
     case 'cancelled':
       return 'Cancelled';
+    case 'interrupted':
+      return 'Interrupted, outcome unknown';
     default:
       return 'Outcome unknown';
   }
@@ -188,6 +190,8 @@ function result(command: CommandEntry): string {
       return 'Declined';
     case 'denied':
       return 'Denied';
+    case 'unknown':
+      return 'Unknown';
   }
 }
 
@@ -242,11 +246,11 @@ function renderSession(live: DeskSession, defaultHost: string): string {
   }
   ${
     start && live.paused?.length
-      ? `<div class="paused"><h3>Paused sessions</h3><p class="fine">Verifold stopped while these sessions were open. Resume one to continue its conversation in a new harness process.</p><ul class="paused-list">${live.paused
+      ? `<div class="paused"><h3>${live.paused.some((paused) => paused.status === 'interrupted') ? 'Paused and interrupted sessions' : 'Paused sessions'}</h3><p class="fine">Verifold stopped while these sessions were open. Resume one to continue its conversation in a new harness process. If no conversation was recorded, start its first request again.</p><ul class="paused-list">${live.paused
           .slice(0, 10)
           .map(
             (paused) =>
-              `<li><span class="paused-meta">${e(hostName(paused.host))} · ${e(time(paused.startedAt))}</span><span class="paused-request">${e(paused.request.length > 160 ? `${paused.request.slice(0, 160)}…` : paused.request)}</span><span class="actions"><button type="button" data-action="resume" data-session="${e(paused.id)}"${live.blocked ? ' disabled' : ''}>Resume</button></span></li>`,
+              `<li><span class="paused-meta">${e(hostName(paused.host))} · ${e(time(paused.startedAt))} · ${paused.status === 'interrupted' ? 'Interrupted, outcome unknown' : 'Paused'}</span><span class="paused-request">${e(paused.request.length > 160 ? `${paused.request.slice(0, 160)}…` : paused.request)}</span><span class="actions"><button type="button" data-action="${paused.restart ? 'restart' : 'resume'}" data-session="${e(paused.id)}"${live.blocked ? ' disabled' : ''}>${paused.restart ? 'Start again' : 'Resume'}</button></span></li>`,
           )
           .join('')}</ul></div>`
       : ''
@@ -325,7 +329,7 @@ export function renderDesk(
         : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one in Harness session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
   }
   <section class="attempt-detail"><div class="section-title"><h2>Selected attempt</h2>${chosen ? `<span class="status ${tone}">${e(outcome(chosen))}</span>` : ''}</div>
-  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>` : '<p class="empty-note">No research attempts yet.</p>'}</section>
+  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>` : '<p class="empty-note">No research attempts yet.</p>'}</section>
   <section class="history"><div class="section-title"><h2>Attempt history</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" ${chosen?.id === attempt.id ? 'aria-pressed="true"' : 'aria-pressed="false"'}><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>${!attempts.length ? '<p class="empty-note">Each research request will appear here with its own identity.</p>' : ''}</section></aside></div>`;
   return { html, observation };
 }

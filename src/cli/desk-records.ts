@@ -17,7 +17,13 @@ export interface AttemptRecord {
   readonly startedAt: string;
   readonly observedAt?: string;
   readonly finishedAt: string | null;
-  readonly status: 'started' | 'succeeded' | 'failed' | 'cancelled';
+  /** `interrupted`: the owner stopped during the attempt. Its outcome is unknown. */
+  readonly status:
+    | 'started'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled'
+    | 'interrupted';
 }
 
 export interface DeskAttempt {
@@ -63,7 +69,8 @@ function parseAttempt(value: unknown, id: string): AttemptRecord {
     (data.status !== 'started' &&
       data.status !== 'succeeded' &&
       data.status !== 'failed' &&
-      data.status !== 'cancelled') ||
+      data.status !== 'cancelled' &&
+      data.status !== 'interrupted') ||
     (data.phase !== 'needs-plan' &&
       data.phase !== 'awaiting-plan-review' &&
       data.phase !== 'needs-research' &&
@@ -75,7 +82,11 @@ function parseAttempt(value: unknown, id: string): AttemptRecord {
     throw new Error('Missing requested model.');
   const finishedAt =
     data.finishedAt === null ? null : timestamp(data.finishedAt);
-  if ((data.status === 'started') !== (finishedAt === null))
+  // An interrupted attempt has no known finish time.
+  if (
+    (data.status === 'started' || data.status === 'interrupted') !==
+    (finishedAt === null)
+  )
     throw new Error('Inconsistent attempt outcome.');
   return {
     schemaVersion: 1,

@@ -1,5 +1,13 @@
 import { loadPrompt } from './prompts.ts';
-import { mkdir, open, writeFile, rm, lstat, rename } from 'node:fs/promises';
+import {
+  mkdir,
+  open,
+  readdir,
+  writeFile,
+  rm,
+  lstat,
+  rename,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { CliIO } from './commands.ts';
@@ -7,7 +15,8 @@ import { withActivity } from './choices.ts';
 import { parseCandidates } from './contracts.ts';
 import type { Candidate, Workspace } from './contracts.ts';
 import { runHarness, type HarnessResult } from './harness.ts';
-import { changeWorkspace, loadWorkspace } from './storage.ts';
+import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
+import { processStart, stopRecordedProcess } from './owner.ts';
 import {
   object,
   text,
@@ -170,6 +179,9 @@ export async function runResearch(
         startedAt: new Date().toISOString(),
       };
       let nativeSessionId: string | null = null;
+      // A later owner checks the start time before it stops a process with this PID.
+      let harnessProcess: { pid: number; processStart: string | null } | null =
+        null;
 
       async function recordAttempt(
         status: 'started' | 'succeeded' | 'failed' | 'cancelled',
@@ -179,6 +191,7 @@ export async function runResearch(
           ...identity,
           status,
           nativeSessionId,
+          ...(harnessProcess ?? {}),
           observedAt: new Date().toISOString(),
           finishedAt: status === 'started' ? null : new Date().toISOString(),
         };
@@ -230,6 +243,13 @@ export async function runResearch(
                 cwd: root,
                 prompt,
                 signal,
+                onSpawn: (pid) => {
+                  harnessProcess = { pid, processStart: null };
+                  void processStart(pid).then((start) => {
+                    if (harnessProcess?.pid === pid)
+                      harnessProcess = { pid, processStart: start };
+                  });
+                },
                 ...(io.progress ? { onActivity: io.progress } : {}),
                 ...(workspace.model ? { model: workspace.model } : {}),
                 ...(state.sessionId ? { sessionId: state.sessionId } : {}),
@@ -360,4 +380,66 @@ export async function selectIdea(
       throw new Error('Choose an ID from the recommendation list.');
     return { ...current, selectedId: id };
   });
+}
+
+/**
+ * After an owner stopped during research, mark each unfinished attempt as
+ * interrupted. A harness process that outlived the owner stops first, but only
+ * when its recorded start time matches. The stale research lock is removed.
+ * Call this only while holding the project owner lock.
+ */
+export async function reconcileAttempts(
+  root: string,
+): Promise<{ readonly interrupted: number; readonly stopped: number }> {
+  let interrupted = 0;
+  let stopped = 0;
+  let live = false;
+  const runs = join(root, '.verifold', 'runs');
+  let names: string[] = [];
+  try {
+    if (!(await lstat(runs)).isSymbolicLink())
+      names = (await readdir(runs)).slice(0, 200);
+  } catch {
+    /* No research has run. */
+  }
+  for (const name of names) {
+    if (!/^[a-f0-9-]{36}$/.test(name)) continue;
+    const path = join(runs, name, 'attempt.json');
+    let record: Record<string, unknown>;
+    try {
+      record = object(await readJson(path));
+    } catch {
+      continue;
+    }
+    if (record.status !== 'started') continue;
+    // A running attempt refreshes observedAt every 2 s. An older Verifold without the owner lock can still run it.
+    const observed =
+      typeof record.observedAt === 'string'
+        ? Date.parse(record.observedAt)
+        : NaN;
+    if (Date.now() - observed < 10_000) {
+      live = true;
+      continue;
+    }
+    const pid = Number.isSafeInteger(record.pid) ? (record.pid as number) : 0;
+    const start =
+      typeof record.processStart === 'string' ? record.processStart : null;
+    if (pid > 0 && (await stopRecordedProcess(pid, start))) stopped++;
+    const temporary = join(runs, name, `${randomUUID()}.tmp`);
+    try {
+      await writeFile(
+        temporary,
+        `${JSON.stringify({ ...record, status: 'interrupted', reconciledAt: new Date().toISOString() }, null, 2)}\n`,
+        { flag: 'wx', mode: 0o600 },
+      );
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    interrupted++;
+  }
+  // Research runs only under the owner lock, so a remaining lock is stale.
+  if (!live)
+    await rm(join(root, '.verifold', 'research.lock'), { force: true });
+  return { interrupted, stopped };
 }
