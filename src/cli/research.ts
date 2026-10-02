@@ -333,3 +333,31 @@ export async function runResearch(
     await rm(lockPath, { force: true });
   }
 }
+
+/**
+ * Lock one direction for the project. With `expected`, the choice fails when
+ * the list changed after the person read it. Selection starts no pilot or experiment.
+ */
+export async function selectIdea(
+  root: string,
+  id: unknown,
+  expected?: readonly Candidate[],
+): Promise<Workspace> {
+  return changeWorkspace(root, (current) => {
+    if (!current || current.selectedId)
+      throw new Error('Workspace missing or selection already locked.');
+    if (
+      expected &&
+      JSON.stringify(current.candidates) !== JSON.stringify(expected)
+    )
+      throw new Error(
+        'The ideas changed during selection. Review the updated list before choosing.',
+      );
+    if (
+      typeof id !== 'string' ||
+      !current.candidates.some((idea) => idea.id === id)
+    )
+      throw new Error('Choose an ID from the recommendation list.');
+    return { ...current, selectedId: id };
+  });
+}

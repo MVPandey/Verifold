@@ -6,6 +6,7 @@ const connectionLabel = requiredElement(document, '#connection', HTMLElement);
 const observationLabel = requiredElement(document, '#observation', HTMLElement);
 const actionLabel = requiredElement(document, '#action-status', HTMLElement);
 let selected: string | undefined;
+let detail = 'summary';
 let token = location.hash.slice(1);
 const launch = token.startsWith('launch-') ? token.slice(7) : '';
 try {
@@ -14,6 +15,7 @@ try {
     history.replaceState(null, '', location.pathname);
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
+  detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
 } catch {
   /* The original fragment still supports reload when storage is unavailable. */
 }
@@ -27,6 +29,16 @@ let request: AbortController | undefined;
 let failure:
   | { readonly selector: string; readonly message: string }
   | undefined;
+
+/** Summary hides the research event list. The choice lasts for this browser. */
+function showDetail(): void {
+  document.body.dataset.detail = detail;
+  for (const button of main.querySelectorAll<HTMLElement>('[data-detail]'))
+    button.setAttribute(
+      'aria-pressed',
+      String(button.dataset.detail === detail),
+    );
+}
 
 function showFailure(): void {
   main.querySelector('.action-error')?.remove();
@@ -118,6 +130,7 @@ async function refresh(): Promise<void> {
         });
       main.replaceChildren(template.content);
       showFailure();
+      showDetail();
       for (const [id, value] of typed) {
         const field = document.getElementById(id);
         if (
@@ -187,6 +200,23 @@ function field(id: string): string {
     : '';
 }
 
+/** The research request for one decision button. */
+function researchBody(kind: string | undefined): Record<string, unknown> {
+  if (kind === 'approve') return { action: 'research', approve: true };
+  if (kind === 'feedback')
+    return { action: 'research', feedback: field('research-feedback') };
+  if (kind !== 'start') return { action: 'research' };
+  const guided = document.getElementById('research-guided');
+  return {
+    action: 'research',
+    topic: field('research-topic'),
+    autonomy:
+      guided instanceof HTMLInputElement && !guided.checked
+        ? 'autonomous'
+        : 'guided',
+  };
+}
+
 /** Send one session action. The server owns validation and the session state. */
 async function act(button: HTMLElement): Promise<void> {
   const action = button.dataset.action;
@@ -211,12 +241,18 @@ async function act(button: HTMLElement): Promise<void> {
             ? { action, command: button.dataset.command }
             : action === 'resume'
               ? { action, session: button.dataset.session }
-              : { action };
+              : action === 'select'
+                ? { action, idea: button.dataset.idea }
+                : action === 'research'
+                  ? researchBody(button.dataset.research)
+                  : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
     ['command', button.dataset.command],
     ['session', button.dataset.session],
+    ['idea', button.dataset.idea],
+    ['research', button.dataset.research],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -246,7 +282,7 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = 'Done';
     failure = undefined;
-    for (const id of ['session-prompt', 'follow-up']) {
+    for (const id of ['session-prompt', 'follow-up', 'research-feedback']) {
       const element = document.getElementById(id);
       if (element instanceof HTMLTextAreaElement && body.action !== 'answer')
         element.value = '';
@@ -284,6 +320,27 @@ document.addEventListener('click', (event) => {
     }
     connectionLabel.textContent = 'Opening attempt…';
     void refresh();
+  }
+  if (target.dataset.detail) {
+    detail = target.dataset.detail === 'details' ? 'details' : 'summary';
+    showDetail();
+    try {
+      localStorage.setItem('verifold-desk-detail', detail);
+    } catch {
+      /* The choice lasts until reload when browser storage is unavailable. */
+    }
+  }
+  // An action that cannot be undone needs a second click within five seconds.
+  if (target.dataset.confirm && !target.dataset.armed) {
+    target.dataset.armed = target.textContent ?? '';
+    target.textContent = target.dataset.confirm;
+    setTimeout(() => {
+      if (target.dataset.armed !== undefined) {
+        target.textContent = target.dataset.armed;
+        delete target.dataset.armed;
+      }
+    }, 5000);
+    return;
   }
   if (target.dataset.action) void act(target);
   if (target.id === 'retry') void refresh();

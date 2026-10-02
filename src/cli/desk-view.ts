@@ -3,6 +3,7 @@ import { markdownHtml } from './markdown.ts';
 import type { Workspace } from './contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
+import type { ResearchView } from './research-runner.ts';
 import {
   decisionLabel,
   hostName,
@@ -22,6 +23,8 @@ export interface DeskSession {
   readonly blocked?: string;
   /** Sessions that an earlier owner paused. */
   readonly paused?: readonly PausedSession[];
+  /** Research in this owner. Without it, research runs only from the CLI. */
+  readonly research?: ResearchView;
 }
 
 export function nextResearchAction(workspace: Workspace): {
@@ -102,6 +105,61 @@ function clock(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function elapsed(since: string): string {
+  const seconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(since).getTime()) / 1000),
+  );
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? `${minutes} min ${seconds % 60} s` : `${seconds} s`;
+}
+
+/** The research step of this owner. Summary is the default level of detail. */
+function renderResearch(view: ResearchView | undefined): string {
+  if (!view?.step) return '';
+  const observed = view.events.filter((event) => event.kind === 'tool').length;
+  const last = view.events.at(-1);
+  return `<section class="research-live" aria-labelledby="research-live-title"><div class="section-title"><h2 id="research-live-title">Research</h2><span class="status ${view.running ? 'active' : 'muted'}">${view.running ? 'Running' : 'Not running'}</span></div>
+  <p class="research-step">${e(view.step)}${view.running && view.startedAt ? ` · ${e(elapsed(view.startedAt))}` : ''}</p>
+  <div class="seg detail-switch" role="group" aria-label="Level of detail"><button type="button" data-detail="summary">Summary</button><button type="button" data-detail="details">Details</button></div>
+  <p class="research-summary">${observed} harness ${observed === 1 ? 'event' : 'events'} observed.${last ? ` Latest: ${e(last.text)}` : ''}</p>
+  <ol class="research-events">${view.events
+    .slice(-100)
+    .map(
+      (event) =>
+        `<li class="event event-${event.kind}"><span class="event-kind">${event.kind === 'tool' ? 'Verifold saw' : 'Status'}</span><span class="event-text">${e(event.text)}</span><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`,
+    )
+    .join('')}</ol>
+  <p class="fine">Verifold shows the tool names that the harness reports. It does not show tool inputs or results.</p></section>`;
+}
+
+/** The research decision that waits for the person, with one primary action. */
+function renderDecision(workspace: Workspace, live: DeskSession): string {
+  const research = live.research;
+  if (!research || workspace.selectedId) return '';
+  if (research.running)
+    return `<section class="next-action"><h2>Research is running</h2><p>${e(research.step ?? 'A research step runs.')}. Follow it in Research.</p><p class="fine">If you cancel, the saved checkpoint and the attempt files stay.</p><div class="actions"><button type="button" data-action="cancel-research">Cancel research</button></div></section>`;
+  const busy = live.session?.live
+    ? 'A harness session is running. End it before research continues.'
+    : undefined;
+  const off = busy ? ' disabled aria-describedby="decision-busy"' : '';
+  const note = busy
+    ? `<p class="notice" id="decision-busy">${e(busy)}</p>`
+    : '';
+  const feedback = (label: string): string =>
+    `<label class="field" for="research-feedback">Changes</label><textarea id="research-feedback" rows="3" maxlength="4000" placeholder="${e(label)}"></textarea><div class="actions"><button type="button" data-action="research" data-research="feedback"${off}>Ask for changes</button></div>`;
+  switch (workspace.research?.phase) {
+    case undefined:
+      return `<section class="next-action"><h2>Start research</h2><p>Write the question that research should explore. The harness plans the research first.</p><label class="field" for="research-topic">Question</label><textarea id="research-topic" rows="3" maxlength="4000"></textarea><label class="check" for="research-guided"><input type="checkbox" id="research-guided" checked> Stop at the plan for my approval</label>${note}<div class="actions"><button type="button" class="primary" data-action="research" data-research="start"${off}>Start research</button></div></section>`;
+    case 'awaiting-plan-review':
+      return `<section class="next-action"><h2>Review the plan</h2><p>Read the research scope. Approve it to start the source search, or ask for changes.</p>${note}<div class="actions"><button type="button" class="primary" data-action="research" data-research="approve"${off}>Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
+    case 'directions':
+      return `<section class="next-action"><h2>Choose a direction</h2><p>Choose one direction under Research directions. The choice locks it for this project. You can ask for changes first.</p>${note}${feedback('What should change in the directions?')}</section>`;
+    default:
+      return `<section class="next-action"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p>${note}<div class="actions"><button type="button" class="primary" data-action="research" data-research="continue"${off}>Continue research</button></div></section>`;
+  }
 }
 
 const eventLabels: Record<SessionEvent['kind'], string> = {
@@ -234,6 +292,11 @@ export function renderDesk(
   const next = nextResearchAction(workspace);
   // The session owner blocks new sessions only while it runs research.
   const researching = live.blocked !== undefined || active.length > 0;
+  const choosable =
+    live.research !== undefined &&
+    !live.research.running &&
+    !workspace.selectedId &&
+    workspace.research?.phase === 'directions';
   const observation =
     active.length === 1 && active[0]?.record?.observedAt
       ? `Research owner last observed ${time(active[0].record.observedAt)}`
@@ -248,19 +311,21 @@ export function renderDesk(
           : 'muted';
   const html = `<div class="project-heading"><p class="project-name">${e(snapshot.project)}</p><h1>${e(workspace.research?.topic ?? 'What will you investigate?')}</h1><div class="project-meta"><span>${e(phaseLabel(workspace.research?.phase))}</span><span>${e(workspace.host === 'claude' ? 'Claude Code' : workspace.host === 'codex' ? 'Codex' : workspace.host)}</span><span>Model request: ${e(workspace.model ?? 'harness default')}</span></div></div>
   <div class="desk-grid"><div class="notebook">
-  ${renderSession(live, workspace.host)}${renderCommands(live.session)}
+  ${renderResearch(live.research)}${renderSession(live, workspace.host)}${renderCommands(live.session)}
   <section class="brief-section"><details id="research-brief" open><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet. Begin with a question in your project terminal.</p>'}</details></section>
   ${workspace.research?.plan ? `<section><details id="research-plan"><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(workspace.research.plan.scope)}</div><ul class="roles">${workspace.research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="findings"><div class="section-title"><h2>Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
   ${report ? `<div class="prose md">${markdownHtml(report.summary)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(chosen?.id ?? '')}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>` : `<div class="empty-note"><p>${chosen ? 'No readable source report is available for this attempt.' : 'Your source record starts here.'}</p><p>${chosen ? 'Planning, failed, and interrupted attempts may have no report. Their evidence remains in the project.' : 'Run research from your project terminal. Sources and findings will appear here when a report is saved.'}</p></div>`}</section>
-  ${workspace.candidates.length ? `<section><div class="section-title"><h2>Research directions</h2><span class="count">${workspace.candidates.length} proposed</span></div>${workspace.candidates.map((idea) => `<article class="direction"><div class="direction-heading"><h3>${e(idea.title)}</h3>${workspace.selectedId === idea.id ? '<span class="selected-label">Selected</span>' : ''}</div><div class="md">${markdownHtml(idea.recommendation)}</div><details id="gates-${e(idea.id)}"><summary>Proposed verification gates</summary><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></details></article>`).join('')}</section>` : ''}
+  ${workspace.candidates.length ? `<section><div class="section-title"><h2>Research directions</h2><span class="count">${workspace.candidates.length} proposed</span></div>${workspace.candidates.map((idea) => `<article class="direction"><div class="direction-heading"><h3>${e(idea.title)}</h3>${workspace.selectedId === idea.id ? '<span class="selected-label">Selected</span>' : ''}</div><div class="md">${markdownHtml(idea.recommendation)}</div>${choosable ? `<div class="actions"><button type="button" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div>` : ''}<details id="gates-${e(idea.id)}"><summary>Proposed verification gates</summary><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></details></article>`).join('')}</section>` : ''}
   </div><aside aria-label="Research activity">${
-    researching
-      ? '<section class="next-action"><h2>Research is running</h2><p>Research runs in your terminal. The results appear here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>'
-      : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one in Harness session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
+    live.research && !workspace.selectedId
+      ? renderDecision(workspace, live)
+      : researching
+        ? '<section class="next-action"><h2>Research is running</h2><p>Research runs in your terminal. The results appear here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>'
+        : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one in Harness session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
   }
   <section class="attempt-detail"><div class="section-title"><h2>Selected attempt</h2>${chosen ? `<span class="status ${tone}">${e(outcome(chosen))}</span>` : ''}</div>
-  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? '<p class="fine">The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>` : '<p class="empty-note">No research attempts yet.</p>'}</section>
+  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>` : '<p class="empty-note">No research attempts yet.</p>'}</section>
   <section class="history"><div class="section-title"><h2>Attempt history</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" ${chosen?.id === attempt.id ? 'aria-pressed="true"' : 'aria-pressed="false"'}><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>${!attempts.length ? '<p class="empty-note">Each research request will appear here with its own identity.</p>' : ''}</section></aside></div>`;
   return { html, observation };
 }
