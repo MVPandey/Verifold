@@ -11,6 +11,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { stripVTControlCharacters } from 'node:util';
 import { validateModel, type HarnessName } from './harness.ts';
+import { processStart, stopRecordedProcess } from './owner.ts';
 import {
   startHostSession,
   type HostEvent,
@@ -24,6 +25,8 @@ export type SessionStatus =
   | 'idle'
   /** The owner stopped. A later owner can resume the native session. */
   | 'paused'
+  /** The owner stopped without a record of the end. The last turn has an unknown outcome. */
+  | 'interrupted'
   | 'ended'
   | 'failed';
 
@@ -32,6 +35,7 @@ const statuses: readonly SessionStatus[] = [
   'running',
   'idle',
   'paused',
+  'interrupted',
   'ended',
   'failed',
 ];
@@ -67,7 +71,14 @@ export interface CommandEntry {
     readonly risk?: string;
     readonly rationale?: string;
   };
-  readonly outcome: 'running' | 'ok' | 'failed' | 'declined' | 'denied';
+  /** `unknown`: the owner stopped while the call ran. */
+  readonly outcome:
+    | 'running'
+    | 'ok'
+    | 'failed'
+    | 'declined'
+    | 'denied'
+    | 'unknown';
   readonly exitCode?: number;
   readonly reviewedAt?: string;
 }
@@ -90,6 +101,9 @@ export interface SessionLaunch {
   readonly ownerId: string;
   readonly startedAt: string;
   readonly endedAt: string | null;
+  /** The harness process and its start time, so a later owner can stop it safely. */
+  readonly pid: number | null;
+  readonly processStart: string | null;
 }
 
 export interface SessionRecord {
@@ -119,12 +133,15 @@ export interface SessionView {
   readonly saveFailed: boolean;
 }
 
-/** A paused session that a person can resume. */
+/** A paused or interrupted session that a person can continue. */
 export interface PausedSession {
   readonly id: string;
   readonly host: HarnessName;
+  readonly status: 'paused' | 'interrupted';
   readonly startedAt: string;
   readonly request: string;
+  /** No native conversation is known, so the session starts again instead of resuming. */
+  readonly restart: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -298,6 +315,7 @@ const outcomes: readonly CommandEntry['outcome'][] = [
   'failed',
   'declined',
   'denied',
+  'unknown',
 ];
 const answers = ['pending', 'allowed', 'denied', 'unanswered'] as const;
 
@@ -388,6 +406,14 @@ function parseLaunch(value: unknown): SessionLaunch[] {
           ownerId: launch.ownerId,
           startedAt: launch.startedAt,
           endedAt: launch.endedAt,
+          pid:
+            Number.isSafeInteger(launch.pid) && (launch.pid as number) > 0
+              ? (launch.pid as number)
+              : null,
+          processStart:
+            typeof launch.processStart === 'string'
+              ? launch.processStart
+              : null,
         },
       ]
     : [];
@@ -466,33 +492,107 @@ async function readRecord(
   }
 }
 
-/** Paused sessions among the latest 50 records, newest first. */
-async function loadPaused(root: string): Promise<PausedSession[]> {
+/**
+ * Whether the harness holds a conversation for this record. Codex reports a
+ * thread. Claude Code takes its ID at launch, so only an observed event proves
+ * that its conversation exists.
+ */
+function conversation(record: SessionRecord): boolean {
+  return (
+    record.nativeSessionId !== null &&
+    (record.host === 'codex' ||
+      record.reportedMode !== null ||
+      record.events.some(
+        (event) => event.kind !== 'you' && event.kind !== 'status',
+      ))
+  );
+}
+
+async function recordIds(root: string): Promise<string[]> {
   let names: string[];
   try {
     names = await readdir(join(root, '.verifold', 'sessions'));
   } catch {
     return [];
   }
-  const ids = names
+  return names
     .filter((name) => /^\d{8}T\d{9}Z-[a-f0-9]{8}\.json$/.test(name))
     .map((name) => name.slice(0, -5))
     .sort()
     .reverse()
     .slice(0, 50);
+}
+
+/** Paused and interrupted sessions among the latest 50 records, newest first. */
+async function loadPaused(root: string): Promise<PausedSession[]> {
   const paused: PausedSession[] = [];
-  for (const id of ids) {
+  for (const id of await recordIds(root)) {
     const record = await readRecord(root, id);
-    if (record?.status === 'paused' && record.nativeSessionId)
+    if (
+      (record?.status === 'paused' || record?.status === 'interrupted') &&
+      record.events.some((event) => event.kind === 'you')
+    )
       paused.push({
         id,
         host: record.host,
+        status: record.status,
         startedAt: record.startedAt,
         request:
           record.events.find((event) => event.kind === 'you')?.text ?? '',
+        restart: !conversation(record),
       });
   }
   return paused;
+}
+
+/**
+ * After an owner stopped without a final record, mark its unfinished sessions
+ * as interrupted. A harness process that outlived the owner stops first, but
+ * only when its recorded start time matches. Call this only while holding the
+ * project owner lock, so no other owner runs these sessions.
+ */
+export async function reconcileSessions(
+  root: string,
+  ownerId: string,
+): Promise<{ readonly interrupted: number; readonly stopped: number }> {
+  let interrupted = 0;
+  let stopped = 0;
+  for (const id of await recordIds(root)) {
+    const record = await readRecord(root, id);
+    const launch = record?.launches.at(-1);
+    if (
+      !record ||
+      (record.status !== 'starting' &&
+        record.status !== 'running' &&
+        record.status !== 'idle') ||
+      launch?.ownerId === ownerId
+    )
+      continue;
+    const outlived =
+      launch?.pid != null &&
+      (await stopRecordedProcess(launch.pid, launch.processStart));
+    if (outlived) stopped++;
+    const now = new Date().toISOString();
+    await writeRecord(root, {
+      ...unanswered(record),
+      status: 'interrupted',
+      commands: record.commands.map((command) =>
+        command.outcome === 'running'
+          ? { ...command, outcome: 'unknown' }
+          : command,
+      ),
+      events: [
+        ...record.events,
+        {
+          at: now,
+          kind: 'status' as const,
+          text: `Verifold stopped without saving the end of this session.${outlived ? ' Its harness process was still running, and Verifold stopped it.' : ''} The last turn may have run commands that Verifold did not see. Their outcome is unknown.`,
+        },
+      ].slice(-400),
+    });
+    interrupted++;
+  }
+  return { interrupted, stopped };
 }
 
 /** Close the current launch. */
@@ -633,7 +733,10 @@ export class SessionManager {
       typeof id === 'string' && validSessionId(id)
         ? await readRecord(this.root, id)
         : null;
-    if (saved?.status !== 'paused' || !saved.nativeSessionId)
+    if (
+      (saved?.status !== 'paused' && saved?.status !== 'interrupted') ||
+      !conversation(saved)
+    )
       fail('That session cannot resume. Choose a paused session.');
     // Another start can begin while the record loads.
     this.ready();
@@ -643,6 +746,42 @@ export class SessionManager {
       'Verifold resumes this session in a new process. The events above come from the earlier launch.',
     );
     await this.launch();
+    this.pausedList = this.pausedList.filter((entry) => entry.id !== saved.id);
+  }
+
+  /**
+   * Run the first request of a paused or interrupted session again when no
+   * native conversation is known. Claude Code keeps its session ID, so it
+   * refuses the launch if that conversation exists after all.
+   */
+  async restart(id: unknown): Promise<void> {
+    this.ready();
+    const saved =
+      typeof id === 'string' && validSessionId(id)
+        ? await readRecord(this.root, id)
+        : null;
+    const prompt = saved?.events.find((event) => event.kind === 'you')?.text;
+    if (
+      (saved?.status !== 'paused' && saved?.status !== 'interrupted') ||
+      conversation(saved) ||
+      !prompt
+    )
+      fail(
+        'That session cannot start again. Resume it, or start a new session.',
+      );
+    // Another start can begin while the record loads.
+    this.ready();
+    this.current = {
+      ...saved,
+      status: 'starting',
+      endedAt: null,
+      nativeSessionId: saved.host === 'claude' ? saved.nativeSessionId : null,
+    };
+    this.event(
+      'status',
+      'No conversation was recorded, so Verifold runs the first request again.',
+    );
+    await this.launch(prompt);
     this.pausedList = this.pausedList.filter((entry) => entry.id !== saved.id);
   }
 
@@ -756,6 +895,8 @@ export class SessionManager {
       ownerId: this.options.ownerId,
       startedAt: new Date().toISOString(),
       endedAt: null,
+      pid: null,
+      processStart: null,
     };
     this.launching = true;
     try {
@@ -792,9 +933,33 @@ export class SessionManager {
         ...(executable ? { executable } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
+      const pid = this.host.pid;
+      if (pid !== undefined) {
+        this.identify(launch.id, { pid });
+        // A later owner checks the start time before it stops a process with this PID.
+        void processStart(pid).then((start) =>
+          this.identify(launch.id, { processStart: start }),
+        );
+      }
     } finally {
       this.launching = false;
     }
+  }
+
+  /** Record the process of a launch, while that launch is still current. */
+  private identify(
+    launch: string,
+    process: { readonly pid?: number; readonly processStart?: string | null },
+  ): void {
+    this.patch((current) => {
+      const last = current.launches.at(-1);
+      return last?.id === launch
+        ? {
+            ...current,
+            launches: current.launches.with(-1, { ...last, ...process }),
+          }
+        : current;
+    });
   }
 
   private text(value: unknown): string {

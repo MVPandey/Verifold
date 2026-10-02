@@ -88,6 +88,9 @@ async function act(
     case 'resume':
       await sessions.resume(body.session);
       return 200;
+    case 'restart':
+      await sessions.restart(body.session);
+      return 200;
     case 'send':
       sessions.send(body.text);
       return 200;

@@ -239,7 +239,7 @@ async function act(button: HTMLElement): Promise<void> {
             }
           : action === 'review'
             ? { action, command: button.dataset.command }
-            : action === 'resume'
+            : action === 'resume' || action === 'restart'
               ? { action, session: button.dataset.session }
               : action === 'select'
                 ? { action, idea: button.dataset.idea }
