@@ -607,6 +607,36 @@ button:disabled {
   align-self: center;
   margin: 0;
 }
+.research-step {
+  margin-top: 6px;
+  color: var(--ink);
+}
+.detail-switch {
+  margin-top: 12px;
+}
+.detail-switch button[aria-pressed='true'] {
+  border-color: var(--violet);
+  color: var(--violet);
+}
+.research-summary {
+  margin-top: 10px;
+}
+.research-events {
+  display: none;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+body[data-detail='details'] .research-events {
+  display: block;
+}
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 13px;
+}
 .action-error {
   margin-top: 8px;
   font-size: 12px;

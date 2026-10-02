@@ -96,6 +96,15 @@ await test('a second verifold for the project stops before it opens a desk', asy
     }),
     /already runs in this project/,
   );
+  // Research from a second terminal also waits for the owner.
+  await assert.rejects(
+    runCli(['research'], root, {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: (value) => out.push(value),
+    }),
+    /already runs in this project/,
+  );
   assert.deepEqual(out, []);
   await owner.release();
 });
