@@ -1,6 +1,6 @@
 import type { Choice } from './choices.ts';
 import { stripVTControlCharacters } from 'node:util';
-import { wrapText } from './terminal-layout.ts';
+import { plainText, visibleWidth, wrapText } from './terminal-layout.ts';
 
 // Colors from brand/exports/brand-tokens.css. Body text inherits the terminal theme.
 export const palette = {
@@ -36,6 +36,83 @@ export function paragraph(value: string, columns = 80, indent = '  '): string {
     .join('\n');
 }
 
+// Inline Markdown styles for a color terminal.
+const styles = {
+  strong: ['\u001b[1m', '\u001b[22m'],
+  em: ['\u001b[3m', '\u001b[23m'],
+  code: [`\u001b[38;2;${palette.lavender}m`, '\u001b[39m'],
+  link: ['\u001b[4m', '\u001b[24m'],
+  url: ['\u001b[2m', '\u001b[22m'],
+} as const;
+type Piece = readonly [text: string, style?: keyof typeof styles];
+
+const inlineMarkdown =
+  /`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<![\w*])\*(?![\s*])([^*\n]+?)\*(?![\w*])|(?<![\w_])_(?![\s_])([^_\n]+?)_(?![\w_])|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
+
+function pieces(line: string): Piece[] {
+  const result: Piece[] = [];
+  let last = 0;
+  for (const match of line.matchAll(inlineMarkdown)) {
+    if (match.index > last) result.push([line.slice(last, match.index)]);
+    const [, code, strong, star, underscore, label, url] = match;
+    if (code !== undefined) result.push([code, 'code']);
+    else if (strong !== undefined) result.push([strong, 'strong']);
+    else if (label !== undefined)
+      result.push([label, 'link'], [` (${url ?? ''})`, 'url']);
+    else result.push([star ?? underscore ?? '', 'em']);
+    last = match.index + match[0].length;
+  }
+  if (last < line.length) result.push([line.slice(last)]);
+  return result;
+}
+
+const render = (parts: readonly Piece[]): string =>
+  parts
+    .map(([text, style]) =>
+      style ? `${styles[style][0]}${text}${styles[style][1]}` : text,
+    )
+    .join('');
+
+/** Wrap styled inline Markdown. Widths count only the visible text. */
+function styledLines(line: string, width: number): string[] {
+  const words: Piece[][] = [];
+  let word: Piece[] = [];
+  for (const [text, style] of pieces(plainText(line)))
+    for (const part of text.split(/(\s+)/u)) {
+      if (!part) continue;
+      if (/^\s+$/u.test(part)) {
+        if (word.length) words.push(word);
+        word = [];
+      } else word.push(style ? [part, style] : [part]);
+    }
+  if (word.length) words.push(word);
+  const lines: string[] = [];
+  let current = '';
+  let used = 0;
+  for (const parts of words) {
+    const plain = parts.map(([text]) => text).join('');
+    const size = visibleWidth(plain);
+    if (current && used + 1 + size <= width) {
+      current += ` ${render(parts)}`;
+      used += 1 + size;
+      continue;
+    }
+    if (current) lines.push(current);
+    if (size <= width) {
+      current = render(parts);
+      used = size;
+      continue;
+    }
+    // A word wider than the line is split without styles.
+    const split = wrapText(plain, width);
+    lines.push(...split.slice(0, -1));
+    current = split.at(-1) ?? '';
+    used = visibleWidth(current);
+  }
+  lines.push(current);
+  return lines;
+}
+
 /** Render common agent Markdown while keeping code and terminal controls inert. */
 export function terminalMessage(
   value: string,
@@ -57,6 +134,13 @@ export function terminalMessage(
       (_match: string, code: string | undefined, strong: string) =>
         code ?? strong,
     );
+  // Without color, the plain rendering stays as it was.
+  const wrap = (text: string, width: number): string[] =>
+    color ? styledLines(text, width) : wrapText(inline(text), width);
+  const block = (text: string, indent: string): string =>
+    wrap(text, Math.max(1, Math.min(72, columns - indent.length - 1)))
+      .map((line) => indent + line)
+      .join('\n');
   return stripVTControlCharacters(value)
     .replace(/\r\n?/g, '\n')
     .split('\n')
@@ -76,7 +160,12 @@ export function terminalMessage(
       }
       const spaces = line.match(/^\s*/)?.[0].replace(/\t/g, '  ').length ?? 0;
       const indent = ' '.repeat(Math.min(spaces, Math.max(0, columns - 8)));
-      if (fence) return paragraph(line.trimStart(), columns, '    ' + indent);
+      if (fence)
+        return tint(
+          paragraph(line.trimStart(), columns, '    ' + indent),
+          color,
+          'lavender',
+        );
       if (index === separator) return [];
       const rowCells = cells(line);
       const nextCells = cells(lines[index + 1] ?? '');
@@ -94,20 +183,26 @@ export function terminalMessage(
         return (
           rowCells
             .map((cell, position) =>
-              paragraph(inline(`${labels[position]}: ${cell}`), columns),
+              block(`${labels[position]}: ${cell}`, '  '),
             )
             .join('\n') + '\n'
         );
       headers = undefined;
       const heading = /^\s*#{1,6}\s+(.+?)(?:\s+#+)?$/.exec(line);
-      if (heading)
-        return tint(paragraph(inline(heading[1] ?? ''), columns), color, 'sky');
+      if (heading) {
+        const title = tint(
+          paragraph(inline(heading[1] ?? ''), columns),
+          color,
+          'sky',
+        );
+        return color ? `${styles.strong[0]}${title}` : title;
+      }
       const list = /^\s*([-+*]|\d+[.)])\s+(.+)$/.exec(line);
       if (list) {
         const marker = /^[-+*]$/.test(list[1] ?? '') ? '• ' : `${list[1]} `;
         const prefix = '  ' + indent;
-        return wrapText(
-          inline(list[2] ?? ''),
+        return wrap(
+          list[2] ?? '',
           Math.max(
             1,
             Math.min(72, columns - prefix.length - marker.length - 1),
@@ -119,7 +214,7 @@ export function terminalMessage(
           )
           .join('\n');
       }
-      const row = paragraph(inline(line), columns, '  ' + indent);
+      const row = block(line, '  ' + indent);
       return line.startsWith('✓ ') ? tint(row, color, 'mint') : row;
     })
     .join('\n');

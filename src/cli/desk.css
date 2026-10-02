@@ -519,6 +519,73 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.md {
+  white-space: normal;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md :is(h3, h4, h5, h6) {
+  margin: 18px 0 6px;
+  font-size: 15px;
+}
+.md :is(h5, h6) {
+  font-size: 13px;
+}
+.md :is(p, ul, ol, pre, table, blockquote) {
+  margin: 0 0 12px;
+}
+.md p {
+  color: inherit;
+}
+.md :is(ul, ol) {
+  padding-left: 22px;
+}
+.md code {
+  display: inline;
+  padding: 1px 4px;
+  background: var(--lavender);
+  border-radius: 4px;
+  user-select: text;
+}
+.md pre {
+  padding: 12px;
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.md pre code {
+  display: block;
+  padding: 0;
+  background: none;
+}
+.md table {
+  width: auto;
+  font-size: 13px;
+}
+.md :is(th, td) {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  white-space: normal;
+}
+.md blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}
+.md a {
+  color: var(--violet);
+}
+/* Manrope has no italic face, so emphasis uses a synthesized slant. */
+.md em {
+  font-synthesis: style;
+}
+.action-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--red);
+}
 .event time {
   font-size: 11px;
   color: var(--muted);
