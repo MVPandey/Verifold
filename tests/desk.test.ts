@@ -331,3 +331,35 @@ await test('desk renders harness Markdown without active content and explains a 
   assert.match(free, /data-action="start">Start session/);
   assert.match(free, /copy-command/);
 });
+
+await test('desk lists paused sessions with a Resume control', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const paused = [
+    {
+      id: '20261002T120000000Z-abcdef12',
+      host: 'codex' as const,
+      startedAt: '2026-10-02T12:00:00.000Z',
+      request: 'Reproduce <b>the baseline</b>',
+    },
+  ];
+  const html = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    paused,
+  }).html;
+  assert.match(html, /Paused sessions/);
+  assert.match(
+    html,
+    /data-action="resume" data-session="20261002T120000000Z-abcdef12">Resume/,
+  );
+  assert.match(html, /Reproduce &lt;b&gt;the baseline&lt;\/b&gt;/);
+  const busy = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    paused,
+    blocked: 'Research is running in the terminal.',
+  }).html;
+  assert.match(busy, /data-action="resume" data-session="[^"]+" disabled>/);
+});
