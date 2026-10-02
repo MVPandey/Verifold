@@ -39,7 +39,7 @@ Verifold starts the selected harness with its existing configuration and permiss
 
 ## Start a research project
 
-Run `verifold` from your terminal. An existing Verifold project checks for unfinished global setup, then opens its desk. This setup does not change the project’s saved harness or research. Otherwise, setup connects your harness, loads your global profile if available, and offers profile creation before selecting a project folder. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open; Ctrl+C stops its work and server.
+Run `verifold` from your terminal. An existing Verifold project checks for unfinished global setup, then opens its desk. This setup does not change the project’s saved harness or research. Otherwise, setup connects your harness, loads your global profile if available, and offers profile creation before selecting a project folder. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open. Ctrl+C stops its work and the desk, and pauses a running session.
 
 Use `verifold init` for setup and research entirely in the CLI. Bare launch requires an interactive terminal. `verifold --no-open` prints the desk URL without opening a browser.
 
@@ -145,7 +145,9 @@ Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the
 
 ### Local research desk
 
-Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its browser desk. Keep that terminal open. Ctrl+C stops the server and ends a running session. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect.
+Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its browser desk. Keep that terminal open. It runs the project owner, and the desk is a second view of the same owner. Ctrl+C stops the desk and pauses a running session. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect. Type `/open` in the terminal to open the desk again with a new one-time link.
+
+One Verifold process owns a project at a time. A second `verifold` for the same project names the running process and exits. The owner writes `.verifold/owner.json` with its process ID and start time, and no access token. If that process stopped, the next owner moves the record aside and continues.
 
 The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Opening or refreshing the desk does not launch a harness. You start a harness session in the desk or with `verifold session`. Research commands remain in the CLI.
 
@@ -161,13 +163,13 @@ Start one harness session from the desk, or from the terminal:
 verifold session --prompt "Reproduce the baseline" --host codex --mode ask
 ```
 
-The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. Each running Verifold process controls one session at a time. The desk cannot start a session while `verifold` runs research in the same terminal. The desk shows that research is running and disables Start session until research ends. If a desk action fails, the reason appears next to that control.
+The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner controls one session at a time. The desk cannot start a session while `verifold` runs research in the same terminal. The desk shows that research is running and disables Start session until research ends. If a desk action fails, the reason appears next to that control.
 
 In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces the answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request. A network call that the sandbox blocks can fail without a request.
 
 In Auto mode, Claude Code uses its `auto` permission mode, and Codex sends approvals to its reviewer agent. The desk shows the mode that the harness reports. It can differ from the requested mode, for example when Claude Code does not allow Auto for a model.
 
-While a turn runs, you can cancel it. When a turn ends, send a follow-up or end the session. In the terminal, type `a` to allow once or `d` to deny the open request. When several requests are open, add the ID, for example `a R2`. Type a follow-up when the agent waits, or type `/cancel` or `/end`. Without an interactive terminal, requests wait for the desk, the session ends after the first turn, and `session` prints a JSON summary with the record path.
+While a turn runs, you can cancel it. When a turn ends, send a follow-up or end the session. In the terminal, type `/start` and a request to start a session with the project's harness in Ask me mode. Type `a` to allow once or `d` to deny the open request. When several requests are open, add the ID, for example `a R2`. Type a follow-up when the agent waits, or type `/cancel` or `/end`. Type `/help` for all terminal commands. Without an interactive terminal, requests wait for the desk, the session ends after the first turn, and `session` prints a JSON summary with the record path.
 
 The Commands table lists each tool call that the harness reports, with the exact command or target, who let it run, risk tags, and the result:
 
@@ -181,7 +183,9 @@ The Commands table lists each tool call that the harness reports, with the exact
 
 A permission request shows the tool input, not a description written by the model. For a write or an edit, the desk also shows the content that would change. Risk tags (Network, Install, Deletes files, Settings files, Outside folder) come from the command text. A risky call that no person approved waits for review until you mark it reviewed. The record shows the command that the agent asked for. It does not show commands inside a script or processes that a command starts. Agent text is a model claim. Tool calls, requests, and decisions come from the harness protocol.
 
-Verifold saves each session in `.verifold/sessions/<session-id>.json`. The record keeps the latest 400 events and 1000 tool calls. The desk shows the session of the current Verifold run and does not reload earlier sessions.
+Verifold saves each session in `.verifold/sessions/<session-id>.json` before it starts the harness. The record keeps the latest 400 events and 1000 tool calls, and one entry for each harness process that ran the session. Verifold gives Claude Code its session ID at launch (`--session-id`) and records the Codex thread ID when Codex reports it.
+
+Ctrl+C pauses a running session: Verifold stops the current turn and the harness process, and keeps the native session ID. The outcome of a turn that Ctrl+C stopped is unknown. The next `verifold` in the folder lists paused sessions in the desk. Resume, or `/resume` in the terminal, continues the same conversation in a new harness process with Claude Code `--resume` or Codex `thread/resume`. A session that ended or failed cannot resume.
 
 ## Privacy and website
 

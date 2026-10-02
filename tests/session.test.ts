@@ -33,6 +33,10 @@ import { changeWorkspace } from '../src/cli/storage.ts';
 const claudeHost = `const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.writeFileSync('args.json', JSON.stringify(args));
+// Verifold saves the session record before it starts the harness.
+fs.writeFileSync('records-at-start.json', JSON.stringify(fs.existsSync('.verifold/sessions') ? fs.readdirSync('.verifold/sessions') : []));
+const flag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+const nativeId = flag('--resume') ?? flag('--session-id') ?? 'native-1';
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const mode = args[args.indexOf('--permission-mode') + 1];
 let turn = 0;
@@ -45,7 +49,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   if (message.type === 'user') {
     turn++;
     if (message.message.content === 'crash') process.exit(3);
-    if (turn === 1) out({ type: 'system', subtype: 'init', session_id: 'native-1', model: 'fake-model', permissionMode: mode });
+    if (turn === 1) out({ type: 'system', subtype: 'init', session_id: nativeId, model: 'fake-model', permissionMode: mode });
     const content = message.message.content;
     if (content === 'withdraw') {
       out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-' + turn, name: 'Write', input: { file_path: 'notes.md', content: 'new <text>' } }] } });
@@ -100,7 +104,10 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
   };
   if (message.method === 'initialize') out({ id: message.id, result: {} });
-  else if (message.method === 'thread/start') {
+  else if (message.method === 'thread/resume') {
+    reviewer = message.params.approvalsReviewer;
+    out({ id: message.id, result: { thread: { id: message.params.threadId }, model: 'fake-codex', approvalsReviewer: reviewer } });
+  } else if (message.method === 'thread/start') {
     reviewer = message.params.approvalsReviewer;
     scenario = message.params.model ?? '';
     if (scenario === 'reject-thread') return out({ id: message.id, error: { code: -32000, message: 'Unknown model' } });
@@ -166,6 +173,7 @@ async function project(
     await run(root, executables, (options = {}) => {
       const manager = new SessionManager(root, {
         clientVersion: 'test',
+        ownerId: 'test-owner',
         executables,
         ...options,
       });
@@ -279,16 +287,26 @@ await test('Claude Code requests reach the person, and the answer returns to the
       onEvent: (event) => seen.push(`${event.kind}:${event.text}`),
     });
     assert.throws(() => sessions.send('early'), SessionActionError);
-    sessions.start({ host: 'claude', mode: 'ask', prompt: 'Check the page' });
-    assert.throws(
-      () => sessions.start({ host: 'claude', mode: 'ask', prompt: 'Another' }),
+    const starting = sessions.start({
+      host: 'claude',
+      mode: 'ask',
+      prompt: 'Check the page',
+    });
+    // A second start fails while the first one saves its record.
+    await assert.rejects(
+      sessions.start({ host: 'claude', mode: 'ask', prompt: 'Another' }),
       /already running/,
     );
+    await starting;
     let record = await until(
       sessions,
       (current) => current.requests.length === 1,
     );
-    assert.equal(record.nativeSessionId, 'native-1');
+    assert.match(record.nativeSessionId ?? '', /^[0-9a-f-]{36}$/);
+    assert.deepEqual(
+      JSON.parse(await readFile(join(root, 'records-at-start.json'), 'utf8')),
+      [`${record.id}.json`],
+    );
     assert.equal(record.reportedMode, 'default');
     assert.deepEqual(
       record.requests[0]?.action,
@@ -345,6 +363,8 @@ await test('Claude Code requests reach the person, and the answer returns to the
       'stdio',
       '--permission-mode',
       'default',
+      '--session-id',
+      record.nativeSessionId,
     ]);
 
     sessions.end();
@@ -365,7 +385,11 @@ await test('Claude Code requests reach the person, and the answer returns to the
 await test('Claude Code Auto records calls that ran without a person, and a review marks them', async () => {
   await project(async (root, executables, create) => {
     const sessions = create();
-    sessions.start({ host: 'claude', mode: 'auto', prompt: 'Check the page' });
+    await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Check the page',
+    });
     const record = await until(
       sessions,
       (current) => current.status === 'idle',
@@ -387,7 +411,11 @@ await test('Claude Code Auto records calls that ran without a person, and a revi
 await test('cancelling a turn denies its open request and stops the turn', async () => {
   await project(async (root, executables, create) => {
     const sessions = create();
-    sessions.start({ host: 'claude', mode: 'ask', prompt: 'Check the page' });
+    await sessions.start({
+      host: 'claude',
+      mode: 'ask',
+      prompt: 'Check the page',
+    });
     await until(sessions, (current) => current.requests.length === 1);
     sessions.cancel();
     const record = await until(
@@ -410,7 +438,7 @@ await test('cancelling a turn denies its open request and stops the turn', async
 await test('a harness that exits with an error leaves a failed record', async () => {
   await project(async (root, executables, create) => {
     const sessions = create();
-    sessions.start({ host: 'claude', mode: 'ask', prompt: 'crash' });
+    await sessions.start({ host: 'claude', mode: 'ask', prompt: 'crash' });
     const record = await until(
       sessions,
       (current) => current.status === 'failed',
@@ -422,39 +450,41 @@ await test('a harness that exits with an error leaves a failed record', async ()
 });
 
 await test('invalid start input is rejected before a harness starts', async () => {
-  await project((_root, _executables, create) => {
+  await project(async (_root, _executables, create) => {
     const sessions = create();
-    assert.throws(
-      () => sessions.start({ host: 'other', mode: 'ask', prompt: 'x' }),
+    await assert.rejects(
+      sessions.start({ host: 'other', mode: 'ask', prompt: 'x' }),
       /Claude Code or Codex/,
     );
-    assert.throws(
-      () => sessions.start({ host: 'codex', mode: 'yolo', prompt: 'x' }),
+    await assert.rejects(
+      sessions.start({ host: 'codex', mode: 'yolo', prompt: 'x' }),
       /Ask me or Auto/,
     );
-    assert.throws(
-      () =>
-        sessions.start({
-          host: 'codex',
-          mode: 'ask',
-          model: '$(x)',
-          prompt: 'x',
-        }),
+    await assert.rejects(
+      sessions.start({
+        host: 'codex',
+        mode: 'ask',
+        model: '$(x)',
+        prompt: 'x',
+      }),
       SessionActionError,
     );
-    assert.throws(
-      () => sessions.start({ host: 'codex', mode: 'ask', prompt: '  ' }),
+    await assert.rejects(
+      sessions.start({ host: 'codex', mode: 'ask', prompt: '  ' }),
       /Write a message/,
     );
     assert.equal(sessions.view(), null);
-    return Promise.resolve();
   });
 });
 
 await test('Codex Ask me sends approvals to the person, not a reviewer agent', async () => {
   await project(async (root, executables, create) => {
     const sessions = create();
-    sessions.start({ host: 'codex', mode: 'ask', prompt: 'Write outside' });
+    await sessions.start({
+      host: 'codex',
+      mode: 'ask',
+      prompt: 'Write outside',
+    });
     let record = await until(
       sessions,
       (current) => current.requests.length === 1,
@@ -506,7 +536,11 @@ await test('Codex Ask me sends approvals to the person, not a reviewer agent', a
 await test('Codex Auto records the reviewer decision and its reason', async () => {
   await project(async (root, executables, create) => {
     const sessions = create();
-    sessions.start({ host: 'codex', mode: 'auto', prompt: 'Write outside' });
+    await sessions.start({
+      host: 'codex',
+      mode: 'auto',
+      prompt: 'Write outside',
+    });
     const record = await until(
       sessions,
       (current) => current.status === 'idle',
@@ -545,7 +579,8 @@ await test('desk actions need the token and a JSON body, and report state errors
     try {
       const url = new URL(server.url);
       const api = `${url.origin}/api/action`;
-      const launch = new URL(server.launchUrl);
+      const launch = new URL(server.launchUrl());
+      const second = new URL(server.launchUrl());
       assert.equal(launch.hash.includes(url.hash.slice(1)), false);
       const claim = (code: string): Promise<Response> =>
         fetch(`${url.origin}/api/launch`, {
@@ -558,6 +593,15 @@ await test('desk actions need the token and a JSON body, and report state errors
       assert.deepEqual(await claimed.json(), { token: url.hash.slice(1) });
       assert.equal(
         (await claim(launch.hash.slice('#launch-'.length))).status,
+        403,
+      );
+      // Each code from /open works once, independently of earlier codes.
+      assert.equal(
+        (await claim(second.hash.slice('#launch-'.length))).status,
+        200,
+      );
+      assert.equal(
+        (await claim(second.hash.slice('#launch-'.length))).status,
         403,
       );
       const headers = {
@@ -682,7 +726,7 @@ await test('Codex requests show the exact command, not the first parsed action',
 await test('a compound Codex command is approved as a whole and tagged', async () => {
   await project(async (_root, _executables, create) => {
     const sessions = create();
-    sessions.start({
+    await sessions.start({
       host: 'codex',
       mode: 'ask',
       model: 'compound',
@@ -703,7 +747,7 @@ await test('a compound Codex command is approved as a whole and tagged', async (
 await test('Codex failures and cancels cannot leave a session stuck', async () => {
   await project(async (root, _executables, create) => {
     const rejected = create();
-    rejected.start({
+    await rejected.start({
       host: 'codex',
       mode: 'ask',
       model: 'reject-thread',
@@ -718,7 +762,12 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     );
 
     const slow = create();
-    slow.start({ host: 'codex', mode: 'ask', model: 'slow-turn', prompt: 'x' });
+    await slow.start({
+      host: 'codex',
+      mode: 'ask',
+      model: 'slow-turn',
+      prompt: 'x',
+    });
     await until(slow, (current) => current.status === 'running');
     slow.cancel();
     const cancelled = await until(slow, (current) => current.status === 'idle');
@@ -733,7 +782,7 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
 
     // A cancel before the thread exists must stop the first turn, not only log it.
     const early = create();
-    early.start({
+    await early.start({
       host: 'codex',
       mode: 'ask',
       model: 'slow-thread',
@@ -763,7 +812,7 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     await early.close();
 
     const other = create();
-    other.start({
+    await other.start({
       host: 'codex',
       mode: 'ask',
       model: 'other-thread',
@@ -779,7 +828,7 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
 await test('withdrawn and harness-denied Claude Code calls keep accurate labels', async () => {
   await project(async (_root, _executables, create) => {
     const sessions = create();
-    sessions.start({ host: 'claude', mode: 'ask', prompt: 'withdraw' });
+    await sessions.start({ host: 'claude', mode: 'ask', prompt: 'withdraw' });
     let record = await until(
       sessions,
       (current) => current.requests.length === 1,
@@ -808,7 +857,11 @@ await test('withdrawn and harness-denied Claude Code calls keep accurate labels'
     sessions.end();
 
     // A second session in the same desk process does not reuse R1.
-    sessions.start({ host: 'claude', mode: 'ask', prompt: 'Check the page' });
+    await sessions.start({
+      host: 'claude',
+      mode: 'ask',
+      prompt: 'Check the page',
+    });
     const fresh = await until(
       sessions,
       (current) => current.requests.length === 1,
@@ -820,7 +873,7 @@ await test('withdrawn and harness-denied Claude Code calls keep accurate labels'
 await test('the desk escapes harness text and removes direction controls', async () => {
   await project(async (root, _executables, create) => {
     const sessions = create();
-    sessions.start({
+    await sessions.start({
       host: 'claude',
       mode: 'ask',
       prompt: 'Check <img src=x onerror=alert(1)> "quoted" ‮gnp.exe',
@@ -848,28 +901,156 @@ await test('terminal answers need an unambiguous request and never become follow
       out: () => {},
       progress: (value: string) => messages.push(value),
     };
+    let opened = 0;
+    const controls = {
+      host: 'claude',
+      open: () => {
+        opened++;
+      },
+    };
     const sessions = create();
-    terminalInput(sessions, 'a', io);
+    terminalInput(sessions, 'a', io, controls);
     assert.match(messages.at(-1) ?? '', /No request is open/);
-    sessions.start({ host: 'claude', mode: 'ask', prompt: 'Check the page' });
+    terminalInput(sessions, '/open', io, controls);
+    assert.equal(opened, 1);
+    terminalInput(sessions, '/help', io, controls);
+    assert.match(messages.at(-1) ?? '', /`\/start` and a request/);
+    terminalInput(sessions, '/stop', io, controls);
+    assert.match(messages.at(-1) ?? '', /\/stop is not a command/);
+    terminalInput(sessions, 'hello', io, controls);
+    assert.match(messages.at(-1) ?? '', /No session is running.*\/start/);
+    terminalInput(sessions, '/resume', io, controls);
+    assert.match(messages.at(-1) ?? '', /No session is paused/);
+    await sessions.start({
+      host: 'claude',
+      mode: 'ask',
+      prompt: 'Check the page',
+    });
     const record = await until(
       sessions,
       (current) => current.requests.length === 1,
     );
     const id = record.requests[0]?.id ?? '';
-    terminalInput(sessions, 'a R99', io);
+    terminalInput(sessions, 'a R99', io, controls);
     assert.match(messages.at(-1) ?? '', /R99 is not open/);
-    terminalInput(sessions, `A ${id.toLowerCase()}`, io);
+    terminalInput(sessions, `A ${id.toLowerCase()}`, io, controls);
     const idle = await until(sessions, (current) => current.status === 'idle');
     const allowed = idle.commands[0];
     assert.ok(allowed);
     assert.equal(decisionLabel(allowed, 'claude'), 'You allowed');
     const events = idle.events.length;
-    terminalInput(sessions, 'd', io);
+    terminalInput(sessions, 'd', io, controls);
     assert.match(messages.at(-1) ?? '', /No request is open/);
     assert.equal(sessions.view()?.record.status, 'idle');
     assert.equal(sessions.view()?.record.events.length, events);
-    terminalInput(sessions, '/end', io);
+    terminalInput(sessions, '/end', io, controls);
     assert.equal(sessions.view()?.live, false);
+  });
+});
+
+await test('Ctrl+C pauses a Claude Code session, and a later owner resumes the same conversation', async () => {
+  await project(async (root, _executables, create) => {
+    const sessions = create();
+    await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Check the page',
+    });
+    const idle = await until(sessions, (current) => current.status === 'idle');
+    const native = idle.nativeSessionId ?? '';
+    await sessions.close();
+    const saved = JSON.parse(
+      await readFile(
+        join(root, '.verifold', 'sessions', `${idle.id}.json`),
+        'utf8',
+      ),
+    ) as SessionRecord;
+    assert.equal(saved.status, 'paused');
+    assert.equal(saved.launches.length, 1);
+    assert.ok(saved.launches[0]?.endedAt);
+    assert.ok(saved.events.some((event) => event.text.includes('paused')));
+
+    const later = create({ ownerId: 'later-owner' });
+    await later.load();
+    assert.deepEqual(later.paused(), [
+      {
+        id: idle.id,
+        host: 'claude',
+        startedAt: idle.startedAt,
+        request: 'Check the page',
+      },
+    ]);
+    await later.resume(idle.id);
+    const ready = await until(later, (current) => current.status === 'idle');
+    assert.equal(ready.nativeSessionId, native);
+    assert.deepEqual(
+      ready.launches.map((launch) => launch.ownerId),
+      ['test-owner', 'later-owner'],
+    );
+    assert.ok(
+      ready.events.some((event) => event.text.includes('earlier launch')),
+    );
+    // The resumed process writes its arguments when it starts.
+    let args: string[] = [];
+    for (let tries = 0; tries < 100 && !args.includes('--resume'); tries++) {
+      await delay(20);
+      args = JSON.parse(
+        await readFile(join(root, 'args.json'), 'utf8'),
+      ) as string[];
+    }
+    assert.deepEqual(args.slice(-2), ['--resume', native]);
+    assert.deepEqual(later.paused(), []);
+    later.send('Continue');
+    await until(
+      later,
+      (current) =>
+        current.status === 'idle' &&
+        current.events.filter((event) => event.text.includes('turn ended'))
+          .length === 2,
+    );
+    later.end();
+    await assert.rejects(later.resume(idle.id), /cannot resume/);
+  });
+});
+
+await test('a resumed Codex thread ignores events from the paused process', async () => {
+  await project(async (root, _executables, create) => {
+    const sessions = create();
+    await sessions.start({
+      host: 'codex',
+      mode: 'auto',
+      prompt: 'Write outside',
+    });
+    const idle = await until(sessions, (current) => current.status === 'idle');
+    assert.equal(idle.nativeSessionId, 'thread-1');
+    await sessions.close();
+    assert.equal(sessions.view()?.record.status, 'paused');
+    await sessions.resume(idle.id);
+    await until(sessions, (current) => current.status === 'idle');
+    // The paused process exits now. Its exit event must not end the new launch.
+    await delay(300);
+    assert.equal(sessions.view()?.live, true);
+    assert.equal(sessions.view()?.record.status, 'idle');
+    const sent = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            method?: string;
+            params?: { threadId?: string; approvalsReviewer?: string };
+          },
+      );
+    const resumed = sent.find((message) => message.method === 'thread/resume');
+    assert.equal(resumed?.params?.threadId, 'thread-1');
+    assert.equal(resumed?.params?.approvalsReviewer, 'auto_review');
+    sessions.send('Again');
+    await until(
+      sessions,
+      (current) =>
+        current.status === 'idle' &&
+        current.events.filter((event) => event.text.includes('turn ended'))
+          .length === 2,
+    );
   });
 });
