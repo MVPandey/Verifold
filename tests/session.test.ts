@@ -994,9 +994,13 @@ await test('Ctrl+C pauses a Claude Code session, and a later owner resumes the s
     let args: string[] = [];
     for (let tries = 0; tries < 100 && !args.includes('--resume'); tries++) {
       await delay(20);
-      args = JSON.parse(
-        await readFile(join(root, 'args.json'), 'utf8'),
-      ) as string[];
+      try {
+        args = JSON.parse(
+          await readFile(join(root, 'args.json'), 'utf8'),
+        ) as string[];
+      } catch {
+        // The fake harness can be in the middle of writing the file.
+      }
     }
     assert.deepEqual(args.slice(-2), ['--resume', native]);
     assert.deepEqual(later.paused(), []);
