@@ -3,8 +3,10 @@ import { requiredElement } from '../ui/dom.ts';
 const main = requiredElement(document, '#content', HTMLElement);
 const connectionLabel = requiredElement(document, '#connection', HTMLElement);
 const observationLabel = requiredElement(document, '#observation', HTMLElement);
+const actionLabel = requiredElement(document, '#action-status', HTMLElement);
 let selected: string | undefined;
 let token = location.hash.slice(1);
+const launch = token.startsWith('launch-') ? token.slice(7) : '';
 try {
   if (/^[a-f0-9]{64}$/.test(token)) {
     sessionStorage.setItem('verifold-desk-token', token);
@@ -77,8 +79,31 @@ async function refresh(): Promise<void> {
         : undefined;
       const focusAttempt =
         focused instanceof HTMLElement ? focused.dataset.attempt : undefined;
+      // Keep text that the person typed while the view refreshes.
+      const typed = new Map(
+        Array.from(
+          main.querySelectorAll<
+            HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+          >('input[id], textarea[id], select[id]'),
+          (field) => [field.id, field.value],
+        ),
+      );
+      const caret =
+        focused instanceof HTMLTextAreaElement ||
+        focused instanceof HTMLInputElement
+          ? [focused.selectionStart, focused.selectionEnd]
+          : undefined;
       // This markup comes from the authenticated local renderer, which escapes research text.
       main.innerHTML = view.html;
+      for (const [id, value] of typed) {
+        const field = document.getElementById(id);
+        if (
+          field instanceof HTMLInputElement ||
+          field instanceof HTMLTextAreaElement ||
+          field instanceof HTMLSelectElement
+        )
+          field.value = value;
+      }
       if (lastHtml)
         for (const detail of main.querySelectorAll('details'))
           detail.open = open.has(detail.id);
@@ -88,9 +113,16 @@ async function refresh(): Promise<void> {
             `[data-attempt="${CSS.escape(focusAttempt)}"]`,
           )
           ?.focus({ preventScroll: true });
-      else if (focusId)
-        document.getElementById(focusId)?.focus({ preventScroll: true });
-      else if (focusDetail)
+      else if (focusId) {
+        const field = document.getElementById(focusId);
+        field?.focus({ preventScroll: true });
+        if (
+          caret &&
+          (field instanceof HTMLTextAreaElement ||
+            field instanceof HTMLInputElement)
+        )
+          field.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
+      } else if (focusDetail)
         document
           .getElementById(focusDetail)
           ?.querySelector('summary')
@@ -123,6 +155,78 @@ async function refresh(): Promise<void> {
   }
 }
 
+function field(id: string): string {
+  const element = document.getElementById(id);
+  return element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element instanceof HTMLSelectElement
+    ? element.value
+    : '';
+}
+
+/** Send one session action. The server owns validation and the session state. */
+async function act(button: HTMLElement): Promise<void> {
+  const action = button.dataset.action;
+  const body =
+    action === 'start'
+      ? {
+          action,
+          host: field('session-host'),
+          mode: field('session-mode'),
+          model: field('session-model').trim(),
+          prompt: field('session-prompt'),
+        }
+      : action === 'send'
+        ? { action, text: field('follow-up') }
+        : action === 'answer'
+          ? {
+              action,
+              request: button.dataset.request,
+              decision: button.dataset.decision,
+            }
+          : action === 'review'
+            ? { action, command: button.dataset.command }
+            : { action };
+  if (button instanceof HTMLButtonElement) button.disabled = true;
+  actionLabel.textContent = 'Sending…';
+  try {
+    const response = await fetch('/api/action', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    const reply: unknown = await response.json().catch(() => null);
+    if (!response.ok)
+      throw new Error(
+        reply &&
+        typeof reply === 'object' &&
+        'error' in reply &&
+        typeof reply.error === 'string'
+          ? reply.error
+          : 'The action failed. Refresh and try again.',
+      );
+    actionLabel.textContent = 'Done';
+    for (const id of ['session-prompt', 'follow-up']) {
+      const element = document.getElementById(id);
+      if (element instanceof HTMLTextAreaElement && body.action !== 'answer')
+        element.value = '';
+    }
+  } catch (error) {
+    actionLabel.textContent =
+      error instanceof Error && error.name !== 'TimeoutError'
+        ? error.message
+        : 'The desk did not answer. Check that Verifold still runs in your terminal.';
+  } finally {
+    if (button instanceof HTMLButtonElement) button.disabled = false;
+    void refresh();
+  }
+}
+
 document.addEventListener('click', (event) => {
   const target =
     event.target instanceof Element
@@ -144,6 +248,7 @@ document.addEventListener('click', (event) => {
     connectionLabel.textContent = 'Opening attempt…';
     void refresh();
   }
+  if (target.dataset.action) void act(target);
   if (target.id === 'retry') void refresh();
   if (target.id === 'theme') {
     const dark = document.documentElement.dataset.theme
@@ -177,4 +282,33 @@ window.addEventListener('pageshow', () => {
     void refresh();
   }
 });
-void refresh();
+
+/** Exchange the one-time launch code for the access token, then load the desk. */
+async function connect(): Promise<void> {
+  if (launch) {
+    history.replaceState(null, '', location.pathname);
+    try {
+      const response = await fetch('/api/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: launch }),
+        cache: 'no-store',
+      });
+      const reply: unknown = await response.json();
+      if (
+        response.ok &&
+        reply &&
+        typeof reply === 'object' &&
+        'token' in reply &&
+        typeof reply.token === 'string'
+      ) {
+        token = reply.token;
+        sessionStorage.setItem('verifold-desk-token', token);
+      }
+    } catch {
+      /* The full URL printed in the terminal still connects. */
+    }
+  }
+  await refresh();
+}
+void connect();

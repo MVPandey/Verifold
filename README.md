@@ -145,21 +145,51 @@ Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the
 
 ### Local research desk
 
-Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its read-only browser desk. Keep that terminal open; Ctrl+C stops the server. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect.
+Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its browser desk. Keep that terminal open. Ctrl+C stops the server and ends a running session. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect.
 
-The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Run research in another terminal; opening or refreshing the desk does not launch a harness. Research controls remain in the CLI.
+The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Opening or refreshing the desk does not launch a harness. You start a harness session in the desk or with `verifold session`. Research commands remain in the CLI.
 
-Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. The CLI displays observed harness tool events; the desk does not yet display those events or raw tool output. Requested models, returned session IDs, and model claims about delegation remain distinct from observed protocol events.
+Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. For research attempts, the CLI displays observed harness tool events and the desk does not. A controlled session shows its events in the desk. Requested models, returned session IDs, and model claims about delegation remain distinct from observed protocol events.
+
+### Controlled harness session
+
+Start one harness session from the desk, or from the terminal:
+
+```sh
+verifold session --prompt "Reproduce the baseline" --host codex --mode ask
+```
+
+The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. Each running Verifold process controls one session at a time. The desk cannot start a session while `verifold` runs research in the same terminal.
+
+In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces the answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request. A network call that the sandbox blocks can fail without a request.
+
+In Auto mode, Claude Code uses its `auto` permission mode, and Codex sends approvals to its reviewer agent. The desk shows the mode that the harness reports. It can differ from the requested mode, for example when Claude Code does not allow Auto for a model.
+
+While a turn runs, you can cancel it. When a turn ends, send a follow-up or end the session. In the terminal, type `a` to allow once or `d` to deny the open request. When several requests are open, add the ID, for example `a R2`. Type a follow-up when the agent waits, or type `/cancel` or `/end`. Without an interactive terminal, requests wait for the desk, the session ends after the first turn, and `session` prints a JSON summary with the record path.
+
+The Commands table lists each tool call that the harness reports, with the exact command or target, who let it run, risk tags, and the result:
+
+| Label                                          | Meaning                                                                                                                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| You allowed, You denied, Not answered          | You answered the permission request, or the turn ended before you answered.                                                                                        |
+| Denied by Claude Code                          | The harness denied the call, for example through a settings rule or its Auto classifier.                                                                           |
+| Auto, no person                                | Claude Code ran the call in Auto mode without a request. Claude Code does not report whether its classifier or a rule allowed it.                                  |
+| Codex reviewer approved, Codex reviewer denied | The Codex reviewer agent decided. The table shows its reason.                                                                                                      |
+| No prompt, Ran in the sandbox                  | The call ran without a request under the harness's own rules, for example a read-only command. Ran in the sandbox applies to Codex commands and file changes only. |
+
+A permission request shows the tool input, not a description written by the model. For a write or an edit, the desk also shows the content that would change. Risk tags (Network, Install, Deletes files, Settings files, Outside folder) come from the command text. A risky call that no person approved waits for review until you mark it reviewed. The record shows the command that the agent asked for. It does not show commands inside a script or processes that a command starts. Agent text is a model claim. Tool calls, requests, and decisions come from the harness protocol.
+
+Verifold saves each session in `.verifold/sessions/<session-id>.json`. The record keeps the latest 400 events and 1000 tool calls. The desk shows the session of the current Verifold run and does not reload earlier sessions.
 
 ## Privacy and website
 
-Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, and reports under `.verifold/runs/<attempt-id>/`. These files can contain private research information.
+Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, and reports under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, and exact commands. These files can contain private research information.
 
 Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
 
 The selected harness uses its configured model services and research tools. Local state does not imply that those services run offline. Verifold creates no remote profile or publication.
 
-`ui` serves only the selected project on loopback, with authenticated project reads and bundled assets. It rejects unexpected hosts and origins. It does not expose raw harness transcripts or arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
+`ui` serves only the selected project on loopback, with authenticated project reads and bundled assets. Session actions use authenticated JSON requests to the same local server. It rejects unexpected hosts and origins. It does not expose raw harness transcripts or arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
 
 ## Project status
 
@@ -172,47 +202,43 @@ This README describes the current source checkout. The published npm package can
 | Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
 | Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
 | Local research records     | Retains attempt files and provides CLI status plus a read-only HTML snapshot.                       |
+| Controlled session         | Runs one Claude Code or Codex session from the desk or terminal and relays its permission requests. |
+| Command record             | Records each tool call in a session with who let it run, risk tags, and a review mark.              |
 
 This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
 
-Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Live multi-agent supervision, scheduled memory, public collaboration, Automative execution, and cloud synchronization remain planned work.
+Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Worker supervision and experiment execution follow the development sequence below. Scheduled memory, public collaboration, and cloud synchronization are deferred.
 
 ## Development plan
 
-Start with a local Node app that opens a browser tab, then add coordination. CLI and browser will use the same project operations. Native desktop packaging is outside the current plan.
+Build a local workspace for independently controlled research agents. Keep one npm distribution and a browser UI initially. CLI and browser will use the same operations, while the selected harness retains its models, credentials, tools, and permissions.
 
-| Priority                    | Planned outcome                                                                                                   | Work                                                                                                                                                                                                                                                                  |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| First                       | Watch one real harness run, inspect its evidence, and recover its recorded state after reconnecting.              | [Local research desk #15](https://github.com/MVPandey/Verifold/issues/15)                                                                                                                                                                                             |
-| Small parallel improvements | Offer reviewed background, inspect scoped Markdown context, and diagnose installed harnesses without model calls. | [Profile import #16](https://github.com/MVPandey/Verifold/issues/16), [memory #17](https://github.com/MVPandey/Verifold/issues/17), [harness diagnostics #28](https://github.com/MVPandey/Verifold/issues/28)                                                         |
-| Next                        | Choose “Continue onboarding in the CLI” or “Open the web UI” and retain the same interview.                       | [Shared onboarding #18](https://github.com/MVPandey/Verifold/issues/18)                                                                                                                                                                                               |
-| Coordination                | Assign adjacent tasks, exchange evidence-linked messages, and supervise two independent harness instances.        | [Task records #19](https://github.com/MVPandey/Verifold/issues/19), [discussions #20](https://github.com/MVPandey/Verifold/issues/20), [workers #21](https://github.com/MVPandey/Verifold/issues/21), [team view #22](https://github.com/MVPandey/Verifold/issues/22) |
-| Complete the research loop  | Assemble a reviewed memo, reproducible repository, and report from retained evidence.                             | [Deliverables #23](https://github.com/MVPandey/Verifold/issues/23)                                                                                                                                                                                                    |
-| Inspect evidence            | Preview registered outputs and flag changed or missing files without altering the cited version.                  | [Evidence inspector #29](https://github.com/MVPandey/Verifold/issues/29), after #20/#22; does not block #23                                                                                                                                                           |
-| Learn from completed work   | Propose sourced memory changes, schedule bounded maintenance, and evaluate reversible procedure improvements.     | [Memory review #24](https://github.com/MVPandey/Verifold/issues/24), [scheduling #25](https://github.com/MVPandey/Verifold/issues/25), [procedure evaluation #26](https://github.com/MVPandey/Verifold/issues/26)                                                     |
-| Share selected research     | Design a public board where people and swarms can critique evidence and contribute with owner review.             | [Public board design #27](https://github.com/MVPandey/Verifold/issues/27)                                                                                                                                                                                             |
+Stage 1 is available in this checkout as the [controlled harness session](#controlled-harness-session). The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
 
-The intended coordinated workflow below is a plan, not a recorded execution:
+| Order | Deliverable                       | Complete when                                                                                                                                                                                        |
+| ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | One controllable harness session  | Start a session, see identified live events, send a follow-up, and cancel from the browser through shared CLI operations. Native permission requests have a supported response or continuation path. |
+| 2     | Persistent ownership and recovery | A local owner keeps sessions independent of browser connections. Reconnect restores identity; owner restart reconciles surviving, interrupted, and unknown work before retry.                        |
+| 3     | Scoped tasks and isolated writes  | Tasks have objectives, dependencies, input records, writable scopes, outputs, owners, and limits. Writers use separate workspaces; duplicate or stale claims are rejected.                           |
+| 4     | Two independent harness workers   | Claude Code and Codex run adjacent assignments concurrently. Cancelling or blocking one does not stop or mislabel the other. Both are visible in the desk.                                           |
+| 5     | Interactive terminal workspace    | Supported workers have native terminal views with input, resize, bounded replay, and explicit input ownership. Reload and protocol handoff preserve identity without duplicate live owners.          |
+| 6     | Coordinator and durable handoffs  | A coordinator assigns and labels tasks, exchanges evidence-linked messages, and revises dependent work through the same manager operations. Runtime code enforces ownership and limits.              |
+| 7     | Reviewed research deliverables    | Parallel investigation, an objection, and revision produce a reviewed memo/report bundle. Accepted artifact versions, producing attempts, failed work, and unresolved objections remain inspectable. |
+| 8     | Owned experiment execution        | An approved local experiment has fixed inputs and evaluator, resource allocation, cancellation, retained results, and recovery. Managed jobs cannot double-book a shared compute slot.               |
 
-```mermaid
-flowchart LR
-  Q[Research question] --> B[Reviewed brief]
-  B --> L[Literature task]
-  B --> E[Baseline or experiment task]
-  L --> D[Evidence and discussion]
-  E --> D
-  D --> R[Critique and revision]
-  R --> A[Reviewed deliverable]
-  D --> M[Proposed memory update]
-  M --> H[Human review]
-  H --> B
-```
+The first usable multi-agent workspace ends at stage 6. Stage 7 completes the research-delivery workflow. Stage 8 adds experiment execution; a planning record or report does not establish that an experiment ran.
 
-For a small-model training competition, the target workflow connects prior work, baseline reproduction, evaluator review, ablations, negative results, and the final repo. A literature-gap memo or a proof project can use the same task and evidence model without a training score.
+Start by extending the existing attempt record and harness adapter. Extract shared operations where the first browser control needs them. Record native session identity and bounded structured events as they arrive. Keep existing CLI JSON and foreground Ctrl+C behavior; persistent sessions have an explicit attach/detach contract.
 
-Memory will separate approved personal background, project decisions, and task notes. Markdown summaries will reference original evidence. Pruning active context will preserve that evidence; accepting a project summary will not silently update a personal profile. Procedure changes will require evaluation and rollback before adoption.
+Worktrees reduce checkout collisions but do not establish sandbox isolation. Keep authoritative writes serialized and require review before integrating worker output. Record scoped inputs with each attempt. A generated label or model report cannot override observed execution state or expand permissions.
 
-See the [ordered roadmap #14](https://github.com/MVPandey/Verifold/issues/14) for dependencies and acceptance criteria.
+The first complete demonstration connects a prior-art worker and a method/baseline reviewer. The researcher observes both, intervenes in one, and reconnects without relaunch. An evidence-linked objection leads to revised work and a reviewed literature-gap memo with a reproducible report. Experiment measurements enter this flow only after stage 8.
+
+After the core workflow is used, reassess desktop distribution from actual installation and interaction needs. A native launcher or optional desktop application can reuse the same manager and UI. Split installation only when native dependencies or an independently shipped application justify it.
+
+Full browser onboarding, automatic memory maintenance, procedure optimization, a public board, cloud synchronization, and broad remote provisioning are outside this sequence. Existing approved background and project context remain available. Harness readiness checks and scoped context belong inside the execution features that need them.
+
+See the [implementation roadmap](https://github.com/MVPandey/Verifold/issues/14) for completion criteria and validation requirements.
 
 ## Help build Verifold
 

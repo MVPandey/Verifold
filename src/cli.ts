@@ -4,6 +4,7 @@ import { runCli } from './cli/commands.ts';
 import { paragraph } from './cli/terminal.ts';
 import { TerminalSession } from './cli/terminal-session.ts';
 import { stripVTControlCharacters } from 'node:util';
+import { createInterface } from 'node:readline';
 const controller = new AbortController();
 const cancel = (): void => {
   controller.abort();
@@ -57,6 +58,18 @@ try {
       progress: (value) => {
         terminal?.progress(value);
       },
+      ...(terminal
+        ? {
+            listen: (onLine: (line: string) => void, signal: AbortSignal) => {
+              // Line mode keeps shell editing and Ctrl+C. Menus are finished before this starts.
+              const input = createInterface({ input: stdin, terminal: false });
+              input.on('line', onLine);
+              signal.addEventListener('abort', () => input.close(), {
+                once: true,
+              });
+            },
+          }
+        : {}),
       out: (value) => {
         stdout.write(
           `${terminal && stdout.isTTY && ['init', 'research'].includes(process.argv[2] ?? '') ? paragraph(value, stdout.columns) : value}\n`,
