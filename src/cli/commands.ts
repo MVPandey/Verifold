@@ -17,6 +17,11 @@ import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser } from './desk.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
+import {
+  SessionActionError,
+  SessionManager,
+  type SessionEvent,
+} from './session.ts';
 export interface CliIO {
   readonly interactive: boolean;
   readonly ask: (question: string) => Promise<string>;
@@ -28,6 +33,11 @@ export interface CliIO {
     initial: string,
   ) => Promise<string>;
   readonly busy?: <T>(label: string, work: () => Promise<T>) => Promise<T>;
+  /** Read terminal lines until the signal aborts. Only an interactive terminal provides it. */
+  readonly listen?: (
+    onLine: (line: string) => void,
+    signal: AbortSignal,
+  ) => void;
 }
 const help = `Verifold - private research with your existing agent harness
 
@@ -41,7 +51,9 @@ verifold select [--id idea-id]         Choose an idea explicitly
 verifold literature [--memory]        Print an optional paper/context request
 verifold handoff                      Print a pilot request for Automative + host
 verifold view                         Generate a private local HTML workspace
-verifold ui [--no-open]               Open the read-only live research desk
+verifold ui [--no-open]               Open the live research desk and control a harness session there
+verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model name] [--no-open]
+                                      Run one harness session; answer its requests here or on the desk
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
 
@@ -56,7 +68,92 @@ and --autonomy autonomous. Use --setup-only to initialize without research.
 The harness searches web sources and proposes ideas. PDF retention is optional
 and follows idea selection. No experiments run during initial research.
 Research stays private in .verifold/. The host owns its permissions and sessions.
+In a session, type a to allow or d to deny the oldest request, type a follow-up when
+the agent waits, or type /cancel or /end. Session records are in .verifold/sessions/.
 `;
+
+const terminalHelp =
+  'Type a to allow once or d to deny the open request. When several are open, add the ID, for example a R2. When the agent waits, type a follow-up. Type /cancel to stop the current turn or /end to end the session.';
+
+const feedLabels: Record<SessionEvent['kind'], string> = {
+  you: 'you',
+  agent: 'agent says',
+  tool: 'Verifold saw',
+  request: 'needs you',
+  decision: 'decision',
+  status: 'status',
+  notice: 'notice',
+};
+
+function feedLine(event: SessionEvent): string {
+  const time = new Date(event.at).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  // One line for each event, so harness text cannot print a line that looks like a request.
+  const line = event.text.replace(/\s*\n\s*/g, ' ⏎ ');
+  const text =
+    event.kind === 'agent' && line.length > 600
+      ? `${line.slice(0, 600)}…`
+      : line;
+  return `${time}  ${feedLabels[event.kind]}: ${text}${event.kind === 'request' ? `\n${terminalHelp}` : ''}`;
+}
+
+/** Terminal controls call the same session operations as the desk. */
+export function terminalInput(
+  sessions: SessionManager,
+  line: string,
+  io: CliIO,
+): void {
+  const value = line.trim();
+  if (!value) return;
+  const view = sessions.view();
+  const requests = view?.record.requests ?? [];
+  const answer = /^([ad])(?:\s+(r\d+))?$/i.exec(value);
+  try {
+    if (answer) {
+      // Without an ID, answer only when one request is open, so the answer matches what the person read.
+      const id = answer[2]?.toUpperCase();
+      const request = id
+        ? requests.find((entry) => entry.id === id)
+        : requests.length === 1
+          ? requests[0]
+          : undefined;
+      if (request)
+        sessions.answer(request.id, answer[1]?.toLowerCase() === 'a');
+      else
+        io.progress?.(
+          requests.length > 1
+            ? `${requests.length} requests are open. Add the ID, for example ${answer[1] ?? 'a'} ${requests[0]?.id ?? 'R1'}.`
+            : id
+              ? `${id} is not open.`
+              : 'No request is open. Type /help for the terminal controls.',
+        );
+    } else if (value === '/cancel') sessions.cancel();
+    else if (value === '/end') sessions.end();
+    else if (value === '/help') io.progress?.(terminalHelp);
+    else if (view?.live) sessions.send(value);
+    else
+      io.progress?.(
+        'No session is running. Start one on the desk or with verifold session.',
+      );
+  } catch (error) {
+    io.progress?.(
+      error instanceof SessionActionError
+        ? error.message
+        : 'The terminal action failed. Use the desk to check the session.',
+    );
+  }
+}
+
+async function packageVersion(): Promise<string> {
+  const metadata = object(
+    await readJson(
+      fileURLToPath(new URL('../../package.json', import.meta.url)),
+    ),
+  );
+  return text(metadata.version, 'package version', 100);
+}
 
 function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
   if (!io.interactive) {
@@ -71,29 +168,86 @@ function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
   );
 }
 
+/**
+ * Serve the desk with a session owner. With `session`, start that session and
+ * return when it ends. Otherwise serve until the CLI is cancelled.
+ */
 async function serveDesk(
   root: string,
   noOpen: boolean,
   io: CliIO,
   signal: AbortSignal,
   research?: () => Promise<void>,
+  session?: Parameters<SessionManager['start']>[0],
 ): Promise<void> {
   const owner = new AbortController();
   const deskSignal = AbortSignal.any([signal, owner.signal]);
-  const desk = await startDesk(root, deskSignal);
+  let finished = (): void => {};
+  const done = new Promise<void>((resolve) => {
+    finished = resolve;
+  });
+  const sessions: SessionManager = new SessionManager(root, {
+    clientVersion: await packageVersion(),
+    onEvent: (event) => {
+      if (io.interactive) io.progress?.(feedLine(event));
+      const view = sessions.view();
+      if (!session || !view) return;
+      if (!view.live) finished();
+      // Without a terminal, requests wait for the desk and the session ends after one turn.
+      else if (!io.interactive && view.record.status === 'idle')
+        sessions.end('The turn ended, so the noninteractive session ended.');
+    },
+  });
   try {
-    io.out(
-      JSON.stringify({ url: desk.url, visibility: 'private', readOnly: true }),
-    );
-    if (!noOpen && !(await openDeskBrowser(desk.url, deskSignal)))
-      io.progress?.(
-        'The browser could not open. Open the printed URL manually.',
+    // Start the session first, so invalid input fails before a desk opens.
+    if (session) sessions.start(session);
+    const desk = await startDesk(root, deskSignal, undefined, sessions);
+    try {
+      io.out(
+        JSON.stringify({
+          url: desk.url,
+          visibility: 'private',
+          readOnly: false,
+        }),
       );
-    await research?.();
-    await desk.closed;
+      if (!noOpen && !(await openDeskBrowser(desk.launchUrl, deskSignal)))
+        io.progress?.(
+          'The browser could not open. Open the printed URL manually.',
+        );
+      if (research) {
+        sessions.block(
+          'Research is running in the terminal. Start a session after it ends.',
+        );
+        try {
+          await research();
+        } finally {
+          sessions.block(null);
+        }
+      }
+      io.listen?.((line) => terminalInput(sessions, line, io), deskSignal);
+      if (session) {
+        if (io.interactive) io.progress?.(terminalHelp);
+        await Promise.race([done, desk.closed]);
+        const record = sessions.view()?.record;
+        if (record && !io.interactive)
+          io.out(
+            JSON.stringify({
+              session: record.id,
+              status: record.status,
+              commands: record.commands.length,
+              record: join(root, '.verifold', 'sessions', `${record.id}.json`),
+            }),
+          );
+      } else await desk.closed;
+    } finally {
+      owner.abort();
+      await desk.closed;
+    }
   } finally {
-    owner.abort();
-    await desk.closed;
+    if (!(await sessions.close()))
+      io.progress?.(
+        'Verifold could not save the last change to the session record in .verifold/sessions/.',
+      );
   }
 }
 /** Subprocess CLI contract: machine commands return JSON; prompts are delegated to stderr I/O. */
@@ -125,6 +279,8 @@ export async function runCli(
       from: { type: 'string' },
       id: { type: 'string' },
       'no-open': { type: 'boolean' },
+      mode: { type: 'string' },
+      prompt: { type: 'string' },
     },
   });
   if (values.help) {
@@ -132,12 +288,7 @@ export async function runCli(
     return;
   }
   if (values.version) {
-    const metadata = object(
-      await readJson(
-        fileURLToPath(new URL('../../package.json', import.meta.url)),
-      ),
-    );
-    io.out(text(metadata.version, 'package version', 100));
+    io.out(await packageVersion());
     return;
   }
   const launch = positionals.length === 0;
@@ -180,6 +331,7 @@ export async function runCli(
     view: [],
     status: [],
     ui: ['no-open'],
+    session: ['host', 'mode', 'model', 'prompt', 'no-open'],
     profile: ['setup', 'agency-dir', 'host', 'model'],
   };
   if (!Object.hasOwn(allowed, command))
@@ -231,6 +383,20 @@ export async function runCli(
       );
     }
     await serveDesk(root, values['no-open'] ?? false, io, signal);
+    return;
+  }
+  if (command === 'session') {
+    if (values.prompt === undefined)
+      throw new Error(
+        'session requires --prompt with a request for the harness.',
+      );
+    const workspace = await loadWorkspace(root);
+    await serveDesk(root, values['no-open'] ?? false, io, signal, undefined, {
+      host: values.host ?? workspace.host,
+      mode: values.mode ?? 'ask',
+      model: values.model,
+      prompt: values.prompt,
+    });
     return;
   }
   if (command === 'init') {

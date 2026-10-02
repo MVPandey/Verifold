@@ -15,23 +15,90 @@ import {
   validAttemptId,
 } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
+import { SessionActionError, type SessionManager } from './session.ts';
 
 export interface DeskServer {
+  /** The desk URL with its access token. Print it, but do not pass it to another process. */
   readonly url: string;
+  /** A URL with a one-time code for the browser launch. The code works once. */
+  readonly launchUrl: string;
   readonly closed: Promise<void>;
 }
 
-/** Serve one selected project until its owning CLI is cancelled. */
+/** Read a JSON request body up to `limit` bytes. Returns null when it is too large or unreadable. */
+async function readJsonBody(
+  request: IncomingMessage,
+  limit: number,
+): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > limit) return null;
+    chunks.push(chunk as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Run one desk action on the session owner. Returns 200, or 400 for an unknown action. */
+function act(sessions: SessionManager, body: Record<string, unknown>): number {
+  switch (body.action) {
+    case 'start':
+      sessions.start({
+        host: body.host,
+        mode: body.mode,
+        model: body.model,
+        prompt: body.prompt,
+      });
+      return 200;
+    case 'send':
+      sessions.send(body.text);
+      return 200;
+    case 'cancel':
+      sessions.cancel();
+      return 200;
+    case 'end':
+      sessions.end();
+      return 200;
+    case 'answer':
+      if (body.decision !== 'allow' && body.decision !== 'deny')
+        throw new SessionActionError('Choose allow or deny.');
+      sessions.answer(body.request, body.decision === 'allow');
+      return 200;
+    case 'review':
+      sessions.review(body.command);
+      return 200;
+    default:
+      return 400;
+  }
+}
+
+/**
+ * Serve one selected project until its owning CLI is cancelled. With a session
+ * owner, authenticated JSON POST requests to /api/action control its session.
+ */
 export async function startDesk(
   root: string,
   signal: AbortSignal,
   assetsRoot: URL = new URL('./', import.meta.url),
+  sessions?: SessionManager,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   root = await realpath(root);
   await readDeskSnapshot(root);
   const token = randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
+  // The browser launch command line can be visible to other local users, so it carries a one-time code.
+  const launchCode = Buffer.from(randomBytes(24).toString('hex'));
+  let launched = false;
   const assets = new Map<string, { type: string; body: Buffer | string }>([
     ['/', { type: 'text/html; charset=utf-8', body: deskPage }],
   ]);
@@ -90,11 +157,74 @@ export async function startDesk(
       response.writeHead(403).end();
       return;
     }
-    if (request.method !== 'GET') {
-      response.writeHead(405, { Allow: 'GET' }).end();
+    const url = new URL(request.url ?? '/', origin);
+    const supplied = Buffer.from(request.headers.authorization ?? '');
+    const authorized =
+      supplied.length === authorization.length &&
+      timingSafeEqual(supplied, authorization);
+    // A JSON content type keeps plain cross-site forms out, in addition to the token or code.
+    const json = /^application\/json(;|$)/i.test(
+      request.headers['content-type'] ?? '',
+    );
+    if (
+      request.method === 'POST' &&
+      url.pathname === '/api/launch' &&
+      !url.search
+    ) {
+      const body = json ? await readJsonBody(request, 1000) : null;
+      const code = Buffer.from(
+        record(body) && typeof body.code === 'string' ? body.code : '',
+      );
+      const valid =
+        !launched &&
+        code.length === launchCode.length &&
+        timingSafeEqual(code, launchCode);
+      if (valid) launched = true;
+      response
+        .writeHead(valid ? 200 : 403, {
+          'Content-Type': 'application/json; charset=utf-8',
+        })
+        .end(valid ? JSON.stringify({ token }) : '{}');
       return;
     }
-    const url = new URL(request.url ?? '/', origin);
+    if (
+      request.method === 'POST' &&
+      sessions &&
+      url.pathname === '/api/action' &&
+      !url.search
+    ) {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      if (!json) {
+        response.writeHead(415).end();
+        return;
+      }
+      const body = await readJsonBody(request, 512_000);
+      let status = 400;
+      let message = 'The desk sent an unreadable action.';
+      if (record(body))
+        try {
+          status = act(sessions, body);
+        } catch (error) {
+          if (!(error instanceof SessionActionError)) throw error;
+          status = 409;
+          message = error.message;
+        }
+      response
+        .writeHead(status, {
+          'Content-Type': 'application/json; charset=utf-8',
+        })
+        .end(
+          JSON.stringify(status === 200 ? { ok: true } : { error: message }),
+        );
+      return;
+    }
+    if (request.method !== 'GET') {
+      response.writeHead(405, { Allow: sessions ? 'GET, POST' : 'GET' }).end();
+      return;
+    }
     const asset = assets.get(url.pathname);
     if (asset && !url.search) {
       response.writeHead(200, { 'Content-Type': asset.type }).end(asset.body);
@@ -104,11 +234,7 @@ export async function startDesk(
       response.writeHead(404).end();
       return;
     }
-    const supplied = Buffer.from(request.headers.authorization ?? '');
-    if (
-      supplied.length !== authorization.length ||
-      !timingSafeEqual(supplied, authorization)
-    ) {
+    if (!authorized) {
       response.writeHead(401).end();
       return;
     }
@@ -147,7 +273,12 @@ export async function startDesk(
           /* Missing or unsafe reports remain unavailable. */
         }
       }
-      const body = JSON.stringify(renderDesk(snapshot, selected, report));
+      const body = JSON.stringify(
+        renderDesk(snapshot, selected, report, {
+          session: sessions?.view() ?? null,
+          controllable: sessions !== undefined,
+        }),
+      );
       if (Buffer.byteLength(body) > 2_000_000)
         throw new Error('Desk view exceeds its output limit.');
       response
@@ -176,7 +307,11 @@ export async function startDesk(
   });
   signal.addEventListener('abort', stop, { once: true });
   if (signal.aborted) stop();
-  return { url: `${origin}/#${token}`, closed };
+  return {
+    url: `${origin}/#${token}`,
+    launchUrl: `${origin}/#launch-${launchCode.toString()}`,
+    closed,
+  };
 }
 
 /** Browser launch is optional. The printed URL remains usable if it fails. */
