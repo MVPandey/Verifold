@@ -297,6 +297,11 @@ export class SessionManager {
     this.blocked = reason;
   }
 
+  /** Why a new session is refused now, or null. */
+  get blockedReason(): string | null {
+    return this.blocked;
+  }
+
   start(input: {
     readonly host: unknown;
     readonly mode: unknown;

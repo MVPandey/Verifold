@@ -2,7 +2,8 @@ import { stripVTControlCharacters } from 'node:util';
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
-function plainText(value: string): string {
+/** Remove terminal controls and invisible format characters, and expand tabs. */
+export function plainText(value: string): string {
   return stripVTControlCharacters(value)
     .replace(/\r\n?/g, '\n')
     .replace(/\t/g, '  ')

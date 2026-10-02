@@ -16,6 +16,7 @@ import { request } from 'node:http';
 import { startDesk, openDeskBrowser } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { readDeskSnapshot, readDeskReport } from '../src/cli/desk-records.ts';
+import { renderDesk } from '../src/cli/desk-view.ts';
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-desk-'));
@@ -158,8 +159,9 @@ await test('desk restricts private reads, serves escaped records, and stops with
     context: '<script>alert("private")</script>',
   }));
   const assets = join(root, 'assets');
-  await mkdir(join(assets, 'cli'), { recursive: true });
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
   await mkdir(join(assets, 'ui'));
+  await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
   for (const name of [
     'desk.css',
     'desk-client.js',
@@ -270,6 +272,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
     '/manrope.ttf',
     '/symbol.webp',
     '/ui/dom.js',
+    '/vendor/purify.js',
   ])
     assert.equal((await fetch(url.origin + path)).status, 200);
   assert.equal(
@@ -283,4 +286,48 @@ await test('desk restricts private reads, serves escaped records, and stops with
   owner.abort();
   await server.closed;
   await assert.rejects(fetch(api, { headers }));
+});
+
+await test('desk renders harness Markdown without active content and explains a busy owner', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    context: [
+      '# Research brief',
+      '',
+      '**Status:** draft with `code`.',
+      '',
+      '<img src=x onerror=alert(1)> [bad](javascript:alert(1)) [paper](https://example.org/p)',
+    ].join('\n'),
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const reason =
+    'Research is running in the terminal. Start a session after it ends.';
+  const busy = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    blocked: reason,
+  }).html;
+  assert.match(busy, /<h3>Research brief<\/h3>/);
+  assert.match(busy, /<strong>Status:<\/strong> draft with <code>code<\/code>/);
+  assert.match(busy, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(busy, /<img|javascript:/);
+  assert.match(
+    busy,
+    /<a href="https:\/\/example\.org\/p" target="_blank" rel="noopener noreferrer">paper<\/a>/,
+  );
+  assert.match(
+    busy,
+    /data-action="start" disabled aria-describedby="start-blocked"/,
+  );
+  assert.ok(busy.includes(reason));
+  assert.match(busy, /Research is running/);
+  assert.doesNotMatch(busy, /copy-command/);
+  const free = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+  }).html;
+  assert.match(free, /data-action="start">Start session/);
+  assert.match(free, /copy-command/);
 });

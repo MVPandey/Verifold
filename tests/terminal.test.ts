@@ -62,6 +62,25 @@ await test('agent Markdown keeps list hierarchy and readable emphasis in narrow 
     assert.ok(visibleWidth(line) < 36, line);
 });
 
+await test('color terminals style inline Markdown and keep the visible width', () => {
+  const message =
+    '**Status:** a *proposal* with `alpha` and _supplied_ text, plus baseline_score and [the paper](https://example.org/p).\u001b[2J';
+  const styled = terminalMessage(message, true, 40);
+  for (const expected of [
+    '\u001b[1mStatus:\u001b[22m',
+    '\u001b[3mproposal\u001b[23m',
+    '\u001b[3msupplied\u001b[23m',
+    '183;148;246malpha',
+    '\u001b[4mpaper\u001b[24m',
+    'baseline_score',
+  ])
+    assert.ok(styled.includes(expected), expected);
+  assert.equal(styled.includes('\u001b[2J'), false);
+  for (const line of styled.split('\n'))
+    assert.ok(visibleWidth(line) < 40, line);
+  assert.equal(terminalMessage(message, false).includes('\u001b'), false);
+});
+
 await test('wide Markdown tables become labeled records without losing research evidence', () => {
   const table = [
     '| Source | Script | Head set | Prompts | Uncertainty | Headline |',

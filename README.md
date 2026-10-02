@@ -149,6 +149,8 @@ Run `verifold` inside an initialized project, or `verifold ui --workspace <path>
 
 The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Opening or refreshing the desk does not launch a harness. You start a harness session in the desk or with `verifold session`. Research commands remain in the CLI.
 
+The desk renders Markdown from the harness. Raw HTML stays visible as text. Links keep only http, https, and mailto targets, and images show only their text. The page sanitizes the rendered Markdown again with a bundled copy of DOMPurify.
+
 Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. For research attempts, the CLI displays observed harness tool events and the desk does not. A controlled session shows its events in the desk. Requested models, returned session IDs, and model claims about delegation remain distinct from observed protocol events.
 
 ### Controlled harness session
@@ -159,7 +161,7 @@ Start one harness session from the desk, or from the terminal:
 verifold session --prompt "Reproduce the baseline" --host codex --mode ask
 ```
 
-The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. Each running Verifold process controls one session at a time. The desk cannot start a session while `verifold` runs research in the same terminal.
+The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. Each running Verifold process controls one session at a time. The desk cannot start a session while `verifold` runs research in the same terminal. The desk shows that research is running and disables Start session until research ends. If a desk action fails, the reason appears next to that control.
 
 In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces the answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request. A network call that the sandbox blocks can fail without a request.
 
@@ -275,7 +277,7 @@ The skill editions live in `.agents/skills/` and require no personal skill insta
 
 `src/cli.ts` owns process lifecycle and terminal streams. CLI command handlers coordinate research and profile operations. The harness adapter owns subprocess arguments and response parsing. Research contracts validate returned data, and storage owns atomic state changes.
 
-Structured results use stdout. Prompts, diagnostics, the violet/lavender folded VF welcome, and activity indicators use stderr. The welcome has a brief fold highlight; selected menu rows update in place and completed choices collapse into a short transcript. Text wraps to the terminal width, including long paths and common wide Unicode characters. Short windows show a compact selector. Indicators show time spent waiting for a real harness response; they do not claim individual subagent progress. Set `VERIFOLD_REDUCED_MOTION=1` for static activity messages. `NO_COLOR` disables color and animation; `TERM=dumb` also uses numbered text menus. Noninteractive commands keep their machine-readable output.
+Structured results use stdout. Prompts, diagnostics, the violet/lavender folded VF welcome, and activity indicators use stderr. The welcome has a brief fold highlight; selected menu rows update in place and completed choices collapse into a short transcript. Agent Markdown in the terminal shows headings, bold, italics, inline code, and links in color. Text wraps to the terminal width, including long paths and common wide Unicode characters. Short windows show a compact selector. Indicators show time spent waiting for a real harness response; they do not claim individual subagent progress. Set `VERIFOLD_REDUCED_MOTION=1` for static activity messages. `NO_COLOR` disables color and animation; `TERM=dumb` also uses numbered text menus. Noninteractive commands keep their machine-readable output.
 
 Normal research failures preserve the saved checkpoint. Inspect `status` and the attempt files before continuing. A forced termination such as SIGKILL can leave `.verifold/research.lock`. Confirm that no research process remains active before removing it. Apply the same check to a stale `write.lock` before another state write.
 

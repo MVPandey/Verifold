@@ -441,7 +441,6 @@ function codex(options: HostOptions): HostSession {
   };
   const startTurn = (text: string): void => {
     if (!thread) return;
-    cancelled = false;
     call(
       'turn/start',
       { threadId: thread, input: [{ type: 'text', text }] },
@@ -684,13 +683,18 @@ function codex(options: HostOptions): HostSession {
             ...(model ? { model } : {}),
             ...(reviewer ? { mode: reviewer } : {}),
           });
-          startTurn(options.prompt);
+          // A cancel can arrive before the thread exists. Then the first turn never starts.
+          if (cancelled) emit({ type: 'turn-end', status: 'interrupted' });
+          else startTurn(options.prompt);
         },
       );
     },
   );
   return {
-    send: startTurn,
+    send(text) {
+      cancelled = false;
+      startTurn(text);
+    },
     interrupt(pending) {
       for (const id of pending) answer(id, false);
       cancelled = true;
