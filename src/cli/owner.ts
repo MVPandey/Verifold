@@ -20,8 +20,8 @@ interface OwnerRecord {
   readonly startedAt: string;
 }
 
-/** The start time of a process, so a reused PID cannot pass for the owner. Null when `ps` is unavailable. */
-async function processStart(pid: number): Promise<string | null> {
+/** The start time of a process, so a reused PID cannot pass for the original process. Null when `ps` is unavailable. */
+export async function processStart(pid: number): Promise<string | null> {
   if (process.platform === 'win32') return null;
   try {
     const { stdout } = await promisify(execFile)(
@@ -141,4 +141,31 @@ export async function claimOwner(
   throw new OwnerConflict(
     'Another Verifold process claimed this project at the same time. Try again.',
   );
+}
+
+/**
+ * Stop the process group of a process that outlived its owner. A PID alone
+ * never authorizes this: the recorded start time must match the running
+ * process. Returns false when nothing matched.
+ */
+export async function stopRecordedProcess(
+  pid: number,
+  start: string | null,
+): Promise<boolean> {
+  if (process.platform === 'win32' || start === null) return false;
+  if ((await processStart(pid)) !== start) return false;
+  const signal = (name: NodeJS.Signals): void => {
+    try {
+      process.kill(-pid, name);
+    } catch {
+      /* The group already exited. */
+    }
+  };
+  signal('SIGTERM');
+  for (let tries = 0; tries < 20; tries++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if ((await processStart(pid)) !== start) return true;
+  }
+  signal('SIGKILL');
+  return true;
 }

@@ -340,8 +340,10 @@ await test('desk lists paused sessions with a Resume control', async (t) => {
     {
       id: '20261002T120000000Z-abcdef12',
       host: 'codex' as const,
+      status: 'paused' as const,
       startedAt: '2026-10-02T12:00:00.000Z',
       request: 'Reproduce <b>the baseline</b>',
+      restart: false,
     },
   ];
   const html = renderDesk(snapshot, undefined, null, {

@@ -976,8 +976,10 @@ await test('Ctrl+C pauses a Claude Code session, and a later owner resumes the s
       {
         id: idle.id,
         host: 'claude',
+        status: 'paused',
         startedAt: idle.startedAt,
         request: 'Check the page',
+        restart: false,
       },
     ]);
     await later.resume(idle.id);
@@ -1056,5 +1058,59 @@ await test('a resumed Codex thread ignores events from the paused process', asyn
         current.events.filter((event) => event.text.includes('turn ended'))
           .length === 2,
     );
+  });
+});
+
+await test('an interrupted session with no recorded conversation starts again with the same Claude Code ID', async () => {
+  await project(async (root, _executables, create) => {
+    const sessions = create();
+    await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Check the page',
+    });
+    const idle = await until(sessions, (current) => current.status === 'idle');
+    await sessions.close();
+    // Simulate a crash before the harness reported anything.
+    const path = join(root, '.verifold', 'sessions', `${idle.id}.json`);
+    const saved = JSON.parse(await readFile(path, 'utf8')) as SessionRecord;
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...saved,
+        status: 'interrupted',
+        reportedMode: null,
+        events: saved.events.filter((event) => event.kind === 'you'),
+      }),
+    );
+    const later = create({ ownerId: 'later-owner' });
+    await later.load();
+    assert.equal(later.paused()[0]?.restart, true);
+    assert.equal(later.paused()[0]?.status, 'interrupted');
+    await assert.rejects(later.resume(idle.id), /cannot resume/);
+    await later.restart(idle.id);
+    const again = await until(later, (current) => current.status === 'idle');
+    assert.equal(again.nativeSessionId, saved.nativeSessionId);
+    assert.ok(
+      again.events.some((event) => event.text.includes('first request again')),
+    );
+    let args: string[] = [];
+    for (
+      let tries = 0;
+      tries < 100 && !args.includes('--session-id');
+      tries++
+    ) {
+      await delay(20);
+      try {
+        args = JSON.parse(
+          await readFile(join(root, 'args.json'), 'utf8'),
+        ) as string[];
+      } catch {
+        // The fake harness can be in the middle of writing the file.
+      }
+    }
+    assert.deepEqual(args.slice(-2), ['--session-id', saved.nativeSessionId]);
+    later.end();
+    await assert.rejects(later.restart(idle.id), /cannot start again/);
   });
 });

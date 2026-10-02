@@ -9,7 +9,12 @@ import { parseCandidates } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { initializeProject, parseAutonomy } from './initialization.ts';
-import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
+import {
+  reconcileAttempts,
+  runResearch,
+  selectIdea,
+  type ResearchOptions,
+} from './research.ts';
 import { ResearchRunner } from './research-runner.ts';
 import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
@@ -19,6 +24,7 @@ import { startDesk, openDeskBrowser } from './desk.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
 import {
+  reconcileSessions,
   SessionActionError,
   SessionManager,
   type SessionEvent,
@@ -77,7 +83,7 @@ Ctrl+C pauses a running session. Session records are in .verifold/sessions/.
 const terminalHelp = `Commands in this terminal:
 - \`/open\`: open the desk in your browser.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
-- \`/resume\`: resume the latest paused session.
+- \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
 - \`/research\`: continue research. In a project without research, add the question.
 - \`/approve\`: approve the research plan.
 - \`/feedback\` and your changes: revise the plan or the directions.
@@ -189,7 +195,11 @@ export function terminalInput(
     } else if (value === '/end') sessions.end();
     else if (value === '/resume') {
       const latest = sessions.paused()[0];
-      if (latest) sessions.resume(latest.id).catch(report);
+      if (latest)
+        (latest.restart
+          ? sessions.restart(latest.id)
+          : sessions.resume(latest.id)
+        ).catch(report);
       else io.progress?.('No session is paused. Type /start and a request.');
     } else if (value === '/start' || value.startsWith('/start '))
       sessions
@@ -247,6 +257,12 @@ async function serveDesk(
     (await loadWorkspace(root)).host === 'codex' ? 'codex' : 'claude';
   // Only one process owns the project. A second one stops here.
   const owner = await claimOwner(root, version);
+  try {
+    await recover(root, owner.ownerId, io);
+  } catch (error) {
+    await owner.release();
+    throw error;
+  }
   const stop = new AbortController();
   const deskSignal = AbortSignal.any([signal, stop.signal]);
   let finished = (): void => {};
@@ -362,10 +378,39 @@ async function serveDesk(
     }
   }
 }
+/**
+ * Settle the work of an owner that stopped without a final record, before this
+ * owner starts anything. The terminal names what was interrupted.
+ */
+async function recover(
+  root: string,
+  ownerId: string,
+  io: CliIO,
+): Promise<void> {
+  const sessions = await reconcileSessions(root, ownerId);
+  const attempts = await reconcileAttempts(root);
+  const parts = [
+    sessions.interrupted &&
+      `${sessions.interrupted} ${sessions.interrupted === 1 ? 'session' : 'sessions'}`,
+    attempts.interrupted &&
+      `${attempts.interrupted} research ${attempts.interrupted === 1 ? 'attempt' : 'attempts'}`,
+  ].filter(Boolean);
+  const stopped = sessions.stopped + attempts.stopped;
+  if (parts.length)
+    io.progress?.(
+      `Verifold stopped earlier without saving the end of its work. ${parts.join(' and ')} stopped with an unknown outcome.${stopped ? ` Verifold stopped ${stopped} harness ${stopped === 1 ? 'process' : 'processes'} that kept running.` : ''} Resume a session in the desk or with /resume. Continue research to run the step again.`,
+    );
+}
+
 /** Run foreground work as the project owner, so no desk owner runs at the same time. */
-async function owned<T>(root: string, work: () => Promise<T>): Promise<T> {
+async function owned<T>(
+  root: string,
+  io: CliIO,
+  work: () => Promise<T>,
+): Promise<T> {
   const owner = await claimOwner(root, await packageVersion());
   try {
+    await recover(root, owner.ownerId, io);
     return await work();
   } finally {
     await owner.release();
@@ -554,7 +599,7 @@ export async function runCli(
       return;
     }
     const result = initialized.research
-      ? await owned(initialized.root, () =>
+      ? await owned(initialized.root, io, () =>
           runResearch(
             initialized.root,
             initialized.research ?? {},
@@ -568,7 +613,7 @@ export async function runCli(
     return;
   }
   if (command === 'research') {
-    const result = await owned(root, () =>
+    const result = await owned(root, io, () =>
       runResearch(
         root,
         {
