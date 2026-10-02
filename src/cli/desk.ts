@@ -16,6 +16,7 @@ import {
 } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
 import { SessionActionError, type SessionManager } from './session.ts';
+import type { ResearchRunner } from './research-runner.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -48,11 +49,33 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Run one desk action on the session owner. Returns 200, or 400 for an unknown action. */
+/** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionManager,
+  research: ResearchRunner | undefined,
   body: Record<string, unknown>,
 ): Promise<number> {
+  if (
+    research &&
+    (body.action === 'research' ||
+      body.action === 'cancel-research' ||
+      body.action === 'select')
+  ) {
+    if (body.action === 'cancel-research') research.cancel();
+    else if (body.action === 'select') await research.select(body.idea);
+    else
+      await research.start({
+        ...(body.approve === true ? { approve: true } : {}),
+        ...(typeof body.feedback === 'string'
+          ? { feedback: body.feedback }
+          : {}),
+        ...(typeof body.topic === 'string' ? { topic: body.topic } : {}),
+        ...(body.autonomy === 'guided' || body.autonomy === 'autonomous'
+          ? { autonomy: body.autonomy }
+          : {}),
+      });
+    return 200;
+  }
   switch (body.action) {
     case 'start':
       await sessions.start({
@@ -96,6 +119,7 @@ export async function startDesk(
   signal: AbortSignal,
   assetsRoot: URL = new URL('./', import.meta.url),
   sessions?: SessionManager,
+  research?: ResearchRunner,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   root = await realpath(root);
@@ -215,7 +239,7 @@ export async function startDesk(
       let message = 'The desk sent an unreadable action.';
       if (record(body))
         try {
-          status = await act(sessions, body);
+          status = await act(sessions, research, body);
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
           status = 409;
@@ -287,6 +311,7 @@ export async function startDesk(
           session: sessions?.view() ?? null,
           controllable: sessions !== undefined,
           paused: sessions?.paused() ?? [],
+          ...(research ? { research: research.view() } : {}),
           ...(sessions?.blockedReason
             ? { blocked: sessions.blockedReason }
             : {}),

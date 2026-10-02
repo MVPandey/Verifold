@@ -9,7 +9,8 @@ import { parseCandidates } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { initializeProject, parseAutonomy } from './initialization.ts';
-import { runResearch } from './research.ts';
+import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
+import { ResearchRunner } from './research-runner.ts';
 import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
 import { runHarness } from './harness.ts';
@@ -77,8 +78,12 @@ const terminalHelp = `Commands in this terminal:
 - \`/open\`: open the desk in your browser.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused session.
+- \`/research\`: continue research. In a project without research, add the question.
+- \`/approve\`: approve the research plan.
+- \`/feedback\` and your changes: revise the plan or the directions.
+- \`/select\` and a direction ID: choose a direction. This locks it.
 - \`a\` or \`d\`: allow once or deny the open request. If several are open, add the ID, for example \`a R2\`.
-- \`/cancel\`: stop the current turn.
+- \`/cancel\`: stop the research step or the current turn.
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
@@ -117,6 +122,7 @@ export interface TerminalControls {
   readonly open: () => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
+  readonly research?: ResearchRunner;
 }
 
 /** Terminal controls call the same session operations as the desk. */
@@ -158,8 +164,29 @@ export function terminalInput(
         );
     } else if (value === '/open') controls.open();
     else if (value === '/help') io.progress?.(terminalHelp);
+    else if (value === '/cancel' && controls.research?.running)
+      controls.research.cancel();
     else if (value === '/cancel') sessions.cancel();
-    else if (value === '/end') sessions.end();
+    else if (
+      controls.research &&
+      /^\/(research|approve|feedback|select)(\s|$)/.test(value)
+    ) {
+      const [command = '', ...rest] = value.split(/\s+/);
+      const text = rest.join(' ');
+      const research = controls.research;
+      (command === '/select'
+        ? research.select(text)
+        : research.start(
+            command === '/approve'
+              ? { approve: true }
+              : command === '/feedback'
+                ? { feedback: text }
+                : text
+                  ? { topic: text }
+                  : {},
+          )
+      ).catch(report);
+    } else if (value === '/end') sessions.end();
     else if (value === '/resume') {
       const latest = sessions.paused()[0];
       if (latest) sessions.resume(latest.id).catch(report);
@@ -211,8 +238,9 @@ async function serveDesk(
   noOpen: boolean,
   io: CliIO,
   signal: AbortSignal,
-  research?: () => Promise<void>,
+  research?: ResearchOptions,
   session?: Parameters<SessionManager['start']>[0],
+  harness: typeof runHarness = runHarness,
 ): Promise<void> {
   const version = await packageVersion();
   const host =
@@ -240,11 +268,24 @@ async function serveDesk(
         sessions.end('The turn ended, so the noninteractive session ended.');
     },
   });
+  const runner = new ResearchRunner(root, {
+    signal,
+    io,
+    harness,
+    busy: () =>
+      sessions.active
+        ? 'A harness session is running. End it before research continues.'
+        : null,
+    onRunning: (running) =>
+      sessions.block(
+        running ? 'Research is running. Start a session after it ends.' : null,
+      ),
+  });
   try {
     await sessions.load();
     // Start the session first, so invalid input fails before a desk opens.
     if (session) await sessions.start(session);
-    const desk = await startDesk(root, deskSignal, undefined, sessions);
+    const desk = await startDesk(root, deskSignal, undefined, sessions, runner);
     try {
       io.out(
         JSON.stringify({
@@ -272,20 +313,12 @@ async function serveDesk(
         io.progress?.(
           `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume or resume one in the desk.`,
         );
-      if (research) {
-        sessions.block(
-          'Research is running in the terminal. Start a session after it ends.',
-        );
-        try {
-          await research();
-        } finally {
-          sessions.block(null);
-        }
-      }
+      if (research) await runner.start(research);
       io.listen?.(
         (line) =>
           terminalInput(sessions, line, io, {
             host,
+            research: runner,
             open: () => {
               void open().then((opened) =>
                 io.progress?.(
@@ -318,6 +351,8 @@ async function serveDesk(
     }
   } finally {
     try {
+      // Ctrl+C cancels research too. Its attempt record must be final before the owner leaves.
+      await runner.settled();
       if (!(await sessions.close()))
         io.progress?.(
           'Verifold could not save the last change to the session record in .verifold/sessions/.',
@@ -327,6 +362,16 @@ async function serveDesk(
     }
   }
 }
+/** Run foreground work as the project owner, so no desk owner runs at the same time. */
+async function owned<T>(root: string, work: () => Promise<T>): Promise<T> {
+  const owner = await claimOwner(root, await packageVersion());
+  try {
+    return await work();
+  } finally {
+    await owner.release();
+  }
+}
+
 /** Subprocess CLI contract: machine commands return JSON; prompts are delegated to stderr I/O. */
 export async function runCli(
   argv: readonly string[],
@@ -496,43 +541,50 @@ export async function runCli(
       signal,
       harness,
     );
-    const research = async (): Promise<void> => {
-      const result = initialized.research
-        ? await runResearch(
-            initialized.root,
-            initialized.research,
-            io,
-            signal,
-            harness,
-          )
-        : initialized.workspace;
-      showWorkspace(initialized.root, result, io);
-    };
-    if (launch)
+    if (launch) {
       await serveDesk(
         initialized.root,
         values['no-open'] ?? false,
         io,
         signal,
-        research,
+        initialized.research ?? undefined,
+        undefined,
+        harness,
       );
-    else await research();
+      return;
+    }
+    const result = initialized.research
+      ? await owned(initialized.root, () =>
+          runResearch(
+            initialized.root,
+            initialized.research ?? {},
+            io,
+            signal,
+            harness,
+          ),
+        )
+      : initialized.workspace;
+    showWorkspace(initialized.root, result, io);
     return;
   }
   if (command === 'research') {
-    const result = await runResearch(
-      root,
-      {
-        ...(values.topic !== undefined ? { topic: values.topic } : {}),
-        ...(values.approve !== undefined ? { approve: values.approve } : {}),
-        ...(values.feedback !== undefined ? { feedback: values.feedback } : {}),
-        ...(values.autonomy !== undefined
-          ? { autonomy: parseAutonomy(values.autonomy) }
-          : {}),
-      },
-      io,
-      signal,
-      harness,
+    const result = await owned(root, () =>
+      runResearch(
+        root,
+        {
+          ...(values.topic !== undefined ? { topic: values.topic } : {}),
+          ...(values.approve !== undefined ? { approve: values.approve } : {}),
+          ...(values.feedback !== undefined
+            ? { feedback: values.feedback }
+            : {}),
+          ...(values.autonomy !== undefined
+            ? { autonomy: parseAutonomy(values.autonomy) }
+            : {}),
+        },
+        io,
+        signal,
+        harness,
+      ),
     );
     showWorkspace(root, result, io);
     return;
@@ -597,22 +649,7 @@ export async function runCli(
         )
       ).trim();
     }
-    const selectedId = id;
-    const result = await changeWorkspace(root, (current) => {
-      if (!current || current.selectedId)
-        throw new Error('Workspace missing or selection already locked.');
-      if (
-        JSON.stringify(current.candidates) !==
-        JSON.stringify(workspace.candidates)
-      ) {
-        throw new Error(
-          'The ideas changed during selection. Review the updated list before choosing.',
-        );
-      }
-      if (!current.candidates.some((idea) => idea.id === selectedId))
-        throw new Error('Choose an ID from the recommendation list.');
-      return { ...current, selectedId };
-    });
+    const result = await selectIdea(root, id, workspace.candidates);
     io.out(
       JSON.stringify({
         selectedId: result.selectedId,

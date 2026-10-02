@@ -90,7 +90,7 @@ Later onboarding reuses this approved background without repeating profile quest
 
 “Import a sample of my chats” inspects at most 200 directory entries and ten files, with a 256 KB per-file limit and 512 KB total. It skips links, hidden subdirectories, oversized files, and unsupported native records. Native JSONL imports retain recognized user-role messages, excluding model responses, tool results, and subagent folders. User-role records can still include harness-injected context; review the profile’s inferences. Ordinary text and JSON exports are supplied as selected. The harness-directed option chooses relevant conversations within the selected source and reports its coverage. Its own permissions enforce access. Both options show the full draft for review before saving `USER.md`. Local storage does not imply offline model processing.
 
-The coordinator proposes a search scope and personas. Guided mode pauses for approval. Use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
+The coordinator proposes a search scope and personas. Guided mode pauses for approval. In the desk, approve the plan or ask for changes. In the terminal that runs the desk, type `/approve` or `/feedback` and your changes. Without a running desk, use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. Initial research does not require PDF downloads.
 
 After directions are available, use `research --feedback` to refine them through the saved coordinator session. `select` asks for an explicit idea ID. Noninteractive selection requires `select --id <idea-id>`. Selection does not start a pilot or experiment.
 
@@ -149,11 +149,13 @@ Run `verifold` inside an initialized project, or `verifold ui --workspace <path>
 
 One Verifold process owns a project at a time. A second `verifold` for the same project names the running process and exits. The owner writes `.verifold/owner.json` with its process ID and start time, and no access token. If that process stopped, the next owner moves the record aside and continues.
 
-The desk shows the question, saved context, research phase, attempt history, source reports, and next CLI command. It refreshes every two seconds. Opening or refreshing the desk does not launch a harness. You start a harness session in the desk or with `verifold session`. Research commands remain in the CLI.
+The desk shows the question, saved context, research phase, attempt history, and source reports. It refreshes every two seconds. Opening or refreshing the desk does not launch a harness. You start a harness session in the desk or with `verifold session`.
+
+Research runs in the same process as the desk. The desk offers the next research decision: start or continue research, approve the plan, ask for changes, or choose a direction. Choosing a direction needs a second click, because it locks the direction. The terminal that runs the desk accepts the same decisions: `/research`, `/approve`, `/feedback`, and `/select`. While research runs, the Research section shows the step, the time, and the harness events as they arrive. Summary shows a count and the latest event. Details lists each event. You can cancel the step. A cancel keeps the saved checkpoint and the attempt files. A research step and a harness session do not run at the same time. While the desk runs, `verifold research` in another terminal names the running process and stops.
 
 The desk renders Markdown from the harness. Raw HTML stays visible as text. Links keep only http, https, and mailto targets, and images show only their text. The page sanitizes the rendered Markdown again with a bundled copy of DOMPurify.
 
-Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. For research attempts, the CLI displays observed harness tool events and the desk does not. A controlled session shows its events in the desk. Requested models, returned session IDs, and model claims about delegation remain distinct from observed protocol events.
+Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. Research that runs in the desk's process shows the observed harness tool events in the desk and in the terminal. Both show tool names only, not tool inputs or results. A controlled session shows its events in the desk. Requested models, returned session IDs, and model claims about delegation remain distinct from observed protocol events.
 
 ### Controlled harness session
 
