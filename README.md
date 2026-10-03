@@ -257,13 +257,15 @@ This README describes the current source checkout. The published npm package can
 | Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
 | Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
 | Local research records     | Retains attempt files and provides CLI status plus a read-only HTML snapshot.                       |
-| Controlled session         | Runs one Claude Code or Codex session from the desk or terminal and relays its permission requests. |
+| Controlled session         | Runs Claude Code or Codex sessions from the desk or terminal and relays their permission requests.  |
 | Command record             | Records each tool call in a session with who let it run, risk tags, and a review mark.              |
 | Project owner              | One `verifold` process owns a project. Ctrl+C pauses a session, and a later run resumes it.         |
 | Research in the desk       | Runs research in the owner, shows its activity live, and offers each research decision in the desk. |
 | Recovery                   | Marks work interrupted after a crash, stops leftover harness processes safely, and offers resume.   |
 | Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.       |
 | Harness transcripts        | Shows each harness run as in its CLI, with tool input and output and nested subagent steps.         |
+| Scoped tasks               | Runs a task in its own copy of the project with Strict limits. You review each version first.       |
+| Two workers                | Runs up to two Claude Code or Codex workers at once, each with its own task, session, and record.   |
 
 This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
 
@@ -273,7 +275,7 @@ Optional literature retention and pilot handoff commands produce requests for th
 
 Build a local workspace for independently controlled research agents. Keep one npm distribution and a browser UI initially. CLI and browser will use the same operations, while the selected harness retains its models, credentials, tools, and permissions.
 
-Stages 1 and 2 are available in this checkout: the [controlled harness session](#controlled-harness-session), and persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts). The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
+Stages 1 to 4 are available in this checkout: the [controlled harness session](#controlled-harness-session); persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts); [scoped tasks](#scoped-tasks); and [two workers](#two-workers). The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
 
 | Order | Deliverable                       | Complete when                                                                                                                                                                                        |
 | ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
