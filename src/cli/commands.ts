@@ -27,6 +27,7 @@ import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
+import { TaskManager } from './tasks.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -366,9 +367,12 @@ async function serveDesk(
       const done = new Promise<void>((resolve) => {
         finished = resolve;
       });
+      // The session owner reports task turns to the tasks, which use the session owner.
+      const owned: { tasks?: TaskManager } = {};
       const sessions: SessionManager = new SessionManager(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
+        onTaskTurn: (task, turn) => void owned.tasks?.turnEnded(task, turn),
         onEvent: (event) => {
           const line = io.interactive ? feedLine(event) : null;
           if (line) io.progress?.(line);
@@ -389,9 +393,11 @@ async function serveDesk(
         io,
         harness,
         busy: () =>
-          sessions.active
-            ? 'A harness session is running. End it before research continues.'
-            : null,
+          !sessions.active
+            ? null
+            : sessions.view()?.record.task
+              ? 'A task session is running. Accept, reject, or cancel its version before research continues.'
+              : 'A harness session is running. End it before research continues.',
         onRunning: (running) =>
           sessions.block(
             running
@@ -399,11 +405,22 @@ async function serveDesk(
               : null,
           ),
       });
+      const tasks = new TaskManager(root, {
+        ownerId: owner.ownerId,
+        sessions,
+        ...(io.progress ? { progress: io.progress } : {}),
+      });
+      owned.tasks = tasks;
       try {
         await sessions.load();
+        const stopped = await tasks.settle();
+        if (stopped)
+          io.progress?.(
+            `Verifold stopped earlier while ${stopped === 1 ? 'a task was' : `${stopped} tasks were`} running. Review the saved work in the desk.`,
+          );
         // Start the session first, so invalid input fails before a desk opens.
         if (session) await sessions.start(session);
-        if (desk) await desk.attach(root, sessions, runner);
+        if (desk) await desk.attach(root, sessions, runner, tasks);
         else {
           desk = await startDesk(
             root,
@@ -411,6 +428,8 @@ async function serveDesk(
             io.deskAssets,
             sessions,
             runner,
+            undefined,
+            tasks,
           );
           await announce(
             desk,
@@ -468,6 +487,8 @@ async function serveDesk(
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
           );
+        // A task turn that Ctrl+C stopped becomes a version for review.
+        await tasks.settle();
       }
     } finally {
       await owner.release();

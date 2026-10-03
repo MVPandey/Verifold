@@ -8,7 +8,20 @@ import {
   type TranscriptUpdate,
 } from './transcript.ts';
 
-export type SessionMode = 'ask' | 'auto';
+/** `strict`: a task session. The harness itself limits writes to the task folder and asks nothing. */
+export type SessionMode = 'ask' | 'auto' | 'strict';
+
+/**
+ * Claude Code settings for a strict task session: shell commands run in the
+ * sandbox, file tools may edit only the working folder, and dontAsk mode
+ * denies the rest. Probed on Claude Code 2.1.288.
+ */
+const strictClaudeSettings = JSON.stringify({
+  sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
+  permissions: {
+    allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
+  },
+});
 
 /** Observed protocol events. Agent text is a model claim; the other events come from the protocol. */
 export type HostEvent =
@@ -241,7 +254,14 @@ function claude(options: HostOptions): HostSession {
       '--permission-prompt-tool',
       'stdio',
       '--permission-mode',
-      options.mode === 'auto' ? 'auto' : 'default',
+      options.mode === 'auto'
+        ? 'auto'
+        : options.mode === 'strict'
+          ? 'dontAsk'
+          : 'default',
+      ...(options.mode === 'strict'
+        ? ['--settings', strictClaudeSettings]
+        : []),
       ...(options.model ? ['--model', options.model] : []),
       ...(options.resume
         ? ['--resume', options.resume]
@@ -725,10 +745,11 @@ function codex(options: HostOptions): HostSession {
         {
           ...(options.resume ? { threadId: options.resume } : {}),
           cwd: options.cwd,
-          approvalPolicy: 'on-request',
+          // A strict task session gets no approvals: an action outside the sandbox fails.
+          approvalPolicy: options.mode === 'strict' ? 'never' : 'on-request',
           sandbox: 'workspace-write',
           // Without this, a user's global reviewer setting can answer requests meant for the person.
-          approvalsReviewer: options.mode === 'ask' ? 'user' : 'auto_review',
+          approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
           ...(options.model ? { model: options.model } : {}),
         },
         (result) => {

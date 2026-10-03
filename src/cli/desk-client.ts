@@ -7,6 +7,17 @@ const connectionLabel = requiredElement(document, '#connection', HTMLElement);
 const observationLabel = requiredElement(document, '#observation', HTMLElement);
 const actionLabel = requiredElement(document, '#action-status', HTMLElement);
 let selected: string | undefined;
+let selectedTask: string | undefined;
+/** The diff that the review pane shows, kept across page renders. */
+let shownDiff:
+  | {
+      readonly task: string;
+      readonly version: string;
+      readonly file: string;
+      readonly text: string;
+      readonly cut: boolean;
+    }
+  | undefined;
 let detail = 'summary';
 let token = location.hash.slice(1);
 const launch = token.startsWith('launch-') ? token.slice(7) : '';
@@ -16,6 +27,7 @@ try {
     history.replaceState(null, '', location.pathname);
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
+  selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
 } catch {
   /* The original fragment still supports reload when storage is unavailable. */
@@ -56,11 +68,15 @@ async function refresh(): Promise<void> {
   clearTimeout(timer);
   loading = true;
   const wanted = selected;
+  const wantedTask = selectedTask;
   request = new AbortController();
   const deadline = setTimeout(() => request?.abort(), 5000);
+  const query = new URLSearchParams();
+  if (wanted) query.set('attempt', wanted);
+  if (wantedTask) query.set('task', wantedTask);
   try {
     const response = await fetch(
-      `/api/view${wanted ? `?attempt=${encodeURIComponent(wanted)}` : ''}`,
+      `/api/view${query.size ? `?${query.toString()}` : ''}`,
       {
         headers: { Authorization: `Bearer ${token}` },
         signal: request.signal,
@@ -72,10 +88,11 @@ async function refresh(): Promise<void> {
         throw new Error(
           'Open the full desk URL printed in your terminal to connect.',
         );
-      if (response.status === 404 && wanted) {
+      if (response.status === 404 && (wanted || wantedTask)) {
         selected = undefined;
+        selectedTask = undefined;
         throw new Error(
-          'That attempt is no longer available. Refreshing the project.',
+          'That attempt or task is no longer available. Refreshing the project.',
         );
       }
       throw new Error(
@@ -92,7 +109,7 @@ async function refresh(): Promise<void> {
       typeof view.observation !== 'string'
     )
       throw new Error('The desk returned an unreadable view.');
-    if (wanted !== selected || stopped) return;
+    if (wanted !== selected || wantedTask !== selectedTask || stopped) return;
     if (view.html !== lastHtml) {
       // Transcript panels keep their own open calls. Only page sections are restored here.
       const open = new Set(
@@ -112,6 +129,13 @@ async function refresh(): Promise<void> {
         : undefined;
       const focusAttempt =
         focused instanceof HTMLElement ? focused.dataset.attempt : undefined;
+      // Keep the files that the person selected for Accept.
+      const checked = new Map(
+        Array.from(
+          main.querySelectorAll<HTMLInputElement>('input[type="checkbox"][id]'),
+          (box) => [box.id, box.checked],
+        ),
+      );
       // Keep text that the person typed while the view refreshes.
       const typed = new Map(
         Array.from(
@@ -151,6 +175,12 @@ async function refresh(): Promise<void> {
           'details[id]',
         ))
           detail.open = open.has(detail.id);
+      for (const [id, value] of checked) {
+        const box = document.getElementById(id);
+        if (box instanceof HTMLInputElement && !box.disabled)
+          box.checked = value;
+      }
+      showReview();
       mountTranscripts(main, () => token);
       inPanel?.focus({ preventScroll: true });
       if (focusAttempt)
@@ -196,7 +226,7 @@ async function refresh(): Promise<void> {
         () => {
           void refresh();
         },
-        wanted !== selected ? 0 : 2000,
+        wanted !== selected || wantedTask !== selectedTask ? 0 : 2000,
       );
   }
 }
@@ -208,6 +238,147 @@ function field(id: string): string {
     element instanceof HTMLSelectElement
     ? element.value
     : '';
+}
+
+/** The Accept button counts the selected files. The diff pane shows the chosen file. */
+function showReview(): void {
+  const accept = main.querySelector<HTMLButtonElement>(
+    '[data-action="task-accept"]',
+  );
+  if (accept) {
+    const count = main.querySelectorAll('input[data-file]:checked').length;
+    accept.textContent = `Accept ${count} ${count === 1 ? 'file' : 'files'}`;
+    accept.disabled = count === 0;
+  }
+  const pane = main.querySelector<HTMLElement>('.diff-pane');
+  if (
+    !pane ||
+    !shownDiff ||
+    pane.dataset.task !== shownDiff.task ||
+    pane.dataset.version !== shownDiff.version
+  )
+    return;
+  for (const button of main.querySelectorAll<HTMLElement>('[data-diff]'))
+    button.setAttribute(
+      'aria-pressed',
+      String(button.dataset.diff === shownDiff.file),
+    );
+  const head = document.createElement('p');
+  head.className = 'diff-head';
+  const name = document.createElement('code');
+  name.textContent = shownDiff.file;
+  head.append(name);
+  const pre = document.createElement('pre');
+  pre.className = 'diff';
+  for (const line of shownDiff.text.split('\n')) {
+    const row = document.createElement('span');
+    row.className = line.startsWith('@@')
+      ? 'd-hunk'
+      : line.startsWith('+++') || line.startsWith('---')
+        ? 'd-meta'
+        : line.startsWith('+')
+          ? 'd-add'
+          : line.startsWith('-')
+            ? 'd-del'
+            : '';
+    row.textContent = `${line}\n`;
+    pre.append(row);
+  }
+  pane.replaceChildren(head, pre);
+  if (shownDiff.cut) {
+    const note = document.createElement('p');
+    note.className = 'fine';
+    note.textContent = 'The diff is cut at 512 KB.';
+    pane.append(note);
+  }
+}
+
+/** Load the diff of one file in a version into the review pane. */
+async function loadDiff(button: HTMLElement): Promise<void> {
+  const task = button.dataset.task ?? '';
+  const version = button.dataset.version ?? '';
+  const file = button.dataset.diff ?? '';
+  try {
+    const response = await fetch(
+      `/api/task-diff?${new URLSearchParams({ task, version, file }).toString()}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    const reply = (await response.json()) as Record<string, unknown>;
+    if (!response.ok || typeof reply.text !== 'string')
+      throw new Error(
+        typeof reply.error === 'string' ? reply.error : 'No diff.',
+      );
+    shownDiff = {
+      task,
+      version,
+      file,
+      text: reply.text,
+      cut: reply.cut === true,
+    };
+    showReview();
+  } catch (error) {
+    actionLabel.textContent =
+      error instanceof Error && error.name !== 'TimeoutError'
+        ? error.message
+        : 'The desk did not answer. Check that Verifold still runs in your terminal.';
+  }
+}
+
+/** The fields of a task form. */
+function taskBody(prefix: string): Record<string, unknown> {
+  const form = document.getElementById(prefix);
+  return {
+    title: field(`${prefix}-title`),
+    objective: field(`${prefix}-objective`),
+    inputs: field(`${prefix}-inputs`),
+    writable: field(`${prefix}-writable`),
+    output: field(`${prefix}-output`),
+    host: field(`${prefix}-host`),
+    model: field(`${prefix}-model`).trim(),
+    minutes: field(`${prefix}-minutes`),
+    dependencies: Array.from(
+      form?.querySelectorAll<HTMLInputElement>('input[data-dep]:checked') ?? [],
+      (box) => box.dataset.dep,
+    ),
+  };
+}
+
+/** The request for one task button. */
+function taskRequest(button: HTMLElement): Record<string, unknown> {
+  const action = button.dataset.action ?? '';
+  const task = button.dataset.task;
+  const version = Number(button.dataset.version);
+  switch (action) {
+    case 'task-create':
+      return { action, ...taskBody('task-new') };
+    case 'task-edit':
+      return {
+        action,
+        task,
+        reason: field('task-edit-reason'),
+        ...taskBody('task-edit'),
+      };
+    case 'task-changes':
+      return { action, task, note: field('task-note') };
+    case 'task-accept':
+      return {
+        action,
+        task,
+        version,
+        files: Array.from(
+          main.querySelectorAll<HTMLInputElement>('input[data-file]:checked'),
+          (box) => box.dataset.file,
+        ),
+      };
+    case 'task-reject':
+      return { action, task, version };
+    default:
+      return { action, task };
+  }
 }
 
 /** The answer to the open setup question. */
@@ -281,7 +452,9 @@ async function act(button: HTMLElement): Promise<void> {
                   ? researchBody(button.dataset.research)
                   : action === 'setup'
                     ? setupBody(button)
-                    : { action };
+                    : action?.startsWith('task-')
+                      ? taskRequest(button)
+                      : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -291,6 +464,8 @@ async function act(button: HTMLElement): Promise<void> {
     ['research', button.dataset.research],
     ['prompt', button.dataset.prompt],
     ['review', button.dataset.review],
+    ['task', button.dataset.task],
+    ['version', button.dataset.version],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -326,9 +501,20 @@ async function act(button: HTMLElement): Promise<void> {
       'research-feedback',
       'setup-answer',
       'setup-feedback',
+      'task-note',
+      'task-edit-reason',
+      ...(body.action === 'task-create'
+        ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
+            (name) => `task-new-${name}`,
+          )
+        : []),
     ]) {
       const element = document.getElementById(id);
-      if (element instanceof HTMLTextAreaElement && body.action !== 'answer')
+      if (
+        (element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLInputElement) &&
+        body.action !== 'answer'
+      )
         element.value = '';
     }
   } catch (error) {
@@ -355,6 +541,17 @@ document.addEventListener('click', (event) => {
     main.focus();
     return;
   }
+  if (target.dataset.taskSelect) {
+    selectedTask = target.dataset.taskSelect;
+    try {
+      sessionStorage.setItem('verifold-desk-task', selectedTask);
+    } catch {
+      /* Selection still lasts until reload when browser storage is unavailable. */
+    }
+    connectionLabel.textContent = 'Opening task…';
+    void refresh();
+  }
+  if (target.dataset.diff) void loadDiff(target);
   if (target.dataset.attempt) {
     selected = target.dataset.attempt;
     try {
@@ -409,6 +606,10 @@ document.addEventListener('click', (event) => {
         target.textContent = 'Select command to copy';
       });
   }
+});
+main.addEventListener('change', (event) => {
+  if (event.target instanceof HTMLInputElement && event.target.dataset.file)
+    showReview();
 });
 window.addEventListener('pagehide', () => {
   stopped = true;
