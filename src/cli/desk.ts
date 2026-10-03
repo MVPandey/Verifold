@@ -201,13 +201,19 @@ async function act(
     body.action.startsWith('coordinator-')
   ) {
     switch (body.action) {
-      case 'coordinator-start':
+      case 'coordinator-start': {
+        const workspace = await loadWorkspace(root);
         await coordinator.start({
           objective: body.objective,
           host: body.host,
           model: body.model,
-          context: coordinatorContext(await loadWorkspace(root)),
+          context: coordinatorContext(workspace),
+          guided: workspace.research?.autonomy !== 'autonomous',
         });
+        return 200;
+      }
+      case 'coordinator-approve':
+        await coordinator.approvePlan();
         return 200;
       case 'coordinator-stop':
         await coordinator.stop();

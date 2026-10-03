@@ -63,6 +63,8 @@ export interface CoordinatorState {
   readonly session: string | null;
   /** Tasks that this coordinator created. */
   readonly created: number;
+  /** Guided research: no task starts until the person approves the coordinator's plan. */
+  readonly planApproved: boolean;
   /** The last event that a digest carried. */
   readonly cursor: number;
   readonly wakeups: readonly string[];
@@ -156,7 +158,8 @@ export class Coordinator {
         Array.isArray(value.actions) &&
         Array.isArray(value.wakeups) &&
         typeof value.cursor === 'number' &&
-        typeof value.created === 'number'
+        typeof value.created === 'number' &&
+        typeof value.planApproved === 'boolean'
       )
         this.state = value as unknown as CoordinatorState;
     } catch {
@@ -182,6 +185,8 @@ export class Coordinator {
     readonly model?: unknown;
     /** The research brief and the chosen direction. */
     readonly context?: string;
+    /** The person approves the first task plan before any task starts. */
+    readonly guided: boolean;
   }): Promise<void> {
     return this.serial(async () => {
       if (this.state && !this.state.stoppedAt)
@@ -214,6 +219,7 @@ export class Coordinator {
         stoppedAt: null,
         session: null,
         created: 0,
+        planApproved: !input.guided,
         cursor: 0,
         wakeups: [],
         events: [],
@@ -229,11 +235,40 @@ ${objective}
 ${input.context ? `\n${input.context}\n` : ''}
 Default harness for workers: ${host === 'claude' ? 'Claude Code' : 'Codex'}${model ? `, model ${model}` : ''}. Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
-Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.`,
+${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
         tools: this.tools(),
       });
       await this.save({ ...this.current(), session });
     });
+  }
+
+  /** Start the coordinator for the chosen direction, unless one already runs. */
+  async startForDirection(workspace: Workspace): Promise<void> {
+    if (this.state && !this.state.stoppedAt) return;
+    const objective = directionObjective(workspace);
+    if (!objective) return;
+    await this.start({
+      objective,
+      host: workspace.host,
+      ...(workspace.model ? { model: workspace.model } : {}),
+      context: coordinatorContext(workspace),
+      guided: workspace.research?.autonomy !== 'autonomous',
+    });
+  }
+
+  /** The person approves the coordinator's task plan. Its tasks can start, and it wakes. */
+  approvePlan(): Promise<void> {
+    return this.serial(async () => {
+      const state = this.current();
+      if (state.stoppedAt || state.planApproved)
+        fail('No task plan waits for your approval.');
+      await this.save({ ...state, planApproved: true });
+    }).then(() =>
+      this.notify({
+        kind: 'person',
+        text: 'The person approved your task plan. Start the tasks that can run.',
+      }),
+    );
   }
 
   /** Stop the coordinator. Running workers finish their turns, and their versions wait for review. */
@@ -452,6 +487,10 @@ Start now: read verifold_state, create the tasks for the first step, and start t
         return `Revised ${task.id}. It is open with revision ${task.revision + 1}.`;
       }
       case 'verifold_start_task':
+        if (!this.current().planApproved)
+          fail(
+            'The person reviews your task plan first. End your turn with a short summary of the plan. Verifold wakes you when the person approves it or writes to you.',
+          );
         await this.tasks.start(args.task, 'coordinator');
         return `Started ${String(args.task)}.`;
       case 'verifold_stop_task':

@@ -445,6 +445,9 @@ async function serveDesk(
         signal,
         io,
         harness,
+        // A chosen direction starts the coordinator.
+        onSelect: async () =>
+          owned.coordinator?.startForDirection(await loadWorkspace(root)),
       });
       const tasks = new TaskManager(root, {
         ownerId: owner.ownerId,

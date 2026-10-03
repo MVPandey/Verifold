@@ -271,6 +271,7 @@ await test('the coordinator creates and starts tasks through checked tools, and 
     objective: 'Compare two shortest-path baselines.',
     host: 'claude',
     context: 'Research brief:\nSparse graphs.',
+    guided: false,
   });
   await turns(1);
   let answers = await results();
@@ -415,7 +416,11 @@ await test('objections, the person, and a stop reach the coordinator as the rule
       },
     ],
   ]);
-  await coordinator.start({ objective: 'Compare baselines.', host: 'claude' });
+  await coordinator.start({
+    objective: 'Compare baselines.',
+    host: 'claude',
+    guided: false,
+  });
   await turns(1);
   await work(root, tasks, workers, 'task-1', {
     'literature/prior/notes.md': 'Dijkstra.\n',
@@ -490,7 +495,11 @@ await test('objections, the person, and a stop reach the coordinator as the rule
 await test('events that arrive close together join one wakeup, and a resumed coordinator gets them', async (t) => {
   const { root, tasks, coordinator, script, inputs, turns } = await team(t);
   await script([[], [], []]);
-  await coordinator.start({ objective: 'Wait.', host: 'claude' });
+  await coordinator.start({
+    objective: 'Wait.',
+    host: 'claude',
+    guided: false,
+  });
   await turns(1);
   await tasks.post('coordinator', 'First.');
   await tasks.post('coordinator', 'Second.');
@@ -537,4 +546,146 @@ await test('events that arrive close together join one wakeup, and a resumed coo
     await readFile(join(root, 'coordinator-args.json'), 'utf8'),
   ) as string[];
   assert.equal(args[args.indexOf('--resume') + 1], native);
+});
+
+await test('in Guided research no task starts before the person approves the plan, and two overrules send the next objection to the person', async (t) => {
+  const { root, tasks, workers, coordinator, script, results, turns } =
+    await team(t);
+  const object = (id: string): Call[] => [
+    {
+      name: 'verifold_decide',
+      arguments: {
+        message: id,
+        decision: 'overruled',
+        reason: 'The source is out of scope.',
+      },
+    },
+  ];
+  await script([
+    [
+      { name: 'verifold_create_task', arguments: prior },
+      { name: 'verifold_create_task', arguments: review },
+      { name: 'verifold_start_task', arguments: { task: 'task-1' } },
+    ],
+    [{ name: 'verifold_start_task', arguments: { task: 'task-1' } }],
+    [
+      {
+        name: 'verifold_accept',
+        arguments: { task: 'task-1', version: 1, reason: 'Complete.' },
+      },
+      { name: 'verifold_start_task', arguments: { task: 'task-2' } },
+    ],
+    object('m-1'),
+    object('m-3'),
+    object('m-5'),
+  ]);
+  await coordinator.start({
+    objective: 'Compare baselines.',
+    host: 'claude',
+    guided: true,
+  });
+  await turns(1);
+  assert.match(
+    (await results()).at(-1)?.result.content[0]?.text ?? '',
+    /The person reviews your task plan first/,
+  );
+  assert.equal((await tasks.get('task-1'))?.state, 'open');
+  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
+    session: null,
+    controllable: true,
+    coordinator: coordinator.view(),
+    tasks: { list: await tasks.list(), selected: null, idle: [] },
+  }).html;
+  assert.match(
+    html,
+    /The task plan waits for you[\s\S]*task-1<\/strong> Prior art[\s\S]*task-2<\/strong> Method review: Review the methods in the prior work\. \(waits for task-1\)[\s\S]*data-action="coordinator-approve">Approve the plan/,
+  );
+  await coordinator.approvePlan();
+  await turns(2);
+  assert.equal((await tasks.get('task-1'))?.state, 'running');
+  await assert.rejects(coordinator.approvePlan(), /No task plan waits/);
+
+  await work(root, tasks, workers, 'task-1', {
+    'literature/prior/notes.md': 'Dijkstra.\n',
+  });
+  await turns(3);
+  const tools = workers.started.findLast(
+    (entry) => entry.task.id === 'task-2',
+  )?.tools;
+  assert.ok(tools);
+  // The coordinator overrules two objections. The third one stays open for the person.
+  for (const [index, turn] of [
+    [1, 4],
+    [2, 5],
+    [3, 6],
+  ] as const) {
+    await tools.call(
+      'verifold_object',
+      {
+        task: 'task-1',
+        version: 1,
+        text: `Objection ${index}: a baseline is missing.`,
+        evidence: ['https://example.org/baseline'],
+      },
+      `o${index}`,
+    );
+    await turns(turn);
+  }
+  const last = (await results()).at(-1);
+  assert.equal(last?.result.isError, true);
+  assert.match(
+    last?.result.content[0]?.text ?? '',
+    /You overruled two objections from task-2 to task-1\. This one goes to the person/,
+  );
+  const messages = await tasks.messageList();
+  assert.deepEqual(
+    messages
+      .filter((message) => message.kind === 'objection')
+      .map((message) => message.status),
+    ['overruled', 'overruled', 'open'],
+  );
+  await tasks.decideMessage('m-5', 'upheld', 'The baseline is in scope.');
+  assert.equal(
+    (await tasks.messageList()).find((message) => message.id === 'm-5')?.status,
+    'upheld',
+  );
+});
+
+await test('a chosen direction starts the coordinator with the brief, the direction, and the research mode', async (t) => {
+  const { coordinator, inputs, script, turns } = await team(t);
+  await script([[]]);
+  const workspace = {
+    schemaVersion: 1 as const,
+    visibility: 'private' as const,
+    profile: { name: 'R', interests: [], scholar: '', github: '', session: '' },
+    host: 'claude',
+    model: 'sonnet',
+    context: 'Shortest paths on sparse graphs.',
+    candidates: [
+      {
+        id: 'sparse',
+        title: 'Compare sparse-graph baselines',
+        recommendation: 'Compare Dijkstra and Thorup on road networks.',
+        gates: ['Both run on the same graphs.'],
+      },
+    ],
+    selectedId: 'sparse',
+    research: { autonomy: 'autonomous' },
+  } as unknown as Parameters<Coordinator['startForDirection']>[0];
+  await coordinator.startForDirection(workspace);
+  await turns(1);
+  const state = coordinator.view()?.state;
+  assert.equal(
+    state?.objective,
+    'Compare sparse-graph baselines\n\nCompare Dijkstra and Thorup on road networks.',
+  );
+  assert.equal(state?.model, 'sonnet');
+  assert.equal(state?.planApproved, true);
+  assert.match(
+    (await inputs())[0] ?? '',
+    /Research brief:\nShortest paths on sparse graphs\.\n\nChosen direction: Compare sparse-graph baselines[\s\S]*- Both run on the same graphs\.[\s\S]*create the tasks for the first step, and start the ones that can run/,
+  );
+  // A running coordinator is not started again.
+  await coordinator.startForDirection(workspace);
+  assert.equal(coordinator.view()?.state.startedAt, state?.startedAt);
 });
