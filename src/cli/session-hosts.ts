@@ -84,6 +84,28 @@ export type HostEvent =
   | { readonly type: 'transcript'; readonly update: TranscriptUpdate }
   | { readonly type: 'exit'; readonly code: number | null };
 
+/** One of Verifold's own tools for an agent. */
+export interface AgentTool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
+}
+
+/**
+ * Verifold's tools for one agent, over the pipe that Verifold owns: an SDK MCP
+ * server for Claude Code, dynamic tools for Codex. The pipe identifies the
+ * agent, so `call` never trusts a name in the input. `callId` is the harness's
+ * ID of the call, so a repeated call can be recognized.
+ */
+export interface AgentTools {
+  readonly specs: readonly AgentTool[];
+  readonly call: (
+    name: string,
+    input: unknown,
+    callId: string,
+  ) => Promise<{ readonly ok: boolean; readonly text: string }>;
+}
+
 export interface HostOptions {
   readonly host: HarnessName;
   readonly cwd: string;
@@ -98,6 +120,7 @@ export interface HostOptions {
   /** Override the executable for an isolated host installation or a test fixture. */
   readonly executable?: string;
   readonly clientVersion: string;
+  readonly tools?: AgentTools;
   readonly onEvent: (event: HostEvent) => void;
 }
 
@@ -290,6 +313,19 @@ function claude(options: HostOptions): HostSession {
         ? ['--settings', strictClaudeSettings]
         : []),
       ...(options.model ? ['--model', options.model] : []),
+      ...(options.tools
+        ? [
+            '--mcp-config',
+            JSON.stringify({
+              mcpServers: { verifold: { type: 'sdk', name: 'verifold' } },
+            }),
+            // Verifold's own tools need no permission request.
+            '--allowedTools',
+            options.tools.specs
+              .map((tool) => `mcp__verifold__${tool.name}`)
+              .join(','),
+          ]
+        : []),
       ...(options.resume
         ? ['--resume', options.resume]
         : options.sessionId
@@ -299,6 +335,7 @@ function claude(options: HostOptions): HostSession {
     options,
   );
   const emit = options.onEvent;
+  const tools = options.tools;
   const inputs = new Map<string, unknown>();
   let interrupting = false;
   const user = (text: string): void =>
@@ -405,7 +442,13 @@ function claude(options: HostOptions): HostSession {
             ...(detail ? { detail } : {}),
             ...(reason ? { reason } : {}),
           });
-        } else
+        } else if (
+          event.request.subtype === 'mcp_message' &&
+          event.request.server_name === 'verifold' &&
+          tools
+        )
+          mcp(id, event.request.message);
+        else
           write(child, {
             type: 'control_response',
             response: {
@@ -435,10 +478,65 @@ function claude(options: HostOptions): HostSession {
     },
     (text) => emit({ type: 'notice', text }),
   );
+  /** Answer one message to Verifold's SDK MCP server. */
+  const mcp = (id: string, message: unknown): void => {
+    const reply = (response: Record<string, unknown>): void =>
+      write(child, {
+        type: 'control_response',
+        response: {
+          subtype: 'success',
+          request_id: id,
+          response: { mcp_response: { jsonrpc: '2.0', ...response } },
+        },
+      });
+    if (!record(message) || !tools) return;
+    const rpc = message.id;
+    const params = record(message.params) ? message.params : {};
+    if (typeof rpc !== 'number' && typeof rpc !== 'string')
+      reply({ id: 0, result: {} });
+    else if (message.method === 'initialize')
+      reply({
+        id: rpc,
+        result: {
+          protocolVersion: str(params.protocolVersion) ?? '2025-06-18',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'verifold', version: options.clientVersion },
+        },
+      });
+    else if (message.method === 'tools/list')
+      reply({ id: rpc, result: { tools: tools.specs } });
+    else if (message.method === 'tools/call') {
+      const meta = record(params._meta) ? params._meta : {};
+      void tools
+        .call(
+          str(params.name) ?? '',
+          params.arguments,
+          str(meta['claudecode/toolUseId']) ?? `mcp-${rpc}`,
+        )
+        .catch(() => ({ ok: false, text: 'Verifold could not run this tool.' }))
+        .then((result) =>
+          reply({
+            id: rpc,
+            result: {
+              content: [{ type: 'text', text: result.text }],
+              isError: !result.ok,
+            },
+          }),
+        );
+    } else
+      reply({
+        id: rpc,
+        error: { code: -32601, message: 'Verifold does not support this.' },
+      });
+  };
+
   write(child, {
     type: 'control_request',
     request_id: `verifold-${randomUUID()}`,
-    request: { subtype: 'initialize' },
+    request: {
+      subtype: 'initialize',
+      ...(tools ? { sdkMcpServers: ['verifold'] } : {}),
+    },
   });
   if (options.prompt) user(options.prompt);
   else if (options.resume) {
@@ -713,7 +811,27 @@ function codex(options: HostOptions): HostSession {
           ...(change?.diff ? { detail: change.diff } : {}),
           ...(reason ? { reason } : {}),
         });
-      } else {
+      } else if (method === 'item/tool/call' && options.tools)
+        void options.tools
+          .call(
+            str(params.tool) ?? '',
+            params.arguments,
+            str(params.callId) ?? key,
+          )
+          .catch(() => ({
+            ok: false,
+            text: 'Verifold could not run this tool.',
+          }))
+          .then((result) =>
+            send({
+              id: rpcId,
+              result: {
+                contentItems: [{ type: 'inputText', text: result.text }],
+                success: result.ok,
+              },
+            }),
+          );
+      else {
         send({
           id: rpcId,
           error: {
@@ -876,6 +994,15 @@ function codex(options: HostOptions): HostSession {
         // Without this, a user's global reviewer setting can answer requests meant for the person.
         approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
         ...(options.model ? { model: options.model } : {}),
+        // Dynamic tools stay with the thread, and `thread/resume` does not take them. Probed on Codex 0.160.0.
+        ...(options.tools && !options.resume
+          ? {
+              dynamicTools: options.tools.specs.map((tool) => ({
+                type: 'function',
+                ...tool,
+              })),
+            }
+          : {}),
         config,
       },
       (result) => {

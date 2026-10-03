@@ -16,6 +16,7 @@ import { openTerminal, type Terminal } from './terminals.ts';
 import {
   startHostSession,
   strictClaudeSettings,
+  type AgentTools,
   type HostEvent,
   type HostSession,
   type SessionMode,
@@ -718,6 +719,8 @@ export class SessionManager {
   private readonly requests: { next: number };
   /** A launch is saving its record. No second start can begin. */
   private launching = false;
+  /** Verifold's tools for the agent of the current session. Each launch of the session gets them again. */
+  private tools: AgentTools | undefined;
   /** The current launch sent a first request, so a turn runs when the harness reports its session. */
   private prompted = false;
   private pausedList: PausedSession[] = [];
@@ -903,6 +906,7 @@ export class SessionManager {
     }
     const prompt = this.text(input.prompt);
     this.current = fresh(host, model ?? null, mode);
+    this.tools = undefined;
     this.event('you', prompt);
     await this.launch(prompt);
   }
@@ -917,6 +921,7 @@ export class SessionManager {
     readonly prompt: string;
     readonly cwd: string;
     readonly task: { readonly id: string; readonly claim: string };
+    readonly tools?: AgentTools;
   }): Promise<string> {
     this.ready();
     const cwd = relative(this.root, input.cwd).split('\\').join('/');
@@ -928,6 +933,7 @@ export class SessionManager {
     if (!parseRecord(record)?.cwd)
       fail('A task session needs its task folder.');
     this.current = record;
+    this.tools = input.tools;
     this.event(
       'status',
       `Verifold started ${input.task.id} in its task folder, in Strict mode.`,
@@ -958,6 +964,7 @@ export class SessionManager {
     // Another start can begin while the record loads.
     this.ready();
     this.current = { ...saved, status: 'starting', endedAt: null };
+    this.tools = undefined;
     this.event(
       'status',
       'Verifold resumes this session in a new process. The events above come from the earlier launch.',
@@ -994,6 +1001,7 @@ export class SessionManager {
       endedAt: null,
       nativeSessionId: saved.host === 'claude' ? saved.nativeSessionId : null,
     };
+    this.tools = undefined;
     this.event(
       'status',
       'No conversation was recorded, so Verifold runs the first request again.',
@@ -1173,6 +1181,7 @@ export class SessionManager {
             ? { sessionId: native }
             : {}),
         ...(executable ? { executable } : {}),
+        ...(this.tools ? { tools: this.tools } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
       const pid = this.host.pid;
