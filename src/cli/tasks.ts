@@ -25,6 +25,7 @@ import {
   integrate,
   overlaps,
   projectPath,
+  readAt,
   release,
   type ChangedFile,
   type Workspace,
@@ -70,6 +71,8 @@ export interface Assignment {
   /** The time limit for one harness turn. */
   readonly minutes: number;
   readonly dependencies: readonly string[];
+  /** Absent when the person wrote this revision. */
+  readonly by?: 'coordinator';
 }
 
 export interface VersionFile extends ChangedFile {
@@ -95,11 +98,16 @@ export interface TaskVersion {
   readonly skipped: readonly string[];
   /** What the harness reported when it ended, for example that it could not start. */
   readonly note?: string;
+  /** The worker's last text in the turn. A model claim. */
+  readonly reply?: string;
   readonly decision: {
     readonly kind: 'accepted' | 'rejected' | 'changes';
     readonly at: string;
     readonly files?: readonly string[];
+    /** The person's changes, or the coordinator's reason. */
     readonly note?: string;
+    /** Absent for the person. */
+    readonly by?: 'coordinator';
   } | null;
   /** The last Accept found these targets changed in the project. */
   readonly conflicts?: readonly string[];
@@ -201,11 +209,22 @@ export interface TaskSessions {
   takeTerminal(session: string, lease: string): Promise<void>;
 }
 
+/** Who acts on a task: the person in the desk, or the coordinator through its tools. */
+export type Actor = 'person' | 'coordinator';
+
+/** A change that the coordinator hears about: a version, a message for it, a failed start, or the person's action. */
+export interface TaskEvent {
+  readonly kind: 'version' | 'message' | 'failed' | 'person';
+  readonly task?: string;
+  readonly text: string;
+}
+
 export interface TaskManagerOptions {
   readonly ownerId: string;
   readonly sessions: TaskSessions;
   /** One line for the owner terminal when a task changes state. */
   readonly progress?: (line: string) => void;
+  readonly onEvent?: (event: TaskEvent) => void;
 }
 
 function fail(message: string): never {
@@ -308,8 +327,12 @@ export class TaskManager {
     return validTaskId(id) ? this.read(id) : null;
   }
 
-  /** Create a task from the person's fields. Returns its ID. */
-  create(fields: TaskInputFields): Promise<string> {
+  /** Create a task. The coordinator gives a reason. Returns its ID. */
+  create(
+    fields: TaskInputFields,
+    by: Actor = 'person',
+    reason = 'Created',
+  ): Promise<string> {
     return this.serial(async () => {
       const existing = await this.list();
       if (existing.length >= limits.tasks)
@@ -321,7 +344,7 @@ export class TaskManager {
       await mkdir(folder, { recursive: true, mode: 0o700 });
       let assignment: Assignment;
       try {
-        assignment = await this.assignment(id, 1, fields, 'Created', existing);
+        assignment = await this.assignment(id, 1, fields, reason, existing, by);
       } catch (error) {
         // A folder without task.json is not a task. Remove it, so the next create starts clean.
         await rm(folder, { recursive: true, force: true });
@@ -340,6 +363,7 @@ export class TaskManager {
         attempts: [],
       });
       this.options.progress?.(`Task ${id} created: ${assignment.title}.`);
+      this.told(by, id, `The person created ${id}: ${assignment.title}.`);
       return id;
     });
   }
@@ -348,6 +372,7 @@ export class TaskManager {
   edit(
     id: unknown,
     fields: TaskInputFields & { readonly reason: unknown },
+    by: Actor = 'person',
   ): Promise<void> {
     return this.serial(async () => {
       const task = await this.load(id);
@@ -364,6 +389,7 @@ export class TaskManager {
           fields,
           reason,
           await this.list(),
+          by,
         );
       } catch (error) {
         await rm(this.revisionFolder(task.id, task.revision + 1), {
@@ -380,6 +406,7 @@ export class TaskManager {
         assignment,
         updatedAt: new Date().toISOString(),
       });
+      this.told(by, task.id, `The person revised ${task.id}: ${reason}`);
     });
   }
 
@@ -387,7 +414,7 @@ export class TaskManager {
    * Claim the task, allocate its workspace, and start a strict harness session
    * in it. Each step happens only after the previous one is saved.
    */
-  start(id: unknown): Promise<void> {
+  start(id: unknown, by: Actor = 'person'): Promise<void> {
     return this.serial(async () => {
       const task = await this.load(id);
       if (task.state !== 'open') fail('Only an open task can start.');
@@ -458,6 +485,11 @@ export class TaskManager {
             endedAt: new Date().toISOString(),
           })),
         );
+        this.options.onEvent?.({
+          kind: 'failed',
+          task: task.id,
+          text: `${task.id} could not start: ${note}`,
+        });
         fail(
           outcome === 'allocation-failed'
             ? `Verifold could not prepare the task folder: ${note}`
@@ -516,16 +548,18 @@ export class TaskManager {
       this.options.progress?.(
         `Task ${task.id} started with ${hostName(task.assignment.host)}. Follow it in the desk.`,
       );
+      this.told(by, task.id, `The person started ${task.id}.`);
     });
   }
 
   /** Stop the running turn. Its work becomes a version for review. */
-  async stop(id: unknown): Promise<void> {
+  async stop(id: unknown, by: Actor = 'person'): Promise<void> {
     const task = await this.load(id);
     const session = task.attempts.at(-1)?.session;
     if (task.state !== 'running' || !session)
       fail('No turn of this task is running.');
     this.options.sessions.cancel(session);
+    this.told(by, task.id, `The person stopped the turn of ${task.id}.`);
   }
 
   /**
@@ -536,6 +570,7 @@ export class TaskManager {
     binding: { readonly id: string; readonly claim: string },
     turn: 'completed' | 'interrupted' | 'failed' | 'exited' | 'terminal',
     detail?: string,
+    reply?: string,
   ): Promise<void> {
     return this.serial(async () => {
       const task = await this.read(binding.id);
@@ -555,6 +590,7 @@ export class TaskManager {
         task,
         expired && turn === 'interrupted' ? 'time-limit' : turn,
         detail,
+        reply,
       );
     });
   }
@@ -584,8 +620,12 @@ export class TaskManager {
     });
   }
 
-  /** Send the person's changes as a new turn. The next version follows. */
-  askForChanges(id: unknown, note: unknown): Promise<void> {
+  /** Send the changes as a new turn. The next version follows. */
+  askForChanges(
+    id: unknown,
+    note: unknown,
+    by: Actor = 'person',
+  ): Promise<void> {
     return this.serial(async () => {
       const task = await this.load(id);
       const text = line(note, 'changes', 4000);
@@ -599,11 +639,17 @@ export class TaskManager {
         this.decide({ ...task, state: 'running' }, attempt, {
           kind: 'changes',
           note: text,
+          ...(by === 'coordinator' ? { by } : {}),
         }),
+      );
+      this.told(
+        by,
+        task.id,
+        `The person asked ${task.id} for changes: ${text}`,
       );
       this.options.sessions.continueTask(
         session,
-        `The person reviewed your version and asks for changes:\n\n${text}\n\nKeep to the writable paths. End your turn with a short reply again.${await this.outbox(task.id)}`,
+        `The ${by} reviewed your version and asks for changes:\n\n${text}\n\nKeep to the writable paths. End your turn with a short reply again.${await this.outbox(task.id)}`,
       );
       this.limit(task.id, session, task.assignment.minutes);
     });
@@ -618,6 +664,8 @@ export class TaskManager {
     id: unknown,
     version: unknown,
     files: unknown,
+    by: Actor = 'person',
+    reason?: string,
   ): Promise<
     | { readonly applied: readonly string[] }
     | { readonly conflicts: readonly string[] }
@@ -691,6 +739,7 @@ export class TaskManager {
           ...this.decide(task, attempt, {
             kind: 'accepted',
             files: result.applied,
+            ...(by === 'coordinator' ? { by, note: reason ?? '' } : {}),
           }),
           artifacts: [
             ...(task.artifacts ?? []),
@@ -706,28 +755,46 @@ export class TaskManager {
         'done',
       );
       this.options.progress?.(
-        `Task ${task.id}: you accepted ${result.applied.length} ${result.applied.length === 1 ? 'file' : 'files'}.`,
+        `Task ${task.id}: ${by === 'person' ? 'you' : 'the coordinator'} accepted ${result.applied.length} ${result.applied.length === 1 ? 'file' : 'files'}.`,
+      );
+      this.told(
+        by,
+        task.id,
+        `The person accepted ${task.id} version ${latest.number}: ${result.applied.join(', ')}.`,
       );
       return result;
     });
   }
 
   /** Reject the latest version. The task opens again for a new attempt or an edit. */
-  reject(id: unknown, version: unknown): Promise<void> {
+  reject(
+    id: unknown,
+    version: unknown,
+    by: Actor = 'person',
+    reason?: string,
+  ): Promise<void> {
     return this.serial(async () => {
       const task = await this.load(id);
       const attempt = this.review(task);
-      this.latest(attempt, version);
+      const latest = this.latest(attempt, version);
       await this.finish(
-        this.decide(task, attempt, { kind: 'rejected' }),
+        this.decide(task, attempt, {
+          kind: 'rejected',
+          ...(by === 'coordinator' ? { by, note: reason ?? '' } : {}),
+        }),
         'rejected',
         'open',
+      );
+      this.told(
+        by,
+        task.id,
+        `The person rejected ${task.id} version ${latest.number}.`,
       );
     });
   }
 
   /** Cancel an open task, or a task in review with its current version. */
-  cancel(id: unknown): Promise<void> {
+  cancel(id: unknown, by: Actor = 'person'): Promise<void> {
     return this.serial(async () => {
       const task = await this.load(id);
       if (task.state === 'open')
@@ -739,7 +806,55 @@ export class TaskManager {
       else if (task.state === 'review')
         await this.finish(task, 'cancelled', 'cancelled');
       else fail('Stop the running turn first, or wait for the version.');
+      this.told(by, task.id, `The person cancelled ${task.id}.`);
     });
+  }
+
+  /**
+   * One file of a version, as text for the coordinator's review, up to 64 KB.
+   * An accepted version reads its artifact copy; a version in review reads its task folder.
+   */
+  async readVersionFile(
+    id: unknown,
+    version: unknown,
+    path: unknown,
+  ): Promise<string> {
+    const task = await this.load(id);
+    for (const attempt of task.attempts)
+      for (const entry of attempt.versions) {
+        if (entry.number !== version) continue;
+        const file =
+          entry.files.find((candidate) => candidate.path === path) ??
+          fail('That file is not in this version.');
+        const artifact = task.artifacts?.find(
+          (saved) =>
+            saved.version === entry.number &&
+            saved.files.some((copy) => copy.path === file.path),
+        );
+        const content = artifact
+          ? await readFile(
+              join(this.artifactFolder(task.id, artifact.version), file.path),
+            )
+          : attempt.workspace
+            ? await readAt(
+                this.root,
+                attempt.workspace,
+                entry.commit,
+                file.path,
+              )
+            : null;
+        if (content === null)
+          fail(
+            'That file is no longer available: its task folder was removed.',
+          );
+        if (content.includes(0))
+          return `${file.path} is a binary file of ${content.length} bytes.`;
+        const text = content.toString('utf8');
+        return text.length > 65536
+          ? `${text.slice(0, 65536)}\n[Verifold: the file continues. It has ${content.length} bytes.]`
+          : text;
+      }
+    fail('That version does not exist.');
   }
 
   /** The diff of one file in one version. */
@@ -801,15 +916,16 @@ export class TaskManager {
     return this.messages.list();
   }
 
-  /** The person sends a note to a task's worker or to the coordinator. */
-  post(to: unknown, text: unknown): Promise<Message> {
+  /** The person sends a note to a task or the coordinator; the coordinator, to a task or the person. */
+  post(to: unknown, text: unknown, by: Actor = 'person'): Promise<Message> {
     return this.serial(async () => {
       const all = await this.list();
-      if (to !== 'coordinator' && !all.some((task) => task.id === to))
-        fail('Send the message to a task or to the coordinator.');
+      const other = by === 'person' ? 'coordinator' : 'person';
+      if (to !== other && !all.some((task) => task.id === to))
+        fail(`Send the message to a task or to the ${other}.`);
       return this.send(
         {
-          from: 'person',
+          from: by,
           to: String(to),
           kind: 'note',
           text: line(text, 'message', messageLimits.text),
@@ -828,6 +944,7 @@ export class TaskManager {
     id: unknown,
     decision: unknown,
     reason: unknown,
+    by: Actor = 'person',
   ): Promise<void> {
     return this.serial(async () => {
       const messages = await this.messages.list();
@@ -842,17 +959,19 @@ export class TaskManager {
       await this.messages.update(message, {
         status: decision as 'upheld' | 'overruled' | 'resolved',
       });
+      const label = `The ${by} ${decisionLabels[decision as keyof typeof decisionLabels]} ${message.id}: ${text}`;
       await this.send(
         {
-          from: 'person',
+          from: by,
           to: message.from,
           kind: 'decision',
           closes: message.id,
-          text: `${decisionLabels[decision as keyof typeof decisionLabels]} ${message.id}: ${text}`,
+          text: label,
         },
         await this.list(),
         messages,
       );
+      this.told(by, undefined, label);
     });
   }
 
@@ -1055,13 +1174,13 @@ export class TaskManager {
   }
 
   /** Record a message. A task recipient gets it with its next turn; the person sees it in the desk. */
-  private send(
+  private async send(
     fields: Omit<Message, 'schemaVersion' | 'id' | 'at' | 'delivery'>,
     all: readonly TaskRecord[],
     messages: readonly Message[],
   ): Promise<Message> {
     const recipient = all.find((task) => task.id === fields.to);
-    return this.messages.add(
+    const message = await this.messages.add(
       {
         ...fields,
         ...(recipient ? { revision: recipient.revision } : {}),
@@ -1069,6 +1188,28 @@ export class TaskManager {
       },
       messages,
     );
+    // The coordinator hears about messages for it and about every blocker and objection, except its own.
+    if (
+      message.from !== 'coordinator' &&
+      (message.to === 'coordinator' ||
+        ['blocker', 'objection', 'withdrawal'].includes(message.kind))
+    )
+      this.options.onEvent?.({
+        kind: 'message',
+        ...(validTaskId(message.from) ? { task: message.from } : {}),
+        text: messageLine(message).slice(2),
+      });
+    return message;
+  }
+
+  /** Tell the coordinator about the person's action. Its own actions need no wakeup. */
+  private told(by: Actor, task: string | undefined, text: string): void {
+    if (by === 'person')
+      this.options.onEvent?.({
+        kind: 'person',
+        ...(task ? { task } : {}),
+        text,
+      });
   }
 
   /**
@@ -1101,6 +1242,7 @@ export class TaskManager {
     task: TaskRecord,
     turn: TaskVersion['turn'],
     detail?: string,
+    reply?: string,
   ): Promise<void> {
     const attempt = task.attempts.at(-1);
     const workspace = attempt?.workspace;
@@ -1138,6 +1280,7 @@ export class TaskManager {
               skipped: saved.skipped,
               decision: null,
               ...(detail ? { note: detail.slice(0, 2000) } : {}),
+              ...(reply ? { reply: reply.slice(0, 4000) } : {}),
             },
           ],
         })),
@@ -1145,6 +1288,11 @@ export class TaskManager {
       this.options.progress?.(
         `Task ${task.id}: version ${number} is ready for review in the desk.`,
       );
+      this.options.onEvent?.({
+        kind: 'version',
+        task: task.id,
+        text: `${task.id} version ${number} is ready for review (${turn}). Files: ${files.map((file) => file.path).join(', ') || 'none'}.${detail ? ` Harness: ${detail.slice(0, 500)}` : ''}${reply ? ` The worker said: ${reply.slice(0, 1500)}` : ''}`,
+      });
     } catch (error) {
       await this.write(
         this.attempt({ ...task, state: 'review' }, () => ({
@@ -1266,6 +1414,7 @@ export class TaskManager {
     fields: TaskInputFields,
     reason: string,
     all: readonly TaskRecord[],
+    by: Actor = 'person',
   ): Promise<Assignment> {
     const host =
       fields.host === 'claude' || fields.host === 'codex'
@@ -1322,6 +1471,7 @@ export class TaskManager {
       model: model ?? null,
       minutes,
       dependencies: dependencies.filter(validTaskId),
+      ...(by === 'coordinator' ? { by } : {}),
     };
     const file = await open(
       join(this.revisionFolder(id, revision), 'assignment.json'),
@@ -1613,9 +1763,9 @@ function parseTask(value: unknown): TaskRecord | null {
 }
 
 const decisionLabels = {
-  upheld: 'The person upheld objection',
-  overruled: 'The person overruled objection',
-  resolved: 'The person resolved blocker',
+  upheld: 'upheld objection',
+  overruled: 'overruled objection',
+  resolved: 'resolved blocker',
 } as const;
 
 /** One delivered message in a worker's turn input. */

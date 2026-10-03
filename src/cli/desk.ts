@@ -37,6 +37,8 @@ import {
   type TaskInputFields,
   type TaskManager,
 } from './tasks.ts';
+import { coordinatorContext, type Coordinator } from './coordinator.ts';
+import { loadWorkspace } from './storage.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -49,6 +51,7 @@ export interface DeskServer {
     sessions: SessionPool,
     research: ResearchRunner,
     tasks: TaskManager,
+    coordinator: Coordinator,
   ): Promise<void>;
   readonly closed: Promise<void>;
 }
@@ -149,6 +152,8 @@ async function act(
   research: ResearchRunner | undefined,
   setup: SetupBridge | undefined,
   tasks: TaskManager | undefined,
+  coordinator: Coordinator | undefined,
+  root: string,
   body: Record<string, unknown>,
 ): Promise<number> {
   if (body.action === 'setup') {
@@ -188,6 +193,34 @@ async function act(
   ) {
     await taskAction(tasks, body);
     return 200;
+  }
+  if (
+    coordinator &&
+    tasks &&
+    typeof body.action === 'string' &&
+    body.action.startsWith('coordinator-')
+  ) {
+    switch (body.action) {
+      case 'coordinator-start':
+        await coordinator.start({
+          objective: body.objective,
+          host: body.host,
+          model: body.model,
+          context: coordinatorContext(await loadWorkspace(root)),
+        });
+        return 200;
+      case 'coordinator-stop':
+        await coordinator.stop();
+        return 200;
+      case 'coordinator-resume':
+        await coordinator.resume();
+        return 200;
+      case 'coordinator-message':
+        await tasks.post('coordinator', body.text);
+        return 200;
+      default:
+        return 400;
+    }
   }
   if (body.action === 'terminal-open') {
     if (!validLease(body.lease))
@@ -252,6 +285,7 @@ export async function startDesk(
   research?: ResearchRunner,
   setup?: SetupBridge,
   tasks?: TaskManager,
+  coordinator?: Coordinator,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
@@ -421,7 +455,15 @@ export async function startDesk(
       let message = 'The desk sent an unreadable action.';
       if (record(body))
         try {
-          status = await act(sessions, research, setup, tasks, body);
+          status = await act(
+            sessions,
+            research,
+            setup,
+            tasks,
+            coordinator,
+            project ?? '',
+            body,
+          );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
           status = 409;
@@ -728,6 +770,7 @@ export async function startDesk(
           controllable: sessions !== undefined,
           paused: sessions?.paused() ?? [],
           ...(research ? { research: research.view() } : {}),
+          ...(coordinator ? { coordinator: coordinator.view() } : {}),
           ...(tasks
             ? {
                 tasks: {
@@ -779,12 +822,13 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner, taskManager) => {
+    attach: async (next, owner, runner, taskManager, lead) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
       research = runner;
       tasks = taskManager;
+      coordinator = lead;
       project = resolved;
     },
     closed,

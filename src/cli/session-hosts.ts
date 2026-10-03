@@ -12,8 +12,12 @@ import {
   type TranscriptUpdate,
 } from './transcript.ts';
 
-/** `strict`: a task session. The harness itself limits writes to the task folder and asks nothing. */
-export type SessionMode = 'ask' | 'auto' | 'strict';
+/**
+ * `strict`: a task session. The harness itself limits writes to the task folder and asks nothing.
+ * `coordinator`: the coordinator. Claude Code gets no built-in tools; Codex gets a read-only sandbox.
+ * Its actions go only through Verifold's tools.
+ */
+export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator';
 
 /**
  * Claude Code settings for a strict task session: shell commands run in the
@@ -312,6 +316,7 @@ function claude(options: HostOptions): HostSession {
       ...(options.mode === 'strict'
         ? ['--settings', strictClaudeSettings]
         : []),
+      ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
       ...(options.model ? ['--model', options.model] : []),
       ...(options.tools
         ? [
@@ -999,9 +1004,13 @@ function codex(options: HostOptions): HostSession {
       {
         ...(options.resume ? { threadId: options.resume } : {}),
         cwd: options.cwd,
-        // A strict task session gets no approvals: an action outside the sandbox fails.
-        approvalPolicy: options.mode === 'strict' ? 'never' : 'on-request',
-        sandbox: 'workspace-write',
+        // A strict task session and the coordinator get no approvals: an action outside the sandbox fails.
+        approvalPolicy:
+          options.mode === 'strict' || options.mode === 'coordinator'
+            ? 'never'
+            : 'on-request',
+        sandbox:
+          options.mode === 'coordinator' ? 'read-only' : 'workspace-write',
         // Without this, a user's global reviewer setting can answer requests meant for the person.
         approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
         ...(options.model ? { model: options.model } : {}),
