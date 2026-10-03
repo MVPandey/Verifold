@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
-import { SessionManager } from '../src/cli/session.ts';
+import { SessionPool } from '../src/cli/workers.ts';
 import { terminalInput } from '../src/cli/commands.ts';
 import { startDesk } from '../src/cli/desk.ts';
 
@@ -201,7 +201,7 @@ await test('terminal commands and desk actions call the same research operations
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   const { runner } = setup(root, { harness: slow });
-  const sessions = new SessionManager(root, {
+  const sessions = new SessionPool(root, {
     clientVersion: 'test',
     ownerId: 'test-owner',
   });

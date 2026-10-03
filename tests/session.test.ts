@@ -25,6 +25,7 @@ import {
 import { startDesk } from '../src/cli/desk.ts';
 import { TranscriptFile } from '../src/cli/transcript.ts';
 import { codexCommand } from '../src/cli/session-hosts.ts';
+import { SessionPool } from '../src/cli/workers.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
 import { feedLine, runCli, terminalInput } from '../src/cli/commands.ts';
@@ -145,9 +146,10 @@ async function project(
     root: string,
     executables: { claude: string; codex: string },
     create: (options?: Partial<SessionManagerOptions>) => SessionManager,
+    pool: () => SessionPool,
   ) => Promise<void>,
 ): Promise<void> {
-  const managers: SessionManager[] = [];
+  const managers: { close(): Promise<boolean> }[] = [];
   const root = await realpath(
     await mkdtemp(join(tmpdir(), 'verifold-session-')),
   );
@@ -180,16 +182,29 @@ async function project(
     await writeFile(executables.codex, `#!${process.execPath}\n${codexHost}`, {
       mode: 0o700,
     });
-    await run(root, executables, (options = {}) => {
-      const manager = new SessionManager(root, {
-        clientVersion: 'test',
-        ownerId: 'test-owner',
-        executables,
-        ...options,
-      });
-      managers.push(manager);
-      return manager;
-    });
+    await run(
+      root,
+      executables,
+      (options = {}) => {
+        const manager = new SessionManager(root, {
+          clientVersion: 'test',
+          ownerId: 'test-owner',
+          executables,
+          ...options,
+        });
+        managers.push(manager);
+        return manager;
+      },
+      () => {
+        const workers = new SessionPool(root, {
+          clientVersion: 'test',
+          ownerId: 'test-owner',
+          executables,
+        });
+        managers.push(workers);
+        return workers;
+      },
+    );
   } finally {
     // A failed assertion must not leave a fake harness running.
     for (const manager of managers) await manager.close();
@@ -197,17 +212,21 @@ async function project(
   }
 }
 
+/** Wait for the session of a manager, or the first worker of a pool. */
 async function until(
-  sessions: SessionManager,
+  sessions: SessionManager | SessionPool,
   check: (record: SessionRecord) => boolean,
 ): Promise<SessionRecord> {
+  const current = (): SessionRecord | undefined =>
+    (sessions instanceof SessionPool ? sessions.views()[0] : sessions.view())
+      ?.record;
   for (let tries = 0; tries < 200; tries++) {
-    const record = sessions.view()?.record;
+    const record = current();
     if (record && check(record)) return record;
     await delay(20);
   }
   throw new Error(
-    `The session did not reach the expected state: ${JSON.stringify(sessions.view()?.record.events)}`,
+    `The session did not reach the expected state: ${JSON.stringify(current()?.events)}`,
   );
 }
 
@@ -595,7 +614,7 @@ await test('Codex Auto records the reviewer decision and its reason', async () =
 });
 
 await test('desk actions need the token and a JSON body, and report state errors', async () => {
-  await project(async (root, executables, create) => {
+  await project(async (root, _executables, _create, pool) => {
     const assets = join(root, 'assets');
     await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
     await mkdir(join(assets, 'ui'));
@@ -609,7 +628,7 @@ await test('desk actions need the token and a JSON body, and report state errors
     ])
       await writeFile(join(assets, 'cli', name), 'fixture asset');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
-    const sessions = create();
+    const sessions = pool();
     const owner = new AbortController();
     const server = await startDesk(
       root,
@@ -679,7 +698,7 @@ await test('desk actions need the token and a JSON body, and report state errors
       assert.equal((await post({ action: 'delete-everything' }))[0], 400);
       assert.deepEqual(await post({ action: 'end' }), [
         409,
-        { error: 'No session is running.' },
+        { error: 'That session is not running.' },
       ]);
       assert.equal(
         (
@@ -713,7 +732,12 @@ await test('desk actions need the token and a JSON body, and report state errors
       ).json()) as { html: string };
       assert.match(after.html, /You allowed/);
       assert.match(after.html, /Send follow-up/);
-      assert.equal((await post({ action: 'end' }))[0], 200);
+      assert.equal(
+        (
+          await post({ action: 'end', session: sessions.views()[0]?.record.id })
+        )[0],
+        200,
+      );
     } finally {
       owner.abort();
       await server.closed;
@@ -1002,7 +1026,7 @@ await test('the terminal feed leaves harness tool events to the desk', () => {
 });
 
 await test('terminal answers need an unambiguous request and never become follow-ups', async () => {
-  await project(async (_root, _executables, create) => {
+  await project(async (_root, _executables, _create, pool) => {
     const messages: string[] = [];
     const io = {
       interactive: true,
@@ -1017,7 +1041,7 @@ await test('terminal answers need an unambiguous request and never become follow
         opened++;
       },
     };
-    const sessions = create();
+    const sessions = pool();
     terminalInput(sessions, 'a', io, controls);
     assert.match(messages.at(-1) ?? '', /No request is open/);
     terminalInput(sessions, '/open', io, controls);
@@ -1050,10 +1074,10 @@ await test('terminal answers need an unambiguous request and never become follow
     const events = idle.events.length;
     terminalInput(sessions, 'd', io, controls);
     assert.match(messages.at(-1) ?? '', /No request is open/);
-    assert.equal(sessions.view()?.record.status, 'idle');
-    assert.equal(sessions.view()?.record.events.length, events);
+    assert.equal(sessions.views()[0]?.record.status, 'idle');
+    assert.equal(sessions.views()[0]?.record.events.length, events);
     terminalInput(sessions, '/end', io, controls);
-    assert.equal(sessions.view()?.live, false);
+    assert.equal(sessions.views()[0]?.live, false);
   });
 });
 

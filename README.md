@@ -173,7 +173,7 @@ Start one harness session from the desk, or from the terminal:
 verifold session --prompt "Reproduce the baseline" --host codex --mode ask
 ```
 
-The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner controls one session at a time. The desk cannot start a session while `verifold` runs research in the same terminal. The desk shows that research is running and disables Start session until research ends. If a desk action fails, the reason appears next to that control.
+The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to two workers at the same time: sessions, tasks, or one of each. The desk cannot start a session while `verifold` runs research in the same terminal. The desk shows that research is running and disables Start session until research ends. If a desk action fails, the reason appears next to that control.
 
 In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces the answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request. A network call that the sandbox blocks can fail without a request.
 
@@ -199,6 +199,29 @@ Ctrl+C pauses a running session: Verifold stops the current turn and the harness
 
 If Verifold stops without saving the end of its work, for example after a forced termination, the next `verifold` in the folder checks each unfinished session and research attempt before it starts anything. A harness process that still runs stops first, but only when its recorded process start time matches, so a reused process ID cannot cause a wrong stop. The work becomes interrupted, with an unknown outcome, and tool calls that were running show as unknown. A session with a recorded conversation can resume. A session without one runs its first request again. Claude Code keeps its session ID for that run, so it cannot create a second conversation. An interrupted research attempt keeps its files. Continue research to run the step again.
 
+### Two workers
+
+Verifold runs up to two harness workers at the same time. Each worker has its own session, launch, native session ID, record, and transcript. A task worker also has its own task, claim, and task folder. Workers lists them with their state and anything that waits for you. Choose one to see its activity, transcript, requests, controls, and Commands table. A third start waits until a worker ends. A cancel, a permission request, an output burst, or a failure in one worker does not change the other.
+
+In the terminal, `a` and `d` with a request ID answer the request of the worker that it belongs to. When two workers could receive a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line names its worker.
+
+What each harness supports in Verifold:
+
+| Control                           | Claude Code                                                            | Codex                                                    |
+| --------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------- |
+| Protocol                          | `claude -p` with stream-json input and output                          | `codex app-server` (JSON-RPC)                            |
+| Native identity                   | Session ID chosen by Verifold before launch (`--session-id`)           | Thread ID from `thread/start`                            |
+| Follow-up                         | Between turns                                                          | Between turns                                            |
+| Cancel a turn                     | Interrupt control request                                              | `turn/interrupt`                                         |
+| Ask me                            | Each permission request comes to the desk and the terminal             | Each approval request comes to the desk and the terminal |
+| Auto                              | Claude Code `auto` mode; Verifold cannot see which rule allowed a call | Codex reviewer agent; the record shows its decision      |
+| Strict (tasks)                    | `dontAsk`, sandbox, edit rules for the task folder                     | `workspace-write`, approval policy `never`               |
+| Resume after Ctrl+C               | `--resume` with the session ID                                         | `thread/resume`                                          |
+| Subagent work in the transcript   | Nested under the Agent call                                            | Nested under the agent call (fixture tested)             |
+| A command that the sandbox blocks | Reported as a failed call                                              | Not reported by Codex                                    |
+
+Tested with Claude Code 2.1.288 and Codex 0.155.1.
+
 ### Scoped tasks
 
 A task gives one harness a scoped job in its own copy of the project. In the desk, under Tasks, write what the agent should do, the input files, the paths where it may write, the expected output, the harness, and a time limit for each turn. A task can wait for other tasks to be done. An edit makes a new revision. Earlier attempts keep the revision that they ran.
@@ -209,7 +232,7 @@ Start task claims the task, prepares a task folder, and then starts the harness:
 - The task folder starts from your project as it is now for the writable paths, including uncommitted changes, plus copies of the input files. Verifold copied each input when you saved the task, so a later edit in the project does not change it.
 - The harness runs in the task folder in Strict mode. Claude Code runs with `--permission-mode dontAsk`, its sandbox turned on, and permission rules that allow edits only in the folder. Codex runs with its `workspace-write` sandbox and the approval policy `never`. Actions outside these rules are denied without a prompt. Web search stays allowed. Reads are not limited, and both sandboxes allow writes to temporary folders. Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt. The task page lists these limits under What the harness enforces.
 
-When a turn ends, Verifold saves the task folder as a version: a commit on the task branch or in the task's Git data. The task waits for review. The review lists the changed files with the diff of one file. Files outside the writable paths, and links, cannot be selected. Accept copies the selected files into your project without a commit. If a target file changed in your project since the task started, Verifold copies nothing and names the file. Ask for changes sends your note as the next turn, which makes the next version. Reject keeps the version in the record and opens the task again. Stop the turn makes a version of the work so far. Tasks run one at a time, and not at the same time as research or a session.
+When a turn ends, Verifold saves the task folder as a version: a commit on the task branch or in the task's Git data. The task waits for review. The review lists the changed files with the diff of one file. Files outside the writable paths, and links, cannot be selected. Accept copies the selected files into your project without a commit. If a target file changed in your project since the task started, Verifold copies nothing and names the file. Ask for changes sends your note as the next turn, which makes the next version. Reject keeps the version in the record and opens the task again. Stop the turn makes a version of the work so far. Up to two tasks and sessions run at the same time, and research waits while one runs. Two active tasks cannot write to the same paths.
 
 After Accept or Reject, Verifold removes the task folder if all its changes are in a version. The branch keeps every version. If Verifold stops while a turn runs, the next `verifold` saves the task folder as a version for review. A task session cannot resume.
 

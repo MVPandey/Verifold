@@ -28,13 +28,14 @@ import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { TaskManager } from './tasks.ts';
+import { SessionPool } from './workers.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
 import {
+  hostName,
   reconcileSessions,
   SessionActionError,
-  SessionManager,
   type SessionEvent,
 } from './session.ts';
 import { claimOwner } from './owner.ts';
@@ -156,8 +157,11 @@ const feedLabels: Record<SessionEvent['kind'], string> = {
   notice: 'notice',
 };
 
-/** One terminal line for a session event. Harness tool events stay in the desk, so they have none. */
-export function feedLine(event: SessionEvent): string | null {
+/**
+ * One terminal line for a session event. Harness tool events stay in the desk,
+ * so they have none. `worker` names the session when two can run.
+ */
+export function feedLine(event: SessionEvent, worker?: string): string | null {
   if (event.kind === 'tool') return null;
   const time = new Date(event.at).toLocaleTimeString('en-GB', {
     hour: '2-digit',
@@ -169,7 +173,7 @@ export function feedLine(event: SessionEvent): string | null {
     event.kind === 'agent' && line.length > 600
       ? `${line.slice(0, 600)}…`
       : line;
-  return `${time}  ${feedLabels[event.kind]}: ${text}${event.kind === 'request' ? `\n${requestHint}` : ''}`;
+  return `${time}  ${worker ? `${worker} · ` : ''}${feedLabels[event.kind]}: ${text}${event.kind === 'request' ? `\n${requestHint}` : ''}`;
 }
 
 /** What the owner terminal can do besides session actions. */
@@ -183,15 +187,29 @@ export interface TerminalControls {
 
 /** Terminal controls call the same session operations as the desk. */
 export function terminalInput(
-  sessions: SessionManager,
+  sessions: SessionPool,
   line: string,
   io: CliIO,
   controls: TerminalControls,
 ): void {
   const value = line.trim();
   if (!value) return;
-  const view = sessions.view();
-  const requests = view?.live ? view.record.requests : [];
+  const live = sessions.views().filter((view) => view.live);
+  const requests = live.flatMap((view) => view.record.requests);
+  /** The one live session that fits, or a message that names where to act. */
+  const only = (
+    fits: (view: (typeof live)[number]) => boolean,
+    none: string,
+  ): string | null => {
+    const found = live.filter(fits);
+    if (found.length === 1) return found[0]?.record.id ?? null;
+    io.progress?.(
+      found.length
+        ? `${found.length} sessions match. Use the desk to choose one.`
+        : none,
+    );
+    return null;
+  };
   const answer = /^([ad])(?:\s+(r\d+))?$/i.exec(value);
   const report = (error: unknown): void =>
     io.progress?.(
@@ -222,8 +240,13 @@ export function terminalInput(
     else if (value === '/help') io.progress?.(terminalHelp);
     else if (value === '/cancel' && controls.research?.running)
       controls.research.cancel();
-    else if (value === '/cancel') sessions.cancel();
-    else if (
+    else if (value === '/cancel') {
+      const id = only(
+        (view) => view.record.status !== 'idle',
+        'Nothing is running.',
+      );
+      if (id) sessions.cancel(id);
+    } else if (
       controls.research &&
       /^\/(research|approve|feedback|select)(\s|$)/.test(value)
     ) {
@@ -242,8 +265,10 @@ export function terminalInput(
                   : {},
           )
       ).catch(report);
-    } else if (value === '/end') sessions.end();
-    else if (value === '/resume') {
+    } else if (value === '/end') {
+      const id = only((view) => !view.record.task, 'No session is running.');
+      if (id) sessions.end(id);
+    } else if (value === '/resume') {
       const latest = sessions.paused()[0];
       if (latest)
         (latest.restart
@@ -257,8 +282,13 @@ export function terminalInput(
         .catch(report);
     else if (value.startsWith('/'))
       io.progress?.(`${value.split(/\s/)[0]} is not a command. Type /help.`);
-    else if (view?.live) sessions.send(value);
-    else
+    else if (live.some((view) => !view.record.task)) {
+      const id = only(
+        (view) => !view.record.task && view.record.status === 'idle',
+        'The session is working. Wait for the turn to end, or type /cancel.',
+      );
+      if (id) sessions.send(id, value);
+    } else
       io.progress?.(
         'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
       );
@@ -299,7 +329,7 @@ async function serveDesk(
   io: CliIO,
   signal: AbortSignal,
   research?: ResearchOptions,
-  session?: Parameters<SessionManager['start']>[0],
+  session?: Parameters<SessionPool['start']>[0],
   harness: typeof runHarness = runHarness,
   setup?: { readonly cwd: string; readonly options: InitializationOptions },
 ): Promise<void> {
@@ -367,23 +397,32 @@ async function serveDesk(
       const done = new Promise<void>((resolve) => {
         finished = resolve;
       });
-      // The session owner reports task turns to the tasks, which use the session owner.
-      const owned: { tasks?: TaskManager } = {};
-      const sessions: SessionManager = new SessionManager(root, {
+      // The workers report task turns to the tasks, which use the workers.
+      const owned: { tasks?: TaskManager; session?: string } = {};
+      const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
-        onTaskTurn: (task, turn) => void owned.tasks?.turnEnded(task, turn),
-        onEvent: (event) => {
-          const line = io.interactive ? feedLine(event) : null;
+        onTaskTurn: (task, turn, detail) =>
+          void owned.tasks?.turnEnded(task, turn, detail),
+        onEvent: (event, view) => {
+          const line = io.interactive
+            ? feedLine(
+                event,
+                view
+                  ? `${hostName(view.record.host)}${view.record.task ? ` ${view.record.task.id}` : ''}`
+                  : undefined,
+              )
+            : null;
           if (line) io.progress?.(line);
-          const view = sessions.view();
-          if (!session || !view) return;
+          // The session that `verifold session` started decides when this command ends.
+          if (!owned.session || view?.record.id !== owned.session) return;
           const { status } = view.record;
           if (status === 'ended' || status === 'failed' || status === 'paused')
             finished();
           // Without a terminal, requests wait for the desk and the session ends after one turn.
-          else if (!io.interactive && view.record.status === 'idle')
+          else if (!io.interactive && status === 'idle')
             sessions.end(
+              owned.session,
               'The turn ended, so the noninteractive session ended.',
             );
         },
@@ -395,7 +434,7 @@ async function serveDesk(
         busy: () =>
           !sessions.active
             ? null
-            : sessions.view()?.record.task
+            : sessions.views().some((view) => view.live && view.record.task)
               ? 'A task session is running. Accept, reject, or cancel its version before research continues.'
               : 'A harness session is running. End it before research continues.',
         onRunning: (running) =>
@@ -419,7 +458,7 @@ async function serveDesk(
             `Verifold stopped earlier while ${stopped === 1 ? 'a task was' : `${stopped} tasks were`} running. Review the saved work in the desk.`,
           );
         // Start the session first, so invalid input fails before a desk opens.
-        if (session) await sessions.start(session);
+        if (session) owned.session = await sessions.start(session);
         if (desk) await desk.attach(root, sessions, runner, tasks);
         else {
           desk = await startDesk(
@@ -462,7 +501,9 @@ async function serveDesk(
         if (session) {
           if (io.interactive) io.progress?.(terminalHelp);
           await Promise.race([done, desk.closed]);
-          const record = sessions.view()?.record;
+          const record = owned.session
+            ? sessions.view(owned.session)?.record
+            : undefined;
           if (record && !io.interactive)
             io.out(
               JSON.stringify({
