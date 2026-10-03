@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -684,5 +685,52 @@ await test(
       ).status,
       404,
     );
+  },
+);
+
+await test(
+  'a Codex worker stops when its owner is killed',
+  { skip: process.platform === 'win32' && 'POSIX process groups' },
+  async (t) => {
+    const { root } = await owner(t);
+    const script = join(root, 'owner.mjs');
+    await writeFile(
+      script,
+      `import { SessionPool } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../src/cli/workers.ts', import.meta.url))).href)};
+const sessions = new SessionPool(${JSON.stringify(root)}, { clientVersion: 'test', ownerId: 'doomed', executables: { codex: ${JSON.stringify(join(root, 'fake-codex'))} } });
+const id = await sessions.start({ host: 'codex', mode: 'auto', prompt: 'Start' });
+for (let tries = 0; tries < 250 && sessions.view(id)?.record.status !== 'idle'; tries++) await new Promise((r) => setTimeout(r, 20));
+console.log(sessions.view(id)?.record.launches.at(-1)?.pid);
+setInterval(() => {}, 1000);`,
+    );
+    const child = spawn(
+      process.execPath,
+      ['--experimental-strip-types', script],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    t.after(() => child.kill('SIGKILL'));
+    let printed = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      printed += chunk;
+    });
+    for (let tries = 0; tries < 250 && !/\d+\n/.test(printed); tries++)
+      await delay(20);
+    const group = Number(printed.trim());
+    assert.ok(
+      group > 0,
+      `The owner did not report its Codex process: ${printed}`,
+    );
+    const running = (): boolean => {
+      try {
+        process.kill(-group, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    assert.equal(running(), true);
+    child.kill('SIGKILL');
+    for (let tries = 0; tries < 250 && running(); tries++) await delay(20);
+    assert.equal(running(), false);
   },
 );
