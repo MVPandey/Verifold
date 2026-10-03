@@ -657,7 +657,7 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   await tasks.askForChanges(review, 'Check the benchmark list.');
   assert.match(
     sessions.sent.at(-1) ?? '',
-    /Messages for this task[\s\S]*- m-4 from person \(decision\): The person upheld objection m-2: The 2024 benchmark is needed\.[\s\S]*- m-5 from person \(decision\)/,
+    /Messages for this task[\s\S]*- m-4 from person \(decision\): "The person upheld objection m-2: The 2024 benchmark is needed\."[\s\S]*- m-5 from person \(decision\)/,
   );
   messages = await tasks.messageList();
   assert.deepEqual(
@@ -684,7 +684,7 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   await tasks.start(prior);
   assert.match(
     sessions.started.at(-1)?.prompt ?? '',
-    /- m-1 from task-2: Which benchmark[\s\S]*- m-2 from task-2 \(objection\), about task-1 version 1: The baseline omits the 2024 benchmark\. Evidence: https:\/\/example\.org\/benchmark; results\/review\/check\.md[\s\S]*- m-6 from person: Add the 2024 benchmark\./,
+    /- m-1 from task-2: "Which benchmark[\s\S]*- m-2 from task-2 \(objection\), about task-1 version 1: "The baseline omits the 2024 benchmark\." Evidence: "https:\/\/example\.org\/benchmark", "results\/review\/check\.md"[\s\S]*- m-6 from person: "Add the 2024 benchmark\."/,
   );
   // A failed turn leaves its messages uncertain. Verifold does not send them again.
   const started = sessions.started.at(-1);
@@ -700,6 +700,31 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   );
   await tasks.askForChanges(prior, 'Try again.');
   assert.doesNotMatch(sessions.sent.at(-1) ?? '', /Messages for this task/);
+});
+
+await test('one turn carries at most 20 messages, each one short, so a change request always fits', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  await turn(tasks, sessions, { 'results/baseline.md': 'v1\n' });
+  for (let index = 0; index < 25; index++)
+    await tasks.post(id, `${index} ${'x'.repeat(3990)}`);
+  await tasks.askForChanges(id, 'y'.repeat(4000));
+  const sent = sessions.sent.at(-1) ?? '';
+  assert.ok(sent.length < 100_000, `${sent.length} characters`);
+  assert.equal((await tasks.get(id))?.state, 'running');
+  const deliveries = (await tasks.messageList()).map(
+    (message) => message.delivery,
+  );
+  assert.deepEqual(
+    [
+      deliveries.filter((delivery) => delivery === 'sent').length,
+      deliveries.filter((delivery) => delivery === 'queued').length,
+    ],
+    [20, 5],
+  );
 });
 
 await test('failed allocation and failed starts keep evidence and release the claim', async (t) => {
@@ -797,8 +822,8 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     clientVersion: 'test',
     ownerId: 'owner-1',
     executables: { claude },
-    onTaskTurn: (task, turn, detail) =>
-      void owner.tasks?.turnEnded(task, turn, detail),
+    onTaskTurn: (task, turn, detail, reply) =>
+      void owner.tasks?.turnEnded(task, turn, detail, reply),
   });
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
   owner.tasks = tasks;

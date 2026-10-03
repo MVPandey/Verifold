@@ -391,6 +391,15 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
       return { action, task, version };
     case 'task-message':
       return { action, to: button.dataset.to, text: field('task-message') };
+    case 'coordinator-start':
+      return {
+        action,
+        objective: field('coordinator-objective'),
+        host: field('coordinator-host'),
+        model: field('coordinator-model').trim(),
+      };
+    case 'coordinator-message':
+      return { action, text: field('coordinator-message') };
     case 'task-decide':
       return {
         action,
@@ -480,7 +489,8 @@ async function act(button: HTMLElement): Promise<void> {
                       ? researchBody(button.dataset.research)
                       : action === 'setup'
                         ? setupBody(button)
-                        : action?.startsWith('task-')
+                        : action?.startsWith('task-') ||
+                            action?.startsWith('coordinator-')
                           ? taskRequest(button)
                           : { action };
   const selector = [
@@ -534,6 +544,7 @@ async function act(button: HTMLElement): Promise<void> {
       'task-note',
       'task-edit-reason',
       'task-message',
+      'coordinator-message',
       ...(body.action === 'task-create'
         ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
             (name) => `task-new-${name}`,

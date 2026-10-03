@@ -12,8 +12,12 @@ import {
   type TranscriptUpdate,
 } from './transcript.ts';
 
-/** `strict`: a task session. The harness itself limits writes to the task folder and asks nothing. */
-export type SessionMode = 'ask' | 'auto' | 'strict';
+/**
+ * `strict`: a task session. The harness itself limits writes to the task folder and asks nothing.
+ * `coordinator`: the coordinator. Claude Code gets no built-in tools; Codex gets a read-only sandbox.
+ * Its actions go only through Verifold's tools.
+ */
+export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator';
 
 /**
  * Claude Code settings for a strict task session: shell commands run in the
@@ -130,6 +134,8 @@ export interface HostSession {
   readonly pid: number | undefined;
   /** Codex only: the app-server socket that a terminal can attach to. */
   readonly socket?: string;
+  /** Codex only: `-c` overrides that keep the user's MCP servers, plugins, and apps off in a terminal. */
+  readonly overrides?: readonly string[];
   /** Start a new turn. The caller sends a follow-up only after the previous turn ends. */
   send(text: string): void;
   /** Deny the listed open requests and stop the current turn. */
@@ -312,6 +318,7 @@ function claude(options: HostOptions): HostSession {
       ...(options.mode === 'strict'
         ? ['--settings', strictClaudeSettings]
         : []),
+      ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
       ...(options.model ? ['--model', options.model] : []),
       ...(options.tools
         ? [
@@ -646,6 +653,7 @@ function codex(options: HostOptions): HostSession {
   const requests = new Map<string, number | string>();
   const changes = new Map<string, { paths: string; diff: string }>();
   let nextId = 1;
+  let overrides: string[] = [];
   let thread: string | undefined;
   let turn: string | undefined;
   let cancelled = false;
@@ -979,6 +987,19 @@ function codex(options: HostOptions): HostSession {
       send({ method: 'initialized', params: {} });
       call('config/read', { cwd: options.cwd }, (result) => {
         const config = codexIsolation(result);
+        if (config)
+          overrides = [
+            '-c',
+            'features.plugins=false',
+            '-c',
+            'features.apps=false',
+            ...Object.keys(
+              config.mcp_servers as Record<string, unknown>,
+            ).flatMap((name) => [
+              '-c',
+              `mcp_servers.${/^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name)}.enabled=false`,
+            ]),
+          ];
         if (!config) {
           emit({
             type: 'notice',
@@ -999,9 +1020,13 @@ function codex(options: HostOptions): HostSession {
       {
         ...(options.resume ? { threadId: options.resume } : {}),
         cwd: options.cwd,
-        // A strict task session gets no approvals: an action outside the sandbox fails.
-        approvalPolicy: options.mode === 'strict' ? 'never' : 'on-request',
-        sandbox: 'workspace-write',
+        // A strict task session and the coordinator get no approvals: an action outside the sandbox fails.
+        approvalPolicy:
+          options.mode === 'strict' || options.mode === 'coordinator'
+            ? 'never'
+            : 'on-request',
+        sandbox:
+          options.mode === 'coordinator' ? 'read-only' : 'workspace-write',
         // Without this, a user's global reviewer setting can answer requests meant for the person.
         approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
         ...(options.model ? { model: options.model } : {}),
@@ -1054,6 +1079,9 @@ function codex(options: HostOptions): HostSession {
       stop(child);
     },
     socket,
+    get overrides() {
+      return overrides;
+    },
   };
 }
 

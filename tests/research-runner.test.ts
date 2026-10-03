@@ -102,7 +102,10 @@ async function project(): Promise<string> {
 
 function setup(
   root: string,
-  options: { readonly harness?: typeof harness } = {},
+  options: {
+    readonly harness?: typeof harness;
+    readonly onSelect?: () => Promise<void>;
+  } = {},
 ): { runner: ResearchRunner; lines: string[] } {
   const lines: string[] = [];
   const runner = new ResearchRunner(root, {
@@ -114,6 +117,7 @@ function setup(
       progress: (line) => lines.push(line),
     },
     harness: options.harness ?? harness,
+    ...(options.onSelect ? { onSelect: options.onSelect } : {}),
   });
   return { runner, lines };
 }
@@ -121,7 +125,13 @@ function setup(
 await test('research runs in the owner, records observed activity, and waits for decisions', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { runner, lines } = setup(root);
+  let selected = 0;
+  const { runner, lines } = setup(root, {
+    onSelect: () => {
+      selected++;
+      return Promise.reject(new Error('Codex is not installed.'));
+    },
+  });
   await assert.rejects(runner.start({}), /Write the question/);
   await assert.rejects(runner.start({ approve: true }), /No plan waits/);
   await runner.start({ topic: 'Proof search', autonomy: 'guided' });
@@ -154,6 +164,12 @@ await test('research runs in the owner, records observed activity, and waits for
   await assert.rejects(runner.select('missing'), /Choose an ID/);
   await runner.select('proof');
   assert.equal((await loadWorkspace(root)).selectedId, 'proof');
+  // The choice starts the coordinator. A failed start keeps the choice and says why.
+  assert.equal(selected, 1);
+  assert.match(
+    runner.view().events.at(-1)?.text ?? '',
+    /The coordinator did not start: Codex is not installed\. Start it under Coordinator\./,
+  );
   await assert.rejects(
     runner.start({ feedback: 'More sources' }),
     /direction is chosen/,
