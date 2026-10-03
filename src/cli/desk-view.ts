@@ -29,8 +29,6 @@ export interface DeskSession {
   readonly terminals?: true | string;
   /** The desk process owns a session manager, so the page can start and control a session. */
   readonly controllable: boolean;
-  /** Why the session owner refuses a new session now, for example while research runs. */
-  readonly blocked?: string;
   /** Sessions that an earlier owner paused. */
   readonly paused?: readonly PausedSession[];
   /** Research in this owner. Without it, research runs only from the CLI. */
@@ -176,26 +174,17 @@ function renderDecision(workspace: Workspace, live: DeskSession): string {
   if (!research || workspace.selectedId) return '';
   if (research.running)
     return `<section class="next-action"><h2>Research is running</h2><p>${e(research.step ?? 'A research step runs.')}. Follow it in Research.</p><p class="fine">If you cancel, the saved checkpoint and the attempt files stay.</p><div class="actions"><button type="button" data-action="cancel-research">Cancel research</button></div></section>`;
-  const busy = (live.workers ?? (live.session ? [live.session] : [])).some(
-    (worker) => worker.live,
-  )
-    ? 'A harness session is running. End it before research continues.'
-    : undefined;
-  const off = busy ? ' disabled aria-describedby="decision-busy"' : '';
-  const note = busy
-    ? `<p class="notice" id="decision-busy">${e(busy)}</p>`
-    : '';
   const feedback = (label: string): string =>
-    `<label class="field" for="research-feedback">Changes</label><textarea id="research-feedback" rows="3" maxlength="4000" placeholder="${e(label)}"></textarea><div class="actions"><button type="button" data-action="research" data-research="feedback"${off}>Ask for changes</button></div>`;
+    `<label class="field" for="research-feedback">Changes</label><textarea id="research-feedback" rows="3" maxlength="4000" placeholder="${e(label)}"></textarea><div class="actions"><button type="button" data-action="research" data-research="feedback">Ask for changes</button></div>`;
   switch (workspace.research?.phase) {
     case undefined:
-      return `<section class="next-action"><h2>Start research</h2><p>Write the question that research should explore. The harness plans the research first.</p><label class="field" for="research-topic">Question</label><textarea id="research-topic" rows="3" maxlength="4000"></textarea><label class="check" for="research-guided"><input type="checkbox" id="research-guided" checked> Stop at the plan for my approval</label>${note}<div class="actions"><button type="button" class="primary" data-action="research" data-research="start"${off}>Start research</button></div></section>`;
+      return `<section class="next-action"><h2>Start research</h2><p>Write the question that research should explore. The harness plans the research first.</p><label class="field" for="research-topic">Question</label><textarea id="research-topic" rows="3" maxlength="4000"></textarea><label class="check" for="research-guided"><input type="checkbox" id="research-guided" checked> Stop at the plan for my approval</label><div class="actions"><button type="button" class="primary" data-action="research" data-research="start">Start research</button></div></section>`;
     case 'awaiting-plan-review':
-      return `<section class="next-action"><h2>Review the plan</h2><p>Read the research scope. Approve it to start the source search, or ask for changes.</p>${note}<div class="actions"><button type="button" class="primary" data-action="research" data-research="approve"${off}>Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
+      return `<section class="next-action"><h2>Review the plan</h2><p>Read the research scope. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
     case 'directions':
-      return `<section class="next-action"><h2>Choose a direction</h2><p>Choose one direction under Research directions. The choice locks it for this project. You can ask for changes first.</p>${note}${feedback('What should change in the directions?')}</section>`;
+      return `<section class="next-action"><h2>Choose a direction</h2><p>Choose one direction under Research directions. The choice locks it for this project. You can ask for changes first.</p>${feedback('What should change in the directions?')}</section>`;
     default:
-      return `<section class="next-action"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p>${note}<div class="actions"><button type="button" class="primary" data-action="research" data-research="continue"${off}>Continue research</button></div></section>`;
+      return `<section class="next-action"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
   }
 }
 
@@ -337,14 +326,14 @@ function renderSession(live: DeskSession, defaultHost: string): string {
           .slice(0, 10)
           .map(
             (paused) =>
-              `<li><span class="paused-meta">${e(hostName(paused.host))} · ${e(time(paused.startedAt))} · ${paused.status === 'interrupted' ? 'Interrupted, outcome unknown' : 'Paused'}</span><span class="paused-request">${e(paused.request.length > 160 ? `${paused.request.slice(0, 160)}…` : paused.request)}</span><span class="actions"><button type="button" data-action="${paused.restart ? 'restart' : 'resume'}" data-session="${e(paused.id)}"${live.blocked ? ' disabled' : ''}>${paused.restart ? 'Start again' : 'Resume'}</button></span></li>`,
+              `<li><span class="paused-meta">${e(hostName(paused.host))} · ${e(time(paused.startedAt))} · ${paused.status === 'interrupted' ? 'Interrupted, outcome unknown' : 'Paused'}</span><span class="paused-request">${e(paused.request.length > 160 ? `${paused.request.slice(0, 160)}…` : paused.request)}</span><span class="actions"><button type="button" data-action="${paused.restart ? 'restart' : 'resume'}" data-session="${e(paused.id)}">${paused.restart ? 'Start again' : 'Resume'}</button></span></li>`,
           )
           .join('')}</ul></div>`
       : ''
   }
   ${
     start
-      ? `<div class="start"><h3>${record ? 'Start another session' : 'Start a session'}</h3><p class="fine">${liveCount ? `${liveCount} of ${workerLimit} workers run. You can start ${workerLimit - liveCount} more. ` : ''}The harness runs in this project folder with its own sign-in and settings. In Ask me, each permission request comes here and to your terminal. Verifold records each tool call that the harness reports.</p><div class="fields"><label class="field" for="session-host">Harness<select id="session-host"><option value="claude"${host === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="session-mode">Commands<select id="session-mode"><option value="ask">Ask me</option><option value="auto">Auto</option></select></label><label class="field" for="session-model">Model<input id="session-model" type="text" maxlength="200" placeholder="Harness default"></label></div><label class="field" for="session-prompt">Request</label><textarea id="session-prompt" rows="4" maxlength="100000" placeholder="What should the harness do?"></textarea>${live.blocked ? `<p class="notice" id="start-blocked">${e(live.blocked)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="start"${live.blocked ? ' disabled aria-describedby="start-blocked"' : ''}>Start session</button></div></div>`
+      ? `<div class="start"><h3>${record ? 'Start another session' : 'Start a session'}</h3><p class="fine">${liveCount ? `${liveCount} of ${workerLimit} workers run. You can start ${workerLimit - liveCount} more. ` : ''}The harness runs in this project folder with its own sign-in and settings. In Ask me, each permission request comes here and to your terminal. Verifold records each tool call that the harness reports.</p><div class="fields"><label class="field" for="session-host">Harness<select id="session-host"><option value="claude"${host === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="session-mode">Commands<select id="session-mode"><option value="ask">Ask me</option><option value="auto">Auto</option></select></label><label class="field" for="session-model">Model<input id="session-model" type="text" maxlength="200" placeholder="Harness default"></label></div><label class="field" for="session-prompt">Request</label><textarea id="session-prompt" rows="4" maxlength="100000" placeholder="What should the harness do?"></textarea><div class="actions"><button type="button" class="primary" data-action="start">Start session</button></div></div>`
       : ''
   }</section>`;
 }
@@ -444,10 +433,9 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
     );
     const blocked = waiting.length
       ? `This task waits for ${waiting.join(', ')}.`
-      : (live.blocked ??
-        (live.full
-          ? `${workerLimit} workers run. End a session, or accept, reject, or cancel a task version first.`
-          : undefined));
+      : live.full
+        ? `${workerLimit} workers run. End a session, or accept, reject, or cancel a task version first.`
+        : undefined;
     let next = '';
     switch (task.state) {
       case 'open':
@@ -545,8 +533,7 @@ export function renderDesk(
     ) ?? attempts[0];
   const record = chosen?.record;
   const next = nextResearchAction(workspace);
-  // The session owner blocks new sessions only while it runs research.
-  const researching = live.blocked !== undefined || active.length > 0;
+  const researching = active.length > 0;
   const choosable =
     live.research !== undefined &&
     !live.research.running &&

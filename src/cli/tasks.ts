@@ -162,7 +162,6 @@ export interface TaskInputFields {
 export interface TaskSessions {
   /** Every worker slot is in use. */
   readonly full: boolean;
-  readonly blockedReason: string | null;
   startTask(input: {
     readonly host: HarnessName;
     readonly model?: string;
@@ -382,8 +381,6 @@ export class TaskManager {
           fail(
             `${other.id} can write to the same paths. Accept, reject, or cancel its version first.`,
           );
-      if (this.options.sessions.blockedReason)
-        fail(this.options.sessions.blockedReason);
       if (this.options.sessions.full)
         fail(
           'Every worker is busy. End a session, or accept, reject, or cancel a task version first.',
