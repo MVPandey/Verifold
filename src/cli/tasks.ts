@@ -83,7 +83,9 @@ export interface TaskVersion {
     | 'failed'
     | 'exited'
     | 'time-limit'
-    | 'stopped';
+    | 'stopped'
+    /** The person worked in the harness's own terminal. */
+    | 'terminal';
   readonly files: readonly VersionFile[];
   /** Files above the size limit that the version does not hold. */
   readonly skipped: readonly string[];
@@ -173,6 +175,8 @@ export interface TaskSessions {
   continueTask(session: string, text: string): void;
   cancel(session: string): void;
   endTask(session: string, reason: string): void;
+  /** Hand the session to the person in its native terminal. */
+  takeTerminal(session: string, lease: string): Promise<void>;
 }
 
 export interface TaskManagerOptions {
@@ -487,7 +491,7 @@ export class TaskManager {
    */
   turnEnded(
     binding: { readonly id: string; readonly claim: string },
-    turn: 'completed' | 'interrupted' | 'failed' | 'exited',
+    turn: 'completed' | 'interrupted' | 'failed' | 'exited' | 'terminal',
     detail?: string,
   ): Promise<void> {
     return this.serial(async () => {
@@ -500,6 +504,31 @@ export class TaskManager {
         task,
         expired && turn === 'interrupted' ? 'time-limit' : turn,
         detail,
+      );
+    });
+  }
+
+  /**
+   * The person takes over the task in the harness's own terminal, with the
+   * task's limits. The latest version counts as changes asked for, and the
+   * terminal's end saves the next version.
+   */
+  openTerminal(id: unknown, lease: string): Promise<void> {
+    return this.serial(async () => {
+      const task = await this.load(id);
+      const attempt = this.review(task);
+      const session = attempt.session;
+      if (!session || !this.options.sessions.idle(session))
+        fail(
+          'The harness session of this task ended. Reject this version, then start the task again.',
+        );
+      await this.options.sessions.takeTerminal(session, lease);
+      this.clearLimit(task.id);
+      await this.write(
+        this.decide({ ...task, state: 'running' }, attempt, {
+          kind: 'changes',
+          note: 'You worked in the terminal.',
+        }),
       );
     });
   }
