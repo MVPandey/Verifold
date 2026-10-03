@@ -253,9 +253,21 @@ A message for a task goes to its worker with the next turn: the start of an atte
 
 After Accept or Reject, Verifold removes the task folder if all its changes are in a version. The branch keeps every version. If Verifold stops while a turn runs, the next `verifold` saves the task folder as a version for review. A task session cannot resume.
 
+### Coordinator
+
+The coordinator turns an objective into tasks for the workers. Under Coordinator in the desk, write the objective or keep the chosen research direction, choose the harness, and start it. Its first turn gets the objective, the research brief, and the chosen direction with its gates.
+
+The coordinator is one harness session outside the two worker slots. Claude Code runs it with `--tools ""`, so it has no built-in tools. Codex runs it with a `read-only` sandbox and the approval policy `never`. Both load none of your MCP servers. It acts only through Verifold tools, and each tool calls the same task operation that you use: create, revise, start, stop, accept, ask for changes, reject, cancel, post a message, and decide an objection or a blocker. It reads versions with a tool, up to 64 KB of text for each file. Verifold checks each action before it changes anything. A refused action changes nothing, and the coordinator reads the reason. It can create up to 12 tasks.
+
+Every change keeps the coordinator's reason, and the desk lists the actions with their results. A decision on a version or a message says that the coordinator made it, and a revision says that the coordinator wrote it. A version also keeps the worker's last reply, a model claim. A repeated tool call with the same harness call ID gets the earlier answer and changes nothing.
+
+Events wake the coordinator: a version ready for review, a message for it, a blocker or an objection, a failed start, or your action on a task. Its own actions do not wake it. Events within 20 seconds join one digest turn, at most 12 turns an hour. Verifold saves the position of each digest before it sends it, so a restart never repeats one. Write to the coordinator under Coordinator; it reads your message at its next wakeup.
+
+Stop the coordinator ends its session. Running workers finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the workers. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.
+
 ## Privacy and website
 
-Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. Task records under `.verifold/tasks/` keep each revision, copies of its input files, each version, and copies of the accepted files. Messages between you, the coordinator, and workers are under `.verifold/messages/`. In a Git repository, the task branches `verifold/*` hold the versions as commits. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research information.
+Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. Task records under `.verifold/tasks/` keep each revision, copies of its input files, each version, and copies of the accepted files. Messages between you, the coordinator, and workers are under `.verifold/messages/`. The coordinator's objective, events, and actions are in `.verifold/coordinator/state.json`, and its conversation is a session record. In a Git repository, the task branches `verifold/*` hold the versions as commits. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research information.
 
 Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
 
