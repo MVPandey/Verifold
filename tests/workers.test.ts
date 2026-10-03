@@ -581,6 +581,13 @@ await test(
       200,
     );
     await status(sessions, id, 'terminal');
+    const view = (
+      (await (
+        await fetch(`${url.origin}/api/view?worker=${id}`, { headers })
+      ).json()) as { html: string }
+    ).html;
+    assert.match(view, /data-action="terminal-return"/);
+    assert.doesNotMatch(view, /data-action="cancel"/);
     // Only the terminal page allows inline styles, and only the desk can frame it.
     const terminalPage = await fetch(`${url.origin}/terminal?session=${id}`);
     assert.equal(terminalPage.status, 200);
