@@ -20,7 +20,7 @@ import {
   type TaskRecord,
   type TaskSessions,
 } from '../src/cli/tasks.ts';
-import { SessionManager } from '../src/cli/session.ts';
+import { SessionPool } from '../src/cli/workers.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 
@@ -80,10 +80,10 @@ async function project(
 
 /** A session owner that runs no harness. The test plays the agent. */
 class FakeSessions implements TaskSessions {
-  active = false;
+  full = false;
   blockedReason: string | null = null;
-  idle = false;
-  current: string | null = null;
+  /** Sessions that wait for a follow-up. */
+  waiting = new Set<string>();
   started: {
     cwd: string;
     prompt: string;
@@ -102,25 +102,21 @@ class FakeSessions implements TaskSessions {
     if (this.failStart)
       return Promise.reject(new Error('claude is not installed'));
     this.started.push(input);
-    this.active = true;
-    this.idle = false;
-    this.current = `S${this.started.length}`;
-    return Promise.resolve(this.current);
+    return Promise.resolve(`S${this.started.length}`);
   }
-  idleSession(): string | null {
-    return this.idle ? this.current : null;
+  idle(session: string): boolean {
+    return this.waiting.has(session);
   }
-  continueTask(text: string): void {
+  continueTask(session: string, text: string): void {
     this.sent.push(text);
-    this.idle = false;
+    this.waiting.delete(session);
   }
   cancel(): void {
     this.cancelled++;
   }
-  endTask(): void {
+  endTask(session: string): void {
     this.ended++;
-    this.active = false;
-    this.idle = false;
+    this.waiting.delete(session);
   }
 }
 
@@ -134,7 +130,7 @@ async function turn(
   assert.ok(started);
   for (const [path, text] of Object.entries(files))
     await write(started.cwd, path, text);
-  sessions.idle = true;
+  sessions.waiting.add(`S${sessions.started.length}`);
   await tasks.turnEnded(started.task, 'completed');
 }
 
@@ -221,9 +217,9 @@ await test('a task runs in its own workspace, versions each turn, and accepts se
     progress: (line) => lines.push(line),
   });
   const id = await tasks.create(fields);
-  sessions.active = true;
-  await assert.rejects(tasks.start(id), /harness session is running/);
-  sessions.active = false;
+  sessions.full = true;
+  await assert.rejects(tasks.start(id), /Every worker is busy/);
+  sessions.full = false;
   await tasks.start(id);
   let task = (await tasks.get(id)) as TaskRecord;
   assert.equal(task.state, 'running');
@@ -325,7 +321,6 @@ await test('stale claims, dependencies, overlapping paths, and conflicts are ref
   await tasks.turnEnded({ id: first, claim: '0000000000000000' }, 'completed');
   assert.equal((await tasks.get(first))?.state, 'running');
   await turn(tasks, sessions, { 'results/baseline.md': 'v1\n' });
-  sessions.active = false;
   await assert.rejects(tasks.start(overlapping), /same paths/);
   // The project file changed after the start, so nothing is copied.
   await write(root, 'results/baseline.md', 'written by the person\n');
@@ -454,11 +449,12 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   t.after(() => delete process.env.ARGS_FILE);
   // The session owner reports task turns to the task manager, which needs the session owner.
   const owner: { tasks?: TaskManager } = {};
-  const sessions = new SessionManager(root, {
+  const sessions = new SessionPool(root, {
     clientVersion: 'test',
     ownerId: 'owner-1',
     executables: { claude },
-    onTaskTurn: (task, turn) => void owner.tasks?.turnEnded(task, turn),
+    onTaskTurn: (task, turn, detail) =>
+      void owner.tasks?.turnEnded(task, turn, detail),
   });
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
   owner.tasks = tasks;
@@ -492,12 +488,12 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     task?.attempts[0]?.versions[0]?.files.map((file) => file.path),
     ['results/baseline.md'],
   );
-  const record = sessions.view()?.record;
+  const record = sessions.views()[0]?.record;
   assert.equal(record?.mode, 'strict');
   assert.equal(record?.task?.id, id);
   // The session controls of the desk and the terminal cannot bypass the task.
-  assert.throws(() => sessions.send('More'), /belongs to a task/);
-  assert.throws(() => sessions.end(), /belongs to a task/);
+  assert.throws(() => sessions.send(record?.id, 'More'), /belongs to a task/);
+  assert.throws(() => sessions.end(record?.id), /belongs to a task/);
   // A task session does not join the paused list when the owner stops.
   await sessions.close();
   await sessions.load();
@@ -521,7 +517,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
   const fake = new FakeSessions();
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions: fake });
-  const sessions = new SessionManager(root, {
+  const sessions = new SessionPool(root, {
     clientVersion: 'test',
     ownerId: 'owner-1',
   });

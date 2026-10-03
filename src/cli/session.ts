@@ -160,11 +160,17 @@ export interface SessionManagerOptions {
   /** Override host executables for an isolated installation or a test fixture. */
   readonly executables?: Partial<Record<HarnessName, string>>;
   readonly onEvent?: (event: SessionEvent) => void;
-  /** A turn of a task session ended, or its process exited. */
+  /**
+   * A turn of a task session ended, or its process exited. For an exit,
+   * `detail` is the last notice, for example that the harness could not start.
+   */
   readonly onTaskTurn?: (
     task: { readonly id: string; readonly claim: string },
     turn: 'completed' | 'interrupted' | 'failed' | 'exited',
+    detail?: string,
   ) => void;
+  /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
+  readonly requests?: { next: number };
 }
 
 /** An action that the current session state does not allow. The message is safe to show. */
@@ -281,7 +287,7 @@ export function modeLabel(record: SessionRecord): string {
       : reported;
 }
 
-function validSessionId(id: string): boolean {
+export function validSessionId(id: string): boolean {
   return /^\d{8}T\d{9}Z-[a-f0-9]{8}$/.test(id);
 }
 
@@ -562,7 +568,7 @@ async function recordIds(root: string): Promise<string[]> {
 }
 
 /** Paused and interrupted sessions among the latest 50 records, newest first. */
-async function loadPaused(root: string): Promise<PausedSession[]> {
+export async function loadPaused(root: string): Promise<PausedSession[]> {
   const paused: PausedSession[] = [];
   for (const id of await recordIds(root)) {
     const record = await readRecord(root, id);
@@ -700,7 +706,7 @@ export class SessionManager {
   private current: SessionRecord | null = null;
   private host: HostSession | null = null;
   /** Request IDs continue across sessions, so an old desk button cannot answer a new request. */
-  private nextRequest = 1;
+  private readonly requests: { next: number };
   private blocked: string | null = null;
   /** A launch is saving its record. No second start can begin. */
   private launching = false;
@@ -719,6 +725,7 @@ export class SessionManager {
   constructor(root: string, options: SessionManagerOptions) {
     this.root = root;
     this.options = options;
+    this.requests = options.requests ?? { next: 1 };
   }
 
   view(): SessionView | null {
@@ -1150,7 +1157,13 @@ export class SessionManager {
         'status',
         `The ${hostName(record.host)} process exited${event.code === null ? '' : ` with code ${event.code}`}.`,
       );
-      if (record.task) this.options.onTaskTurn?.(record.task, 'exited');
+      if (record.task)
+        this.options.onTaskTurn?.(
+          record.task,
+          'exited',
+          this.current?.events.findLast((entry) => entry.kind === 'notice')
+            ?.text,
+        );
       return;
     }
     if (!this.host) return;
@@ -1226,7 +1239,7 @@ export class SessionManager {
       }
       case 'request': {
         const request: PendingRequest = {
-          id: `R${this.nextRequest++}`,
+          id: `R${this.requests.next++}`,
           native: event.id,
           tool: clean(event.tool, 80),
           action: clean(event.action, 2000),
