@@ -1307,3 +1307,75 @@ footer {
 .worker-title h3 {
   margin: 0;
 }
+.pane-switch {
+  margin-top: 12px;
+}
+.pane-switch button[aria-pressed='true'] {
+  border-color: var(--violet);
+  color: var(--violet);
+}
+body[data-pane='details'] .pane-summary,
+body[data-pane='terminal'] .pane-summary,
+body:not([data-pane='details']) .pane-details,
+body:not([data-pane='terminal']) .pane-terminal {
+  display: none;
+}
+.terminal-slot {
+  height: min(520px, 70vh);
+  margin-top: 12px;
+  border-radius: 10px;
+  background: #121016;
+}
+/* Frames stay in this layer, so a page refresh never reloads them. */
+.terminal-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+}
+.terminal-frame {
+  position: absolute;
+  border: 1px solid #2f2938;
+  border-radius: 10px;
+  background: #121016;
+}
+.terminal-frame[hidden] {
+  display: none;
+}
+body.terminal-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  margin: 0;
+  background: #121016;
+  color: #ece8f3;
+}
+.terminal-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2f2938;
+  font-size: 12px;
+}
+.terminal-bar button {
+  padding: 3px 9px;
+  border: 1px solid #2f2938;
+  border-radius: 6px;
+  background: transparent;
+  color: #ece8f3;
+  font: inherit;
+  cursor: pointer;
+}
+.terminal-bar button:hover {
+  border-color: #c5a7ff;
+}
+.terminal-bar button[hidden] {
+  display: none;
+}
+.terminal-screen {
+  flex: 1;
+  min-height: 0;
+  padding: 6px;
+}

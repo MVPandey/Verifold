@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import {
@@ -13,6 +13,7 @@ import {
 } from '../src/cli/tasks.ts';
 import { SessionPool, workerLimit } from '../src/cli/workers.ts';
 import { ptyLibrary } from '../src/cli/terminals.ts';
+import { startDesk } from '../src/cli/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
@@ -496,5 +497,185 @@ await test(
     await delay(300);
     assert.equal(sessions.view(id)?.live, false);
     assert.ok(root);
+  },
+);
+
+await test(
+  'the desk opens, streams, and returns a terminal through its routes',
+  { skip: terminals },
+  async (t) => {
+    const { root, sessions } = await owner(t);
+    const assets = join(root, 'assets');
+    await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+    await mkdir(join(assets, 'ui'));
+    for (const name of [
+      'desk.css',
+      'desk-client.js',
+      'desk-transcript.js',
+      'desk-terminal.js',
+      'desk-terminals.js',
+      'desk-lease.js',
+      'manrope.ttf',
+      'symbol.webp',
+    ])
+      await writeFile(join(assets, 'cli', name), 'fixture asset');
+    for (const name of ['purify.js', 'xterm.js', 'xterm.css', 'addon-fit.js'])
+      await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+    await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    const stop = new AbortController();
+    const desk = await startDesk(
+      root,
+      stop.signal,
+      pathToFileURL(`${assets}/cli/`),
+      sessions,
+    );
+    t.after(async () => {
+      stop.abort();
+      await desk.closed;
+    });
+    const url = new URL(desk.url);
+    const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+    const post = async (
+      path: string,
+      body: unknown,
+    ): Promise<[number, Record<string, unknown>]> => {
+      const response = await fetch(`${url.origin}${path}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return [
+        response.status,
+        (await response.json()) as Record<string, unknown>,
+      ];
+    };
+    const id = await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    const page = await fetch(`${url.origin}/`);
+    assert.match(
+      page.headers.get('content-security-policy') ?? '',
+      /frame-src 'self'; frame-ancestors 'none'/,
+    );
+    assert.equal(
+      (
+        await post('/api/action', {
+          action: 'terminal-open',
+          session: id,
+          lease: 'bad',
+        })
+      )[0],
+      409,
+    );
+    assert.equal(
+      (
+        await post('/api/action', {
+          action: 'terminal-open',
+          session: id,
+          lease,
+        })
+      )[0],
+      200,
+    );
+    await status(sessions, id, 'terminal');
+    // Only the terminal page allows inline styles, and only the desk can frame it.
+    const terminalPage = await fetch(`${url.origin}/terminal?session=${id}`);
+    assert.equal(terminalPage.status, 200);
+    assert.match(
+      terminalPage.headers.get('content-security-policy') ?? '',
+      /style-src 'self' 'unsafe-inline'.*frame-ancestors 'self'/,
+    );
+    assert.equal(terminalPage.headers.get('x-frame-options'), 'SAMEORIGIN');
+    assert.equal(
+      (await fetch(`${url.origin}/terminal?session=../x`)).status,
+      400,
+    );
+    const read = async (after: number): Promise<Record<string, unknown>> =>
+      (await (
+        await fetch(`${url.origin}/api/terminal?session=${id}&after=${after}`, {
+          headers,
+        })
+      ).json()) as Record<string, unknown>;
+    assert.equal(
+      (await fetch(`${url.origin}/api/terminal?session=${id}&after=0`)).status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(`${url.origin}/api/terminal?session=${id}&after=-1`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    let output = await read(0);
+    let text = String(output.data);
+    for (let tries = 0; tries < 20 && !text.includes('fake tui'); tries++) {
+      output = await read(Number(output.next));
+      text += String(output.data);
+    }
+    assert.match(text, /fake tui --resume/);
+    assert.equal(output.owner, lease);
+    const other = 'd'.repeat(16);
+    assert.deepEqual(
+      await post('/api/terminal', { session: id, lease: other, input: 'x\r' }),
+      [
+        409,
+        {
+          error:
+            'Another view holds input for this terminal. Take input here first.',
+        },
+      ],
+    );
+    assert.equal(
+      (
+        await post('/api/terminal', {
+          session: id,
+          lease,
+          input: 'from the desk\r',
+        })
+      )[0],
+      200,
+    );
+    for (
+      let tries = 0;
+      tries < 20 && !text.includes('echo from the desk');
+      tries++
+    ) {
+      output = await read(Number(output.next));
+      text += String(output.data);
+    }
+    assert.match(text, /echo from the desk/);
+    assert.equal(
+      (
+        await post('/api/terminal', {
+          session: id,
+          lease: other,
+          take: true,
+          cols: 90,
+          rows: 20,
+        })
+      )[0],
+      200,
+    );
+    assert.equal((await read(Number(output.next))).owner, other);
+    assert.equal(
+      (
+        await post('/api/action', { action: 'terminal-return', session: id })
+      )[0],
+      200,
+    );
+    await status(sessions, id, 'idle');
+    assert.equal(
+      (
+        await fetch(`${url.origin}/api/terminal?session=${id}&after=0`, {
+          headers,
+        })
+      ).status,
+      404,
+    );
   },
 );

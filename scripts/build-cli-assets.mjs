@@ -15,6 +15,8 @@ for (const [source, target] of [
   ['node_modules/@xterm/xterm/lib/xterm.mjs', 'vendor/xterm.js'],
   ['node_modules/@xterm/xterm/css/xterm.css', 'vendor/xterm.css'],
   ['node_modules/@xterm/xterm/LICENSE', 'vendor/xterm.LICENSE.txt'],
+  ['node_modules/@xterm/addon-fit/lib/addon-fit.mjs', 'vendor/addon-fit.js'],
+  ['node_modules/@xterm/addon-fit/LICENSE', 'vendor/addon-fit.LICENSE.txt'],
 ]) {
   await copyFile(source, `dist-cli/cli/${target}`);
 }

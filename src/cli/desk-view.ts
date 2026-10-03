@@ -25,6 +25,8 @@ export interface DeskSession {
   readonly workers?: readonly SessionView[];
   /** Every worker slot is in use. */
   readonly full?: boolean;
+  /** True when terminal panes work here, or why they do not. */
+  readonly terminals?: true | string;
   /** The desk process owns a session manager, so the page can start and control a session. */
   readonly controllable: boolean;
   /** Why the session owner refuses a new session now, for example while research runs. */
@@ -142,8 +144,12 @@ const detailSwitch =
  * A place for a transcript panel. The page fills it from /api/transcript and
  * keeps the panel between renders. `detail` shows it only in Details.
  */
-function transcriptSlot(source: string, label: string, detail = true): string {
-  return `<div class="transcript-slot${detail ? ' detail-only' : ''}" data-source="${e(source)}" data-label="${e(label)}"></div>`;
+function transcriptSlot(
+  source: string,
+  label: string,
+  visibility = 'detail-only',
+): string {
+  return `<div class="transcript-slot${visibility ? ` ${visibility}` : ''}" data-source="${e(source)}" data-label="${e(label)}"></div>`;
 }
 
 const transcriptNote =
@@ -226,11 +232,35 @@ function result(command: CommandEntry): string {
 
 const sessionStatus: Record<string, [string, string]> = {
   starting: ['Starting', 'active'],
+  terminal: ['You hold the terminal', 'active'],
   running: ['Working', 'active'],
   idle: ['Waiting for a follow-up', 'success'],
   ended: ['Ended', 'muted'],
   failed: ['Stopped with an error', 'failed'],
 };
+
+const paneSwitch =
+  '<div class="seg pane-switch" role="group" aria-label="Worker view"><button type="button" data-pane="summary">Summary</button><button type="button" data-pane="details">Details</button><button type="button" data-pane="terminal">Terminal</button></div>';
+
+/**
+ * The worker's own terminal. While the person holds it, a framed terminal page
+ * fills the slot. Otherwise the pane says what opening it does, or why it cannot open.
+ */
+function renderTerminal(view: SessionView, live: DeskSession): string {
+  const { record } = view;
+  const name = hostName(record.host);
+  if (typeof live.terminals === 'string')
+    return `<p class="notice">${e(live.terminals)}</p>`;
+  if (record.status === 'terminal')
+    return `<p class="fine">${record.host === 'claude' ? 'You work in the Claude Code terminal. Verifold records no tool calls until you return.' : 'You work in the Codex terminal. Codex keeps reporting its events to Verifold.'}</p><div class="terminal-slot" data-session="${e(record.id)}" data-label="${e(name)} terminal"></div><div class="actions"><button type="button" class="primary" data-action="terminal-return" data-session="${e(record.id)}">Return to Verifold</button><button type="button" data-terminal-tab="${e(record.id)}">Open in new tab</button></div>`;
+  if (!view.live)
+    return '<p class="fine">The session ended. Start or resume a session to open its terminal.</p>';
+  const off =
+    record.status === 'idle'
+      ? ''
+      : 'Open the terminal between turns. Wait for the turn to end, or cancel it.';
+  return `<p class="fine">${record.host === 'claude' ? `Verifold stops its Claude Code process and opens Claude Code in a terminal on this conversation${record.mode === 'strict' ? ', with the task limits' : ''}. While you work there, Verifold records no tool calls.` : `Codex opens in a terminal on this session${record.mode === 'strict' ? ', with the task limits' : ''}. Codex keeps reporting its events while you type.`}${record.task ? ' When you return, Verifold saves the task folder as a version.' : ' Return to Verifold to continue here.'}</p>${off ? `<p class="notice" id="terminal-off">${off}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="terminal-open" data-session="${e(record.id)}"${off ? ' disabled aria-describedby="terminal-off"' : ''}>Open the terminal</button></div>`;
+}
 
 /** The status of a live worker. A task worker that waits has a version to review. */
 function workerStatus(record: SessionView['record']): [string, string] {
@@ -279,15 +309,16 @@ function renderSession(live: DeskSession, defaultHost: string): string {
         `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type">${e(request.id)} · Needs you</p><p>${e(hostName(record.host))} asks to use ${e(request.tool)}.</p><code>${e(request.action)}</code>${request.detail ? `<p class="fine">Change to review:</p><code class="detail">${e(request.detail)}</code>` : ''}${request.reason ? `<p class="fine">Reason from the harness: ${e(request.reason)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="answer" data-request="${e(request.id)}" data-decision="allow">Allow once</button><button type="button" data-action="answer" data-request="${e(request.id)}" data-decision="deny">Deny</button></div></article>`,
     )
     .join('')}
-  ${detailSwitch}
-  <ol class="session-events summary-only">${record.events
+  ${paneSwitch}
+  <ol class="session-events pane-summary">${record.events
     .slice(-60)
     .map(
       (event) =>
         `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span>${event.kind === 'agent' ? `<div class="event-text md">${markdownHtml(event.text)}</div>` : `<span class="event-text">${e(event.text)}</span>`}<time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`,
     )
     .join('')}</ol>
-  ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`)}
+  ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
+  <div class="pane-terminal">${renderTerminal(view, live)}</div>
   ${
     record.task
       ? `<p class="fine">This session belongs to ${e(record.task.id)}. It runs in the task folder in Strict mode. Use the task actions under Tasks.</p>`
@@ -493,6 +524,9 @@ function renderCommands(view: SessionView | null): string {
     .join('')}</tbody></table></div></section>`;
 }
 
+/** The terminal page: xterm.js renders one harness terminal. It runs inside the desk, or alone in its own tab. */
+export const terminalPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Verifold terminal</title><link rel="icon" href="/symbol.webp"><link rel="stylesheet" href="/vendor/xterm.css"><link rel="stylesheet" href="/desk.css"><script type="module" src="/desk-terminal.js"></script></head><body class="terminal-page"><div class="terminal-bar"><span id="terminal-state" role="status">Connecting…</span><button id="terminal-take" type="button" hidden>Take input here</button></div><div id="terminal" class="terminal-screen" role="application" aria-label="Harness terminal"></div></body></html>`;
+
 export const deskPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Verifold research desk</title><link rel="icon" href="/symbol.webp"><link rel="stylesheet" href="/desk.css"><script type="module" src="/desk-client.js"></script></head><body><a class="skip" href="#content">Skip to research</a><header class="topbar"><a class="brand" href="/" aria-label="Verifold research desk"><img src="/symbol.webp" alt="" width="36" height="36"><span>verifold</span></a><span class="desk-name">Research desk</span><div class="header-actions"><span class="privacy">Private workspace</span><button id="theme" type="button" aria-label="Switch color theme">Change theme</button></div></header><div class="connection-bar"><span id="connection" role="status">Connecting to your project…</span><span id="action-status" role="status"></span><span id="observation"></span><button id="retry" type="button">Refresh</button></div><main id="content" tabindex="-1"><div class="empty"><h1>Opening your research desk</h1><p>Reading the selected project. This does not start research.</p></div></main><footer>Research stays in your project. Your chosen harness owns its tools and permissions.</footer></body></html>`;
 
 /** All research text is escaped. Source links are validated before rendering. */
@@ -546,7 +580,7 @@ export function renderDesk(
         : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one under Workers.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
   }
   <section class="attempt-detail"><div class="section-title"><h2>Selected attempt</h2>${chosen ? `<span class="status ${tone}">${e(outcome(chosen))}</span>` : ''}</div>
-  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Its transcript is under Research. Choose Details there.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', false)}</details>`}` : '<p class="empty-note">No research attempts yet.</p>'}</section>
+  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Its transcript is under Research. Choose Details there.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', '')}</details>`}` : '<p class="empty-note">No research attempts yet.</p>'}</section>
   <section class="history"><div class="section-title"><h2>Attempt history</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" ${chosen?.id === attempt.id ? 'aria-pressed="true"' : 'aria-pressed="false"'}><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>${!attempts.length ? '<p class="empty-note">Each research request will appear here with its own identity.</p>' : ''}</section></aside></div>`;
   return { html, observation };
 }

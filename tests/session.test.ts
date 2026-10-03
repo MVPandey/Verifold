@@ -624,10 +624,15 @@ await test('desk actions need the token and a JSON body, and report state errors
     await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
     await mkdir(join(assets, 'ui'));
     await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+    for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
+      await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
     for (const name of [
       'desk.css',
       'desk-client.js',
       'desk-transcript.js',
+      'desk-terminal.js',
+      'desk-terminals.js',
+      'desk-lease.js',
       'manrope.ttf',
       'symbol.webp',
     ])
