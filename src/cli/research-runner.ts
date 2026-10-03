@@ -128,7 +128,8 @@ export class ResearchRunner {
       (request) =>
         harness({
           ...request,
-          onActivity: (message) => this.note('tool', message),
+          onActivity: (message, kind) =>
+            this.note('tool', message, undefined, kind === 'notice'),
         }),
     )
       .then((workspace) => {
@@ -187,15 +188,20 @@ export class ResearchRunner {
     await this.work;
   }
 
+  /** Status lines and notices also go to the terminal. Harness events stay in the desk. */
   private note(
     kind: ResearchActivity['kind'],
     text: string,
     terminalHint?: string,
+    notice = kind === 'status',
   ): void {
     this.events = [
       ...this.events,
       { at: new Date().toISOString(), kind, text: text.slice(0, 2000) },
     ].slice(-300);
-    this.options.io.progress?.(terminalHint ? `${text} ${terminalHint}` : text);
+    if (notice)
+      this.options.io.progress?.(
+        terminalHint ? `${text} ${terminalHint}` : text,
+      );
   }
 }

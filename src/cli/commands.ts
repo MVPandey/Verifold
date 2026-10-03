@@ -155,7 +155,9 @@ const feedLabels: Record<SessionEvent['kind'], string> = {
   notice: 'notice',
 };
 
-function feedLine(event: SessionEvent): string {
+/** One terminal line for a session event. Harness tool events stay in the desk, so they have none. */
+export function feedLine(event: SessionEvent): string | null {
+  if (event.kind === 'tool') return null;
   const time = new Date(event.at).toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
@@ -368,7 +370,8 @@ async function serveDesk(
         clientVersion: version,
         ownerId: owner.ownerId,
         onEvent: (event) => {
-          if (io.interactive) io.progress?.(feedLine(event));
+          const line = io.interactive ? feedLine(event) : null;
+          if (line) io.progress?.(line);
           const view = sessions.view();
           if (!session || !view) return;
           const { status } = view.record;

@@ -14,7 +14,7 @@ import type { CliIO } from './commands.ts';
 import { withActivity } from './choices.ts';
 import { parseCandidates } from './contracts.ts';
 import type { Candidate, Workspace } from './contracts.ts';
-import { runHarness, type HarnessResult } from './harness.ts';
+import { activityProgress, runHarness, type HarnessResult } from './harness.ts';
 import { TranscriptWriter } from './transcript.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { processStart, stopRecordedProcess } from './owner.ts';
@@ -256,7 +256,7 @@ export async function runResearch(
                   });
                 },
                 onTranscript: transcript.run(),
-                ...(io.progress ? { onActivity: io.progress } : {}),
+                onActivity: activityProgress(io.progress),
                 ...(workspace.model ? { model: workspace.model } : {}),
                 ...(state.sessionId ? { sessionId: state.sessionId } : {}),
               }),
