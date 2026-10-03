@@ -23,6 +23,8 @@ import {
 import { SessionPool } from '../src/cli/workers.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
+import { renderDesk } from '../src/cli/desk-view.ts';
+import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, {
@@ -363,6 +365,132 @@ await test('stale claims, dependencies, overlapping paths, and conflicts are ref
   assert.equal((await tasks.get(second))?.state, 'running');
 });
 
+await test('an accepted version reaches the tasks that wait for it, and a replaced one blocks their acceptance', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  const prior = await tasks.create({
+    ...fields,
+    title: 'Prior art',
+    inputs: '',
+    writable: 'results/prior',
+    output: 'results/prior/notes.md',
+  });
+  const review = await tasks.create({
+    ...fields,
+    title: 'Method review',
+    inputs: '',
+    writable: 'results/review',
+    output: 'results/review/notes.md',
+    dependencies: [prior],
+  });
+  await tasks.start(prior);
+  await turn(tasks, sessions, { 'results/prior/notes.md': 'prior art v1\n' });
+  await tasks.accept(prior, 1, ['results/prior/notes.md']);
+  let task = (await tasks.get(prior)) as TaskRecord;
+  assert.equal(task.artifacts?.length, 1);
+  assert.equal(task.artifacts?.[0]?.version, 1);
+  assert.equal(task.artifacts?.[0]?.files[0]?.path, 'results/prior/notes.md');
+  const snapshot = join(
+    root,
+    '.verifold/tasks',
+    prior,
+    'artifacts/v1/results/prior/notes.md',
+  );
+  assert.equal(await readFile(snapshot, 'utf8'), 'prior art v1\n');
+
+  // The waiting task receives the accepted file and records its version.
+  await tasks.start(review);
+  let started = sessions.started.at(-1);
+  assert.equal(
+    await readFile(join(started?.cwd ?? '', 'results/prior/notes.md'), 'utf8'),
+    'prior art v1\n',
+  );
+  assert.match(
+    started?.prompt ?? '',
+    /task-1 \(Prior art\), version 1: results\/prior\/notes\.md/,
+  );
+  task = (await tasks.get(review)) as TaskRecord;
+  assert.deepEqual(task.attempts[0]?.consumed, [{ task: prior, version: 1 }]);
+  await turn(tasks, sessions, { 'results/review/notes.md': 'review\n' });
+
+  // The done task is revised and accepted again. The first artifact stays as it was.
+  await tasks.edit(prior, {
+    ...fields,
+    title: 'Prior art',
+    inputs: '',
+    writable: 'results/prior',
+    output: 'results/prior/notes.md',
+    reason: 'An objection found a missing source.',
+  });
+  task = (await tasks.get(prior)) as TaskRecord;
+  assert.equal(task.state, 'open');
+  assert.equal(task.revision, 2);
+  await tasks.start(prior);
+  await turn(tasks, sessions, { 'results/prior/notes.md': 'prior art v2\n' });
+  await tasks.accept(prior, 2, ['results/prior/notes.md']);
+  task = (await tasks.get(prior)) as TaskRecord;
+  assert.deepEqual(
+    task.artifacts?.map((artifact) => [artifact.version, artifact.revision]),
+    [
+      [1, 1],
+      [2, 2],
+    ],
+  );
+  assert.equal(await readFile(snapshot, 'utf8'), 'prior art v1\n');
+
+  // The review used version 1, so it cannot be accepted now.
+  await assert.rejects(
+    tasks.accept(review, 1, ['results/review/notes.md']),
+    /used task-1 version 1, but task-1 now has version 2/,
+  );
+  const desk = async (selected: string): Promise<string> =>
+    renderDesk(await readDeskSnapshot(root), undefined, null, {
+      session: null,
+      controllable: true,
+      tasks: {
+        list: await tasks.list(),
+        selected: await tasks.get(selected),
+        idle: [],
+      },
+    }).html;
+  const stale = await desk(review);
+  assert.match(
+    stale,
+    /This version used task-1 version 1, but task-1 now has version 2\. It cannot be accepted/,
+  );
+  assert.match(stale, /data-action="task-accept"[^>]*disabled>Accept 0 files/);
+  assert.match(stale, /<dt>Received<\/dt><dd>task-1 version 1<\/dd>/);
+  assert.match(
+    await desk(prior),
+    /Version 2 was accepted: results\/prior\/notes\.md[\s\S]*Revise the task/,
+  );
+  await tasks.reject(review, 1);
+  await tasks.start(review);
+  started = sessions.started.at(-1);
+  assert.equal(
+    await readFile(join(started?.cwd ?? '', 'results/prior/notes.md'), 'utf8'),
+    'prior art v2\n',
+  );
+  task = (await tasks.get(review)) as TaskRecord;
+  assert.deepEqual(task.attempts[1]?.consumed, [{ task: prior, version: 2 }]);
+
+  // One file from two sources is refused before any claim.
+  const both = await tasks.create({
+    ...fields,
+    title: 'Both',
+    inputs: 'results/prior/notes.md',
+    writable: 'results/both',
+    output: 'results/both/notes.md',
+    dependencies: [prior],
+  });
+  await assert.rejects(
+    tasks.start(both),
+    /results\/prior\/notes\.md comes from task-1 and from an input file/,
+  );
+  assert.equal((await tasks.get(both))?.attempts.length, 0);
+});
+
 await test('failed allocation and failed starts keep evidence and release the claim', async (t) => {
   const root = await project(t, false);
   const outside = await realpath(
@@ -640,5 +768,8 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     )[0],
     200,
   );
-  assert.match(await view(), /Done\. You accepted results\/baseline\.md/);
+  assert.match(
+    await view(),
+    /Done\. Version 1 was accepted: results\/baseline\.md/,
+  );
 });
