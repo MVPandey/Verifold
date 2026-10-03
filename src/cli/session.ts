@@ -18,6 +18,11 @@ import {
   type HostSession,
   type SessionMode,
 } from './session-hosts.ts';
+import {
+  requestUpdate,
+  TranscriptWriter,
+  type TranscriptUpdate,
+} from './transcript.ts';
 
 export type SessionStatus =
   | 'starting'
@@ -268,6 +273,15 @@ export function modeLabel(record: SessionRecord): string {
 
 function validSessionId(id: string): boolean {
   return /^\d{8}T\d{9}Z-[a-f0-9]{8}$/.test(id);
+}
+
+function transcriptFile(root: string, id: string): string {
+  return join(root, '.verifold', 'sessions', `${id}.transcript.jsonl`);
+}
+
+/** The private transcript of a session: full messages, tool inputs, and tool results. Null for an invalid ID. */
+export function sessionTranscript(root: string, id: string): string | null {
+  return validSessionId(id) ? transcriptFile(root, id) : null;
 }
 
 function nativeId(value: string): string | null {
@@ -640,6 +654,11 @@ export class SessionManager {
   private dirty = false;
   private writing: Promise<void> | null = null;
   private saveFailed = false;
+  /** The transcript file of the current launch. */
+  private transcript: {
+    readonly writer: TranscriptWriter;
+    readonly apply: (update: TranscriptUpdate) => void;
+  } | null = null;
 
   constructor(root: string, options: SessionManagerOptions) {
     this.root = root;
@@ -790,6 +809,7 @@ export class SessionManager {
     if (!this.host || this.current?.status !== 'idle')
       fail('Wait for the current turn to end, or cancel it.');
     this.host.send(text);
+    this.transcript?.apply(requestUpdate(text));
     this.patch((record) => ({ ...record, status: 'running' }));
     this.event('you', text);
   }
@@ -858,6 +878,7 @@ export class SessionManager {
   async close(): Promise<boolean> {
     this.pause();
     while (this.writing) await this.writing;
+    await this.transcript?.writer.flushed();
     return !this.saveFailed;
   }
 
@@ -915,6 +936,11 @@ export class SessionManager {
           'Verifold could not save the session record, so the harness did not start. Check .verifold/sessions/ and try again.',
         );
       }
+      const writer = await TranscriptWriter.open(
+        transcriptFile(this.root, record.id),
+      );
+      this.transcript = { writer, apply: writer.run() };
+      if (prompt !== undefined) this.transcript.apply(requestUpdate(prompt));
       const executable = this.options.executables?.[record.host];
       const native = record.nativeSessionId;
       this.prompted = prompt !== undefined;
@@ -1200,6 +1226,9 @@ export class SessionManager {
         break;
       case 'notice':
         this.event('notice', event.text);
+        break;
+      case 'transcript':
+        this.transcript?.apply(event.update);
         break;
     }
   }

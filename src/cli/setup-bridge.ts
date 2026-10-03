@@ -1,6 +1,7 @@
 import type { Choice } from './choices.ts';
 import type { AskHint, BriefDecision, CliIO, SetupStep } from './commands.ts';
 import { SessionActionError } from './session.ts';
+import { TranscriptLog } from './transcript.ts';
 
 export type SetupPrompt =
   | {
@@ -59,6 +60,8 @@ function plain(question: string): string {
  */
 export class SetupBridge {
   readonly io: CliIO;
+  /** Harness runs during setup. Setup keeps them in memory only. */
+  readonly transcript = new TranscriptLog();
   private readonly signal: AbortSignal;
   private nextId = 1;
   private pending: {

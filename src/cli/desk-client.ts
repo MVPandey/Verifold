@@ -1,5 +1,6 @@
 import DOMPurify from './vendor/purify.js';
 import { requiredElement } from '../ui/dom.ts';
+import { mountTranscripts, refreshTranscripts } from './desk-transcript.ts';
 
 const main = requiredElement(document, '#content', HTMLElement);
 const connectionLabel = requiredElement(document, '#connection', HTMLElement);
@@ -30,7 +31,7 @@ let failure:
   | { readonly selector: string; readonly message: string }
   | undefined;
 
-/** Summary hides the research event list. The choice lasts for this browser. */
+/** Details shows the harness transcripts. The choice lasts for this browser. */
 function showDetail(): void {
   document.body.dataset.detail = detail;
   for (const button of main.querySelectorAll<HTMLElement>('[data-detail]'))
@@ -93,13 +94,18 @@ async function refresh(): Promise<void> {
       throw new Error('The desk returned an unreadable view.');
     if (wanted !== selected || stopped) return;
     if (view.html !== lastHtml) {
+      // Transcript panels keep their own open calls. Only page sections are restored here.
       const open = new Set(
         Array.from(
-          main.querySelectorAll('details[open]'),
+          main.querySelectorAll('details[id][open]'),
           (element) => element.id,
         ),
       );
       const focused = document.activeElement;
+      const inPanel =
+        focused instanceof HTMLElement && focused.closest('.transcript')
+          ? focused
+          : null;
       const focusId = focused instanceof HTMLElement ? focused.id : '';
       const focusDetail = focused?.matches('summary')
         ? focused.closest('details')?.id
@@ -141,8 +147,12 @@ async function refresh(): Promise<void> {
           field.value = value;
       }
       if (lastHtml)
-        for (const detail of main.querySelectorAll('details'))
+        for (const detail of main.querySelectorAll<HTMLDetailsElement>(
+          'details[id]',
+        ))
           detail.open = open.has(detail.id);
+      mountTranscripts(main, () => token);
+      inPanel?.focus({ preventScroll: true });
       if (focusAttempt)
         main
           .querySelector<HTMLButtonElement>(
@@ -358,6 +368,7 @@ document.addEventListener('click', (event) => {
   if (target.dataset.detail) {
     detail = target.dataset.detail === 'details' ? 'details' : 'summary';
     showDetail();
+    refreshTranscripts();
     try {
       localStorage.setItem('verifold-desk-detail', detail);
     } catch {

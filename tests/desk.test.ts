@@ -165,6 +165,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
   for (const name of [
     'desk.css',
     'desk-client.js',
+    'desk-transcript.js',
     'manrope.ttf',
     'symbol.webp',
   ])
