@@ -20,6 +20,10 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    files: ['**/*.cjs'],
+    languageOptions: { globals: globals.node, sourceType: 'commonjs' },
+  },
+  {
     files: ['src/**/*.ts', 'tests/**/*.ts'],
     extends: [...tseslint.configs.recommendedTypeChecked],
     languageOptions: {

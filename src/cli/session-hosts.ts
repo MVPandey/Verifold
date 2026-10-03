@@ -1,4 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { harnessEnvironment, type HarnessName } from './harness.ts';
@@ -101,6 +105,8 @@ export interface HostOptions {
 export interface HostSession {
   /** The harness process. It leads its own process group on POSIX. */
   readonly pid: number | undefined;
+  /** Codex only: the app-server socket that a terminal can attach to. */
+  readonly socket?: string;
   /** Start a new turn. The caller sends a follow-up only after the previous turn ends. */
   send(text: string): void;
   /** Deny the listed open requests and stop the current turn. */
@@ -460,8 +466,26 @@ export function codexCommand(item: Record<string, unknown>): string {
  * approvals to this client. Auto routes them to the Codex reviewer agent.
  */
 function codex(options: HostOptions): HostSession {
-  const child = launch(options.executable ?? 'codex', ['app-server'], options);
+  // The app-server listens on a socket in a private folder, so a terminal can attach later.
+  // Unix socket paths are short (about 104 bytes on macOS), so the folder is under the temporary folder.
+  const folder = mkdtempSync(join(tmpdir(), 'vf-'));
+  const socket = join(folder, 'codex.sock');
+  const child = launch(
+    options.executable ?? 'codex',
+    ['app-server', '--listen', `unix://${socket}`],
+    options,
+  );
+  child.stdout.resume();
+  child.on('close', () => rmSync(folder, { recursive: true, force: true }));
   const emit = options.onEvent;
+  /** Messages wait here until the socket connects. */
+  let queue: string[] | null = [];
+  let connection: UnixWebSocket | null = null;
+  const send = (value: unknown): void => {
+    const text = JSON.stringify(value);
+    if (connection) connection.send(text);
+    else queue?.push(text);
+  };
   const results = new Map<
     number,
     {
@@ -482,7 +506,7 @@ function codex(options: HostOptions): HostSession {
   ): void => {
     const id = nextId++;
     results.set(id, { method, ...(onResult ? { onResult } : {}) });
-    write(child, { method, id, params });
+    send({ method, id, params });
   };
   const interruptTurn = (): void => {
     if (thread && turn)
@@ -504,7 +528,7 @@ function codex(options: HostOptions): HostSession {
     const rpcId = requests.get(id);
     if (rpcId === undefined) return;
     requests.delete(id);
-    write(child, {
+    send({
       id: rpcId,
       result: { decision: allow ? 'accept' : 'decline' },
     });
@@ -608,126 +632,156 @@ function codex(options: HostOptions): HostSession {
     }
   };
 
-  readLines(
-    child.stdout,
-    (message) => {
-      if (!record(message)) return;
-      const method = str(message.method);
-      const params = record(message.params) ? message.params : {};
-      const rpcId =
-        typeof message.id === 'number' || typeof message.id === 'string'
-          ? message.id
-          : undefined;
-      if (method && rpcId !== undefined) {
-        const key = `c${rpcId}`;
-        if (
-          method === 'item/commandExecution/requestApproval' ||
-          method === 'item/fileChange/requestApproval'
-        ) {
-          const toolId = str(params.itemId);
-          const reason = str(params.reason);
-          const change = toolId ? changes.get(toolId) : undefined;
-          requests.set(key, rpcId);
-          emit({
-            type: 'request',
-            id: key,
-            tool: method.includes('command') ? 'Command' : 'File change',
-            action: method.includes('command')
-              ? codexCommand(params)
-              : (change?.paths ?? str(params.grantRoot) ?? 'File changes'),
-            ...(toolId ? { toolId } : {}),
-            ...(change?.diff ? { detail: change.diff } : {}),
-            ...(reason ? { reason } : {}),
-          });
-        } else {
-          write(child, {
-            id: rpcId,
-            error: {
-              code: -32601,
-              message: 'Verifold does not support this request.',
-            },
-          });
-          emit({
-            type: 'notice',
-            text: `Codex sent a request that Verifold does not support (${method}). Verifold declined it.`,
-          });
-        }
-        return;
-      }
-      if (typeof message.id === 'number') {
-        const pending = results.get(message.id);
-        results.delete(message.id);
-        if (record(message.error)) {
-          emit({
-            type: 'notice',
-            text: `Codex rejected ${pending?.method ?? 'a request'}: ${str(message.error.message) ?? 'unknown error'}.`,
-          });
-          // Without a thread, the session cannot continue. A rejected turn ends that turn.
-          if (
-            pending?.method === 'initialize' ||
-            pending?.method === 'thread/start' ||
-            pending?.method === 'thread/resume'
-          )
-            stop(child);
-          else if (pending?.method === 'turn/start')
-            emit({ type: 'turn-end', status: 'failed' });
-        } else if (record(message.result)) pending?.onResult?.(message.result);
-        return;
-      }
-      // Codex can report other threads, such as a reviewer, on the same connection.
-      const from = str(params.threadId);
-      if (thread && from && from !== thread) {
-        // Only the transcript shows subagent work. Requests and records stay with the main thread.
-        if (method && agents.has(from)) transcribe(method, params.item, from);
-        return;
-      }
-      if (method === 'serverRequest/resolved') {
-        const resolved = params.requestId;
-        const key =
-          typeof resolved === 'number' || typeof resolved === 'string'
-            ? `c${resolved}`
-            : '';
-        if (requests.delete(key)) emit({ type: 'request-end', id: key });
-      } else if (method === 'item/started' || method === 'item/completed') {
-        transcribe(method, params.item, null);
-        item(method, params.item);
-      } else if (method === 'turn/completed') {
-        turn = undefined;
-        const value = record(params.turn) ? str(params.turn.status) : undefined;
+  const handle = (message: unknown): void => {
+    if (!record(message)) return;
+    const method = str(message.method);
+    const params = record(message.params) ? message.params : {};
+    const rpcId =
+      typeof message.id === 'number' || typeof message.id === 'string'
+        ? message.id
+        : undefined;
+    if (method && rpcId !== undefined) {
+      const key = `c${rpcId}`;
+      if (
+        method === 'item/commandExecution/requestApproval' ||
+        method === 'item/fileChange/requestApproval'
+      ) {
+        const toolId = str(params.itemId);
+        const reason = str(params.reason);
+        const change = toolId ? changes.get(toolId) : undefined;
+        requests.set(key, rpcId);
         emit({
-          type: 'turn-end',
-          status:
-            value === 'interrupted'
-              ? 'interrupted'
-              : value === 'failed'
-                ? 'failed'
-                : 'completed',
+          type: 'request',
+          id: key,
+          tool: method.includes('command') ? 'Command' : 'File change',
+          action: method.includes('command')
+            ? codexCommand(params)
+            : (change?.paths ?? str(params.grantRoot) ?? 'File changes'),
+          ...(toolId ? { toolId } : {}),
+          ...(change?.diff ? { detail: change.diff } : {}),
+          ...(reason ? { reason } : {}),
         });
-      } else if (method === 'item/autoApprovalReview/completed') {
-        const toolId = str(params.targetItemId);
-        const review = record(params.review) ? params.review : {};
-        const action = record(params.action)
-          ? str(params.action.command)
-          : undefined;
-        const risk = str(review.riskLevel);
-        const rationale = str(review.rationale);
-        if (toolId)
-          emit({
-            type: 'review',
-            toolId,
-            approved: review.status === 'approved',
-            ...(action ? { action } : {}),
-            ...(risk ? { risk } : {}),
-            ...(rationale ? { rationale } : {}),
-          });
-      } else if (method === 'error')
+      } else {
+        send({
+          id: rpcId,
+          error: {
+            code: -32601,
+            message: 'Verifold does not support this request.',
+          },
+        });
         emit({
           type: 'notice',
-          text: `Codex reported an error: ${record(params.error) ? (str(params.error.message) ?? 'unknown') : 'unknown'}.`,
+          text: `Codex sent a request that Verifold does not support (${method}). Verifold declined it.`,
         });
-    },
-    (text) => emit({ type: 'notice', text }),
-  );
+      }
+      return;
+    }
+    if (typeof message.id === 'number') {
+      const pending = results.get(message.id);
+      results.delete(message.id);
+      if (record(message.error)) {
+        emit({
+          type: 'notice',
+          text: `Codex rejected ${pending?.method ?? 'a request'}: ${str(message.error.message) ?? 'unknown error'}.`,
+        });
+        // Without a thread, the session cannot continue. A rejected turn ends that turn.
+        if (
+          pending?.method === 'initialize' ||
+          pending?.method === 'thread/start' ||
+          pending?.method === 'thread/resume'
+        )
+          stop(child);
+        else if (pending?.method === 'turn/start')
+          emit({ type: 'turn-end', status: 'failed' });
+      } else if (record(message.result)) pending?.onResult?.(message.result);
+      return;
+    }
+    // Codex can report other threads, such as a reviewer, on the same connection.
+    const from = str(params.threadId);
+    if (thread && from && from !== thread) {
+      // Only the transcript shows subagent work. Requests and records stay with the main thread.
+      if (method && agents.has(from)) transcribe(method, params.item, from);
+      return;
+    }
+    if (method === 'serverRequest/resolved') {
+      const resolved = params.requestId;
+      const key =
+        typeof resolved === 'number' || typeof resolved === 'string'
+          ? `c${resolved}`
+          : '';
+      if (requests.delete(key)) emit({ type: 'request-end', id: key });
+    } else if (method === 'item/started' || method === 'item/completed') {
+      transcribe(method, params.item, null);
+      item(method, params.item);
+    } else if (method === 'turn/completed') {
+      turn = undefined;
+      const value = record(params.turn) ? str(params.turn.status) : undefined;
+      emit({
+        type: 'turn-end',
+        status:
+          value === 'interrupted'
+            ? 'interrupted'
+            : value === 'failed'
+              ? 'failed'
+              : 'completed',
+      });
+    } else if (method === 'item/autoApprovalReview/completed') {
+      const toolId = str(params.targetItemId);
+      const review = record(params.review) ? params.review : {};
+      const action = record(params.action)
+        ? str(params.action.command)
+        : undefined;
+      const risk = str(review.riskLevel);
+      const rationale = str(review.rationale);
+      if (toolId)
+        emit({
+          type: 'review',
+          toolId,
+          approved: review.status === 'approved',
+          ...(action ? { action } : {}),
+          ...(risk ? { risk } : {}),
+          ...(rationale ? { rationale } : {}),
+        });
+    } else if (method === 'error')
+      emit({
+        type: 'notice',
+        text: `Codex reported an error: ${record(params.error) ? (str(params.error.message) ?? 'unknown') : 'unknown'}.`,
+      });
+  };
+  // Connect when the socket appears. A server that never listens counts as a failed start.
+  void (async () => {
+    for (let tries = 0; tries < 300 && !existsSync(socket); tries++) {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    try {
+      connection = await connectUnixWebSocket(
+        socket,
+        (text) => {
+          let message: unknown;
+          try {
+            message = JSON.parse(text);
+          } catch {
+            emit({
+              type: 'notice',
+              text: 'Verifold could not read one message from Codex.',
+            });
+            return;
+          }
+          handle(message);
+        },
+        () => stop(child),
+      );
+      for (const text of queue ?? []) connection.send(text);
+      queue = null;
+    } catch {
+      emit({
+        type: 'notice',
+        text: 'Could not connect to Codex. Check that it is installed and signed in.',
+      });
+      stop(child);
+    }
+  })();
 
   call(
     'initialize',
@@ -740,7 +794,7 @@ function codex(options: HostOptions): HostSession {
       capabilities: { experimentalApi: true },
     },
     () => {
-      write(child, { method: 'initialized', params: {} });
+      send({ method: 'initialized', params: {} });
       call(
         options.resume ? 'thread/resume' : 'thread/start',
         {
@@ -788,9 +842,10 @@ function codex(options: HostOptions): HostSession {
     },
     answer,
     close() {
-      child.stdin.end();
+      connection?.close();
       stop(child);
     },
+    socket,
   };
 }
 
