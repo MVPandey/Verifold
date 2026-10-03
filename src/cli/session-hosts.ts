@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import type { HarnessName } from './harness.ts';
+import { harnessEnvironment, type HarnessName } from './harness.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
@@ -161,6 +161,7 @@ function launch(
 ): ChildProcessWithoutNullStreams {
   const child = spawn(command, args, {
     cwd: options.cwd,
+    env: harnessEnvironment(),
     shell: false,
     detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe'],

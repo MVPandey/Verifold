@@ -613,3 +613,39 @@ await test('activity is delivered before completion and callback failures stop t
     },
   );
 });
+
+await test('a harness does not inherit the session variables of a parent Claude Code', async () => {
+  await fixture(
+    `process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ result: JSON.stringify({ child: process.env.CLAUDE_CODE_CHILD_SESSION ?? null, token: process.env.CLAUDE_CODE_MESSAGING_TOKEN ?? null, kept: process.env.VERIFOLD_KEEP ?? null }) })));`,
+    async (executable, cwd) => {
+      const saved = { ...process.env };
+      process.env.CLAUDE_CODE_CHILD_SESSION = '1';
+      process.env.CLAUDE_CODE_MESSAGING_TOKEN = 'parent-token';
+      process.env.VERIFOLD_KEEP = 'yes';
+      try {
+        const result = await runHarness(
+          {
+            host: 'claude',
+            cwd,
+            prompt: '',
+            signal: new AbortController().signal,
+          },
+          { executable },
+        );
+        assert.deepEqual(JSON.parse(result.text), {
+          child: null,
+          token: null,
+          kept: 'yes',
+        });
+      } finally {
+        for (const name of [
+          'CLAUDE_CODE_CHILD_SESSION',
+          'CLAUDE_CODE_MESSAGING_TOKEN',
+          'VERIFOLD_KEEP',
+        ])
+          if (saved[name] === undefined) delete process.env[name];
+          else process.env[name] = saved[name];
+      }
+    },
+  );
+});
