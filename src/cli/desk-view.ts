@@ -119,23 +119,33 @@ function elapsed(since: string): string {
   return minutes ? `${minutes} min ${seconds % 60} s` : `${seconds} s`;
 }
 
+const detailSwitch =
+  '<div class="seg detail-switch" role="group" aria-label="Level of detail"><button type="button" data-detail="summary">Summary</button><button type="button" data-detail="details">Details</button></div>';
+
+/**
+ * A place for a transcript panel. The page fills it from /api/transcript and
+ * keeps the panel between renders. `detail` shows it only in Details.
+ */
+function transcriptSlot(source: string, label: string, detail = true): string {
+  return `<div class="transcript-slot${detail ? ' detail-only' : ''}" data-source="${e(source)}" data-label="${e(label)}"></div>`;
+}
+
+const transcriptNote =
+  '<p class="fine detail-only">The transcript shows what the harness reported: messages, tool calls with their input and output, and subagent steps under the call that started them. It stays private in this project.</p>';
+
 /** The research step of this owner. Summary is the default level of detail. */
-function renderResearch(view: ResearchView | undefined): string {
+function renderResearch(
+  view: ResearchView | undefined,
+  attempt: string | undefined,
+): string {
   if (!view?.step) return '';
   const observed = view.events.filter((event) => event.kind === 'tool').length;
   const last = view.events.at(-1);
   return `<section class="research-live" aria-labelledby="research-live-title"><div class="section-title"><h2 id="research-live-title">Research</h2><span class="status ${view.running ? 'active' : 'muted'}">${view.running ? 'Running' : 'Not running'}</span></div>
   <p class="research-step">${e(view.step)}${view.running && view.startedAt ? ` · ${e(elapsed(view.startedAt))}` : ''}</p>
-  <div class="seg detail-switch" role="group" aria-label="Level of detail"><button type="button" data-detail="summary">Summary</button><button type="button" data-detail="details">Details</button></div>
-  <p class="research-summary">${observed} harness ${observed === 1 ? 'event' : 'events'} observed.${last ? ` Latest: ${e(last.text)}` : ''}</p>
-  <ol class="research-events">${view.events
-    .slice(-100)
-    .map(
-      (event) =>
-        `<li class="event event-${event.kind}"><span class="event-kind">${event.kind === 'tool' ? 'Verifold saw' : 'Status'}</span><span class="event-text">${e(event.text)}</span><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`,
-    )
-    .join('')}</ol>
-  <p class="fine">Verifold shows the tool names that the harness reports. It does not show tool inputs or results.</p></section>`;
+  ${detailSwitch}
+  <p class="research-summary summary-only">${observed} harness ${observed === 1 ? 'event' : 'events'} observed.${last ? ` Latest: ${e(last.text)}` : ''}</p>
+  ${attempt ? `${transcriptSlot(`attempt:${attempt}`, 'Research transcript')}${transcriptNote}` : ''}</section>`;
 }
 
 /** The research decision that waits for the person, with one primary action. */
@@ -228,13 +238,15 @@ function renderSession(live: DeskSession, defaultHost: string): string {
         `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type">${e(request.id)} · Needs you</p><p>${e(hostName(record.host))} asks to use ${e(request.tool)}.</p><code>${e(request.action)}</code>${request.detail ? `<p class="fine">Change to review:</p><code class="detail">${e(request.detail)}</code>` : ''}${request.reason ? `<p class="fine">Reason from the harness: ${e(request.reason)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="answer" data-request="${e(request.id)}" data-decision="allow">Allow once</button><button type="button" data-action="answer" data-request="${e(request.id)}" data-decision="deny">Deny</button></div></article>`,
     )
     .join('')}
-  <ol class="session-events">${record.events
+  ${detailSwitch}
+  <ol class="session-events summary-only">${record.events
     .slice(-60)
     .map(
       (event) =>
         `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span>${event.kind === 'agent' ? `<div class="event-text md">${markdownHtml(event.text)}</div>` : `<span class="event-text">${e(event.text)}</span>`}<time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`,
     )
     .join('')}</ol>
+  ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`)}
   ${
     running
       ? record.status === 'idle'
@@ -316,7 +328,7 @@ export function renderDesk(
           : 'muted';
   const html = `<div class="project-heading"><p class="project-name">${e(snapshot.project)}</p><h1>${e(workspace.research?.topic ?? 'What will you investigate?')}</h1><div class="project-meta"><span>${e(phaseLabel(workspace.research?.phase))}</span><span>${e(workspace.host === 'claude' ? 'Claude Code' : workspace.host === 'codex' ? 'Codex' : workspace.host)}</span><span>Model request: ${e(workspace.model ?? 'harness default')}</span></div></div>
   <div class="desk-grid"><div class="notebook">
-  ${renderResearch(live.research)}${renderSession(live, workspace.host)}${renderCommands(live.session)}
+  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${renderCommands(live.session)}
   <section class="brief-section"><details id="research-brief" open><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet. Begin with a question in your project terminal.</p>'}</details></section>
   ${workspace.research?.plan ? `<section><details id="research-plan"><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(workspace.research.plan.scope)}</div><ul class="roles">${workspace.research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="findings"><div class="section-title"><h2>Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
@@ -330,7 +342,7 @@ export function renderDesk(
         : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one in Harness session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
   }
   <section class="attempt-detail"><div class="section-title"><h2>Selected attempt</h2>${chosen ? `<span class="status ${tone}">${e(outcome(chosen))}</span>` : ''}</div>
-  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>` : '<p class="empty-note">No research attempts yet.</p>'}</section>
+  ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Its transcript is under Research. Choose Details there.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', false)}</details>`}` : '<p class="empty-note">No research attempts yet.</p>'}</section>
   <section class="history"><div class="section-title"><h2>Attempt history</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" ${chosen?.id === attempt.id ? 'aria-pressed="true"' : 'aria-pressed="false"'}><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>${!attempts.length ? '<p class="empty-note">Each research request will appear here with its own identity.</p>' : ''}</section></aside></div>`;
   return { html, observation };
 }
@@ -397,13 +409,14 @@ export function renderSetup(view: SetupView | null): {
         `<li data-state="${index < current ? 'done' : index === current ? 'current' : 'next'}"${index === current ? ' aria-current="step"' : ''}>${e(name)}</li>`,
     )
     .join('')}</ol>
-  <div class="setup"><ol class="setup-lines">${view.lines
+  <div class="setup">${detailSwitch}<ol class="setup-lines">${view.lines
     .slice(-60)
     .map(
       (line) =>
         `<li class="event setup-${line.source}"><span class="event-kind">${setupLabels[line.source]}</span>${line.source === 'tool' || line.source === 'you' ? `<span class="event-text">${e(line.text)}</span>` : `<div class="event-text md">${markdownHtml(line.text)}</div>`}<time datetime="${e(line.at)}">${e(clock(line.at))}</time></li>`,
     )
     .join('')}</ol>
+  ${transcriptSlot('setup', 'Harness transcript')}
   ${view.busy ? `<p class="setup-busy" role="status">${e(view.busy.label)} · ${e(elapsed(view.busy.startedAt))}</p>` : ''}
   ${view.prompt ? renderSetupPrompt(view.prompt) : ''}
   ${view.outcome === 'done' ? '<p class="notice">Setup is complete. The project desk opens here.</p>' : ''}

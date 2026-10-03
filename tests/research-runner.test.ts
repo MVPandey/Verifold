@@ -36,9 +36,28 @@ const report = {
   ],
 };
 
-/** Plans first, then reports. Each call reports one observed tool event. */
+/** Plans first, then reports. Each call reports one observed tool event and its transcript. */
 function harness(request: HarnessRequest): Promise<HarnessResult> {
   request.onActivity?.('Claude Code requested WebSearch.');
+  request.onTranscript?.({
+    kind: 'request',
+    parent: null,
+    text: request.prompt,
+  });
+  request.onTranscript?.({
+    id: 'toolu_1',
+    kind: 'tool',
+    parent: null,
+    name: 'WebSearch',
+    title: 'proof search benchmarks',
+    input: '{"query": "proof search benchmarks"}',
+    status: 'running',
+  });
+  request.onTranscript?.({
+    id: 'toolu_1',
+    output: 'Paper A, Paper B',
+    status: 'done',
+  });
   return Promise.resolve({
     text: JSON.stringify(
       request.prompt.includes('Approved plan:') ? report : plan,
@@ -208,6 +227,7 @@ await test('terminal commands and desk actions call the same research operations
   for (const name of [
     'desk.css',
     'desk-client.js',
+    'desk-transcript.js',
     'manrope.ttf',
     'symbol.webp',
   ])
@@ -257,7 +277,61 @@ await test('terminal commands and desk actions call the same research operations
   const html = await view();
   assert.match(html, /Review the plan/);
   assert.match(html, /data-research="approve"/);
-  assert.match(html, /Verifold saw/);
+  // Details shows the full transcript of the latest attempt.
+  const attempt = (await loadWorkspace(root)).research?.latestAttempt ?? '';
+  assert.match(
+    html,
+    new RegExp(
+      `class="transcript-slot detail-only" data-source="attempt:${attempt}"`,
+    ),
+  );
+  const transcript = async (
+    query: string,
+    authorized = true,
+  ): Promise<[number, Record<string, unknown> | null]> => {
+    const response = await fetch(`${url.origin}/api/transcript?${query}`, {
+      headers: authorized
+        ? { Authorization: `Bearer ${url.hash.slice(1)}` }
+        : {},
+    });
+    return [
+      response.status,
+      response.ok ? ((await response.json()) as Record<string, unknown>) : null,
+    ];
+  };
+  const [status, page] = await transcript(`source=attempt:${attempt}`);
+  assert.equal(status, 200);
+  const entries = page?.entries as {
+    kind: string;
+    output?: string;
+    text?: string;
+  }[];
+  assert.deepEqual(
+    entries.map((entry) => entry.kind),
+    ['request', 'tool'],
+  );
+  assert.match(entries[0]?.text ?? '', /Topic: Proof search/);
+  assert.equal(entries[1]?.output, 'Paper A, Paper B');
+  // The next page has only newer entries.
+  const [, next] = await transcript(
+    `source=attempt:${attempt}&after=${String(page?.last)}&epoch=${String(page?.epoch)}`,
+  );
+  assert.deepEqual(next?.entries, []);
+  assert.equal((await transcript(`source=attempt:${attempt}`, false))[0], 401);
+  for (const bad of [
+    'source=attempt:../../etc',
+    'source=session:x',
+    'source=setup',
+    'source=attempt:00000000-0000-4000-8000-000000000000&after=-1',
+    `source=attempt:${attempt}&epoch=XYZ`,
+    `source=attempt:${attempt}&extra=1`,
+  ])
+    assert.ok([400, 404].includes((await transcript(bad))[0]), bad);
+  // An attempt without a transcript file answers with an empty page.
+  const [, missing] = await transcript(
+    'source=attempt:00000000-0000-4000-8000-000000000000',
+  );
+  assert.equal(missing?.found, false);
   assert.equal((await post({ action: 'research', approve: true }))[0], 200);
   await deskResearch.settled();
   assert.match(await view(), /data-action="select" data-idea="proof"/);

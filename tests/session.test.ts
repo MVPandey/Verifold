@@ -23,6 +23,7 @@ import {
   type SessionRecord,
 } from '../src/cli/session.ts';
 import { startDesk } from '../src/cli/desk.ts';
+import { TranscriptFile } from '../src/cli/transcript.ts';
 import { codexCommand } from '../src/cli/session-hosts.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
@@ -118,6 +119,15 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     if (scenario === 'slow-turn') return setTimeout(() => out({ id: message.id, result: { turn: { id: 'turn-1' } } }), 300);
     out({ id: message.id, result: { turn: { id: 'turn-1' } } });
     if (scenario === 'other-thread') out({ method: 'turn/completed', params: { threadId: 'reviewer-thread', turn: { id: 'turn-9', status: 'completed' } } });
+    if (scenario === 'agents') {
+      // A subagent thread reuses an item ID of the main thread. A reviewer thread is not a subagent.
+      const collab = (status) => ({ type: 'collabAgentToolCall', id: 'collab-1', tool: 'spawn_agent', prompt: 'Check the README', receiverThreadIds: ['child-1'], status });
+      out({ method: 'item/started', params: { threadId: 'thread-1', item: collab('inProgress') } });
+      out({ method: 'item/completed', params: { threadId: 'child-1', item: { type: 'commandExecution', id: 'exec-1', command: 'cat README.md', aggregatedOutput: '# Readme', exitCode: 0, status: 'completed' } } });
+      out({ method: 'item/completed', params: { threadId: 'child-1', item: { type: 'agentMessage', id: 'msg-c', text: 'The README is short.' } } });
+      out({ method: 'item/completed', params: { threadId: 'reviewer-thread', item: { type: 'agentMessage', id: 'msg-r', text: 'Reviewer text' } } });
+      out({ method: 'item/completed', params: { threadId: 'thread-1', item: collab('completed') } });
+    }
     out({ method: 'item/started', params: { item: item('inProgress', null) } });
     if (reviewer === 'auto_review') {
       out({ method: 'item/autoApprovalReview/completed', params: { targetItemId: 'exec-1', review: { status: 'approved', riskLevel: 'low', rationale: 'Benign file.' }, action: { command: 'touch ../out.txt' } } });
@@ -303,9 +313,12 @@ await test('Claude Code requests reach the person, and the answer returns to the
       (current) => current.requests.length === 1,
     );
     assert.match(record.nativeSessionId ?? '', /^[0-9a-f-]{36}$/);
-    assert.deepEqual(
-      JSON.parse(await readFile(join(root, 'records-at-start.json'), 'utf8')),
-      [`${record.id}.json`],
+    assert.ok(
+      (
+        JSON.parse(
+          await readFile(join(root, 'records-at-start.json'), 'utf8'),
+        ) as string[]
+      ).includes(`${record.id}.json`),
     );
     assert.equal(record.reportedMode, 'default');
     assert.deepEqual(
@@ -379,6 +392,33 @@ await test('Claude Code requests reach the person, and the answer returns to the
     assert.equal(saved.status, 'ended');
     assert.equal(saved.commands.length, 2);
     assert.equal(saved.requests.length, 0);
+    // The transcript keeps both requests, the full tool input, and the result of each call.
+    const transcript = new TranscriptFile(
+      join(root, '.verifold', 'sessions', `${record.id}.transcript.jsonl`),
+    );
+    await transcript.refresh();
+    const entries = [...transcript.log.page(null, 0, Infinity).entries].sort(
+      (a, b) => a.order - b.order,
+    );
+    assert.deepEqual(
+      entries.map((entry) => [
+        entry.kind,
+        entry.text ?? entry.title,
+        entry.status,
+      ]),
+      [
+        ['request', 'Check the page', undefined],
+        ['note', 'Claude Code session started with fake-model.', undefined],
+        ['text', 'Working now', undefined],
+        ['tool', 'curl -sI https://example.com', 'done'],
+        ['note', 'The turn ended.', undefined],
+        ['request', 'Now the second step', undefined],
+        ['text', 'Working now', undefined],
+        ['tool', 'echo second', 'failed'],
+        ['note', 'The turn ended.', undefined],
+      ],
+    );
+    assert.match(entries[3]?.input ?? '', /"description": "x"/);
   });
 });
 
@@ -563,6 +603,7 @@ await test('desk actions need the token and a JSON body, and report state errors
     for (const name of [
       'desk.css',
       'desk-client.js',
+      'desk-transcript.js',
       'manrope.ttf',
       'symbol.webp',
     ])
@@ -822,6 +863,61 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     assert.equal(open.status, 'running');
     other.answer(open.requests[0]?.id, true);
     await until(other, (current) => current.status === 'idle');
+  });
+});
+
+await test('Codex subagent threads nest in the transcript and stay out of the session records', async () => {
+  await project(async (root, _executables, create) => {
+    const sessions = create();
+    await sessions.start({
+      host: 'codex',
+      mode: 'ask',
+      model: 'agents',
+      prompt: 'Use a subagent',
+    });
+    const open = await until(
+      sessions,
+      (current) => current.requests.length === 1,
+    );
+    sessions.answer(open.requests[0]?.id, true);
+    const record = await until(
+      sessions,
+      (current) => current.status === 'idle',
+    );
+    // Only the main thread command is a session command.
+    assert.deepEqual(
+      record.commands.map((command) => command.action),
+      ['touch ../out.txt'],
+    );
+    assert.ok(!record.events.some((event) => event.text.includes('README')));
+    await sessions.close();
+    const transcript = new TranscriptFile(
+      join(root, '.verifold', 'sessions', `${record.id}.transcript.jsonl`),
+    );
+    await transcript.refresh();
+    const entries = [...transcript.log.page(null, 0, Infinity).entries].sort(
+      (a, b) => a.order - b.order,
+    );
+    const agents = entries.find((entry) => entry.name === 'Agents');
+    assert.equal(agents?.status, 'done');
+    assert.equal(agents?.title, 'Check the README');
+    const nested = entries.filter((entry) => entry.parent === agents?.id);
+    assert.deepEqual(
+      nested.map((entry) => [entry.kind, entry.title ?? entry.text]),
+      [
+        ['tool', 'cat README.md'],
+        ['text', 'The README is short.'],
+      ],
+    );
+    // The main command keeps its own entry, although the subagent used the same item ID.
+    const main = entries.filter(
+      (entry) => entry.parent === null && entry.kind === 'tool',
+    );
+    assert.deepEqual(
+      main.map((entry) => entry.name),
+      ['Agents', 'Command'],
+    );
+    assert.ok(!entries.some((entry) => entry.text === 'Reviewer text'));
   });
 });
 
