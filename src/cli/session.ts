@@ -174,7 +174,11 @@ export interface SessionManagerOptions {
     task: { readonly id: string; readonly claim: string },
     turn: 'completed' | 'interrupted' | 'failed' | 'exited' | 'terminal',
     detail?: string,
+    /** The last agent text of the turn. A model claim. */
+    reply?: string,
   ) => void;
+  /** A turn ended, a resumed session became ready, or the harness process exited. */
+  readonly onTurnEnd?: (record: SessionRecord) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
   readonly requests?: { next: number };
 }
@@ -275,8 +279,19 @@ export function needsReview(command: CommandEntry): boolean {
 }
 
 /** Plain words for the harness mode. */
+/** The last agent text since the latest request: what the agent said at the end of its turn. */
+function lastReply(record: SessionRecord): string | undefined {
+  for (let index = record.events.length - 1; index >= 0; index--) {
+    const event = record.events[index];
+    if (event?.kind === 'you') return undefined;
+    if (event?.kind === 'agent') return event.text;
+  }
+  return undefined;
+}
+
 export function modeLabel(record: SessionRecord): string {
   if (record.mode === 'strict') return 'Strict (task)';
+  if (record.mode === 'coordinator') return 'Coordinator (Verifold tools only)';
   const reported = record.reportedMode;
   if (!reported)
     return record.mode === 'auto' ? 'Auto (requested)' : 'Ask me (requested)';
@@ -466,7 +481,10 @@ function parseRecord(value: unknown): SessionRecord | null {
   const host =
     record.host === 'claude' || record.host === 'codex' ? record.host : null;
   const mode =
-    record.mode === 'ask' || record.mode === 'auto' || record.mode === 'strict'
+    record.mode === 'ask' ||
+    record.mode === 'auto' ||
+    record.mode === 'strict' ||
+    record.mode === 'coordinator'
       ? record.mode
       : null;
   const task = object(record.task);
@@ -582,6 +600,7 @@ export async function loadPaused(root: string): Promise<PausedSession[]> {
     if (
       (record?.status === 'paused' || record?.status === 'interrupted') &&
       !record.task &&
+      record.mode !== 'coordinator' &&
       record.events.some((event) => event.kind === 'you')
     )
       paused.push({
@@ -786,6 +805,7 @@ export class SessionManager {
       fail(
         'Open the terminal between turns. Wait for the turn to end, or cancel it.',
       );
+    if (record.mode === 'coordinator') fail('The coordinator has no terminal.');
     const native =
       record.nativeSessionId ??
       fail('The harness has not reported its session yet.');
@@ -942,6 +962,28 @@ export class SessionManager {
     return record.id;
   }
 
+  /**
+   * Start the coordinator in the project folder. It has only Verifold's tools:
+   * Claude Code gets no built-in tools, and Codex a read-only sandbox.
+   */
+  async startCoordinator(input: {
+    readonly host: HarnessName;
+    readonly model?: string;
+    readonly prompt: string;
+    readonly tools: AgentTools;
+  }): Promise<string> {
+    this.ready();
+    const record = fresh(input.host, input.model ?? null, 'coordinator');
+    this.current = record;
+    this.tools = input.tools;
+    this.event(
+      'status',
+      'Verifold started the coordinator. It has no shell or file tools, only Verifold tools.',
+    );
+    await this.launch(input.prompt);
+    return record.id;
+  }
+
   /** The ID of the live session when it waits for a follow-up. */
   idleSession(): string | null {
     return this.host && this.current?.status === 'idle'
@@ -949,8 +991,8 @@ export class SessionManager {
       : null;
   }
 
-  /** Continue a paused session in a new harness process. */
-  async resume(id: unknown): Promise<void> {
+  /** Continue a paused session in a new harness process. A coordinator gets its tools again. */
+  async resume(id: unknown, tools?: AgentTools): Promise<void> {
     this.ready();
     const saved =
       typeof id === 'string' && validSessionId(id)
@@ -964,7 +1006,7 @@ export class SessionManager {
     // Another start can begin while the record loads.
     this.ready();
     this.current = { ...saved, status: 'starting', endedAt: null };
-    this.tools = undefined;
+    this.tools = tools;
     this.event(
       'status',
       'Verifold resumes this session in a new process. The events above come from the earlier launch.',
@@ -1012,6 +1054,8 @@ export class SessionManager {
 
   send(value: unknown): void {
     if (this.current?.task) fail(taskSession);
+    if (this.current?.mode === 'coordinator')
+      fail('Send the coordinator a message under Coordinator.');
     this.continueTask(value);
   }
 
@@ -1295,6 +1339,7 @@ export class SessionManager {
           this.current?.events.findLast((entry) => entry.kind === 'notice')
             ?.text,
         );
+      if (this.current) this.options.onTurnEnd?.(this.current);
       return;
     }
     if (!this.host) return;
@@ -1317,6 +1362,9 @@ export class SessionManager {
               ? `${name} session started${event.model ? ` with ${event.model}` : ''}. Mode: ${modeLabel(this.current ?? record)}.`
               : `${name} is ready to continue the session. Send a follow-up.`,
           );
+        // A resumed session waits for its next turn, as after a turn.
+        if (first && !this.prompted && this.current)
+          this.options.onTurnEnd?.(this.current);
         else if (event.mode && event.mode !== record.reportedMode)
           this.event(
             'status',
@@ -1466,7 +1514,14 @@ export class SessionManager {
             ? `The turn ${event.status === 'completed' ? 'ended' : event.status === 'interrupted' ? 'was stopped' : 'failed'}. Verifold saves the task folder as a version for review.`
             : `The turn ${event.status === 'completed' ? 'ended' : event.status === 'interrupted' ? 'was cancelled' : 'failed'}. Send a follow-up or end the session.`,
         );
-        if (record.task) this.options.onTaskTurn?.(record.task, event.status);
+        if (record.task)
+          this.options.onTaskTurn?.(
+            record.task,
+            event.status,
+            undefined,
+            lastReply(this.current ?? record),
+          );
+        if (this.current) this.options.onTurnEnd?.(this.current);
         break;
       case 'notice':
         this.event('notice', event.text);

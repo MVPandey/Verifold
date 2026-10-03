@@ -169,8 +169,8 @@ async function owner(
       codex: join(root, 'fake-codex'),
       ...executables,
     },
-    onTaskTurn: (task, turn, detail) =>
-      void owned.tasks?.turnEnded(task, turn, detail),
+    onTaskTurn: (task, turn, detail, reply) =>
+      void owned.tasks?.turnEnded(task, turn, detail, reply),
   });
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
   owned.tasks = tasks;

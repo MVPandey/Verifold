@@ -440,6 +440,16 @@ export async function diff(
     : { text: output.toString('utf8'), cut: false };
 }
 
+/** The content of a file in a version, or null when it or its task folder is gone. */
+export function readAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+  path: string,
+): Promise<Buffer | null> {
+  return fileAt(join(root, workspace.path), commit, path);
+}
+
 /** The content of a file at a commit, or null when it does not exist there. */
 async function fileAt(
   target: string,

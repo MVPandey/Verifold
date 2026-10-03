@@ -797,8 +797,8 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     clientVersion: 'test',
     ownerId: 'owner-1',
     executables: { claude },
-    onTaskTurn: (task, turn, detail) =>
-      void owner.tasks?.turnEnded(task, turn, detail),
+    onTaskTurn: (task, turn, detail, reply) =>
+      void owner.tasks?.turnEnded(task, turn, detail, reply),
   });
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
   owner.tasks = tasks;
