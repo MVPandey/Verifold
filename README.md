@@ -255,11 +255,15 @@ After Accept or Reject, Verifold removes the task folder if all its changes are 
 
 ### Coordinator
 
-The coordinator turns an objective into tasks for the workers. Under Coordinator in the desk, write the objective or keep the chosen research direction, choose the harness, and start it. Its first turn gets the objective, the research brief, and the chosen direction with its gates.
+The coordinator turns an objective into tasks for the workers. When you choose a research direction, the coordinator starts with the project's harness and model. Its first turn gets the direction as the objective, the research brief, and the direction's gates. You can also start it under Coordinator in the desk with an objective that you write.
+
+The research mode applies here too. In Guided research, no task starts until you approve the coordinator's task plan under Coordinator. To change the plan first, write to the coordinator or edit a task. In Autonomous research, the coordinator starts tasks at once.
 
 The coordinator is one harness session outside the two worker slots. Claude Code runs it with `--tools ""`, so it has no built-in tools. Codex runs it with a `read-only` sandbox and the approval policy `never`. Both load none of your MCP servers. It acts only through Verifold tools, and each tool calls the same task operation that you use: create, revise, start, stop, accept, ask for changes, reject, cancel, post a message, and decide an objection or a blocker. It reads versions with a tool, up to 64 KB of text for each file. Verifold checks each action before it changes anything. A refused action changes nothing, and the coordinator reads the reason. It can create up to 12 tasks.
 
 Every change keeps the coordinator's reason, and the desk lists the actions with their results. A decision on a version or a message says that the coordinator made it, and a revision says that the coordinator wrote it. A version also keeps the worker's last reply, a model claim. A repeated tool call with the same harness call ID gets the earlier answer and changes nothing.
+
+The coordinator settles objections. It can uphold an objection and revise the task, or overrule it with a reason. After it overrules two objections from one task to the same task, Verifold refuses its next overrule of such an objection, and the objection waits for you under Needs you. You can decide any open blocker or objection yourself, and your decision is final.
 
 Events wake the coordinator: a version ready for review, a message for it, a blocker or an objection, a failed start, or your action on a task. Its own actions do not wake it. Events within 20 seconds join one digest turn, at most 12 turns an hour. Verifold saves the position of each digest before it sends it, so a restart never repeats one. Write to the coordinator under Coordinator; it reads your message at its next wakeup.
 

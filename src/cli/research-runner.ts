@@ -25,6 +25,8 @@ export interface ResearchRunnerOptions {
   /** The owner terminal. Plan and report text go there, as before. */
   readonly io: CliIO;
   readonly harness?: typeof runHarness;
+  /** A direction was chosen. The owner starts the coordinator. */
+  readonly onSelect?: () => Promise<void>;
 }
 
 function fail(message: string): never {
@@ -174,6 +176,14 @@ export class ResearchRunner {
       this.starting = false;
     }
     this.note('status', 'You chose a direction. Research cannot change it.');
+    try {
+      await this.options.onSelect?.();
+    } catch (error) {
+      this.note(
+        'status',
+        `The coordinator did not start: ${error instanceof Error ? error.message : 'unknown error'} Start it under Coordinator.`,
+      );
+    }
   }
 
   /** Wait until the current step ends. */

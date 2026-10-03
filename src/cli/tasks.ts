@@ -955,6 +955,26 @@ export class TaskManager {
         message.kind === 'objection' ? ['upheld', 'overruled'] : ['resolved'];
       if (typeof decision !== 'string' || !allowed.includes(decision))
         fail('Choose a decision for this message.');
+      // After the coordinator overrules a task's objections to one task twice, the next one goes to the person.
+      if (
+        by === 'coordinator' &&
+        decision === 'overruled' &&
+        message.about &&
+        messages.filter(
+          (earlier) =>
+            earlier.kind === 'objection' &&
+            earlier.from === message.from &&
+            earlier.about?.task === message.about?.task &&
+            earlier.status === 'overruled' &&
+            messages.some(
+              (entry) =>
+                entry.closes === earlier.id && entry.from === 'coordinator',
+            ),
+        ).length >= 2
+      )
+        fail(
+          `You overruled two objections from ${message.from} to ${message.about.task}. This one goes to the person. Leave it open.`,
+        );
       const text = line(reason, 'reason', 2000);
       await this.messages.update(message, {
         status: decision as 'upheld' | 'overruled' | 'resolved',
