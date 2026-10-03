@@ -621,14 +621,248 @@ button:disabled {
 .research-summary {
   margin-top: 10px;
 }
-.research-events {
+body:not([data-detail='details']) .detail-only,
+body[data-detail='details'] .summary-only {
   display: none;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
 }
-body[data-detail='details'] .research-events {
+/* Transcript panels look like a coding CLI in both themes. */
+.transcript {
+  --t-bg: #121016;
+  --t-ink: #ece8f3;
+  --t-muted: #a8a0b6;
+  --t-line: #2f2938;
+  --t-green: #7fd6a1;
+  --t-red: #ff9eae;
+  --t-amber: #f2c46d;
+  --t-violet: #c5a7ff;
+  --ink: var(--t-ink);
+  --muted: var(--t-muted);
+  --border: var(--t-line);
+  --violet: var(--t-violet);
+  --lavender: #2b213b;
+  --surface: var(--t-bg);
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--t-line);
+  border-radius: 10px;
+  background: var(--t-bg);
+  color: var(--t-ink);
+  font:
+    12.5px/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.t-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--t-line);
+  font-family: Manrope, sans-serif;
+  font-size: 12px;
+}
+.t-heading {
+  font-weight: 700;
+}
+.t-state {
+  margin-right: auto;
+  color: var(--t-muted);
+}
+.t-button {
+  padding: 3px 9px;
+  border: 1px solid var(--t-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--t-ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.t-button:hover,
+.t-button[aria-pressed='true'] {
+  border-color: var(--t-violet);
+}
+.transcript :is(.t-button, .t-scroll, summary):focus-visible {
+  outline: 2px solid var(--t-violet);
+  outline-offset: 2px;
+}
+.t-scroll {
+  max-height: 560px;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.transcript.t-full {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-radius: 0;
+}
+.t-full .t-scroll {
+  flex: 1;
+  max-height: none;
+}
+body.t-locked {
+  overflow: hidden;
+}
+.t-empty {
+  margin: 0;
+  color: var(--t-muted);
+}
+.t-entry {
+  margin: 0 0 8px;
+}
+.transcript summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  align-items: baseline;
+  border-radius: 4px;
+  color: inherit;
+  font-size: inherit;
+  list-style: none;
+  cursor: pointer;
+}
+/* The page styles for section summaries do not apply in the panel. */
+.transcript :where(summary > span) {
+  display: inline;
+  float: none;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.transcript summary::-webkit-details-marker {
+  display: none;
+}
+.transcript summary:hover {
+  background: rgb(255 255 255 / 5%);
+}
+.t-mark {
+  flex: none;
+  width: 1.3em;
+  color: var(--t-muted);
+}
+.t-text {
+  display: flex;
+  gap: 0;
+}
+.t-text .t-mark {
+  color: var(--t-ink);
+}
+.t-text .md {
+  min-width: 0;
+  font-family: Manrope, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.t-text .md > :first-child {
+  margin-top: 0;
+}
+.t-tool > summary .t-mark {
+  color: var(--t-green);
+}
+.t-tool[data-status='running'] > summary .t-mark {
+  color: var(--t-amber);
+  animation: t-blink 1.2s steps(2) infinite;
+}
+.t-tool[data-status='failed'] > summary .t-mark,
+.t-tool[data-status='failed'] > summary .t-status {
+  color: var(--t-red);
+}
+.t-name {
+  font-weight: 700;
+}
+.t-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.t-line {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.transcript p {
+  font: inherit;
+}
+.t-status {
+  color: var(--t-amber);
+}
+.t-steps {
+  color: var(--t-muted);
+}
+.t-preview {
+  display: -webkit-box;
+  flex-basis: 100%;
+  padding-left: 1.3em;
+  overflow: hidden;
+  color: var(--t-muted);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.t-steps:empty,
+.t-preview:empty,
+.t-tool[open] > summary .t-preview {
+  display: none;
+}
+.t-label {
   display: block;
+  margin: 8px 0 2px 1.3em;
+  color: var(--t-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.t-label[hidden],
+.t-pre[hidden] {
+  display: none;
+}
+.t-pre {
+  max-height: 420px;
+  margin: 0 0 0 1.3em;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 5%);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.t-children {
+  margin: 8px 0 8px 0.6em;
+  padding-left: 12px;
+  border-left: 1px solid var(--t-line);
+}
+.t-request > summary,
+.t-request > summary .t-mark {
+  color: var(--t-violet);
+}
+.t-request[open] > summary .t-line {
+  display: none;
+}
+.t-request[open] > summary::after {
+  content: 'Prompt';
+}
+.t-thinking > summary {
+  color: var(--t-muted);
+  font-style: italic;
+}
+.t-note {
+  padding-left: 1.3em;
+  color: var(--t-muted);
+}
+@keyframes t-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-tool[data-status='running'] > summary .t-mark {
+    animation: none;
+  }
 }
 .check {
   display: flex;

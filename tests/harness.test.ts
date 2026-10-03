@@ -164,9 +164,9 @@ await test('missing executable gives an actionable error', async () => {
   });
 });
 
-await test('output limit stops an active child', async () => {
+await test('a line above the limit stops an active child', async () => {
   await fixture(
-    "process.stdin.resume(); process.stdout.write('x'.repeat(3 * 1024 * 1024)); setInterval(() => {}, 1000);",
+    "process.stdin.resume(); process.stdout.write('x'.repeat(9 * 1024 * 1024)); setInterval(() => {}, 1000);",
     async (executable, cwd) => {
       await assert.rejects(
         runHarness(
