@@ -84,6 +84,7 @@ const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
 onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
+  if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
   if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'codex-thread-' + process.pid }, approvalsReviewer: message.params.approvalsReviewer } });
   if (message.method === 'turn/start') {
     const text = message.params.input[0].text;
@@ -396,7 +397,7 @@ await test(
     assert.equal(sessions.view(id)?.live, true);
     const shown = await screen(sessions, id, /fake tui --resume/);
     assert.match(shown, new RegExp(`--resume ${native}`));
-    assert.match(shown, /--permission-mode auto/);
+    assert.match(shown, /--strict-mcp-config --permission-mode auto/);
     assert.throws(() => sessions.send(id, 'More'), /hold the terminal/);
     await assert.rejects(sessions.takeTerminal(id, lease), /terminal is open/);
     sessions.terminal(id)?.write(lease, 'hello\r');
@@ -462,7 +463,10 @@ await test(
     const session = (await tasks.get(id))?.attempts[0]?.session ?? '';
     assert.equal((await tasks.get(id))?.state, 'running');
     const shown = await screen(sessions, session, /fake tui/);
-    assert.match(shown, /--permission-mode dontAsk --settings \{"sandbox"/);
+    assert.match(
+      shown,
+      /--strict-mcp-config --permission-mode dontAsk --settings \{"sandbox"/,
+    );
     sessions.terminal(session)?.write(lease, 'WRITE\r');
     await screen(sessions, session, /echo WRITE/);
     sessions.terminal(session)?.write(lease, '/exit\r');
