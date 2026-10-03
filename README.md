@@ -226,6 +226,7 @@ This README describes the current source checkout. The published npm package can
 | Research in the desk       | Runs research in the owner, shows its activity live, and offers each research decision in the desk. |
 | Recovery                   | Marks work interrupted after a crash, stops leftover harness processes safely, and offers resume.   |
 | Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.       |
+| Harness transcripts        | Shows each harness run as in its CLI, with tool input and output and nested subagent steps.         |
 
 This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
 
@@ -235,7 +236,7 @@ Optional literature retention and pilot handoff commands produce requests for th
 
 Build a local workspace for independently controlled research agents. Keep one npm distribution and a browser UI initially. CLI and browser will use the same operations, while the selected harness retains its models, credentials, tools, and permissions.
 
-Stages 1 and 2 are available in this checkout: the [controlled harness session](#controlled-harness-session), and persistent ownership with recovery, research in the desk, and browser setup. The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
+Stages 1 and 2 are available in this checkout: the [controlled harness session](#controlled-harness-session), and persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts). The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
 
 | Order | Deliverable                       | Complete when                                                                                                                                                                                        |
 | ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
