@@ -54,6 +54,11 @@ try {
           'dist-cli/cli/symbol.webp',
           'dist-cli/cli/vendor/purify.js',
           'dist-cli/cli/vendor/purify.LICENSE.txt',
+          'dist-cli/cli/vendor/xterm.js',
+          'dist-cli/cli/vendor/xterm.css',
+          'dist-cli/cli/vendor/xterm.LICENSE.txt',
+          'dist-cli/cli/vendor/addon-fit.js',
+          'dist-cli/cli/vendor/addon-fit.LICENSE.txt',
           'package.json',
           'README.md',
           'LICENSE',
@@ -63,10 +68,14 @@ try {
     ),
   );
   // Runtime dependencies come from the locked node_modules, so the install stays offline.
+  // The terminal library is optional. Its prebuilt package for this platform comes along.
+  const source = JSON.parse(await readFile('package.json', 'utf8'));
   const dependencies = [];
-  for (const name of Object.keys(
-    JSON.parse(await readFile('package.json', 'utf8')).dependencies ?? {},
-  )) {
+  for (const name of [
+    ...Object.keys(source.dependencies ?? {}),
+    ...Object.keys(source.optionalDependencies ?? {}),
+    `@lydell/node-pty-${process.platform}-${process.arch}`,
+  ]) {
     const dependency = run(
       'npm',
       [
@@ -112,8 +121,31 @@ try {
   assert.equal(metadata.license, 'MIT');
   assert.equal(metadata.private, undefined);
   assert.equal(metadata.publishConfig.registry, 'https://registry.npmjs.org/');
-  // The desk renders harness Markdown with marked. DOMPurify ships as a vendored file.
+  // The desk renders harness Markdown with marked. DOMPurify and xterm.js ship as vendored files.
   assert.deepEqual(Object.keys(metadata.dependencies ?? {}), ['marked']);
+  // Terminal panes need the prebuilt PTY library. No install script builds it.
+  assert.deepEqual(Object.keys(metadata.optionalDependencies ?? {}), [
+    '@lydell/node-pty',
+  ]);
+  const pty = JSON.parse(
+    await readFile(
+      join(directory, 'node_modules', '@lydell', 'node-pty', 'package.json'),
+      'utf8',
+    ),
+  );
+  for (const script of ['preinstall', 'install', 'postinstall'])
+    assert.equal(pty.scripts?.[script], undefined);
+  const shell = run(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      "const { spawn } = await import('@lydell/node-pty'); const term = spawn('/bin/sh', ['-c', 'echo pty-ok'], {}); let out = ''; term.onData((d) => { out += d; }); term.onExit(() => { console.log(out.trim()); });",
+    ],
+    directory,
+  );
+  assert.equal(shell.status, 0, shell.stderr);
+  assert.match(shell.stdout, /pty-ok/);
   for (const script of ['preinstall', 'install', 'postinstall', 'prepare'])
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
@@ -385,9 +417,9 @@ main().catch(() => { process.exitCode = 1; });
   await writeFile(
     join(directory, 'bin', 'codex'),
     `#!/usr/bin/env node
-const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+const { out, onLine } = require(${JSON.stringify(join(process.cwd(), 'tests', 'fixtures', 'codex-socket.cjs'))})(process.argv);
 let strict = false;
-require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
   if (message.method === 'thread/start') {
@@ -477,6 +509,12 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
       '/',
       '/desk-client.js',
       '/desk-transcript.js',
+      '/desk-terminal.js',
+      '/desk-terminals.js',
+      '/desk-lease.js',
+      '/vendor/xterm.js',
+      '/vendor/xterm.css',
+      '/vendor/addon-fit.js',
       '/ui/dom.js',
       '/desk.css',
       '/manrope.ttf',
@@ -487,6 +525,16 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
       assert.equal(asset.status, 200, path);
       assert.ok((await asset.arrayBuffer()).byteLength > 0, path);
     }
+    // The terminal page alone allows inline styles for xterm.js, and only the desk may frame it.
+    const terminal = await fetch(
+      `${url.origin}/terminal?session=20261003T000000000Z-aaaaaaaa`,
+    );
+    assert.equal(terminal.status, 200);
+    assert.match(
+      terminal.headers.get('content-security-policy') ?? '',
+      /style-src 'self' 'unsafe-inline'.*frame-ancestors 'self'/,
+    );
+    assert.match(await terminal.text(), /desk-terminal\.js/);
     // A scoped task with the packed task prompt: create, run, review, accept.
     const action = async (body) => {
       const response = await fetch(`${url.origin}/api/action`, {

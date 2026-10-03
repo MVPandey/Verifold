@@ -1,8 +1,10 @@
 import test from 'node:test';
+import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import {
@@ -11,6 +13,8 @@ import {
   type TaskRecord,
 } from '../src/cli/tasks.ts';
 import { SessionPool, workerLimit } from '../src/cli/workers.ts';
+import { ptyLibrary } from '../src/cli/terminals.ts';
+import { startDesk } from '../src/cli/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
@@ -18,11 +22,27 @@ import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 /** The first writable path in a task prompt. Plain sessions write to `out`. */
 const writable = `const match = /Writable paths:\\n- (\\S+)/.exec(text); const folder = match ? match[1] : 'out';`;
 
+/** The TUI mode of a fake harness: prints its arguments, echoes lines, writes on WRITE, exits on /exit. */
+const fakeTui = `const fs = require('node:fs');
+process.stdin.setRawMode?.(true);
+process.stdout.write('fake tui ' + process.argv.slice(2).join(' ') + '\\r\\n');
+let line = '';
+process.stdin.on('data', (chunk) => {
+  for (const char of chunk.toString()) {
+    if (char !== '\\r' && char !== '\\n') { line += char; continue; }
+    if (line === '/exit') process.exit(0);
+    if (line === 'WRITE') { fs.mkdirSync('results/tui', { recursive: true }); fs.writeFileSync('results/tui/terminal.md', 'from the terminal\\n'); }
+    process.stdout.write('echo ' + line + '\\r\\n');
+    line = '';
+  }
+});`;
+
 /**
  * A fake Claude Code. SLOW waits for an interrupt, BURST sends many text
  * events first, ASK opens a permission request. Each turn writes one file.
  */
-const claudeHost = `const fs = require('node:fs');
+const claudeHost = `if (!process.argv.includes('-p')) { ${fakeTui}; return; }
+const fs = require('node:fs');
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const args = process.argv.slice(2);
 const id = args[args.indexOf('--session-id') + 1] || 'claude-native';
@@ -50,10 +70,16 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   setTimeout(() => out({ type: 'result', subtype: 'success' }), 50);
 });`;
 
+/** The fake Codex app-servers listen on a Unix socket, like Codex. */
+const codexSocket = fileURLToPath(
+  new URL('./fixtures/codex-socket.cjs', import.meta.url),
+);
+
 /** A fake Codex app-server. Each turn writes one file and ends after a short delay. */
-const codexHost = `const fs = require('node:fs');
-const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
-require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+const codexHost = `if (process.argv.includes('--remote')) { ${fakeTui}; return; }
+const fs = require('node:fs');
+const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
+onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
   if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'codex-thread-' + process.pid }, approvalsReviewer: message.params.approvalsReviewer } });
@@ -307,3 +333,404 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   terminalInput(sessions, '/end', io, controls);
   assert.equal(sessions.view(second)?.live, false);
 });
+
+const lease = 'c'.repeat(16);
+
+/** Read a terminal until the pattern shows, for at most 10 s. */
+async function screen(
+  sessions: SessionPool,
+  id: string,
+  pattern: RegExp,
+): Promise<string> {
+  let text = '';
+  let next = 0;
+  const deadline = Date.now() + 10_000;
+  while (!pattern.test(text) && Date.now() < deadline) {
+    const terminal = sessions.terminal(id);
+    if (!terminal) break;
+    const output = await terminal.read(next, 200);
+    text += output.data;
+    next = output.next;
+  }
+  assert.ok(
+    pattern.test(text),
+    `The terminal did not show ${String(pattern)}.`,
+  );
+  return text;
+}
+
+async function status(
+  sessions: SessionPool,
+  id: string,
+  wanted: string,
+): Promise<void> {
+  for (let tries = 0; tries < 250; tries++) {
+    if (sessions.view(id)?.record.status === wanted) return;
+    await delay(20);
+  }
+  assert.equal(sessions.view(id)?.record.status, wanted);
+}
+
+const terminals =
+  typeof (await ptyLibrary()) === 'string'
+    ? 'no PTY library on this platform'
+    : false;
+
+await test(
+  'a Claude Code session moves to its terminal between turns and back to Verifold',
+  { skip: terminals },
+  async (t) => {
+    const { sessions } = await owner(t);
+    const id = await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    const native = sessions.view(id)?.record.nativeSessionId ?? '';
+    await sessions.takeTerminal(id, lease);
+    await status(sessions, id, 'terminal');
+    // No structured process runs, but the worker is live and its slot is busy.
+    assert.equal(sessions.view(id)?.live, true);
+    const shown = await screen(sessions, id, /fake tui --resume/);
+    assert.match(shown, new RegExp(`--resume ${native}`));
+    assert.match(shown, /--permission-mode auto/);
+    assert.throws(() => sessions.send(id, 'More'), /hold the terminal/);
+    await assert.rejects(sessions.takeTerminal(id, lease), /terminal is open/);
+    sessions.terminal(id)?.write(lease, 'hello\r');
+    await screen(sessions, id, /echo hello/);
+    // The terminal's exit returns the session: the structured process starts again on the same conversation.
+    sessions.terminal(id)?.write(lease, '/exit\r');
+    await status(sessions, id, 'idle');
+    const record = sessions.view(id)?.record;
+    assert.equal(record?.nativeSessionId, native);
+    assert.ok(
+      record?.events.some((event) =>
+        event.text.includes('records no tool calls'),
+      ),
+    );
+    assert.ok(
+      record?.events.some(
+        (event) => event.text === 'You returned to Verifold.',
+      ),
+    );
+  },
+);
+
+await test(
+  'a Codex terminal attaches to the same socket while its events continue',
+  { skip: terminals },
+  async (t) => {
+    const { sessions } = await owner(t);
+    const id = await sessions.start({
+      host: 'codex',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    await sessions.takeTerminal(id, lease);
+    await status(sessions, id, 'terminal');
+    const shown = await screen(sessions, id, /fake tui/);
+    assert.match(
+      shown,
+      /--remote unix:\/\/\S+codex\.sock resume codex-thread-\d+/,
+    );
+    assert.throws(() => sessions.cancel(id), /hold the terminal/);
+    sessions.returnFromTerminal(id);
+    await status(sessions, id, 'idle');
+  },
+);
+
+await test(
+  'a task terminal keeps the Strict limits and its end saves a version',
+  { skip: terminals },
+  async (t) => {
+    const { sessions, tasks } = await owner(t);
+    const id = await tasks.create(
+      task('Terminal task', 'claude', 'results/tui'),
+    );
+    await tasks.start(id);
+    await state(tasks, id, 'review');
+    for (let tries = 0; tries < 250; tries++) {
+      const session = (await tasks.get(id))?.attempts[0]?.session ?? '';
+      if (sessions.idle(session)) break;
+      await delay(20);
+    }
+    await tasks.openTerminal(id, lease);
+    const session = (await tasks.get(id))?.attempts[0]?.session ?? '';
+    assert.equal((await tasks.get(id))?.state, 'running');
+    const shown = await screen(sessions, session, /fake tui/);
+    assert.match(shown, /--permission-mode dontAsk --settings \{"sandbox"/);
+    sessions.terminal(session)?.write(lease, 'WRITE\r');
+    await screen(sessions, session, /echo WRITE/);
+    sessions.terminal(session)?.write(lease, '/exit\r');
+    const reviewed = await state(tasks, id, 'review');
+    const versions = reviewed.attempts[0]?.versions ?? [];
+    assert.equal(versions[0]?.decision?.note, 'You worked in the terminal.');
+    assert.equal(versions[1]?.turn, 'terminal');
+    assert.ok(
+      versions[1]?.files.some(
+        (file) => file.path === 'results/tui/terminal.md',
+      ),
+    );
+  },
+);
+
+await test(
+  'stopping the owner closes an open terminal without starting the session again',
+  { skip: terminals },
+  async (t) => {
+    const { root, sessions } = await owner(t);
+    const id = await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    await sessions.takeTerminal(id, lease);
+    await status(sessions, id, 'terminal');
+    const terminal = sessions.terminal(id);
+    await sessions.close();
+    for (let tries = 0; tries < 100 && !terminal?.exited; tries++)
+      await delay(20);
+    assert.equal(terminal?.exited, true);
+    assert.equal(sessions.view(id)?.record.status, 'paused');
+    await delay(300);
+    assert.equal(sessions.view(id)?.live, false);
+    assert.ok(root);
+  },
+);
+
+await test(
+  'the desk opens, streams, and returns a terminal through its routes',
+  { skip: terminals },
+  async (t) => {
+    const { root, sessions } = await owner(t);
+    const assets = join(root, 'assets');
+    await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+    await mkdir(join(assets, 'ui'));
+    for (const name of [
+      'desk.css',
+      'desk-client.js',
+      'desk-transcript.js',
+      'desk-terminal.js',
+      'desk-terminals.js',
+      'desk-lease.js',
+      'manrope.ttf',
+      'symbol.webp',
+    ])
+      await writeFile(join(assets, 'cli', name), 'fixture asset');
+    for (const name of ['purify.js', 'xterm.js', 'xterm.css', 'addon-fit.js'])
+      await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+    await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    const stop = new AbortController();
+    const desk = await startDesk(
+      root,
+      stop.signal,
+      pathToFileURL(`${assets}/cli/`),
+      sessions,
+    );
+    t.after(async () => {
+      stop.abort();
+      await desk.closed;
+    });
+    const url = new URL(desk.url);
+    const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+    const post = async (
+      path: string,
+      body: unknown,
+    ): Promise<[number, Record<string, unknown>]> => {
+      const response = await fetch(`${url.origin}${path}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return [
+        response.status,
+        (await response.json()) as Record<string, unknown>,
+      ];
+    };
+    const id = await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    const page = await fetch(`${url.origin}/`);
+    assert.match(
+      page.headers.get('content-security-policy') ?? '',
+      /frame-src 'self'; frame-ancestors 'none'/,
+    );
+    assert.equal(
+      (
+        await post('/api/action', {
+          action: 'terminal-open',
+          session: id,
+          lease: 'bad',
+        })
+      )[0],
+      409,
+    );
+    assert.equal(
+      (
+        await post('/api/action', {
+          action: 'terminal-open',
+          session: id,
+          lease,
+        })
+      )[0],
+      200,
+    );
+    await status(sessions, id, 'terminal');
+    const view = (
+      (await (
+        await fetch(`${url.origin}/api/view?worker=${id}`, { headers })
+      ).json()) as { html: string }
+    ).html;
+    assert.match(view, /data-action="terminal-return"/);
+    assert.doesNotMatch(view, /data-action="cancel"/);
+    // Only the terminal page allows inline styles, and only the desk can frame it.
+    const terminalPage = await fetch(`${url.origin}/terminal?session=${id}`);
+    assert.equal(terminalPage.status, 200);
+    assert.match(
+      terminalPage.headers.get('content-security-policy') ?? '',
+      /style-src 'self' 'unsafe-inline'.*frame-ancestors 'self'/,
+    );
+    assert.equal(terminalPage.headers.get('x-frame-options'), 'SAMEORIGIN');
+    assert.equal(
+      (await fetch(`${url.origin}/terminal?session=../x`)).status,
+      400,
+    );
+    const read = async (after: number): Promise<Record<string, unknown>> =>
+      (await (
+        await fetch(`${url.origin}/api/terminal?session=${id}&after=${after}`, {
+          headers,
+        })
+      ).json()) as Record<string, unknown>;
+    assert.equal(
+      (await fetch(`${url.origin}/api/terminal?session=${id}&after=0`)).status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(`${url.origin}/api/terminal?session=${id}&after=-1`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    let output = await read(0);
+    let text = String(output.data);
+    for (let tries = 0; tries < 20 && !text.includes('fake tui'); tries++) {
+      output = await read(Number(output.next));
+      text += String(output.data);
+    }
+    assert.match(text, /fake tui --resume/);
+    assert.equal(output.owner, lease);
+    const other = 'd'.repeat(16);
+    assert.deepEqual(
+      await post('/api/terminal', { session: id, lease: other, input: 'x\r' }),
+      [
+        409,
+        {
+          error:
+            'Another view holds input for this terminal. Take input here first.',
+        },
+      ],
+    );
+    assert.equal(
+      (
+        await post('/api/terminal', {
+          session: id,
+          lease,
+          input: 'from the desk\r',
+        })
+      )[0],
+      200,
+    );
+    for (
+      let tries = 0;
+      tries < 20 && !text.includes('echo from the desk');
+      tries++
+    ) {
+      output = await read(Number(output.next));
+      text += String(output.data);
+    }
+    assert.match(text, /echo from the desk/);
+    assert.equal(
+      (
+        await post('/api/terminal', {
+          session: id,
+          lease: other,
+          take: true,
+          cols: 90,
+          rows: 20,
+        })
+      )[0],
+      200,
+    );
+    assert.equal((await read(Number(output.next))).owner, other);
+    assert.equal(
+      (
+        await post('/api/action', { action: 'terminal-return', session: id })
+      )[0],
+      200,
+    );
+    await status(sessions, id, 'idle');
+    assert.equal(
+      (
+        await fetch(`${url.origin}/api/terminal?session=${id}&after=0`, {
+          headers,
+        })
+      ).status,
+      404,
+    );
+  },
+);
+
+await test(
+  'a Codex worker stops when its owner is killed',
+  { skip: process.platform === 'win32' && 'POSIX process groups' },
+  async (t) => {
+    const { root } = await owner(t);
+    const script = join(root, 'owner.mjs');
+    await writeFile(
+      script,
+      `import { SessionPool } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../src/cli/workers.ts', import.meta.url))).href)};
+const sessions = new SessionPool(${JSON.stringify(root)}, { clientVersion: 'test', ownerId: 'doomed', executables: { codex: ${JSON.stringify(join(root, 'fake-codex'))} } });
+const id = await sessions.start({ host: 'codex', mode: 'auto', prompt: 'Start' });
+for (let tries = 0; tries < 250 && sessions.view(id)?.record.status !== 'idle'; tries++) await new Promise((r) => setTimeout(r, 20));
+console.log(sessions.view(id)?.record.launches.at(-1)?.pid);
+setInterval(() => {}, 1000);`,
+    );
+    const child = spawn(
+      process.execPath,
+      ['--experimental-strip-types', script],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    t.after(() => child.kill('SIGKILL'));
+    let printed = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      printed += chunk;
+    });
+    for (let tries = 0; tries < 250 && !/\d+\n/.test(printed); tries++)
+      await delay(20);
+    const group = Number(printed.trim());
+    assert.ok(
+      group > 0,
+      `The owner did not report its Codex process: ${printed}`,
+    );
+    const running = (): boolean => {
+      try {
+        process.kill(-group, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    assert.equal(running(), true);
+    child.kill('SIGKILL');
+    for (let tries = 0; tries < 250 && running(); tries++) await delay(20);
+    assert.equal(running(), false);
+  },
+);

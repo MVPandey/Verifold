@@ -118,6 +118,12 @@ class FakeSessions implements TaskSessions {
     this.ended++;
     this.waiting.delete(session);
   }
+  terminals: string[] = [];
+  takeTerminal(session: string): Promise<void> {
+    this.terminals.push(session);
+    this.waiting.delete(session);
+    return Promise.resolve();
+  }
 }
 
 /** Play one agent turn in the task folder, then end the turn. */
@@ -509,11 +515,16 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     'desk.css',
     'desk-client.js',
     'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
     'manrope.ttf',
     'symbol.webp',
   ])
     await writeFile(join(assets, 'cli', name), 'fixture asset');
   await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+  for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
   const fake = new FakeSessions();
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions: fake });

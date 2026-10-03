@@ -230,11 +230,16 @@ await test('terminal commands and desk actions call the same research operations
     'desk.css',
     'desk-client.js',
     'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
     'manrope.ttf',
     'symbol.webp',
   ])
     await writeFile(join(assets, 'cli', name), 'fixture asset');
   await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+  for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
   const owner = new AbortController();
   const deskResearch = setup(root).runner;

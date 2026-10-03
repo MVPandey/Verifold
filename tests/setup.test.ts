@@ -89,11 +89,16 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     'desk.css',
     'desk-client.js',
     'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
     'manrope.ttf',
     'symbol.webp',
   ])
     await writeFile(join(assets, 'cli', name), 'fixture asset');
   await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+  for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
   let interview = 0;
   const harness = (request: HarnessRequest): Promise<HarnessResult> => {
