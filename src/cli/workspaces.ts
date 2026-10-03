@@ -11,7 +11,7 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 
 /**
@@ -452,6 +452,33 @@ async function fileAt(
     return null;
   }
   return git(target, ['cat-file', 'blob', `${commit}:${path}`]);
+}
+
+/**
+ * Copy files of a commit into an empty record folder. A file that the commit
+ * deletes is skipped. Returns each copied file with its size and SHA-256.
+ */
+export async function copyAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+  paths: readonly string[],
+  folder: string,
+): Promise<{ path: string; bytes: number; sha256: string }[]> {
+  const target = join(root, workspace.path);
+  const copied = [];
+  for (const path of paths) {
+    const content = await fileAt(target, commit, path);
+    if (content === null) continue;
+    await mkdir(dirname(join(folder, path)), { recursive: true, mode: 0o700 });
+    await writeFile(join(folder, path), content, { flag: 'wx', mode: 0o600 });
+    copied.push({
+      path,
+      bytes: content.length,
+      sha256: createHash('sha256').update(content).digest('hex'),
+    });
+  }
+  return copied;
 }
 
 /**
