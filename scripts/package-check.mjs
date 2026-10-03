@@ -465,6 +465,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     for (const path of [
       '/',
       '/desk-client.js',
+      '/desk-transcript.js',
       '/ui/dom.js',
       '/desk.css',
       '/manrope.ttf',

@@ -6,6 +6,7 @@ import {
 import { readFile, realpath } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { deskPage, renderDesk, renderSetup } from './desk-view.ts';
@@ -15,7 +16,13 @@ import {
   validAttemptId,
 } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
-import { SessionActionError, type SessionManager } from './session.ts';
+import {
+  SessionActionError,
+  sessionTranscript,
+  type SessionManager,
+} from './session.ts';
+import { TranscriptFile, type TranscriptLog } from './transcript.ts';
+import { markdownHtml } from './markdown.ts';
 import type { ResearchRunner } from './research-runner.ts';
 import type { SetupBridge } from './setup-bridge.ts';
 
@@ -156,6 +163,11 @@ export async function startDesk(
   for (const [path, file, type] of [
     ['/desk.css', 'desk.css', 'text/css; charset=utf-8'],
     ['/desk-client.js', 'desk-client.js', 'text/javascript; charset=utf-8'],
+    [
+      '/desk-transcript.js',
+      'desk-transcript.js',
+      'text/javascript; charset=utf-8',
+    ],
     ['/manrope.ttf', 'manrope.ttf', 'font/ttf'],
     ['/symbol.webp', 'symbol.webp', 'image/webp'],
     ['/ui/dom.js', '../ui/dom.js', 'text/javascript; charset=utf-8'],
@@ -165,6 +177,33 @@ export async function startDesk(
   }
   let origin = '';
   let pending = 0;
+  /** Transcript files that the page follows. The least recently used one leaves first. */
+  const followed = new Map<string, TranscriptFile>();
+
+  /** The transcript for one source: `setup`, `attempt:<id>`, or `session:<id>`. */
+  async function transcript(source: string): Promise<{
+    readonly log: TranscriptLog;
+    readonly found: boolean;
+  } | null> {
+    if (source === 'setup')
+      return !project && setup ? { log: setup.transcript, found: true } : null;
+    const match = /^(attempt|session):(.{1,100})$/.exec(source);
+    if (!project || !match) return null;
+    const [, kind, id = ''] = match;
+    const path =
+      kind === 'attempt'
+        ? validAttemptId(id)
+          ? join(project, '.verifold', 'runs', id, 'transcript.jsonl')
+          : null
+        : sessionTranscript(project, id);
+    if (!path) return null;
+    const file = followed.get(path) ?? new TranscriptFile(path);
+    followed.delete(path);
+    followed.set(path, file);
+    if (followed.size > 8) followed.delete(followed.keys().next().value ?? '');
+    await file.refresh();
+    return { log: file.log, found: file.found };
+  }
   const server = createServer(
     { maxHeaderSize: 8192, headersTimeout: 5000, requestTimeout: 5000 },
     (request, response) => {
@@ -285,6 +324,59 @@ export async function startDesk(
     const asset = assets.get(url.pathname);
     if (asset && !url.search) {
       response.writeHead(200, { 'Content-Type': asset.type }).end(asset.body);
+      return;
+    }
+    if (url.pathname === '/api/transcript') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const source = url.searchParams.get('source') ?? '';
+      const after = Number(url.searchParams.get('after') ?? '0');
+      const epoch = url.searchParams.get('epoch');
+      if (
+        [...url.searchParams.keys()].some(
+          (key) => !['source', 'after', 'epoch'].includes(key),
+        ) ||
+        [...url.searchParams.values()].some((value) => value.length > 120) ||
+        !Number.isSafeInteger(after) ||
+        after < 0 ||
+        (epoch !== null && !/^[a-f0-9]{1,32}$/.test(epoch))
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      if (pending >= 4) {
+        response.writeHead(503).end();
+        return;
+      }
+      pending++;
+      try {
+        const found = await transcript(source);
+        if (!found) {
+          response.writeHead(404).end();
+          return;
+        }
+        const page = found.log.page(epoch, after);
+        // Harness Markdown becomes HTML here. The page sanitizes it again before display.
+        response
+          .writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(
+            JSON.stringify({
+              ...page,
+              found: found.found,
+              entries: page.entries.map((entry) =>
+                entry.kind === 'text'
+                  ? { ...entry, html: markdownHtml(entry.text ?? '') }
+                  : entry,
+              ),
+            }),
+          );
+      } finally {
+        pending--;
+      }
       return;
     }
     if (url.pathname !== '/api/view') {

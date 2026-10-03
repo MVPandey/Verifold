@@ -2,6 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { HarnessName } from './harness.ts';
+import {
+  claudeUpdates,
+  codexAppUpdates,
+  type TranscriptUpdate,
+} from './transcript.ts';
 
 export type SessionMode = 'ask' | 'auto';
 
@@ -58,6 +63,8 @@ export type HostEvent =
       readonly costUsd?: number;
     }
   | { readonly type: 'notice'; readonly text: string }
+  /** One transcript update: full messages, tool inputs, and tool results. Private session data. */
+  | { readonly type: 'transcript'; readonly update: TranscriptUpdate }
   | { readonly type: 'exit'; readonly code: number | null };
 
 export interface HostOptions {
@@ -89,7 +96,7 @@ export interface HostSession {
   close(): void;
 }
 
-const maxLine = 1024 * 1024;
+const maxLine = 8 * 1024 * 1024;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -99,7 +106,7 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
 
-/** Split newline-delimited output. A line above 1 MiB is dropped, not buffered. */
+/** Split newline-delimited output. A line above 8 MiB is dropped, not buffered. */
 function readLines(
   stream: NodeJS.ReadableStream,
   onLine: (value: unknown) => void,
@@ -129,7 +136,7 @@ function readLines(
     if (pending.length > maxLine) {
       pending = '';
       dropping = true;
-      onNotice('Verifold dropped one harness message above 1 MiB.');
+      onNotice('Verifold dropped one harness message above 8 MiB.');
     }
   });
 }
@@ -278,6 +285,8 @@ function claude(options: HostOptions): HostSession {
     child.stdout,
     (event) => {
       if (!record(event)) return;
+      for (const update of claudeUpdates(event))
+        emit({ type: 'transcript', update });
       if (event.type === 'system') {
         if (event.subtype === 'init') {
           const id = str(event.session_id);
@@ -479,6 +488,34 @@ function codex(options: HostOptions): HostSession {
       result: { decision: allow ? 'accept' : 'decline' },
     });
   };
+  /** Subagent threads and the tool call that started each one. */
+  const agents = new Map<string, string>();
+  /** Item IDs of a subagent thread get its thread ID, so they cannot match IDs of the main thread. */
+  const transcribe = (
+    method: string,
+    value: unknown,
+    from: string | null,
+  ): void => {
+    const local = (id: string): string => (from ? `${from}/${id}` : id);
+    if (
+      record(value) &&
+      value.type === 'collabAgentToolCall' &&
+      typeof value.id === 'string' &&
+      Array.isArray(value.receiverThreadIds)
+    )
+      for (const child of value.receiverThreadIds as unknown[])
+        if (typeof child === 'string' && agents.size < 500)
+          agents.set(child, local(value.id));
+    const parent = from ? (agents.get(from) ?? null) : null;
+    for (const update of codexAppUpdates(method, value, parent))
+      emit({
+        type: 'transcript',
+        update:
+          update.id === undefined
+            ? update
+            : { ...update, id: local(update.id) },
+      });
+  };
   const item = (method: string, value: unknown): void => {
     if (!record(value)) return;
     const id = str(value.id);
@@ -618,7 +655,11 @@ function codex(options: HostOptions): HostSession {
       }
       // Codex can report other threads, such as a reviewer, on the same connection.
       const from = str(params.threadId);
-      if (thread && from && from !== thread) return;
+      if (thread && from && from !== thread) {
+        // Only the transcript shows subagent work. Requests and records stay with the main thread.
+        if (method && agents.has(from)) transcribe(method, params.item, from);
+        return;
+      }
       if (method === 'serverRequest/resolved') {
         const resolved = params.requestId;
         const key =
@@ -626,9 +667,10 @@ function codex(options: HostOptions): HostSession {
             ? `c${resolved}`
             : '';
         if (requests.delete(key)) emit({ type: 'request-end', id: key });
-      } else if (method === 'item/started' || method === 'item/completed')
+      } else if (method === 'item/started' || method === 'item/completed') {
+        transcribe(method, params.item, null);
         item(method, params.item);
-      else if (method === 'turn/completed') {
+      } else if (method === 'turn/completed') {
         turn = undefined;
         const value = record(params.turn) ? str(params.turn.status) : undefined;
         emit({

@@ -88,6 +88,7 @@ await test('bare verifold sets up a new project in the desk and opens the projec
   for (const name of [
     'desk.css',
     'desk-client.js',
+    'desk-transcript.js',
     'manrope.ttf',
     'symbol.webp',
   ])
@@ -109,6 +110,16 @@ await test('bare verifold sets up a new project in the desk and opens the projec
         sessionId: 'research-1',
       });
     interview++;
+    request.onTranscript?.({
+      kind: 'request',
+      parent: null,
+      text: request.prompt,
+    });
+    request.onTranscript?.({
+      kind: 'text',
+      parent: null,
+      text: `Interview step ${interview}`,
+    });
     return Promise.resolve({
       text:
         interview === 1
@@ -188,6 +199,18 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     }
     assert.match(html, pattern);
     seen.push(pattern.source);
+    if (pattern.source === 'Review the brief') {
+      // Details shows the harness runs of setup, with Markdown as HTML.
+      assert.match(html, /data-source="setup"/);
+      const page = (await (
+        await fetch(`${url.origin}/api/transcript?source=setup`, { headers })
+      ).json()) as { entries: { kind: string; html?: string }[] };
+      assert.deepEqual(
+        page.entries.map((entry) => entry.kind),
+        ['request', 'text', 'request', 'text'],
+      );
+      assert.match(page.entries[3]?.html ?? '', /<p>Interview step 2<\/p>/);
+    }
     await answer(Number(/data-prompt="(\d+)"/.exec(html)?.[1]), value);
   }
   let html = '';
@@ -196,6 +219,12 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.match(html, /Review the plan/);
+  // After setup, the setup transcript is gone with the setup desk.
+  assert.equal(
+    (await fetch(`${url.origin}/api/transcript?source=setup`, { headers }))
+      .status,
+    404,
+  );
   const workspace = await loadWorkspace(project);
   assert.equal(workspace.context, '# Research brief\n\nEdited by me.');
   assert.equal(workspace.research?.phase, 'awaiting-plan-review');
