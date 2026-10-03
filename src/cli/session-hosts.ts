@@ -134,6 +134,8 @@ export interface HostSession {
   readonly pid: number | undefined;
   /** Codex only: the app-server socket that a terminal can attach to. */
   readonly socket?: string;
+  /** Codex only: `-c` overrides that keep the user's MCP servers, plugins, and apps off in a terminal. */
+  readonly overrides?: readonly string[];
   /** Start a new turn. The caller sends a follow-up only after the previous turn ends. */
   send(text: string): void;
   /** Deny the listed open requests and stop the current turn. */
@@ -651,6 +653,7 @@ function codex(options: HostOptions): HostSession {
   const requests = new Map<string, number | string>();
   const changes = new Map<string, { paths: string; diff: string }>();
   let nextId = 1;
+  let overrides: string[] = [];
   let thread: string | undefined;
   let turn: string | undefined;
   let cancelled = false;
@@ -984,6 +987,19 @@ function codex(options: HostOptions): HostSession {
       send({ method: 'initialized', params: {} });
       call('config/read', { cwd: options.cwd }, (result) => {
         const config = codexIsolation(result);
+        if (config)
+          overrides = [
+            '-c',
+            'features.plugins=false',
+            '-c',
+            'features.apps=false',
+            ...Object.keys(
+              config.mcp_servers as Record<string, unknown>,
+            ).flatMap((name) => [
+              '-c',
+              `mcp_servers.${/^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name)}.enabled=false`,
+            ]),
+          ];
         if (!config) {
           emit({
             type: 'notice',
@@ -1063,6 +1079,9 @@ function codex(options: HostOptions): HostSession {
       stop(child);
     },
     socket,
+    get overrides() {
+      return overrides;
+    },
   };
 }
 

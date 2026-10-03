@@ -6,8 +6,10 @@ import { validateModel, type HarnessName } from './harness.ts';
 import { messageLimits } from './messages.ts';
 import { loadPrompt } from './prompts.ts';
 import {
+  readRecord,
   SessionActionError,
   type SessionManager,
+  type SessionRecord,
   type SessionView,
 } from './session.ts';
 import type { AgentTool, AgentTools } from './session-hosts.ts';
@@ -124,6 +126,10 @@ export class Coordinator {
   private timer: NodeJS.Timeout | undefined;
   private limitedUntil: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  /** The saved session record after a restart, until the session resumes. */
+  private saved: SessionRecord | null = null;
+  /** Verifold is stopping. Tool calls change nothing. */
+  private closing = false;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -165,6 +171,9 @@ export class Coordinator {
     } catch {
       /* No coordinator yet, or an unreadable record. */
     }
+    // The session of an earlier owner shows as paused or interrupted, so the desk offers Resume.
+    if (this.state?.session)
+      this.saved = await readRecord(this.root, this.state.session);
   }
 
   view(): CoordinatorView | null {
@@ -172,7 +181,12 @@ export class Coordinator {
     if (!state) return null;
     return {
       state,
-      session: state.session ? this.sessions.view() : null,
+      session: state.session
+        ? (this.sessions.view() ??
+          (this.saved
+            ? { record: this.saved, live: false, saveFailed: false }
+            : null))
+        : null,
       waiting: state.events.filter((event) => event.seq > state.cursor).length,
       limitedUntil: this.limitedUntil,
     };
@@ -225,10 +239,12 @@ export class Coordinator {
         events: [],
         actions: [],
       });
-      const session = await this.sessions.startCoordinator({
-        host,
-        ...(model ? { model } : {}),
-        prompt: `${await loadPrompt('coordinator')}
+      let session: string;
+      try {
+        session = await this.sessions.startCoordinator({
+          host,
+          ...(model ? { model } : {}),
+          prompt: `${await loadPrompt('coordinator')}
 
 Objective:
 ${objective}
@@ -236,8 +252,16 @@ ${input.context ? `\n${input.context}\n` : ''}
 Default harness for workers: ${host === 'claude' ? 'Claude Code' : 'Codex'}${model ? `, model ${model}` : ''}. Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
 ${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
-        tools: this.tools(),
-      });
+          tools: this.tools(),
+        });
+      } catch (error) {
+        // A coordinator that did not start counts as stopped, so the person can start it again.
+        await this.save({
+          ...this.current(),
+          stoppedAt: new Date().toISOString(),
+        });
+        throw error;
+      }
       await this.save({ ...this.current(), session });
     });
   }
@@ -298,28 +322,44 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
 
   /** A task event. It waits for the next wakeup. */
   notify(event: TaskEvent): void {
-    void this.serial(async () => {
+    this.serial(async () => {
       const state = this.state;
       if (!state || state.stoppedAt) return;
       const seq = (state.events.at(-1)?.seq ?? 0) + 1;
-      await this.save({
+      // The schedule comes first: the event is in memory even if the save fails.
+      const saving = this.save({
         ...state,
         events: [
           ...state.events,
-          { ...event, seq, at: new Date().toISOString() },
+          {
+            ...event,
+            // One line of at most 2000 characters, so a digest stays small and its lines stay apart.
+            text: event.text.replace(/[\r\n]+/g, ' ').slice(0, 2000),
+            seq,
+            at: new Date().toISOString(),
+          },
         ].slice(-coordinatorLimits.events),
       });
       this.schedule();
+      await saving;
+    }).catch(() => {
+      /* The next save writes the event. */
     });
   }
 
-  /** The coordinator's turn ended. Events that arrived during it wake it again. */
-  turnEnded(): void {
+  /**
+   * The coordinator's turn ended, or its process stopped. The messages that
+   * its digest carried are delivered or uncertain, and new events wake it.
+   */
+  turnEnded(record?: SessionRecord): void {
+    if (record)
+      this.tasks.coordinatorTurnEnded(record.status === 'idle').catch(() => {});
     this.schedule();
   }
 
   /** Stop the wakeups and pause the session. Returns false when its record could not be saved. */
   async close(): Promise<boolean> {
+    this.closing = true;
     clearTimeout(this.timer);
     this.timer = undefined;
     await this.queue;
@@ -331,7 +371,9 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     if (this.timer || !state || state.stoppedAt) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.serial(() => this.wake());
+      this.serial(() => this.wake()).catch(() => {
+        /* The events wait for the next wakeup. */
+      });
     }, delay);
     this.timer.unref();
   }
@@ -362,11 +404,20 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
     try {
       this.sessions.continueTask(
-        `Events since your last turn:\n${sent.map((event) => `- [${event.kind}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
+        `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${sent.map((event) => `- [${event.kind}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
       );
     } catch {
-      /* The session ended. The desk shows it. */
+      // Nothing was sent, so the events wait for the next wakeup.
+      await this.save({
+        ...this.current(),
+        cursor: state.cursor,
+        wakeups: state.wakeups,
+      });
+      return;
     }
+    await this.tasks.sentToCoordinator(
+      sent.flatMap((event) => (event.message ? [event.message] : [])),
+    );
   }
 
   private tools(): AgentTools {
@@ -384,7 +435,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     callId: string,
   ): Promise<{ readonly ok: boolean; readonly text: string }> {
     const state = this.state;
-    if (!state || state.stoppedAt)
+    if (!state || state.stoppedAt || this.closing)
       return {
         ok: false,
         text: 'The coordinator is stopped, so Verifold did nothing.',
@@ -453,7 +504,11 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             writable: args.writable,
             output: args.output,
             host: args.host ?? state.host,
-            model: args.model ?? state.model ?? undefined,
+            // The coordinator's model belongs to its harness. Another harness uses its default.
+            model:
+              args.model ??
+              ((args.host ?? state.host) === state.host ? state.model : null) ??
+              undefined,
             minutes: args.minutes,
             dependencies: args.dependencies,
           },
@@ -477,7 +532,12 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             writable: args.writable ?? current.writable,
             output: args.output ?? current.output,
             host: args.host ?? current.host,
-            model: args.model ?? current.model ?? undefined,
+            model:
+              args.model ??
+              ((args.host ?? current.host) === current.host
+                ? current.model
+                : null) ??
+              undefined,
             minutes: args.minutes ?? current.minutes,
             dependencies: args.dependencies ?? current.dependencies,
             reason: `The coordinator: ${why()}`,
