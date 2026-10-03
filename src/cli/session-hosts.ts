@@ -728,7 +728,8 @@ function codex(options: HostOptions): HostSession {
             ? 'declined'
             : status === 'failed' ||
                 (typeof exit === 'number' && exit !== 0) ||
-                value.error
+                value.error ||
+                value.success === false
               ? 'failed'
               : 'ok',
         ...(typeof exit === 'number' ? { exitCode: exit } : {}),
@@ -766,6 +767,16 @@ function codex(options: HostOptions): HostSession {
           id,
           tool: 'MCP tool',
           action: `${str(value.server) ?? 'server'}.${str(value.tool) ?? 'tool'}`,
+        });
+      end();
+    } else if (value.type === 'dynamicToolCall') {
+      // One of Verifold's own tools.
+      if (started)
+        emit({
+          type: 'tool',
+          id,
+          tool: str(value.tool) ?? 'Verifold tool',
+          action: JSON.stringify(value.arguments ?? {}),
         });
       end();
     } else if (value.type === 'webSearch' && !started) {

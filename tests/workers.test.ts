@@ -106,6 +106,7 @@ onLine((line) => {
   const message = JSON.parse(line);
   if (message.id === 'tool-1' && !message.method) {
     fs.writeFileSync(toolFolder + '/tool.json', JSON.stringify({ reply: message.result, dynamicTools: start.dynamicTools.map((tool) => tool.name) }));
+    out({ method: 'item/completed', params: { item: { type: 'dynamicToolCall', id: 'dyn-1', tool: 'verifold_post', arguments: {}, status: 'completed', success: message.result.success } } });
     return out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
   }
   if (message.method === 'initialize') out({ id: message.id, result: {} });
@@ -120,6 +121,7 @@ onLine((line) => {
     fs.writeFileSync(folder + '/codex.md', 'from codex\\n');
     if (text.includes('TOOL')) {
       toolFolder = folder;
+      out({ method: 'item/started', params: { item: { type: 'dynamicToolCall', id: 'dyn-1', tool: 'verifold_post', arguments: { to: 'coordinator' }, status: 'inProgress' } } });
       return out({ id: 'tool-1', method: 'item/tool/call', params: { threadId: 'codex-thread', turnId: 'turn-1', callId: 'call-1', tool: 'verifold_post', arguments: { to: 'coordinator', text: 'hello from codex' } } });
     }
     setTimeout(() => out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } }), 50);
@@ -249,7 +251,7 @@ await test('two workers run tasks at the same time, each with its own identity a
 });
 
 await test('Claude Code and Codex workers reach Verifold tools over their own pipes', async (t) => {
-  const { root, tasks } = await owner(t);
+  const { root, sessions, tasks } = await owner(t);
   const a = await tasks.create(
     task('Claude tool', 'claude', 'results/a', 'TOOL post.'),
   );
@@ -312,6 +314,17 @@ await test('Claude Code and Codex workers reach Verifold tools over their own pi
     dynamicTools: string[];
   };
   assert.equal(codex.reply.success, true);
+  // The Commands record lists the call like any other tool call.
+  assert.deepEqual(
+    sessions
+      .view(second.attempts[0]?.session ?? '')
+      ?.record.commands.map((command) => [
+        command.tool,
+        command.action,
+        command.outcome,
+      ]),
+    [['verifold_post', '{"to":"coordinator"}', 'ok']],
+  );
   assert.match(codex.reply.contentItems[0]?.text ?? '', /^Recorded m-\d\.$/);
   assert.deepEqual(codex.dynamicTools, names);
 });
