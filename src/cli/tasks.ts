@@ -87,6 +87,8 @@ export interface TaskVersion {
   readonly files: readonly VersionFile[];
   /** Files above the size limit that the version does not hold. */
   readonly skipped: readonly string[];
+  /** What the harness reported when it ended, for example that it could not start. */
+  readonly note?: string;
   readonly decision: {
     readonly kind: 'accepted' | 'rejected' | 'changes';
     readonly at: string;
@@ -156,7 +158,8 @@ export interface TaskInputFields {
  * workspace with strict limits, and its turns report back through `turnEnded`.
  */
 export interface TaskSessions {
-  readonly active: boolean;
+  /** Every worker slot is in use. */
+  readonly full: boolean;
   readonly blockedReason: string | null;
   startTask(input: {
     readonly host: HarnessName;
@@ -165,11 +168,11 @@ export interface TaskSessions {
     readonly cwd: string;
     readonly task: { readonly id: string; readonly claim: string };
   }): Promise<string>;
-  /** The ID of the live session, if it waits for a follow-up. */
-  idleSession(): string | null;
-  continueTask(text: string): void;
-  cancel(): void;
-  endTask(reason: string): void;
+  /** The session is live and waits for a follow-up. */
+  idle(session: string): boolean;
+  continueTask(session: string, text: string): void;
+  cancel(session: string): void;
+  endTask(session: string, reason: string): void;
 }
 
 export interface TaskManagerOptions {
@@ -232,8 +235,11 @@ export class TaskManager {
   private readonly root: string;
   private readonly options: TaskManagerOptions;
   private queue: Promise<unknown> = Promise.resolve();
-  private timer: NodeJS.Timeout | null = null;
-  private timedOut = false;
+  /** The time limit of each running turn, by task. */
+  private readonly limits = new Map<
+    string,
+    { readonly timer: NodeJS.Timeout; expired: boolean }
+  >();
 
   constructor(root: string, options: TaskManagerOptions) {
     this.root = root;
@@ -374,9 +380,9 @@ export class TaskManager {
           );
       if (this.options.sessions.blockedReason)
         fail(this.options.sessions.blockedReason);
-      if (this.options.sessions.active)
+      if (this.options.sessions.full)
         fail(
-          'A harness session is running. End it, or finish the review of its task, before a task starts.',
+          'Every worker is busy. End a session, or accept, reject, or cancel a task version first.',
         );
       const number = task.attempts.length + 1;
       const claim = {
@@ -459,7 +465,7 @@ export class TaskManager {
         return end('start-failed', error);
       }
       await this.write(this.attempt(current, () => ({ session })));
-      this.limit(task.assignment.minutes);
+      this.limit(task.id, session, task.assignment.minutes);
       this.options.progress?.(
         `Task ${task.id} started with ${hostName(task.assignment.host)}. Follow it in the desk.`,
       );
@@ -469,8 +475,10 @@ export class TaskManager {
   /** Stop the running turn. Its work becomes a version for review. */
   async stop(id: unknown): Promise<void> {
     const task = await this.load(id);
-    if (task.state !== 'running') fail('No turn of this task is running.');
-    this.options.sessions.cancel();
+    const session = task.attempts.at(-1)?.session;
+    if (task.state !== 'running' || !session)
+      fail('No turn of this task is running.');
+    this.options.sessions.cancel(session);
   }
 
   /**
@@ -480,15 +488,18 @@ export class TaskManager {
   turnEnded(
     binding: { readonly id: string; readonly claim: string },
     turn: 'completed' | 'interrupted' | 'failed' | 'exited',
+    detail?: string,
   ): Promise<void> {
     return this.serial(async () => {
       const task = await this.read(binding.id);
       if (!task || task.claim?.id !== binding.claim || task.state !== 'running')
         return;
-      this.clearLimit();
+      const expired = this.limits.get(task.id)?.expired === true;
+      this.clearLimit(task.id);
       await this.version(
         task,
-        this.timedOut && turn === 'interrupted' ? 'time-limit' : turn,
+        expired && turn === 'interrupted' ? 'time-limit' : turn,
+        detail,
       );
     });
   }
@@ -499,10 +510,8 @@ export class TaskManager {
       const task = await this.load(id);
       const text = line(note, 'changes', 4000);
       const attempt = this.review(task);
-      if (
-        !attempt.session ||
-        this.options.sessions.idleSession() !== attempt.session
-      )
+      const session = attempt.session;
+      if (!session || !this.options.sessions.idle(session))
         fail(
           'The harness session of this task ended. Reject this version, then start the task again.',
         );
@@ -513,9 +522,10 @@ export class TaskManager {
         }),
       );
       this.options.sessions.continueTask(
+        session,
         `The person reviewed your version and asks for changes:\n\n${text}\n\nKeep to the writable paths. End your turn with a short reply again.`,
       );
-      this.limit(task.assignment.minutes);
+      this.limit(task.id, session, task.assignment.minutes);
     });
   }
 
@@ -650,7 +660,7 @@ export class TaskManager {
    */
   settle(): Promise<number> {
     return this.serial(async () => {
-      this.clearLimit();
+      for (const id of this.limits.keys()) this.clearLimit(id);
       let settled = 0;
       for (const task of await this.list()) {
         if (task.state === 'claimed') {
@@ -676,6 +686,7 @@ export class TaskManager {
   private async version(
     task: TaskRecord,
     turn: TaskVersion['turn'],
+    detail?: string,
   ): Promise<void> {
     const attempt = task.attempts.at(-1);
     const workspace = attempt?.workspace;
@@ -712,6 +723,7 @@ export class TaskManager {
               })),
               skipped: saved.skipped,
               decision: null,
+              ...(detail ? { note: detail.slice(0, 2000) } : {}),
             },
           ],
         })),
@@ -735,11 +747,9 @@ export class TaskManager {
     state: TaskState,
   ): Promise<void> {
     const attempt = task.attempts.at(-1);
-    if (
-      attempt?.session &&
-      this.options.sessions.idleSession() === attempt.session
-    )
+    if (attempt?.session && this.options.sessions.idle(attempt.session))
       this.options.sessions.endTask(
+        attempt.session,
         `The task ${outcome === 'accepted' ? 'is done' : `was ${outcome}`}.`,
       );
     const kept = attempt?.workspace
@@ -803,23 +813,28 @@ export class TaskManager {
       : task;
   }
 
-  private limit(minutes: number): void {
-    this.clearLimit();
-    this.timedOut = false;
-    this.timer = setTimeout(() => {
-      this.timedOut = true;
-      try {
-        this.options.sessions.cancel();
-      } catch {
-        /* The turn ended already. */
-      }
-    }, minutes * 60_000);
-    this.timer.unref();
+  /** Stop the turn of this task's session when its time limit ends. */
+  private limit(id: string, session: string, minutes: number): void {
+    this.clearLimit(id);
+    const entry = {
+      timer: setTimeout(() => {
+        entry.expired = true;
+        try {
+          this.options.sessions.cancel(session);
+        } catch {
+          /* The turn ended already. */
+        }
+      }, minutes * 60_000),
+      expired: false,
+    };
+    entry.timer.unref();
+    this.limits.set(id, entry);
   }
 
-  private clearLimit(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
+  private clearLimit(id: string): void {
+    const entry = this.limits.get(id);
+    if (entry) clearTimeout(entry.timer);
+    this.limits.delete(id);
   }
 
   private revisionFolder(id: string, revision: number): string {
