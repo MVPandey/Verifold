@@ -125,6 +125,24 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
 
+/**
+ * Codex thread settings that load none of the user's MCP servers, plugins, or
+ * connected apps, from the `config/read` result. An empty `mcp_servers` table
+ * does not replace the user's servers, so each one is turned off by name.
+ * Probed on Codex 0.160.0. Without a readable configuration, undefined.
+ */
+function codexIsolation(result: unknown): Record<string, unknown> | undefined {
+  if (!record(result) || !record(result.config)) return undefined;
+  const servers = result.config.mcp_servers ?? {};
+  if (!record(servers)) return undefined;
+  return {
+    features: { plugins: false, apps: false },
+    mcp_servers: Object.fromEntries(
+      Object.keys(servers).map((name) => [name, { enabled: false }]),
+    ),
+  };
+}
+
 /** Split newline-delimited output. A line above 8 MiB is dropped, not buffered. */
 function readLines(
   stream: NodeJS.ReadableStream,
@@ -260,6 +278,8 @@ function claude(options: HostOptions): HostSession {
       '--verbose',
       '--permission-prompt-tool',
       'stdio',
+      // Workers load no MCP server from the user's configuration, plugins, or claude.ai connectors.
+      '--strict-mcp-config',
       '--permission-mode',
       options.mode === 'auto'
         ? 'auto'
@@ -719,6 +739,7 @@ function codex(options: HostOptions): HostSession {
         // Without a thread, the session cannot continue. A rejected turn ends that turn.
         if (
           pending?.method === 'initialize' ||
+          pending?.method === 'config/read' ||
           pending?.method === 'thread/start' ||
           pending?.method === 'thread/resume'
         )
@@ -827,40 +848,57 @@ function codex(options: HostOptions): HostSession {
     },
     () => {
       send({ method: 'initialized', params: {} });
-      call(
-        options.resume ? 'thread/resume' : 'thread/start',
-        {
-          ...(options.resume ? { threadId: options.resume } : {}),
-          cwd: options.cwd,
-          // A strict task session gets no approvals: an action outside the sandbox fails.
-          approvalPolicy: options.mode === 'strict' ? 'never' : 'on-request',
-          sandbox: 'workspace-write',
-          // Without this, a user's global reviewer setting can answer requests meant for the person.
-          approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
-          ...(options.model ? { model: options.model } : {}),
-        },
-        (result) => {
-          thread = record(result.thread) ? str(result.thread.id) : undefined;
-          if (!thread) {
-            emit({ type: 'notice', text: 'Codex did not start a thread.' });
-            stop(child);
-            return;
-          }
-          const model = str(result.model);
-          const reviewer = str(result.approvalsReviewer);
+      call('config/read', { cwd: options.cwd }, (result) => {
+        const config = codexIsolation(result);
+        if (!config) {
           emit({
-            type: 'session',
-            id: thread,
-            ...(model ? { model } : {}),
-            ...(reviewer ? { mode: reviewer } : {}),
+            type: 'notice',
+            text: 'Codex did not report its configuration, so Verifold cannot turn off its MCP servers. The session stopped.',
           });
-          // A cancel can arrive before the thread exists. Then the first turn never starts.
-          if (cancelled) emit({ type: 'turn-end', status: 'interrupted' });
-          else if (options.prompt) startTurn(options.prompt);
-        },
-      );
+          stop(child);
+          return;
+        }
+        startThread(config);
+      });
     },
   );
+
+  /** Start or resume the thread with the configuration that turns off the user's MCP servers. */
+  function startThread(config: Record<string, unknown>): void {
+    call(
+      options.resume ? 'thread/resume' : 'thread/start',
+      {
+        ...(options.resume ? { threadId: options.resume } : {}),
+        cwd: options.cwd,
+        // A strict task session gets no approvals: an action outside the sandbox fails.
+        approvalPolicy: options.mode === 'strict' ? 'never' : 'on-request',
+        sandbox: 'workspace-write',
+        // Without this, a user's global reviewer setting can answer requests meant for the person.
+        approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
+        ...(options.model ? { model: options.model } : {}),
+        config,
+      },
+      (result) => {
+        thread = record(result.thread) ? str(result.thread.id) : undefined;
+        if (!thread) {
+          emit({ type: 'notice', text: 'Codex did not start a thread.' });
+          stop(child);
+          return;
+        }
+        const model = str(result.model);
+        const reviewer = str(result.approvalsReviewer);
+        emit({
+          type: 'session',
+          id: thread,
+          ...(model ? { model } : {}),
+          ...(reviewer ? { mode: reviewer } : {}),
+        });
+        // A cancel can arrive before the thread exists. Then the first turn never starts.
+        if (cancelled) emit({ type: 'turn-end', status: 'interrupted' });
+        else if (options.prompt) startTurn(options.prompt);
+      },
+    );
+  }
   return {
     pid: child.pid,
     send(text) {

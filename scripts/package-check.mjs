@@ -422,6 +422,7 @@ let strict = false;
 onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
+  if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
   if (message.method === 'thread/start') {
     // A task session asks for no approvals. Only then does this fake write output.
     strict = message.params.approvalPolicy === 'never';

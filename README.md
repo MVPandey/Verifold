@@ -35,7 +35,7 @@ verifold
 
 You can also run `npx verifold` or install locally with `npm install verifold`. A local installation runs through `npx verifold`.
 
-Verifold starts the selected harness with its existing configuration and permissions. See [security boundaries](SECURITY.md).
+Verifold starts the selected harness with its existing configuration and permissions. Workers in the desk are the exception: they load none of your MCP servers or connected apps. See [security boundaries](SECURITY.md).
 
 ## Start a research project
 
@@ -173,7 +173,7 @@ Start one harness session from the desk, or from the terminal:
 verifold session --prompt "Reproduce the baseline" --host codex --mode ask
 ```
 
-The session runs in the project folder with the harness's own sign-in, settings, and permissions. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to two workers at the same time: sessions, tasks, or one of each. Research can run at the same time. If a desk action fails, the reason appears next to that control.
+The session runs in the project folder with the harness's own sign-in, settings, and permissions. A worker loads none of your MCP servers, claude.ai connectors, or ChatGPT apps. Claude Code starts with `--strict-mcp-config`, and plugin skills and hooks still load. Codex starts each thread with plugins, apps, and each configured MCP server turned off. If Codex does not report its configuration, the session stops. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to two workers at the same time: sessions, tasks, or one of each. Research can run at the same time. If a desk action fails, the reason appears next to that control.
 
 In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces the answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request. A network call that the sandbox blocks can fail without a request.
 
