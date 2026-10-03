@@ -207,20 +207,31 @@ In the terminal, `a` and `d` with a request ID answer the request of the worker 
 
 What each harness supports in Verifold:
 
-| Control                           | Claude Code                                                            | Codex                                                    |
-| --------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------- |
-| Protocol                          | `claude -p` with stream-json input and output                          | `codex app-server` (JSON-RPC)                            |
-| Native identity                   | Session ID chosen by Verifold before launch (`--session-id`)           | Thread ID from `thread/start`                            |
-| Follow-up                         | Between turns                                                          | Between turns                                            |
-| Cancel a turn                     | Interrupt control request                                              | `turn/interrupt`                                         |
-| Ask me                            | Each permission request comes to the desk and the terminal             | Each approval request comes to the desk and the terminal |
-| Auto                              | Claude Code `auto` mode; Verifold cannot see which rule allowed a call | Codex reviewer agent; the record shows its decision      |
-| Strict (tasks)                    | `dontAsk`, sandbox, edit rules for the task folder                     | `workspace-write`, approval policy `never`               |
-| Resume after Ctrl+C               | `--resume` with the session ID                                         | `thread/resume`                                          |
-| Subagent work in the transcript   | Nested under the Agent call                                            | Nested under the agent call (fixture tested)             |
-| A command that the sandbox blocks | Reported as a failed call                                              | Not reported by Codex                                    |
+| Control                           | Claude Code                                                                 | Codex                                                           |
+| --------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Protocol                          | `claude -p` with stream-json input and output                               | `codex app-server` (JSON-RPC)                                   |
+| Native identity                   | Session ID chosen by Verifold before launch (`--session-id`)                | Thread ID from `thread/start`                                   |
+| Follow-up                         | Between turns                                                               | Between turns                                                   |
+| Cancel a turn                     | Interrupt control request                                                   | `turn/interrupt`                                                |
+| Ask me                            | Each permission request comes to the desk and the terminal                  | Each approval request comes to the desk and the terminal        |
+| Auto                              | Claude Code `auto` mode; Verifold cannot see which rule allowed a call      | Codex reviewer agent; the record shows its decision             |
+| Strict (tasks)                    | `dontAsk`, sandbox, edit rules for the task folder                          | `workspace-write`, approval policy `never`                      |
+| Resume after Ctrl+C               | `--resume` with the session ID                                              | `thread/resume`                                                 |
+| Subagent work in the transcript   | Nested under the Agent call                                                 | Nested under the agent call (fixture tested)                    |
+| Terminal                          | `claude --resume` in a PTY, between turns; no tool record while you hold it | `codex --remote` on the same app-server socket; events continue |
+| A command that the sandbox blocks | Reported as a failed call                                                   | Not reported by Codex                                           |
 
-Tested with Claude Code 2.1.288 and Codex 0.155.1.
+Tested with Claude Code 2.1.288 and Codex 0.155.1 and 0.160.0. Terminals were tested on macOS with Codex 0.160.0.
+
+### Worker terminals
+
+Each worker has a third view beside Summary and Details: Terminal. Between turns, Open the terminal runs the harness's own TUI on the same conversation, in the desk. Open in new tab gives it a full window. Return to Verifold ends the TUI and continues the session in the desk.
+
+- Claude Code: Verifold stops its stream-json process and starts `claude --resume <session>` in the terminal, with the session's permission mode. While you work there, Verifold records no tool calls. When you return, stream-json resumes on the same conversation, including what you did in the terminal.
+- Codex: every Codex worker runs its app-server on a private Unix socket, and the terminal runs `codex --remote unix://… resume <thread>` on the same server. Codex keeps reporting its events to Verifold while you type. A thread needs one turn before its terminal can open.
+- Task workers keep their Strict limits in the terminal. When you return, Verifold saves the task folder as a version for review.
+
+One browser view holds input at a time. A reload of that view keeps input and replays the last 256 KB of output, with no new process. Another view, for example a new tab, starts read-only until you choose Take input here. While you hold a terminal, the worker's follow-up, cancel, and end controls wait until you return. Terminals work on macOS and Linux. They need the optional `@lydell/node-pty` package, which npm installs with Verifold. Startup prompts of a harness TUI, such as an update or folder trust question, are yours to answer in the terminal.
 
 ### Scoped tasks
 
