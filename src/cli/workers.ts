@@ -33,7 +33,6 @@ export class SessionPool {
   private readonly root: string;
   private readonly slots: SessionManager[] = [];
   private pausedList: PausedSession[] = [];
-  private blocked: string | null = null;
 
   constructor(root: string, options: SessionPoolOptions) {
     this.root = root;
@@ -69,15 +68,6 @@ export class SessionPool {
   /** Every slot is in use, so no worker can start. */
   get full(): boolean {
     return this.slots.every((slot) => slot.active);
-  }
-
-  get blockedReason(): string | null {
-    return this.blocked;
-  }
-
-  block(reason: string | null): void {
-    this.blocked = reason;
-    for (const slot of this.slots) slot.block(reason);
   }
 
   async load(): Promise<void> {
@@ -187,7 +177,6 @@ export class SessionPool {
   }
 
   private free(): SessionManager {
-    if (this.blocked) fail(this.blocked);
     return (
       this.slots.find((slot) => !slot.active) ??
       fail(

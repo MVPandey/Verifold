@@ -102,13 +102,9 @@ async function project(): Promise<string> {
 
 function setup(
   root: string,
-  options: {
-    readonly harness?: typeof harness;
-    readonly busy?: () => string | null;
-  } = {},
-): { runner: ResearchRunner; lines: string[]; running: boolean[] } {
+  options: { readonly harness?: typeof harness } = {},
+): { runner: ResearchRunner; lines: string[] } {
   const lines: string[] = [];
-  const running: boolean[] = [];
   const runner = new ResearchRunner(root, {
     signal: new AbortController().signal,
     io: {
@@ -118,16 +114,14 @@ function setup(
       progress: (line) => lines.push(line),
     },
     harness: options.harness ?? harness,
-    busy: options.busy ?? (() => null),
-    onRunning: (value) => running.push(value),
   });
-  return { runner, lines, running };
+  return { runner, lines };
 }
 
 await test('research runs in the owner, records observed activity, and waits for decisions', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { runner, lines, running } = setup(root);
+  const { runner, lines } = setup(root);
   await assert.rejects(runner.start({}), /Write the question/);
   await assert.rejects(runner.start({ approve: true }), /No plan waits/);
   await runner.start({ topic: 'Proof search', autonomy: 'guided' });
@@ -141,7 +135,6 @@ await test('research runs in the owner, records observed activity, and waits for
     ['status', 'tool', 'status'],
   );
   assert.match(planned.events.at(-1)?.text ?? '', /plan is ready/);
-  assert.deepEqual(running, [true, false]);
   assert.ok(lines.some((line) => line.includes('/approve')));
   // The terminal gets status lines. Harness events stay in the desk.
   assert.ok(!lines.some((line) => line.includes('requested WebSearch')));
@@ -167,16 +160,10 @@ await test('research runs in the owner, records observed activity, and waits for
   );
 });
 
-await test('a busy owner refuses research, and a cancel keeps the attempt evidence', async (t) => {
+await test('a research cancel keeps the attempt evidence', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
-  let busy: string | null = 'A harness session is running.';
-  const { runner } = setup(root, { harness: slow, busy: () => busy });
-  await assert.rejects(
-    runner.start({ topic: 'Proof search' }),
-    /session is running/,
-  );
-  busy = null;
+  const { runner } = setup(root, { harness: slow });
   const calls = slowCalls;
   await runner.start({ topic: 'Proof search' });
   await assert.rejects(runner.select('proof'), /Wait for research/);

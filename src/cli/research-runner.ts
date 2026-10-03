@@ -24,9 +24,6 @@ export interface ResearchRunnerOptions {
   readonly signal: AbortSignal;
   /** The owner terminal. Plan and report text go there, as before. */
   readonly io: CliIO;
-  /** Why research cannot start now, for example a running session. */
-  readonly busy: () => string | null;
-  readonly onRunning: (running: boolean) => void;
   readonly harness?: typeof runHarness;
 }
 
@@ -72,8 +69,6 @@ export class ResearchRunner {
   async start(input: ResearchOptions): Promise<void> {
     if (this.running || this.starting)
       fail('Research is already running. Wait for it, or cancel it.');
-    const reason = this.options.busy();
-    if (reason) fail(reason);
     this.starting = true;
     let phase: string | undefined;
     try {
@@ -111,7 +106,6 @@ export class ResearchRunner {
     const signal = AbortSignal.any([this.options.signal, controller.signal]);
     const harness = this.options.harness ?? runHarness;
     this.note('status', `Research started: ${this.step}.`);
-    this.options.onRunning(true);
     this.work = runResearch(
       this.root,
       input,
@@ -159,7 +153,6 @@ export class ResearchRunner {
       .finally(() => {
         this.work = null;
         this.controller = null;
-        this.options.onRunning(false);
       });
   }
 

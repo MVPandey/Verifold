@@ -716,7 +716,6 @@ export class SessionManager {
   private host: HostSession | null = null;
   /** Request IDs continue across sessions, so an old desk button cannot answer a new request. */
   private readonly requests: { next: number };
-  private blocked: string | null = null;
   /** A launch is saving its record. No second start can begin. */
   private launching = false;
   /** The current launch sent a first request, so a turn runs when the harness reports its session. */
@@ -757,11 +756,6 @@ export class SessionManager {
 
   paused(): readonly PausedSession[] {
     return this.pausedList;
-  }
-
-  /** Refuse new sessions while other work in this process uses the project. */
-  block(reason: string | null): void {
-    this.blocked = reason;
   }
 
   /** A session runs or is starting. */
@@ -882,11 +876,6 @@ export class SessionManager {
     } catch {
       /* The launch records its failure in the session. */
     }
-  }
-
-  /** Why a new session is refused now, or null. */
-  get blockedReason(): string | null {
-    return this.blocked;
   }
 
   async start(input: {
@@ -1129,7 +1118,6 @@ export class SessionManager {
   }
 
   private ready(): void {
-    if (this.blocked) fail(this.blocked);
     if (this.host || this.launching)
       fail('A session is already running. End it before you start another.');
   }

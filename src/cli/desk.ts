@@ -733,9 +733,6 @@ export async function startDesk(
                 },
               }
             : {}),
-          ...(sessions?.blockedReason
-            ? { blocked: sessions.blockedReason }
-            : {}),
         }),
       );
       if (Buffer.byteLength(body) > 2_000_000)
