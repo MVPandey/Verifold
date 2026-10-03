@@ -5,7 +5,7 @@ import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
 import type { ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
-import type { TaskRecord, TaskVersion } from './tasks.ts';
+import { replaced, type TaskRecord, type TaskVersion } from './tasks.ts';
 import { workerLimit } from './workers.ts';
 import {
   decisionLabel,
@@ -392,21 +392,23 @@ function renderReview(
   task: TaskRecord,
   version: TaskVersion,
   canChange: boolean,
+  stale: string | undefined,
 ): string {
-  const selectable = version.files.filter(
-    (file) => file.inScope && file.regular,
-  );
+  const selectable = stale
+    ? []
+    : version.files.filter((file) => file.inScope && file.regular);
   const marks = { added: '+', modified: 'M', deleted: '−' } as const;
   return `<div class="review" aria-labelledby="review-title"><h3 id="review-title">Version ${version.number} · ${e(turnLabels[version.turn])}</h3>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
+  ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
   ${
     version.files.length
       ? `<div class="review-grid"><ul class="review-files">${version.files
           .map((file, index) => {
-            const allowed = file.inScope && file.regular;
-            return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${allowed ? ' checked' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
+            const allowed = file.inScope && file.regular && !stale;
+            return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${allowed ? ' checked' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed || stale ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
           })
           .join(
             '',
@@ -431,6 +433,12 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
     const waiting = task.assignment.dependencies.filter(
       (id) => view.list.find((entry) => entry.id === id)?.state !== 'done',
     );
+    const [stale] = replaced(attempt, view.list);
+    const used = stale
+      ? `This version used ${stale.task} version ${stale.used}, but ${stale.task} now has version ${stale.current}.`
+      : undefined;
+    const editForm = `<details id="task-edit"><summary>${task.state === 'done' ? 'Revise the task' : 'Edit the task'}</summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'An edit makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', task.assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
+    const artifact = task.artifacts?.at(-1);
     const blocked = waiting.length
       ? `This task waits for ${waiting.join(', ')}.`
       : live.full
@@ -440,7 +448,7 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
     switch (task.state) {
       case 'open':
         next = `${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>
-        <details id="task-edit"><summary>Edit the task</summary><p class="fine">An edit makes a new revision. Earlier attempts keep the revision that they ran.</p>${taskForm('task-edit', task.assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
+        ${editForm}`;
         break;
       case 'claimed':
         next = '<p>Verifold prepares the task folder.</p>';
@@ -455,16 +463,13 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
                 task,
                 version,
                 !!attempt?.session && view.idle.includes(attempt.session),
+                used &&
+                  `${used} It cannot be accepted. Reject it and start the task again, so it uses the new files.`,
               )
             : `<p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions"><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>`;
         break;
       case 'done':
-        next = `<p>Done. You accepted ${e(
-          task.attempts
-            .flatMap((entry) => entry.versions)
-            .find((entry) => entry.decision?.kind === 'accepted')
-            ?.decision?.files?.join(', ') ?? 'no files',
-        )}.</p>`;
+        next = `<p>Done. ${artifact ? `Version ${artifact.version} was accepted: ${e(artifact.files.map((file) => file.path).join(', ') || 'no files')}.` : 'A version was accepted.'} Tasks that wait for this one receive these files.</p>${used ? `<p class="notice">${e(used)} Revise this task, so it runs again with the new files.</p>` : ''}${editForm}`;
         break;
       case 'cancelled':
         next = '<p>Cancelled. Its records stay in the project.</p>';
@@ -485,7 +490,7 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
       );
     body = `<article class="task" aria-labelledby="task-title"><div class="section-title"><h3 id="task-title">${e(task.assignment.title)}</h3><span class="status ${tone}">${e(label)}</span></div>
     <p class="session-meta"><span>${e(task.id)} · revision ${task.revision}</span><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>
-    <dl class="task-fields"><dt>Objective</dt><dd class="pre">${e(task.assignment.objective)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Expected output</dt><dd class="pre">${e(task.assignment.output)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}</dl>
+    <dl class="task-fields"><dt>Objective</dt><dd class="pre">${e(task.assignment.objective)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Expected output</dt><dd class="pre">${e(task.assignment.output)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
     ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
