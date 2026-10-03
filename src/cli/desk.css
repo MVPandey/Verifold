@@ -1112,3 +1112,153 @@ footer {
     padding-inline: 20px;
   }
 }
+.tasks .task-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.task-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.task-list button[aria-pressed='true'] {
+  border-color: var(--violet);
+}
+.task {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.task h3 {
+  margin: 0;
+}
+.task-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.task-fields dt {
+  color: var(--muted);
+}
+.task-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pre {
+  white-space: pre-wrap;
+}
+.task-deps {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.review h3 {
+  margin: 16px 0 8px;
+}
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(0, 5fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+.review-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.review-files li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  margin: 0;
+  padding: 4px 0;
+}
+.review-files input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+.file-name {
+  min-width: 0;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink);
+  font:
+    13px/1.5 ui-monospace,
+    monospace;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.file-name[aria-pressed='true'] {
+  border-color: var(--violet);
+}
+.change {
+  display: inline-block;
+  width: 1.4em;
+  font-weight: 700;
+}
+.change-added {
+  color: var(--green);
+}
+.change-deleted {
+  color: var(--red);
+}
+.scope {
+  flex-basis: 100%;
+  padding-left: 22px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.diff-pane {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.diff-head {
+  margin: 0 0 6px;
+}
+.diff {
+  max-height: 480px;
+  margin: 0;
+  overflow: auto;
+  font:
+    12px/1.5 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.d-add {
+  color: var(--green);
+}
+.d-del {
+  color: var(--red);
+}
+.d-hunk,
+.d-meta {
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .review-grid,
+  .task-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

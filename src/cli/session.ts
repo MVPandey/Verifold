@@ -130,6 +130,10 @@ export interface SessionRecord {
   readonly requests: readonly PendingRequest[];
   /** Oldest first. The last launch is the current or the latest process. */
   readonly launches: readonly SessionLaunch[];
+  /** A task session: the task and the claim that started it. */
+  readonly task?: { readonly id: string; readonly claim: string };
+  /** The task folder that a task session runs in, relative to the project. */
+  readonly cwd?: string;
 }
 
 export interface SessionView {
@@ -156,6 +160,11 @@ export interface SessionManagerOptions {
   /** Override host executables for an isolated installation or a test fixture. */
   readonly executables?: Partial<Record<HarnessName, string>>;
   readonly onEvent?: (event: SessionEvent) => void;
+  /** A turn of a task session ended, or its process exited. */
+  readonly onTaskTurn?: (
+    task: { readonly id: string; readonly claim: string },
+    turn: 'completed' | 'interrupted' | 'failed' | 'exited',
+  ) => void;
 }
 
 /** An action that the current session state does not allow. The message is safe to show. */
@@ -255,6 +264,7 @@ export function needsReview(command: CommandEntry): boolean {
 
 /** Plain words for the harness mode. */
 export function modeLabel(record: SessionRecord): string {
+  if (record.mode === 'strict') return 'Strict (task)';
   const reported = record.reportedMode;
   if (!reported)
     return record.mode === 'auto' ? 'Auto (requested)' : 'Ask me (requested)';
@@ -444,7 +454,10 @@ function parseRecord(value: unknown): SessionRecord | null {
   const host =
     record.host === 'claude' || record.host === 'codex' ? record.host : null;
   const mode =
-    record.mode === 'ask' || record.mode === 'auto' ? record.mode : null;
+    record.mode === 'ask' || record.mode === 'auto' || record.mode === 'strict'
+      ? record.mode
+      : null;
+  const task = object(record.task);
   const status = statuses.find((entry) => entry === record.status);
   const model =
     record.model === null || typeof record.model === 'string'
@@ -489,6 +502,17 @@ function parseRecord(value: unknown): SessionRecord | null {
     commands: list(record.commands).flatMap(parseCommand).slice(-1000),
     requests: [],
     launches: list(record.launches).flatMap(parseLaunch).slice(-50),
+    ...(task &&
+    typeof task.id === 'string' &&
+    /^task-\d{1,6}$/.test(task.id) &&
+    typeof task.claim === 'string' &&
+    /^[0-9a-f]{16}$/.test(task.claim)
+      ? { task: { id: task.id, claim: task.claim } }
+      : {}),
+    ...(typeof record.cwd === 'string' &&
+    /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(record.cwd)
+      ? { cwd: record.cwd }
+      : {}),
   };
 }
 
@@ -542,8 +566,10 @@ async function loadPaused(root: string): Promise<PausedSession[]> {
   const paused: PausedSession[] = [];
   for (const id of await recordIds(root)) {
     const record = await readRecord(root, id);
+    // A task session belongs to its task. The task offers its own next step.
     if (
       (record?.status === 'paused' || record?.status === 'interrupted') &&
+      !record.task &&
       record.events.some((event) => event.kind === 'you')
     )
       paused.push({
@@ -634,6 +660,36 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
+const taskSession =
+  'This session belongs to a task. Use the task actions in the desk: accept, ask for changes, or reject.';
+
+/** A new session record, before its first launch. */
+function fresh(
+  host: HarnessName,
+  model: string | null,
+  mode: SessionMode,
+): SessionRecord {
+  const now = new Date();
+  return {
+    schemaVersion: 2,
+    id: `${now.toISOString().replace(/[-:.]/g, '')}-${randomBytes(4).toString('hex')}`,
+    host,
+    model,
+    mode,
+    reportedMode: null,
+    // Claude Code takes its session ID at launch, so the record names it before the process starts.
+    nativeSessionId: host === 'claude' ? randomUUID() : null,
+    status: 'starting',
+    startedAt: now.toISOString(),
+    endedAt: null,
+    costUsd: null,
+    events: [],
+    commands: [],
+    requests: [],
+    launches: [],
+  };
+}
+
 /**
  * Owns one live harness session for one project. The desk and the terminal
  * call the same methods. Each change is saved to `.verifold/sessions/<id>.json`.
@@ -722,27 +778,45 @@ export class SessionManager {
       fail(error instanceof Error ? error.message : 'Invalid model.');
     }
     const prompt = this.text(input.prompt);
-    const now = new Date();
-    this.current = {
-      schemaVersion: 2,
-      id: `${now.toISOString().replace(/[-:.]/g, '')}-${randomBytes(4).toString('hex')}`,
-      host,
-      model: model ?? null,
-      mode,
-      reportedMode: null,
-      // Claude Code takes its session ID at launch, so the record names it before the process starts.
-      nativeSessionId: host === 'claude' ? randomUUID() : null,
-      status: 'starting',
-      startedAt: now.toISOString(),
-      endedAt: null,
-      costUsd: null,
-      events: [],
-      commands: [],
-      requests: [],
-      launches: [],
-    };
+    this.current = fresh(host, model ?? null, mode);
     this.event('you', prompt);
     await this.launch(prompt);
+  }
+
+  /**
+   * Start a strict session for a task, in its task folder. The harness limits
+   * writes to that folder and asks nothing. Returns the session ID.
+   */
+  async startTask(input: {
+    readonly host: HarnessName;
+    readonly model?: string;
+    readonly prompt: string;
+    readonly cwd: string;
+    readonly task: { readonly id: string; readonly claim: string };
+  }): Promise<string> {
+    this.ready();
+    const cwd = relative(this.root, input.cwd).split('\\').join('/');
+    const record: SessionRecord = {
+      ...fresh(input.host, input.model ?? null, 'strict'),
+      task: input.task,
+      cwd,
+    };
+    if (!parseRecord(record)?.cwd)
+      fail('A task session needs its task folder.');
+    this.current = record;
+    this.event(
+      'status',
+      `Verifold started ${input.task.id} in its task folder, in Strict mode.`,
+    );
+    await this.launch(input.prompt);
+    return record.id;
+  }
+
+  /** The ID of the live session when it waits for a follow-up. */
+  idleSession(): string | null {
+    return this.host && this.current?.status === 'idle'
+      ? this.current.id
+      : null;
   }
 
   /** Continue a paused session in a new harness process. */
@@ -805,6 +879,12 @@ export class SessionManager {
   }
 
   send(value: unknown): void {
+    if (this.current?.task) fail(taskSession);
+    this.continueTask(value);
+  }
+
+  /** Send the next turn. For a task session, only its task calls this, so each turn ends in a version. */
+  continueTask(value: unknown): void {
     const text = this.text(value);
     if (!this.host || this.current?.status !== 'idle')
       fail('Wait for the current turn to end, or cancel it.');
@@ -829,6 +909,12 @@ export class SessionManager {
   }
 
   end(reason = 'You ended the session.'): void {
+    if (this.current?.task) fail(taskSession);
+    this.endTask(reason);
+  }
+
+  /** End the session. For a task session, only its task calls this. */
+  endTask(reason: string): void {
     if (!this.host) fail('No session is running.');
     this.host.close();
     this.host = null;
@@ -888,7 +974,8 @@ export class SessionManager {
     if (!this.host || !record) return;
     this.host.close();
     this.host = null;
-    const resumable = record.nativeSessionId !== null;
+    // A task session ends with the owner. Its task keeps the work as a version.
+    const resumable = record.nativeSessionId !== null && !record.task;
     this.patch((current) => ({
       ...unanswered(current),
       status: resumable ? 'paused' : 'ended',
@@ -946,7 +1033,7 @@ export class SessionManager {
       this.prompted = prompt !== undefined;
       this.host = startHostSession({
         host: record.host,
-        cwd: this.root,
+        cwd: record.cwd ? join(this.root, record.cwd) : this.root,
         mode: record.mode,
         clientVersion: this.options.clientVersion,
         ...(record.model ? { model: record.model } : {}),
@@ -1063,6 +1150,7 @@ export class SessionManager {
         'status',
         `The ${hostName(record.host)} process exited${event.code === null ? '' : ` with code ${event.code}`}.`,
       );
+      if (record.task) this.options.onTaskTurn?.(record.task, 'exited');
       return;
     }
     if (!this.host) return;
@@ -1221,8 +1309,11 @@ export class SessionManager {
         }));
         this.event(
           'status',
-          `The turn ${event.status === 'completed' ? 'ended' : event.status === 'interrupted' ? 'was cancelled' : 'failed'}. Send a follow-up or end the session.`,
+          record.task
+            ? `The turn ${event.status === 'completed' ? 'ended' : event.status === 'interrupted' ? 'was stopped' : 'failed'}. Verifold saves the task folder as a version for review.`
+            : `The turn ${event.status === 'completed' ? 'ended' : event.status === 'interrupted' ? 'was cancelled' : 'failed'}. Send a follow-up or end the session.`,
         );
+        if (record.task) this.options.onTaskTurn?.(record.task, event.status);
         break;
       case 'notice':
         this.event('notice', event.text);

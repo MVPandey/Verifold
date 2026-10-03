@@ -199,9 +199,23 @@ Ctrl+C pauses a running session: Verifold stops the current turn and the harness
 
 If Verifold stops without saving the end of its work, for example after a forced termination, the next `verifold` in the folder checks each unfinished session and research attempt before it starts anything. A harness process that still runs stops first, but only when its recorded process start time matches, so a reused process ID cannot cause a wrong stop. The work becomes interrupted, with an unknown outcome, and tool calls that were running show as unknown. A session with a recorded conversation can resume. A session without one runs its first request again. Claude Code keeps its session ID for that run, so it cannot create a second conversation. An interrupted research attempt keeps its files. Continue research to run the step again.
 
+### Scoped tasks
+
+A task gives one harness a scoped job in its own copy of the project. In the desk, under Tasks, write what the agent should do, the input files, the paths where it may write, the expected output, the harness, and a time limit for each turn. A task can wait for other tasks to be done. An edit makes a new revision. Earlier attempts keep the revision that they ran.
+
+Start task claims the task, prepares a task folder, and then starts the harness:
+
+- In a Git repository, the task folder is a worktree on a new branch `verifold/<task>-r<revision>-a<attempt>-<id>`, under `.verifold/workspaces/`. In other folders, it is a plain folder with its own Git data under `.verifold/tasks/git/`.
+- The task folder starts from your project as it is now for the writable paths, including uncommitted changes, plus copies of the input files. Verifold copied each input when you saved the task, so a later edit in the project does not change it.
+- The harness runs in the task folder in Strict mode. Claude Code runs with `--permission-mode dontAsk`, its sandbox turned on, and permission rules that allow edits only in the folder. Codex runs with its `workspace-write` sandbox and the approval policy `never`. Actions outside these rules are denied without a prompt. Web search stays allowed. Reads are not limited, and both sandboxes allow writes to temporary folders. Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt. The task page lists these limits under What the harness enforces.
+
+When a turn ends, Verifold saves the task folder as a version: a commit on the task branch or in the task's Git data. The task waits for review. The review lists the changed files with the diff of one file. Files outside the writable paths, and links, cannot be selected. Accept copies the selected files into your project without a commit. If a target file changed in your project since the task started, Verifold copies nothing and names the file. Ask for changes sends your note as the next turn, which makes the next version. Reject keeps the version in the record and opens the task again. Stop the turn makes a version of the work so far. Tasks run one at a time, and not at the same time as research or a session.
+
+After Accept or Reject, Verifold removes the task folder if all its changes are in a version. The branch keeps every version. If Verifold stops while a turn runs, the next `verifold` saves the task folder as a version for review. A task session cannot resume.
+
 ## Privacy and website
 
-Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research information.
+Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. Task records under `.verifold/tasks/` keep each revision, copies of its input files, and each version. In a Git repository, the task branches `verifold/*` hold the versions as commits. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research information.
 
 Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
 
