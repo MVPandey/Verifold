@@ -81,7 +81,6 @@ async function project(
 /** A session owner that runs no harness. The test plays the agent. */
 class FakeSessions implements TaskSessions {
   full = false;
-  blockedReason: string | null = null;
   /** Sessions that wait for a follow-up. */
   waiting = new Set<string>();
   started: {

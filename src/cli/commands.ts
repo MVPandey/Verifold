@@ -138,7 +138,7 @@ const terminalHelp = `Commands in this terminal:
 - \`/feedback\` and your changes: revise the plan or the directions.
 - \`/select\` and a direction ID: choose a direction. This locks it.
 - \`a\` or \`d\`: allow once or deny the open request. If several are open, add the ID, for example \`a R2\`.
-- \`/cancel\`: stop the research step or the current turn.
+- \`/cancel\`: stop the research step or the current turn. If both run, choose in the desk.
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
@@ -238,14 +238,21 @@ export function terminalInput(
         );
     } else if (value === '/open') controls.open();
     else if (value === '/help') io.progress?.(terminalHelp);
-    else if (value === '/cancel' && controls.research?.running)
-      controls.research.cancel();
     else if (value === '/cancel') {
-      const id = only(
-        (view) => view.record.status !== 'idle',
-        'Nothing is running.',
-      );
-      if (id) sessions.cancel(id);
+      const turns = live.filter((view) => view.record.status !== 'idle');
+      // Research and a turn can run together. Then the desk chooses which one stops.
+      if (controls.research?.running && turns.length)
+        io.progress?.(
+          `Research and ${turns.length === 1 ? 'a session' : `${turns.length} sessions`} run. Use the desk to choose what to cancel.`,
+        );
+      else if (controls.research?.running) controls.research.cancel();
+      else {
+        const id = only(
+          (view) => view.record.status !== 'idle',
+          'Nothing is running.',
+        );
+        if (id) sessions.cancel(id);
+      }
     } else if (
       controls.research &&
       /^\/(research|approve|feedback|select)(\s|$)/.test(value)
@@ -431,18 +438,6 @@ async function serveDesk(
         signal,
         io,
         harness,
-        busy: () =>
-          !sessions.active
-            ? null
-            : sessions.views().some((view) => view.live && view.record.task)
-              ? 'A task session is running. Accept, reject, or cancel its version before research continues.'
-              : 'A harness session is running. End it before research continues.',
-        onRunning: (running) =>
-          sessions.block(
-            running
-              ? 'Research is running. Start a session after it ends.'
-              : null,
-          ),
       });
       const tasks = new TaskManager(root, {
         ownerId: owner.ownerId,
