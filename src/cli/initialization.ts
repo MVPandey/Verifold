@@ -86,6 +86,7 @@ export async function initializeProject(
   // Legacy JSON imports remain project-scoped and do not change agency settings.
   const directory = agencyDirectory(cwd, options.agencyDir);
   const saved = options.profile ? undefined : await loadAgency(directory);
+  io.step?.('Connect');
   const host = (
     options.host ??
     (io.interactive
@@ -128,6 +129,13 @@ export async function initializeProject(
       ? (
           await io.ask(
             `Model [${defaultModel ?? 'host default'}]; enter default to use host settings: `,
+            {
+              kind: 'text',
+              label:
+                'Which model should your harness use? Leave it empty to keep your saved choice.',
+              placeholder: defaultModel ?? 'Harness default',
+              actions: [{ label: 'Use the harness default', value: 'default' }],
+            },
           )
         ).trim() || defaultModel
       : defaultModel);
@@ -138,6 +146,7 @@ export async function initializeProject(
     const agency: Agency = { host, ...(model ? { model } : {}) };
     context = await loadMemory(directory);
     if (!context && io.interactive && !(await loadProfileState(directory))) {
+      io.step?.('Profile');
       context = await setupProfile(
         directory,
         cwd,
@@ -169,8 +178,15 @@ export async function initializeProject(
     let topicFromBrief = false;
     if (host !== 'claude' && host !== 'codex')
       throw new Error('Research requires a supported harness.');
+    io.step?.('Project');
     if (io.interactive && !options.workspaceSpecified) {
-      const selected = (await io.ask(`Project directory [${root}]: `)).trim();
+      const selected = (
+        await io.ask(`Project directory [${root}]: `, {
+          kind: 'text',
+          label: `Project folder. Leave it empty to use ${root}.`,
+          placeholder: root,
+        })
+      ).trim();
       if (selected)
         root = selected.startsWith('~/')
           ? resolve(homedir(), selected.slice(2))
@@ -198,6 +214,14 @@ export async function initializeProject(
       topic ??= (
         await io.ask(
           'Add a direction, question, or notes; /file <path> imports a written brief (optional; Enter lets your harness help): ',
+          {
+            kind: 'text',
+            label:
+              'What do you want to research? Add a question, a direction, or notes. To import a written brief, type /file and its path.',
+            multiline: true,
+            placeholder: 'A question, a direction, or notes',
+            actions: [{ label: 'Let my harness help', value: '' }],
+          },
         )
       ).trim();
       if (topic.startsWith('/file ')) {
@@ -208,6 +232,11 @@ export async function initializeProject(
           : resolve(cwd, selected);
         const consent = await io.ask(
           `Read only ${source} (up to 12000 bytes) and send its text to ${host} (${model ?? 'host default model'}) as project context? Your model provider may process it under your harness settings. [y/N]: `,
+          {
+            kind: 'confirm',
+            yes: 'Read and send the file',
+            no: 'Skip the file',
+          },
         );
         signal.throwIfAborted();
         if (/^(y|yes)$/i.test(consent.trim())) {
@@ -240,6 +269,7 @@ export async function initializeProject(
         ? 'Your harness can search the web and read the approved project directory to clarify your question.'
         : 'Your harness can search the web to clarify your question. It can ask you for local files or directories to inspect. Declined directories stay out of scope unless you explicitly authorize them later.',
     );
+    io.step?.('Interview');
     context = await researchInterview(
       topic,
       context ?? (options.profile ? JSON.stringify(profile) : undefined),
@@ -251,6 +281,7 @@ export async function initializeProject(
       projectReviewed ? 'project' : 'topic',
     );
     if (topicFromBrief) topic = memorySummary(context);
+    io.step?.('Research mode');
     const autonomy = parseAutonomy(
       options.autonomy ??
         (io.interactive
