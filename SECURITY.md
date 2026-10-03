@@ -16,6 +16,8 @@ Workers that the project owner starts, including task sessions and their termina
 
 Task workers reach Verifold's own tools only through the harness process that Verifold started, so the pipe identifies the sending task and attempt. No credential for these tools is on disk. Verifold checks each call before it records anything: an attempt that is no longer running changes nothing, a worker can message only linked tasks, the coordinator, or the person, and it can object only to a file version that its task received. Messages reach a worker as information in its next turn. They cannot change its writable paths, permissions, or limits.
 
+The coordinator acts only through Verifold tools. Claude Code runs it with no built-in tools, and Codex with a read-only sandbox and no approvals. Each tool calls the task operation that the person uses, with the same checks, and none can widen a task's paths beyond the project, change a harness permission, or raise a limit. It can create at most 12 tasks, and its wakeups are limited to 12 an hour. Its reasons and summaries are model text, labeled as its reading.
+
 Model providers and research tools can receive project prompts according to the harness configuration. Local project storage does not imply offline execution.
 
 Source links and model reports are untrusted data. Valid JSON and a successful subprocess do not establish scientific correctness or source authenticity.

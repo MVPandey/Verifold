@@ -7,6 +7,11 @@ import type { ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import { replaced, type TaskRecord, type TaskVersion } from './tasks.ts';
 import type { Message } from './messages.ts';
+import {
+  coordinatorLimits,
+  directionObjective,
+  type CoordinatorView,
+} from './coordinator.ts';
 import { workerLimit } from './workers.ts';
 import {
   decisionLabel,
@@ -35,6 +40,8 @@ export interface DeskSession {
   /** Research in this owner. Without it, research runs only from the CLI. */
   readonly research?: ResearchView;
   readonly tasks?: TaskView;
+  /** The coordinator of this owner. Null: none has started in this project. */
+  readonly coordinator?: CoordinatorView | null;
 }
 
 export interface TaskView {
@@ -404,6 +411,7 @@ function renderReview(
   return `<div class="review" aria-labelledby="review-title"><h3 id="review-title">Version ${version.number} · ${e(turnLabels[version.turn])}</h3>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
+  ${version.reply ? `<div class="worker-reply"><p class="fine">The worker said (a model claim):</p><p class="pre">${e(version.reply)}</p></div>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
   ${
@@ -467,6 +475,59 @@ function renderNeeds(messages: readonly Message[]): string {
     )}</ul><p class="fine">Your decision and its reason go to the task that raised the message, with its next turn. To change the work, revise the task.</p></div>`;
 }
 
+const coordinatorStates: Record<string, string> = {
+  starting: 'Starting',
+  running: 'Working',
+  idle: 'Waiting for events',
+  paused: 'Paused',
+  interrupted: 'Interrupted',
+  ended: 'Ended',
+  failed: 'Failed',
+};
+
+/** The coordinator: its objective, its state, what it did and why, and a way to reach it. */
+function renderCoordinator(
+  view: CoordinatorView | null,
+  workspace: Workspace,
+  host: string,
+  tasks: readonly TaskRecord[],
+): string {
+  const state = view?.state;
+  if (!state || state.stoppedAt) {
+    const objective = directionObjective(workspace) ?? '';
+    return `<section class="coordinator" aria-labelledby="coordinator-title"><div class="section-title"><h2 id="coordinator-title">Coordinator</h2>${state ? '<span class="status muted">Stopped</span>' : ''}</div>
+    <p class="fine">The coordinator turns an objective into tasks for the workers. It starts them, reviews each version, and settles objections. It acts only through Verifold's task tools, so every action has the same checks as yours, and it gives a reason for each one. It cannot run commands or edit files.</p>
+    <label class="field" for="coordinator-objective">Objective</label><textarea id="coordinator-objective" rows="4" maxlength="8000">${e(objective)}</textarea>
+    ${objective ? '' : '<p class="fine">Choose a research direction first, or write the objective yourself.</p>'}
+    <div class="fields"><label class="field" for="coordinator-host">Harness<select id="coordinator-host"><option value="claude"${host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="coordinator-model">Model<input id="coordinator-model" type="text" maxlength="200" placeholder="Harness default"></label></div>
+    <div class="actions"><button type="button" class="primary" data-action="coordinator-start">Start the coordinator</button></div></section>`;
+  }
+  const session = view.session?.record;
+  const status = session
+    ? (coordinatorStates[session.status] ?? session.status)
+    : 'Starting';
+  const paused =
+    session?.status === 'paused' || session?.status === 'interrupted';
+  const hourAgo = Date.now() - 3_600_000;
+  const wakeups = state.wakeups.filter((at) => Date.parse(at) > hourAgo).length;
+  const actions = state.actions.slice(-20).reverse();
+  const planned = tasks.filter((task) => task.assignment.by === 'coordinator');
+  const plan = state.planApproved
+    ? ''
+    : `<div class="needs" role="region" aria-labelledby="plan-title"><h3 id="plan-title">The task plan waits for you</h3><p>No task starts until you approve the plan. To change it, write to the coordinator below, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(task.assignment.objective.slice(0, 300))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${planned.length ? '' : ' disabled'}>Approve the plan</button></div></div>`;
+  return `<section class="coordinator" aria-labelledby="coordinator-title"><div class="section-title"><h2 id="coordinator-title">Coordinator</h2><span class="status ${paused || session?.status === 'failed' ? 'muted' : 'active'}">${e(status)}</span></div>
+  <p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span>${state.created} of ${coordinatorLimits.tasks} tasks created</span><span>${wakeups} of ${coordinatorLimits.wakeupsPerHour} wakeups this hour</span><span>${view.waiting} ${view.waiting === 1 ? 'event waits' : 'events wait'}</span></p>
+  ${view.limitedUntil ? `<p class="notice">The coordinator used its wakeups for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
+  ${paused ? '<p class="notice">The coordinator paused when Verifold stopped. Resume it to continue with the same conversation.</p>' : ''}
+  ${plan}
+  <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="messages">${actions.map((action) => `<li class="message"><p class="message-meta"><span>${e(action.tool.replace(/^verifold_/, ''))}</span><span>${action.ok ? 'Done' : 'Refused'}</span><time datetime="${e(action.at)}">${e(clock(action.at))}</time></p>${action.reason ? `<p class="pre">${e(action.reason)}</p>` : ''}<p class="fine">${e(action.result)}</p></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Reasons are the coordinator's reading, a model claim. Results come from Verifold.</p></details>
+  ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
+  <label class="field" for="coordinator-message">Message to the coordinator</label><textarea id="coordinator-message" rows="2" maxlength="4000"></textarea><p class="fine">It reads your message at its next wakeup.</p>
+  <div class="actions"><button type="button" data-action="coordinator-message">Send</button>${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
+  <p class="fine">If you stop it, running workers finish their turns, and their versions wait for your review.</p></section>`;
+}
+
 /** Scoped tasks: the list, one task with its next step, and a form for a new task. */
 function renderTasks(view: TaskView, live: DeskSession, host: string): string {
   const task = view.selected;
@@ -524,10 +585,18 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
     const history = task.attempts.flatMap((entry) =>
       entry.versions
         .filter((saved) => saved.decision)
-        .map(
-          (saved) =>
-            `<li>Version ${saved.number}: ${saved.decision?.kind === 'accepted' ? `accepted ${e(saved.decision.files?.join(', ') ?? '')}` : saved.decision?.kind === 'changes' ? `you asked for changes: ${e(saved.decision.note ?? '')}` : 'rejected'}</li>`,
-        ),
+        .map((saved) => {
+          const decision = saved.decision;
+          const who =
+            decision?.by === 'coordinator' ? 'the coordinator' : 'you';
+          const what =
+            decision?.kind === 'accepted'
+              ? `${who} accepted ${e(decision.files?.join(', ') ?? '')}`
+              : decision?.kind === 'changes'
+                ? `${who} asked for changes`
+                : `${who} rejected it`;
+          return `<li>Version ${saved.number}: ${what}${decision?.note ? `: ${e(decision.note)}` : ''}</li>`;
+        }),
     );
     const notes = task.attempts
       .filter((entry) => entry.note && entry !== attempt)
@@ -610,7 +679,7 @@ export function renderDesk(
           : 'muted';
   const html = `<div class="project-heading"><p class="project-name">${e(snapshot.project)}</p><h1>${e(workspace.research?.topic ?? 'What will you investigate?')}</h1><div class="project-meta"><span>${e(phaseLabel(workspace.research?.phase))}</span><span>${e(workspace.host === 'claude' ? 'Claude Code' : workspace.host === 'codex' ? 'Codex' : workspace.host)}</span><span>Model request: ${e(workspace.model ?? 'harness default')}</span></div></div>
   <div class="desk-grid"><div class="notebook">
-  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${live.tasks ? renderTasks(live.tasks, live, workspace.host) : ''}${renderCommands(live.session)}
+  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${live.coordinator !== undefined ? renderCoordinator(live.coordinator, workspace, workspace.host, live.tasks?.list ?? []) : ''}${live.tasks ? renderTasks(live.tasks, live, workspace.host) : ''}${renderCommands(live.session)}
   <section class="brief-section"><details id="research-brief" open><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet. Begin with a question in your project terminal.</p>'}</details></section>
   ${workspace.research?.plan ? `<section><details id="research-plan"><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(workspace.research.plan.scope)}</div><ul class="roles">${workspace.research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="findings"><div class="section-title"><h2>Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>

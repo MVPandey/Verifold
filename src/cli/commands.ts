@@ -29,6 +29,7 @@ import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { TaskManager } from './tasks.ts';
 import { SessionPool } from './workers.ts';
+import { Coordinator } from './coordinator.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -36,6 +37,7 @@ import {
   hostName,
   reconcileSessions,
   SessionActionError,
+  SessionManager,
   type SessionEvent,
 } from './session.ts';
 import { claimOwner } from './owner.ts';
@@ -405,12 +407,23 @@ async function serveDesk(
         finished = resolve;
       });
       // The workers report task turns to the tasks, which use the workers.
-      const owned: { tasks?: TaskManager; session?: string } = {};
+      // Task events wake the coordinator, which uses the tasks.
+      const owned: {
+        tasks?: TaskManager;
+        coordinator?: Coordinator;
+        session?: string;
+      } = {};
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
-        onTaskTurn: (task, turn, detail) =>
-          void owned.tasks?.turnEnded(task, turn, detail),
+        onTaskTurn: (task, turn, detail, reply) =>
+          void owned.tasks
+            ?.turnEnded(task, turn, detail, reply)
+            .catch(() =>
+              io.progress?.(
+                `Verifold could not save the version of ${task.id}. Check .verifold/tasks/.`,
+              ),
+            ),
         onEvent: (event, view) => {
           const line = io.interactive
             ? feedLine(
@@ -438,15 +451,30 @@ async function serveDesk(
         signal,
         io,
         harness,
+        // A chosen direction starts the coordinator.
+        onSelect: async () =>
+          owned.coordinator?.startForDirection(await loadWorkspace(root)),
       });
       const tasks = new TaskManager(root, {
         ownerId: owner.ownerId,
         sessions,
         ...(io.progress ? { progress: io.progress } : {}),
+        onEvent: (event) => owned.coordinator?.notify(event),
       });
       owned.tasks = tasks;
+      // The coordinator has its own session, outside the worker slots.
+      const coordinator = new Coordinator(root, {
+        tasks,
+        sessions: new SessionManager(root, {
+          clientVersion: version,
+          ownerId: owner.ownerId,
+          onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
+        }),
+      });
+      owned.coordinator = coordinator;
       try {
         await sessions.load();
+        await coordinator.load();
         const stopped = await tasks.settle();
         if (stopped)
           io.progress?.(
@@ -454,7 +482,7 @@ async function serveDesk(
           );
         // Start the session first, so invalid input fails before a desk opens.
         if (session) owned.session = await sessions.start(session);
-        if (desk) await desk.attach(root, sessions, runner, tasks);
+        if (desk) await desk.attach(root, sessions, runner, tasks, coordinator);
         else {
           desk = await startDesk(
             root,
@@ -464,6 +492,7 @@ async function serveDesk(
             runner,
             undefined,
             tasks,
+            coordinator,
           );
           await announce(
             desk,
@@ -474,6 +503,11 @@ async function serveDesk(
         if (paused && !session)
           io.progress?.(
             `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume or resume one in the desk.`,
+          );
+        const lead = coordinator.view();
+        if (lead?.session && !lead.session.live && !lead.state.stoppedAt)
+          io.progress?.(
+            'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
         if (research) await runner.start(research);
         io.listen?.(
@@ -519,7 +553,9 @@ async function serveDesk(
         await desk?.closed;
         // Ctrl+C cancels research too. Its attempt record must be final before the owner leaves.
         await runner.settled();
-        if (!(await sessions.close()))
+        // The coordinator pauses first, so no wakeup starts a task while the workers stop.
+        const coordinatorSaved = await coordinator.close();
+        if (!(await sessions.close()) || !coordinatorSaved)
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
           );
