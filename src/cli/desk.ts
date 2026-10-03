@@ -126,6 +126,12 @@ async function taskAction(
     case 'task-cancel':
       await tasks.cancel(body.task);
       return;
+    case 'task-message':
+      await tasks.post(body.to, body.text);
+      return;
+    case 'task-decide':
+      await tasks.decideMessage(body.message, body.decision, body.reason);
+      return;
     default:
       throw new SessionActionError('The desk sent an unknown task action.');
   }
@@ -730,6 +736,7 @@ export async function startDesk(
                   idle: workers
                     .filter((view) => sessions?.idle(view.record.id))
                     .map((view) => view.record.id),
+                  messages: (await tasks.messageList()).slice(-300),
                 },
               }
             : {}),
