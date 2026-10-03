@@ -200,6 +200,30 @@ function field(id: string): string {
     : '';
 }
 
+/** The answer to the open setup question. */
+function setupBody(button: HTMLElement): Record<string, unknown> {
+  const prompt = Number(button.dataset.prompt);
+  const review = button.dataset.review;
+  if (review)
+    return {
+      action: 'setup',
+      prompt,
+      value:
+        review === 'feedback'
+          ? { action: review, text: field('setup-feedback') }
+          : review === 'edit'
+            ? { action: review, brief: field('setup-edited') }
+            : { action: review },
+    };
+  return {
+    action: 'setup',
+    prompt,
+    value:
+      button.dataset.value ??
+      (button.dataset.field ? field(button.dataset.field) : ''),
+  };
+}
+
 /** The research request for one decision button. */
 function researchBody(kind: string | undefined): Record<string, unknown> {
   if (kind === 'approve') return { action: 'research', approve: true };
@@ -245,7 +269,9 @@ async function act(button: HTMLElement): Promise<void> {
                 ? { action, idea: button.dataset.idea }
                 : action === 'research'
                   ? researchBody(button.dataset.research)
-                  : { action };
+                  : action === 'setup'
+                    ? setupBody(button)
+                    : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -253,6 +279,8 @@ async function act(button: HTMLElement): Promise<void> {
     ['session', button.dataset.session],
     ['idea', button.dataset.idea],
     ['research', button.dataset.research],
+    ['prompt', button.dataset.prompt],
+    ['review', button.dataset.review],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -282,7 +310,13 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = 'Done';
     failure = undefined;
-    for (const id of ['session-prompt', 'follow-up', 'research-feedback']) {
+    for (const id of [
+      'session-prompt',
+      'follow-up',
+      'research-feedback',
+      'setup-answer',
+      'setup-feedback',
+    ]) {
       const element = document.getElementById(id);
       if (element instanceof HTMLTextAreaElement && body.action !== 'answer')
         element.value = '';

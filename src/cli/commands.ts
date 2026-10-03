@@ -8,7 +8,12 @@ import { escapeHtml as e } from '../ui/dom.ts';
 import { parseCandidates } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
-import { initializeProject, parseAutonomy } from './initialization.ts';
+import {
+  initializeProject,
+  parseAutonomy,
+  type InitializationOptions,
+} from './initialization.ts';
+import { choose } from './choices.ts';
 import {
   reconcileAttempts,
   runResearch,
@@ -20,7 +25,8 @@ import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
 import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
-import { startDesk, openDeskBrowser } from './desk.ts';
+import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
+import { SetupBridge } from './setup-bridge.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
 import {
@@ -30,11 +36,51 @@ import {
   type SessionEvent,
 } from './session.ts';
 import { claimOwner } from './owner.ts';
+/** How a view can show a question. The terminal shows only the question text. */
+export type AskHint =
+  | { readonly kind: 'confirm'; readonly yes: string; readonly no: string }
+  | {
+      readonly kind: 'text';
+      /** The question for a view with buttons, without terminal keys and commands. */
+      readonly label?: string;
+      readonly multiline?: boolean;
+      readonly placeholder?: string;
+      /** Buttons that answer with a fixed value, for example an empty answer. */
+      readonly actions?: readonly {
+        readonly label: string;
+        readonly value: string;
+      }[];
+    };
+
+/** A decision about a draft brief. */
+export type BriefDecision =
+  | { readonly action: 'accept' }
+  | { readonly action: 'feedback'; readonly text: string }
+  | { readonly action: 'edit'; readonly brief: string }
+  | { readonly action: 'cancel' };
+
+/** The setup steps, in order. */
+export type SetupStep =
+  | 'Connect'
+  | 'Profile'
+  | 'Project'
+  | 'Interview'
+  | 'Research mode';
+
 export interface CliIO {
   readonly interactive: boolean;
-  readonly ask: (question: string) => Promise<string>;
+  readonly ask: (question: string, hint?: AskHint) => Promise<string>;
   readonly out: (value: string) => void;
-  readonly progress?: (value: string) => void;
+  /** `agent`: text from the harness. `tool`: a harness event that Verifold observed. */
+  readonly progress?: (value: string, source?: 'agent' | 'tool') => void;
+  /** Review a draft brief with direct editing. Only the desk provides it. */
+  readonly review?: (brief: string, final: boolean) => Promise<BriefDecision>;
+  /** Mark the current setup step for a view that shows it. */
+  readonly step?: (name: SetupStep) => void;
+  /** Open a desk URL in a browser. Tests replace it. The default is the system browser. */
+  readonly browse?: (url: string, signal: AbortSignal) => Promise<boolean>;
+  /** The folder of desk page files. Tests use fixtures. The default is the installed package. */
+  readonly deskAssets?: URL;
   readonly select?: (
     question: string,
     choices: readonly Choice[],
@@ -251,131 +297,180 @@ async function serveDesk(
   research?: ResearchOptions,
   session?: Parameters<SessionManager['start']>[0],
   harness: typeof runHarness = runHarness,
+  setup?: { readonly cwd: string; readonly options: InitializationOptions },
 ): Promise<void> {
   const version = await packageVersion();
-  const host =
-    (await loadWorkspace(root)).host === 'codex' ? 'codex' : 'claude';
-  // Only one process owns the project. A second one stops here.
-  const owner = await claimOwner(root, version);
-  try {
-    await recover(root, owner.ownerId, io);
-  } catch (error) {
-    await owner.release();
-    throw error;
-  }
   const stop = new AbortController();
   const deskSignal = AbortSignal.any([signal, stop.signal]);
-  let finished = (): void => {};
-  const done = new Promise<void>((resolve) => {
-    finished = resolve;
-  });
-  const sessions: SessionManager = new SessionManager(root, {
-    clientVersion: version,
-    ownerId: owner.ownerId,
-    onEvent: (event) => {
-      if (io.interactive) io.progress?.(feedLine(event));
-      const view = sessions.view();
-      if (!session || !view) return;
-      const { status } = view.record;
-      if (status === 'ended' || status === 'failed' || status === 'paused')
-        finished();
-      // Without a terminal, requests wait for the desk and the session ends after one turn.
-      else if (!io.interactive && view.record.status === 'idle')
-        sessions.end('The turn ended, so the noninteractive session ended.');
-    },
-  });
-  const runner = new ResearchRunner(root, {
-    signal,
-    io,
-    harness,
-    busy: () =>
-      sessions.active
-        ? 'A harness session is running. End it before research continues.'
-        : null,
-    onRunning: (running) =>
-      sessions.block(
-        running ? 'Research is running. Start a session after it ends.' : null,
-      ),
-  });
+  let desk: DeskServer | undefined;
+  const open = async (): Promise<boolean> =>
+    desk ? (io.browse ?? openDeskBrowser)(desk.launchUrl(), deskSignal) : false;
+  const announce = async (server: DeskServer, ready: string): Promise<void> => {
+    io.out(
+      JSON.stringify({
+        url: server.url,
+        visibility: 'private',
+        readOnly: false,
+      }),
+    );
+    if (noOpen)
+      io.progress?.(
+        'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
+      );
+    else if (await open()) io.progress?.(ready);
+    else
+      io.progress?.(
+        'The browser could not open. Open the printed URL, or type /open to try again.',
+      );
+  };
   try {
-    await sessions.load();
-    // Start the session first, so invalid input fails before a desk opens.
-    if (session) await sessions.start(session);
-    const desk = await startDesk(root, deskSignal, undefined, sessions, runner);
-    try {
-      io.out(
-        JSON.stringify({
-          url: desk.url,
-          visibility: 'private',
-          readOnly: false,
-        }),
-      );
-      const open = async (): Promise<boolean> =>
-        openDeskBrowser(desk.launchUrl(), deskSignal);
-      if (noOpen)
-        io.progress?.(
-          'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
-        );
-      else if (await open())
-        io.progress?.(
-          'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
-        );
-      else
-        io.progress?.(
-          'The browser could not open. Open the printed URL, or type /open to try again.',
-        );
-      const paused = sessions.paused().length;
-      if (paused && !session)
-        io.progress?.(
-          `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume or resume one in the desk.`,
-        );
-      if (research) await runner.start(research);
-      io.listen?.(
-        (line) =>
-          terminalInput(sessions, line, io, {
-            host,
-            research: runner,
-            open: () => {
-              void open().then((opened) =>
-                io.progress?.(
-                  opened
-                    ? 'The desk opened in your browser.'
-                    : 'The browser could not open. Open the printed URL.',
-                ),
-              );
-            },
-          }),
+    if (setup) {
+      // The same desk shows setup first, then the project that setup creates.
+      const bridge = new SetupBridge(io, signal);
+      desk = await startDesk(
+        null,
         deskSignal,
+        io.deskAssets,
+        undefined,
+        undefined,
+        bridge,
       );
-      if (session) {
-        if (io.interactive) io.progress?.(terminalHelp);
-        await Promise.race([done, desk.closed]);
-        const record = sessions.view()?.record;
-        if (record && !io.interactive)
-          io.out(
-            JSON.stringify({
-              session: record.id,
-              status: record.status,
-              commands: record.commands.length,
-              record: join(root, '.verifold', 'sessions', `${record.id}.json`),
-            }),
-          );
-      } else await desk.closed;
-    } finally {
-      stop.abort();
-      await desk.closed;
+      await announce(
+        desk,
+        'Set up your project in the desk. This terminal shows each step. Ctrl+C cancels setup.',
+      );
+      const initialized = await bridge.run((setupIo) =>
+        initializeProject(
+          root,
+          setup.cwd,
+          setup.options,
+          setupIo,
+          signal,
+          harness,
+        ),
+      );
+      root = initialized.root;
+      research = initialized.research ?? undefined;
+      io.progress?.(`Setup is complete. The project is in ${root}.`);
     }
-  } finally {
+    const host =
+      (await loadWorkspace(root)).host === 'codex' ? 'codex' : 'claude';
+    // Only one process owns the project. A second one stops here.
+    const owner = await claimOwner(root, version);
     try {
-      // Ctrl+C cancels research too. Its attempt record must be final before the owner leaves.
-      await runner.settled();
-      if (!(await sessions.close()))
-        io.progress?.(
-          'Verifold could not save the last change to the session record in .verifold/sessions/.',
+      await recover(root, owner.ownerId, io);
+      let finished = (): void => {};
+      const done = new Promise<void>((resolve) => {
+        finished = resolve;
+      });
+      const sessions: SessionManager = new SessionManager(root, {
+        clientVersion: version,
+        ownerId: owner.ownerId,
+        onEvent: (event) => {
+          if (io.interactive) io.progress?.(feedLine(event));
+          const view = sessions.view();
+          if (!session || !view) return;
+          const { status } = view.record;
+          if (status === 'ended' || status === 'failed' || status === 'paused')
+            finished();
+          // Without a terminal, requests wait for the desk and the session ends after one turn.
+          else if (!io.interactive && view.record.status === 'idle')
+            sessions.end(
+              'The turn ended, so the noninteractive session ended.',
+            );
+        },
+      });
+      const runner = new ResearchRunner(root, {
+        signal,
+        io,
+        harness,
+        busy: () =>
+          sessions.active
+            ? 'A harness session is running. End it before research continues.'
+            : null,
+        onRunning: (running) =>
+          sessions.block(
+            running
+              ? 'Research is running. Start a session after it ends.'
+              : null,
+          ),
+      });
+      try {
+        await sessions.load();
+        // Start the session first, so invalid input fails before a desk opens.
+        if (session) await sessions.start(session);
+        if (desk) await desk.attach(root, sessions, runner);
+        else {
+          desk = await startDesk(
+            root,
+            deskSignal,
+            io.deskAssets,
+            sessions,
+            runner,
+          );
+          await announce(
+            desk,
+            'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
+          );
+        }
+        const paused = sessions.paused().length;
+        if (paused && !session)
+          io.progress?.(
+            `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume or resume one in the desk.`,
+          );
+        if (research) await runner.start(research);
+        io.listen?.(
+          (line) =>
+            terminalInput(sessions, line, io, {
+              host,
+              research: runner,
+              open: () => {
+                void open().then((opened) =>
+                  io.progress?.(
+                    opened
+                      ? 'The desk opened in your browser.'
+                      : 'The browser could not open. Open the printed URL.',
+                  ),
+                );
+              },
+            }),
+          deskSignal,
         );
+        if (session) {
+          if (io.interactive) io.progress?.(terminalHelp);
+          await Promise.race([done, desk.closed]);
+          const record = sessions.view()?.record;
+          if (record && !io.interactive)
+            io.out(
+              JSON.stringify({
+                session: record.id,
+                status: record.status,
+                commands: record.commands.length,
+                record: join(
+                  root,
+                  '.verifold',
+                  'sessions',
+                  `${record.id}.json`,
+                ),
+              }),
+            );
+        } else await desk.closed;
+      } finally {
+        stop.abort();
+        await desk?.closed;
+        // Ctrl+C cancels research too. Its attempt record must be final before the owner leaves.
+        await runner.settled();
+        if (!(await sessions.close()))
+          io.progress?.(
+            'Verifold could not save the last change to the session record in .verifold/sessions/.',
+          );
+      }
     } finally {
       await owner.release();
     }
+  } finally {
+    stop.abort();
+    await desk?.closed;
   }
 }
 /**
@@ -567,21 +662,51 @@ export async function runCli(
     return;
   }
   if (command === 'init') {
+    const options: InitializationOptions = {
+      ...(values.profile !== undefined ? { profile: values.profile } : {}),
+      ...(values.host !== undefined ? { host: values.host } : {}),
+      ...(values.model !== undefined ? { model: values.model } : {}),
+      ...(values['agency-dir'] !== undefined
+        ? { agencyDir: values['agency-dir'] }
+        : {}),
+      ...(values.topic !== undefined ? { topic: values.topic } : {}),
+      ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
+      setupOnly: values['setup-only'] ?? false,
+      workspaceSpecified: values.workspace !== undefined,
+    };
+    // Bare verifold in a new folder offers setup in the desk. init stays the terminal path.
+    if (
+      launch &&
+      !values['no-open'] &&
+      (await choose(
+        io,
+        'Where do you want to set up this project?',
+        [
+          {
+            value: 'browser',
+            label: 'Continue in the browser',
+            description:
+              'Set up the project in the desk. This terminal stays open and shows each step.',
+          },
+          {
+            value: 'terminal',
+            label: 'Continue here',
+            description: 'Answer each setup question in this terminal.',
+          },
+        ],
+        'browser',
+      )) === 'browser'
+    ) {
+      await serveDesk(root, false, io, signal, undefined, undefined, harness, {
+        cwd,
+        options,
+      });
+      return;
+    }
     const initialized = await initializeProject(
       root,
       cwd,
-      {
-        ...(values.profile !== undefined ? { profile: values.profile } : {}),
-        ...(values.host !== undefined ? { host: values.host } : {}),
-        ...(values.model !== undefined ? { model: values.model } : {}),
-        ...(values['agency-dir'] !== undefined
-          ? { agencyDir: values['agency-dir'] }
-          : {}),
-        ...(values.topic !== undefined ? { topic: values.topic } : {}),
-        ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
-        setupOnly: values['setup-only'] ?? false,
-        workspaceSpecified: values.workspace !== undefined,
-      },
+      options,
       io,
       signal,
       harness,

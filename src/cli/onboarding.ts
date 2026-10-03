@@ -79,7 +79,7 @@ export async function researchInterview(
               ...agency,
               cwd,
               signal,
-              ...(io.progress ? { onActivity: io.progress } : {}),
+              onActivity: (message) => io.progress?.(message, 'tool'),
               ...(sessionId ? { sessionId } : {}),
               prompt: `${await loadPrompt('research-interview')}
 ${finish ? await loadPrompt('interview-finish') : await loadPrompt('interview-followup')}
@@ -137,11 +137,21 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
       }
     }
     if (!response) throw new Error('Onboarding produced no response.');
-    io.progress?.(stripVTControlCharacters(response.body));
+    io.progress?.(stripVTControlCharacters(response.body), 'agent');
     if (!response.ready) {
       const answer = (
         await io.ask(
           'Reply, or press Enter to draft your brief (/cancel to stop): ',
+          {
+            kind: 'text',
+            label: 'Reply to your harness.',
+            multiline: true,
+            placeholder: 'Your answer',
+            actions: [
+              { label: 'Draft my brief now', value: '' },
+              { label: 'Cancel setup', value: '/cancel' },
+            ],
+          },
         )
       ).trim();
       signal.throwIfAborted();
@@ -156,6 +166,25 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
     }
     previousBrief = response.body;
     if (!io.interactive) return response.body;
+    if (io.review) {
+      const decision = await io.review(response.body, turn === 5);
+      signal.throwIfAborted();
+      if (decision.action === 'cancel') cancelOnboarding();
+      if (decision.action === 'accept') return response.body;
+      // The person wrote this version. It is the accepted brief.
+      if (decision.action === 'edit')
+        return localBrief(text(decision.brief, 'edited brief', 11000));
+      if (turn === 5)
+        return localBrief(
+          `${response.body}\n\n## User review note\n\n${text(decision.text, 'brief feedback', 4000)}`,
+        );
+      answers.push({
+        question: 'Review feedback',
+        answer: text(decision.text, 'brief feedback', 4000),
+      });
+      finish = true;
+      continue;
+    }
     const feedback = (
       await io.ask(
         turn === 5
@@ -172,7 +201,11 @@ ${JSON.stringify({ background: background ?? 'No saved background.', answers, pr
         `${response.body}\n\n## User review note\n\n${note}`,
       );
       io.progress?.(stripVTControlCharacters(finalBrief));
-      const accepted = await io.ask('Save this brief with your note? [y/N]: ');
+      const accepted = await io.ask('Save this brief with your note? [y/N]: ', {
+        kind: 'confirm',
+        yes: 'Save the brief with my note',
+        no: 'Cancel setup',
+      });
       signal.throwIfAborted();
       if (/^(y|yes)$/i.test(accepted.trim())) return finalBrief;
       cancelOnboarding();
