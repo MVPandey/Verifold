@@ -8,7 +8,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { deskPage, renderDesk } from './desk-view.ts';
+import { deskPage, renderDesk, renderSetup } from './desk-view.ts';
 import {
   readDeskSnapshot,
   readDeskReport,
@@ -17,12 +17,19 @@ import {
 import type { ResearchReport } from './research.ts';
 import { SessionActionError, type SessionManager } from './session.ts';
 import type { ResearchRunner } from './research-runner.ts';
+import type { SetupBridge } from './setup-bridge.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
   readonly url: string;
   /** A URL with a one-time code for a browser launch. Each code works once, for two minutes. */
   launchUrl(): string;
+  /** Switch a setup desk to the project that setup created. */
+  attach(
+    root: string,
+    sessions: SessionManager,
+    research: ResearchRunner,
+  ): Promise<void>;
   readonly closed: Promise<void>;
 }
 
@@ -51,10 +58,20 @@ function record(value: unknown): value is Record<string, unknown> {
 
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
-  sessions: SessionManager,
+  sessions: SessionManager | undefined,
   research: ResearchRunner | undefined,
+  setup: SetupBridge | undefined,
   body: Record<string, unknown>,
 ): Promise<number> {
+  if (body.action === 'setup') {
+    if (!setup) return 400;
+    setup.answer(body.prompt, body.value);
+    return 200;
+  }
+  if (!sessions)
+    throw new SessionActionError(
+      'The project does not exist yet. Finish setup first.',
+    );
   if (
     research &&
     (body.action === 'research' ||
@@ -118,15 +135,17 @@ async function act(
  * owner, authenticated JSON POST requests to /api/action control its session.
  */
 export async function startDesk(
-  root: string,
+  root: string | null,
   signal: AbortSignal,
   assetsRoot: URL = new URL('./', import.meta.url),
   sessions?: SessionManager,
   research?: ResearchRunner,
+  setup?: SetupBridge,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
-  root = await realpath(root);
-  await readDeskSnapshot(root);
+  // In setup mode the project does not exist yet. attach() sets it.
+  let project: string | null = root === null ? null : await realpath(root);
+  if (project) await readDeskSnapshot(project);
   const token = randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
   // A browser launch command line can be visible to other local users, so it carries a one-time code.
@@ -225,7 +244,7 @@ export async function startDesk(
     }
     if (
       request.method === 'POST' &&
-      sessions &&
+      (sessions || setup) &&
       url.pathname === '/api/action' &&
       !url.search
     ) {
@@ -242,7 +261,7 @@ export async function startDesk(
       let message = 'The desk sent an unreadable action.';
       if (record(body))
         try {
-          status = await act(sessions, research, body);
+          status = await act(sessions, research, setup, body);
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
           status = 409;
@@ -258,7 +277,9 @@ export async function startDesk(
       return;
     }
     if (request.method !== 'GET') {
-      response.writeHead(405, { Allow: sessions ? 'GET, POST' : 'GET' }).end();
+      response
+        .writeHead(405, { Allow: sessions || setup ? 'GET, POST' : 'GET' })
+        .end();
       return;
     }
     const asset = assets.get(url.pathname);
@@ -287,6 +308,13 @@ export async function startDesk(
       response.writeHead(503).end();
       return;
     }
+    if (!project) {
+      response
+        .writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        .end(JSON.stringify(renderSetup(setup?.view() ?? null)));
+      return;
+    }
+    const root = project;
     pending++;
     try {
       const snapshot = await readDeskSnapshot(root);
@@ -356,6 +384,13 @@ export async function startDesk(
       const code = randomBytes(24).toString('hex');
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
+    },
+    attach: async (next, owner, runner) => {
+      const resolved = await realpath(next);
+      await readDeskSnapshot(resolved);
+      sessions = owner;
+      research = runner;
+      project = resolved;
     },
     closed,
   };

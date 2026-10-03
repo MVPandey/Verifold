@@ -41,6 +41,8 @@ Verifold starts the selected harness with its existing configuration and permiss
 
 Run `verifold` from your terminal. An existing Verifold project checks for unfinished global setup, then opens its desk. This setup does not change the project’s saved harness or research. Otherwise, setup connects your harness, loads your global profile if available, and offers profile creation before selecting a project folder. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open. Ctrl+C stops its work and the desk, and pauses a running session.
 
+In a folder without a project, `verifold` asks where to set it up: in the browser (the default) or in the terminal. The browser path opens the desk on the same setup steps: harness and model, the optional profile, the project folder and context, the interview, the brief, and the research mode. The desk shows one question at a time. Consent steps, file limits, retries, and the six-turn interview limit are the same as in the terminal, because both paths run the same setup. The terminal stays open and shows each step as one line. Ctrl+C cancels setup and saves nothing. In the brief review, you can also edit the brief yourself and accept your version. When setup ends, the same desk shows the new project and planning starts. `verifold init`, `--no-open`, and runs without a terminal set up in the terminal.
+
 Use `verifold init` for setup and research entirely in the CLI. Bare launch requires an interactive terminal. `verifold --no-open` prints the desk URL without opening a browser.
 
 Run subsequent commands from that project directory, or add `--workspace <path>`:

@@ -44,6 +44,7 @@ export async function investigateProject(
   );
   const consent = await io.ask(
     'Let your harness investigate this project? [y/N]: ',
+    { kind: 'confirm', yes: 'Investigate the project', no: 'Skip' },
   );
   if (!/^(y|yes)$/i.test(consent.trim())) return brief;
   signal.throwIfAborted();
@@ -60,15 +61,20 @@ export async function investigateProject(
           ...agency,
           cwd: root,
           signal,
-          ...(io.progress ? { onActivity: io.progress } : {}),
+          onActivity: (message) => io.progress?.(message, 'tool'),
           prompt: `${await loadPrompt('project-context')}\nInitial project direction: ${JSON.stringify(brief)}\nProject evidence:\n${evidence}`,
         }),
     );
     const draft = parseContext(result.text);
     io.progress?.(
       `Project brief for review:\n\n${stripVTControlCharacters(draft)}`,
+      'agent',
     );
-    const accepted = await io.ask('Use this project brief? [y/N]: ');
+    const accepted = await io.ask('Use this project brief? [y/N]: ', {
+      kind: 'confirm',
+      yes: 'Use this brief',
+      no: 'Keep my original',
+    });
     signal.throwIfAborted();
     return /^(y|yes)$/i.test(accepted.trim()) ? draft : brief;
   } catch {
