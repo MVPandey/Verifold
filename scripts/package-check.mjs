@@ -14,15 +14,17 @@ import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
+// Every process in this check finds the fake harnesses first, never a real one.
+const environment = {
+  ...process.env,
+  PATH: `${join(directory, 'bin')}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
+  npm_config_cache: join(directory, 'cache'),
+};
 const run = (command, args, cwd) => {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      PATH: `${join(directory, 'bin')}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
-      npm_config_cache: join(directory, 'cache'),
-    },
+    env: environment,
     timeout: 30000,
   });
   if (result.error) throw result.error;
@@ -384,12 +386,21 @@ main().catch(() => { process.exitCode = 1; });
     join(directory, 'bin', 'codex'),
     `#!/usr/bin/env node
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+let strict = false;
 require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
-  if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'package-thread' }, approvalsReviewer: message.params.approvalsReviewer } });
+  if (message.method === 'thread/start') {
+    // A task session asks for no approvals. Only then does this fake write output.
+    strict = message.params.approvalPolicy === 'never';
+    out({ id: message.id, result: { thread: { id: 'package-thread' }, approvalsReviewer: message.params.approvalsReviewer } });
+  }
   if (message.method === 'turn/start') {
     out({ id: message.id, result: { turn: { id: 'turn-1' } } });
+    if (strict) {
+      require('node:fs').mkdirSync('results', { recursive: true });
+      require('node:fs').writeFileSync('results/package.md', 'packaged task output\\n');
+    }
     out({ method: 'item/started', params: { item: { type: 'commandExecution', id: 'exec-1', command: 'curl -sI https://example.org', status: 'inProgress' } } });
     out({ method: 'item/autoApprovalReview/completed', params: { targetItemId: 'exec-1', review: { status: 'approved', riskLevel: 'low', rationale: 'Read-only request.' } } });
     out({ method: 'item/completed', params: { item: { type: 'commandExecution', id: 'exec-1', command: 'curl -sI https://example.org', status: 'completed', exitCode: 0 } } });
@@ -433,7 +444,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
       'research-project',
       '--no-open',
     ],
-    { cwd: directory, stdio: ['ignore', 'pipe', 'pipe'] },
+    { cwd: directory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   const closed = once(desk, 'close');
   const lines = createInterface({ input: desk.stdout });
@@ -476,6 +487,49 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
       assert.equal(asset.status, 200, path);
       assert.ok((await asset.arrayBuffer()).byteLength > 0, path);
     }
+    // A scoped task with the packed task prompt: create, run, review, accept.
+    const action = async (body) => {
+      const response = await fetch(`${url.origin}/api/action`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 200, await response.text());
+    };
+    await action({
+      action: 'task-create',
+      title: 'Package task',
+      objective: 'Write results/package.md.',
+      writable: 'results',
+      output: 'results/package.md',
+      host: 'codex',
+    });
+    await action({ action: 'task-start', task: 'task-1' });
+    let html = '';
+    for (let tries = 0; tries < 100 && !html.includes('Version 1'); tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      html = (await (await fetch(`${url.origin}/api/view`, { headers })).json())
+        .html;
+    }
+    assert.match(html, /Version 1/);
+    await action({
+      action: 'task-accept',
+      task: 'task-1',
+      version: 1,
+      files: ['results/package.md'],
+    });
+    assert.equal(
+      await readFile(
+        join(directory, 'research-project', 'results', 'package.md'),
+        'utf8',
+      ),
+      'packaged task output\n',
+    );
+    // The task ran the fake Codex, never a harness from the person's PATH.
+    assert.match(
+      (await (await fetch(`${url.origin}/api/view`, { headers })).json()).html,
+      /Native session: package-thread/,
+    );
   } finally {
     lines.close();
     desk.kill('SIGTERM');
@@ -485,7 +539,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     assert.equal(code, 0, diagnostics);
   }
   console.log(
-    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, selection, memory request, and local desk passed.`,
+    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, a scoped task, selection, memory request, and local desk passed.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

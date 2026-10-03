@@ -19,6 +19,7 @@ const promptIds = [
   'pilot-request',
   'interview-finish',
   'interview-followup',
+  'task-worker',
 ] as const;
 
 export type PromptId = (typeof promptIds)[number];

@@ -5,6 +5,7 @@ import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
 import type { ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
+import type { TaskRecord, TaskVersion } from './tasks.ts';
 import {
   decisionLabel,
   hostName,
@@ -26,6 +27,15 @@ export interface DeskSession {
   readonly paused?: readonly PausedSession[];
   /** Research in this owner. Without it, research runs only from the CLI. */
   readonly research?: ResearchView;
+  readonly tasks?: TaskView;
+}
+
+export interface TaskView {
+  readonly list: readonly TaskRecord[];
+  /** The task that the page shows. */
+  readonly selected: TaskRecord | null;
+  /** The live session that waits for a follow-up, if any. */
+  readonly idleSession: string | null;
 }
 
 export function nextResearchAction(workspace: Workspace): {
@@ -248,11 +258,13 @@ function renderSession(live: DeskSession, defaultHost: string): string {
     .join('')}</ol>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`)}
   ${
-    running
-      ? record.status === 'idle'
-        ? `<label class="field" for="follow-up">Follow-up</label><textarea id="follow-up" rows="3" maxlength="100000" placeholder="Ask the agent to continue or change course."></textarea><div class="actions"><button type="button" class="primary" data-action="send">Send follow-up</button><button type="button" data-action="end">End session</button></div>`
-        : `<div class="actions"><button type="button" data-action="cancel">Cancel this turn</button><button type="button" data-action="end">End session</button></div>`
-      : ''
+    record.task
+      ? `<p class="fine">This session belongs to ${e(record.task.id)}. It runs in the task folder in Strict mode. Use the task actions under Tasks.</p>`
+      : running
+        ? record.status === 'idle'
+          ? `<label class="field" for="follow-up">Follow-up</label><textarea id="follow-up" rows="3" maxlength="100000" placeholder="Ask the agent to continue or change course."></textarea><div class="actions"><button type="button" class="primary" data-action="send">Send follow-up</button><button type="button" data-action="end">End session</button></div>`
+          : `<div class="actions"><button type="button" data-action="cancel">Cancel this turn</button><button type="button" data-action="end">End session</button></div>`
+        : ''
   }
   ${!running && record.nativeSessionId ? `<p class="fine">Native session: ${e(record.nativeSessionId)}. The record is in .verifold/sessions/${e(record.id)}.json.</p>` : ''}`
       : ''
@@ -273,6 +285,168 @@ function renderSession(live: DeskSession, defaultHost: string): string {
       ? `<div class="start"><h3>${record ? 'Start another session' : 'Start a session'}</h3><p class="fine">The harness runs in this project folder with its own sign-in and settings. In Ask me, each permission request comes here and to your terminal. Verifold records each tool call that the harness reports.</p><div class="fields"><label class="field" for="session-host">Harness<select id="session-host"><option value="claude"${host === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="session-mode">Commands<select id="session-mode"><option value="ask">Ask me</option><option value="auto">Auto</option></select></label><label class="field" for="session-model">Model<input id="session-model" type="text" maxlength="200" placeholder="Harness default"></label></div><label class="field" for="session-prompt">Request</label><textarea id="session-prompt" rows="4" maxlength="100000" placeholder="What should the harness do?"></textarea>${live.blocked ? `<p class="notice" id="start-blocked">${e(live.blocked)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="start"${live.blocked ? ' disabled aria-describedby="start-blocked"' : ''}>Start session</button></div></div>`
       : ''
   }</section>`;
+}
+
+const taskStates: Record<TaskRecord['state'], [string, string]> = {
+  open: ['Open', 'muted'],
+  claimed: ['Preparing', 'active'],
+  running: ['Running', 'active'],
+  review: ['Ready for review', 'success'],
+  done: ['Done', 'muted'],
+  cancelled: ['Cancelled', 'muted'],
+};
+
+const turnLabels: Record<TaskVersion['turn'], string> = {
+  completed: 'the turn ended',
+  interrupted: 'you stopped the turn',
+  failed: 'the turn failed',
+  exited: 'the harness process exited',
+  'time-limit': 'the time limit stopped the turn',
+  stopped: 'Verifold stopped during the turn',
+};
+
+/** A task form. The new-task form and the edit form share it, with different ID prefixes. */
+function taskForm(
+  prefix: 'task-new' | 'task-edit',
+  values: TaskRecord['assignment'] | null,
+  others: readonly TaskRecord[],
+  host: string,
+): string {
+  const field = (name: string, label: string, control: string): string =>
+    `<label class="field" for="${prefix}-${name}">${e(label)}</label>${control}`;
+  const area = (name: string, rows: number, max: number, value = ''): string =>
+    `<textarea id="${prefix}-${name}" rows="${rows}" maxlength="${max}">${e(value)}</textarea>`;
+  const chosen = values?.host ?? (host === 'codex' ? 'codex' : 'claude');
+  return `${field('title', 'Title', `<input id="${prefix}-title" type="text" maxlength="120" value="${e(values?.title ?? '')}">`)}
+  ${field('objective', 'What should the agent do?', area('objective', 4, 8000, values?.objective))}
+  ${field('inputs', 'Input files, one path per line (Verifold copies them now)', area('inputs', 2, 4000, values?.inputs.map((input) => input.path).join('\n')))}
+  ${field('writable', 'Where it may write, one path per line', area('writable', 2, 4000, values?.writable.join('\n')))}
+  ${field('output', 'What it should produce', area('output', 2, 2000, values?.output))}
+  <div class="fields"><label class="field" for="${prefix}-host">Harness<select id="${prefix}-host"><option value="claude"${chosen === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${chosen === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="${prefix}-model">Model<input id="${prefix}-model" type="text" maxlength="200" placeholder="Harness default" value="${e(values?.model ?? '')}"></label><label class="field" for="${prefix}-minutes">Time limit for each turn, in minutes<input id="${prefix}-minutes" type="number" min="1" max="240" value="${values?.minutes ?? 30}"></label></div>
+  ${
+    others.length
+      ? `<fieldset class="task-deps"><legend>Wait for these tasks to be done</legend>${others
+          .map(
+            (other) =>
+              `<label class="check" for="${prefix}-dep-${e(other.id)}"><input type="checkbox" id="${prefix}-dep-${e(other.id)}" data-dep="${e(other.id)}"${values?.dependencies.includes(other.id) ? ' checked' : ''}> ${e(other.id)} · ${e(other.assignment.title)}</label>`,
+          )
+          .join('')}</fieldset>`
+      : ''
+  }`;
+}
+
+/** The latest version of a task in review: file list, one diff, and the decision. */
+function renderReview(
+  task: TaskRecord,
+  version: TaskVersion,
+  canChange: boolean,
+): string {
+  const selectable = version.files.filter(
+    (file) => file.inScope && file.regular,
+  );
+  const marks = { added: '+', modified: 'M', deleted: '−' } as const;
+  return `<div class="review" aria-labelledby="review-title"><h3 id="review-title">Version ${version.number} · ${e(turnLabels[version.turn])}</h3>
+  ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
+  ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
+  ${
+    version.files.length
+      ? `<div class="review-grid"><ul class="review-files">${version.files
+          .map((file, index) => {
+            const allowed = file.inScope && file.regular;
+            return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${allowed ? ' checked' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
+          })
+          .join(
+            '',
+          )}</ul><div class="diff-pane" data-task="${e(task.id)}" data-version="${version.number}" aria-live="polite"><p class="fine">Choose a file to see its changes.</p></div></div>`
+      : '<p class="empty-note">This version changed no files.</p>'
+  }
+  <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button></div>
+  <label class="field" for="task-note">Changes</label><textarea id="task-note" rows="3" maxlength="4000" placeholder="What should change in the next version?"${canChange ? '' : ' disabled aria-describedby="task-note-off"'}></textarea>
+  ${canChange ? '' : '<p class="fine" id="task-note-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}
+  <div class="actions"><button type="button" data-action="task-changes" data-task="${e(task.id)}"${canChange ? '' : ' disabled'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject version</button></div></div>`;
+}
+
+/** Scoped tasks: the list, one task with its next step, and a form for a new task. */
+function renderTasks(view: TaskView, live: DeskSession, host: string): string {
+  const task = view.selected;
+  const others = view.list.filter((entry) => entry.id !== task?.id);
+  let body = '';
+  if (task) {
+    const [label, tone] = taskStates[task.state];
+    const attempt = task.attempts.at(-1);
+    const version = attempt?.versions.at(-1);
+    const waiting = task.assignment.dependencies.filter(
+      (id) => view.list.find((entry) => entry.id === id)?.state !== 'done',
+    );
+    const blocked = waiting.length
+      ? `This task waits for ${waiting.join(', ')}.`
+      : (live.blocked ??
+        (live.session?.live
+          ? live.session.record.task
+            ? `${live.session.record.task.id} has a live session. Accept, reject, or cancel its version first.`
+            : 'A harness session is running. End it before a task starts.'
+          : undefined));
+    let next = '';
+    switch (task.state) {
+      case 'open':
+        next = `${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>
+        <details id="task-edit"><summary>Edit the task</summary><p class="fine">An edit makes a new revision. Earlier attempts keep the revision that they ran.</p>${taskForm('task-edit', task.assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
+        break;
+      case 'claimed':
+        next = '<p>Verifold prepares the task folder.</p>';
+        break;
+      case 'running':
+        next = `<p>The harness works in the task folder. Follow it in Harness session. Details shows the transcript.</p><div class="actions"><button type="button" data-action="task-stop" data-task="${e(task.id)}">Stop the turn</button></div><p class="fine">If you stop the turn, its work becomes a version for review.</p>`;
+        break;
+      case 'review':
+        next =
+          version && !version.decision
+            ? renderReview(
+                task,
+                version,
+                attempt?.session !== null &&
+                  attempt?.session === view.idleSession,
+              )
+            : `<p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions"><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>`;
+        break;
+      case 'done':
+        next = `<p>Done. You accepted ${e(
+          task.attempts
+            .flatMap((entry) => entry.versions)
+            .find((entry) => entry.decision?.kind === 'accepted')
+            ?.decision?.files?.join(', ') ?? 'no files',
+        )}.</p>`;
+        break;
+      case 'cancelled':
+        next = '<p>Cancelled. Its records stay in the project.</p>';
+        break;
+    }
+    const history = task.attempts.flatMap((entry) =>
+      entry.versions
+        .filter((saved) => saved.decision)
+        .map(
+          (saved) =>
+            `<li>Version ${saved.number}: ${saved.decision?.kind === 'accepted' ? `accepted ${e(saved.decision.files?.join(', ') ?? '')}` : saved.decision?.kind === 'changes' ? `you asked for changes: ${e(saved.decision.note ?? '')}` : 'rejected'}</li>`,
+        ),
+    );
+    const notes = task.attempts
+      .filter((entry) => entry.note && entry !== attempt)
+      .map(
+        (entry) => `<li>Attempt ${entry.number}: ${e(entry.note ?? '')}</li>`,
+      );
+    body = `<article class="task" aria-labelledby="task-title"><div class="section-title"><h3 id="task-title">${e(task.assignment.title)}</h3><span class="status ${tone}">${e(label)}</span></div>
+    <p class="session-meta"><span>${e(task.id)} · revision ${task.revision}</span><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>
+    <dl class="task-fields"><dt>Objective</dt><dd class="pre">${e(task.assignment.objective)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Expected output</dt><dd class="pre">${e(task.assignment.output)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}</dl>
+    ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
+    ${next}
+    ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
+    ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}</article>`;
+  }
+  return `<section class="tasks" aria-labelledby="tasks-title"><div class="section-title"><h2 id="tasks-title">Tasks</h2><span class="count">${view.list.length}</span></div>
+  <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Tasks run one at a time.</p>
+  ${view.list.length ? `<ol class="task-list">${view.list.map((entry) => `<li><button type="button" data-task-select="${e(entry.id)}" aria-pressed="${entry.id === task?.id}"><span>${e(entry.id)} · ${e(entry.assignment.title)}</span><span class="attempt-status">${e(taskStates[entry.state][0])}</span></button></li>`).join('')}</ol>` : ''}
+  ${body}
+  <details id="task-new"${view.list.length ? '' : ' open'}><summary>New task</summary>${taskForm('task-new', null, view.list, host)}<div class="actions"><button type="button" class="primary" data-action="task-create">Create task</button></div></details></section>`;
 }
 
 /** Every tool call with who let it run. Summary first, then the full list. */
@@ -328,7 +502,7 @@ export function renderDesk(
           : 'muted';
   const html = `<div class="project-heading"><p class="project-name">${e(snapshot.project)}</p><h1>${e(workspace.research?.topic ?? 'What will you investigate?')}</h1><div class="project-meta"><span>${e(phaseLabel(workspace.research?.phase))}</span><span>${e(workspace.host === 'claude' ? 'Claude Code' : workspace.host === 'codex' ? 'Codex' : workspace.host)}</span><span>Model request: ${e(workspace.model ?? 'harness default')}</span></div></div>
   <div class="desk-grid"><div class="notebook">
-  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${renderCommands(live.session)}
+  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${live.tasks ? renderTasks(live.tasks, live, workspace.host) : ''}${renderCommands(live.session)}
   <section class="brief-section"><details id="research-brief" open><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet. Begin with a question in your project terminal.</p>'}</details></section>
   ${workspace.research?.plan ? `<section><details id="research-plan"><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(workspace.research.plan.scope)}</div><ul class="roles">${workspace.research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="findings"><div class="section-title"><h2>Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
