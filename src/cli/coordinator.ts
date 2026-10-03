@@ -663,6 +663,11 @@ const reason = {
   description: 'Why you take this action. The person reads it.',
 };
 const paths = { type: 'array', items: { type: 'string' }, maxItems: 20 };
+const inputs = {
+  ...paths,
+  description:
+    'Files that exist in the project now. Do not list files from tasks that this task waits for: it receives them when it starts.',
+};
 
 /** The coordinator's tools. Each one calls the task operation that the person uses in the desk. */
 const coordinatorToolSpecs: readonly AgentTool[] = [
@@ -702,7 +707,7 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         objective: { type: 'string', maxLength: 8000 },
         writable: paths,
         output: { type: 'string', maxLength: 2000 },
-        inputs: paths,
+        inputs,
         dependencies: { type: 'array', items: task, maxItems: 20 },
         host: { type: 'string', enum: ['claude', 'codex'] },
         minutes: { type: 'integer', minimum: 1, maximum: 240 },
@@ -724,7 +729,7 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         objective: { type: 'string', maxLength: 8000 },
         writable: paths,
         output: { type: 'string', maxLength: 2000 },
-        inputs: paths,
+        inputs,
         dependencies: { type: 'array', items: task, maxItems: 20 },
         host: { type: 'string', enum: ['claude', 'codex'] },
         minutes: { type: 'integer', minimum: 1, maximum: 240 },
