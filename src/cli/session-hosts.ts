@@ -462,6 +462,23 @@ export function codexCommand(item: Record<string, unknown>): string {
 }
 
 /**
+ * Runs the Codex app-server and stops it when its stdin closes. With a socket,
+ * the app-server itself ignores stdin, so it would outlive a Verifold that
+ * crashed. The watchdog and Codex share one process group, so a later owner
+ * can stop both. A missing Codex exits with code 127.
+ */
+const watchdog = `const { spawn } = require('node:child_process');
+const [command, ...args] = process.argv.slice(1);
+const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
+const stop = () => { try { child.kill('SIGTERM'); } catch {} setTimeout(() => process.exit(0), 2000).unref(); };
+process.stdin.on('end', stop);
+process.stdin.on('close', stop);
+process.stdin.resume();
+process.on('SIGTERM', stop);
+child.on('error', () => process.exit(127));
+child.on('exit', (code) => process.exit(code ?? 1));`;
+
+/**
  * Codex through `codex app-server` (JSON-RPC over stdio). Ask me routes
  * approvals to this client. Auto routes them to the Codex reviewer agent.
  */
@@ -471,13 +488,28 @@ function codex(options: HostOptions): HostSession {
   const folder = mkdtempSync(join(tmpdir(), 'vf-'));
   const socket = join(folder, 'codex.sock');
   const child = launch(
-    options.executable ?? 'codex',
-    ['app-server', '--listen', `unix://${socket}`],
+    process.execPath,
+    [
+      '-e',
+      watchdog,
+      options.executable ?? 'codex',
+      'app-server',
+      '--listen',
+      `unix://${socket}`,
+    ],
     options,
   );
   child.stdout.resume();
   child.on('close', () => rmSync(folder, { recursive: true, force: true }));
   const emit = options.onEvent;
+  // `exit` comes before `close`, which reports the end of the session, so the reason comes first.
+  child.on('exit', () => {
+    if (!connection)
+      emit({
+        type: 'notice',
+        text: 'Could not start Codex. Check that it is installed and signed in.',
+      });
+  });
   /** Messages wait here until the socket connects. */
   let queue: string[] | null = [];
   let connection: UnixWebSocket | null = null;
