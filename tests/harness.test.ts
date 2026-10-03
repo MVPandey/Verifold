@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runHarness, type HarnessName } from '../src/cli/harness.ts';
+import {
+  activityProgress,
+  runHarness,
+  type HarnessName,
+} from '../src/cli/harness.ts';
 
 async function fixture(
   source: string,
@@ -493,16 +497,30 @@ await test('Claude streams observed activity and denials without private tool pa
      }, 10);`,
     async (executable, cwd) => {
       const messages: string[] = [];
+      const notices: string[] = [];
       const result = await runHarness(
         {
           host: 'claude',
           cwd,
           prompt: '',
           signal: new AbortController().signal,
-          onActivity: (message) => messages.push(message),
+          onActivity: (message, kind) => {
+            messages.push(message);
+            if (kind === 'notice') notices.push(message);
+          },
         },
         { executable },
       );
+      // Only denials need the person. The terminal shows notices and leaves events to the desk.
+      assert.ok(notices.length > 0);
+      assert.ok(notices.every((message) => message.includes('denied')));
+      const printed: string[] = [];
+      const progress = activityProgress((value, source) => {
+        if (source !== 'tool') printed.push(value);
+      });
+      for (const message of messages)
+        progress(message, notices.includes(message) ? 'notice' : 'event');
+      assert.deepEqual(printed, notices);
       assert.deepEqual(result, {
         text: 'A reviewed answer',
         sessionId: 'session-123',

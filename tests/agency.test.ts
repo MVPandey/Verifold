@@ -175,7 +175,7 @@ await test('the harness reviews selected history only after consent and the user
         assert.match(request.prompt, /native read tools/);
         assert.match(request.prompt, /selected local source only/);
         assert.match(request.prompt, /Do not search other history roots/);
-        request.onActivity?.('Claude Code requested Read.');
+        request.onActivity?.('Claude Code requested Read.', 'event');
         return Promise.resolve({ text: draft });
       },
     );

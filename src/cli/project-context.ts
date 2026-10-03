@@ -4,7 +4,7 @@ import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
 import { contextFiles } from './context-files.ts';
 import { withActivity } from './choices.ts';
-import { runHarness } from './harness.ts';
+import { activityProgress, runHarness } from './harness.ts';
 import { parseContext } from './contracts.ts';
 import { stripVTControlCharacters } from 'node:util';
 
@@ -61,7 +61,7 @@ export async function investigateProject(
           ...agency,
           cwd: root,
           signal,
-          onActivity: (message) => io.progress?.(message, 'tool'),
+          onActivity: activityProgress(io.progress),
           prompt: `${await loadPrompt('project-context')}\nInitial project direction: ${JSON.stringify(brief)}\nProject evidence:\n${evidence}`,
         }),
     );

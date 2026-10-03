@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from 'node:util';
 import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
 import { withActivity, choose } from './choices.ts';
-import { runHarness } from './harness.ts';
+import { activityProgress, runHarness } from './harness.ts';
 import { text, parseHostJson } from './research-contracts.ts';
 
 function cancelOnboarding(): never {
@@ -79,7 +79,7 @@ export async function researchInterview(
               ...agency,
               cwd,
               signal,
-              onActivity: (message) => io.progress?.(message, 'tool'),
+              onActivity: activityProgress(io.progress),
               ...(sessionId ? { sessionId } : {}),
               prompt: `${await loadPrompt('research-interview')}
 ${finish ? await loadPrompt('interview-finish') : await loadPrompt('interview-followup')}
