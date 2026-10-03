@@ -9,7 +9,13 @@ import { once } from 'node:events';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { deskPage, renderDesk, renderSetup } from './desk-view.ts';
+import {
+  deskPage,
+  renderDesk,
+  renderSetup,
+  terminalPage,
+} from './desk-view.ts';
+import { ptyLibrary, validLease } from './terminals.ts';
 import {
   readDeskSnapshot,
   readDeskReport,
@@ -125,6 +131,12 @@ async function taskAction(
   }
 }
 
+/** True when terminal panes work here, or why they do not. */
+async function terminalSupport(): Promise<true | string> {
+  const library = await ptyLibrary();
+  return typeof library === 'string' ? library : true;
+}
+
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionPool | undefined,
@@ -169,6 +181,20 @@ async function act(
     body.action.startsWith('task-')
   ) {
     await taskAction(tasks, body);
+    return 200;
+  }
+  if (body.action === 'terminal-open') {
+    if (!validLease(body.lease))
+      throw new SessionActionError('The desk sent an invalid input lease.');
+    const id = typeof body.session === 'string' ? body.session : '';
+    const task = sessions.view(id)?.record.task;
+    // A task terminal goes through the task, so its end saves a version.
+    if (task && tasks) await tasks.openTerminal(task.id, body.lease);
+    else await sessions.takeTerminal(id, body.lease);
+    return 200;
+  }
+  if (body.action === 'terminal-return') {
+    sessions.returnFromTerminal(body.session);
     return 200;
   }
   switch (body.action) {
@@ -231,10 +257,25 @@ export async function startDesk(
   const launchCodes = new Map<string, number>();
   const assets = new Map<string, { type: string; body: Buffer | string }>([
     ['/', { type: 'text/html; charset=utf-8', body: deskPage }],
+    ['/terminal', { type: 'text/html; charset=utf-8', body: terminalPage }],
   ]);
   for (const [path, file, type] of [
     ['/desk.css', 'desk.css', 'text/css; charset=utf-8'],
     ['/desk-client.js', 'desk-client.js', 'text/javascript; charset=utf-8'],
+    ['/desk-terminal.js', 'desk-terminal.js', 'text/javascript; charset=utf-8'],
+    ['/desk-lease.js', 'desk-lease.js', 'text/javascript; charset=utf-8'],
+    [
+      '/desk-terminals.js',
+      'desk-terminals.js',
+      'text/javascript; charset=utf-8',
+    ],
+    ['/vendor/xterm.js', 'vendor/xterm.js', 'text/javascript; charset=utf-8'],
+    ['/vendor/xterm.css', 'vendor/xterm.css', 'text/css; charset=utf-8'],
+    [
+      '/vendor/addon-fit.js',
+      'vendor/addon-fit.js',
+      'text/javascript; charset=utf-8',
+    ],
     [
       '/desk-transcript.js',
       'desk-transcript.js',
@@ -249,6 +290,8 @@ export async function startDesk(
   }
   let origin = '';
   let pending = 0;
+  /** Open long polls of terminal output. */
+  let terminalReads = 0;
   /** Transcript files that the page follows. The least recently used one leaves first. */
   const followed = new Map<string, TranscriptFile>();
 
@@ -307,7 +350,7 @@ export async function startDesk(
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     );
     if (
       request.headers.host !== origin.slice(7) ||
@@ -387,10 +430,115 @@ export async function startDesk(
         );
       return;
     }
+    if (
+      request.method === 'POST' &&
+      sessions &&
+      url.pathname === '/api/terminal' &&
+      !url.search
+    ) {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      if (!json) {
+        response.writeHead(415).end();
+        return;
+      }
+      const body = await readJsonBody(request, 200_000);
+      const terminal = record(body) ? sessions.terminal(body.session) : null;
+      let status = 200;
+      let message = '';
+      if (!record(body) || !validLease(body.lease)) {
+        status = 400;
+        message = 'The terminal sent an unreadable request.';
+      } else if (!terminal) {
+        status = 404;
+        message = 'The terminal is not open.';
+      } else
+        try {
+          if (body.take === true) terminal.take(body.lease);
+          if (body.input !== undefined) terminal.write(body.lease, body.input);
+          if (body.cols !== undefined || body.rows !== undefined)
+            terminal.resize(body.lease, body.cols, body.rows);
+        } catch (error) {
+          if (!(error instanceof SessionActionError)) throw error;
+          status = 409;
+          message = error.message;
+        }
+      response
+        .writeHead(status, {
+          'Content-Type': 'application/json; charset=utf-8',
+        })
+        .end(
+          JSON.stringify(status === 200 ? { ok: true } : { error: message }),
+        );
+      return;
+    }
     if (request.method !== 'GET') {
       response
         .writeHead(405, { Allow: sessions || setup ? 'GET, POST' : 'GET' })
         .end();
+      return;
+    }
+    // The terminal page needs inline styles for xterm.js, so only it gets them. Only the desk may frame it.
+    if (url.pathname === '/terminal') {
+      const id = url.searchParams.get('session') ?? '';
+      if (
+        !validSessionId(id) ||
+        [...url.searchParams.keys()].some((key) => key !== 'session')
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      response.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
+      );
+      response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      response
+        .writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        .end(terminalPage);
+      return;
+    }
+    if (url.pathname === '/api/terminal') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const id = url.searchParams.get('session') ?? '';
+      const after = Number(url.searchParams.get('after') ?? '0');
+      if (
+        !validSessionId(id) ||
+        !Number.isSafeInteger(after) ||
+        after < 0 ||
+        [...url.searchParams.keys()].some(
+          (key) => key !== 'session' && key !== 'after',
+        )
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      const terminal = sessions?.terminal(id);
+      if (!terminal) {
+        response.writeHead(404).end();
+        return;
+      }
+      if (terminalReads >= 8) {
+        response.writeHead(503).end();
+        return;
+      }
+      terminalReads++;
+      try {
+        // A long poll: the answer comes at once with new output, or after a few seconds without.
+        const output = await terminal.read(after, 8000);
+        response
+          .writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify(output));
+      } finally {
+        terminalReads--;
+      }
       return;
     }
     const asset = assets.get(url.pathname);
@@ -570,6 +718,7 @@ export async function startDesk(
           workers,
           session: worker,
           full: sessions?.full ?? false,
+          terminals: await terminalSupport(),
           controllable: sessions !== undefined,
           paused: sessions?.paused() ?? [],
           ...(research ? { research: research.view() } : {}),
