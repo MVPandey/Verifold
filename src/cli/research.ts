@@ -15,6 +15,7 @@ import { withActivity } from './choices.ts';
 import { parseCandidates } from './contracts.ts';
 import type { Candidate, Workspace } from './contracts.ts';
 import { runHarness, type HarnessResult } from './harness.ts';
+import { TranscriptWriter } from './transcript.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { processStart, stopRecordedProcess } from './owner.ts';
 import {
@@ -232,6 +233,10 @@ export async function runResearch(
               writing = false;
             });
         }, 2000);
+        // The full harness transcript stays private in the attempt folder.
+        const transcript = await TranscriptWriter.open(
+          join(directory, 'transcript.jsonl'),
+        );
         let result: HarnessResult;
         try {
           result = await withActivity(
@@ -250,6 +255,7 @@ export async function runResearch(
                       harnessProcess = { pid, processStart: start };
                   });
                 },
+                onTranscript: transcript.run(),
                 ...(io.progress ? { onActivity: io.progress } : {}),
                 ...(workspace.model ? { model: workspace.model } : {}),
                 ...(state.sessionId ? { sessionId: state.sessionId } : {}),
@@ -258,6 +264,7 @@ export async function runResearch(
         } finally {
           clearInterval(timer);
           await heartbeat;
+          await transcript.flushed();
         }
         nativeSessionId = result.sessionId ?? null;
         await writeFile(

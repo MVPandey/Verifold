@@ -1,5 +1,11 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import {
+  claudeUpdates,
+  codexExecUpdates,
+  requestUpdate,
+  type TranscriptUpdate,
+} from './transcript.ts';
 
 export type HarnessName = 'claude' | 'codex';
 
@@ -16,6 +22,11 @@ export interface HarnessRequest {
   readonly onActivity?: (message: string) => void;
   /** The harness process started. It leads its own process group on POSIX. */
   readonly onSpawn?: (pid: number) => void;
+  /**
+   * The full transcript: the prompt, messages, thinking, tool inputs, and tool
+   * results, with subagent work under its tool call. It is private session data.
+   */
+  readonly onTranscript?: (update: TranscriptUpdate) => void;
 }
 
 export interface HarnessResult {
@@ -29,6 +40,8 @@ export interface HarnessOptions {
 }
 
 const maxBytes = 2 * 1024 * 1024;
+/** One protocol line, for example one tool result, can be large. The whole stream has no size limit. */
+const maxLine = 8 * 1024 * 1024;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -41,50 +54,55 @@ function sessionId(value: unknown): string | undefined {
     : undefined;
 }
 
-function parseResult(host: HarnessName, output: string): HarnessResult {
-  if (host === 'claude') {
-    const events: unknown[] = output
-      .split('\n')
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line) as unknown);
-    const result = events.findLast(
-      (event) =>
-        record(event) && (event.type === 'result' || 'result' in event),
-    );
-    if (!record(result) || result.is_error === true) {
-      throw new Error(
-        'Claude reported a failed request. Check the host session.',
-      );
-    }
-    if (typeof result.result !== 'string' || !result.result.trim()) {
-      throw new Error('Claude returned no result text.');
-    }
-    const id = sessionId(result.session_id);
-    return { text: result.result, ...(id ? { sessionId: id } : {}) };
-  }
-
-  let result: string | undefined;
+/**
+ * Reads one host stream line by line. It keeps only what the final result
+ * needs, so a long run does not fill memory.
+ */
+function reader(host: HarnessName): {
+  line(event: unknown): void;
+  result(): HarnessResult;
+} {
+  let last: Record<string, unknown> | undefined;
+  let text: string | undefined;
   let id: string | undefined;
-  for (const line of output.split('\n').filter((line) => line.trim())) {
-    const event: unknown = JSON.parse(line);
-    if (!record(event)) throw new Error('Codex returned an invalid event.');
-    if (event.type === 'thread.started') id = sessionId(event.thread_id);
-    if (event.type === 'turn.failed' || event.type === 'error') {
-      throw new Error(
-        'Codex reported a failed request. Check the host session.',
-      );
-    }
-    if (
-      event.type === 'item.completed' &&
-      record(event.item) &&
-      event.item.type === 'agent_message' &&
-      typeof event.item.text === 'string'
-    ) {
-      result = event.item.text;
-    }
-  }
-  if (!result?.trim()) throw new Error('Codex returned no result text.');
-  return { text: result, ...(id ? { sessionId: id } : {}) };
+  let failed = false;
+  return {
+    line(event) {
+      if (host === 'claude') {
+        if (record(event) && (event.type === 'result' || 'result' in event))
+          last = event;
+        return;
+      }
+      if (!record(event)) throw new Error('Codex returned an invalid event.');
+      if (event.type === 'thread.started') id = sessionId(event.thread_id);
+      if (event.type === 'turn.failed' || event.type === 'error') failed = true;
+      if (
+        event.type === 'item.completed' &&
+        record(event.item) &&
+        event.item.type === 'agent_message' &&
+        typeof event.item.text === 'string'
+      )
+        text = event.item.text;
+    },
+    result() {
+      if (host === 'claude') {
+        if (!last || last.is_error === true)
+          throw new Error(
+            'Claude reported a failed request. Check the host session.',
+          );
+        if (typeof last.result !== 'string' || !last.result.trim())
+          throw new Error('Claude returned no result text.');
+        const claude = sessionId(last.session_id);
+        return { text: last.result, ...(claude ? { sessionId: claude } : {}) };
+      }
+      if (failed)
+        throw new Error(
+          'Codex reported a failed request. Check the host session.',
+        );
+      if (!text?.trim()) throw new Error('Codex returned no result text.');
+      return { text, ...(id ? { sessionId: id } : {}) };
+    },
+  };
 }
 
 /** Only protocol identifiers can appear in activity messages, never private payloads. */
@@ -177,7 +195,8 @@ export function validateModel(
 
 /**
  * Run one host request with the user's host configuration and permissions.
- * Prompts use stdin. Output and input are limited to 2 MiB each. The default
+ * Prompts use stdin and are limited to 2 MiB. Output is read line by line, and
+ * one line is limited to 8 MiB. Error output is limited to 2 MiB. The default
  * deadline is ten minutes. Cancellation stops the process group on POSIX.
  * Errors exclude raw host output, which can contain private session data.
  */
@@ -224,7 +243,8 @@ export async function runHarness(
           ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? [request.sessionId, '-'] : ['-']),
         ];
-  const output = await new Promise<string>((resolve, reject) => {
+  const stream = reader(request.host);
+  return new Promise<HarnessResult>((resolve, reject) => {
     const child = spawn(options.executable ?? request.host, args, {
       cwd: request.cwd,
       shell: false,
@@ -232,25 +252,11 @@ export async function runHarness(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (child.pid !== undefined) request.onSpawn?.(child.pid);
-    const chunks: Buffer[] = [];
-    let size = 0;
+    let errorBytes = 0;
     let failure: Error | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     const decoder = new StringDecoder('utf8');
     let pending = '';
-
-    function report(line: string): void {
-      if (!request.onActivity || !line.trim()) return;
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        // Final parsing reports malformed output after the process closes.
-        return;
-      }
-      for (const message of activity(request.host, event))
-        request.onActivity(message);
-    }
 
     function kill(signal: NodeJS.Signals): void {
       if (child.pid === undefined) return;
@@ -281,34 +287,65 @@ export async function runHarness(
       );
     }
 
+    /** Read one line. Invalid output stops the host, because its result cannot be trusted. */
+    function line(text: string): void {
+      if (failure || !text.trim()) return;
+      let event: unknown;
+      try {
+        event = JSON.parse(text);
+        stream.line(event);
+      } catch (error) {
+        stop(
+          error instanceof SyntaxError
+            ? new Error(`${request.host} returned invalid JSON.`, {
+                cause: error,
+              })
+            : error instanceof Error
+              ? error
+              : new Error(`${request.host} returned an invalid event.`),
+        );
+        return;
+      }
+      try {
+        if (request.onActivity)
+          for (const message of activity(request.host, event))
+            request.onActivity(message);
+        if (request.onTranscript)
+          for (const update of request.host === 'claude'
+            ? claudeUpdates(event)
+            : codexExecUpdates(event))
+            request.onTranscript(update);
+      } catch {
+        stop(new Error('Could not report harness activity.'));
+      }
+    }
+
     const deadline = setTimeout(
       () => stop(new Error('Harness request exceeded its time limit.')),
       timeoutMs,
     );
     request.signal.addEventListener('abort', abort, { once: true });
     if (request.signal.aborted) abort();
-
-    function consume(chunk: Buffer, retain: boolean): void {
-      size += chunk.length;
-      if (size > maxBytes)
-        stop(new Error('Harness output exceeds the 2 MiB limit.'));
-      else if (retain) {
-        chunks.push(chunk);
-        if (request.onActivity) {
-          pending += decoder.write(chunk);
-          const lines = pending.split('\n');
-          pending = lines.pop() ?? '';
-          try {
-            for (const line of lines) report(line);
-          } catch {
-            stop(new Error('Could not report harness activity.'));
-          }
-        }
-      }
+    try {
+      request.onTranscript?.(requestUpdate(request.prompt));
+    } catch {
+      stop(new Error('Could not report harness activity.'));
     }
 
-    child.stdout.on('data', (chunk: Buffer) => consume(chunk, true));
-    child.stderr.on('data', (chunk: Buffer) => consume(chunk, false));
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (failure) return;
+      pending += decoder.write(chunk);
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const text of lines) line(text);
+      if (pending.length > maxLine)
+        stop(new Error('Harness output exceeds the 8 MiB line limit.'));
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      errorBytes += chunk.length;
+      if (errorBytes > maxBytes)
+        stop(new Error('Harness error output exceeds the 2 MiB limit.'));
+    });
     child.stdin.on('error', (error: Error) =>
       stop(new Error('Could not send the harness prompt.', { cause: error })),
     );
@@ -319,11 +356,7 @@ export async function runHarness(
       );
     });
     child.on('close', (code) => {
-      try {
-        if (!failure) report(pending + decoder.end());
-      } catch {
-        failure ??= new Error('Could not report harness activity.');
-      }
+      line(pending + decoder.end());
       clearTimeout(deadline);
       clearTimeout(killTimer);
       request.signal.removeEventListener('abort', abort);
@@ -336,18 +369,14 @@ export async function runHarness(
             `${request.host} exited with status ${String(code)}. Check host authentication and permissions.`,
           ),
         );
-      } else resolve(Buffer.concat(chunks).toString('utf8'));
+      } else {
+        try {
+          resolve(stream.result());
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error('Invalid result.'));
+        }
+      }
     });
     child.stdin.end(request.prompt);
   });
-  try {
-    return parseResult(request.host, output);
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error(`${request.host} returned invalid JSON.`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
 }

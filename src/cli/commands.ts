@@ -27,6 +27,7 @@ import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
+import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
 import {
@@ -346,7 +347,7 @@ async function serveDesk(
           setup.options,
           setupIo,
           signal,
-          harness,
+          withTranscript(harness, bridge.transcript),
         ),
       );
       root = initialized.root;
