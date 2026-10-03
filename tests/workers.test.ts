@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import {
@@ -50,10 +51,15 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   setTimeout(() => out({ type: 'result', subtype: 'success' }), 50);
 });`;
 
+/** The fake Codex app-servers listen on a Unix socket, like Codex. */
+const codexSocket = fileURLToPath(
+  new URL('./fixtures/codex-socket.cjs', import.meta.url),
+);
+
 /** A fake Codex app-server. Each turn writes one file and ends after a short delay. */
 const codexHost = `const fs = require('node:fs');
-const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
-require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
+onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
   if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'codex-thread-' + process.pid }, approvalsReviewer: message.params.approvalsReviewer } });

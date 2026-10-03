@@ -415,9 +415,9 @@ main().catch(() => { process.exitCode = 1; });
   await writeFile(
     join(directory, 'bin', 'codex'),
     `#!/usr/bin/env node
-const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+const { out, onLine } = require(${JSON.stringify(join(process.cwd(), 'tests', 'fixtures', 'codex-socket.cjs'))})(process.argv);
 let strict = false;
-require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
   if (message.method === 'thread/start') {
