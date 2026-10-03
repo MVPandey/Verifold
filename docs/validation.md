@@ -55,7 +55,7 @@ These commands do not fetch files, run the host, create memory, or verify offici
 
 ## Recovery and private files
 
-Research attempts store briefs, responses, reports, harness transcripts, or failure details under `.verifold/runs/<attempt-id>/`. Session transcripts are under `.verifold/sessions/`. State and attempt files remain private project artifacts.
+Research attempts store briefs, responses, reports, harness transcripts, or failure details under `.verifold/runs/<attempt-id>/`. Session transcripts are under `.verifold/sessions/`. Task records, revisions, and input copies are under `.verifold/tasks/`, and task folders under `.verifold/workspaces/`. State and attempt files remain private project artifacts.
 
 Normal failures preserve the checkpoint and release the research lock. SIGKILL can leave `.verifold/research.lock`.
 

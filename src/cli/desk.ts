@@ -25,6 +25,11 @@ import { TranscriptFile, type TranscriptLog } from './transcript.ts';
 import { markdownHtml } from './markdown.ts';
 import type { ResearchRunner } from './research-runner.ts';
 import type { SetupBridge } from './setup-bridge.ts';
+import {
+  validTaskId,
+  type TaskInputFields,
+  type TaskManager,
+} from './tasks.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -36,6 +41,7 @@ export interface DeskServer {
     root: string,
     sessions: SessionManager,
     research: ResearchRunner,
+    tasks: TaskManager,
   ): Promise<void>;
   readonly closed: Promise<void>;
 }
@@ -63,11 +69,67 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** The fields of a task form, as the page sends them. */
+function taskFields(body: Record<string, unknown>): TaskInputFields {
+  return {
+    title: body.title,
+    objective: body.objective,
+    inputs: body.inputs,
+    writable: body.writable,
+    output: body.output,
+    host: body.host,
+    model: body.model,
+    minutes: body.minutes,
+    dependencies: body.dependencies,
+  };
+}
+
+/** Task actions. Errors that the person can fix are SessionActionError. */
+async function taskAction(
+  tasks: TaskManager,
+  body: Record<string, unknown>,
+): Promise<void> {
+  switch (body.action) {
+    case 'task-create':
+      await tasks.create(taskFields(body));
+      return;
+    case 'task-edit':
+      await tasks.edit(body.task, { ...taskFields(body), reason: body.reason });
+      return;
+    case 'task-start':
+      await tasks.start(body.task);
+      return;
+    case 'task-stop':
+      await tasks.stop(body.task);
+      return;
+    case 'task-changes':
+      await tasks.askForChanges(body.task, body.note);
+      return;
+    case 'task-accept': {
+      const result = await tasks.accept(body.task, body.version, body.files);
+      if ('conflicts' in result)
+        throw new SessionActionError(
+          `These files changed in your project after the task started, so Verifold copied nothing: ${result.conflicts.join(', ')}. Ask for changes, or reject the version.`,
+        );
+      return;
+    }
+    case 'task-reject':
+      await tasks.reject(body.task, body.version);
+      return;
+    case 'task-cancel':
+      await tasks.cancel(body.task);
+      return;
+    default:
+      throw new SessionActionError('The desk sent an unknown task action.');
+  }
+}
+
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionManager | undefined,
   research: ResearchRunner | undefined,
   setup: SetupBridge | undefined,
+  tasks: TaskManager | undefined,
   body: Record<string, unknown>,
 ): Promise<number> {
   if (body.action === 'setup') {
@@ -98,6 +160,14 @@ async function act(
           ? { autonomy: body.autonomy }
           : {}),
       });
+    return 200;
+  }
+  if (
+    tasks &&
+    typeof body.action === 'string' &&
+    body.action.startsWith('task-')
+  ) {
+    await taskAction(tasks, body);
     return 200;
   }
   switch (body.action) {
@@ -148,6 +218,7 @@ export async function startDesk(
   sessions?: SessionManager,
   research?: ResearchRunner,
   setup?: SetupBridge,
+  tasks?: TaskManager,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
@@ -300,7 +371,7 @@ export async function startDesk(
       let message = 'The desk sent an unreadable action.';
       if (record(body))
         try {
-          status = await act(sessions, research, setup, body);
+          status = await act(sessions, research, setup, tasks, body);
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
           status = 409;
@@ -379,6 +450,45 @@ export async function startDesk(
       }
       return;
     }
+    if (url.pathname === '/api/task-diff') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const id = url.searchParams.get('task');
+      const number = Number(url.searchParams.get('version'));
+      const file = url.searchParams.get('file') ?? '';
+      if (
+        !tasks ||
+        !validTaskId(id) ||
+        !Number.isSafeInteger(number) ||
+        number < 1 ||
+        !file ||
+        file.length > 300 ||
+        [...url.searchParams.keys()].some(
+          (key) => !['task', 'version', 'file'].includes(key),
+        )
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      try {
+        const shown = await tasks.diff(id, number, file);
+        response
+          .writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify(shown));
+      } catch (error) {
+        if (!(error instanceof SessionActionError)) throw error;
+        response
+          .writeHead(404, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify({ error: error.message }));
+      }
+      return;
+    }
     if (url.pathname !== '/api/view') {
       response.writeHead(404).end();
       return;
@@ -388,10 +498,15 @@ export async function startDesk(
       return;
     }
     const selected = url.searchParams.get('attempt') ?? undefined;
+    const chosenTask = url.searchParams.get('task') ?? undefined;
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
-      [...url.searchParams.keys()].some((key) => key !== 'attempt') ||
-      url.searchParams.getAll('attempt').length > 1
+      (chosenTask !== undefined && !validTaskId(chosenTask)) ||
+      [...url.searchParams.keys()].some(
+        (key) => key !== 'attempt' && key !== 'task',
+      ) ||
+      url.searchParams.getAll('attempt').length > 1 ||
+      url.searchParams.getAll('task').length > 1
     ) {
       response.writeHead(400).end();
       return;
@@ -421,6 +536,16 @@ export async function startDesk(
         response.writeHead(404).end();
         return;
       }
+      const taskList = tasks ? await tasks.list() : [];
+      const task = chosenTask
+        ? taskList.find((entry) => entry.id === chosenTask)
+        : (taskList.find((entry) =>
+            ['claimed', 'running', 'review'].includes(entry.state),
+          ) ?? taskList.at(-1));
+      if (chosenTask && !task) {
+        response.writeHead(404).end();
+        return;
+      }
       let report: ResearchReport | null = null;
       if (id) {
         try {
@@ -435,6 +560,15 @@ export async function startDesk(
           controllable: sessions !== undefined,
           paused: sessions?.paused() ?? [],
           ...(research ? { research: research.view() } : {}),
+          ...(tasks
+            ? {
+                tasks: {
+                  list: taskList,
+                  selected: task ?? null,
+                  idleSession: sessions?.idleSession() ?? null,
+                },
+              }
+            : {}),
           ...(sessions?.blockedReason
             ? { blocked: sessions.blockedReason }
             : {}),
@@ -477,11 +611,12 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner) => {
+    attach: async (next, owner, runner, taskManager) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
       research = runner;
+      tasks = taskManager;
       project = resolved;
     },
     closed,
