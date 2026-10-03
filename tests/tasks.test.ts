@@ -118,6 +118,12 @@ class FakeSessions implements TaskSessions {
     this.ended++;
     this.waiting.delete(session);
   }
+  terminals: string[] = [];
+  takeTerminal(session: string): Promise<void> {
+    this.terminals.push(session);
+    this.waiting.delete(session);
+    return Promise.resolve();
+  }
 }
 
 /** Play one agent turn in the task folder, then end the turn. */

@@ -334,6 +334,7 @@ const turnLabels: Record<TaskVersion['turn'], string> = {
   exited: 'the harness process exited',
   'time-limit': 'the time limit stopped the turn',
   stopped: 'Verifold stopped during the turn',
+  terminal: 'you worked in the terminal',
 };
 
 /** A task form. The new-task form and the edit form share it, with different ID prefixes. */

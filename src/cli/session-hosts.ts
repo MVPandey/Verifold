@@ -20,7 +20,7 @@ export type SessionMode = 'ask' | 'auto' | 'strict';
  * sandbox, file tools may edit only the working folder, and dontAsk mode
  * denies the rest. Probed on Claude Code 2.1.288.
  */
-const strictClaudeSettings = JSON.stringify({
+export const strictClaudeSettings = JSON.stringify({
   sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
   permissions: {
     allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
