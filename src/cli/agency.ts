@@ -359,6 +359,17 @@ export async function personalize(
         choice === 'import'
           ? 'Path to one plain-text memory file or conversation export (blank to skip): '
           : `Local chat file or folder [${defaultSource}]; /skip to skip: `,
+        {
+          kind: 'text',
+          label:
+            choice === 'import'
+              ? 'Path to one plain-text memory file or conversation export.'
+              : `Local chat file or folder. Leave it empty to use ${defaultSource}.`,
+          placeholder: choice === 'import' ? 'Path to a file' : defaultSource,
+          actions: [
+            { label: 'Skip', value: choice === 'import' ? '' : '/skip' },
+          ],
+        },
       )
     ).trim();
     if (selected === '/skip' || (!selected && choice === 'import'))
@@ -374,6 +385,7 @@ export async function personalize(
       );
       const consent = await io.ask(
         'Ask your harness to read this source and draft your profile? [y/N]: ',
+        { kind: 'confirm', yes: 'Read and draft my profile', no: 'Skip' },
       );
       if (!/^(y|yes)$/i.test(consent.trim())) return undefined;
       signal.throwIfAborted();
@@ -390,7 +402,7 @@ export async function personalize(
             ...agency,
             cwd,
             signal,
-            ...(io.progress ? { onActivity: io.progress } : {}),
+            onActivity: (message) => io.progress?.(message, 'tool'),
             prompt: `${await loadPrompt('profile-history')}\nSelected source: ${JSON.stringify(source)}`,
           }),
       );
@@ -398,6 +410,7 @@ export async function personalize(
     } else {
       const consent = await io.ask(
         `Verifold will read ${choice === 'history' ? `a bounded sample from ${source}: up to 200 directory entries, 10 text/chat files, 256 KB per file and 512 KB total; no links or hidden subdirectories` : `only the selected file, ${source} (up to 128 KB)`}.\n\nIt sends this text to ${agency.host} (${agency.model ?? 'host default model'}) to summarize research interests and working preferences. Your model provider may process this content. Your harness keeps its own permissions and session records.\n\nVerifold will not copy the source archive. Native user-role messages can include harness-injected context. Review which statements are yours.\n\nYou will review the full draft before reuse. Accepted context is saved in ${directory}/USER.md.\n\nAllow this import? [y/N]: `,
+        { kind: 'confirm', yes: 'Allow this import', no: 'Skip' },
       );
       if (!/^(y|yes)$/i.test(consent.trim())) return undefined;
       signal.throwIfAborted();
@@ -413,7 +426,7 @@ export async function personalize(
             ...agency,
             cwd,
             signal,
-            ...(io.progress ? { onActivity: io.progress } : {}),
+            onActivity: (message) => io.progress?.(message, 'tool'),
             prompt: `${await loadPrompt('profile-summary')}\nSource path: ${JSON.stringify(source)}\nSource text (JSON string): ${JSON.stringify(content)}`,
           }),
       );
@@ -424,12 +437,16 @@ export async function personalize(
       'Your answers help your agent tailor research directions and experiments. No accounts or history are read.',
     );
     const topic = text(
-      await io.ask('What do you want to work on? '),
+      await io.ask('What do you want to work on? ', {
+        kind: 'text',
+        multiline: true,
+      }),
       'research topic',
       4000,
     );
     const consent = await io.ask(
       `Use ${agency.host} (${agency.model ?? 'host default model'}) to ask follow-up questions and draft a private research profile? Your model provider may process the answers and your harness may retain the session. You will review it before saving. [y/N]: `,
+      { kind: 'confirm', yes: 'Start the interview', no: 'Skip' },
     );
     if (!/^(y|yes)$/i.test(consent.trim())) return undefined;
     draft = await researchInterview(
@@ -445,6 +462,7 @@ export async function personalize(
     draft = text(
       await io.ask(
         'What interests or working preferences should research use? ',
+        { kind: 'text', multiline: true },
       ),
       'research context',
       10000,
@@ -466,6 +484,7 @@ export async function personalize(
     );
     const accepted = await io.ask(
       'Save this profile for future research with your chosen harness and model provider? [y/N]: ',
+      { kind: 'confirm', yes: 'Save my profile', no: "Don't save it" },
     );
     if (!/^(y|yes)$/i.test(accepted.trim())) return undefined;
     signal.throwIfAborted();

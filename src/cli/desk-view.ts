@@ -4,6 +4,7 @@ import type { Workspace } from './contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
 import type { ResearchView } from './research-runner.ts';
+import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import {
   decisionLabel,
   hostName,
@@ -332,4 +333,80 @@ export function renderDesk(
   ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>` : '<p class="empty-note">No research attempts yet.</p>'}</section>
   <section class="history"><div class="section-title"><h2>Attempt history</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" ${chosen?.id === attempt.id ? 'aria-pressed="true"' : 'aria-pressed="false"'}><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>${!attempts.length ? '<p class="empty-note">Each research request will appear here with its own identity.</p>' : ''}</section></aside></div>`;
   return { html, observation };
+}
+
+const setupSteps = [
+  'Connect',
+  'Profile',
+  'Project',
+  'Interview',
+  'Research mode',
+] as const;
+
+const setupLabels: Record<SetupView['lines'][number]['source'], string> = {
+  verifold: 'Verifold',
+  agent: 'Your harness',
+  tool: 'Verifold saw',
+  you: 'You',
+};
+
+/** The open setup question, with one primary action. */
+function renderSetupPrompt(prompt: SetupPrompt): string {
+  const answer = (value: string): string =>
+    `data-action="setup" data-prompt="${prompt.id}" data-value="${e(value)}"`;
+  if (prompt.kind === 'choice')
+    return `<section class="setup-prompt" aria-labelledby="setup-question"><h2 id="setup-question">${e(prompt.question)}</h2><div class="choices">${prompt.choices
+      .map(
+        (choice) =>
+          `<button type="button" class="choice${choice.value === prompt.initial ? ' default' : ''}" ${answer(choice.value)}><span class="choice-label">${e(choice.label)}${choice.value === prompt.initial ? ' <span class="fine">Default</span>' : ''}</span><span class="choice-description">${e(choice.description)}</span></button>`,
+      )
+      .join('')}</div></section>`;
+  if (prompt.kind === 'review')
+    return `<section class="setup-prompt review" aria-labelledby="setup-question"><h2 id="setup-question">Review the brief</h2><div class="prose md">${markdownHtml(prompt.brief)}</div><div class="actions"><button type="button" class="primary" data-action="setup" data-prompt="${prompt.id}" data-review="accept">Accept the brief</button></div><label class="field" for="setup-feedback">${prompt.final ? 'A final note for the brief' : 'Changes for your harness'}</label><textarea id="setup-feedback" rows="3" maxlength="4000"></textarea><div class="actions"><button type="button" data-action="setup" data-prompt="${prompt.id}" data-review="feedback">${prompt.final ? 'Add the note and accept' : 'Ask for changes'}</button></div><details id="setup-edit"><summary>Edit the brief yourself</summary><textarea id="setup-edited" rows="16" maxlength="11000">${e(prompt.brief)}</textarea><div class="actions"><button type="button" data-action="setup" data-prompt="${prompt.id}" data-review="edit">Accept my version</button></div></details><div class="actions"><button type="button" class="quiet" data-action="setup" data-prompt="${prompt.id}" data-review="cancel">Cancel setup</button></div></section>`;
+  const { hint } = prompt;
+  if (hint?.kind === 'confirm')
+    return `<section class="setup-prompt"><div class="md">${markdownHtml(prompt.question)}</div><div class="actions"><button type="button" class="primary" ${answer('y')}>${e(hint.yes)}</button><button type="button" ${answer('n')}>${e(hint.no)}</button></div></section>`;
+  const field = hint?.multiline
+    ? `<textarea id="setup-answer" rows="4" maxlength="100000" aria-labelledby="setup-question"${hint.placeholder ? ` placeholder="${e(hint.placeholder)}"` : ''}></textarea>`
+    : `<input id="setup-answer" type="text" maxlength="4000" aria-labelledby="setup-question"${hint?.placeholder ? ` placeholder="${e(hint.placeholder)}"` : ''}>`;
+  return `<section class="setup-prompt"><div class="md" id="setup-question">${markdownHtml(prompt.question)}</div>${field}<div class="actions"><button type="button" class="primary" data-action="setup" data-prompt="${prompt.id}" data-field="setup-answer">Continue</button>${(
+    hint?.actions ?? []
+  )
+    .map(
+      (action) =>
+        `<button type="button" ${answer(action.value)}>${e(action.label)}</button>`,
+    )
+    .join('')}</div></section>`;
+}
+
+/** Project setup in the desk, before the project exists. Harness and model text is escaped or sanitized Markdown. */
+export function renderSetup(view: SetupView | null): {
+  html: string;
+  observation: string;
+} {
+  if (!view)
+    return {
+      html: '<div class="empty"><h1>Setting up</h1><p>Verifold is starting setup.</p></div>',
+      observation: '',
+    };
+  const current = view.step ? setupSteps.indexOf(view.step) : -1;
+  const html = `<div class="project-heading"><p class="project-name">New project</p><h1>Set up a project</h1></div>
+  <ol class="setup-steps" aria-label="Setup steps">${setupSteps
+    .map(
+      (name, index) =>
+        `<li data-state="${index < current ? 'done' : index === current ? 'current' : 'next'}"${index === current ? ' aria-current="step"' : ''}>${e(name)}</li>`,
+    )
+    .join('')}</ol>
+  <div class="setup"><ol class="setup-lines">${view.lines
+    .slice(-60)
+    .map(
+      (line) =>
+        `<li class="event setup-${line.source}"><span class="event-kind">${setupLabels[line.source]}</span>${line.source === 'tool' || line.source === 'you' ? `<span class="event-text">${e(line.text)}</span>` : `<div class="event-text md">${markdownHtml(line.text)}</div>`}<time datetime="${e(line.at)}">${e(clock(line.at))}</time></li>`,
+    )
+    .join('')}</ol>
+  ${view.busy ? `<p class="setup-busy" role="status">${e(view.busy.label)} · ${e(elapsed(view.busy.startedAt))}</p>` : ''}
+  ${view.prompt ? renderSetupPrompt(view.prompt) : ''}
+  ${view.outcome === 'done' ? '<p class="notice">Setup is complete. The project desk opens here.</p>' : ''}
+  ${view.outcome === 'stopped' ? `<p class="notice">${e(view.error ?? 'Setup stopped.')}</p><p class="fine">Run verifold again in your terminal to start over.</p>` : ''}</div>`;
+  return { html, observation: view.step ? `Setup step: ${view.step}` : '' };
 }

@@ -637,6 +637,69 @@ body[data-detail='details'] .research-events {
   margin-top: 10px;
   font-size: 13px;
 }
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--muted);
+}
+.setup-steps li[data-state='current'] {
+  color: var(--violet);
+  font-weight: 700;
+}
+.setup-steps li[data-state='done'] {
+  color: var(--ink);
+}
+.setup {
+  max-width: 820px;
+  margin-top: 22px;
+}
+.setup-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.setup-busy {
+  margin-top: 14px;
+  color: var(--violet);
+}
+.setup-prompt {
+  margin-top: 22px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.setup-prompt textarea,
+.setup-prompt input {
+  width: 100%;
+  margin-top: 10px;
+}
+.choices {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.choice {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+}
+.choice.default {
+  border-color: var(--violet);
+}
+.choice-label {
+  font-weight: 650;
+}
+.choice-description {
+  font-size: 13px;
+  color: var(--muted);
+}
 .action-error {
   margin-top: 8px;
   font-size: 12px;
