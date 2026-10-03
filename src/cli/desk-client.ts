@@ -389,6 +389,15 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
       };
     case 'task-reject':
       return { action, task, version };
+    case 'task-message':
+      return { action, to: button.dataset.to, text: field('task-message') };
+    case 'task-decide':
+      return {
+        action,
+        message: button.dataset.message,
+        decision: button.dataset.decision,
+        reason: field(`decide-${button.dataset.message ?? ''}`),
+      };
     default:
       return { action, task };
   }
@@ -485,6 +494,8 @@ async function act(button: HTMLElement): Promise<void> {
     ['review', button.dataset.review],
     ['task', button.dataset.task],
     ['version', button.dataset.version],
+    ['message', button.dataset.message],
+    ['decision', button.dataset.decision],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -522,6 +533,7 @@ async function act(button: HTMLElement): Promise<void> {
       'setup-feedback',
       'task-note',
       'task-edit-reason',
+      'task-message',
       ...(body.action === 'task-create'
         ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
             (name) => `task-new-${name}`,

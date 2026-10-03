@@ -6,6 +6,7 @@ import type { ResearchReport } from './research.ts';
 import type { ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import { replaced, type TaskRecord, type TaskVersion } from './tasks.ts';
+import type { Message } from './messages.ts';
 import { workerLimit } from './workers.ts';
 import {
   decisionLabel,
@@ -42,6 +43,8 @@ export interface TaskView {
   readonly selected: TaskRecord | null;
   /** Live sessions that wait for a follow-up. */
   readonly idle: readonly string[];
+  /** The latest messages, oldest first. */
+  readonly messages?: readonly Message[];
 }
 
 export function nextResearchAction(workspace: Workspace): {
@@ -421,6 +424,49 @@ function renderReview(
   <div class="actions"><button type="button" data-action="task-changes" data-task="${e(task.id)}"${canChange ? '' : ' disabled'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject version</button></div></div>`;
 }
 
+const deliveryLabels: Record<Message['delivery'], string> = {
+  queued: 'Waits for the next turn',
+  sent: 'Sent with the current turn',
+  delivered: 'Delivered',
+  uncertain: 'Delivery uncertain',
+  board: 'On the desk',
+};
+
+const kindLabels: Record<Message['kind'], string> = {
+  note: 'Note',
+  blocker: 'Blocker',
+  objection: 'Objection',
+  withdrawal: 'Withdrawal',
+  decision: 'Decision',
+};
+
+/** One message: who sent it to whom, what it is, and how far it got. */
+function messageItem(message: Message): string {
+  const delivery =
+    message.to === 'coordinator' && message.delivery === 'queued'
+      ? 'Waits for the coordinator'
+      : deliveryLabels[message.delivery];
+  return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? ` · ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}<p class="pre">${e(message.text)}</p>${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
+}
+
+/** Open blockers and objections. Each one waits for a decision with a reason. */
+function renderNeeds(messages: readonly Message[]): string {
+  const open = messages.filter((message) => message.status === 'open');
+  if (!open.length) return '';
+  return `<div class="needs" role="region" aria-labelledby="needs-title"><h3 id="needs-title">Needs you</h3><ul class="messages">${open
+    .map(
+      (message) =>
+        `${messageItem(message)}<li class="decide"><label class="field" for="decide-${e(message.id)}">Reason for your decision on ${e(message.id)}</label><input id="decide-${e(message.id)}" type="text" maxlength="2000"><div class="actions">${
+          message.kind === 'objection'
+            ? `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="upheld">Uphold</button><button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="overruled">Overrule</button>`
+            : `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved">Resolve</button>`
+        }</div></li>`,
+    )
+    .join(
+      '',
+    )}</ul><p class="fine">Your decision and its reason go to the task that raised the message, with its next turn. To change the work, revise the task.</p></div>`;
+}
+
 /** Scoped tasks: the list, one task with its next step, and a form for a new task. */
 function renderTasks(view: TaskView, live: DeskSession, host: string): string {
   const task = view.selected;
@@ -488,16 +534,22 @@ function renderTasks(view: TaskView, live: DeskSession, host: string): string {
       .map(
         (entry) => `<li>Attempt ${entry.number}: ${e(entry.note ?? '')}</li>`,
       );
+    const thread = (view.messages ?? [])
+      .filter((message) => message.to === task.id || message.from === task.id)
+      .slice(-50);
+    const messagesBlock = `<details id="task-messages"><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map(messageItem).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}<label class="field" for="task-message">Message to this task's worker</label><textarea id="task-message" rows="2" maxlength="4000"></textarea><p class="fine">The worker receives it with its next turn. A message cannot change the task's paths, permissions, or limits.</p><div class="actions"><button type="button" data-action="task-message" data-task="${e(task.id)}" data-to="${e(task.id)}">Send</button></div></details>`;
     body = `<article class="task" aria-labelledby="task-title"><div class="section-title"><h3 id="task-title">${e(task.assignment.title)}</h3><span class="status ${tone}">${e(label)}</span></div>
     <p class="session-meta"><span>${e(task.id)} · revision ${task.revision}</span><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>
     <dl class="task-fields"><dt>Objective</dt><dd class="pre">${e(task.assignment.objective)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Expected output</dt><dd class="pre">${e(task.assignment.output)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
+    ${messagesBlock}
     ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
     ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}</article>`;
   }
   return `<section class="tasks" aria-labelledby="tasks-title"><div class="section-title"><h2 id="tasks-title">Tasks</h2><span class="count">${view.list.length}</span></div>
   <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
+  ${renderNeeds(view.messages ?? [])}
   ${view.list.length ? `<ol class="task-list">${view.list.map((entry) => `<li><button type="button" data-task-select="${e(entry.id)}" aria-pressed="${entry.id === task?.id}"><span>${e(entry.id)} · ${e(entry.assignment.title)}</span><span class="attempt-status">${e(taskStates[entry.state][0])}</span></button></li>`).join('')}</ol>` : ''}
   ${body}
   <details id="task-new"${view.list.length ? '' : ' open'}><summary>New task</summary>${taskForm('task-new', null, view.list, host)}<div class="actions"><button type="button" class="primary" data-action="task-create">Create task</button></div></details></section>`;

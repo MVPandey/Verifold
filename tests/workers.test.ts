@@ -1,7 +1,14 @@
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -49,15 +56,23 @@ const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const args = process.argv.slice(2);
 const id = args[args.indexOf('--session-id') + 1] || 'claude-native';
 let waiting = null;
+let init = null;
+let toolFolder = null;
 require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
-  if (message.type === 'control_request' && message.request.subtype === 'initialize')
+  if (message.type === 'control_request' && message.request.subtype === 'initialize') {
+    init = message.request;
     return out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } });
+  }
   if (message.type === 'control_request' && message.request.subtype === 'interrupt') {
     clearTimeout(waiting);
     return out({ type: 'result', subtype: 'error_during_execution', is_error: true });
   }
-  if (message.type === 'control_response') return out({ type: 'result', subtype: 'success' });
+  if (message.type === 'control_response') {
+    if (message.response.request_id === 'mcp-1')
+      fs.writeFileSync(toolFolder + '/tool.json', JSON.stringify({ reply: message.response.response, args, init }));
+    return out({ type: 'result', subtype: 'success' });
+  }
   if (message.type !== 'user') return;
   const text = String(message.message.content);
   ${writable}
@@ -69,6 +84,10 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   if (text.includes('ASK'))
     return out({ type: 'control_request', request_id: 'ask-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'tool-ask', input: { command: 'echo ask' } } });
   if (text.includes('SLOW')) { waiting = setTimeout(() => {}, 60000); return; }
+  if (text.includes('TOOL')) {
+    toolFolder = folder;
+    return out({ type: 'control_request', request_id: 'mcp-1', request: { subtype: 'mcp_message', server_name: 'verifold', message: { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'verifold_post', arguments: { to: 'coordinator', text: 'hello from claude' }, _meta: { 'claudecode/toolUseId': 'toolu_9' } } } } });
+  }
   setTimeout(() => out({ type: 'result', subtype: 'success' }), 50);
 });`;
 
@@ -81,10 +100,17 @@ const codexSocket = fileURLToPath(
 const codexHost = `if (process.argv.includes('--remote')) { ${fakeTui}; return; }
 const fs = require('node:fs');
 const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
+let start = null;
+let toolFolder = null;
 onLine((line) => {
   const message = JSON.parse(line);
+  if (message.id === 'tool-1' && !message.method) {
+    fs.writeFileSync(toolFolder + '/tool.json', JSON.stringify({ reply: message.result, dynamicTools: start.dynamicTools.map((tool) => tool.name) }));
+    return out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
+  }
   if (message.method === 'initialize') out({ id: message.id, result: {} });
   if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
+  if (message.method === 'thread/start') start = message.params;
   if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'codex-thread-' + process.pid }, approvalsReviewer: message.params.approvalsReviewer } });
   if (message.method === 'turn/start') {
     const text = message.params.input[0].text;
@@ -92,6 +118,10 @@ onLine((line) => {
     out({ id: message.id, result: { turn: { id: 'turn-1' } } });
     fs.mkdirSync(folder, { recursive: true });
     fs.writeFileSync(folder + '/codex.md', 'from codex\\n');
+    if (text.includes('TOOL')) {
+      toolFolder = folder;
+      return out({ id: 'tool-1', method: 'item/tool/call', params: { threadId: 'codex-thread', turnId: 'turn-1', callId: 'call-1', tool: 'verifold_post', arguments: { to: 'coordinator', text: 'hello from codex' } } });
+    }
     setTimeout(() => out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } }), 50);
   }
   if (message.method === 'turn/interrupt') out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });
@@ -216,6 +246,74 @@ await test('two workers run tasks at the same time, each with its own identity a
     (await tasks.get(a))?.attempts[0]?.workspace?.path !==
       (await tasks.get(b))?.attempts[0]?.workspace?.path,
   );
+});
+
+await test('Claude Code and Codex workers reach Verifold tools over their own pipes', async (t) => {
+  const { root, tasks } = await owner(t);
+  const a = await tasks.create(
+    task('Claude tool', 'claude', 'results/a', 'TOOL post.'),
+  );
+  const b = await tasks.create(
+    task('Codex tool', 'codex', 'results/b', 'TOOL post.'),
+  );
+  await Promise.all([tasks.start(a), tasks.start(b)]);
+  const [first, second] = await Promise.all([
+    state(tasks, a, 'review'),
+    state(tasks, b, 'review'),
+  ]);
+  const messages = await tasks.messageList();
+  assert.deepEqual(
+    messages.map((message) => [message.from, message.to, message.text]).sort(),
+    [
+      [a, 'coordinator', 'hello from claude'],
+      [b, 'coordinator', 'hello from codex'],
+    ],
+  );
+  // Each message keeps the harness's call ID, so a repeated call adds nothing.
+  assert.ok(messages.some((message) => message.key?.endsWith(':toolu_9')));
+  assert.ok(messages.some((message) => message.key?.endsWith(':call-1')));
+  const read = async (
+    record: TaskRecord,
+    path: string,
+  ): Promise<Record<string, unknown>> =>
+    JSON.parse(
+      await readFile(
+        join(root, record.attempts[0]?.workspace?.path ?? '', path),
+        'utf8',
+      ),
+    ) as Record<string, unknown>;
+  const names = [
+    'verifold_post',
+    'verifold_block',
+    'verifold_object',
+    'verifold_withdraw',
+  ];
+  const claude = (await read(first, 'results/a/tool.json')) as {
+    reply: {
+      mcp_response: {
+        result: { content: { text: string }[]; isError: boolean };
+      };
+    };
+    args: string[];
+    init: { sdkMcpServers: string[] };
+  };
+  assert.match(
+    claude.reply.mcp_response.result.content[0]?.text ?? '',
+    /^Recorded m-\d\.$/,
+  );
+  assert.equal(claude.reply.mcp_response.result.isError, false);
+  assert.deepEqual(claude.init.sdkMcpServers, ['verifold']);
+  assert.equal(
+    claude.args[claude.args.indexOf('--allowedTools') + 1],
+    names.map((name) => `mcp__verifold__${name}`).join(','),
+  );
+  const codex = (await read(second, 'results/b/tool.json')) as {
+    reply: { success: boolean; contentItems: { text: string }[] };
+    dynamicTools: string[];
+  };
+  assert.equal(codex.reply.success, true);
+  assert.match(codex.reply.contentItems[0]?.text ?? '', /^Recorded m-\d\.$/);
+  assert.deepEqual(codex.dynamicTools, names);
 });
 
 await test('a stop, an output burst, or a failure in one worker leaves the other alone', async (t) => {
