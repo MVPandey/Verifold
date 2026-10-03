@@ -17,6 +17,8 @@ import { ptyLibrary } from '../src/cli/terminals.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
+import { ResearchRunner } from '../src/cli/research-runner.ts';
+import { loadPaused } from '../src/cli/session.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 
 /** The first writable path in a task prompt. Plain sessions write to `out`. */
@@ -734,3 +736,79 @@ setInterval(() => {}, 1000);`,
     assert.equal(running(), false);
   },
 );
+
+await test('research and two workers run together, and each stop reaches only its target', async (t) => {
+  const { root, sessions } = await owner(t);
+  const stop = new AbortController();
+  let researched = 0;
+  const runner = new ResearchRunner(root, {
+    signal: stop.signal,
+    io: {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    },
+    // A research step that waits until it is cancelled.
+    harness: (request) => {
+      researched++;
+      return new Promise((_resolve, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Cancelled.', 'AbortError')),
+          { once: true },
+        ),
+      );
+    },
+  });
+  const slow = await sessions.start({
+    host: 'claude',
+    mode: 'auto',
+    prompt: 'SLOW work.',
+  });
+  await status(sessions, slow, 'running');
+  await runner.start({ topic: 'Proof search' });
+  // A worker starts while research runs.
+  const other = await sessions.start({
+    host: 'codex',
+    mode: 'auto',
+    prompt: 'Write the result.',
+  });
+  await status(sessions, other, 'idle');
+  for (let tries = 0; tries < 250 && !researched; tries++) await delay(20);
+  assert.equal(runner.running, true);
+
+  // With research and a turn running, the terminal sends the choice to the desk.
+  const lines: string[] = [];
+  const controls = { host: 'claude', open: () => {}, research: runner };
+  const io = {
+    interactive: true,
+    ask: () => Promise.reject(new Error('No prompts')),
+    out: () => {},
+    progress: (line: string) => lines.push(line),
+  };
+  terminalInput(sessions, '/cancel', io, controls);
+  assert.match(lines.at(-1) ?? '', /Research and a session run\. Use the desk/);
+  assert.equal(runner.running, true);
+  assert.equal(sessions.view(slow)?.record.status, 'running');
+
+  sessions.cancel(slow);
+  await status(sessions, slow, 'idle');
+  assert.equal(runner.running, true);
+  runner.cancel();
+  await runner.settled();
+  assert.match(runner.view().events.at(-1)?.text ?? '', /was cancelled/);
+  assert.ok(sessions.view(slow)?.live);
+  assert.ok(sessions.view(other)?.live);
+
+  // Stopping the owner stops research and pauses both workers.
+  await runner.start({ topic: 'Proof search' });
+  for (let tries = 0; tries < 250 && researched < 2; tries++) await delay(20);
+  stop.abort();
+  await runner.settled();
+  await sessions.close();
+  assert.match(runner.view().events.at(-1)?.text ?? '', /was cancelled/);
+  assert.deepEqual(
+    (await loadPaused(root)).map((entry) => entry.id).sort(),
+    [slow, other].sort(),
+  );
+});

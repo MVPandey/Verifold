@@ -308,34 +308,20 @@ await test('desk renders harness Markdown without active content and explains a 
     ].join('\n'),
   }));
   const snapshot = await readDeskSnapshot(root);
-  const reason =
-    'Research is running in the terminal. Start a session after it ends.';
-  const busy = renderDesk(snapshot, undefined, null, {
+  const html = renderDesk(snapshot, undefined, null, {
     session: null,
     controllable: true,
-    blocked: reason,
   }).html;
-  assert.match(busy, /<h3>Research brief<\/h3>/);
-  assert.match(busy, /<strong>Status:<\/strong> draft with <code>code<\/code>/);
-  assert.match(busy, /&lt;img src=x onerror=alert\(1\)&gt;/);
-  assert.doesNotMatch(busy, /<img|javascript:/);
+  assert.match(html, /<h3>Research brief<\/h3>/);
+  assert.match(html, /<strong>Status:<\/strong> draft with <code>code<\/code>/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(html, /<img|javascript:/);
   assert.match(
-    busy,
+    html,
     /<a href="https:\/\/example\.org\/p" target="_blank" rel="noopener noreferrer">paper<\/a>/,
   );
-  assert.match(
-    busy,
-    /data-action="start" disabled aria-describedby="start-blocked"/,
-  );
-  assert.ok(busy.includes(reason));
-  assert.match(busy, /Research is running/);
-  assert.doesNotMatch(busy, /copy-command/);
-  const free = renderDesk(snapshot, undefined, null, {
-    session: null,
-    controllable: true,
-  }).html;
-  assert.match(free, /data-action="start">Start session/);
-  assert.match(free, /copy-command/);
+  assert.match(html, /data-action="start">Start session/);
+  assert.match(html, /copy-command/);
 });
 
 await test('desk lists paused sessions with a Resume control', async (t) => {
@@ -363,13 +349,6 @@ await test('desk lists paused sessions with a Resume control', async (t) => {
     /data-action="resume" data-session="20261002T120000000Z-abcdef12">Resume/,
   );
   assert.match(html, /Reproduce &lt;b&gt;the baseline&lt;\/b&gt;/);
-  const busy = renderDesk(snapshot, undefined, null, {
-    session: null,
-    controllable: true,
-    paused,
-    blocked: 'Research is running in the terminal.',
-  }).html;
-  assert.match(busy, /data-action="resume" data-session="[^"]+" disabled>/);
 });
 
 await test('desk shows one research decision for each phase', async (t) => {
@@ -444,12 +423,11 @@ await test('desk shows one research decision for each phase', async (t) => {
     review,
     /class="primary" data-action="research" data-research="approve">/,
   );
-  const busy = await html({}, true);
+  // A live worker does not hold research back.
   assert.match(
-    busy,
-    /data-research="approve" disabled aria-describedby="decision-busy"/,
+    await html({}, true),
+    /class="primary" data-action="research" data-research="approve">/,
   );
-  assert.match(busy, /A harness session is running/);
   const events = await html({
     step: 'Planning research roles and scope',
     events: [
