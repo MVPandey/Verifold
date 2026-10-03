@@ -1,4 +1,5 @@
 import type { HarnessName } from './harness.ts';
+import type { Terminal } from './terminals.ts';
 import {
   loadPaused,
   SessionActionError,
@@ -146,6 +147,19 @@ export class SessionPool {
   /** The worker waits for a follow-up. */
   idle(id: string): boolean {
     return this.slot(id)?.idleSession() === id;
+  }
+
+  /** The native terminal of a worker, while the person holds it. */
+  terminal(id: unknown): Terminal | null {
+    return this.slot(id)?.terminal ?? null;
+  }
+
+  takeTerminal(id: string, lease: string): Promise<void> {
+    return this.live(id).takeTerminal(lease);
+  }
+
+  returnFromTerminal(id: unknown): void {
+    this.live(id).returnFromTerminal();
   }
 
   continueTask(id: string, text: string): void {

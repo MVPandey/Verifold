@@ -1,6 +1,8 @@
 import DOMPurify from './vendor/purify.js';
 import { requiredElement } from '../ui/dom.ts';
 import { mountTranscripts, refreshTranscripts } from './desk-transcript.ts';
+import { mountTerminals, placeTerminals } from './desk-terminals.ts';
+import { viewLease } from './desk-lease.ts';
 
 const main = requiredElement(document, '#content', HTMLElement);
 const connectionLabel = requiredElement(document, '#connection', HTMLElement);
@@ -20,6 +22,8 @@ let shownDiff:
     }
   | undefined;
 let detail = 'summary';
+/** The view of the selected worker: summary, details, or terminal. */
+let pane = 'summary';
 let token = location.hash.slice(1);
 const launch = token.startsWith('launch-') ? token.slice(7) : '';
 try {
@@ -31,6 +35,7 @@ try {
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
   selectedWorker = sessionStorage.getItem('verifold-desk-worker') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
+  pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
 } catch {
   /* The original fragment still supports reload when storage is unavailable. */
 }
@@ -48,11 +53,14 @@ let failure:
 /** Details shows the harness transcripts. The choice lasts for this browser. */
 function showDetail(): void {
   document.body.dataset.detail = detail;
+  document.body.dataset.pane = pane;
   for (const button of main.querySelectorAll<HTMLElement>('[data-detail]'))
     button.setAttribute(
       'aria-pressed',
       String(button.dataset.detail === detail),
     );
+  for (const button of main.querySelectorAll<HTMLElement>('[data-pane]'))
+    button.setAttribute('aria-pressed', String(button.dataset.pane === pane));
 }
 
 function showFailure(): void {
@@ -186,6 +194,7 @@ async function refresh(): Promise<void> {
       }
       showReview();
       mountTranscripts(main, () => token);
+      mountTerminals(main);
       inPanel?.focus({ preventScroll: true });
       if (focusAttempt)
         main
@@ -440,27 +449,31 @@ async function act(button: HTMLElement): Promise<void> {
         }
       : action === 'send'
         ? { action, session: button.dataset.session, text: field('follow-up') }
-        : action === 'cancel' || action === 'end'
+        : action === 'cancel' ||
+            action === 'end' ||
+            action === 'terminal-return'
           ? { action, session: button.dataset.session }
-          : action === 'answer'
-            ? {
-                action,
-                request: button.dataset.request,
-                decision: button.dataset.decision,
-              }
-            : action === 'review'
-              ? { action, command: button.dataset.command }
-              : action === 'resume' || action === 'restart'
-                ? { action, session: button.dataset.session }
-                : action === 'select'
-                  ? { action, idea: button.dataset.idea }
-                  : action === 'research'
-                    ? researchBody(button.dataset.research)
-                    : action === 'setup'
-                      ? setupBody(button)
-                      : action?.startsWith('task-')
-                        ? taskRequest(button)
-                        : { action };
+          : action === 'terminal-open'
+            ? { action, session: button.dataset.session, lease: viewLease() }
+            : action === 'answer'
+              ? {
+                  action,
+                  request: button.dataset.request,
+                  decision: button.dataset.decision,
+                }
+              : action === 'review'
+                ? { action, command: button.dataset.command }
+                : action === 'resume' || action === 'restart'
+                  ? { action, session: button.dataset.session }
+                  : action === 'select'
+                    ? { action, idea: button.dataset.idea }
+                    : action === 'research'
+                      ? researchBody(button.dataset.research)
+                      : action === 'setup'
+                        ? setupBody(button)
+                        : action?.startsWith('task-')
+                          ? taskRequest(button)
+                          : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -558,6 +571,24 @@ document.addEventListener('click', (event) => {
     void refresh();
   }
   if (target.dataset.diff) void loadDiff(target);
+  if (target.dataset.pane) {
+    pane = ['details', 'terminal'].includes(target.dataset.pane)
+      ? target.dataset.pane
+      : 'summary';
+    showDetail();
+    placeTerminals();
+    refreshTranscripts();
+    try {
+      localStorage.setItem('verifold-desk-pane', pane);
+    } catch {
+      /* The choice lasts until reload when browser storage is unavailable. */
+    }
+  }
+  // A new tab gets its own input lease, so it starts read-only. It keeps this tab's session storage.
+  if (target.dataset.terminalTab)
+    window.open(
+      `/terminal?session=${encodeURIComponent(target.dataset.terminalTab)}`,
+    );
   if (target.dataset.worker) {
     selectedWorker = target.dataset.worker;
     try {

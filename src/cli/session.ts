@@ -12,8 +12,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { stripVTControlCharacters } from 'node:util';
 import { validateModel, type HarnessName } from './harness.ts';
 import { processStart, stopRecordedProcess } from './owner.ts';
+import { openTerminal, type Terminal } from './terminals.ts';
 import {
   startHostSession,
+  strictClaudeSettings,
   type HostEvent,
   type HostSession,
   type SessionMode,
@@ -28,6 +30,8 @@ export type SessionStatus =
   | 'starting'
   | 'running'
   | 'idle'
+  /** The person holds the harness's own terminal. */
+  | 'terminal'
   /** The owner stopped. A later owner can resume the native session. */
   | 'paused'
   /** The owner stopped without a record of the end. The last turn has an unknown outcome. */
@@ -39,6 +43,7 @@ const statuses: readonly SessionStatus[] = [
   'starting',
   'running',
   'idle',
+  'terminal',
   'paused',
   'interrupted',
   'ended',
@@ -166,7 +171,7 @@ export interface SessionManagerOptions {
    */
   readonly onTaskTurn?: (
     task: { readonly id: string; readonly claim: string },
-    turn: 'completed' | 'interrupted' | 'failed' | 'exited',
+    turn: 'completed' | 'interrupted' | 'failed' | 'exited' | 'terminal',
     detail?: string,
   ) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
@@ -610,7 +615,8 @@ export async function reconcileSessions(
       !record ||
       (record.status !== 'starting' &&
         record.status !== 'running' &&
-        record.status !== 'idle') ||
+        record.status !== 'idle' &&
+        record.status !== 'terminal') ||
       launch?.ownerId === ownerId
     )
       continue;
@@ -666,6 +672,9 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
+const inTerminal =
+  'You hold the terminal of this session. Return to Verifold first.';
+
 const taskSession =
   'This session belongs to a task. Use the task actions in the desk: accept, ask for changes, or reject.';
 
@@ -717,6 +726,8 @@ export class SessionManager {
   private writing: Promise<void> | null = null;
   private saveFailed = false;
   /** The transcript file of the current launch. */
+  /** The harness's own terminal while the person holds it. */
+  private native: Terminal | null = null;
   private transcript: {
     readonly writer: TranscriptWriter;
     readonly apply: (update: TranscriptUpdate) => void;
@@ -732,7 +743,8 @@ export class SessionManager {
     return this.current
       ? {
           record: this.current,
-          live: this.host !== null,
+          // A Claude Code session in its terminal has no structured process, but it is live.
+          live: this.host !== null || this.native !== null,
           saveFailed: this.saveFailed,
         }
       : null;
@@ -754,7 +766,122 @@ export class SessionManager {
 
   /** A session runs or is starting. */
   get active(): boolean {
-    return this.host !== null || this.launching;
+    return this.host !== null || this.launching || this.native !== null;
+  }
+
+  /** The harness's own terminal, while the person holds it. */
+  get terminal(): Terminal | null {
+    return this.native;
+  }
+
+  /**
+   * Hand the session to the harness's own terminal, between turns. Claude Code
+   * allows one process for a conversation, so its structured process stops
+   * first and starts again when the terminal ends. A Codex terminal attaches to
+   * the same app-server, which keeps reporting its events.
+   */
+  async takeTerminal(lease: string): Promise<void> {
+    const record = this.current;
+    const host = this.host;
+    if (this.native) fail('The terminal is open. Take input in it.');
+    if (!host || !record) fail('No session is running.');
+    if (record.status !== 'idle')
+      fail(
+        'Open the terminal between turns. Wait for the turn to end, or cancel it.',
+      );
+    const native =
+      record.nativeSessionId ??
+      fail('The harness has not reported its session yet.');
+    const strict = record.mode === 'strict';
+    let args: string[];
+    if (record.host === 'claude')
+      args = [
+        '--resume',
+        native,
+        ...(record.model ? ['--model', record.model] : []),
+        '--permission-mode',
+        record.mode === 'auto' ? 'auto' : strict ? 'dontAsk' : 'default',
+        ...(strict ? ['--settings', strictClaudeSettings] : []),
+      ];
+    else {
+      const socket =
+        host.socket ?? fail('This Codex session has no socket for a terminal.');
+      args = [
+        // A turn that starts in the terminal must keep the task's limits.
+        ...(strict
+          ? [
+              '-c',
+              'approval_policy="never"',
+              '-c',
+              'sandbox_mode="workspace-write"',
+            ]
+          : []),
+        '--remote',
+        `unix://${socket}`,
+        'resume',
+        native,
+      ];
+    }
+    if (record.host === 'claude') {
+      host.close();
+      this.host = null;
+      this.patch((current) => ({
+        ...current,
+        launches: ended(current.launches),
+      }));
+    }
+    let terminal: Terminal | undefined;
+    try {
+      terminal = await openTerminal({
+        command: this.options.executables?.[record.host] ?? record.host,
+        args,
+        cwd: record.cwd ? join(this.root, record.cwd) : this.root,
+        owner: lease,
+        onExit: () => {
+          if (terminal) this.terminalEnded(terminal);
+        },
+      });
+    } catch (error) {
+      if (record.host === 'claude') await this.resumeAfterTerminal();
+      throw error;
+    }
+    this.native = terminal;
+    this.patch((current) => ({ ...current, status: 'terminal' }));
+    this.event(
+      'status',
+      record.host === 'claude'
+        ? 'You took the Claude Code terminal. Verifold records no tool calls until you return.'
+        : 'You took the Codex terminal. Codex keeps reporting its events to Verifold.',
+    );
+  }
+
+  /** End the terminal. Its exit returns the session to Verifold. */
+  returnFromTerminal(): void {
+    if (!this.native) fail('The terminal is not open.');
+    this.native.close();
+  }
+
+  private terminalEnded(terminal: Terminal): void {
+    // A pause closes the terminal itself and needs no return.
+    if (this.native !== terminal) return;
+    this.native = null;
+    const record = this.current;
+    if (!record) return;
+    this.event('status', 'You returned to Verifold.');
+    if (record.task) this.options.onTaskTurn?.(record.task, 'terminal');
+    if (record.host === 'claude') void this.resumeAfterTerminal();
+    else if (this.host)
+      this.patch((current) => ({ ...current, status: 'idle' }));
+  }
+
+  /** Start the structured Claude Code process again on the same conversation. */
+  private async resumeAfterTerminal(): Promise<void> {
+    this.patch((current) => ({ ...current, status: 'starting' }));
+    try {
+      await this.launch();
+    } catch {
+      /* The launch records its failure in the session. */
+    }
   }
 
   /** Why a new session is refused now, or null. */
@@ -892,6 +1019,7 @@ export class SessionManager {
 
   /** Send the next turn. For a task session, only its task calls this, so each turn ends in a version. */
   continueTask(value: unknown): void {
+    if (this.native) fail(inTerminal);
     const text = this.text(value);
     if (!this.host || this.current?.status !== 'idle')
       fail('Wait for the current turn to end, or cancel it.');
@@ -902,6 +1030,7 @@ export class SessionManager {
   }
 
   cancel(): void {
+    if (this.native) fail(inTerminal);
     const record = this.current;
     if (!this.host || !record || record.status === 'idle')
       fail('Nothing is running.');
@@ -922,6 +1051,7 @@ export class SessionManager {
 
   /** End the session. For a task session, only its task calls this. */
   endTask(reason: string): void {
+    if (this.native) fail(inTerminal);
     if (!this.host) fail('No session is running.');
     this.host.close();
     this.host = null;
@@ -978,8 +1108,11 @@ export class SessionManager {
   /** Stop the harness and keep the native session, so a later owner can resume it. */
   private pause(): void {
     const record = this.current;
-    if (!this.host || !record) return;
-    this.host.close();
+    if ((!this.host && !this.native) || !record) return;
+    const native = this.native;
+    this.native = null;
+    native?.close();
+    this.host?.close();
     this.host = null;
     // A task session ends with the owner. Its task keeps the work as a version.
     const resumable = record.nativeSessionId !== null && !record.task;
@@ -1315,6 +1448,15 @@ export class SessionManager {
         );
         break;
       case 'turn-end':
+        // A turn that the person started in the Codex terminal is not a task turn.
+        if (this.native) {
+          this.patch((current) => unanswered(current));
+          this.event(
+            'status',
+            'A turn that you started in the terminal ended.',
+          );
+          break;
+        }
         this.patch((current) => ({
           ...unanswered(current),
           status: 'idle',

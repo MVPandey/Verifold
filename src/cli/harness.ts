@@ -214,6 +214,31 @@ function activity(host: HarnessName, event: unknown): Activity[] {
   return [];
 }
 
+/**
+ * Variables that a running Claude Code session gives its child processes. When
+ * Verifold runs inside such a session, they would tie a harness to that session:
+ * for example, Claude Code turns transcript saving off for a child session.
+ */
+const parentSessionVariables = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_SSE_PORT',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_PID',
+];
+
+/** The environment for a harness process: the person's environment without the variables of a parent harness session. */
+export function harnessEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env };
+  for (const name of parentSessionVariables) delete environment[name];
+  return environment;
+}
+
 /** Validate a host identifier without selecting or resolving a model for the user. */
 export function validateModel(
   model: unknown,
@@ -282,6 +307,7 @@ export async function runHarness(
   return new Promise<HarnessResult>((resolve, reject) => {
     const child = spawn(options.executable ?? request.host, args, {
       cwd: request.cwd,
+      env: harnessEnvironment(),
       shell: false,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
