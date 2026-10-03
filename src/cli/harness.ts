@@ -18,8 +18,12 @@ export interface HarnessRequest {
   readonly sessionId?: string;
   /** Host model identifier or alias. Omit to use the host's default. */
   readonly model?: string;
-  /** Observed host activity only. Excludes prompts, tool inputs, and tool results. */
-  readonly onActivity?: (message: string) => void;
+  /**
+   * Observed host activity only. Excludes prompts, tool inputs, and tool results.
+   * A `notice` needs the person, for example a denied permission. Other events
+   * belong in the desk, not in the terminal.
+   */
+  readonly onActivity?: (message: string, kind: 'event' | 'notice') => void;
   /** The harness process started. It leads its own process group on POSIX. */
   readonly onSpawn?: (pid: number) => void;
   /**
@@ -105,8 +109,24 @@ function reader(host: HarnessName): {
   };
 }
 
+/** Send harness activity to a progress line. Events become `tool` lines, which only the desk shows. */
+export function activityProgress(
+  progress: ((value: string, source?: 'tool') => void) | undefined,
+): (message: string, kind: 'event' | 'notice') => void {
+  return (message, kind) =>
+    progress?.(message, kind === 'notice' ? undefined : 'tool');
+}
+
+interface Activity {
+  readonly text: string;
+  /** Permission denials need the person. Other activity is an observed event. */
+  readonly kind: 'event' | 'notice';
+}
+
+const observed = (text: string): Activity => ({ text, kind: 'event' });
+
 /** Only protocol identifiers can appear in activity messages, never private payloads. */
-function activity(host: HarnessName, event: unknown): string[] {
+function activity(host: HarnessName, event: unknown): Activity[] {
   if (!record(event)) return [];
   const label = (value: unknown): string | undefined =>
     typeof value === 'string' &&
@@ -118,12 +138,17 @@ function activity(host: HarnessName, event: unknown): string[] {
       const model = label(event.model);
       const id = sessionId(event.session_id);
       return [
-        `Claude Code session connected.${model ? ` Model: ${model}.` : ''}${id ? ` Session: ${id}.` : ''}`,
+        observed(
+          `Claude Code session connected.${model ? ` Model: ${model}.` : ''}${id ? ` Session: ${id}.` : ''}`,
+        ),
       ];
     }
     if (event.type === 'system' && event.subtype === 'permission_denied')
       return [
-        'Claude Code denied a tool request. Review permissions in Claude Code; Verifold cannot answer native approval prompts.',
+        {
+          text: 'Claude Code denied a tool request. Review permissions in Claude Code; Verifold cannot answer native approval prompts.',
+          kind: 'notice',
+        },
       ];
     if (
       Array.isArray(event.permission_denials) &&
@@ -131,7 +156,10 @@ function activity(host: HarnessName, event: unknown): string[] {
     ) {
       const id = sessionId(event.session_id);
       return [
-        `Claude Code denied ${event.permission_denials.length} tool request(s). ${id ? `Open claude --resume ${id} to review permissions.` : 'Review permissions in Claude Code.'} Verifold cannot answer native approval prompts.`,
+        {
+          text: `Claude Code denied ${event.permission_denials.length} tool request(s). ${id ? `Open claude --resume ${id} to review permissions.` : 'Review permissions in Claude Code.'} Verifold cannot answer native approval prompts.`,
+          kind: 'notice',
+        },
       ];
     }
     if (
@@ -142,18 +170,23 @@ function activity(host: HarnessName, event: unknown): string[] {
       return event.message.content.flatMap((block: unknown) =>
         record(block) && event.type === 'assistant' && block.type === 'tool_use'
           ? [
-              `Claude Code requested ${label(block.name) ?? 'tool'}${event.parent_tool_use_id ? ' in a native subagent' : ''}.`,
+              observed(
+                `Claude Code requested ${label(block.name) ?? 'tool'}${event.parent_tool_use_id ? ' in a native subagent' : ''}.`,
+              ),
             ]
           : record(block) &&
               event.type === 'user' &&
               block.type === 'tool_result'
             ? [
-                `Claude Code tool returned${block.is_error === true ? ' an error' : ' a result'}${event.parent_tool_use_id ? ' in a native subagent' : ''}.`,
+                observed(
+                  `Claude Code tool returned${block.is_error === true ? ' an error' : ' a result'}${event.parent_tool_use_id ? ' in a native subagent' : ''}.`,
+                ),
               ]
             : [],
       );
   } else {
-    if (event.type === 'thread.started') return ['Codex session connected.'];
+    if (event.type === 'thread.started')
+      return [observed('Codex session connected.')];
     if (
       (event.type === 'item.started' || event.type === 'item.completed') &&
       record(event.item)
@@ -172,7 +205,9 @@ function activity(host: HarnessName, event: unknown): string[] {
           : undefined;
       if (tool)
         return [
-          `Codex ${event.type === 'item.started' ? 'started' : 'finished'} ${tool}.`,
+          observed(
+            `Codex ${event.type === 'item.started' ? 'started' : 'finished'} ${tool}.`,
+          ),
         ];
     }
   }
@@ -308,8 +343,8 @@ export async function runHarness(
       }
       try {
         if (request.onActivity)
-          for (const message of activity(request.host, event))
-            request.onActivity(message);
+          for (const { text, kind } of activity(request.host, event))
+            request.onActivity(text, kind);
         if (request.onTranscript)
           for (const update of request.host === 'claude'
             ? claudeUpdates(event)

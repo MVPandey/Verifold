@@ -55,8 +55,9 @@ try {
             busy: terminal.busy.bind(terminal),
           }
         : {}),
-      progress: (value) => {
-        terminal?.progress(value);
+      // Harness tool events belong in the desk, so the terminal skips them.
+      progress: (value, source) => {
+        if (source !== 'tool') terminal?.progress(value);
       },
       ...(terminal
         ? {

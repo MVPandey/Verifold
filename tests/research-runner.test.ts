@@ -38,7 +38,7 @@ const report = {
 
 /** Plans first, then reports. Each call reports one observed tool event and its transcript. */
 function harness(request: HarnessRequest): Promise<HarnessResult> {
-  request.onActivity?.('Claude Code requested WebSearch.');
+  request.onActivity?.('Claude Code requested WebSearch.', 'event');
   request.onTranscript?.({
     kind: 'request',
     parent: null,
@@ -71,7 +71,7 @@ let slowCalls = 0;
 /** Waits until the step is cancelled. */
 function slow(request: HarnessRequest): Promise<HarnessResult> {
   slowCalls++;
-  request.onActivity?.('Claude Code requested WebSearch.');
+  request.onActivity?.('Claude Code requested WebSearch.', 'event');
   return new Promise((_resolve, reject) => {
     request.signal.addEventListener(
       'abort',
@@ -143,6 +143,8 @@ await test('research runs in the owner, records observed activity, and waits for
   assert.match(planned.events.at(-1)?.text ?? '', /plan is ready/);
   assert.deepEqual(running, [true, false]);
   assert.ok(lines.some((line) => line.includes('/approve')));
+  // The terminal gets status lines. Harness events stay in the desk.
+  assert.ok(!lines.some((line) => line.includes('requested WebSearch')));
   assert.equal(
     (await loadWorkspace(root)).research?.phase,
     'awaiting-plan-review',
