@@ -619,6 +619,28 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   assert.equal(messages[1]?.sender?.claim, claim);
   assert.equal(messages[0]?.revision, 1);
 
+  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
+    session: null,
+    controllable: true,
+    tasks: {
+      list: await tasks.list(),
+      selected: await tasks.get(review),
+      idle: [],
+      messages,
+    },
+  }).html;
+  assert.match(
+    html,
+    /Needs you[\s\S]*m-2[\s\S]*data-message="m-2" data-decision="upheld">Uphold[\s\S]*data-message="m-2" data-decision="overruled">Overrule[\s\S]*data-message="m-3" data-decision="resolved">Resolve/,
+  );
+  assert.match(html, /<li>https:\/\/example\.org\/benchmark<\/li>/);
+  assert.match(html, /Messages \(3\)/);
+  assert.match(html, /Waits for the coordinator/);
+  assert.match(
+    html,
+    /data-action="task-message" data-task="task-2" data-to="task-2"/,
+  );
+
   // The person decides the objection. The decision goes to the objector with its next turn.
   await assert.rejects(
     tasks.decideMessage('m-2', 'resolved', 'x'),
