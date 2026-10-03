@@ -525,6 +525,16 @@ onLine((line) => {
       assert.equal(asset.status, 200, path);
       assert.ok((await asset.arrayBuffer()).byteLength > 0, path);
     }
+    // The terminal page alone allows inline styles for xterm.js, and only the desk may frame it.
+    const terminal = await fetch(
+      `${url.origin}/terminal?session=20261003T000000000Z-aaaaaaaa`,
+    );
+    assert.equal(terminal.status, 200);
+    assert.match(
+      terminal.headers.get('content-security-policy') ?? '',
+      /style-src 'self' 'unsafe-inline'.*frame-ancestors 'self'/,
+    );
+    assert.match(await terminal.text(), /desk-terminal\.js/);
     // A scoped task with the packed task prompt: create, run, review, accept.
     const action = async (body) => {
       const response = await fetch(`${url.origin}/api/action`, {
