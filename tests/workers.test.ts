@@ -545,9 +545,10 @@ await test(
     await sessions.takeTerminal(id, lease);
     await status(sessions, id, 'terminal');
     const shown = await screen(sessions, id, /fake tui/);
+    // The terminal keeps the worker's MCP isolation.
     assert.match(
       shown,
-      /--remote unix:\/\/\S+codex\.sock resume codex-thread-\d+/,
+      /-c features\.plugins=false -c features\.apps=false --remote unix:\/\/\S+codex\.sock resume codex-thread-\d+/,
     );
     assert.throws(() => sessions.cancel(id), /hold the terminal/);
     sessions.returnFromTerminal(id);

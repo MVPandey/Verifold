@@ -546,7 +546,7 @@ function parseRecord(value: unknown): SessionRecord | null {
   };
 }
 
-async function readRecord(
+export async function readRecord(
   root: string,
   id: string,
 ): Promise<SessionRecord | null> {
@@ -834,6 +834,8 @@ export class SessionManager {
               'sandbox_mode="workspace-write"',
             ]
           : []),
+        // The terminal keeps the worker's MCP isolation.
+        ...(host.overrides ?? []),
         '--remote',
         `unix://${socket}`,
         'resume',
@@ -1362,14 +1364,14 @@ export class SessionManager {
               ? `${name} session started${event.model ? ` with ${event.model}` : ''}. Mode: ${modeLabel(this.current ?? record)}.`
               : `${name} is ready to continue the session. Send a follow-up.`,
           );
-        // A resumed session waits for its next turn, as after a turn.
-        if (first && !this.prompted && this.current)
-          this.options.onTurnEnd?.(this.current);
         else if (event.mode && event.mode !== record.reportedMode)
           this.event(
             'status',
             `${name} now reports the mode ${modeLabel(this.current ?? record)}.`,
           );
+        // A resumed session waits for its next turn, as after a turn.
+        if (first && !this.prompted && this.current)
+          this.options.onTurnEnd?.(this.current);
         break;
       }
       case 'mode':

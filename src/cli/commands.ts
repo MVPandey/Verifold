@@ -417,7 +417,13 @@ async function serveDesk(
         clientVersion: version,
         ownerId: owner.ownerId,
         onTaskTurn: (task, turn, detail, reply) =>
-          void owned.tasks?.turnEnded(task, turn, detail, reply),
+          void owned.tasks
+            ?.turnEnded(task, turn, detail, reply)
+            .catch(() =>
+              io.progress?.(
+                `Verifold could not save the version of ${task.id}. Check .verifold/tasks/.`,
+              ),
+            ),
         onEvent: (event, view) => {
           const line = io.interactive
             ? feedLine(
@@ -462,7 +468,7 @@ async function serveDesk(
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
-          onTurnEnd: () => owned.coordinator?.turnEnded(),
+          onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
         }),
       });
       owned.coordinator = coordinator;
@@ -497,6 +503,11 @@ async function serveDesk(
         if (paused && !session)
           io.progress?.(
             `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume or resume one in the desk.`,
+          );
+        const lead = coordinator.view();
+        if (lead?.session && !lead.session.live && !lead.state.stoppedAt)
+          io.progress?.(
+            'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
         if (research) await runner.start(research);
         io.listen?.(
@@ -543,7 +554,8 @@ async function serveDesk(
         // Ctrl+C cancels research too. Its attempt record must be final before the owner leaves.
         await runner.settled();
         // The coordinator pauses first, so no wakeup starts a task while the workers stop.
-        if (!(await coordinator.close()) || !(await sessions.close()))
+        const coordinatorSaved = await coordinator.close();
+        if (!(await sessions.close()) || !coordinatorSaved)
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
           );
