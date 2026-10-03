@@ -21,6 +21,7 @@ import {
   type TaskSessions,
 } from '../src/cli/tasks.ts';
 import { SessionPool } from '../src/cli/workers.ts';
+import type { AgentTools } from '../src/cli/session-hosts.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
@@ -89,6 +90,7 @@ class FakeSessions implements TaskSessions {
     cwd: string;
     prompt: string;
     task: { id: string; claim: string };
+    tools?: AgentTools;
   }[] = [];
   sent: string[] = [];
   ended = 0;
@@ -99,6 +101,7 @@ class FakeSessions implements TaskSessions {
     cwd: string;
     prompt: string;
     task: { id: string; claim: string };
+    tools?: AgentTools;
   }): Promise<string> {
     if (this.failStart)
       return Promise.reject(new Error('claude is not installed'));
@@ -489,6 +492,214 @@ await test('an accepted version reaches the tasks that wait for it, and a replac
     /results\/prior\/notes\.md comes from task-1 and from an input file/,
   );
   assert.equal((await tasks.get(both))?.attempts.length, 0);
+});
+
+await test('workers talk through Verifold tools, and messages reach a task with its next turn', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  const prior = await tasks.create({
+    ...fields,
+    title: 'Prior art',
+    inputs: '',
+    writable: 'results/prior',
+    output: 'results/prior/notes.md',
+  });
+  const review = await tasks.create({
+    ...fields,
+    title: 'Method review',
+    inputs: '',
+    writable: 'results/review',
+    output: 'results/review/notes.md',
+    dependencies: [prior],
+  });
+  const other = await tasks.create({
+    ...fields,
+    title: 'Unrelated',
+    inputs: '',
+    writable: 'results/other',
+    output: 'results/other/notes.md',
+  });
+  await tasks.start(prior);
+  await turn(tasks, sessions, { 'results/prior/notes.md': 'prior art\n' });
+  await tasks.accept(prior, 1, ['results/prior/notes.md']);
+  await tasks.start(review);
+  const tools = sessions.started.at(-1)?.tools;
+  assert.ok(tools);
+  assert.deepEqual(
+    tools.specs.map((spec) => spec.name),
+    ['verifold_post', 'verifold_block', 'verifold_object', 'verifold_withdraw'],
+  );
+  const call = (name: string, input: unknown, id: string) =>
+    tools.call(name, input, id);
+
+  // The pipe names the sender. A worker reaches only linked tasks, the coordinator, and the person.
+  assert.deepEqual(
+    await call('verifold_post', { to: other, text: 'Hi' }, 'c1'),
+    {
+      ok: false,
+      text: 'Send to "coordinator", "person", or a linked task: task-1.',
+    },
+  );
+  const posted = await call(
+    'verifold_post',
+    { to: prior, text: 'Which benchmark did you use?' },
+    'c2',
+  );
+  assert.equal(posted.ok, true);
+  assert.match(
+    posted.text,
+    /Recorded m-1\. task-1 receives it with its next turn/,
+  );
+  // A repeated call adds nothing.
+  assert.match(
+    (await call('verifold_post', { to: prior, text: 'Again' }, 'c2')).text,
+    /recorded this call as m-1/,
+  );
+  // An objection needs a version that this task received, and evidence.
+  assert.match(
+    (
+      await call(
+        'verifold_object',
+        { task: prior, version: 7, text: 'Wrong', evidence: ['a'] },
+        'c3',
+      )
+    ).text,
+    /received: task-1 version 1/,
+  );
+  assert.match(
+    (
+      await call(
+        'verifold_object',
+        { task: prior, version: 1, text: 'Wrong', evidence: [] },
+        'c4',
+      )
+    ).text,
+    /1 to 10 items of evidence/,
+  );
+  assert.equal(
+    (
+      await call(
+        'verifold_object',
+        {
+          task: prior,
+          version: 1,
+          text: 'The baseline omits the 2024 benchmark.',
+          evidence: [
+            'https://example.org/benchmark',
+            'results/review/check.md',
+          ],
+        },
+        'c5',
+      )
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (await call('verifold_block', { text: 'I need GPU access.' }, 'c6')).ok,
+    true,
+  );
+  let messages = await tasks.messageList();
+  assert.deepEqual(
+    messages.map((message) => [
+      message.id,
+      message.from,
+      message.to,
+      message.kind,
+      message.status ?? null,
+      message.delivery,
+    ]),
+    [
+      ['m-1', review, prior, 'note', null, 'queued'],
+      ['m-2', review, prior, 'objection', 'open', 'queued'],
+      ['m-3', review, 'coordinator', 'blocker', 'open', 'queued'],
+    ],
+  );
+  const claim = (await tasks.get(review))?.claim?.id;
+  assert.equal(messages[1]?.sender?.claim, claim);
+  assert.equal(messages[0]?.revision, 1);
+
+  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
+    session: null,
+    controllable: true,
+    tasks: {
+      list: await tasks.list(),
+      selected: await tasks.get(review),
+      idle: [],
+      messages,
+    },
+  }).html;
+  assert.match(
+    html,
+    /Needs you[\s\S]*m-2[\s\S]*data-message="m-2" data-decision="upheld">Uphold[\s\S]*data-message="m-2" data-decision="overruled">Overrule[\s\S]*data-message="m-3" data-decision="resolved">Resolve/,
+  );
+  assert.match(html, /<li>https:\/\/example\.org\/benchmark<\/li>/);
+  assert.match(html, /Messages \(3\)/);
+  assert.match(html, /Waits for the coordinator/);
+  assert.match(
+    html,
+    /data-action="task-message" data-task="task-2" data-to="task-2"/,
+  );
+
+  // The person decides the objection. The decision goes to the objector with its next turn.
+  await assert.rejects(
+    tasks.decideMessage('m-2', 'resolved', 'x'),
+    /Choose a decision/,
+  );
+  await tasks.decideMessage('m-2', 'upheld', 'The 2024 benchmark is needed.');
+  await tasks.decideMessage('m-3', 'resolved', 'No GPU in this stage.');
+  await turn(tasks, sessions, { 'results/review/notes.md': 'review\n' });
+  // After the turn, the attempt is not running, so its tools change nothing.
+  assert.match(
+    (await call('verifold_post', { to: prior, text: 'Late' }, 'c7')).text,
+    /no longer current/,
+  );
+  await tasks.askForChanges(review, 'Check the benchmark list.');
+  assert.match(
+    sessions.sent.at(-1) ?? '',
+    /Messages for this task[\s\S]*- m-4 from person \(decision\): The person upheld objection m-2: The 2024 benchmark is needed\.[\s\S]*- m-5 from person \(decision\)/,
+  );
+  messages = await tasks.messageList();
+  assert.deepEqual(
+    messages.slice(3).map((message) => message.delivery),
+    ['sent', 'sent'],
+  );
+  await turn(tasks, sessions, { 'results/review/notes.md': 'review 2\n' });
+  messages = await tasks.messageList();
+  assert.deepEqual(
+    messages.slice(3).map((message) => message.delivery),
+    ['delivered', 'delivered'],
+  );
+
+  // The prior-art task receives its note and the objection when it runs again.
+  await tasks.edit(prior, {
+    ...fields,
+    title: 'Prior art',
+    inputs: '',
+    writable: 'results/prior',
+    output: 'results/prior/notes.md',
+    reason: 'Objection m-2 was upheld.',
+  });
+  await tasks.post(prior, 'Add the 2024 benchmark.');
+  await tasks.start(prior);
+  assert.match(
+    sessions.started.at(-1)?.prompt ?? '',
+    /- m-1 from task-2: Which benchmark[\s\S]*- m-2 from task-2 \(objection\), about task-1 version 1: The baseline omits the 2024 benchmark\. Evidence: https:\/\/example\.org\/benchmark; results\/review\/check\.md[\s\S]*- m-6 from person: Add the 2024 benchmark\./,
+  );
+  // A failed turn leaves its messages uncertain. Verifold does not send them again.
+  const started = sessions.started.at(-1);
+  assert.ok(started);
+  sessions.waiting.add(`S${sessions.started.length}`);
+  await tasks.turnEnded(started.task, 'failed');
+  messages = await tasks.messageList();
+  assert.deepEqual(
+    messages
+      .filter((message) => message.to === prior)
+      .map((message) => message.delivery),
+    ['uncertain', 'uncertain', 'uncertain'],
+  );
+  await tasks.askForChanges(prior, 'Try again.');
+  assert.doesNotMatch(sessions.sent.at(-1) ?? '', /Messages for this task/);
 });
 
 await test('failed allocation and failed starts keep evidence and release the claim', async (t) => {

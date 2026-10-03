@@ -1,4 +1,3 @@
-import type { HarnessName } from './harness.ts';
 import type { Terminal } from './terminals.ts';
 import {
   loadPaused,
@@ -85,13 +84,9 @@ export class SessionPool {
     return slot.view()?.record.id ?? fail('The session did not start.');
   }
 
-  startTask(input: {
-    readonly host: HarnessName;
-    readonly model?: string;
-    readonly prompt: string;
-    readonly cwd: string;
-    readonly task: { readonly id: string; readonly claim: string };
-  }): Promise<string> {
+  startTask(
+    input: Parameters<SessionManager['startTask']>[0],
+  ): Promise<string> {
     return this.free().startTask(input);
   }
 
