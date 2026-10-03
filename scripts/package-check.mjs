@@ -54,6 +54,9 @@ try {
           'dist-cli/cli/symbol.webp',
           'dist-cli/cli/vendor/purify.js',
           'dist-cli/cli/vendor/purify.LICENSE.txt',
+          'dist-cli/cli/vendor/xterm.js',
+          'dist-cli/cli/vendor/xterm.css',
+          'dist-cli/cli/vendor/xterm.LICENSE.txt',
           'package.json',
           'README.md',
           'LICENSE',
@@ -63,10 +66,14 @@ try {
     ),
   );
   // Runtime dependencies come from the locked node_modules, so the install stays offline.
+  // The terminal library is optional. Its prebuilt package for this platform comes along.
+  const source = JSON.parse(await readFile('package.json', 'utf8'));
   const dependencies = [];
-  for (const name of Object.keys(
-    JSON.parse(await readFile('package.json', 'utf8')).dependencies ?? {},
-  )) {
+  for (const name of [
+    ...Object.keys(source.dependencies ?? {}),
+    ...Object.keys(source.optionalDependencies ?? {}),
+    `@lydell/node-pty-${process.platform}-${process.arch}`,
+  ]) {
     const dependency = run(
       'npm',
       [
@@ -112,8 +119,31 @@ try {
   assert.equal(metadata.license, 'MIT');
   assert.equal(metadata.private, undefined);
   assert.equal(metadata.publishConfig.registry, 'https://registry.npmjs.org/');
-  // The desk renders harness Markdown with marked. DOMPurify ships as a vendored file.
+  // The desk renders harness Markdown with marked. DOMPurify and xterm.js ship as vendored files.
   assert.deepEqual(Object.keys(metadata.dependencies ?? {}), ['marked']);
+  // Terminal panes need the prebuilt PTY library. No install script builds it.
+  assert.deepEqual(Object.keys(metadata.optionalDependencies ?? {}), [
+    '@lydell/node-pty',
+  ]);
+  const pty = JSON.parse(
+    await readFile(
+      join(directory, 'node_modules', '@lydell', 'node-pty', 'package.json'),
+      'utf8',
+    ),
+  );
+  for (const script of ['preinstall', 'install', 'postinstall'])
+    assert.equal(pty.scripts?.[script], undefined);
+  const shell = run(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      "const { spawn } = await import('@lydell/node-pty'); const term = spawn('/bin/sh', ['-c', 'echo pty-ok'], {}); let out = ''; term.onData((d) => { out += d; }); term.onExit(() => { console.log(out.trim()); });",
+    ],
+    directory,
+  );
+  assert.equal(shell.status, 0, shell.stderr);
+  assert.match(shell.stdout, /pty-ok/);
   for (const script of ['preinstall', 'install', 'postinstall', 'prepare'])
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
