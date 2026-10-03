@@ -97,7 +97,7 @@ await test('bare verifold sets up a new project in the desk and opens the projec
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
   let interview = 0;
   const harness = (request: HarnessRequest): Promise<HarnessResult> => {
-    request.onActivity?.('Claude Code requested WebSearch.');
+    request.onActivity?.('Claude Code requested WebSearch.', 'event');
     if (request.prompt.includes('\nTopic: '))
       return Promise.resolve({
         text: JSON.stringify({

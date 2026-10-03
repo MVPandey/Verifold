@@ -27,7 +27,7 @@ import { TranscriptFile } from '../src/cli/transcript.ts';
 import { codexCommand } from '../src/cli/session-hosts.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
-import { runCli, terminalInput } from '../src/cli/commands.ts';
+import { feedLine, runCli, terminalInput } from '../src/cli/commands.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 
 /** A fake Claude Code that speaks the stream-json control protocol. */
@@ -986,6 +986,19 @@ await test('the desk escapes harness text and removes direction controls', async
     );
     assert.equal(html.includes('‮'), false);
   });
+});
+
+await test('the terminal feed leaves harness tool events to the desk', () => {
+  const at = '2026-10-02T12:00:00.000Z';
+  assert.equal(feedLine({ at, kind: 'tool', text: 'Bash: ls' }), null);
+  assert.match(
+    feedLine({ at, kind: 'request', text: 'R1 Bash: curl' }) ?? '',
+    /R1 Bash: curl/,
+  );
+  assert.match(
+    feedLine({ at, kind: 'status', text: 'The turn ended.' }) ?? '',
+    /The turn ended/,
+  );
 });
 
 await test('terminal answers need an unambiguous request and never become follow-ups', async () => {

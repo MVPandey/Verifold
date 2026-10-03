@@ -15,7 +15,12 @@ import { randomUUID } from 'node:crypto';
 import { stripVTControlCharacters } from 'node:util';
 import type { CliIO } from './commands.ts';
 import { choose, withActivity } from './choices.ts';
-import { runHarness, validateModel, type HarnessName } from './harness.ts';
+import {
+  activityProgress,
+  runHarness,
+  validateModel,
+  type HarnessName,
+} from './harness.ts';
 import { object, text } from './research-contracts.ts';
 import { researchInterview } from './onboarding.ts';
 import { contextFiles } from './context-files.ts';
@@ -402,7 +407,7 @@ export async function personalize(
             ...agency,
             cwd,
             signal,
-            onActivity: (message) => io.progress?.(message, 'tool'),
+            onActivity: activityProgress(io.progress),
             prompt: `${await loadPrompt('profile-history')}\nSelected source: ${JSON.stringify(source)}`,
           }),
       );
@@ -426,7 +431,7 @@ export async function personalize(
             ...agency,
             cwd,
             signal,
-            onActivity: (message) => io.progress?.(message, 'tool'),
+            onActivity: activityProgress(io.progress),
             prompt: `${await loadPrompt('profile-summary')}\nSource path: ${JSON.stringify(source)}\nSource text (JSON string): ${JSON.stringify(content)}`,
           }),
       );
