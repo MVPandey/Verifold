@@ -793,6 +793,7 @@ export class SessionManager {
         '--resume',
         native,
         ...(record.model ? ['--model', record.model] : []),
+        '--strict-mcp-config',
         '--permission-mode',
         record.mode === 'auto' ? 'auto' : strict ? 'dontAsk' : 'default',
         ...(strict ? ['--settings', strictClaudeSettings] : []),

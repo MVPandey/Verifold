@@ -12,6 +12,8 @@ Verifold starts the selected `claude` or `codex` executable from the user's PATH
 
 The selected harness owns models, tool permissions, configured extensions, and its session data. Its normal startup can load project or user configuration. Verifold does not sandbox the harness or override its permission policy.
 
+Workers that the project owner starts, including task sessions and their terminals, load no MCP server from the user's configuration. Claude Code workers start with `--strict-mcp-config`, which also removes plugin MCP servers and claude.ai connectors. Plugin skills and hooks still load. Codex workers start each thread with plugins, connected apps, and each configured MCP server turned off. If Codex does not report its configuration, the worker stops. Research, setup, and harness use outside Verifold keep the user's configuration. A new conversation that the person starts inside a Codex terminal is outside this rule.
+
 Model providers and research tools can receive project prompts according to the harness configuration. Local project storage does not imply offline execution.
 
 Source links and model reports are untrusted data. Valid JSON and a successful subprocess do not establish scientific correctness or source authenticity.

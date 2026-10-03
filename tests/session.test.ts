@@ -111,6 +111,11 @@ onLine((line) => {
     out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
   };
   if (message.method === 'initialize') out({ id: message.id, result: {} });
+  // The user's configuration has one MCP server, which a worker must not load.
+  else if (message.method === 'config/read') {
+    if (fs.existsSync('config-fails')) return out({ id: message.id, error: { code: -32000, message: 'Config unavailable' } });
+    out({ id: message.id, result: { config: { model: 'gpt-x', mcp_servers: { mail: { command: 'mail-mcp' } } } } });
+  }
   else if (message.method === 'thread/resume') {
     reviewer = message.params.approvalsReviewer;
     out({ id: message.id, result: { thread: { id: message.params.threadId }, model: 'fake-codex', approvalsReviewer: reviewer } });
@@ -398,6 +403,7 @@ await test('Claude Code requests reach the person, and the answer returns to the
       '--verbose',
       '--permission-prompt-tool',
       'stdio',
+      '--strict-mcp-config',
       '--permission-mode',
       'default',
       '--session-id',
@@ -584,7 +590,15 @@ await test('Codex Ask me sends approvals to the person, not a reviewer agent', a
       approvalPolicy: 'on-request',
       sandbox: 'workspace-write',
       approvalsReviewer: 'user',
+      config: {
+        features: { plugins: false, apps: false },
+        mcp_servers: { mail: { enabled: false } },
+      },
     });
+    assert.deepEqual(
+      rpc.find((message) => message.method === 'config/read')?.params,
+      { cwd: root },
+    );
     assert.deepEqual(
       rpc.find((message) => message.id === 7),
       { id: 7, result: { decision: 'accept' } },
@@ -835,6 +849,29 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     assert.ok(
       failed.events.some((event) => event.text.includes('Unknown model')),
     );
+
+    // Without the user's configuration, Verifold cannot turn off its MCP servers, so no thread starts.
+    const starts = async (): Promise<number> =>
+      (
+        (await readFile(join(root, 'rpc.jsonl'), 'utf8')).match(
+          /"method":"thread\/start"/g,
+        ) ?? []
+      ).length;
+    const before = await starts();
+    await writeFile(join(root, 'config-fails'), '');
+    const unconfigured = create();
+    await unconfigured.start({ host: 'codex', mode: 'ask', prompt: 'x' });
+    const unread = await until(
+      unconfigured,
+      (current) => current.status === 'failed',
+    );
+    assert.ok(
+      unread.events.some((event) =>
+        event.text.includes('Codex rejected config/read'),
+      ),
+    );
+    assert.equal(await starts(), before);
+    await rm(join(root, 'config-fails'));
 
     const slow = create();
     await slow.start({
