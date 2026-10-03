@@ -8,6 +8,7 @@ const observationLabel = requiredElement(document, '#observation', HTMLElement);
 const actionLabel = requiredElement(document, '#action-status', HTMLElement);
 let selected: string | undefined;
 let selectedTask: string | undefined;
+let selectedWorker: string | undefined;
 /** The diff that the review pane shows, kept across page renders. */
 let shownDiff:
   | {
@@ -28,6 +29,7 @@ try {
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
+  selectedWorker = sessionStorage.getItem('verifold-desk-worker') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
 } catch {
   /* The original fragment still supports reload when storage is unavailable. */
@@ -74,6 +76,8 @@ async function refresh(): Promise<void> {
   const query = new URLSearchParams();
   if (wanted) query.set('attempt', wanted);
   if (wantedTask) query.set('task', wantedTask);
+  // A worker that left its slot is not an error. The server shows another one.
+  if (selectedWorker) query.set('worker', selectedWorker);
   try {
     const response = await fetch(
       `/api/view${query.size ? `?${query.toString()}` : ''}`,
@@ -435,26 +439,28 @@ async function act(button: HTMLElement): Promise<void> {
           prompt: field('session-prompt'),
         }
       : action === 'send'
-        ? { action, text: field('follow-up') }
-        : action === 'answer'
-          ? {
-              action,
-              request: button.dataset.request,
-              decision: button.dataset.decision,
-            }
-          : action === 'review'
-            ? { action, command: button.dataset.command }
-            : action === 'resume' || action === 'restart'
-              ? { action, session: button.dataset.session }
-              : action === 'select'
-                ? { action, idea: button.dataset.idea }
-                : action === 'research'
-                  ? researchBody(button.dataset.research)
-                  : action === 'setup'
-                    ? setupBody(button)
-                    : action?.startsWith('task-')
-                      ? taskRequest(button)
-                      : { action };
+        ? { action, session: button.dataset.session, text: field('follow-up') }
+        : action === 'cancel' || action === 'end'
+          ? { action, session: button.dataset.session }
+          : action === 'answer'
+            ? {
+                action,
+                request: button.dataset.request,
+                decision: button.dataset.decision,
+              }
+            : action === 'review'
+              ? { action, command: button.dataset.command }
+              : action === 'resume' || action === 'restart'
+                ? { action, session: button.dataset.session }
+                : action === 'select'
+                  ? { action, idea: button.dataset.idea }
+                  : action === 'research'
+                    ? researchBody(button.dataset.research)
+                    : action === 'setup'
+                      ? setupBody(button)
+                      : action?.startsWith('task-')
+                        ? taskRequest(button)
+                        : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -552,6 +558,15 @@ document.addEventListener('click', (event) => {
     void refresh();
   }
   if (target.dataset.diff) void loadDiff(target);
+  if (target.dataset.worker) {
+    selectedWorker = target.dataset.worker;
+    try {
+      sessionStorage.setItem('verifold-desk-worker', selectedWorker);
+    } catch {
+      /* Selection still lasts until reload when browser storage is unavailable. */
+    }
+    void refresh();
+  }
   if (target.dataset.attempt) {
     selected = target.dataset.attempt;
     try {

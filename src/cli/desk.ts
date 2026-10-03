@@ -19,8 +19,9 @@ import type { ResearchReport } from './research.ts';
 import {
   SessionActionError,
   sessionTranscript,
-  type SessionManager,
+  validSessionId,
 } from './session.ts';
+import type { SessionPool } from './workers.ts';
 import { TranscriptFile, type TranscriptLog } from './transcript.ts';
 import { markdownHtml } from './markdown.ts';
 import type { ResearchRunner } from './research-runner.ts';
@@ -39,7 +40,7 @@ export interface DeskServer {
   /** Switch a setup desk to the project that setup created. */
   attach(
     root: string,
-    sessions: SessionManager,
+    sessions: SessionPool,
     research: ResearchRunner,
     tasks: TaskManager,
   ): Promise<void>;
@@ -126,7 +127,7 @@ async function taskAction(
 
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
-  sessions: SessionManager | undefined,
+  sessions: SessionPool | undefined,
   research: ResearchRunner | undefined,
   setup: SetupBridge | undefined,
   tasks: TaskManager | undefined,
@@ -186,13 +187,13 @@ async function act(
       await sessions.restart(body.session);
       return 200;
     case 'send':
-      sessions.send(body.text);
+      sessions.send(body.session, body.text);
       return 200;
     case 'cancel':
-      sessions.cancel();
+      sessions.cancel(body.session);
       return 200;
     case 'end':
-      sessions.end();
+      sessions.end(body.session);
       return 200;
     case 'answer':
       if (body.decision !== 'allow' && body.decision !== 'deny')
@@ -215,7 +216,7 @@ export async function startDesk(
   root: string | null,
   signal: AbortSignal,
   assetsRoot: URL = new URL('./', import.meta.url),
-  sessions?: SessionManager,
+  sessions?: SessionPool,
   research?: ResearchRunner,
   setup?: SetupBridge,
   tasks?: TaskManager,
@@ -499,14 +500,17 @@ export async function startDesk(
     }
     const selected = url.searchParams.get('attempt') ?? undefined;
     const chosenTask = url.searchParams.get('task') ?? undefined;
+    const chosenWorker = url.searchParams.get('worker') ?? undefined;
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
       (chosenTask !== undefined && !validTaskId(chosenTask)) ||
+      (chosenWorker !== undefined && !validSessionId(chosenWorker)) ||
       [...url.searchParams.keys()].some(
-        (key) => key !== 'attempt' && key !== 'task',
+        (key) => !['attempt', 'task', 'worker'].includes(key),
       ) ||
-      url.searchParams.getAll('attempt').length > 1 ||
-      url.searchParams.getAll('task').length > 1
+      ['attempt', 'task', 'worker'].some(
+        (key) => url.searchParams.getAll(key).length > 1,
+      )
     ) {
       response.writeHead(400).end();
       return;
@@ -554,9 +558,18 @@ export async function startDesk(
           /* Missing or unsafe reports remain unavailable. */
         }
       }
+      const workers = sessions?.views() ?? [];
+      // A worker that left its slot falls back to a live one, then to the first.
+      const worker =
+        workers.find((view) => view.record.id === chosenWorker) ??
+        workers.find((view) => view.live) ??
+        workers[0] ??
+        null;
       const body = JSON.stringify(
         renderDesk(snapshot, selected, report, {
-          session: sessions?.view() ?? null,
+          workers,
+          session: worker,
+          full: sessions?.full ?? false,
           controllable: sessions !== undefined,
           paused: sessions?.paused() ?? [],
           ...(research ? { research: research.view() } : {}),
@@ -565,7 +578,9 @@ export async function startDesk(
                 tasks: {
                   list: taskList,
                   selected: task ?? null,
-                  idleSession: sessions?.idleSession() ?? null,
+                  idle: workers
+                    .filter((view) => sessions?.idle(view.record.id))
+                    .map((view) => view.record.id),
                 },
               }
             : {}),
