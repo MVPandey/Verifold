@@ -91,6 +91,7 @@ class FakeSessions implements TaskSessions {
     prompt: string;
     task: { id: string; claim: string };
     tools?: AgentTools;
+    network?: readonly string[];
   }[] = [];
   sent: string[] = [];
   ended = 0;
@@ -102,6 +103,7 @@ class FakeSessions implements TaskSessions {
     prompt: string;
     task: { id: string; claim: string };
     tools?: AgentTools;
+    network?: readonly string[];
   }): Promise<string> {
     if (this.failStart)
       return Promise.reject(new Error('claude is not installed'));
@@ -724,6 +726,59 @@ await test('one turn carries at most 20 messages, each one short, so a change re
       deliveries.filter((delivery) => delivery === 'queued').length,
     ],
     [20, 5],
+  );
+});
+
+await test('a task names the domains its shell commands may reach, and why', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  for (const [network, error] of [
+    [{ domains: 'not a domain', reason: 'x' }, /not a domain name/],
+    [{ domains: '*', reason: 'x' }, /not a domain name/],
+    [
+      { domains: 'data.example.org', reason: ' ' },
+      /reason that the task needs the network/,
+    ],
+  ] as const)
+    await assert.rejects(tasks.create({ ...fields, network }), error);
+  const plain = await tasks.create({
+    ...fields,
+    network: { domains: '\n', reason: '' },
+  });
+  assert.equal((await tasks.get(plain))?.assignment.network, null);
+  const id = await tasks.create({
+    ...fields,
+    writable: 'data',
+    output: 'data/graph.gr',
+    network: {
+      domains: 'Data.Example.org\n*.zenodo.org\ndata.example.org',
+      reason: 'Download the road graph.',
+    },
+  });
+  const task = (await tasks.get(id)) as TaskRecord;
+  assert.deepEqual(task.assignment.network, {
+    domains: ['data.example.org', '*.zenodo.org'],
+    reason: 'Download the road graph.',
+  });
+  await tasks.start(id);
+  const started = sessions.started.at(-1);
+  assert.deepEqual(started?.network, ['data.example.org', '*.zenodo.org']);
+  assert.match(
+    started?.prompt ?? '',
+    /Network: shell commands can reach data\.example\.org, \*\.zenodo\.org\./,
+  );
+  assert.ok(
+    (await tasks.get(id))?.attempts[0]?.restrictions.includes(
+      'Shell commands can reach only these domains: data.example.org, *.zenodo.org (Claude Code sandbox).',
+    ),
+  );
+  // A task without domains has no network for its shell commands.
+  await tasks.start(plain);
+  assert.equal(sessions.started.at(-1)?.network, undefined);
+  assert.match(
+    sessions.started.at(-1)?.prompt ?? '',
+    /Network: shell commands cannot reach the network\./,
   );
 });
 
