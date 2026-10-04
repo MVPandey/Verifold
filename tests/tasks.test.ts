@@ -55,7 +55,7 @@ async function project(
   gitProject = true,
 ): Promise<string> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'verifold-tasks-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   await changeWorkspace(root, () => ({
     schemaVersion: 1,
     visibility: 'private',
