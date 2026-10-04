@@ -202,6 +202,8 @@ export async function openTerminal(input: {
   readonly cwd: string;
   readonly owner: string;
   readonly onExit: (code: number) => void;
+  /** Variables that the harness needs in addition to its usual environment. */
+  readonly env?: Readonly<Record<string, string>>;
 }): Promise<Terminal> {
   if (!validLease(input.owner)) fail('The view sent an invalid input lease.');
   const pty = await ptyLibrary();
@@ -211,7 +213,7 @@ export async function openTerminal(input: {
     cols: 100,
     rows: 30,
     cwd: input.cwd,
-    env: { ...harnessEnvironment(), TERM: 'xterm-256color' },
+    env: { ...harnessEnvironment(), ...input.env, TERM: 'xterm-256color' },
   });
   return new Terminal(process, input.owner, input.onExit);
 }
