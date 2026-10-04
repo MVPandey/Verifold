@@ -15,6 +15,7 @@ import { processStart, stopRecordedProcess } from './owner.ts';
 import { openTerminal, type Terminal } from './terminals.ts';
 import {
   startHostSession,
+  strictClaudeEnvironment,
   strictClaudeSettings,
   type AgentTools,
   type HostEvent,
@@ -738,6 +739,10 @@ export class SessionManager {
   private readonly requests: { next: number };
   /** A launch is saving its record. No second start can begin. */
   private launching = false;
+  /** Each close adds one. A start that began before a close starts no harness after it. */
+  private generation = 0;
+  /** The launch in progress, so close can wait for it. */
+  private inflight: Promise<void> = Promise.resolve();
   /** Verifold's tools for the agent of the current session. Each launch of the session gets them again. */
   private tools: AgentTools | undefined;
   /** The current launch sent a first request, so a turn runs when the harness reports its session. */
@@ -857,6 +862,9 @@ export class SessionManager {
         args,
         cwd: record.cwd ? join(this.root, record.cwd) : this.root,
         owner: lease,
+        ...(strict && record.host === 'claude'
+          ? { env: strictClaudeEnvironment }
+          : {}),
         onExit: () => {
           if (terminal) this.terminalEnded(terminal);
         },
@@ -995,6 +1003,7 @@ export class SessionManager {
 
   /** Continue a paused session in a new harness process. A coordinator gets its tools again. */
   async resume(id: unknown, tools?: AgentTools): Promise<void> {
+    const generation = this.generation;
     this.ready();
     const saved =
       typeof id === 'string' && validSessionId(id)
@@ -1013,7 +1022,7 @@ export class SessionManager {
       'status',
       'Verifold resumes this session in a new process. The events above come from the earlier launch.',
     );
-    await this.launch();
+    await this.launch(undefined, generation);
     this.pausedList = this.pausedList.filter((entry) => entry.id !== saved.id);
   }
 
@@ -1023,6 +1032,7 @@ export class SessionManager {
    * refuses the launch if that conversation exists after all.
    */
   async restart(id: unknown): Promise<void> {
+    const generation = this.generation;
     this.ready();
     const saved =
       typeof id === 'string' && validSessionId(id)
@@ -1050,7 +1060,7 @@ export class SessionManager {
       'status',
       'No conversation was recorded, so Verifold runs the first request again.',
     );
-    await this.launch(prompt);
+    await this.launch(prompt, generation);
     this.pausedList = this.pausedList.filter((entry) => entry.id !== saved.id);
   }
 
@@ -1143,6 +1153,9 @@ export class SessionManager {
 
   /** Pause a live session and wait for its record. Returns false when the last save failed. */
   async close(): Promise<boolean> {
+    this.generation++;
+    // A launch, for example after a terminal, can still be saving its record. It must not start a harness after this.
+    await this.inflight;
     this.pause();
     while (this.writing) await this.writing;
     await this.transcript?.writer.flushed();
@@ -1178,7 +1191,16 @@ export class SessionManager {
   }
 
   /** Save the launch, then start the harness. A launch that cannot be saved does not start. */
-  private async launch(prompt?: string): Promise<void> {
+  private launch(prompt?: string, generation = this.generation): Promise<void> {
+    const run = this.launchNow(prompt, generation);
+    this.inflight = run.catch(() => {});
+    return run;
+  }
+
+  private async launchNow(
+    prompt: string | undefined,
+    generation: number,
+  ): Promise<void> {
     const record = this.current;
     if (!record) return;
     const launch: SessionLaunch = {
@@ -1211,6 +1233,19 @@ export class SessionManager {
       );
       this.transcript = { writer, apply: writer.run() };
       if (prompt !== undefined) this.transcript.apply(requestUpdate(prompt));
+      // Verifold closed while this start waited, so the session stops as a pause would stop it.
+      if (generation !== this.generation) {
+        this.patch((current) => ({
+          ...current,
+          status:
+            current.nativeSessionId !== null && !current.task
+              ? 'paused'
+              : 'ended',
+          endedAt: new Date().toISOString(),
+          launches: ended(current.launches),
+        }));
+        return;
+      }
       const executable = this.options.executables?.[record.host];
       const native = record.nativeSessionId;
       this.prompted = prompt !== undefined;

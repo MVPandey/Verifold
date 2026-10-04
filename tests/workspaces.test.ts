@@ -209,6 +209,10 @@ await test('a folder workspace uses its own Git data, and deletions apply', asyn
   assert.ok(existsSync(join(root, '.verifold/tasks/git/task-2-r1-a1')));
   await write(target, 'out/a.txt', 'a, by the agent\n');
   await rm(join(target, 'out/b.txt'));
+  // Caches that tools write stay out of the version, even inside writable paths.
+  await write(target, 'out/__pycache__/m.cpython-312.pyc', 'cache');
+  await write(target, 'out/.DS_Store', 'cache');
+  await write(target, 'lib/__pycache__/x.cpython-312.pyc', 'cache');
   const version = await commitVersion(root, workspace, ['out'], 'Version 1');
   assert.deepEqual(
     (await changes(root, workspace, workspace.start, version.commit)).map(

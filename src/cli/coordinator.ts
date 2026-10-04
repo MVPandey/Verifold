@@ -286,6 +286,11 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       const state = this.current();
       if (state.stoppedAt || state.planApproved)
         fail('No task plan waits for your approval.');
+      const status = this.sessions.view()?.record.status;
+      if (status === 'running' || status === 'starting')
+        fail(
+          'The coordinator is still making its plan. Approve it when its turn ends.',
+        );
       await this.save({ ...state, planApproved: true });
     }).then(() =>
       this.notify({
