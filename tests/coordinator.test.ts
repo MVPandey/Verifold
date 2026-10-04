@@ -159,7 +159,7 @@ async function team(
   owned.coordinator = coordinator;
   t.after(async () => {
     await coordinator.close();
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
   });
   const lines = async (file: string): Promise<string[]> =>
     (await readFile(join(root, file), 'utf8').catch(() => ''))
