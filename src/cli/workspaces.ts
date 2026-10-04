@@ -239,6 +239,14 @@ async function startFiles(
  * count too, so output in an ignored folder is kept. Files above the size limit
  * stay out of the commit and are listed.
  */
+/** Caches that tools write as a side effect. A version leaves them out, even inside writable paths. */
+const caches = [
+  '**/__pycache__/**',
+  '**/*.py[co]',
+  '**/.ipynb_checkpoints/**',
+  '**/.DS_Store',
+].map((pattern) => `:(exclude,glob)${pattern}`);
+
 async function commitAll(
   target: string,
   writable: readonly string[],
@@ -280,7 +288,10 @@ async function commitAll(
     const stats = await lstat(join(target, file)).catch(() => null);
     if (stats?.isFile() && stats.size > limits.fileBytes) skipped.push(file);
   }
-  const exclude = skipped.map((file) => `:(exclude,literal)${file}`);
+  const exclude = [
+    ...skipped.map((file) => `:(exclude,literal)${file}`),
+    ...caches,
+  ];
   await git(target, ['add', '--all', '--', '.', ...exclude]);
   if (forced.length)
     await git(target, ['add', '--all', '--force', '--', ...forced, ...exclude]);
@@ -567,7 +578,18 @@ export async function release(
   const target = join(root, workspace.path);
   if ((await lstat(target).catch(() => null)) === null) return true;
   try {
-    if ((await list(target, ['status', '--porcelain', '-z'])).length)
+    if (
+      (
+        await list(target, [
+          'status',
+          '--porcelain',
+          '-z',
+          '--',
+          '.',
+          ...caches,
+        ])
+      ).length
+    )
       return false;
     if (workspace.kind === 'git')
       await git(root, ['worktree', 'remove', target]);
