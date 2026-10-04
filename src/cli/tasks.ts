@@ -13,7 +13,11 @@ import { dirname, join } from 'node:path';
 import { validateModel, type HarnessName } from './harness.ts';
 import { messageLimits, Messages, type Message } from './messages.ts';
 import { loadPrompt } from './prompts.ts';
-import type { AgentTool, AgentTools } from './session-hosts.ts';
+import {
+  validDomain,
+  type AgentTool,
+  type AgentTools,
+} from './session-hosts.ts';
 import { hostName, SessionActionError } from './session.ts';
 import {
   allocate,
@@ -71,6 +75,11 @@ export interface Assignment {
   /** The time limit for one harness turn. */
   readonly minutes: number;
   readonly dependencies: readonly string[];
+  /** The domains that shell commands of the task may reach, and why. Absent or null: no network. */
+  readonly network?: {
+    readonly domains: readonly string[];
+    readonly reason: string;
+  } | null;
   /** Absent when the person wrote this revision. */
   readonly by?: 'coordinator';
 }
@@ -183,6 +192,8 @@ export interface TaskInputFields {
   readonly model?: unknown;
   readonly minutes?: unknown;
   readonly dependencies?: unknown;
+  /** `{ domains, reason }`. No domains: no network. */
+  readonly network?: unknown;
 }
 
 /**
@@ -199,6 +210,7 @@ export interface TaskSessions {
     readonly cwd: string;
     readonly task: { readonly id: string; readonly claim: string };
     readonly tools?: AgentTools;
+    readonly network?: readonly string[];
   }): Promise<string>;
   /** The session is live and waits for a follow-up. */
   idle(session: string): boolean;
@@ -464,7 +476,10 @@ export class TaskManager {
             endedAt: null,
             workspace: null,
             session: null,
-            restrictions: restrictions(task.assignment.host),
+            restrictions: restrictions(
+              task.assignment.host,
+              task.assignment.network,
+            ),
             outcome: null,
             note: null,
             versions: [],
@@ -538,6 +553,9 @@ export class TaskManager {
           cwd: join(this.root, workspace.path),
           task: { id: task.id, claim: claim.id },
           tools: this.workerTools({ id: task.id, claim: claim.id }),
+          ...(task.assignment.network
+            ? { network: task.assignment.network.domains }
+            : {}),
         });
       } catch (error) {
         // The harness did not start, so its messages wait for the next turn.
@@ -1525,6 +1543,7 @@ export class TaskManager {
       model: model ?? null,
       minutes,
       dependencies: dependencies.filter(validTaskId),
+      network: network(fields.network),
       ...(by === 'coordinator' ? { by } : {}),
     };
     const file = await open(
@@ -1667,10 +1686,51 @@ function parseAssignment(value: unknown): Assignment | null {
     !Array.isArray(entry.dependencies) ||
     !entry.dependencies.every(validTaskId) ||
     !Array.isArray(entry.inputs) ||
-    !entry.inputs.every(savedFile)
+    !entry.inputs.every(savedFile) ||
+    !(
+      entry.network === undefined ||
+      entry.network === null ||
+      (Array.isArray(object(entry.network)?.domains) &&
+        (object(entry.network)?.domains as unknown[]).every(
+          (domain) => text(domain) && validDomain(domain),
+        ) &&
+        text(object(entry.network)?.reason))
+    )
   )
     return null;
   return entry as unknown as Assignment;
+}
+
+/** The network of a task from its fields: domains, one per line or a list, and why. No domains: none. */
+function network(value: unknown): NonNullable<Assignment['network']> | null {
+  if (value === undefined || value === null) return null;
+  const fields =
+    object(value) ?? fail('Give the network as domains and a reason.');
+  const domains = [
+    ...new Set(
+      (typeof fields.domains === 'string'
+        ? fields.domains.split('\n')
+        : Array.isArray(fields.domains)
+          ? (fields.domains as unknown[])
+          : []
+      )
+        .map((domain) =>
+          typeof domain === 'string' ? domain.trim().toLowerCase() : '',
+        )
+        .filter(Boolean),
+    ),
+  ];
+  if (!domains.length) return null;
+  if (domains.length > 20) fail('List at most 20 domains.');
+  for (const domain of domains)
+    if (!validDomain(domain))
+      fail(
+        `${domain} is not a domain name. Write names like data.example.org or *.example.org.`,
+      );
+  return {
+    domains,
+    reason: line(fields.reason, 'reason that the task needs the network', 500),
+  };
 }
 
 /** A recorded file copy: a project path, its size, and its SHA-256. */
@@ -1932,16 +1992,23 @@ function cycle(
 }
 
 /** What the harness enforces in a strict task session. Reads are never limited. */
-function restrictions(host: HarnessName): string[] {
+function restrictions(host: HarnessName, net: Assignment['network']): string[] {
+  const domains = net?.domains.join(', ');
   return host === 'claude'
     ? [
         'Shell commands can write only in the task folder and in temporary folders (Claude Code sandbox).',
+        domains
+          ? `Shell commands can reach only these domains: ${domains} (Claude Code sandbox).`
+          : 'Shell commands cannot reach the network (Claude Code sandbox).',
         'File tools can edit only in the task folder. Claude Code denies other edits without a prompt (permission rules, dontAsk mode).',
         'Other tools that need permission are denied, except web search and web fetch.',
         'Reads are not limited. The harness can read files outside the task folder.',
       ]
     : [
         'Shell commands and file changes can write only in the task folder and in temporary folders (Codex workspace-write sandbox).',
+        domains
+          ? `Shell commands can reach the network. Codex cannot limit it to the task's domains (${domains}).`
+          : 'Shell commands cannot reach the network (Codex workspace-write sandbox).',
         'Codex asks for no approvals. An action outside the sandbox fails (approval policy never).',
         'Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt.',
         'Reads are not limited. The harness can read files outside the task folder.',
@@ -1974,6 +2041,8 @@ ${assignment.writable.map((path) => `- ${path === '.' ? 'the whole folder' : pat
 
 Expected output:
 ${assignment.output}
+
+Network: ${assignment.network ? `shell commands can reach ${assignment.network.domains.join(', ')}. Download only what the task needs.` : 'shell commands cannot reach the network. Use web search and web fetch to read sources.'}
 
 Time limit for this turn: ${assignment.minutes} minutes.`;
 }

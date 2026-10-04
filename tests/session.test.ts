@@ -1294,3 +1294,69 @@ await test('an interrupted session with no recorded conversation starts again wi
     await assert.rejects(later.restart(idle.id), /cannot start again/);
   });
 });
+
+await test('a task with domains opens only those to its shell commands', async () => {
+  await project(async (root, _executables, create) => {
+    const file = async (path: string): Promise<string> => {
+      for (let tries = 0; tries < 250; tries++) {
+        const text = await readFile(path, 'utf8').catch(() => '');
+        if (text) return text;
+        await delay(20);
+      }
+      throw new Error(`${path} was not written.`);
+    };
+    const folder = (name: string): string =>
+      join(root, '.verifold', 'workspaces', name);
+    await mkdir(folder('net-claude'), { recursive: true });
+    const claude = create();
+    await claude.startTask({
+      host: 'claude',
+      prompt: 'Download the data.',
+      cwd: folder('net-claude'),
+      task: { id: 'task-1', claim: '0123456789abcdef' },
+      network: ['data.example.org', '*.zenodo.org'],
+    });
+    const args = JSON.parse(
+      await file(join(folder('net-claude'), 'args.json')),
+    ) as string[];
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '') as {
+      sandbox: { network?: { allowedDomains: string[] } };
+    };
+    assert.deepEqual(settings.sandbox.network, {
+      allowedDomains: ['data.example.org', '*.zenodo.org'],
+    });
+    assert.deepEqual(claude.view()?.record.network, [
+      'data.example.org',
+      '*.zenodo.org',
+    ]);
+    await claude.close();
+
+    // Codex cannot limit domains, so a task with domains gets the network.
+    await mkdir(folder('net-codex'), { recursive: true });
+    const codex = create();
+    await codex.startTask({
+      host: 'codex',
+      prompt: 'Download the data.',
+      cwd: folder('net-codex'),
+      task: { id: 'task-2', claim: '0123456789abcdef' },
+      network: ['data.example.org'],
+    });
+    let start: { params?: { config?: Record<string, unknown> } } | undefined;
+    for (let tries = 0; tries < 250 && !start; tries++) {
+      start = (
+        await readFile(join(folder('net-codex'), 'rpc.jsonl'), 'utf8').catch(
+          () => '',
+        )
+      )
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { method?: string })
+        .find((message) => message.method === 'thread/start') as typeof start;
+      if (!start) await delay(20);
+    }
+    assert.deepEqual(start?.params?.config?.sandbox_workspace_write, {
+      network_access: true,
+    });
+    await codex.close();
+  });
+});

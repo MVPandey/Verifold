@@ -353,6 +353,10 @@ function taskBody(prefix: string): Record<string, unknown> {
     host: field(`${prefix}-host`),
     model: field(`${prefix}-model`).trim(),
     minutes: field(`${prefix}-minutes`),
+    network: {
+      domains: field(`${prefix}-network`),
+      reason: field(`${prefix}-network-reason`),
+    },
     dependencies: Array.from(
       form?.querySelectorAll<HTMLInputElement>('input[data-dep]:checked') ?? [],
       (box) => box.dataset.dep,
