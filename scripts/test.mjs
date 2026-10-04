@@ -6,7 +6,8 @@ const files = (await readdir('tests'))
 if (!files.length) throw new Error('No test files found');
 const result = spawnSync(
   process.execPath,
-  ['--experimental-strip-types', '--test', ...files],
+  // A test that hangs fails with its name instead of stopping CI at its job limit.
+  ['--experimental-strip-types', '--test', '--test-timeout=180000', ...files],
   { stdio: 'inherit' },
 );
 if (result.error) throw result.error;
