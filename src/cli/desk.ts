@@ -91,6 +91,7 @@ function taskFields(body: Record<string, unknown>): TaskInputFields {
     model: body.model,
     minutes: body.minutes,
     dependencies: body.dependencies,
+    network: body.network,
   };
 }
 

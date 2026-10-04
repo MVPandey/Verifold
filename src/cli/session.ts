@@ -17,6 +17,7 @@ import {
   startHostSession,
   strictClaudeEnvironment,
   strictClaudeSettings,
+  validDomain,
   type AgentTools,
   type HostEvent,
   type HostSession,
@@ -141,6 +142,8 @@ export interface SessionRecord {
   readonly task?: { readonly id: string; readonly claim: string };
   /** The task folder that a task session runs in, relative to the project. */
   readonly cwd?: string;
+  /** A task session: the domains that its shell commands may reach. */
+  readonly network?: readonly string[];
 }
 
 export interface SessionView {
@@ -540,6 +543,13 @@ function parseRecord(value: unknown): SessionRecord | null {
     /^[0-9a-f]{16}$/.test(task.claim)
       ? { task: { id: task.id, claim: task.claim } }
       : {}),
+    ...(Array.isArray(record.network) &&
+    record.network.length <= 20 &&
+    record.network.every(
+      (domain) => typeof domain === 'string' && validDomain(domain),
+    )
+      ? { network: record.network as string[] }
+      : {}),
     ...(typeof record.cwd === 'string' &&
     /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(record.cwd)
       ? { cwd: record.cwd }
@@ -824,7 +834,7 @@ export class SessionManager {
         '--strict-mcp-config',
         '--permission-mode',
         record.mode === 'auto' ? 'auto' : strict ? 'dontAsk' : 'default',
-        ...(strict ? ['--settings', strictClaudeSettings] : []),
+        ...(strict ? ['--settings', strictClaudeSettings(record.network)] : []),
       ];
     else {
       const socket =
@@ -952,6 +962,7 @@ export class SessionManager {
     readonly cwd: string;
     readonly task: { readonly id: string; readonly claim: string };
     readonly tools?: AgentTools;
+    readonly network?: readonly string[];
   }): Promise<string> {
     this.ready();
     const cwd = relative(this.root, input.cwd).split('\\').join('/');
@@ -959,6 +970,7 @@ export class SessionManager {
       ...fresh(input.host, input.model ?? null, 'strict'),
       task: input.task,
       cwd,
+      ...(input.network?.length ? { network: input.network } : {}),
     };
     if (!parseRecord(record)?.cwd)
       fail('A task session needs its task folder.');
@@ -1263,6 +1275,7 @@ export class SessionManager {
             : {}),
         ...(executable ? { executable } : {}),
         ...(this.tools ? { tools: this.tools } : {}),
+        ...(record.network?.length ? { network: record.network } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
       const pid = this.host.pid;

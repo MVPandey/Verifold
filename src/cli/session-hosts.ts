@@ -19,18 +19,32 @@ import {
  */
 export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator';
 
+/** A domain that a task's shell commands may reach: a host name, or `*.` and a domain. */
+export function validDomain(value: string): boolean {
+  return /^(\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(
+    value,
+  );
+}
+
 /**
  * Claude Code settings for a strict task session: shell commands run in the
  * sandbox, file tools may edit only the working folder, and dontAsk mode
- * denies the rest. Probed on Claude Code 2.1.288.
+ * denies the rest. The sandbox blocks the network for shell commands, except
+ * the task's domains. Probed on Claude Code 2.1.288 and 2.1.289.
  */
-export const strictClaudeSettings = JSON.stringify({
-  // Edit(./**) and Write(./**) resolve against Claude Code's current folder. See strictClaudeEnvironment.
-  sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
-  permissions: {
-    allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
-  },
-});
+export function strictClaudeSettings(domains: readonly string[] = []): string {
+  return JSON.stringify({
+    // Edit(./**) and Write(./**) resolve against Claude Code's current folder. See strictClaudeEnvironment.
+    sandbox: {
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      ...(domains.length ? { network: { allowedDomains: domains } } : {}),
+    },
+    permissions: {
+      allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
+    },
+  });
+}
 
 /**
  * The environment of a strict Claude Code session. Claude Code keeps the
@@ -137,6 +151,8 @@ export interface HostOptions {
   readonly executable?: string;
   readonly clientVersion: string;
   readonly tools?: AgentTools;
+  /** A strict task: the domains that its shell commands may reach. Codex cannot limit domains, so any domain opens its network. */
+  readonly network?: readonly string[];
   readonly onEvent: (event: HostEvent) => void;
 }
 
@@ -333,7 +349,7 @@ function claude(options: HostOptions): HostSession {
           ? 'dontAsk'
           : 'default',
       ...(options.mode === 'strict'
-        ? ['--settings', strictClaudeSettings]
+        ? ['--settings', strictClaudeSettings(options.network)]
         : []),
       ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
       ...(options.model ? ['--model', options.model] : []),
@@ -1016,6 +1032,9 @@ function codex(options: HostOptions): HostSession {
               '-c',
               `mcp_servers.${/^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name)}.enabled=false`,
             ]),
+            ...(options.network?.length
+              ? ['-c', 'sandbox_workspace_write.network_access=true']
+              : []),
           ];
         if (!config) {
           emit({
@@ -1056,7 +1075,9 @@ function codex(options: HostOptions): HostSession {
               })),
             }
           : {}),
-        config,
+        config: options.network?.length
+          ? { ...config, sandbox_workspace_write: { network_access: true } }
+          : config,
       },
       (result) => {
         thread = record(result.thread) ? str(result.thread.id) : undefined;
