@@ -97,7 +97,11 @@ interface Call {
   readonly id?: string;
 }
 
-async function team(t: test.TestContext): Promise<{
+/** `debounceMs`: a test that needs events to join one digest gives slow machines more time. */
+async function team(
+  t: test.TestContext,
+  debounceMs = 30,
+): Promise<{
   root: string;
   tasks: TaskManager;
   workers: Workers;
@@ -144,7 +148,7 @@ async function team(t: test.TestContext): Promise<{
   });
   const coordinator = new Coordinator(root, {
     tasks,
-    debounceMs: 30,
+    debounceMs,
     sessions: new SessionManager(root, {
       clientVersion: 'test',
       ownerId: 'owner-1',
@@ -502,7 +506,10 @@ await test('objections, the person, and a stop reach the coordinator as the rule
 });
 
 await test('events that arrive close together join one wakeup, and a resumed coordinator gets them', async (t) => {
-  const { root, tasks, coordinator, script, inputs, turns } = await team(t);
+  const { root, tasks, coordinator, script, inputs, turns } = await team(
+    t,
+    400,
+  );
   await script([[], [], []]);
   await coordinator.start({
     objective: 'Wait.',
@@ -552,7 +559,7 @@ await test('events that arrive close together join one wakeup, and a resumed coo
   });
   const next = new Coordinator(root, {
     tasks: again,
-    debounceMs: 30,
+    debounceMs: 400,
     sessions: new SessionManager(root, {
       clientVersion: 'test',
       ownerId: 'owner-2',
@@ -561,29 +568,33 @@ await test('events that arrive close together join one wakeup, and a resumed coo
     }),
   });
   owned.coordinator = next;
-  t.after(() => next.close());
-  await next.load();
-  assert.equal(next.view()?.state.session, session);
-  // The desk offers Resume for the coordinator of an earlier owner.
-  assert.equal(next.view()?.session?.record.status, 'paused');
-  assert.match(
-    renderDesk(await readDeskSnapshot(root), undefined, null, {
-      session: null,
-      controllable: true,
-      coordinator: next.view(),
-    }).html,
-    /data-action="coordinator-resume">Resume the coordinator/,
-  );
-  await again.post('coordinator', 'Third.');
-  assert.equal(next.view()?.waiting, 1);
-  await next.resume();
-  for (let tries = 0; tries < 200 && (await inputs()).length < 3; tries++)
-    await delay(20);
-  assert.match((await inputs())[2] ?? '', /m-4 from person: "Third\."/);
-  const args = JSON.parse(
-    await readFile(join(root, 'coordinator-args.json'), 'utf8'),
-  ) as string[];
-  assert.equal(args[args.indexOf('--resume') + 1], native);
+  // It closes before the project folder goes, so its harness never outlives the folder.
+  try {
+    await next.load();
+    assert.equal(next.view()?.state.session, session);
+    // The desk offers Resume for the coordinator of an earlier owner.
+    assert.equal(next.view()?.session?.record.status, 'paused');
+    assert.match(
+      renderDesk(await readDeskSnapshot(root), undefined, null, {
+        session: null,
+        controllable: true,
+        coordinator: next.view(),
+      }).html,
+      /data-action="coordinator-resume">Resume the coordinator/,
+    );
+    await again.post('coordinator', 'Third.');
+    assert.equal(next.view()?.waiting, 1);
+    await next.resume();
+    for (let tries = 0; tries < 200 && (await inputs()).length < 3; tries++)
+      await delay(20);
+    assert.match((await inputs())[2] ?? '', /m-4 from person: "Third\."/);
+    const args = JSON.parse(
+      await readFile(join(root, 'coordinator-args.json'), 'utf8'),
+    ) as string[];
+    assert.equal(args[args.indexOf('--resume') + 1], native);
+  } finally {
+    await next.close();
+  }
 });
 
 await test('in Guided research no task starts before the person approves the plan, and two overrules send the next objection to the person', async (t) => {
