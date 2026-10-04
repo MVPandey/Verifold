@@ -516,6 +516,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
               undefined,
             minutes: args.minutes,
             dependencies: args.dependencies,
+            network: args.network,
           },
           'coordinator',
           `Created by the coordinator: ${why()}`,
@@ -545,6 +546,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
               undefined,
             minutes: args.minutes ?? current.minutes,
             dependencies: args.dependencies ?? current.dependencies,
+            network: args.network ?? current.network,
             reason: `The coordinator: ${why()}`,
           },
           'coordinator',
@@ -728,6 +730,17 @@ const reason = {
   description: 'Why you take this action. The person reads it.',
 };
 const paths = { type: 'array', items: { type: 'string' }, maxItems: 20 };
+const network = {
+  type: 'object',
+  description:
+    "The domains that the task's shell commands may reach, for example to download a dataset, and why. Leave out for no network. An empty domain list removes it.",
+  properties: {
+    domains: { type: 'array', items: { type: 'string' }, maxItems: 20 },
+    reason: { type: 'string', maxLength: 500 },
+  },
+  required: ['domains', 'reason'],
+  additionalProperties: false,
+};
 const inputs = {
   ...paths,
   description:
@@ -776,6 +789,7 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         dependencies: { type: 'array', items: task, maxItems: 20 },
         host: { type: 'string', enum: ['claude', 'codex'] },
         minutes: { type: 'integer', minimum: 1, maximum: 240 },
+        network,
         reason,
       },
       required: ['title', 'objective', 'writable', 'output', 'reason'],
@@ -798,6 +812,7 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         dependencies: { type: 'array', items: task, maxItems: 20 },
         host: { type: 'string', enum: ['claude', 'codex'] },
         minutes: { type: 'integer', minimum: 1, maximum: 240 },
+        network,
         reason,
       },
       required: ['task', 'reason'],
