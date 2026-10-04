@@ -34,7 +34,7 @@ const writable = `const match = /Writable paths:\\n- (\\S+)/.exec(text); const f
 /** The TUI mode of a fake harness: prints its arguments, echoes lines, writes on WRITE, exits on /exit. */
 const fakeTui = `const fs = require('node:fs');
 process.stdin.setRawMode?.(true);
-process.stdout.write('fake tui ' + process.argv.slice(2).join(' ') + '\\r\\n');
+process.stdout.write('fake tui ' + (process.env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR ? 'keeps-folder ' : '') + process.argv.slice(2).join(' ') + '\\r\\n');
 let line = '';
 process.stdin.on('data', (chunk) => {
   for (const char of chunk.toString()) {
@@ -70,7 +70,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   }
   if (message.type === 'control_response') {
     if (message.response.request_id === 'mcp-1')
-      fs.writeFileSync(toolFolder + '/tool.json', JSON.stringify({ reply: message.response.response, args, init }));
+      fs.writeFileSync(toolFolder + '/tool.json', JSON.stringify({ reply: message.response.response, args, init, keepsFolder: process.env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR ?? null }));
     return out({ type: 'result', subtype: 'success' });
   }
   if (message.type !== 'user') return;
@@ -298,6 +298,7 @@ await test('Claude Code and Codex workers reach Verifold tools over their own pi
     };
     args: string[];
     init: { sdkMcpServers: string[] };
+    keepsFolder: string | null;
   };
   assert.match(
     claude.reply.mcp_response.result.content[0]?.text ?? '',
@@ -305,6 +306,8 @@ await test('Claude Code and Codex workers reach Verifold tools over their own pi
   );
   assert.equal(claude.reply.mcp_response.result.isError, false);
   assert.deepEqual(claude.init.sdkMcpServers, ['verifold']);
+  // A Bash cd cannot move the folder that the Strict allow rules use.
+  assert.equal(claude.keepsFolder, '1');
   assert.equal(
     claude.args[claude.args.indexOf('--allowedTools') + 1],
     names.map((name) => `mcp__verifold__${name}`).join(','),
@@ -577,7 +580,7 @@ await test(
     const shown = await screen(sessions, session, /fake tui/);
     assert.match(
       shown,
-      /--strict-mcp-config --permission-mode dontAsk --settings \{"sandbox"/,
+      /fake tui keeps-folder --resume[\s\S]*--strict-mcp-config --permission-mode dontAsk --settings \{"sandbox"/,
     );
     sessions.terminal(session)?.write(lease, 'WRITE\r');
     await screen(sessions, session, /echo WRITE/);

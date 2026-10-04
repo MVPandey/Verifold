@@ -25,11 +25,23 @@ export type SessionMode = 'ask' | 'auto' | 'strict' | 'coordinator';
  * denies the rest. Probed on Claude Code 2.1.288.
  */
 export const strictClaudeSettings = JSON.stringify({
+  // Edit(./**) and Write(./**) resolve against Claude Code's current folder. See strictClaudeEnvironment.
   sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
   permissions: {
     allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
   },
 });
+
+/**
+ * The environment of a strict Claude Code session. Claude Code keeps the
+ * folder of a Bash `cd` for later tool calls, and the allow rules above then
+ * resolve against it, so a worker that ran `cd sub` was denied every write
+ * elsewhere in its task folder. This setting returns the shell to the task
+ * folder after each command. Probed on Claude Code 2.1.288.
+ */
+export const strictClaudeEnvironment = {
+  CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: '1',
+} as const;
 
 /** Observed protocol events. Agent text is a model claim; the other events come from the protocol. */
 export type HostEvent =
@@ -214,7 +226,12 @@ function launch(
 ): ChildProcessWithoutNullStreams {
   const child = spawn(command, args, {
     cwd: options.cwd,
-    env: harnessEnvironment(),
+    env: {
+      ...harnessEnvironment(),
+      ...(options.host === 'claude' && options.mode === 'strict'
+        ? strictClaudeEnvironment
+        : {}),
+    },
     shell: false,
     detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe'],

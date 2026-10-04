@@ -15,6 +15,7 @@ import { processStart, stopRecordedProcess } from './owner.ts';
 import { openTerminal, type Terminal } from './terminals.ts';
 import {
   startHostSession,
+  strictClaudeEnvironment,
   strictClaudeSettings,
   type AgentTools,
   type HostEvent,
@@ -857,6 +858,9 @@ export class SessionManager {
         args,
         cwd: record.cwd ? join(this.root, record.cwd) : this.root,
         owner: lease,
+        ...(strict && record.host === 'claude'
+          ? { env: strictClaudeEnvironment }
+          : {}),
         onExit: () => {
           if (terminal) this.terminalEnded(terminal);
         },
