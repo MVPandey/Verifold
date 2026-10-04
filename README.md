@@ -300,6 +300,9 @@ This README describes the current source checkout. The published npm package can
 | Scoped tasks               | Runs a task in its own copy of the project with Strict limits. You review each version first.       |
 | Two workers                | Runs up to two Claude Code or Codex workers at once, each with its own task, session, and record.   |
 | Worker terminals           | Opens a worker in its own Claude Code or Codex terminal in the desk. One view at a time types.      |
+| Task handoffs              | Gives a task the accepted files of the tasks that it waits for, and blocks use of replaced files.   |
+| Team messages              | Workers post notes, report blockers, and raise objections with evidence. You decide in the desk.    |
+| Coordinator                | Turns a chosen direction into tasks, starts them, reviews versions, and settles objections.         |
 
 This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
 
@@ -309,7 +312,7 @@ Optional literature retention and pilot handoff commands produce requests for th
 
 Build a local workspace for independently controlled research agents. Keep one npm distribution and a browser UI initially. CLI and browser will use the same operations, while the selected harness retains its models, credentials, tools, and permissions.
 
-Stages 1 to 5 are available in this checkout: the [controlled harness session](#controlled-harness-session); persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts); [scoped tasks](#scoped-tasks); [two workers](#two-workers); and [worker terminals](#worker-terminals). The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
+Stages 1 to 6 are available in this checkout: the [controlled harness session](#controlled-harness-session); persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts); [scoped tasks](#scoped-tasks); [two workers](#two-workers); [worker terminals](#worker-terminals); and the [coordinator](#coordinator) with task handoffs and messages. The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
 
 | Order | Deliverable                       | Complete when                                                                                                                                                                                        |
 | ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
