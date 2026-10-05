@@ -16,7 +16,11 @@ import { request } from 'node:http';
 import { startDesk, openDeskBrowser } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { readDeskSnapshot, readDeskReport } from '../src/cli/desk-records.ts';
-import { renderDesk, type DeskView } from '../src/cli/desk-view.ts';
+import {
+  renderDesk,
+  type DeskPanel,
+  type DeskView,
+} from '../src/cli/desk-view.ts';
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-desk-'));
@@ -641,4 +645,253 @@ await test('desk frame shows one view, the team, and one panel', async (t) => {
   ).html;
   assert.match(full, /2 workers run\. End a session/);
   assert.doesNotMatch(full, /data-action="start"/);
+});
+
+await test('desk lists in Needs you only the decisions that are the person’s', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const at = '2026-10-04T12:00:00.000Z';
+  const idle = { running: false, step: null, startedAt: null, events: [] };
+  const research = async (
+    phase: string,
+  ): Promise<ReturnType<typeof renderDesk>> => {
+    await changeWorkspace(
+      root,
+      (state) =>
+        ({
+          ...state!,
+          research: {
+            topic: 'Graphs',
+            autonomy: 'guided',
+            phase,
+            plan: {
+              scope: 'Scope.',
+              personas: [
+                { name: 'Historian', task: 'Prior art.' },
+                { name: 'Skeptic', task: 'Counterexamples.' },
+              ],
+            },
+          },
+        }) as never,
+    );
+    return renderDesk(await readDeskSnapshot(root), undefined, null, {
+      session: null,
+      controllable: true,
+      research: idle,
+    });
+  };
+  const plan = await research('awaiting-plan-review');
+  assert.deepEqual(plan.needs, [
+    { key: 'research-plan:', title: 'Review the plan' },
+  ]);
+  assert.match(
+    plan.html,
+    /Needs you[\s\S]*Guided research stops at its plan[\s\S]*data-research="approve">Approve the plan/,
+  );
+  // The rail counts the item on the view that holds it.
+  assert.match(plan.html, /<span>Research<\/span><span class="n">/);
+  assert.equal(
+    (await research('directions')).needs[0]?.title,
+    'Choose a direction',
+  );
+  assert.match(
+    (await research('needs-research')).html,
+    /Research stopped before its step ended[\s\S]*data-research="continue">Continue research/,
+  );
+
+  // After a direction, the coordinator settles what it can.
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'proof',
+        title: 'Proof search',
+        recommendation: 'Pilot.',
+        gates: ['A check.'],
+      },
+    ],
+    selectedId: 'proof',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const task = (id: string, state: string, extra: object = {}): object => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      title: `Title of ${id}`,
+      objective: 'Work.',
+      inputs: [],
+      writable: ['results'],
+      output: 'A report.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies: [],
+    },
+    ...extra,
+  });
+  const review = task('task-2', 'review', {
+    attempts: [
+      {
+        number: 1,
+        session: null,
+        outcome: null,
+        note: null,
+        restrictions: [],
+        versions: [
+          {
+            number: 1,
+            at,
+            turn: 'completed',
+            files: [],
+            skipped: [],
+            decision: null,
+          },
+        ],
+      },
+    ],
+  });
+  const objection = (id: string, status: string, text: string): object => ({
+    schemaVersion: 1,
+    id,
+    at,
+    from: 'task-3',
+    to: 'coordinator',
+    kind: 'objection',
+    status,
+    text,
+    delivery: 'board',
+    about: { task: 'task-2', version: 1 },
+  });
+  const overruled = (id: string, closes: string): object => ({
+    schemaVersion: 1,
+    id,
+    at,
+    from: 'coordinator',
+    to: 'task-3',
+    kind: 'decision',
+    text: 'Overruled.',
+    delivery: 'delivered',
+    closes,
+  });
+  const messages = [
+    objection('m-1', 'overruled', 'First.'),
+    overruled('m-2', 'm-1'),
+    objection('m-3', 'overruled', 'Second.'),
+    overruled('m-4', 'm-3'),
+    objection('m-5', 'open', 'The benchmark has no negative control.'),
+    {
+      schemaVersion: 1,
+      id: 'm-6',
+      at,
+      from: 'task-2',
+      to: 'coordinator',
+      kind: 'blocker',
+      status: 'open',
+      text: 'The data host is down.',
+      delivery: 'board',
+    },
+  ];
+  const coordinator = (
+    status: string,
+    stoppedAt: string | null = null,
+  ): object => ({
+    state: {
+      objective: 'Proof search',
+      host: 'claude',
+      model: null,
+      startedAt: at,
+      stoppedAt,
+      session: 'C1',
+      created: 3,
+      planApproved: true,
+      cursor: 0,
+      wakeups: [],
+      events: [],
+      actions: [],
+    },
+    session: {
+      live: true,
+      saveFailed: false,
+      record: { id: 'C1', status, host: 'claude' },
+    },
+    waiting: 0,
+    limitedUntil: null,
+  });
+  const desk = (
+    live: object,
+    view: DeskView = 'home',
+    panel: DeskPanel | null = null,
+  ): ReturnType<typeof renderDesk> =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      { session: null, controllable: true, ...live },
+      { view, panel },
+    );
+  const tasks = {
+    list: [task('task-1', 'done'), review, task('task-3', 'open')],
+    selected: review,
+    idle: [],
+    messages,
+  };
+  // With a running coordinator: only the objection after two overrules is the person's.
+  const team = desk({ tasks, coordinator: coordinator('idle') });
+  assert.deepEqual(
+    team.needs.map((item) => item.key),
+    ['message:m-5'],
+  );
+  assert.match(
+    team.html,
+    /The coordinator overruled two objections from this task, so this one goes to you/,
+  );
+  assert.match(
+    team.html,
+    /The coordinator runs the team[\s\S]*1 item needs you above/,
+  );
+  // The blocker stays with the coordinator. Its task panel still lets the person settle it first.
+  const panel = desk(
+    { tasks, coordinator: coordinator('idle') },
+    'tasks',
+    'task',
+  ).html;
+  assert.match(
+    panel,
+    /The coordinator settles this one\. You can settle it first\.[\s\S]*data-message="m-6" data-decision="resolved"/,
+  );
+  assert.equal(panel.match(/id="decide-m-5"/g)?.length, undefined);
+  // A paused coordinator is the person's to resume.
+  assert.deepEqual(
+    desk({ tasks, coordinator: coordinator('paused') }).needs.map(
+      (item) => item.key,
+    ),
+    ['coordinator-paused:C1', 'message:m-5'],
+  );
+  // Without a running coordinator, the person settles messages and reviews versions.
+  const alone = desk({ tasks, coordinator: coordinator('idle', at) });
+  assert.deepEqual(
+    alone.needs.map((item) => item.key),
+    ['message:m-5', 'message:m-6', 'review:task-2:1:1'],
+  );
+  assert.match(
+    alone.html,
+    /No coordinator runs, so only you can accept or reject it\./,
+  );
+  assert.match(alone.html, /<span>Tasks<\/span><span class="n">/);
+  // Needs you lists the same items, and says when nothing waits.
+  assert.match(
+    desk({ tasks, coordinator: coordinator('idle', at) }, 'needs').html,
+    /<h1 id="view-title" tabindex="-1">Needs you<\/h1><p>3 items wait for you/,
+  );
+  assert.match(
+    desk(
+      { tasks: { ...tasks, messages: [] }, coordinator: coordinator('idle') },
+      'needs',
+    ).html,
+    /Nothing needs you\./,
+  );
 });

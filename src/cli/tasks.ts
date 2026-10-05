@@ -975,22 +975,11 @@ export class TaskManager {
         message.kind === 'objection' ? ['upheld', 'overruled'] : ['resolved'];
       if (typeof decision !== 'string' || !allowed.includes(decision))
         fail('Choose a decision for this message.');
-      // After the coordinator overrules a task's objections to one task twice, the next one goes to the person.
       if (
         by === 'coordinator' &&
         decision === 'overruled' &&
         message.about &&
-        messages.filter(
-          (earlier) =>
-            earlier.kind === 'objection' &&
-            earlier.from === message.from &&
-            earlier.about?.task === message.about?.task &&
-            earlier.status === 'overruled' &&
-            messages.some(
-              (entry) =>
-                entry.closes === earlier.id && entry.from === 'coordinator',
-            ),
-        ).length >= 2
+        forPerson(message, messages)
       )
         fail(
           `You overruled two objections from ${message.from} to ${message.about.task}. This one goes to the person. Leave it open.`,
@@ -1771,6 +1760,32 @@ function handoffs(
     handed.push({ from, artifact });
   }
   return handed;
+}
+
+/**
+ * An open objection that only the person can settle: the coordinator already
+ * overruled two objections from the same task to the same task.
+ */
+export function forPerson(
+  message: Message,
+  messages: readonly Message[],
+): boolean {
+  const about = message.about?.task;
+  return (
+    message.kind === 'objection' &&
+    about !== undefined &&
+    messages.filter(
+      (earlier) =>
+        earlier.kind === 'objection' &&
+        earlier.from === message.from &&
+        earlier.about?.task === about &&
+        earlier.status === 'overruled' &&
+        messages.some(
+          (entry) =>
+            entry.closes === earlier.id && entry.from === 'coordinator',
+        ),
+    ).length >= 2
+  );
 }
 
 /** Dependencies that accepted a newer version after this attempt received theirs. */
