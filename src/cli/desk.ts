@@ -171,6 +171,24 @@ async function computeAction(
     case 'compute-settings':
       await compute.saveSettings(body);
       return 200;
+    case 'compute-lease-approve':
+      await compute.leases.approve(body.lease);
+      return 200;
+    case 'compute-lease-deny':
+      await compute.leases.deny(body.lease);
+      return 200;
+    case 'compute-lease-stop':
+      await compute.leases.stop(body.lease, 'person', 'you stopped it.');
+      return 200;
+    case 'compute-lease-start':
+      await compute.leases.start(body.lease, 'person', 'you started it.');
+      return 200;
+    case 'compute-lease-end':
+      await compute.leases.end(body.lease, 'person', 'you ended it.');
+      return 200;
+    case 'compute-lease-dismiss':
+      await compute.leases.dismiss(body.lease);
+      return 200;
     default:
       return 400;
   }
