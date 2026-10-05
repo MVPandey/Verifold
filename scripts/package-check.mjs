@@ -507,7 +507,8 @@ onLine((line) => {
           await fetch(`${url.origin}/api/view${query}`, { headers })
         ).json()
       ).html;
-    assert.match(await view(''), /Compare proof search/);
+    // The coordinator's panel offers the chosen direction as its objective.
+    assert.match(await view('?panel=coordinator'), /Compare proof search/);
     // The attempt panel shows the native session of the research attempt.
     assert.match(await view('?view=records&panel=attempt'), /package-session/);
     for (const path of [
