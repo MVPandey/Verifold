@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, relative } from 'node:path';
+import { childEnvironment } from './harness.ts';
 
 /**
  * Task workspaces. Every workspace is Git-backed, so versions and diffs work the
@@ -55,7 +56,9 @@ const limits = {
 function gitEnvironment(): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+      Object.entries(childEnvironment()).filter(
+        ([key]) => !key.startsWith('GIT_'),
+      ),
     ),
     GIT_TERMINAL_PROMPT: '0',
     LC_ALL: 'C',

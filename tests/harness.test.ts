@@ -614,13 +614,15 @@ await test('activity is delivered before completion and callback failures stop t
   );
 });
 
-await test('a harness does not inherit the session variables of a parent Claude Code', async () => {
+await test('a harness gets neither the session variables of a parent Claude Code nor RunPod variables', async () => {
   await fixture(
-    `process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ result: JSON.stringify({ child: process.env.CLAUDE_CODE_CHILD_SESSION ?? null, token: process.env.CLAUDE_CODE_MESSAGING_TOKEN ?? null, kept: process.env.VERIFOLD_KEEP ?? null }) })));`,
+    `process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ result: JSON.stringify({ child: process.env.CLAUDE_CODE_CHILD_SESSION ?? null, token: process.env.CLAUDE_CODE_MESSAGING_TOKEN ?? null, runpod: Object.keys(process.env).filter((name) => name.startsWith('RUNPOD_')), kept: process.env.VERIFOLD_KEEP ?? null }) })));`,
     async (executable, cwd) => {
       const saved = { ...process.env };
       process.env.CLAUDE_CODE_CHILD_SESSION = '1';
       process.env.CLAUDE_CODE_MESSAGING_TOKEN = 'parent-token';
+      process.env.RUNPOD_API_KEY = 'test-runpod-key';
+      process.env.RUNPOD_POD_ID = 'pod-1';
       process.env.VERIFOLD_KEEP = 'yes';
       try {
         const result = await runHarness(
@@ -635,12 +637,15 @@ await test('a harness does not inherit the session variables of a parent Claude 
         assert.deepEqual(JSON.parse(result.text), {
           child: null,
           token: null,
+          runpod: [],
           kept: 'yes',
         });
       } finally {
         for (const name of [
           'CLAUDE_CODE_CHILD_SESSION',
           'CLAUDE_CODE_MESSAGING_TOKEN',
+          'RUNPOD_API_KEY',
+          'RUNPOD_POD_ID',
           'VERIFOLD_KEEP',
         ])
           if (saved[name] === undefined) delete process.env[name];

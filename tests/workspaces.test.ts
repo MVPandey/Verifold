@@ -258,6 +258,40 @@ await test('writable paths cannot lead outside the project, and names cannot rep
   );
 });
 
+await test('Git gets no RunPod variables', async (t) => {
+  const root = await folder(t);
+  const log = join(await folder(t), 'seen.txt');
+  run(root, 'init', '-q');
+  // A clean filter runs inside each `git add` with Git's environment, so it shows what Git received.
+  run(
+    root,
+    'config',
+    'filter.probe.clean',
+    `sh -c 'echo "key=\${RUNPOD_API_KEY:-none}" >> "${log}"; cat'`,
+  );
+  await write(root, '.gitattributes', '*.md filter=probe\n');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const saved = process.env.RUNPOD_API_KEY;
+  t.after(() => {
+    if (saved === undefined) delete process.env.RUNPOD_API_KEY;
+    else process.env.RUNPOD_API_KEY = saved;
+  });
+  process.env.RUNPOD_API_KEY = 'test-runpod-key';
+  await writeFile(log, '');
+  const workspace = await allocate(root, {
+    name: 'task-6-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  await write(join(root, workspace.path), 'results/b.md', 'b\n');
+  await commitVersion(root, workspace, ['results'], 'Version 1');
+  const seen = await readFile(log, 'utf8');
+  assert.match(seen, /key=none/);
+  assert.doesNotMatch(seen, /test-runpod-key/);
+});
+
 await test('Git variables from the environment cannot redirect a workspace to another repository', async (t) => {
   const decoy = await folder(t);
   run(decoy, 'init', '-q');

@@ -916,11 +916,23 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   );
   assert.equal(args[args.indexOf('--permission-mode') + 1], 'dontAsk');
   const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}') as {
-    sandbox: { enabled: boolean };
-    permissions: { allow: string[] };
+    sandbox: {
+      enabled: boolean;
+      failIfUnavailable: boolean;
+      allowUnsandboxedCommands: boolean;
+      filesystem: { denyRead: string[] };
+    };
+    permissions: { allow: string[]; deny: string[] };
   };
   assert.equal(settings.sandbox.enabled, true);
   assert.ok(settings.permissions.allow.includes('Edit(./**)'));
+  // Neither shell commands nor the Read tool can read credential files, and no command runs without the sandbox.
+  assert.equal(settings.sandbox.failIfUnavailable, true);
+  assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
+  for (const path of ['~/.ssh', '~/.verifold/credentials', '~/.runpod']) {
+    assert.ok(settings.sandbox.filesystem.denyRead.includes(path));
+    assert.ok(settings.permissions.deny.includes(`Read(${path}/**)`));
+  }
   assert.deepEqual(
     task?.attempts[0]?.versions[0]?.files.map((file) => file.path),
     ['results/baseline.md'],

@@ -127,3 +127,30 @@ await test(
     assert.throws(() => terminal.write(owner, 'more\r'), /terminal has ended/);
   },
 );
+
+await test(
+  'a terminal gets no RunPod variables',
+  { skip: !available && 'no PTY library on this platform' },
+  async (t) => {
+    const saved = process.env.RUNPOD_API_KEY;
+    process.env.RUNPOD_API_KEY = 'test-runpod-key';
+    t.after(() => {
+      if (saved === undefined) delete process.env.RUNPOD_API_KEY;
+      else process.env.RUNPOD_API_KEY = saved;
+    });
+    const folder = await mkdtemp(join(tmpdir(), 'vf-terminal-'));
+    t.after(() => rm(folder, { recursive: true, force: true }));
+    const terminal = await openTerminal({
+      command: process.execPath,
+      args: [
+        '-e',
+        "console.log('runpod=' + (process.env.RUNPOD_API_KEY ?? 'none')); setTimeout(() => {}, 5000);",
+      ],
+      cwd: folder,
+      owner: 'a'.repeat(16),
+      onExit: () => {},
+    });
+    t.after(() => terminal.close());
+    await until(terminal, /runpod=none/);
+  },
+);
