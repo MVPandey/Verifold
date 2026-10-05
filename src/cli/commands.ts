@@ -27,7 +27,7 @@ import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
-import { TaskManager } from './tasks.ts';
+import { TaskManager, type TaskPlace } from './tasks.ts';
 import { SessionPool } from './workers.ts';
 import { Coordinator } from './coordinator.ts';
 import { withTranscript } from './transcript.ts';
@@ -101,6 +101,11 @@ export interface CliIO {
   readonly compute?: {
     readonly url?: string;
     readonly store?: KeyStoreOptions;
+    readonly programs?: {
+      readonly ssh?: string;
+      readonly keyscan?: string;
+      readonly keygen?: string;
+    };
   };
   /** Read terminal lines until the signal aborts. Only an interactive terminal provides it. */
   readonly listen?: (
@@ -469,19 +474,26 @@ async function serveDesk(
         onSelect: async () =>
           owned.coordinator?.startForDirection(await loadWorkspace(root)),
       });
+      // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
+      // Before a pod stops, its tasks' results come back into their folders.
+      const compute = computeFor(
+        root,
+        io,
+        (lease, line) => {
+          io.progress?.(`Pod ${line}`);
+          if (lease.history.at(-1)?.by !== 'coordinator')
+            owned.coordinator?.notify({ kind: 'pod', text: line });
+        },
+        (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
+      );
       const tasks = new TaskManager(root, {
         ownerId: owner.ownerId,
         sessions,
         ...(io.progress ? { progress: io.progress } : {}),
         onEvent: (event) => owned.coordinator?.notify(event),
+        pods: compute.podTools(),
       });
       owned.tasks = tasks;
-      // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
-      const compute = computeFor(root, io, (lease, line) => {
-        io.progress?.(`Pod ${line}`);
-        if (lease.history.at(-1)?.by !== 'coordinator')
-          owned.coordinator?.notify({ kind: 'pod', text: line });
-      });
       // The coordinator has its own session, outside the worker slots.
       const coordinator = new Coordinator(root, {
         tasks,
@@ -593,10 +605,10 @@ async function serveDesk(
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
           );
-        // A task turn that Ctrl+C stopped becomes a version for review.
-        await tasks.settle();
-        // Pods stop when Verifold stops, so billing stops.
+        // Pods stop when Verifold stops, so billing stops. Their results come back first.
         for (const line of await compute.close()) io.progress?.(line);
+        // A task turn that Ctrl+C stopped becomes a version for review, with the results from its pod.
+        await tasks.settle();
       }
     } finally {
       await owner.release();
@@ -635,11 +647,14 @@ function computeFor(
   root: string,
   io: CliIO,
   onChange?: (lease: Lease, line: string) => void,
+  taskFolder?: (task: string) => Promise<TaskPlace | null>,
 ): Compute {
   return new Compute(root, {
     store: new KeyStore(io.compute?.store),
     ...(io.compute?.url ? { url: io.compute.url } : {}),
+    ...(io.compute?.programs ? { programs: io.compute.programs } : {}),
     ...(onChange ? { onChange } : {}),
+    ...(taskFolder ? { taskFolder } : {}),
   });
 }
 

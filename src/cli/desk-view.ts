@@ -1184,6 +1184,17 @@ function renderSince(
 }
 
 /** One task in full: its assignment, its next step, the review of its latest version, and its messages. */
+/** The pod of a task: its lease, GPU, state, and end, and what the pod allows. */
+function taskPod(task: string, compute: ComputeView | undefined): string {
+  const lease = compute?.leases.findLast(
+    (entry) =>
+      entry.tasks.includes(task) &&
+      (isOpen(entry) || entry.state === 'requested'),
+  );
+  if (!lease) return '';
+  return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.id)}, ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. Verifold runs SSH; the worker uses Verifold's pod tools.</p>`;
+}
+
 function taskPanel(
   task: TaskRecord,
   view: TaskView,
@@ -1273,6 +1284,7 @@ function taskPanel(
     ${task.state !== 'running' && agent ? `<div class="actions">${agent}</div>` : ''}
     ${live.coordinator?.state && !live.coordinator.state.stoppedAt ? `<label class="field" for="task-coordinator-message">Ask the coordinator about this task</label><textarea id="task-coordinator-message" rows="2" maxlength="3950"></textarea><div class="actions"><button type="button" data-action="coordinator-message" data-about="${e(task.id)}">Ask the coordinator</button></div><p class="fine">The coordinator gets your message with this task named. It answers in its note on Home.</p>` : ''}
     <details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}<label class="field" for="task-message">Message to this task's worker</label><textarea id="task-message" rows="2" maxlength="4000"></textarea><p class="fine">The worker receives it with its next turn. A message cannot change the task's paths, permissions, or limits.</p><div class="actions"><button type="button" data-action="task-message" data-task="${e(task.id)}" data-to="${e(task.id)}">Send</button></div></details>
+    ${taskPod(task.id, live.compute)}
     ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
     ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}`;
   return {
