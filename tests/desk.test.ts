@@ -9,14 +9,14 @@ import {
   readFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { request } from 'node:http';
 import { startDesk, openDeskBrowser } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { readDeskSnapshot, readDeskReport } from '../src/cli/desk-records.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
+import { renderDesk, type DeskView } from '../src/cli/desk-view.ts';
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-desk-'));
@@ -224,6 +224,9 @@ await test('desk restricts private reads, serves escaped records, and stops with
     '?attempt=../../secret',
     '?file=workspace.json',
     `?attempt=${randomUUID()}&attempt=${randomUUID()}`,
+    '?view=results',
+    '?panel=page',
+    '?view=home&view=records',
   ])
     assert.equal((await fetch(api + query, { headers })).status, 400);
   assert.equal(
@@ -234,12 +237,15 @@ await test('desk restricts private reads, serves escaped records, and stops with
     (await fetch(`${url.origin}/workspace.json`, { headers })).status,
     404,
   );
-  const view = await (await fetch(api, { headers })).text();
+  // Research shows the brief, escaped.
+  const view = await (await fetch(`${api}?view=research`, { headers })).text();
   assert.match(view, /&lt;script&gt;/);
   assert.doesNotMatch(view, /<script>alert/);
   const id = await attempt(root, { observedAt: new Date().toISOString() });
+  // The attempt panel shows one attempt in full, beside the Records view.
+  const opened = `${api}?view=records&panel=attempt&attempt=${id}`;
   assert.match(
-    await (await fetch(`${api}?attempt=${id}`, { headers })).text(),
+    await (await fetch(opened, { headers })).text(),
     /Recently active/,
   );
   const recordPath = join(root, '.verifold', 'runs', id, 'attempt.json');
@@ -262,9 +268,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
         finishedAt: status === 'started' ? null : new Date().toISOString(),
       }),
     );
-    const updated = await (
-      await fetch(`${api}?attempt=${id}`, { headers })
-    ).text();
+    const updated = await (await fetch(opened, { headers })).text();
     assert.ok(updated.includes(label));
     assert.ok(updated.includes(id));
   }
@@ -308,9 +312,10 @@ await test('desk renders harness Markdown without active content and explains a 
     ].join('\n'),
   }));
   const snapshot = await readDeskSnapshot(root);
-  const html = renderDesk(snapshot, undefined, null, {
-    session: null,
-    controllable: true,
+  const live = { session: null, controllable: true };
+  const html = renderDesk(snapshot, undefined, null, live, {
+    view: 'research',
+    panel: 'new-session',
   }).html;
   assert.match(html, /<h3>Research brief<\/h3>/);
   assert.match(html, /<strong>Status:<\/strong> draft with <code>code<\/code>/);
@@ -321,7 +326,10 @@ await test('desk renders harness Markdown without active content and explains a 
     /<a href="https:\/\/example\.org\/p" target="_blank" rel="noopener noreferrer">paper<\/a>/,
   );
   assert.match(html, /data-action="start">Start session/);
-  assert.match(html, /copy-command/);
+  assert.match(
+    renderDesk(snapshot, undefined, null, live).html,
+    /copy-command/,
+  );
 });
 
 await test('desk lists paused sessions with a Resume control', async (t) => {
@@ -360,30 +368,40 @@ await test('desk shows one research decision for each phase', async (t) => {
     startedAt: null,
     events: [],
   };
-  const html = async (research: object, live = false): Promise<string> =>
-    renderDesk(await readDeskSnapshot(root), undefined, null, {
-      session: live
-        ? ({
-            live: true,
-            saveFailed: false,
-            record: {
-              requests: [],
-              events: [],
-              commands: [],
-              host: 'claude',
-              status: 'idle',
-              mode: 'ask',
-              reportedMode: null,
-              model: null,
-              costUsd: null,
-              nativeSessionId: null,
-              id: '20261002T120000000Z-abcdef12',
-            },
-          } as never)
-        : null,
-      controllable: true,
-      research: { ...idle, ...research },
-    }).html;
+  const html = async (
+    research: object,
+    live = false,
+    view: DeskView = 'home',
+  ): Promise<string> =>
+    renderDesk(
+      await readDeskSnapshot(root),
+      undefined,
+      null,
+      {
+        session: live
+          ? ({
+              live: true,
+              saveFailed: false,
+              record: {
+                requests: [],
+                events: [],
+                commands: [],
+                host: 'claude',
+                status: 'idle',
+                mode: 'ask',
+                reportedMode: null,
+                model: null,
+                costUsd: null,
+                nativeSessionId: null,
+                id: '20261002T120000000Z-abcdef12',
+              },
+            } as never)
+          : null,
+        controllable: true,
+        research: { ...idle, ...research },
+      },
+      { view, panel: null },
+    ).html;
   const start = await html({});
   assert.match(start, /Start research/);
   assert.match(start, /id="research-topic"/);
@@ -428,16 +446,21 @@ await test('desk shows one research decision for each phase', async (t) => {
     await html({}, true),
     /class="primary" data-action="research" data-research="approve">/,
   );
-  const events = await html({
-    step: 'Planning research roles and scope',
-    events: [
-      {
-        at: new Date().toISOString(),
-        kind: 'tool',
-        text: 'Claude Code requested <WebSearch>.',
-      },
-    ],
-  });
+  // Research shows the step, its events, and its transcript.
+  const events = await html(
+    {
+      step: 'Planning research roles and scope',
+      events: [
+        {
+          at: new Date().toISOString(),
+          kind: 'tool',
+          text: 'Claude Code requested <WebSearch>.',
+        },
+      ],
+    },
+    false,
+    'research',
+  );
   assert.match(events, /Claude Code requested &lt;WebSearch&gt;\./);
   assert.match(events, /data-detail="details"/);
 });
@@ -484,11 +507,23 @@ await test('desk points to the coordinator after a direction and shows its notes
     text: 'The benchmark needs a dataset host.',
     delivery: 'board',
   };
-  const html = (planApproved: boolean): string =>
+  const pilot = {
+    id: 'task-1',
+    state: 'open',
+    revision: 1,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      title: 'Bounded pilot',
+      objective: 'Run the pilot.',
+      dependencies: [],
+    },
+  };
+  const html = (planApproved: boolean, planned = [pilot]): string =>
     renderDesk(snapshot, undefined, null, {
       session: null,
       controllable: true,
-      tasks: { list: [], selected: null, idle: [], messages: [note] },
+      tasks: { list: planned, selected: null, idle: [], messages: [note] },
       coordinator: {
         state: { ...state, planApproved },
         session: null,
@@ -498,13 +533,112 @@ await test('desk points to the coordinator after a direction and shows its notes
     } as never).html;
   const waiting = html(false);
   assert.match(waiting, /The task plan waits for you/);
+  assert.match(waiting, /Plan: waits for you/);
   assert.doesNotMatch(waiting, /verifold handoff/);
   assert.match(
     waiting,
     /Notes to you \(1\)[\s\S]*The benchmark needs a dataset host\./,
   );
+  // Before the coordinator creates a task, nothing waits for the person.
+  const empty = html(false, []);
+  assert.match(empty, /No task plan yet/);
+  assert.doesNotMatch(empty, /waits for you/);
   assert.match(
     html(true),
     /The coordinator runs the team[\s\S]*Nothing needs you/,
   );
+});
+
+await test('desk frame shows one view, the team, and one panel', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261002T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'running',
+      mode: 'ask',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: '2026-10-02T12:00:00.000Z',
+      events: [],
+      commands: [],
+      requests: [
+        {
+          id: 'R1',
+          native: 'n-1',
+          tool: 'Bash',
+          action: 'curl -sI https://example.org',
+          at: '2026-10-02T12:00:00.000Z',
+        },
+      ],
+    },
+  };
+  const live = {
+    session: worker,
+    workers: [worker],
+    controllable: true,
+  } as never;
+  const home = renderDesk(snapshot, undefined, null, live);
+  assert.equal(home.title, basename(root));
+  assert.equal(home.stage, 'Question: not asked yet');
+  assert.match(home.html, /data-view="home" aria-current="page"/);
+  // Without a task owner the rail has no Tasks view.
+  assert.doesNotMatch(home.html, /data-view="tasks"/);
+  // Home holds the request, and the rail counts it for the person.
+  assert.match(home.html, /<h1 id="view-title" tabindex="-1">Home<\/h1>/);
+  assert.match(
+    home.html,
+    /role="img" aria-label="Project stage\. Question: not asked yet\."/,
+  );
+  assert.match(home.html, /Claude Code session asks to use Bash/);
+  assert.match(
+    home.html,
+    /◆ <\/span>1<span class="visually-hidden"> item waits for you/,
+  );
+  assert.match(
+    home.html,
+    /data-worker="20261002T120000000Z-abcdef12" aria-pressed="false"/,
+  );
+  assert.doesNotMatch(home.html, /id="panel"/);
+  // The panel shows one item beside the view, with a way to close it.
+  const opened = renderDesk(snapshot, undefined, null, live, {
+    view: 'records',
+    panel: 'worker',
+  }).html;
+  assert.match(opened, /data-view="records" aria-current="page"/);
+  assert.match(opened, /<h1 id="view-title" tabindex="-1">Records<\/h1>/);
+  assert.match(
+    opened,
+    /<aside class="panel" id="panel" aria-labelledby="panel-title">/,
+  );
+  assert.match(
+    opened,
+    /<h2 id="panel-title" tabindex="-1">Claude Code session<\/h2>/,
+  );
+  assert.match(opened, /data-close-panel aria-label="Close the panel"/);
+  assert.match(
+    opened,
+    /data-worker="20261002T120000000Z-abcdef12" aria-pressed="true"/,
+  );
+  assert.match(
+    opened,
+    /data-action="cancel" data-session="20261002T120000000Z-abcdef12"/,
+  );
+  // New offers a session form. Every slot is in use, so the panel says why no session starts.
+  assert.match(opened, /data-panel="new-session"/);
+  const full = renderDesk(
+    snapshot,
+    undefined,
+    null,
+    { ...(live as object), full: true } as never,
+    { view: 'home', panel: 'new-session' },
+  ).html;
+  assert.match(full, /2 workers run\. End a session/);
+  assert.doesNotMatch(full, /data-action="start"/);
 });
