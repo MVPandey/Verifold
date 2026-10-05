@@ -387,9 +387,12 @@ await test('the coordinator creates and starts tasks through checked tools, and 
   assert.match(html, /Coordinator[\s\S]*Waiting for events/);
   assert.match(
     html,
-    /accept<\/span><span>Done[\s\S]*It lists the two baselines/,
+    /<span class="tool">accept<\/span> [^<][\s\S]*Its reason[\s\S]*It lists the two baselines/,
   );
-  assert.match(html, /launch_missiles<\/span><span>Refused/);
+  assert.match(
+    html,
+    /<span class="tool">launch_missiles<\/span> <strong>Verifold refused this\.<\/strong>/,
+  );
 });
 
 await test('objections, the person, and a stop reach the coordinator as the rules say', async (t) => {
