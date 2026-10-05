@@ -9,14 +9,23 @@ const frames = new Map<string, HTMLIFrameElement>();
 let layer: HTMLElement | null = null;
 let main: HTMLElement | null = null;
 
-/** Lay each frame over its slot. A slot that is not shown hides its frame. */
+/**
+ * Lay each frame over its slot. A slot that is not shown hides its frame. The
+ * view and the panel scroll on their own, so a frame is clipped to the visible
+ * part of the area that holds its slot.
+ */
 export function placeTerminals(): void {
   for (const [session, frame] of frames) {
     const slot = main?.querySelector<HTMLElement>(
       `.terminal-slot[data-session="${CSS.escape(session)}"]`,
     );
     const box = slot?.getBoundingClientRect();
-    if (!box || box.width === 0 || box.height === 0) {
+    const area = slot
+      ?.closest<HTMLElement>('#view, #panel-body')
+      ?.getBoundingClientRect();
+    const top = area ? Math.max(0, area.top - (box?.top ?? 0)) : 0;
+    const bottom = area ? Math.max(0, (box?.bottom ?? 0) - area.bottom) : 0;
+    if (!box || box.width === 0 || top + bottom >= box.height) {
       frame.hidden = true;
       continue;
     }
@@ -25,6 +34,8 @@ export function placeTerminals(): void {
     frame.style.left = `${box.left + window.scrollX}px`;
     frame.style.width = `${box.width}px`;
     frame.style.height = `${box.height}px`;
+    frame.style.clipPath =
+      top || bottom ? `inset(${top}px 0 ${bottom}px 0)` : '';
   }
 }
 
@@ -37,6 +48,11 @@ export function mountTerminals(content: HTMLElement): void {
     document.body.append(layer);
     new ResizeObserver(() => placeTerminals()).observe(document.body);
     window.addEventListener('resize', () => placeTerminals());
+    // A scroll of the view or the panel moves the slot. Scroll events do not bubble, so listen in the capture phase.
+    document.addEventListener('scroll', () => placeTerminals(), {
+      capture: true,
+      passive: true,
+    });
   }
   const used = new Set<string>();
   for (const slot of content.querySelectorAll<HTMLElement>(

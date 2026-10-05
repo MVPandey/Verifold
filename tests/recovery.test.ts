@@ -249,7 +249,13 @@ await test('research attempts of a stopped owner become interrupted and stop blo
   assert.equal(record.status, 'interrupted');
   assert.equal(record.finishedAt, null);
   assert.equal(typeof record.reconciledAt, 'string');
-  const html = renderDesk(await readDeskSnapshot(root), stale, null).html;
+  const html = renderDesk(
+    await readDeskSnapshot(root),
+    stale,
+    null,
+    undefined,
+    { view: 'records', panel: 'attempt' },
+  ).html;
   assert.match(html, /Interrupted, outcome unknown/);
   assert.match(html, /Continue research to run the step again/);
 

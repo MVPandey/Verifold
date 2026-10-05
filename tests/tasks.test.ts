@@ -450,15 +450,21 @@ await test('an accepted version reaches the tasks that wait for it, and a replac
     /used task-1 version 1, but task-1 now has version 2/,
   );
   const desk = async (selected: string): Promise<string> =>
-    renderDesk(await readDeskSnapshot(root), undefined, null, {
-      session: null,
-      controllable: true,
-      tasks: {
-        list: await tasks.list(),
-        selected: await tasks.get(selected),
-        idle: [],
+    renderDesk(
+      await readDeskSnapshot(root),
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: {
+          list: await tasks.list(),
+          selected: await tasks.get(selected),
+          idle: [],
+        },
       },
-    }).html;
+      { view: 'tasks', panel: 'task' },
+    ).html;
   const stale = await desk(review);
   assert.match(
     stale,
@@ -621,16 +627,23 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   assert.equal(messages[1]?.sender?.claim, claim);
   assert.equal(messages[0]?.revision, 1);
 
-  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
-    session: null,
-    controllable: true,
-    tasks: {
-      list: await tasks.list(),
-      selected: await tasks.get(review),
-      idle: [],
-      messages,
+  // Home holds the open objections. The task panel holds the task's messages.
+  const html = renderDesk(
+    await readDeskSnapshot(root),
+    undefined,
+    null,
+    {
+      session: null,
+      controllable: true,
+      tasks: {
+        list: await tasks.list(),
+        selected: await tasks.get(review),
+        idle: [],
+        messages,
+      },
     },
-  }).html;
+    { view: 'home', panel: 'task' },
+  ).html;
   assert.match(
     html,
     /Needs you[\s\S]*m-2[\s\S]*data-message="m-2" data-decision="upheld">Uphold[\s\S]*data-message="m-2" data-decision="overruled">Overrule[\s\S]*data-message="m-3" data-decision="resolved">Resolve/,
@@ -985,7 +998,15 @@ await test('the desk creates, reviews, and accepts a task through the same opera
         await fetch(`${url.origin}/api/view${query}`, { headers })
       ).json()) as { html: string }
     ).html;
-  assert.match(await view(), /<details id="task-new" open>/);
+  // Without tasks, Tasks offers New task, and the panel holds the form.
+  assert.match(
+    await view('?view=tasks'),
+    /No tasks yet[\s\S]*data-panel="new-task"|data-panel="new-task"[\s\S]*No tasks yet/,
+  );
+  assert.match(
+    await view('?view=tasks&panel=new-task'),
+    /<div id="task-new">[\s\S]*data-action="task-create">Create task/,
+  );
   const [badStatus, bad] = await post({
     action: 'task-create',
     ...fields,
@@ -994,14 +1015,18 @@ await test('the desk creates, reviews, and accepts a task through the same opera
   assert.equal(badStatus, 409);
   assert.match(String(bad.error), /inside the project/);
   assert.equal((await post({ action: 'task-create', ...fields }))[0], 200);
-  let html = await view();
+  // Without a task ID, the panel opens the newest task: the one just created.
+  let html = await view('?view=tasks&panel=task');
   assert.match(html, /data-task-select="task-1" aria-pressed="true"/);
   assert.match(html, /data-action="task-start" data-task="task-1"/);
   assert.equal((await post({ action: 'task-start', task: 'task-1' }))[0], 200);
-  assert.match(await view(), /The harness works in the task folder/);
+  assert.match(
+    await view('?view=tasks&panel=task'),
+    /The harness works in the task folder/,
+  );
   await turn(tasks, fake, { 'results/baseline.md': '# Baseline\n\n1.82 ms\n' });
-  html = await view('?task=task-1');
-  assert.match(html, /Version 1 · the turn ended/);
+  html = await view('?view=tasks&panel=task&task=task-1');
+  assert.match(html, /Version 1: the turn ended/);
   assert.match(
     html,
     /data-action="task-accept" data-task="task-1" data-version="1"/,
@@ -1060,7 +1085,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     200,
   );
   assert.match(
-    await view(),
+    await view('?view=tasks&panel=task&task=task-1'),
     /Done\. Version 1 was accepted: results\/baseline\.md/,
   );
 });

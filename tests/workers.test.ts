@@ -409,16 +409,22 @@ await test('the terminal names the worker, routes answers by request ID, and sen
       .flatMap((view) => view.record.requests.map((request) => request.id));
   }
   assert.deepEqual([...requests].sort(), ['R1', 'R2']);
-  // The desk shows both workers and the selected one in full. No slot is free.
-  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
-    workers: sessions.views(),
-    session: sessions.view(second),
-    full: sessions.full,
-    controllable: true,
-  }).html;
+  // The rail shows both workers, and the panel shows the selected one in full. No slot is free.
+  const html = renderDesk(
+    await readDeskSnapshot(root),
+    undefined,
+    null,
+    {
+      workers: sessions.views(),
+      session: sessions.view(second),
+      full: sessions.full,
+      controllable: true,
+    },
+    { view: 'home', panel: 'worker' },
+  ).html;
   assert.equal(html.match(/data-worker="/g)?.length, 2);
   assert.match(html, new RegExp(`data-worker="${second}" aria-pressed="true"`));
-  assert.match(html, /2 of 2 running/);
+  assert.match(html, /2 of 2 workers run/);
   assert.match(html, /1 request waits for you/);
   assert.doesNotMatch(html, /data-action="start"/);
   // Without an ID, two open requests are ambiguous.
@@ -729,7 +735,9 @@ await test(
     await status(sessions, id, 'terminal');
     const view = (
       (await (
-        await fetch(`${url.origin}/api/view?worker=${id}`, { headers })
+        await fetch(`${url.origin}/api/view?panel=worker&worker=${id}`, {
+          headers,
+        })
       ).json()) as { html: string }
     ).html;
     assert.match(view, /data-action="terminal-return"/);
