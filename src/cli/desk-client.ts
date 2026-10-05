@@ -4,10 +4,26 @@ import { mountTranscripts, refreshTranscripts } from './desk-transcript.ts';
 import { mountTerminals, placeTerminals } from './desk-terminals.ts';
 import { viewLease } from './desk-lease.ts';
 
-const main = requiredElement(document, '#content', HTMLElement);
+const content = requiredElement(document, '#content', HTMLElement);
 const connectionLabel = requiredElement(document, '#connection', HTMLElement);
+const connectionNote = requiredElement(
+  document,
+  '#connection-note',
+  HTMLElement,
+);
+const connectionMessage = requiredElement(
+  document,
+  '#connection-message',
+  HTMLElement,
+);
 const observationLabel = requiredElement(document, '#observation', HTMLElement);
 const actionLabel = requiredElement(document, '#action-status', HTMLElement);
+const projectTitle = requiredElement(document, '#project-title', HTMLElement);
+const stageLabel = requiredElement(document, '#stage', HTMLElement);
+const menuButton = requiredElement(document, '#menu', HTMLElement);
+/** The open view and panel. Like the selections, they last for this tab. */
+let view = 'home';
+let panel = '';
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
@@ -31,6 +47,8 @@ try {
     sessionStorage.setItem('verifold-desk-token', token);
     history.replaceState(null, '', location.pathname);
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
+  view = sessionStorage.getItem('verifold-desk-view') ?? 'home';
+  panel = sessionStorage.getItem('verifold-desk-panel') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
   selectedWorker = sessionStorage.getItem('verifold-desk-worker') ?? undefined;
@@ -40,7 +58,24 @@ try {
   /* The original fragment still supports reload when storage is unavailable. */
 }
 
+/** Keep a choice for this tab. Without browser storage, it lasts until reload. */
+function remember(key: string, value: string | undefined): void {
+  try {
+    if (value) sessionStorage.setItem(`verifold-desk-${key}`, value);
+    else sessionStorage.removeItem(`verifold-desk-${key}`);
+  } catch {
+    /* The choice lasts until reload when browser storage is unavailable. */
+  }
+}
+
 let lastHtml = '';
+/** The view and the panel item of the last render, so a new one starts at its top. */
+let rendered = { view: '', panel: '' };
+/** Where focus goes after the next render: the view or panel that the person opened. */
+let pendingFocus = '';
+let pendingScroll: ScrollLogicalPosition = 'nearest';
+/** The control that opened the panel. Focus returns to it when the panel closes. */
+let opener: string | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let loading = false;
 let stopped = false;
@@ -54,18 +89,18 @@ let failure:
 function showDetail(): void {
   document.body.dataset.detail = detail;
   document.body.dataset.pane = pane;
-  for (const button of main.querySelectorAll<HTMLElement>('[data-detail]'))
+  for (const button of content.querySelectorAll<HTMLElement>('[data-detail]'))
     button.setAttribute(
       'aria-pressed',
       String(button.dataset.detail === detail),
     );
-  for (const button of main.querySelectorAll<HTMLElement>('[data-pane]'))
+  for (const button of content.querySelectorAll<HTMLElement>('[data-pane]'))
     button.setAttribute('aria-pressed', String(button.dataset.pane === pane));
 }
 
 function showFailure(): void {
-  main.querySelector('.action-error')?.remove();
-  const control = failure ? main.querySelector(failure.selector) : null;
+  content.querySelector('.action-error')?.remove();
+  const control = failure ? content.querySelector(failure.selector) : null;
   if (!failure || !control) return;
   const note = document.createElement('p');
   note.className = 'action-error';
@@ -73,164 +108,248 @@ function showFailure(): void {
   (control.closest('.actions') ?? control).after(note);
 }
 
+/** The query of /api/view. Only the open panel sends its item. */
+function viewQuery(): string {
+  const query = new URLSearchParams();
+  if (view !== 'home') query.set('view', view);
+  if (panel) query.set('panel', panel);
+  if (panel === 'attempt' && selected) query.set('attempt', selected);
+  if (panel === 'task' && selectedTask) query.set('task', selectedTask);
+  // A worker that left its slot is not an error. The server shows another one.
+  if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
+  return query.toString();
+}
+
+/** The item in the open panel. A change of item starts the panel at its top. */
+function panelKey(): string {
+  const item =
+    panel === 'task'
+      ? selectedTask
+      : panel === 'worker'
+        ? selectedWorker
+        : panel === 'attempt'
+          ? selected
+          : '';
+  return `${panel}:${item ?? ''}`;
+}
+
+/** A selector that finds the same control after a render. Most controls have data attributes, not IDs. */
+function selectorOf(element: HTMLElement): string | undefined {
+  if (element.id) return `#${CSS.escape(element.id)}`;
+  if (element.matches('summary')) {
+    const id = element.closest('details')?.id;
+    return id ? `#${CSS.escape(id)} > summary` : undefined;
+  }
+  const data = Object.entries(element.dataset).filter(
+    ([key]) => key !== 'armed',
+  );
+  return data.length
+    ? `${element.localName}${data
+        .map(
+          ([key, value]) =>
+            `[data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${CSS.escape(value ?? '')}"]`,
+        )
+        .join('')}`
+    : undefined;
+}
+
+function showConnection(problem: string | undefined): void {
+  connectionLabel.textContent =
+    problem === undefined ? 'Connected' : 'Not connected';
+  connectionMessage.textContent = problem ?? '';
+  connectionNote.hidden = problem === undefined;
+  document.body.dataset.connection =
+    problem === undefined ? 'connected' : 'disconnected';
+}
+
+/**
+ * Replace the rail, the view, and the panel. Typed text, open sections, checked
+ * files, focus, and the scroll position of the view and the panel stay.
+ */
+function render(html: string): void {
+  // Transcript panels keep their own open calls. Only page sections are restored here.
+  const known = new Set(
+    Array.from(
+      content.querySelectorAll('details[id]'),
+      (element) => element.id,
+    ),
+  );
+  const open = new Set(
+    Array.from(
+      content.querySelectorAll('details[id][open]'),
+      (element) => element.id,
+    ),
+  );
+  const focused = document.activeElement;
+  const inPanel =
+    focused instanceof HTMLElement && focused.closest('.transcript')
+      ? focused
+      : null;
+  const focusTarget =
+    focused instanceof HTMLElement && !inPanel && content.contains(focused)
+      ? selectorOf(focused)
+      : undefined;
+  // Keep the files that the person selected for Accept.
+  const checked = new Map(
+    Array.from(
+      content.querySelectorAll<HTMLInputElement>('input[type="checkbox"][id]'),
+      (box) => [box.id, box.checked],
+    ),
+  );
+  // Keep text that the person typed while the view refreshes.
+  const typed = new Map(
+    Array.from(
+      content.querySelectorAll<
+        HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+      >('input[id], textarea[id], select[id]'),
+      (field) => [field.id, field.value],
+    ),
+  );
+  const caret =
+    focused instanceof HTMLTextAreaElement ||
+    focused instanceof HTMLInputElement
+      ? [focused.selectionStart, focused.selectionEnd]
+      : undefined;
+  const scrolls = Array.from(
+    content.querySelectorAll<HTMLElement>('#rail, #view, #panel-body'),
+    (element) => [element.id, element.scrollTop] as const,
+  );
+  // The local renderer escapes research text. Harness Markdown is sanitized
+  // again in an inert template, before it reaches the live page.
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  for (const fragment of template.content.querySelectorAll('.md'))
+    fragment.innerHTML = DOMPurify.sanitize(fragment.innerHTML, {
+      ADD_ATTR: ['target'],
+    });
+  content.replaceChildren(template.content);
+  showFailure();
+  showDetail();
+  for (const [id, value] of typed) {
+    const field = document.getElementById(id);
+    if (
+      field instanceof HTMLInputElement ||
+      field instanceof HTMLTextAreaElement ||
+      field instanceof HTMLSelectElement
+    )
+      field.value = value;
+  }
+  // A section that is new to the page keeps the state that the server gave it.
+  for (const detail of content.querySelectorAll<HTMLDetailsElement>(
+    'details[id]',
+  ))
+    if (known.has(detail.id)) detail.open = open.has(detail.id);
+  for (const [id, value] of checked) {
+    const box = document.getElementById(id);
+    if (box instanceof HTMLInputElement && !box.disabled) box.checked = value;
+  }
+  // A view or a panel item that the person just opened starts at its top.
+  for (const [id, top] of scrolls) {
+    const element = document.getElementById(id);
+    if (
+      element &&
+      (id === 'rail' ||
+        (id === 'view'
+          ? view === rendered.view
+          : panelKey() === rendered.panel))
+    )
+      element.scrollTop = top;
+  }
+  rendered = { view, panel: panelKey() };
+  showReview();
+  mountTranscripts(content, () => token);
+  mountTerminals(content);
+  inPanel?.focus({ preventScroll: true });
+  const target = focusTarget
+    ? content.querySelector<HTMLElement>(focusTarget)
+    : null;
+  target?.focus({ preventScroll: true });
+  if (
+    caret &&
+    (target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLInputElement)
+  )
+    target.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
+  lastHtml = html;
+}
+
+/** After the person opens a view or a panel, focus moves there, so keyboard and screen reader users follow. */
+function focusPending(): void {
+  if (!pendingFocus) return;
+  const target =
+    content.querySelector<HTMLElement>(pendingFocus) ??
+    document.getElementById('view-title');
+  pendingFocus = '';
+  target?.focus({ preventScroll: true });
+  target?.scrollIntoView({ block: pendingScroll });
+}
+
 async function refresh(): Promise<void> {
   if (loading || stopped) return;
   clearTimeout(timer);
   loading = true;
-  const wanted = selected;
-  const wantedTask = selectedTask;
+  const wanted = viewQuery();
   request = new AbortController();
   const deadline = setTimeout(() => request?.abort(), 5000);
-  const query = new URLSearchParams();
-  if (wanted) query.set('attempt', wanted);
-  if (wantedTask) query.set('task', wantedTask);
-  // A worker that left its slot is not an error. The server shows another one.
-  if (selectedWorker) query.set('worker', selectedWorker);
   try {
-    const response = await fetch(
-      `/api/view${query.size ? `?${query.toString()}` : ''}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: request.signal,
-        cache: 'no-store',
-      },
-    );
+    const response = await fetch(`/api/view${wanted ? `?${wanted}` : ''}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: request.signal,
+      cache: 'no-store',
+    });
     if (!response.ok) {
       if (response.status === 401)
         throw new Error(
           'Open the full desk URL printed in your terminal to connect.',
         );
-      if (response.status === 404 && (wanted || wantedTask)) {
+      // The item left the project, or this tab kept a view that the desk does not know.
+      if ((response.status === 404 || response.status === 400) && wanted) {
+        view = 'home';
+        panel = '';
         selected = undefined;
         selectedTask = undefined;
+        remember('view', undefined);
+        remember('panel', undefined);
         throw new Error(
-          'That attempt or task is no longer available. Refreshing the project.',
+          'That item is no longer available. The desk shows Home.',
         );
       }
       throw new Error(
         'Project records are unavailable. Inspect the selected workspace, then refresh.',
       );
     }
-    const view: unknown = await response.json();
+    const reply: unknown = await response.json();
     if (
-      !view ||
-      typeof view !== 'object' ||
-      !('html' in view) ||
-      typeof view.html !== 'string' ||
-      !('observation' in view) ||
-      typeof view.observation !== 'string'
+      !reply ||
+      typeof reply !== 'object' ||
+      !('html' in reply) ||
+      typeof reply.html !== 'string' ||
+      !('observation' in reply) ||
+      typeof reply.observation !== 'string'
     )
       throw new Error('The desk returned an unreadable view.');
-    if (wanted !== selected || wantedTask !== selectedTask || stopped) return;
-    if (view.html !== lastHtml) {
-      // Transcript panels keep their own open calls. Only page sections are restored here.
-      const open = new Set(
-        Array.from(
-          main.querySelectorAll('details[id][open]'),
-          (element) => element.id,
-        ),
-      );
-      const focused = document.activeElement;
-      const inPanel =
-        focused instanceof HTMLElement && focused.closest('.transcript')
-          ? focused
-          : null;
-      const focusId = focused instanceof HTMLElement ? focused.id : '';
-      const focusDetail = focused?.matches('summary')
-        ? focused.closest('details')?.id
-        : undefined;
-      const focusAttempt =
-        focused instanceof HTMLElement ? focused.dataset.attempt : undefined;
-      // Keep the files that the person selected for Accept.
-      const checked = new Map(
-        Array.from(
-          main.querySelectorAll<HTMLInputElement>('input[type="checkbox"][id]'),
-          (box) => [box.id, box.checked],
-        ),
-      );
-      // Keep text that the person typed while the view refreshes.
-      const typed = new Map(
-        Array.from(
-          main.querySelectorAll<
-            HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-          >('input[id], textarea[id], select[id]'),
-          (field) => [field.id, field.value],
-        ),
-      );
-      const caret =
-        focused instanceof HTMLTextAreaElement ||
-        focused instanceof HTMLInputElement
-          ? [focused.selectionStart, focused.selectionEnd]
-          : undefined;
-      // The local renderer escapes research text. Harness Markdown is sanitized
-      // again in an inert template, before it reaches the live page.
-      const template = document.createElement('template');
-      template.innerHTML = view.html;
-      for (const fragment of template.content.querySelectorAll('.md'))
-        fragment.innerHTML = DOMPurify.sanitize(fragment.innerHTML, {
-          ADD_ATTR: ['target'],
-        });
-      main.replaceChildren(template.content);
-      showFailure();
-      showDetail();
-      for (const [id, value] of typed) {
-        const field = document.getElementById(id);
-        if (
-          field instanceof HTMLInputElement ||
-          field instanceof HTMLTextAreaElement ||
-          field instanceof HTMLSelectElement
-        )
-          field.value = value;
-      }
-      if (lastHtml)
-        for (const detail of main.querySelectorAll<HTMLDetailsElement>(
-          'details[id]',
-        ))
-          detail.open = open.has(detail.id);
-      for (const [id, value] of checked) {
-        const box = document.getElementById(id);
-        if (box instanceof HTMLInputElement && !box.disabled)
-          box.checked = value;
-      }
-      showReview();
-      mountTranscripts(main, () => token);
-      mountTerminals(main);
-      inPanel?.focus({ preventScroll: true });
-      if (focusAttempt)
-        main
-          .querySelector<HTMLButtonElement>(
-            `[data-attempt="${CSS.escape(focusAttempt)}"]`,
-          )
-          ?.focus({ preventScroll: true });
-      else if (focusId) {
-        const field = document.getElementById(focusId);
-        field?.focus({ preventScroll: true });
-        if (
-          caret &&
-          (field instanceof HTMLTextAreaElement ||
-            field instanceof HTMLInputElement)
-        )
-          field.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
-      } else if (focusDetail)
-        document
-          .getElementById(focusDetail)
-          ?.querySelector('summary')
-          ?.focus({ preventScroll: true });
-      lastHtml = view.html;
-    }
-    observationLabel.textContent = view.observation;
-    connectionLabel.textContent = 'Connected · updates automatically';
-    document.body.dataset.connection = 'connected';
+    if (wanted !== viewQuery() || stopped) return;
+    if (reply.html !== lastHtml) render(reply.html);
+    focusPending();
+    const title =
+      'title' in reply && typeof reply.title === 'string' ? reply.title : '';
+    const stage =
+      'stage' in reply && typeof reply.stage === 'string' ? reply.stage : '';
+    projectTitle.textContent = title || 'Research desk';
+    stageLabel.textContent = stage;
+    stageLabel.hidden = !stage;
+    document.title = title ? `${title} – Verifold` : 'Verifold';
+    observationLabel.textContent = reply.observation;
+    showConnection(undefined);
   } catch (error) {
-    if (!stopped) {
-      connectionLabel.textContent =
+    if (!stopped)
+      showConnection(
         error instanceof Error &&
-        error.name !== 'AbortError' &&
-        error.name !== 'TypeError'
+          error.name !== 'AbortError' &&
+          error.name !== 'TypeError'
           ? error.message
-          : 'Disconnected · showing the last saved view. Reconnecting…';
-      document.body.dataset.connection = 'disconnected';
-    }
+          : 'The desk shows the last saved view and tries again.',
+      );
   } finally {
     clearTimeout(deadline);
     loading = false;
@@ -239,9 +358,47 @@ async function refresh(): Promise<void> {
         () => {
           void refresh();
         },
-        wanted !== selected || wantedTask !== selectedTask ? 0 : 2000,
+        wanted !== viewQuery() ? 0 : 2000,
       );
   }
+}
+
+function closeRail(): void {
+  document.body.classList.remove('rail-open');
+  menuButton.setAttribute('aria-expanded', 'false');
+}
+
+/** Open a view or a panel. A new view closes the panel. Focus moves to the new place after the next render. */
+function navigate(
+  next: { readonly view?: string; readonly panel?: string },
+  focus: string,
+  scroll: ScrollLogicalPosition = 'nearest',
+): void {
+  if (next.view !== undefined && next.view !== view) {
+    view = next.view;
+    panel = '';
+  }
+  if (next.panel !== undefined) panel = next.panel;
+  remember('view', view === 'home' ? undefined : view);
+  remember('panel', panel);
+  pendingFocus = focus;
+  pendingScroll = scroll;
+  closeRail();
+  void refresh();
+}
+
+/** Open one item in the panel. Closing the panel returns focus to the control that opened it. */
+function openItem(
+  kind: 'task' | 'worker' | 'attempt',
+  id: string,
+  from: HTMLElement,
+): void {
+  if (kind === 'task') selectedTask = id;
+  else if (kind === 'worker') selectedWorker = id;
+  else selected = id;
+  remember(kind, id);
+  opener = selectorOf(from);
+  navigate({ panel: kind }, '#panel-title');
 }
 
 function field(id: string): string {
@@ -255,15 +412,15 @@ function field(id: string): string {
 
 /** The Accept button counts the selected files. The diff pane shows the chosen file. */
 function showReview(): void {
-  const accept = main.querySelector<HTMLButtonElement>(
+  const accept = content.querySelector<HTMLButtonElement>(
     '[data-action="task-accept"]',
   );
   if (accept) {
-    const count = main.querySelectorAll('input[data-file]:checked').length;
+    const count = content.querySelectorAll('input[data-file]:checked').length;
     accept.textContent = `Accept ${count} ${count === 1 ? 'file' : 'files'}`;
     accept.disabled = count === 0;
   }
-  const pane = main.querySelector<HTMLElement>('.diff-pane');
+  const pane = content.querySelector<HTMLElement>('.diff-pane');
   if (
     !pane ||
     !shownDiff ||
@@ -271,7 +428,7 @@ function showReview(): void {
     pane.dataset.version !== shownDiff.version
   )
     return;
-  for (const button of main.querySelectorAll<HTMLElement>('[data-diff]'))
+  for (const button of content.querySelectorAll<HTMLElement>('[data-diff]'))
     button.setAttribute(
       'aria-pressed',
       String(button.dataset.diff === shownDiff.file),
@@ -387,7 +544,9 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         task,
         version,
         files: Array.from(
-          main.querySelectorAll<HTMLInputElement>('input[data-file]:checked'),
+          content.querySelectorAll<HTMLInputElement>(
+            'input[data-file]:checked',
+          ),
           (box) => box.dataset.file,
         ),
       };
@@ -539,6 +698,18 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = 'Done';
     failure = undefined;
+    // A new or resumed session opens in the panel, and so does a new task.
+    if (action === 'start' || action === 'resume' || action === 'restart') {
+      selectedWorker = undefined;
+      remember('worker', undefined);
+      opener = undefined;
+      navigate({ panel: 'worker' }, '#panel-title');
+    } else if (action === 'task-create') {
+      selectedTask = undefined;
+      remember('task', undefined);
+      opener = undefined;
+      navigate({ view: 'tasks', panel: 'task' }, '#panel-title');
+    }
     for (const id of [
       'session-prompt',
       'follow-up',
@@ -581,21 +752,60 @@ document.addEventListener('click', (event) => {
     event.target instanceof Element
       ? event.target.closest('button, a.skip')
       : null;
+  // On a phone the rail covers the view. A click beside it closes it.
+  if (
+    document.body.classList.contains('rail-open') &&
+    !(event.target instanceof Element && event.target.closest('.rail, #menu'))
+  ) {
+    closeRail();
+    return;
+  }
   if (!(target instanceof HTMLElement)) return;
   if (target.matches('a.skip')) {
     event.preventDefault();
-    main.focus();
+    document.getElementById('view')?.focus();
+    return;
+  }
+  if (target.id === 'menu') {
+    const open = document.body.classList.toggle('rail-open');
+    target.setAttribute('aria-expanded', String(open));
+    if (open)
+      content
+        .querySelector<HTMLElement>('.rail [aria-current="page"]')
+        ?.focus();
+    return;
+  }
+  if (target.dataset.view) {
+    const focus = target.dataset.focus;
+    navigate(
+      { view: target.dataset.view },
+      focus ? `#${CSS.escape(focus)}` : '#view-title',
+      focus ? 'start' : 'nearest',
+    );
+    return;
+  }
+  if (target.dataset.panel) {
+    target.closest('details')?.removeAttribute('open');
+    opener = selectorOf(target);
+    navigate({ panel: target.dataset.panel }, '#panel-title');
+    return;
+  }
+  if (target.hasAttribute('data-close-panel')) {
+    navigate({ panel: '' }, opener ?? '#view-title');
+    opener = undefined;
     return;
   }
   if (target.dataset.taskSelect) {
-    selectedTask = target.dataset.taskSelect;
-    try {
-      sessionStorage.setItem('verifold-desk-task', selectedTask);
-    } catch {
-      /* Selection still lasts until reload when browser storage is unavailable. */
-    }
-    connectionLabel.textContent = 'Opening task…';
-    void refresh();
+    openItem('task', target.dataset.taskSelect, target);
+    return;
+  }
+  if (target.dataset.worker) {
+    openItem('worker', target.dataset.worker, target);
+    return;
+  }
+  if (target.dataset.attempt) {
+    openItem('attempt', target.dataset.attempt, target);
+    return;
   }
   if (target.dataset.diff) void loadDiff(target);
   if (target.dataset.pane) {
@@ -616,25 +826,6 @@ document.addEventListener('click', (event) => {
     window.open(
       `/terminal?session=${encodeURIComponent(target.dataset.terminalTab)}`,
     );
-  if (target.dataset.worker) {
-    selectedWorker = target.dataset.worker;
-    try {
-      sessionStorage.setItem('verifold-desk-worker', selectedWorker);
-    } catch {
-      /* Selection still lasts until reload when browser storage is unavailable. */
-    }
-    void refresh();
-  }
-  if (target.dataset.attempt) {
-    selected = target.dataset.attempt;
-    try {
-      sessionStorage.setItem('verifold-desk-attempt', selected);
-    } catch {
-      /* Selection still lasts until reload when browser storage is unavailable. */
-    }
-    connectionLabel.textContent = 'Opening attempt…';
-    void refresh();
-  }
   if (target.dataset.detail) {
     detail = target.dataset.detail === 'details' ? 'details' : 'summary';
     showDetail();
@@ -664,7 +855,6 @@ document.addEventListener('click', (event) => {
       ? document.documentElement.dataset.theme === 'dark'
       : matchMedia('(prefers-color-scheme: dark)').matches;
     document.documentElement.dataset.theme = dark ? 'light' : 'dark';
-    target.textContent = dark ? 'Dark appearance' : 'Light appearance';
   }
   if (target.id === 'copy-command' && target.dataset.command) {
     void (
@@ -680,7 +870,25 @@ document.addEventListener('click', (event) => {
       });
   }
 });
-main.addEventListener('change', (event) => {
+// Escape closes the phone menu, then the panel. In a text field it does nothing, so a draft stays.
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  if (document.body.classList.contains('rail-open')) {
+    closeRail();
+    menuButton.focus();
+    return;
+  }
+  if (
+    !panel ||
+    document.body.classList.contains('t-locked') ||
+    (event.target instanceof Element &&
+      event.target.closest('input, textarea, select'))
+  )
+    return;
+  navigate({ panel: '' }, opener ?? '#view-title');
+  opener = undefined;
+});
+content.addEventListener('change', (event) => {
   if (event.target instanceof HTMLInputElement && event.target.dataset.file)
     showReview();
 });
