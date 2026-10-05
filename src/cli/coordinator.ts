@@ -15,6 +15,8 @@ import {
 import type { AgentTool, AgentTools } from './session-hosts.ts';
 import { replaced, type TaskEvent, type TaskManager } from './tasks.ts';
 import { ResultsStore, type Results } from './results.ts';
+import type { Compute } from './compute.ts';
+import { spent, usd } from './leases.ts';
 import { loadWorkspace } from './storage.ts';
 import { workerLimit } from './workers.ts';
 
@@ -136,6 +138,8 @@ export class Coordinator {
   private closing = false;
   /** The checks and the answer of the chosen direction. */
   private readonly results: ResultsStore;
+  /** GPU pods: the person's limits and the leases. */
+  private readonly compute: Compute | undefined;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -144,11 +148,13 @@ export class Coordinator {
       readonly tasks: TaskManager;
       readonly sessions: SessionManager;
       readonly debounceMs?: number;
+      readonly compute?: Compute;
     },
   ) {
     this.root = root;
     this.tasks = options.tasks;
     this.sessions = options.sessions;
+    this.compute = options.compute;
     this.results = new ResultsStore(root);
     this.debounceMs = options.debounceMs ?? coordinatorLimits.debounceMs;
   }
@@ -637,9 +643,105 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
         await this.results.propose(id, await this.accepted(), args);
         return 'Recorded the answer. The person signs off.';
       }
+      case 'verifold_compute':
+        return this.describeCompute();
+      case 'verifold_request_pod': {
+        const lease = await this.pods().leases.request({
+          by: 'coordinator',
+          gpu: args.gpuType,
+          hours: args.hours,
+          tasks: args.tasks,
+          reason: why(),
+        });
+        return `Asked the person for ${lease.id}: ${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour. Nothing is created until the person approves it. An event tells you the decision.`;
+      }
+      case 'verifold_stop_pod': {
+        const lease = await this.pods().leases.stop(
+          args.lease,
+          'coordinator',
+          why(),
+        );
+        return `Stopped the pod of ${lease.id}. RunPod erased its disk. The lease stays open until ${lease.deadline ?? 'its end'}.`;
+      }
+      case 'verifold_start_pod': {
+        const lease = await this.pods().leases.start(
+          args.lease,
+          'coordinator',
+          why(),
+        );
+        return `Started the pod of ${lease.id} again. An event tells you when it is ready.`;
+      }
+      case 'verifold_end_lease': {
+        const lease = await this.pods().leases.end(
+          args.lease,
+          'coordinator',
+          why(),
+        );
+        return lease.state === 'denied'
+          ? `Withdrew the request ${lease.id}.`
+          : `Ended ${lease.id}. Verifold deleted its pod.`;
+      }
       default:
         fail(`Verifold has no tool named ${name}.`);
     }
+  }
+
+  private pods(): Compute {
+    return this.compute ?? fail('This Verifold has no compute owner.');
+  }
+
+  /** The pods part of the state: the person's limits, the budget, the leases, and the allowed GPUs now. */
+  private async describeCompute(): Promise<string> {
+    const compute = this.pods();
+    const view = compute.view();
+    const { settings, budget } = view;
+    let offers: unknown;
+    try {
+      const catalog = await compute.catalog();
+      offers = settings.gpuTypes.map((id) => {
+        const offer = catalog.find((entry) => entry.id === id);
+        return offer
+          ? {
+              gpuType: id,
+              memoryGb: offer.memoryGb,
+              usdPerHour: offer.price,
+              stock: offer.stock,
+            }
+          : { gpuType: id, offered: false };
+      });
+    } catch (error) {
+      offers = `unknown: ${error instanceof Error ? error.message : 'RunPod did not answer.'}`;
+    }
+    const now = Date.now();
+    return JSON.stringify({
+      podsOn: settings.limitUsd !== null && view.key !== null,
+      limits: {
+        spendLimitUsd: settings.limitUsd,
+        maxUsdPerHourPerPod: settings.maxUsdPerHour,
+        maxHoursPerLease: settings.maxHoursPerLease,
+        idleMinutesBeforeStop: settings.idleMinutes,
+        podsAtOnce: settings.maxRunningPods,
+        diskGb: settings.diskGb,
+        images: settings.images,
+      },
+      budget: {
+        spentUsd: Number(budget.spent.toFixed(2)),
+        heldUsd: Number(budget.reserved.toFixed(2)),
+        leftUsd: budget.left === null ? null : Number(budget.left.toFixed(2)),
+      },
+      allowedGpus: offers,
+      leases: view.leases.slice(-20).map((lease) => ({
+        id: lease.id,
+        state: lease.state,
+        tasks: lease.tasks,
+        gpuType: lease.gpu,
+        usdPerHour: lease.rate,
+        hours: lease.hours,
+        endsAt: lease.deadline,
+        costSoFarUsd: Number(spent(lease, now).toFixed(2)),
+        ...(lease.end ? { ended: lease.end.reason } : {}),
+      })),
+    });
   }
 
   /** The person rules on a check that waits for their judgement. The coordinator reads it at its next wakeup. */
@@ -864,8 +966,75 @@ const inputs = {
     'Files that exist in the project now. Do not list files from tasks that this task waits for: it receives them when it starts.',
 };
 
+const lease = {
+  type: 'string',
+  pattern: '^lease-[0-9]{1,6}$',
+  description: 'A lease ID from verifold_compute',
+};
+
 /** The coordinator's tools. Each one calls the task operation that the person uses in the desk. */
 const coordinatorToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_compute',
+    description:
+      'Read the GPU pod limits that the person set, what is spent and held, each lease with its state and cost, and the allowed GPU types with their price and stock now.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_request_pod',
+    description:
+      'Ask the person for a GPU pod lease for tasks: one GPU of an allowed type, for a number of hours. Nothing is created or billed until the person approves it. Verifold refuses a request that does not fit the limits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        gpuType: {
+          type: 'string',
+          description: 'An allowed GPU type ID from verifold_compute',
+        },
+        hours: { type: 'integer', minimum: 1, maximum: 24 },
+        tasks: { type: 'array', items: task, minItems: 1, maxItems: 4 },
+        reason,
+      },
+      required: ['gpuType', 'hours', 'tasks', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_stop_pod',
+    description:
+      'Stop the pod of a lease while no task needs it. RunPod erases its disk. The lease stays open until its end, so you can start the pod again.',
+    inputSchema: {
+      type: 'object',
+      properties: { lease, reason },
+      required: ['lease', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_start_pod',
+    description: 'Start the stopped pod of an open lease again.',
+    inputSchema: {
+      type: 'object',
+      properties: { lease, reason },
+      required: ['lease', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_end_lease',
+    description:
+      'End a lease now: Verifold deletes its pod, and billing ends. A request that waits for the person is withdrawn.',
+    inputSchema: {
+      type: 'object',
+      properties: { lease, reason },
+      required: ['lease', 'reason'],
+      additionalProperties: false,
+    },
+  },
   {
     name: 'verifold_state',
     description:
