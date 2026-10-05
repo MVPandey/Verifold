@@ -224,7 +224,15 @@ async function act(
         await coordinator.resume();
         return 200;
       case 'coordinator-message':
-        await tasks.post('coordinator', body.text);
+        // A question from a task's panel names the task, so the coordinator knows what it is about.
+        if (body.about !== undefined && !validTaskId(body.about))
+          throw new SessionActionError('The desk sent an invalid task ID.');
+        await tasks.post(
+          'coordinator',
+          body.about !== undefined && typeof body.text === 'string'
+            ? `About ${body.about}: ${body.text}`
+            : body.text,
+        );
         return 200;
       default:
         return 400;
@@ -708,8 +716,9 @@ export async function startDesk(
     const frame = parseFrame(
       url.searchParams.get('view'),
       url.searchParams.get('panel'),
+      url.searchParams.get('since'),
     );
-    const keys = ['attempt', 'task', 'worker', 'view', 'panel'];
+    const keys = ['attempt', 'task', 'worker', 'view', 'panel', 'since'];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
       (chosenTask !== undefined && !validTaskId(chosenTask)) ||
