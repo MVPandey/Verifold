@@ -21,6 +21,9 @@ import {
   type TaskSessions,
 } from '../src/cli/tasks.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
+import { Compute } from '../src/cli/compute.ts';
+import { KeyStore } from '../src/cli/credentials.ts';
+import { createServer } from 'node:http';
 import { startDesk } from '../src/cli/desk.ts';
 import { SessionPool } from '../src/cli/workers.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
@@ -104,6 +107,7 @@ interface Call {
 async function team(
   t: test.TestContext,
   debounceMs = 30,
+  compute?: (root: string) => Promise<Compute>,
 ): Promise<{
   root: string;
   tasks: TaskManager;
@@ -152,6 +156,7 @@ async function team(
   const coordinator = new Coordinator(root, {
     tasks,
     debounceMs,
+    ...(compute ? { compute: await compute(root) } : {}),
     sessions: new SessionManager(root, {
       clientVersion: 'test',
       ownerId: 'owner-1',
@@ -981,5 +986,144 @@ await test('the coordinator reports checks with accepted evidence and proposes t
       'My ruling on check 2 (Settled nodes fall by 30 percent.): partly passed. Seven of nine groups is not every group.',
       'I accept the answer.',
     ],
+  );
+});
+
+await test('the coordinator reads the compute limits and asks the person for a pod, and only the person approves', async (t) => {
+  // A fake RunPod with the key check and the GPU catalog. No pod is created in this test.
+  const created: string[] = [];
+  const api = createServer((request, response) => {
+    if (request.method === 'POST') created.push(request.url ?? '');
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(
+      JSON.stringify(
+        request.url?.startsWith('/v2/catalog/gpus')
+          ? {
+              gpus: [
+                {
+                  id: 'NVIDIA RTX A5000',
+                  name: 'RTX A5000',
+                  memory: 24,
+                  secure: true,
+                  community: true,
+                  price: { secure: 0.27, community: 0.16 },
+                  availability: 'HIGH',
+                },
+                {
+                  id: 'NVIDIA H100 80GB HBM3',
+                  name: 'H100',
+                  memory: 80,
+                  secure: true,
+                  community: true,
+                  price: { secure: 0.4, community: 0.3 },
+                  availability: 'NONE',
+                },
+              ],
+            }
+          : { pods: [] },
+      ),
+    );
+  });
+  api.listen(0, '127.0.0.1');
+  await new Promise((resolve) => api.once('listening', resolve));
+  t.after(() => api.close());
+  const address = api.address();
+  const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+  let pods: Compute | undefined;
+  const { coordinator, script, results, turns } = await team(
+    t,
+    30,
+    async (root) => {
+      pods = new Compute(root, {
+        url,
+        store: new KeyStore({
+          home: join(root, 'home'),
+          platform: 'linux',
+          secretTool: join(root, 'none'),
+        }),
+      });
+      await pods.load();
+      await pods.setKey('rpa_TESTKEY0123456789abcdefWXYZ', true);
+      await pods.saveSettings({
+        limitUsd: '5',
+        maxUsdPerHour: '0.5',
+        maxHoursPerLease: '4',
+        idleMinutes: '15',
+        maxRunningPods: '1',
+        diskGb: '50',
+        images: 'runpod/base:1.0',
+        gpuTypes: ['NVIDIA RTX A5000', 'NVIDIA H100 80GB HBM3'],
+      });
+      return pods;
+    },
+  );
+  const ask = {
+    gpuType: 'NVIDIA RTX A5000',
+    hours: 2,
+    tasks: ['task-1'],
+    reason: 'The training run needs a GPU.',
+  };
+  await script([
+    [
+      { name: 'verifold_compute', arguments: {} },
+      {
+        name: 'verifold_request_pod',
+        arguments: { ...ask, gpuType: 'NVIDIA H100 80GB HBM3' },
+      },
+      { name: 'verifold_request_pod', arguments: { ...ask, hours: 9 } },
+      { name: 'verifold_request_pod', arguments: ask },
+      {
+        name: 'verifold_end_lease',
+        arguments: { lease: 'lease-1', reason: 'Asked too early.' },
+      },
+    ],
+  ]);
+  await coordinator.start({
+    objective: 'Train a small model.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  const answers = (await results()).slice(-5);
+  const state = JSON.parse(answers[0]?.result.content[0]?.text ?? '{}') as {
+    podsOn: boolean;
+    budget: { leftUsd: number };
+    allowedGpus: { gpuType: string; usdPerHour: number; stock: string }[];
+  };
+  assert.equal(state.podsOn, true);
+  assert.equal(state.budget.leftUsd, 5);
+  assert.deepEqual(
+    state.allowedGpus.map((gpu) => [gpu.gpuType, gpu.usdPerHour, gpu.stock]),
+    [
+      ['NVIDIA RTX A5000', 0.27, 'HIGH'],
+      ['NVIDIA H100 80GB HBM3', 0.4, 'NONE'],
+    ],
+  );
+  assert.deepEqual(
+    answers.map((answer) => answer.result.isError),
+    [false, true, true, false, false],
+  );
+  assert.match(
+    answers[1]?.result.content[0]?.text ?? '',
+    /no NVIDIA H100 80GB HBM3 in stock/,
+  );
+  assert.match(
+    answers[2]?.result.content[0]?.text ?? '',
+    /Ask for 1 to 4 hours/,
+  );
+  assert.match(
+    answers[3]?.result.content[0]?.text ?? '',
+    /Asked the person for lease-1/,
+  );
+  assert.equal(
+    answers[4]?.result.content[0]?.text,
+    'Withdrew the request lease-1.',
+  );
+  // The coordinator cannot approve: nothing was created at RunPod.
+  assert.deepEqual(created, []);
+  assert.equal(pods?.leases.get('lease-1').state, 'denied');
+  assert.equal(
+    pods?.leases.get('lease-1').reason,
+    'The training run needs a GPU.',
   );
 });

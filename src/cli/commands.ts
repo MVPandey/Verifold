@@ -43,6 +43,7 @@ import {
 import { claimOwner } from './owner.ts';
 import { Compute } from './compute.ts';
 import { KeyStore, type KeyStoreOptions } from './credentials.ts';
+import { spent, type Lease } from './leases.ts';
 /** How a view can show a question. The terminal shows only the question text. */
 export type AskHint =
   | { readonly kind: 'confirm'; readonly yes: string; readonly no: string }
@@ -127,6 +128,7 @@ verifold profile [--setup]            Inspect or configure your global profile
 verifold runpod key set [--file]      Store a RunPod API key from hidden input or stdin, after a check
 verifold runpod key status|check|remove
                                       Show where the key is, check it with RunPod, or remove it
+verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when the desk does not run
 
 Options: --workspace path (default: current directory), --help, --version
 Init connects your harness and profile, then asks for a project directory and context.
@@ -474,9 +476,16 @@ async function serveDesk(
         onEvent: (event) => owned.coordinator?.notify(event),
       });
       owned.tasks = tasks;
+      // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
+      const compute = computeFor(root, io, (lease, line) => {
+        io.progress?.(`Pod ${line}`);
+        if (lease.history.at(-1)?.by !== 'coordinator')
+          owned.coordinator?.notify({ kind: 'pod', text: line });
+      });
       // The coordinator has its own session, outside the worker slots.
       const coordinator = new Coordinator(root, {
         tasks,
+        compute,
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
@@ -484,11 +493,13 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
-      const compute = computeFor(root, io);
       try {
         await sessions.load();
         await coordinator.load();
         await compute.load();
+        // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
+        await compute.leases.recover();
+        compute.watch();
         const stopped = await tasks.settle();
         if (stopped)
           io.progress?.(
@@ -584,6 +595,8 @@ async function serveDesk(
           );
         // A task turn that Ctrl+C stopped becomes a version for review.
         await tasks.settle();
+        // Pods stop when Verifold stops, so billing stops.
+        for (const line of await compute.close()) io.progress?.(line);
       }
     } finally {
       await owner.release();
@@ -617,11 +630,16 @@ async function recover(
     );
 }
 
-/** The compute settings and RunPod key of a project, with the test hooks of the I/O. */
-function computeFor(root: string, io: CliIO): Compute {
+/** The compute settings, RunPod key, and pod leases of a project, with the test hooks of the I/O. */
+function computeFor(
+  root: string,
+  io: CliIO,
+  onChange?: (lease: Lease, line: string) => void,
+): Compute {
   return new Compute(root, {
     store: new KeyStore(io.compute?.store),
     ...(io.compute?.url ? { url: io.compute.url } : {}),
+    ...(onChange ? { onChange } : {}),
   });
 }
 
@@ -672,6 +690,52 @@ async function runpodCommand(
     io.progress?.(
       'RunPod keeps the key valid until you revoke it in the RunPod console.',
     );
+}
+
+/**
+ * `verifold pods` lists the leases. `verifold pods stop <lease|all>` stops pods
+ * without the desk, as the project owner, so it refuses while Verifold runs.
+ */
+async function podsCommand(
+  verb: string | undefined,
+  target: string | undefined,
+  root: string,
+  io: CliIO,
+): Promise<void> {
+  if (verb !== undefined && verb !== 'stop')
+    throw new Error('Use verifold pods, or verifold pods stop <lease or all>.');
+  const compute = computeFor(root, io);
+  if (verb === 'stop')
+    await owned(root, io, async () => {
+      await compute.load();
+      // Pods that run now outlived their owner, so recovery stops them first.
+      await compute.leases.recover();
+      if (target === 'all') await compute.close();
+      else {
+        const lease = compute.leases.get(target);
+        if (lease.state === 'ready' || lease.state === 'starting')
+          await compute.leases.stop(
+            lease.id,
+            'person',
+            'you stopped it in the terminal.',
+          );
+      }
+    });
+  else await compute.load();
+  const now = Date.now();
+  io.out(
+    JSON.stringify(
+      compute.view().leases.map((lease) => ({
+        lease: lease.id,
+        state: lease.state,
+        gpu: lease.gpu,
+        pod: lease.podId,
+        tasks: lease.tasks,
+        costUsd: Number(spent(lease, now).toFixed(2)),
+        endsAt: lease.deadline,
+      })),
+    ),
+  );
 }
 
 /** Run foreground work as the project owner, so no desk owner runs at the same time. */
@@ -750,15 +814,21 @@ export async function runCli(
         throw error;
     }
   }
-  // `runpod key <action>` is the only command with more words.
+  // `runpod key <action>` and `pods stop <lease>` are the only commands with more words.
   if (
     !command ||
-    (command === 'runpod' ? positionals.length !== 3 : positionals.length > 1)
+    (command === 'runpod'
+      ? positionals.length !== 3
+      : command === 'pods'
+        ? positionals.length !== 1 && positionals.length !== 3
+        : positionals.length > 1)
   )
     throw new Error(
       command === 'runpod'
         ? 'Use verifold runpod key set, status, check, or remove.'
-        : 'Provide one command. Use --help.',
+        : command === 'pods'
+          ? 'Use verifold pods, or verifold pods stop <lease or all>.'
+          : 'Provide one command. Use --help.',
     );
   const allowed: Record<string, readonly string[]> = {
     init: [
@@ -782,6 +852,7 @@ export async function runCli(
     session: ['host', 'mode', 'model', 'prompt', 'no-open'],
     profile: ['setup', 'agency-dir', 'host', 'model'],
     runpod: ['file'],
+    pods: [],
   };
   if (!Object.hasOwn(allowed, command))
     throw new Error(`Unknown command: ${command}. Use --help.`);
@@ -816,6 +887,10 @@ export async function runCli(
   }
   if (command === 'runpod') {
     await runpodCommand(positionals[1], positionals[2], values.file, root, io);
+    return;
+  }
+  if (command === 'pods') {
+    await podsCommand(positionals[1], positionals[2], root, io);
     return;
   }
   if (command === 'ui') {
