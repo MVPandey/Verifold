@@ -228,7 +228,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
     '?attempt=../../secret',
     '?file=workspace.json',
     `?attempt=${randomUUID()}&attempt=${randomUUID()}`,
-    '?view=results',
+    '?view=unknown',
     '?panel=page',
     '?view=home&view=records',
   ])
@@ -1408,4 +1408,146 @@ await test('desk compares the directions in a table and lists sources as they ar
   );
   // While a step runs, a direction cannot be chosen.
   assert.doesNotMatch(desk(true, 'direction'), /data-action="select"/);
+});
+
+await test('desk leads Results with the checks, then the answer and its sign-off', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'bidir',
+        title: 'Bidirectional search',
+        recommendation: 'A pilot.',
+        gates: [
+          'Distances match.',
+          'Settled nodes fall by 30 percent.',
+          'The gain survives a control.',
+        ],
+      },
+    ],
+    selectedId: 'bidir',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-05T12:00:00.000Z';
+  const results = (decision?: object): object => ({
+    schemaVersion: 1,
+    direction: 'bidir',
+    checks: [
+      {
+        check: 1,
+        result: 'passed',
+        value: '0 mismatches in 1,800 queries',
+        evidence: ['results/summary.json'],
+        reason: 'Every query matches.',
+        at,
+      },
+      {
+        check: 2,
+        result: 'judgement',
+        value: '7 of 9 groups gain 30 percent',
+        evidence: ['results/summary.json'],
+        reason: 'The check does not say whether every group must gain.',
+        question: 'Does a gain in 7 of 9 groups count as a pass?',
+        at,
+      },
+    ],
+    answer: {
+      statement: 'Bidirectional search settles fewer nodes in most groups.',
+      claims: [
+        {
+          text: 'Distances match.',
+          evidence: [
+            'results/summary.json',
+            'https://arxiv.org/abs/1504.05140',
+          ],
+        },
+      ],
+      at,
+      ...(decision ? { decision } : {}),
+    },
+  });
+  const desk = (
+    view: DeskView,
+    decision?: object,
+  ): ReturnType<typeof renderDesk> =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [], selected: null, idle: [], messages: [] },
+        coordinator: {
+          state: {
+            objective: 'Pilot.',
+            host: 'claude',
+            model: null,
+            startedAt: at,
+            stoppedAt: null,
+            session: 'C1',
+            created: 0,
+            planApproved: true,
+            cursor: 0,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          session: {
+            live: true,
+            saveFailed: false,
+            record: { id: 'C1', status: 'idle', host: 'claude' },
+          },
+          waiting: 0,
+          limitedUntil: null,
+          results: results(decision),
+        },
+      } as never,
+      { view, panel: null },
+    );
+  const view = desk('results');
+  // The checks come first, each with its result. A check without a report says so.
+  assert.match(view.html, /2 of 3 reported/);
+  assert.match(
+    view.html,
+    /data-result="passed"[\s\S]*Distances match\.[\s\S]*0 mismatches in 1,800 queries[\s\S]*<code>results\/summary\.json<\/code>[\s\S]*<span class="check-result">Passed<\/span>/,
+  );
+  assert.match(
+    view.html,
+    /data-result="judgement"[\s\S]*Does a gain in 7 of 9 groups count as a pass\?[\s\S]*data-action="coordinator-rule" data-check="2" data-result="partial">It partly passed/,
+  );
+  assert.match(
+    view.html,
+    /data-result="none"[\s\S]*The gain survives a control\.[\s\S]*Not reported yet/,
+  );
+  // Then the answer. It cannot be accepted while a judgement is open.
+  assert.match(
+    view.html,
+    /The answer<\/h2><span class="tag reading">The coordinator's reading<\/span>/,
+  );
+  assert.match(view.html, /<a href="https:\/\/arxiv\.org\/abs\/1504\.05140"/);
+  assert.match(view.html, /Settle the 1 open judgement above first\./);
+  assert.match(
+    view.html,
+    /data-action="coordinator-answer" data-decision="accepted" disabled>Accept the answer/,
+  );
+  // Needs you lists the judgement and the sign-off. The rail counts them on Results. The arc waits at the answer.
+  assert.deepEqual(
+    view.needs.map((item) => item.title),
+    [
+      'Check 2: Does a gain in 7 of 9 groups count as a pass?',
+      'The answer waits for your sign-off',
+    ],
+  );
+  assert.match(
+    view.html,
+    /<span>Results<\/span><span class="n"><span aria-hidden="true">◆ <\/span>2/,
+  );
+  assert.equal(view.stage, 'Answer: waits for you');
+  // After the sign-off the answer stays, marked with its time.
+  const accepted = desk('results', { kind: 'accepted', at });
+  assert.match(accepted.html, /You accepted the answer at/);
+  assert.equal(accepted.stage, 'Answer: accepted');
 });
