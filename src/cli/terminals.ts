@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { harnessEnvironment } from './harness.ts';
+import { childEnvironment } from './harness.ts';
 import { SessionActionError } from './session.ts';
 
 /**
@@ -213,7 +213,7 @@ export async function openTerminal(input: {
     cols: 100,
     rows: 30,
     cwd: input.cwd,
-    env: { ...harnessEnvironment(), ...input.env, TERM: 'xterm-256color' },
+    env: { ...childEnvironment(), ...input.env, TERM: 'xterm-256color' },
   });
   return new Terminal(process, input.owner, input.onExit);
 }

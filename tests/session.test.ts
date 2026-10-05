@@ -1336,6 +1336,29 @@ await test('a task with domains opens only those to its shell commands', async (
     await claude.close();
 
     // Codex cannot limit domains, so a task with domains gets the network.
+    interface Profile {
+      readonly extends: string;
+      readonly filesystem: Record<string, string>;
+      readonly network?: { enabled: boolean };
+    }
+    const threadStart = async (
+      path: string,
+    ): Promise<{
+      sandbox?: string;
+      config?: {
+        permissions?: Record<string, Profile>;
+        default_permissions?: string;
+      };
+    }> => {
+      for (let tries = 0; tries < 250; tries++) {
+        const line = (await readFile(path, 'utf8').catch(() => ''))
+          .split('\n')
+          .find((entry) => entry.includes('"thread/start"'));
+        if (line) return (JSON.parse(line) as { params: object }).params;
+        await delay(20);
+      }
+      throw new Error(`${path} has no thread/start.`);
+    };
     await mkdir(folder('net-codex'), { recursive: true });
     const codex = create();
     await codex.startTask({
@@ -1345,22 +1368,31 @@ await test('a task with domains opens only those to its shell commands', async (
       task: { id: 'task-2', claim: '0123456789abcdef' },
       network: ['data.example.org'],
     });
-    let start: { params?: { config?: Record<string, unknown> } } | undefined;
-    for (let tries = 0; tries < 250 && !start; tries++) {
-      start = (
-        await readFile(join(folder('net-codex'), 'rpc.jsonl'), 'utf8').catch(
-          () => '',
-        )
-      )
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as { method?: string })
-        .find((message) => message.method === 'thread/start') as typeof start;
-      if (!start) await delay(20);
-    }
-    assert.deepEqual(start?.params?.config?.sandbox_workspace_write, {
-      network_access: true,
-    });
+    // A strict thread gets Verifold's permission profile instead of a sandbox mode.
+    const strict = await threadStart(join(folder('net-codex'), 'rpc.jsonl'));
+    assert.equal(strict.config?.default_permissions, 'verifold-strict');
+    assert.equal(strict.sandbox, undefined);
+    const profile = strict.config?.permissions?.['verifold-strict'];
+    assert.equal(profile?.extends, ':workspace');
+    assert.equal(profile?.filesystem['~/.ssh'], 'deny');
+    assert.equal(profile?.filesystem['~/Library/Keychains'], 'deny');
+    assert.deepEqual(profile?.network, { enabled: true });
     await codex.close();
+
+    // The coordinator reads with a read-only profile that also denies the credential files.
+    const coordinator = create();
+    await coordinator.startCoordinator({
+      host: 'codex',
+      prompt: 'Plan the work.',
+      tools: { specs: [], call: () => Promise.resolve({ ok: true, text: '' }) },
+    });
+    const planning = await threadStart(join(root, 'rpc.jsonl'));
+    assert.equal(planning.config?.default_permissions, 'verifold-coordinator');
+    assert.equal(planning.sandbox, undefined);
+    const readOnly = planning.config?.permissions?.['verifold-coordinator'];
+    assert.equal(readOnly?.extends, ':read-only');
+    assert.equal(readOnly?.filesystem['~/.verifold/credentials'], 'deny');
+    assert.equal(readOnly?.network, undefined);
+    await coordinator.close();
   });
 });

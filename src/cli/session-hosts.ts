@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { harnessEnvironment, type HarnessName } from './harness.ts';
+import { childEnvironment, type HarnessName } from './harness.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
@@ -27,10 +27,32 @@ export function validDomain(value: string): boolean {
 }
 
 /**
+ * Credential files and folders that a strict worker cannot read: SSH keys,
+ * Verifold's credentials, the RunPod, GitHub, and AWS logins, Git and netrc
+ * passwords, the logins of both harnesses, and the macOS login keychain. A
+ * sandboxed command with network access can otherwise read keychain items
+ * through the `security` tool. Probed on Codex 0.160.0.
+ */
+export const credentialPaths = [
+  '~/.ssh',
+  '~/.verifold/credentials',
+  '~/.runpod',
+  '~/.aws/credentials',
+  '~/.config/gh',
+  '~/.git-credentials',
+  '~/.netrc',
+  '~/.claude/.credentials.json',
+  '~/.codex/auth.json',
+  '~/Library/Keychains',
+] as const;
+
+/**
  * Claude Code settings for a strict task session: shell commands run in the
  * sandbox, file tools may edit only the working folder, and dontAsk mode
  * denies the rest. The sandbox blocks the network for shell commands, except
- * the task's domains. Probed on Claude Code 2.1.288 and 2.1.289.
+ * the task's domains. Neither shell commands nor file tools can read the
+ * credential paths. When the sandbox cannot start, Claude Code stops instead
+ * of running commands without it. Probed on Claude Code 2.1.288 and 2.1.289.
  */
 export function strictClaudeSettings(domains: readonly string[] = []): string {
   return JSON.stringify({
@@ -38,12 +60,59 @@ export function strictClaudeSettings(domains: readonly string[] = []): string {
     sandbox: {
       enabled: true,
       autoAllowBashIfSandboxed: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyRead: credentialPaths },
       ...(domains.length ? { network: { allowedDomains: domains } } : {}),
     },
     permissions: {
       allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
+      // The sandbox limits shell commands only. These rules limit the Read tool.
+      deny: credentialPaths.flatMap((path) => [
+        `Read(${path})`,
+        `Read(${path}/**)`,
+      ]),
     },
   });
+}
+
+/**
+ * The Codex permission profile of a session that nobody supervises. A strict
+ * task session extends the built-in workspace profile (writes only in the
+ * working folder and temporary folders), and the coordinator extends the
+ * read-only profile. Neither can read the credential paths. A task with domains
+ * gets the network, because Codex cannot limit it to domains. Probed on Codex
+ * 0.160.0.
+ */
+function codexProfile(
+  mode: 'strict' | 'coordinator',
+  network: boolean,
+): Record<string, unknown> {
+  return {
+    extends: mode === 'strict' ? ':workspace' : ':read-only',
+    filesystem: Object.fromEntries(
+      credentialPaths.map((path) => [path, 'deny']),
+    ),
+    ...(network ? { network: { enabled: true } } : {}),
+  };
+}
+
+/** The strict profile as `-c` options, for a Codex terminal on a strict task session. */
+export function strictCodexOptions(network: boolean): string[] {
+  const deny = credentialPaths
+    .map((path) => `${JSON.stringify(path)}="deny"`)
+    .join(',');
+  return [
+    '-c',
+    'permissions.verifold-strict.extends=":workspace"',
+    '-c',
+    `permissions.verifold-strict.filesystem={${deny}}`,
+    ...(network
+      ? ['-c', 'permissions.verifold-strict.network.enabled=true']
+      : []),
+    '-c',
+    'default_permissions="verifold-strict"',
+  ];
 }
 
 /**
@@ -243,7 +312,7 @@ function launch(
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: {
-      ...harnessEnvironment(),
+      ...childEnvironment(),
       ...(options.host === 'claude' && options.mode === 'strict'
         ? strictClaudeEnvironment
         : {}),
@@ -1032,9 +1101,6 @@ function codex(options: HostOptions): HostSession {
               '-c',
               `mcp_servers.${/^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name)}.enabled=false`,
             ]),
-            ...(options.network?.length
-              ? ['-c', 'sandbox_workspace_write.network_access=true']
-              : []),
           ];
         if (!config) {
           emit({
@@ -1051,18 +1117,19 @@ function codex(options: HostOptions): HostSession {
 
   /** Start or resume the thread with the configuration that turns off the user's MCP servers. */
   function startThread(config: Record<string, unknown>): void {
+    const unsupervised =
+      options.mode === 'strict' || options.mode === 'coordinator'
+        ? options.mode
+        : null;
     call(
       options.resume ? 'thread/resume' : 'thread/start',
       {
         ...(options.resume ? { threadId: options.resume } : {}),
         cwd: options.cwd,
         // A strict task session and the coordinator get no approvals: an action outside the sandbox fails.
-        approvalPolicy:
-          options.mode === 'strict' || options.mode === 'coordinator'
-            ? 'never'
-            : 'on-request',
-        sandbox:
-          options.mode === 'coordinator' ? 'read-only' : 'workspace-write',
+        approvalPolicy: unsupervised ? 'never' : 'on-request',
+        // A session that nobody supervises selects its permission profile in the configuration below instead.
+        ...(unsupervised ? {} : { sandbox: 'workspace-write' }),
         // Without this, a user's global reviewer setting can answer requests meant for the person.
         approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
         ...(options.model ? { model: options.model } : {}),
@@ -1075,8 +1142,18 @@ function codex(options: HostOptions): HostSession {
               })),
             }
           : {}),
-        config: options.network?.length
-          ? { ...config, sandbox_workspace_write: { network_access: true } }
+        // The `permissions` parameter made Codex 0.160.0 fail with "failed to load workspace requirements"; `default_permissions` works.
+        config: unsupervised
+          ? {
+              ...config,
+              permissions: {
+                [`verifold-${unsupervised}`]: codexProfile(
+                  unsupervised,
+                  Boolean(options.network?.length),
+                ),
+              },
+              default_permissions: `verifold-${unsupervised}`,
+            }
           : config,
       },
       (result) => {
