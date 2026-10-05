@@ -335,11 +335,14 @@ export class RunPod {
 
   /** What RunPod billed for one pod since a time, in USD, from its hourly records. */
   async billed(id: string, since: string): Promise<number> {
-    const hour = new Date(since);
-    hour.setUTCMinutes(0, 0, 0);
+    // RunPod needs the start and the end together; both fall on hour boundaries.
+    const start = new Date(since);
+    start.setUTCMinutes(0, 0, 0);
+    const end = new Date();
+    end.setUTCHours(end.getUTCHours() + 1, 0, 0, 0);
     const value = await this.#call(
       'GET',
-      `/v2/billing/pods?podId=${encodeURIComponent(id)}&bucketSize=hour&startTime=${encodeURIComponent(hour.toISOString())}`,
+      `/v2/billing/pods?podId=${encodeURIComponent(id)}&bucketSize=hour&startTime=${encodeURIComponent(start.toISOString())}&endTime=${encodeURIComponent(end.toISOString())}`,
     );
     const records = field(value, 'records');
     return Array.isArray(records)

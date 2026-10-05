@@ -200,6 +200,18 @@ async function fakeRunPod(t: test.TestContext): Promise<{
         request.method === 'GET' &&
         url.pathname === '/v2/billing/pods'
       ) {
+        // Like RunPod, the fake needs the start and the end together.
+        if (
+          !url.searchParams.get('startTime') ||
+          !url.searchParams.get('endTime')
+        ) {
+          json(400, {
+            title: 'Bad Request',
+            status: 400,
+            detail: 'startTime and endTime must be provided together',
+          });
+          return;
+        }
         json(200, {
           records: mode.billed
             ? [
