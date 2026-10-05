@@ -2071,6 +2071,37 @@ body[data-detail='details'] .summary-only {
   margin-top: 8px;
 }
 
+/* ---------- Compute ---------- */
+.gpus td:first-child {
+  width: 1%;
+}
+.gpus th[scope='row'] {
+  color: var(--ink);
+  white-space: normal;
+}
+.gpus td:nth-child(n + 3) {
+  white-space: nowrap;
+}
+.tag.over-cap {
+  padding: 0 6px;
+  border: 1px solid var(--caution-line);
+  border-radius: 6px;
+  background: var(--caution-bg);
+  color: var(--caution);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+#key-replace {
+  margin-top: 10px;
+}
+#key-replace > summary {
+  font-weight: 650;
+  cursor: pointer;
+}
+#key-replace[open] > summary {
+  margin-bottom: 8px;
+}
+
 /* ---------- Records ---------- */
 .table {
   overflow-x: auto;
