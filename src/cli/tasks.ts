@@ -234,12 +234,31 @@ export interface TaskEvent {
   readonly text: string;
 }
 
+/** Where a task works: its folder in this computer and the paths that it may write. */
+export interface TaskPlace {
+  readonly id: string;
+  readonly folder: string;
+  readonly writable: readonly string[];
+}
+
+/** GPU pod tools for workers. A project with pods on offers them to each new worker. */
+export interface PodTools {
+  readonly on: () => boolean;
+  readonly specs: readonly AgentTool[];
+  readonly call: (
+    task: TaskPlace,
+    name: string,
+    input: Record<string, unknown>,
+  ) => Promise<string>;
+}
+
 export interface TaskManagerOptions {
   readonly ownerId: string;
   readonly sessions: TaskSessions;
   /** One line for the owner terminal when a task changes state. */
   readonly progress?: (line: string) => void;
   readonly onEvent?: (event: TaskEvent) => void;
+  readonly pods?: PodTools;
 }
 
 function fail(message: string): never {
@@ -550,7 +569,7 @@ export class TaskManager {
         session = await this.options.sessions.startTask({
           host: task.assignment.host,
           ...(task.assignment.model ? { model: task.assignment.model } : {}),
-          prompt: `${await prompt(task.assignment, handed)}${await this.outbox(task.id)}`,
+          prompt: `${await prompt(task.assignment, handed, this.options.pods?.on() ?? false)}${await this.outbox(task.id)}`,
           cwd: join(this.root, workspace.path),
           task: { id: task.id, claim: claim.id },
           tools: this.workerTools({ id: task.id, claim: claim.id }),
@@ -1005,15 +1024,69 @@ export class TaskManager {
     });
   }
 
-  /** Verifold's tools for the worker of one task attempt. Each call runs in the task queue. */
+  /**
+   * Verifold's tools for the worker of one task attempt. Each call runs in the
+   * task queue, except the pod tools: a pod command can run for 10 minutes,
+   * and the queue must not wait for it.
+   */
   private workerTools(binding: {
     readonly id: string;
     readonly claim: string;
   }): AgentTools {
+    const pods = this.options.pods;
     return {
-      specs: workerToolSpecs,
+      specs: [...workerToolSpecs, ...(pods?.on() ? pods.specs : [])],
       call: (name, input, callId) =>
-        this.serial(() => this.toolCall(binding, name, input, callId)),
+        pods && name.startsWith('verifold_pod_')
+          ? this.podCall(pods, binding, name, input)
+          : this.serial(() => this.toolCall(binding, name, input, callId)),
+    };
+  }
+
+  /** One pod tool call, from the current attempt of a running task only. */
+  private async podCall(
+    pods: PodTools,
+    binding: { readonly id: string; readonly claim: string },
+    name: string,
+    input: unknown,
+  ): Promise<{ readonly ok: boolean; readonly text: string }> {
+    const place = await this.folderOf(binding.id, binding.claim);
+    if (!place)
+      return {
+        ok: false,
+        text: 'This task attempt is no longer current, so Verifold did nothing.',
+      };
+    try {
+      return {
+        ok: true,
+        text: await pods.call(place, name, object(input) ?? {}),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        text: error instanceof Error ? error.message : 'The pod tool failed.',
+      };
+    }
+  }
+
+  /**
+   * The folder and the writable paths of a task's latest attempt. With a
+   * claim, only while that claim runs the task.
+   */
+  async folderOf(id: string, claim?: string): Promise<TaskPlace | null> {
+    const task = await this.read(id);
+    const workspace = task?.attempts.at(-1)?.workspace;
+    if (
+      !task ||
+      !workspace ||
+      (claim !== undefined &&
+        (task.claim?.id !== claim || task.state !== 'running'))
+    )
+      return null;
+    return {
+      id,
+      folder: join(this.root, workspace.path),
+      writable: task.assignment.writable,
     };
   }
 
@@ -2034,6 +2107,7 @@ function restrictions(host: HarnessName, net: Assignment['network']): string[] {
 async function prompt(
   assignment: Assignment,
   handed: readonly { from: TaskRecord; artifact: TaskArtifact }[],
+  pods: boolean,
 ): Promise<string> {
   return `${await loadPrompt('task-worker')}
 
@@ -2060,5 +2134,11 @@ ${assignment.output}
 
 Network: ${assignment.network ? `shell commands can reach ${assignment.network.domains.join(', ')}. Download only what the task needs.` : 'shell commands cannot reach the network. Use web search and web fetch to read sources.'}
 
-Time limit for this turn: ${assignment.minutes} minutes.`;
+Time limit for this turn: ${assignment.minutes} minutes.${
+    pods
+      ? `
+
+GPU pod: this project can rent GPU pods on RunPod. If this task needs a GPU, ask the coordinator with verifold_post; it asks the person for a pod. When the pod is ready, use verifold_pod_copy to copy files to it, verifold_pod_run to run commands there (background: true for long work, then verifold_pod_job), and verifold_pod_copy again to copy results back into your writable paths. The pod's disk is erased when the pod stops. Verifold also copies your writable paths back before it stops the pod.`
+      : ''
+  }`;
 }

@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage } from 'node:http';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Compute } from '../src/cli/compute.ts';
@@ -132,11 +140,18 @@ async function fakeRunPod(t: test.TestContext): Promise<{
         assert.deepEqual(Object.keys(input).sort(), [
           'cloud',
           'disk',
+          'env',
           'gpu',
           'image',
           'name',
           'ports',
         ]);
+        // The only variable is the lease's own SSH public key.
+        assert.match(
+          (input.env as Record<string, string>).PUBLIC_KEY ?? '',
+          /^ssh-ed25519 \S+ verifold-lease-\d+$/,
+        );
+        assert.equal(Object.keys(input.env as object).length, 1);
         assert.equal(input.cloud, 'SECURE');
         assert.deepEqual(input.ports, ['22/tcp']);
         if (mode.create === 'capacity') {
@@ -228,6 +243,13 @@ async function setup(
   t.after(() => rm(dir, { recursive: true, force: true }));
   const root = join(dir, 'project');
   await mkdir(root);
+  // SSH answers at once with a host key; the fake API has no log, so the key is trusted on first use.
+  const keyscan = join(dir, 'ssh-keyscan');
+  await writeFile(
+    keyscan,
+    `#!/usr/bin/env node\nconst args = process.argv.slice(2);\nprocess.stdout.write('[' + args.at(-1) + ']:' + args[args.indexOf('-p') + 1] + ' ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOmpawy8ACLANKLqK6tdKsFJ55Erhu5/b+MUJUrQrH1M\\n');\n`,
+  );
+  await chmod(keyscan, 0o755);
   const store = new KeyStore({
     home: join(dir, 'home'),
     platform: 'linux',
@@ -239,6 +261,7 @@ async function setup(
     const compute = new Compute(root, {
       store,
       url: api.url,
+      programs: { keyscan },
       now: () => clock.now,
       onChange: (_lease, line) => lines.push(line),
     });

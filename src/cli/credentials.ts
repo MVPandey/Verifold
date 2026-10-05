@@ -91,7 +91,8 @@ export class KeyStore {
     this.secretTool = options.secretTool ?? 'secret-tool';
   }
 
-  private get folder(): string {
+  /** `~/.verifold/credentials`. Strict workers cannot read it. */
+  get folder(): string {
     return join(this.home, '.verifold', 'credentials');
   }
 

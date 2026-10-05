@@ -9,6 +9,9 @@ import {
 } from './credentials.ts';
 import { RunPod, type GpuOffer } from './runpod.ts';
 import { Leases, isOpen, type Budget, type Lease } from './leases.ts';
+import { PodShell, podLimits, type PodTarget } from './pod-shell.ts';
+import type { AgentTool } from './session-hosts.ts';
+import type { PodTools, TaskPlace } from './tasks.ts';
 import { SessionActionError } from './session.ts';
 
 /** Limits for pods in one project. Only the person changes them. Without a spend limit, pods stay off. */
@@ -89,6 +92,55 @@ function number(
 }
 
 const gpuId = /^[A-Za-z0-9 ._()-]{1,100}$/;
+
+/** The worker tools for a task's GPU pod. Verifold runs SSH; the worker never gets the key. */
+export const podToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_pod_run',
+    description:
+      "Run a shell command as root on the task's GPU pod, in the task's folder there. Returns the exit code and the last 64 KB of output. Commands run for at most 10 minutes; with background: true the command starts as a job and the call returns its ID at once.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', maxLength: 8000 },
+        timeoutSeconds: { type: 'integer', minimum: 1, maximum: 600 },
+        background: { type: 'boolean' },
+      },
+      required: ['command'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_pod_job',
+    description:
+      'Read the state, the exit code, and the last 64 KB of output of a background job on the pod.',
+    inputSchema: {
+      type: 'object',
+      properties: { job: { type: 'string', pattern: '^job-[0-9a-f]{8}$' } },
+      required: ['job'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_pod_copy',
+    description:
+      "Copy files or folders between the task folder and the task's folder on the pod: to-pod, or from-pod into the writable paths only. At most 20 paths, 2,000 files, and 200 MB in one copy. The pod's disk is erased when the pod stops.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['to-pod', 'from-pod'] },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 20,
+        },
+      },
+      required: ['direction', 'paths'],
+      additionalProperties: false,
+    },
+  },
+];
 const image = /^runpod\/[a-z0-9][a-z0-9._/-]{0,150}(:[A-Za-z0-9._-]{1,128})?$/;
 
 /** Check the settings that the person sent. A missing GPU list keeps the current one. */
@@ -171,6 +223,10 @@ export class Compute {
   };
   private queue: Promise<unknown> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
+  private readonly shell: PodShell;
+  private readonly taskFolder:
+    | ((task: string) => Promise<TaskPlace | null>)
+    | undefined;
   /** The pod leases of the project. The desk and the coordinator act on them. */
   readonly leases: Leases;
 
@@ -185,11 +241,25 @@ export class Compute {
       readonly url?: string;
       readonly onChange?: (lease: Lease, line: string) => void;
       readonly now?: () => number;
+      /** The folder and writable paths of a task, for the copy back before a stop. */
+      readonly taskFolder?: (task: string) => Promise<TaskPlace | null>;
+      /** The `ssh`, `ssh-keyscan`, and `ssh-keygen` programs. Tests use fakes. */
+      readonly programs?: {
+        readonly ssh?: string;
+        readonly keyscan?: string;
+        readonly keygen?: string;
+      };
     } = {},
   ) {
     this.root = root;
     this.store = options.store ?? new KeyStore();
     this.url = options.url;
+    this.taskFolder = options.taskFolder;
+    this.shell = new PodShell({
+      root,
+      credentials: this.store.folder,
+      ...options.programs,
+    });
     this.leases = new Leases(root, {
       client: async () => new RunPod(await this.key(), this.url),
       settings: () => this.state.settings,
@@ -197,7 +267,162 @@ export class Compute {
         (await this.catalog()).find((entry) => entry.id === gpu) ?? null,
       ...(options.onChange ? { onChange: options.onChange } : {}),
       ...(options.now ? { now: options.now } : {}),
+      sshKey: (lease) => this.shell.newKey(lease.id),
+      prepare: async (lease, pod) => {
+        if (!pod.ssh) throw new Error('No SSH yet.');
+        const logged = await new RunPod(await this.key(), this.url).logs(
+          pod.id,
+        );
+        return (await this.shell.pin(
+          { lease: lease.id, host: pod.ssh.host, port: pod.ssh.port },
+          logged,
+        )) === 'verified'
+          ? 'Its SSH host key matches the key in its log.'
+          : 'Its log shows no host key, so Verifold trusted the first key that it saw.';
+      },
+      beforeStop: (lease) => this.copyBack(lease),
+      closed: (lease) => this.shell.forget(lease.id),
     });
+  }
+
+  /** Pods are on when a key is stored and the person set a spend limit. */
+  podsOn(): boolean {
+    return this.state.key !== null && this.state.settings.limitUsd !== null;
+  }
+
+  /** The worker tools for pods. */
+  podTools(): PodTools {
+    return {
+      on: () => this.podsOn(),
+      specs: podToolSpecs,
+      call: (task, name, input) => this.podCall(task, name, input),
+    };
+  }
+
+  /** The newest ready lease of a task, with where its pod answers SSH. */
+  private target(task: string): PodTarget {
+    const leases = this.leases
+      .list()
+      .filter((lease) => lease.tasks.includes(task));
+    const ready = leases.findLast(
+      (lease) => lease.state === 'ready' && lease.ssh,
+    );
+    if (ready?.ssh)
+      return { lease: ready.id, host: ready.ssh.host, port: ready.ssh.port };
+    fail(
+      leases.some(
+        (lease) => lease.state === 'starting' || lease.state === 'requested',
+      )
+        ? 'The pod of this task is not ready yet. Try again in a minute.'
+        : 'This task has no ready pod. Ask the coordinator for one with verifold_post.',
+    );
+  }
+
+  /** One worker pod tool call. Each call counts as activity, so the idle stop waits. */
+  private async podCall(
+    task: TaskPlace,
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<string> {
+    const target = this.target(task.id);
+    await this.leases.active(target.lease);
+    try {
+      if (name === 'verifold_pod_run') {
+        const command = input.command;
+        if (
+          typeof command !== 'string' ||
+          !command.trim() ||
+          command.length > podLimits.command
+        )
+          fail(`Give a command of up to ${podLimits.command} characters.`);
+        if (input.background === true)
+          return `Started ${await this.shell.start(target, task.id, command)} on the pod. Read its state and output with verifold_pod_job.`;
+        const seconds =
+          input.timeoutSeconds === undefined
+            ? podLimits.commandSeconds
+            : number(
+                input.timeoutSeconds,
+                'timeoutSeconds',
+                1,
+                podLimits.commandSeconds,
+                true,
+              );
+        const result = await this.shell.run(target, task.id, command, seconds);
+        return `${result.exit === null ? `The command ran out of its ${seconds} seconds.` : `Exit code ${result.exit}.`}\n${result.output}`;
+      }
+      if (name === 'verifold_pod_job') {
+        const job = await this.shell.job(
+          target,
+          task.id,
+          typeof input.job === 'string' ? input.job : '',
+        );
+        return `${job.state === 'done' ? `Done, exit code ${job.exit ?? 'unknown'}.` : job.state === 'running' ? 'Running.' : 'Unknown job.'}\n${job.output}`;
+      }
+      if (name === 'verifold_pod_copy') {
+        const paths = Array.isArray(input.paths) ? input.paths : [];
+        if (input.direction === 'to-pod') {
+          const sent = await this.shell.copyTo(
+            target,
+            task.id,
+            task.folder,
+            paths,
+          );
+          return `Copied ${sent.files} files (${Math.ceil(sent.bytes / 1024)} KB) to the pod.`;
+        }
+        if (input.direction === 'from-pod') {
+          const got = await this.shell.copyFrom(
+            target,
+            task.id,
+            task.folder,
+            task.writable,
+            paths,
+          );
+          return `Copied ${got.copied.length} files from the pod${got.copied.length ? `: ${got.copied.slice(0, 20).join(', ')}` : ''}.${got.refused.length ? ` Refused, because they are not regular files inside the writable paths: ${got.refused.slice(0, 20).join(', ')}.` : ''}`;
+        }
+        fail('The direction is to-pod or from-pod.');
+      }
+      fail(`Verifold has no tool named ${name}.`);
+    } finally {
+      await this.leases.active(target.lease);
+    }
+  }
+
+  /** Copy the writable paths of each task of a lease back from its pod. Returns a notice when a copy failed. */
+  private async copyBack(lease: Lease): Promise<string | null> {
+    if (!lease.ssh || !this.taskFolder) return null;
+    const target = {
+      lease: lease.id,
+      host: lease.ssh.host,
+      port: lease.ssh.port,
+    };
+    const problems: string[] = [];
+    for (const task of lease.tasks) {
+      const place = await this.taskFolder(task);
+      if (!place) continue;
+      const paths = place.writable.filter((path) => path !== '.');
+      if (!paths.length) {
+        problems.push(
+          `${task} may write its whole folder, so only its worker copies results back.`,
+        );
+        continue;
+      }
+      try {
+        await this.shell.copyFrom(
+          target,
+          task,
+          place.folder,
+          place.writable,
+          paths,
+        );
+      } catch (error) {
+        problems.push(
+          `${task}: ${error instanceof Error ? error.message : 'the copy failed.'}`,
+        );
+      }
+    }
+    return problems.length
+      ? `Before the pod of ${lease.id} stopped, Verifold could not copy back every result. ${problems.join(' ')}`
+      : null;
   }
 
   private get file(): string {

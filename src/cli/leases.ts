@@ -208,6 +208,14 @@ export interface LeaseHooks {
   readonly onChange?: (lease: Lease, line: string) => void;
   /** Tests use a clock that they move. */
   readonly now?: () => number;
+  /** A new SSH key pair for a lease. The pod gets the public key. */
+  readonly sshKey?: (lease: Lease) => Promise<string>;
+  /** Make a running pod ready for tasks, by pinning its host key. Throws while SSH does not answer. Returns a line for the history. */
+  readonly prepare?: (lease: Lease, pod: Pod) => Promise<string>;
+  /** Before a stop or an end: copy the results of the tasks back. Returns a notice when a copy failed. */
+  readonly beforeStop?: (lease: Lease) => Promise<string | null>;
+  /** A lease closed: forget its key. */
+  readonly closed?: (lease: Lease) => Promise<void>;
 }
 
 /**
@@ -311,7 +319,7 @@ export class Leases {
     return lease;
   }
 
-  /** Save a change, with a line in its history, and report it. */
+  /** Save a change, with a line in its history, and report it. A lease that closes forgets its key. */
   private async change(
     lease: Lease,
     patch: Partial<Lease>,
@@ -325,6 +333,13 @@ export class Leases {
         -leaseLimits.history,
       ),
     });
+    if (
+      (next.state === 'ended' ||
+        next.state === 'failed' ||
+        next.state === 'denied') &&
+      next.state !== lease.state
+    )
+      await this.hooks.closed?.(next).catch(() => undefined);
     this.hooks.onChange?.(next, `${next.id}: ${text}`);
     return next;
   }
@@ -491,11 +506,13 @@ export class Leases {
       );
       let pod: Pod | null = null;
       try {
+        const publicKey = await this.hooks.sshKey?.(lease);
         pod = await client.createPod({
           name: lease.podName,
           image: lease.image,
           gpu: lease.gpu,
           diskGb: lease.diskGb,
+          ...(publicKey ? { publicKey } : {}),
         });
       } catch (error) {
         // A lost reply can still have created the pod, so look for it by name.
@@ -578,11 +595,18 @@ export class Leases {
   ): Promise<Lease> {
     if (!isRunning(lease) || !lease.podId)
       fail(`The pod of ${lease.id} does not run.`);
+    // RunPod erases the disk at a stop, so the results come back first.
+    const copied = lease.ssh ? await this.hooks.beforeStop?.(lease) : null;
     await (await this.hooks.client()).action(lease.podId, 'stop');
     const at = this.stamp();
     return this.change(
       lease,
-      { state: 'stopped', intervals: this.closed(lease, at), ssh: null },
+      {
+        state: 'stopped',
+        intervals: this.closed(lease, at),
+        ssh: null,
+        ...(copied ? { notice: copied } : {}),
+      },
       by,
       `Stopped the pod: ${reason}`,
     );
@@ -638,6 +662,10 @@ export class Leases {
         `Withdrew the request: ${reason}`,
       );
     if (!isOpen(lease)) fail(`${lease.id} has ended.`);
+    const copied =
+      lease.state === 'ready' && lease.ssh
+        ? await this.hooks.beforeStop?.(lease)
+        : null;
     if (lease.podId) await (await this.hooks.client()).terminate(lease.podId);
     const at = this.stamp();
     return this.change(
@@ -647,7 +675,7 @@ export class Leases {
         intervals: this.closed(lease, at),
         ssh: null,
         end: { at, by, reason },
-        notice,
+        notice: copied ?? notice,
       },
       by,
       `Ended the lease and deleted the pod: ${reason}`,
@@ -769,13 +797,19 @@ export class Leases {
                   { start: at, end: null, rate: pod.cost },
                 ],
               });
-            if (lease.state === 'starting' && pod.ssh)
-              lease = await this.change(
-                lease,
-                { state: 'ready', ssh: pod.ssh, activeAt: at },
-                'verifold',
-                `The pod runs, with SSH at ${pod.ssh.host}:${pod.ssh.port}.`,
-              );
+            if (lease.state === 'starting' && pod.ssh) {
+              // A pod whose SSH does not answer yet stays starting until the next read.
+              const note = this.hooks.prepare
+                ? await this.hooks.prepare(lease, pod).catch(() => null)
+                : '';
+              if (note !== null)
+                lease = await this.change(
+                  lease,
+                  { state: 'ready', ssh: pod.ssh, activeAt: at },
+                  'verifold',
+                  `The pod is ready, with SSH at ${pod.ssh.host}:${pod.ssh.port}.${note ? ` ${note}` : ''}`,
+                );
+            }
           }
           const begun = lease.intervals.at(-1)?.start;
           if (
