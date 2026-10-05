@@ -717,8 +717,17 @@ export async function startDesk(
       url.searchParams.get('view'),
       url.searchParams.get('panel'),
       url.searchParams.get('since'),
+      url.searchParams.get('direction'),
     );
-    const keys = ['attempt', 'task', 'worker', 'view', 'panel', 'since'];
+    const keys = [
+      'attempt',
+      'task',
+      'worker',
+      'view',
+      'panel',
+      'since',
+      'direction',
+    ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
       (chosenTask !== undefined && !validTaskId(chosenTask)) ||
