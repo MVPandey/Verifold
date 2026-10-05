@@ -331,6 +331,40 @@ button:disabled {
 .menu-button {
   display: none;
 }
+/* Needs you in the top bar: amber, with the count, while an item waits. */
+.needs-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.needs-button .count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 12px;
+}
+.needs-button.has {
+  border-color: var(--needs);
+  background: var(--needs-bg);
+  color: var(--needs);
+}
+.needs-button.has .count {
+  background: var(--needs);
+  color: var(--needs-bg);
+}
+.needs-button[aria-current='page'] {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px currentColor;
+}
 .connection-note {
   flex: none;
   display: flex;
@@ -1111,6 +1145,67 @@ textarea {
 .paused-list .actions {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+/* Needs you: each item says what it is, why it is yours, and its answer. */
+.needs-list {
+  list-style: none;
+  padding: 0;
+}
+.need {
+  padding: 12px 0;
+  border-top: 1px solid var(--needs-line);
+}
+.need:first-child {
+  padding-top: 2px;
+  border-top: 0;
+}
+.need-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.need-head .mark {
+  margin-top: 3px;
+}
+.need-kind {
+  color: var(--needs);
+  font-size: 12px;
+  font-weight: 650;
+}
+.need h3 {
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+.need-body {
+  margin: 10px 0 0 26px;
+}
+.need-body > * + * {
+  margin-top: 8px;
+}
+.request-action,
+.need-body .detail {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  white-space: pre-wrap;
+}
+.request-action {
+  user-select: all;
+}
+.need-body .detail {
+  max-height: 260px;
+  overflow: auto;
+}
+.notify {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  max-width: none;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 /* ---------- Research ---------- */
@@ -2042,6 +2137,22 @@ body.terminal-page {
   #action-status {
     display: none;
   }
+  /* The count and the diamond stay. The words stay for screen readers. */
+  .needs-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .needs-button::before {
+    content: '◆';
+    content: '◆' / '';
+  }
+  .need-body {
+    margin-left: 0;
+  }
   .project {
     flex-direction: column;
     align-items: flex-start;
@@ -2078,6 +2189,12 @@ body.terminal-page {
   summary > span {
     float: none;
     display: block;
+  }
+}
+@media (max-width: 600px) {
+  /* The dot says the connection state. The word stays for screen readers. */
+  #connection {
+    font-size: 0;
   }
 }
 /* Setup has no rail, so it needs no menu. */
