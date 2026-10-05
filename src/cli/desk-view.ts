@@ -1169,27 +1169,164 @@ function taskPanel(
   };
 }
 
-/** The tasks of this project. The panel shows one task in full. */
+/** Why a task exists: the coordinator's reason when it created the task, or the start of its objective. */
+function taskWhy(task: TaskRecord): string {
+  const reason = task.assignment.reason.replace(
+    /^Created by the coordinator:\s*/,
+    '',
+  );
+  return lead(
+    reason && reason !== 'Created' ? reason : task.assignment.objective,
+    140,
+  );
+}
+
+/** What a task's agent does now: its latest step, or how long it has been quiet. */
+function taskNow(
+  task: TaskRecord,
+  workers: readonly SessionView[],
+): string | null {
+  if (task.state !== 'running' && task.state !== 'claimed') return null;
+  const session = task.attempts.at(-1)?.session;
+  const record = workers.find((worker) => worker.record.id === session)?.record;
+  const last = record?.events.filter((event) => event.kind !== 'status').at(-1);
+  if (!last)
+    return task.state === 'claimed' ? 'Preparing the task folder' : null;
+  const quiet = Math.floor((Date.now() - Date.parse(last.at)) / 60_000);
+  return quiet >= 5
+    ? `No update in ${quiet} min`
+    : lead(last.kind === 'agent' ? plain(last.text) : last.text, 110);
+}
+
+/** Whose turn it is in a task, and whether the turn is the person's. */
+function taskTurn(
+  task: TaskRecord,
+  all: readonly TaskRecord[],
+  coordinated: boolean,
+): [string, boolean] {
+  const waiting = task.assignment.dependencies.filter(
+    (id) => all.find((entry) => entry.id === id)?.state !== 'done',
+  );
+  switch (task.state) {
+    case 'open':
+      return waiting.length
+        ? [
+            `Waits for ${waiting.map((id) => all.find((entry) => entry.id === id)?.assignment.title ?? id).join(', ')}`,
+            false,
+          ]
+        : [
+            coordinated ? "Coordinator's turn to start it" : 'Ready to start',
+            !coordinated,
+          ];
+    case 'claimed':
+      return ['Starting', false];
+    case 'running':
+      return ["Agent's turn", false];
+    case 'review':
+      return coordinated
+        ? ["Coordinator's turn to review", false]
+        : ['Your turn to review', true];
+    case 'done':
+      return ['Done', false];
+    case 'cancelled':
+      return ['Cancelled', false];
+  }
+}
+
+/**
+ * The plan as a map: the objective, then each task in the column of its
+ * depth, with arrows from what it waits for. The page draws the arrows. Each
+ * box says the same in words, so the map reads without them.
+ */
+function renderMap(
+  view: TaskView,
+  live: DeskSession,
+  objective: string,
+  shown: string | undefined,
+  needs: readonly Need[],
+): string {
+  const tasks = view.list;
+  const workers = live.workers ?? (live.session ? [live.session] : []);
+  const state = live.coordinator?.state;
+  const coordinated = !!state && !state.stoppedAt;
+  const depth = new Map<string, number>();
+  const measure = (task: TaskRecord, seen: ReadonlySet<string>): number => {
+    const known = depth.get(task.id);
+    if (known !== undefined) return known;
+    const parents = task.assignment.dependencies
+      .map((id) => tasks.find((entry) => entry.id === id))
+      .filter((entry) => entry !== undefined && !seen.has(entry.id));
+    const value =
+      1 +
+      Math.max(
+        0,
+        ...parents.map((parent) =>
+          parent ? measure(parent, new Set([...seen, task.id])) : 0,
+        ),
+      );
+    depth.set(task.id, value);
+    return value;
+  };
+  for (const task of tasks) measure(task, new Set());
+  const columns = Math.max(1, ...depth.values());
+  const box = (task: TaskRecord): string => {
+    const [turn, yours] = taskTurn(task, tasks, coordinated);
+    const now = taskNow(task, workers);
+    const version = task.attempts.at(-1)?.versions.at(-1);
+    const raised = needs.filter((item) => item.task === task.id).length;
+    const from = task.assignment.dependencies.length
+      ? task.assignment.dependencies.join(' ')
+      : 'objective';
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta"><span>${e(task.id)}</span>${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
+  };
+  return `<div class="map" data-map><div class="map-col"><div class="map-root" data-node="objective"><span class="map-label">Objective</span><span class="map-title">${e(lead(objective, 140))}</span></div></div>${Array.from(
+    { length: columns },
+    (_, index) =>
+      `<div class="map-col">${tasks
+        .filter((task) => depth.get(task.id) === index + 1)
+        .map(box)
+        .join('')}</div>`,
+  ).join(
+    '',
+  )}<svg class="map-links" aria-hidden="true"><defs><marker id="map-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L8 4L0 8z"/></marker></defs><g></g></svg></div>`;
+}
+
+/** Team now, on Home: each running task with what its agent does and why the task exists. */
+function renderTeamNow(
+  tasks: readonly TaskRecord[],
+  workers: readonly SessionView[],
+): string {
+  const running = tasks.filter(
+    (task) => task.state === 'running' || task.state === 'claimed',
+  );
+  if (!running.length) return '';
+  return `<section class="card" aria-labelledby="now-title"><div class="section-title"><h2 id="now-title">Team now</h2><button type="button" class="quiet" data-view="tasks">See the plan</button></div><ul class="now-list">${running
+    .map(
+      (task) =>
+        `<li><button type="button" data-task-select="${e(task.id)}">${avatar('task', 'working')}<span class="who"><span class="name">${e(task.assignment.title)}</span><span class="line"><span class="map-label">Now</span> ${e(taskNow(task, workers) ?? 'Working')}</span><span class="line"><span class="map-label">Why</span> ${e(taskWhy(task))}</span></span></button></li>`,
+    )
+    .join('')}</ul></section>`;
+}
+
+/** The tasks of this project as a live map. The panel shows one task in full. */
 function renderTasksView(
   view: TaskView,
+  live: DeskSession,
+  objective: string,
   shown: string | undefined,
   offerCoordinator: boolean,
   needs: readonly Need[],
 ): string {
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Tasks</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
-  <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
+  const running = view.list.filter(
+    (task) => task.state === 'running' || task.state === 'claimed',
+  ).length;
+  return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Tasks</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   ${
     view.list.length
-      ? `<ol class="task-list">${view.list
-          .map((entry) => {
-            const raised = needs.filter(
-              (item) => item.task === entry.id,
-            ).length;
-            return `<li><button type="button" data-task-select="${e(entry.id)}" aria-pressed="${entry.id === shown}"><span class="mark ${taskMarks[entry.state]}" aria-hidden="true"></span><span class="task-name">${e(entry.assignment.title)}</span><span class="task-id">${e(entry.id)}</span><span class="attempt-status">${e(taskStates[entry.state][0])}</span>${raised ? `<span class="flag">${raised} ${raised === 1 ? 'item needs' : 'items need'} you</span>` : ''}</button></li>`;
-          })
-          .join('')}</ol>`
+      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The plan</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for. A box opens the task.</p></section>`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write a task yourself with New task.</p></section>'
   }
+  <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
 }
 
@@ -1585,7 +1722,7 @@ function renderHome(
       ? renderCoordinatorHome(coordinator, messages)
       : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${renderTeamNow(tasks, live.workers ?? (live.session ? [live.session] : []))}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -1700,6 +1837,12 @@ export function renderDesk(
         : view === 'tasks' && live.tasks
           ? renderTasksView(
               live.tasks,
+              live,
+              workspace.candidates.find(
+                (idea) => idea.id === workspace.selectedId,
+              )?.title ??
+                live.coordinator?.state?.objective ??
+                'Your tasks',
               frame.panel === 'task' ? live.tasks.selected?.id : undefined,
               // Before a direction and a coordinator, Tasks offers to start one with your own objective.
               live.coordinator !== undefined &&
