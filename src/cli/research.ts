@@ -325,9 +325,7 @@ export async function runResearch(
           (await io.ask('Approve this research plan? [y/N]: ')).trim(),
         );
       if (!approved) {
-        io.progress?.(
-          'Plan saved. Use research --feedback to revise it, or research --approve to continue.',
-        );
+        io.progress?.('Plan saved.');
         return workspace;
       }
       await save({ ...state, phase: 'needs-research' });
@@ -351,7 +349,7 @@ export async function runResearch(
         },
       );
       io.progress?.(
-        `${report.summary}\nDelegation reported by host: ${report.delegation}\n\n${report.candidates.map((idea) => `${idea.id}: ${idea.title}\n${idea.recommendation}\n${idea.sources?.join('\n')}`).join('\n\n')}\n\nUse research --feedback to refine these ideas. Use select to choose one.`,
+        `${report.summary}\nDelegation reported by host: ${report.delegation}\n\n${report.candidates.map((idea) => `${idea.id}: ${idea.title}\n${idea.recommendation}\n${idea.sources?.join('\n')}`).join('\n\n')}`,
       );
     }
     return workspace;

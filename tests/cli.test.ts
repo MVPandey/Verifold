@@ -94,6 +94,8 @@ await test('private CLI workflow preserves explicit selection and host ownership
       /Choose an ID/,
     );
     await runCli(['select', '--id', 'proof'], root, io);
+    assert.match(results.at(-1) ?? '', /"status":"direction-selected"/);
+    assert.match(results.at(-1) ?? '', /coordinator plans the tasks/);
     await runCli(['literature'], root, io);
     assert.match(results.at(-1) ?? '', /literature-retention-request/);
     await runCli(['handoff'], root, io);
