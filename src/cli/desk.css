@@ -980,6 +980,13 @@ summary > span {
   content: '◐';
   color: var(--violet);
 }
+.mark.settled::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
 .mark.failed::before {
   content: '✕';
   color: var(--red);
@@ -1206,6 +1213,103 @@ textarea {
   max-width: none;
   color: var(--muted);
   font-size: 12.5px;
+}
+
+/* Home: what changed and the team feed beside the coordinator, in two columns when the view is wide. */
+.view {
+  container-type: inline-size;
+}
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.home-grid > .col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+@container (min-width: 760px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+.since,
+.feed,
+.convo {
+  list-style: none;
+  padding: 0;
+}
+.since li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.since li:first-child {
+  border-top: 0;
+}
+.since time {
+  color: var(--muted);
+  font-size: 12px;
+}
+.feed li {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.feed li:first-child {
+  border-top: 0;
+}
+.feed-text {
+  overflow-wrap: anywhere;
+}
+.msg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.msg-meta strong {
+  color: var(--ink);
+}
+/* A model's account carries a dashed label: it is a reading, not a record. */
+.tag.reading {
+  padding: 0 7px;
+  border: 1px dashed var(--control);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.note {
+  padding: 10px 12px;
+  border-left: 3px solid var(--tint-line);
+  border-radius: 0 10px 10px 0;
+  background: var(--sunken);
+}
+.convo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.msg {
+  max-width: 92%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.msg.mine {
+  align-self: flex-end;
+  border-color: var(--tint-line);
+  background: var(--lavender);
 }
 
 /* ---------- Research ---------- */
@@ -2137,8 +2241,8 @@ body.terminal-page {
   #action-status {
     display: none;
   }
-  /* The count and the diamond stay. The words stay for screen readers. */
-  .needs-label {
+  /* While an item waits, the diamond and the count stay, and the words stay for screen readers. */
+  .needs-button.has .needs-label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2146,9 +2250,12 @@ body.terminal-page {
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  .needs-button::before {
+  .needs-button.has::before {
     content: '◆';
     content: '◆' / '';
+  }
+  .needs-button:not(.has) .count {
+    display: none;
   }
   .need-body {
     margin-left: 0;

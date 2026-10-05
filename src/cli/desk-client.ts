@@ -26,6 +26,9 @@ const needsCount = requiredElement(document, '#needs-count', HTMLElement);
 /** The open view and panel. Like the selections, they last for this tab. */
 let view = 'home';
 let panel = '';
+/** When the page last went to the background for 5 minutes or more. Home lists what changed after it. */
+let since: string | undefined;
+let hiddenAt: number | undefined;
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
@@ -50,6 +53,7 @@ try {
     history.replaceState(null, '', location.pathname);
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   view = sessionStorage.getItem('verifold-desk-view') ?? 'home';
+  since = sessionStorage.getItem('verifold-desk-since') ?? undefined;
   panel = sessionStorage.getItem('verifold-desk-panel') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
@@ -121,6 +125,7 @@ function viewQuery(): string {
   if (panel === 'task' && selectedTask) query.set('task', selectedTask);
   // A worker that left its slot is not an error. The server shows another one.
   if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
+  if (since) query.set('since', since);
   return query.toString();
 }
 
@@ -637,7 +642,14 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         model: field('coordinator-model').trim(),
       };
     case 'coordinator-message':
-      return { action, text: field('coordinator-message') };
+      // A question from a task's panel names its task.
+      return button.dataset.about
+        ? {
+            action,
+            about: button.dataset.about,
+            text: field('task-coordinator-message'),
+          }
+        : { action, text: field('coordinator-message') };
     case 'task-decide':
       return {
         action,
@@ -795,6 +807,7 @@ async function act(button: HTMLElement): Promise<void> {
       'task-edit-reason',
       'task-message',
       'coordinator-message',
+      'task-coordinator-message',
       ...(body.action === 'task-create'
         ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
             (name) => `task-new-${name}`,
@@ -862,7 +875,12 @@ document.addEventListener('click', (event) => {
   if (target.dataset.panel) {
     target.closest('details')?.removeAttribute('open');
     opener = selectorOf(target);
-    navigate({ panel: target.dataset.panel }, '#panel-title');
+    const focus = target.dataset.focus;
+    navigate(
+      { panel: target.dataset.panel },
+      focus ? `#${CSS.escape(focus)}` : '#panel-title',
+      focus ? 'start' : 'nearest',
+    );
     return;
   }
   if (target.hasAttribute('data-close-panel')) {
@@ -968,6 +986,19 @@ document.addEventListener('keydown', (event) => {
 content.addEventListener('change', (event) => {
   if (event.target instanceof HTMLInputElement && event.target.dataset.file)
     showReview();
+});
+// A person who comes back after 5 minutes or more sees on Home what changed while they were away.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    return;
+  }
+  if (hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
+    since = new Date(hiddenAt).toISOString();
+    remember('since', since);
+    void refresh();
+  }
+  hiddenAt = undefined;
 });
 window.addEventListener('pagehide', () => {
   stopped = true;
