@@ -501,11 +501,15 @@ onLine((line) => {
       (await fetch(`${url.origin}/api/action`, { method: 'POST' })).status,
       401,
     );
-    const view = await (
-      await fetch(`${url.origin}/api/view`, { headers })
-    ).json();
-    assert.match(view.html, /Compare proof search/);
-    assert.match(view.html, /package-session/);
+    const view = async (query) =>
+      (
+        await (
+          await fetch(`${url.origin}/api/view${query}`, { headers })
+        ).json()
+      ).html;
+    assert.match(await view(''), /Compare proof search/);
+    // The attempt panel shows the native session of the research attempt.
+    assert.match(await view('?view=records&panel=attempt'), /package-session/);
     for (const path of [
       '/',
       '/desk-client.js',
@@ -557,8 +561,7 @@ onLine((line) => {
     let html = '';
     for (let tries = 0; tries < 100 && !html.includes('Version 1'); tries++) {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      html = (await (await fetch(`${url.origin}/api/view`, { headers })).json())
-        .html;
+      html = await view('?view=tasks&panel=task');
     }
     assert.match(html, /Version 1/);
     await action({
@@ -575,10 +578,7 @@ onLine((line) => {
       'packaged task output\n',
     );
     // The task ran the fake Codex, never a harness from the person's PATH.
-    assert.match(
-      (await (await fetch(`${url.origin}/api/view`, { headers })).json()).html,
-      /Native session: package-thread/,
-    );
+    assert.match(await view('?panel=worker'), /Native session: package-thread/);
   } finally {
     lines.close();
     desk.kill('SIGTERM');

@@ -751,8 +751,9 @@ await test('desk actions need the token and a JSON body, and report state errors
         200,
       );
       await until(sessions, (current) => current.status === 'idle');
+      // Home holds open requests. The worker's panel holds its events and its follow-up.
       const after = (await (
-        await fetch(`${url.origin}/api/view`, { headers })
+        await fetch(`${url.origin}/api/view?panel=worker`, { headers })
       ).json()) as { html: string };
       assert.match(after.html, /You allowed/);
       assert.match(after.html, /Send follow-up/);
@@ -1046,10 +1047,13 @@ await test('the desk escapes harness text and removes direction controls', async
       prompt: 'Check <img src=x onerror=alert(1)> "quoted" ‮gnp.exe',
     });
     await until(sessions, (current) => current.requests.length === 1);
-    const { html } = renderDesk(await readDeskSnapshot(root), undefined, null, {
-      session: sessions.view(),
-      controllable: true,
-    });
+    const { html } = renderDesk(
+      await readDeskSnapshot(root),
+      undefined,
+      null,
+      { session: sessions.view(), controllable: true },
+      { view: 'home', panel: 'worker' },
+    );
     assert.doesNotMatch(html, /<img src=x/);
     assert.match(
       html,
