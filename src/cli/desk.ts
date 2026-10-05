@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   deskPage,
+  parseFrame,
   renderDesk,
   renderSetup,
   terminalPage,
@@ -704,16 +705,18 @@ export async function startDesk(
     const selected = url.searchParams.get('attempt') ?? undefined;
     const chosenTask = url.searchParams.get('task') ?? undefined;
     const chosenWorker = url.searchParams.get('worker') ?? undefined;
+    const frame = parseFrame(
+      url.searchParams.get('view'),
+      url.searchParams.get('panel'),
+    );
+    const keys = ['attempt', 'task', 'worker', 'view', 'panel'];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
       (chosenTask !== undefined && !validTaskId(chosenTask)) ||
       (chosenWorker !== undefined && !validSessionId(chosenWorker)) ||
-      [...url.searchParams.keys()].some(
-        (key) => !['attempt', 'task', 'worker'].includes(key),
-      ) ||
-      ['attempt', 'task', 'worker'].some(
-        (key) => url.searchParams.getAll(key).length > 1,
-      )
+      !frame ||
+      [...url.searchParams.keys()].some((key) => !keys.includes(key)) ||
+      keys.some((key) => url.searchParams.getAll(key).length > 1)
     ) {
       response.writeHead(400).end();
       return;
@@ -744,11 +747,10 @@ export async function startDesk(
         return;
       }
       const taskList = tasks ? await tasks.list() : [];
+      // Without a task ID the panel shows the newest task, so a task that the person just created opens.
       const task = chosenTask
         ? taskList.find((entry) => entry.id === chosenTask)
-        : (taskList.find((entry) =>
-            ['claimed', 'running', 'review'].includes(entry.state),
-          ) ?? taskList.at(-1));
+        : taskList.at(-1);
       if (chosenTask && !task) {
         response.writeHead(404).end();
         return;
@@ -762,35 +764,45 @@ export async function startDesk(
         }
       }
       const workers = sessions?.views() ?? [];
-      // A worker that left its slot falls back to a live one, then to the first.
+      // A worker that left its slot falls back to the newest live one, then to the first.
+      // So a session that the person just started or resumed opens.
       const worker =
         workers.find((view) => view.record.id === chosenWorker) ??
-        workers.find((view) => view.live) ??
+        workers
+          .filter((view) => view.live)
+          .sort((a, b) => b.record.startedAt.localeCompare(a.record.startedAt))
+          .at(0) ??
         workers[0] ??
         null;
       const body = JSON.stringify(
-        renderDesk(snapshot, selected, report, {
-          workers,
-          session: worker,
-          full: sessions?.full ?? false,
-          terminals: await terminalSupport(),
-          controllable: sessions !== undefined,
-          paused: sessions?.paused() ?? [],
-          ...(research ? { research: research.view() } : {}),
-          ...(coordinator ? { coordinator: coordinator.view() } : {}),
-          ...(tasks
-            ? {
-                tasks: {
-                  list: taskList,
-                  selected: task ?? null,
-                  idle: workers
-                    .filter((view) => sessions?.idle(view.record.id))
-                    .map((view) => view.record.id),
-                  messages: (await tasks.messageList()).slice(-300),
-                },
-              }
-            : {}),
-        }),
+        renderDesk(
+          snapshot,
+          selected,
+          report,
+          {
+            workers,
+            session: worker,
+            full: sessions?.full ?? false,
+            terminals: await terminalSupport(),
+            controllable: sessions !== undefined,
+            paused: sessions?.paused() ?? [],
+            ...(research ? { research: research.view() } : {}),
+            ...(coordinator ? { coordinator: coordinator.view() } : {}),
+            ...(tasks
+              ? {
+                  tasks: {
+                    list: taskList,
+                    selected: task ?? null,
+                    idle: workers
+                      .filter((view) => sessions?.idle(view.record.id))
+                      .map((view) => view.record.id),
+                    messages: (await tasks.messageList()).slice(-300),
+                  },
+                }
+              : {}),
+          },
+          frame,
+        ),
       );
       if (Buffer.byteLength(body) > 2_000_000)
         throw new Error('Desk view exceeds its output limit.');

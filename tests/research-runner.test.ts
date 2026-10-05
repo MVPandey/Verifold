@@ -269,10 +269,10 @@ await test('terminal commands and desk actions call the same research operations
     });
     return [response.status, await response.json()];
   };
-  const view = async (): Promise<string> =>
+  const view = async (query = ''): Promise<string> =>
     (
       (await (
-        await fetch(`${url.origin}/api/view`, {
+        await fetch(`${url.origin}/api/view${query}`, {
           headers: { Authorization: `Bearer ${url.hash.slice(1)}` },
         })
       ).json()) as { html: string }
@@ -287,10 +287,10 @@ await test('terminal commands and desk actions call the same research operations
   const html = await view();
   assert.match(html, /Review the plan/);
   assert.match(html, /data-research="approve"/);
-  // Details shows the full transcript of the latest attempt.
+  // In Research, Details shows the full transcript of the latest attempt.
   const attempt = (await loadWorkspace(root)).research?.latestAttempt ?? '';
   assert.match(
-    html,
+    await view('?view=research'),
     new RegExp(
       `class="transcript-slot detail-only" data-source="attempt:${attempt}"`,
     ),
@@ -344,7 +344,12 @@ await test('terminal commands and desk actions call the same research operations
   assert.equal(missing?.found, false);
   assert.equal((await post({ action: 'research', approve: true }))[0], 200);
   await deskResearch.settled();
-  assert.match(await view(), /data-action="select" data-idea="proof"/);
+  // Home sends the person to Research, where each direction has its choice.
+  assert.match(await view(), /data-view="research">Compare the directions/);
+  assert.match(
+    await view('?view=research'),
+    /data-action="select" data-idea="proof"/,
+  );
   assert.equal((await post({ action: 'select', idea: 'proof' }))[0], 200);
   assert.equal((await loadWorkspace(root)).selectedId, 'proof');
 });
