@@ -441,3 +441,70 @@ await test('desk shows one research decision for each phase', async (t) => {
   assert.match(events, /Claude Code requested &lt;WebSearch&gt;\./);
   assert.match(events, /data-detail="details"/);
 });
+
+await test('desk points to the coordinator after a direction and shows its notes to the person', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'proof',
+        title: 'Proof search',
+        recommendation: 'Try a bounded pilot.',
+        gates: ['A checker passes.'],
+      },
+    ],
+    selectedId: 'proof',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const state = {
+    schemaVersion: 1,
+    objective: 'Proof search',
+    host: 'claude',
+    model: null,
+    startedAt: at,
+    stoppedAt: null,
+    session: null,
+    created: 1,
+    planApproved: false,
+    cursor: 0,
+    wakeups: [],
+    events: [],
+    actions: [],
+  };
+  const note = {
+    schemaVersion: 1,
+    id: 'm-1',
+    at,
+    from: 'coordinator',
+    to: 'person',
+    kind: 'note',
+    text: 'The benchmark needs a dataset host.',
+    delivery: 'board',
+  };
+  const html = (planApproved: boolean): string =>
+    renderDesk(snapshot, undefined, null, {
+      session: null,
+      controllable: true,
+      tasks: { list: [], selected: null, idle: [], messages: [note] },
+      coordinator: {
+        state: { ...state, planApproved },
+        session: null,
+        waiting: 0,
+        limitedUntil: null,
+      },
+    } as never).html;
+  const waiting = html(false);
+  assert.match(waiting, /The task plan waits for you/);
+  assert.doesNotMatch(waiting, /verifold handoff/);
+  assert.match(
+    waiting,
+    /Notes to you \(1\)[\s\S]*The benchmark needs a dataset host\./,
+  );
+  assert.match(
+    html(true),
+    /The coordinator runs the team[\s\S]*Nothing needs you/,
+  );
+});

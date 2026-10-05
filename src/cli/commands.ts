@@ -108,7 +108,7 @@ verifold recommend                    Print a research request for your host
 verifold ideas --from ideas.json       Import host recommendations
 verifold select [--id idea-id]         Choose an idea explicitly
 verifold literature [--memory]        Print an optional paper/context request
-verifold handoff                      Print a pilot request for Automative + host
+verifold handoff                      Print a planning request for your harness (older flow)
 verifold view                         Generate a private local HTML workspace
 verifold ui [--no-open]               Open the live research desk and control a harness session there
 verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model name] [--no-open]
@@ -916,11 +916,14 @@ export async function runCli(
         )
       ).trim();
     }
-    const result = await selectIdea(root, id, workspace.candidates);
+    const result = await owned(root, io, () =>
+      selectIdea(root, id, workspace.candidates),
+    );
     io.out(
       JSON.stringify({
         selectedId: result.selectedId,
-        status: 'awaiting-pilot-plan',
+        status: 'direction-selected',
+        next: 'Run verifold in this project directory. The coordinator plans the tasks for this direction and waits for your approval.',
         visibility: 'private',
       }),
     );
@@ -978,7 +981,7 @@ export async function runCli(
     );
     return;
   }
-  const page = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verifold — private workspace</title><style>body{font:16px system-ui;background:#f8f7fa;color:#101014;max-width:900px;margin:50px auto;padding:24px}h1{color:#4c1d95}article{padding:20px 0;border-top:1px solid #ddd}p{line-height:1.7}</style><h1>Verifold</h1><p>Private workspace · managed by the CLI · ${e(workspace.profile.name)}</p><p>${workspace.profile.interests.map(e).join(', ')}</p><p>Host: ${e(workspace.host)} · Selection: ${e(workspace.selectedId ?? 'Awaiting your choice')}</p>${workspace.candidates.map((idea) => `<article><h2>${e(idea.title)}</h2><p>${e(idea.recommendation)}</p><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></article>`).join('')}<p>Run <code>verifold select</code> to choose an idea. This view sends no data and starts no experiments.</p></html>`;
+  const page = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verifold — private workspace</title><style>body{font:16px system-ui;background:#f8f7fa;color:#101014;max-width:900px;margin:50px auto;padding:24px}h1{color:#4c1d95}article{padding:20px 0;border-top:1px solid #ddd}p{line-height:1.7}</style><h1>Verifold</h1><p>Private workspace · managed by the CLI · ${e(workspace.profile.name)}</p><p>${workspace.profile.interests.map(e).join(', ')}</p><p>Host: ${e(workspace.host)} · Selection: ${e(workspace.selectedId ?? 'Awaiting your choice')}</p>${workspace.candidates.map((idea) => `<article><h2>${e(idea.title)}</h2><p>${e(idea.recommendation)}</p><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></article>`).join('')}<p>Run <code>verifold</code> in this project directory to open the desk and choose a direction there. This view sends no data and starts no experiments.</p></html>`;
   const path = join(root, '.verifold', 'workspace.html');
   const temporary = join(root, '.verifold', `${randomUUID()}.html.tmp`);
   try {

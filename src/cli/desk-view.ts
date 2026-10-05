@@ -60,9 +60,9 @@ export function nextResearchAction(workspace: Workspace): {
 } {
   if (workspace.selectedId)
     return {
-      command: 'verifold handoff',
+      command: 'verifold',
       instruction:
-        'Print a pilot-planning request for the selected idea. Execution still needs approval.',
+        'The coordinator plans and runs the tasks for the chosen direction. Open the desk to approve its plan and follow the team.',
     };
   const phase = workspace.research?.phase;
   if (phase === 'directions')
@@ -477,6 +477,55 @@ function renderNeeds(messages: readonly Message[]): string {
     )}</ul><p class="fine">Your decision and its reason go to the task that raised the message, with its next turn. To change the work, revise the task.</p></div>`;
 }
 
+/** Notes that the coordinator wrote to the person, newest first. */
+function notesToPerson(messages: readonly Message[]): string {
+  const notes = messages
+    .filter(
+      (message) =>
+        message.from === 'coordinator' &&
+        message.to === 'person' &&
+        message.kind === 'note',
+    )
+    .slice(-10)
+    .reverse();
+  return notes.length
+    ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map(messageItem).join('')}</ul></details>`
+    : '';
+}
+
+/** The next step after a direction: what the coordinator does, and what waits for the person. */
+function renderTeamNext(
+  view: CoordinatorView | null,
+  messages: readonly Message[],
+): string {
+  const state = view?.state;
+  const session = view?.session?.record;
+  const open = messages.filter((message) => message.status === 'open').length;
+  const [title, text] =
+    !state || state.stoppedAt
+      ? [
+          'The coordinator is not running',
+          'Start it under Coordinator. It plans the tasks for the chosen direction.',
+        ]
+      : !state.planApproved
+        ? [
+            'The task plan waits for you',
+            'Approve it under Coordinator. No task starts before your approval.',
+          ]
+        : session?.status === 'paused' || session?.status === 'interrupted'
+          ? [
+              'The coordinator is paused',
+              'Resume it under Coordinator to continue the same conversation.',
+            ]
+          : [
+              'The coordinator runs the team',
+              open
+                ? `${open} ${open === 1 ? 'message needs' : 'messages need'} your decision under Tasks.`
+                : 'Nothing needs you. Follow the work under Coordinator and Tasks.',
+            ];
+  return `<section class="next-action"><h2>${e(title)}</h2><p>${e(text)}</p></section>`;
+}
+
 const coordinatorStates: Record<string, string> = {
   starting: 'Starting',
   running: 'Working',
@@ -493,6 +542,7 @@ function renderCoordinator(
   workspace: Workspace,
   host: string,
   tasks: readonly TaskRecord[],
+  messages: readonly Message[],
 ): string {
   const state = view?.state;
   if (!state || state.stoppedAt) {
@@ -524,6 +574,7 @@ function renderCoordinator(
   ${view.limitedUntil ? `<p class="notice">The coordinator used its wakeups for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
   ${paused ? '<p class="notice">The coordinator paused when Verifold stopped. Resume it to continue with the same conversation.</p>' : ''}
   ${plan}
+  ${notesToPerson(messages)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
   <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="messages">${actions.map((action) => `<li class="message"><p class="message-meta"><span>${e(action.tool.replace(/^verifold_/, ''))}</span><span>${action.ok ? 'Done' : 'Refused'}</span><time datetime="${e(action.at)}">${e(clock(action.at))}</time></p>${action.reason ? `<p class="pre">${e(action.reason)}</p>` : ''}<p class="fine">${e(action.result)}</p></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Reasons are the coordinator's reading, a model claim. Results come from Verifold.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
@@ -683,7 +734,7 @@ export function renderDesk(
           : 'muted';
   const html = `<div class="project-heading"><p class="project-name">${e(snapshot.project)}</p><h1>${e(workspace.research?.topic ?? 'What will you investigate?')}</h1><div class="project-meta"><span>${e(phaseLabel(workspace.research?.phase))}</span><span>${e(workspace.host === 'claude' ? 'Claude Code' : workspace.host === 'codex' ? 'Codex' : workspace.host)}</span><span>Model request: ${e(workspace.model ?? 'harness default')}</span></div></div>
   <div class="desk-grid"><div class="notebook">
-  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${live.coordinator !== undefined ? renderCoordinator(live.coordinator, workspace, workspace.host, live.tasks?.list ?? []) : ''}${live.tasks ? renderTasks(live.tasks, live, workspace.host) : ''}${renderCommands(live.session)}
+  ${renderResearch(live.research, workspace.research?.latestAttempt)}${renderSession(live, workspace.host)}${live.coordinator !== undefined ? renderCoordinator(live.coordinator, workspace, workspace.host, live.tasks?.list ?? [], live.tasks?.messages ?? []) : ''}${live.tasks ? renderTasks(live.tasks, live, workspace.host) : ''}${renderCommands(live.session)}
   <section class="brief-section"><details id="research-brief" open><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet. Begin with a question in your project terminal.</p>'}</details></section>
   ${workspace.research?.plan ? `<section><details id="research-plan"><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(workspace.research.plan.scope)}</div><ul class="roles">${workspace.research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="findings"><div class="section-title"><h2>Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
@@ -692,9 +743,11 @@ export function renderDesk(
   </div><aside aria-label="Research activity">${
     live.research && !workspace.selectedId
       ? renderDecision(workspace, live)
-      : researching
-        ? '<section class="next-action"><h2>Research is running</h2><p>Research runs in your terminal. The results appear here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>'
-        : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one under Workers.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
+      : workspace.selectedId && live.coordinator !== undefined
+        ? renderTeamNext(live.coordinator, live.tasks?.messages ?? [])
+        : researching
+          ? '<section class="next-action"><h2>Research is running</h2><p>Research runs in your terminal. The results appear here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>'
+          : `<section class="next-action"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. Start one under Workers.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`
   }
   <section class="attempt-detail"><div class="section-title"><h2>Selected attempt</h2>${chosen ? `<span class="status ${tone}">${e(outcome(chosen))}</span>` : ''}</div>
   ${chosen ? `<p>${e(record ? phaseLabel(record.phase) : 'No readable lifecycle record')}</p>${chosen.activity === 'unknown' ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>' : chosen.activity === 'recent' ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>` : record?.status === 'interrupted' ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>' : record?.status === 'failed' || record?.status === 'cancelled' ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>' : '<p class="fine">The response passed validation and its checkpoint was saved.</p>'}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Its transcript is under Research. Choose Details there.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', '')}</details>`}` : '<p class="empty-note">No research attempts yet.</p>'}</section>
