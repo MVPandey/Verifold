@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { SessionManager } from '../src/cli/session.ts';
@@ -20,6 +21,8 @@ import {
   type TaskSessions,
 } from '../src/cli/tasks.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
+import { startDesk } from '../src/cli/desk.ts';
+import { SessionPool } from '../src/cli/workers.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 
@@ -373,12 +376,14 @@ await test('the coordinator creates and starts tasks through checked tools, and 
   assert.equal(state?.wakeups.length, 1);
   assert.equal(coordinator.view()?.waiting, 0);
 
-  // The desk shows the coordinator's actions with its reasons.
-  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
-    session: null,
-    controllable: true,
-    coordinator: coordinator.view(),
-  }).html;
+  // The coordinator's panel shows its actions with its reasons.
+  const html = renderDesk(
+    await readDeskSnapshot(root),
+    undefined,
+    null,
+    { session: null, controllable: true, coordinator: coordinator.view() },
+    { view: 'home', panel: 'coordinator' },
+  ).html;
   assert.match(html, /Coordinator[\s\S]*Waiting for events/);
   assert.match(
     html,
@@ -639,12 +644,19 @@ await test('in Guided research no task starts before the person approves the pla
     /The person reviews your task plan first/,
   );
   assert.equal((await tasks.get('task-1'))?.state, 'open');
-  const html = renderDesk(await readDeskSnapshot(root), undefined, null, {
-    session: null,
-    controllable: true,
-    coordinator: coordinator.view(),
-    tasks: { list: await tasks.list(), selected: null, idle: [] },
-  }).html;
+  // Needs you names the plan. The coordinator's panel lists it with Approve.
+  const html = renderDesk(
+    await readDeskSnapshot(root),
+    undefined,
+    null,
+    {
+      session: null,
+      controllable: true,
+      coordinator: coordinator.view(),
+      tasks: { list: await tasks.list(), selected: null, idle: [] },
+    },
+    { view: 'home', panel: 'coordinator' },
+  ).html;
   assert.match(
     html,
     /The task plan waits for you[\s\S]*task-1<\/strong> Prior art[\s\S]*task-2<\/strong> Method review: Review the methods in the prior work\. \(waits for task-1\)[\s\S]*data-action="coordinator-approve">Approve the plan/,
@@ -742,4 +754,88 @@ await test('a chosen direction starts the coordinator with the brief, the direct
   // A running coordinator is not started again.
   await coordinator.startForDirection(workspace);
   assert.equal(coordinator.view()?.state.startedAt, state?.startedAt);
+});
+
+await test('a question from a task panel names its task for the coordinator', async (t) => {
+  const { root, tasks, coordinator } = await team(t);
+  const assets = join(root, 'assets');
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  for (const name of ['purify.js', 'xterm.js', 'xterm.css', 'addon-fit.js'])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const sessions = new SessionPool(root, {
+    clientVersion: 'test',
+    ownerId: 'owner-1',
+  });
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    pathToFileURL(`${assets}/cli/`),
+    sessions,
+    undefined,
+    undefined,
+    tasks,
+    coordinator,
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const post = async (body: unknown): Promise<number> =>
+    (
+      await fetch(`${url.origin}/api/action`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    ).status;
+  const task = await tasks.create({
+    title: 'Pilot',
+    objective: 'Run the pilot.',
+    writable: 'results',
+    output: 'results/pilot.md',
+    host: 'claude',
+  });
+  assert.equal(
+    await post({
+      action: 'coordinator-message',
+      about: task,
+      text: 'Why synthetic?',
+    }),
+    200,
+  );
+  assert.equal(
+    await post({ action: 'coordinator-message', about: '../x', text: 'Hi' }),
+    409,
+  );
+  assert.equal(
+    await post({ action: 'coordinator-message', text: 'And on Home?' }),
+    200,
+  );
+  assert.deepEqual(
+    (await tasks.messageList())
+      .filter((message) => message.from === 'person')
+      .map((message) => message.text),
+    [`About ${task}: Why synthetic?`, 'And on Home?'],
+  );
+  // Home lists what changed after a time that the page sends. Another value is refused.
+  const view = async (query: string): Promise<number> =>
+    (await fetch(`${url.origin}/api/view${query}`, { headers })).status;
+  assert.equal(await view('?since=yesterday'), 400);
+  assert.equal(await view(`?since=${new Date().toISOString()}`), 200);
 });

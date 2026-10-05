@@ -523,24 +523,39 @@ await test('desk points to the coordinator after a direction and shows its notes
       dependencies: [],
     },
   };
-  const html = (planApproved: boolean, planned = [pilot]): string =>
-    renderDesk(snapshot, undefined, null, {
-      session: null,
-      controllable: true,
-      tasks: { list: planned, selected: null, idle: [], messages: [note] },
-      coordinator: {
-        state: { ...state, planApproved },
+  const html = (
+    planApproved: boolean,
+    planned = [pilot],
+    panel: 'coordinator' | null = null,
+  ): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
         session: null,
-        waiting: 0,
-        limitedUntil: null,
-      },
-    } as never).html;
+        controllable: true,
+        tasks: { list: planned, selected: null, idle: [], messages: [note] },
+        coordinator: {
+          state: { ...state, planApproved },
+          session: null,
+          waiting: 0,
+          limitedUntil: null,
+        },
+      } as never,
+      { view: 'home', panel },
+    ).html;
   const waiting = html(false);
   assert.match(waiting, /The task plan waits for you/);
   assert.match(waiting, /Plan: waits for you/);
   assert.doesNotMatch(waiting, /verifold handoff/);
+  // Home shows the latest note as the coordinator's reading. Its panel lists every note.
   assert.match(
     waiting,
+    /Its latest note[\s\S]*Its reading[\s\S]*The benchmark needs a dataset host\./,
+  );
+  assert.match(
+    html(false, [pilot], 'coordinator'),
     /Notes to you \(1\)[\s\S]*The benchmark needs a dataset host\./,
   );
   // Before the coordinator creates a task, nothing waits for the person.
@@ -894,4 +909,186 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     ).html,
     /Nothing needs you\./,
   );
+});
+
+await test('desk Home lists what changed since the person left, the team feed, and the talk with the coordinator', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'proof',
+        title: 'Proof search',
+        recommendation: 'Pilot.',
+        gates: ['A check.'],
+      },
+    ],
+    selectedId: 'proof',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const left = '2026-10-04T12:00:00.000Z';
+  const before = '2026-10-04T11:00:00.000Z';
+  const later = (minutes: number): string =>
+    new Date(Date.parse(left) + minutes * 60_000).toISOString();
+  const task = {
+    id: 'task-1',
+    state: 'done',
+    revision: 1,
+    createdAt: before,
+    attempts: [
+      {
+        number: 1,
+        startedAt: later(5),
+        session: null,
+        outcome: 'accepted',
+        note: null,
+        restrictions: [],
+        versions: [
+          {
+            number: 1,
+            at: later(20),
+            turn: 'completed',
+            files: [],
+            skipped: [],
+            decision: { kind: 'accepted', at: later(25), by: 'coordinator' },
+          },
+        ],
+      },
+    ],
+    assignment: {
+      by: 'coordinator',
+      title: 'Bounded pilot',
+      objective: 'Run.',
+      inputs: [],
+      writable: ['results'],
+      output: 'A report.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies: [],
+    },
+  };
+  const message = (
+    id: string,
+    from: string,
+    to: string,
+    text: string,
+    at: string,
+    extra: object = {},
+  ): object => ({
+    schemaVersion: 1,
+    id,
+    at,
+    from,
+    to,
+    kind: 'note',
+    text,
+    delivery: 'board',
+    ...extra,
+  });
+  const messages = [
+    message(
+      'm-1',
+      'person',
+      'coordinator',
+      'Why is the data synthetic?',
+      before,
+      { delivery: 'delivered', deliveredAt: before },
+    ),
+    message(
+      'm-2',
+      'coordinator',
+      'person',
+      'The brief allows a synthetic graph for a first pass.',
+      later(1),
+    ),
+    message('m-3', 'task-1', 'coordinator', 'The pilot is done.', later(21), {
+      delivery: 'delivered',
+    }),
+    message(
+      'm-4',
+      'person',
+      'coordinator',
+      'Can we add a real graph next?',
+      later(30),
+      { delivery: 'queued' },
+    ),
+  ];
+  const coordinator = {
+    state: {
+      objective: 'Proof search',
+      host: 'claude',
+      model: null,
+      startedAt: before,
+      stoppedAt: null,
+      session: 'C1',
+      created: 1,
+      planApproved: true,
+      cursor: 0,
+      wakeups: [],
+      events: [],
+      actions: [
+        {
+          at: later(25),
+          tool: 'verifold_accept',
+          ok: true,
+          reason: 'The checks pass.',
+          result: 'Accepted.',
+        },
+      ],
+    },
+    session: {
+      live: true,
+      saveFailed: false,
+      record: { id: 'C1', status: 'idle', host: 'claude' },
+    },
+    waiting: 0,
+    limitedUntil: null,
+  };
+  const home = (since?: string): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [task], selected: null, idle: [], messages },
+        coordinator,
+      } as never,
+      { view: 'home', panel: null, ...(since ? { since } : {}) },
+    ).html;
+  const away = home(left);
+  // Facts from the records, newest first.
+  assert.match(away, /Since you left at /);
+  assert.match(
+    away,
+    /The coordinator accepted version 1 of Bounded pilot[\s\S]*Bounded pilot made version 1[\s\S]*Bounded pilot started/,
+  );
+  assert.match(
+    away,
+    /The coordinator acted 1 time\. Its reasons are in its panel\./,
+  );
+  assert.match(away, /1 message in the team feed\./);
+  assert.doesNotMatch(home(), /Since you left/);
+  // The feed holds what the agents write, never the person's messages.
+  const feed =
+    /<h2 id="feed-title">Team feed<\/h2>[\s\S]*?<\/section>/.exec(away)?.[0] ??
+    '';
+  assert.match(feed, /Bounded pilot[\s\S]*The pilot is done\./);
+  assert.doesNotMatch(feed, /synthetic/);
+  // The latest note, the message that waits for its answer, and the earlier talk.
+  assert.match(
+    away,
+    /Its latest note[\s\S]*Its reading[\s\S]*The brief allows a synthetic graph for a first pass\.[\s\S]*Waits for the coordinator[\s\S]*Can we add a real graph next\?/,
+  );
+  assert.match(
+    away,
+    /Earlier messages \(1\)[\s\S]*Read by the coordinator at[\s\S]*Why is the data synthetic\?/,
+  );
+  assert.match(away, /id="coordinator-message"/);
+  // The coordinator's actions and controls are in its panel, which the rail opens.
+  assert.match(away, /data-panel="coordinator" aria-pressed="false"/);
+  assert.doesNotMatch(away, /What it did/);
 });
