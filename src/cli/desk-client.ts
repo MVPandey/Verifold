@@ -32,6 +32,7 @@ let hiddenAt: number | undefined;
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
+let selectedDirection: string | undefined;
 /** The diff that the review pane shows, kept across page renders. */
 let shownDiff:
   | {
@@ -58,6 +59,8 @@ try {
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
   selectedWorker = sessionStorage.getItem('verifold-desk-worker') ?? undefined;
+  selectedDirection =
+    sessionStorage.getItem('verifold-desk-direction') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
 } catch {
@@ -125,6 +128,8 @@ function viewQuery(): string {
   if (panel === 'task' && selectedTask) query.set('task', selectedTask);
   // A worker that left its slot is not an error. The server shows another one.
   if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
+  if (panel === 'direction' && selectedDirection)
+    query.set('direction', selectedDirection);
   if (since) query.set('since', since);
   return query.toString();
 }
@@ -138,7 +143,9 @@ function panelKey(): string {
         ? selectedWorker
         : panel === 'attempt'
           ? selected
-          : '';
+          : panel === 'direction'
+            ? selectedDirection
+            : '';
   return `${panel}:${item ?? ''}`;
 }
 
@@ -517,12 +524,13 @@ function navigate(
 
 /** Open one item in the panel. Closing the panel returns focus to the control that opened it. */
 function openItem(
-  kind: 'task' | 'worker' | 'attempt',
+  kind: 'task' | 'worker' | 'attempt' | 'direction',
   id: string,
   from: HTMLElement,
 ): void {
   if (kind === 'task') selectedTask = id;
   else if (kind === 'worker') selectedWorker = id;
+  else if (kind === 'direction') selectedDirection = id;
   else selected = id;
   remember(kind, id);
   opener = selectorOf(from);
@@ -946,6 +954,10 @@ document.addEventListener('click', (event) => {
   }
   if (target.dataset.attempt) {
     openItem('attempt', target.dataset.attempt, target);
+    return;
+  }
+  if (target.dataset.direction) {
+    openItem('direction', target.dataset.direction, target);
     return;
   }
   if (target.dataset.diff) void loadDiff(target);

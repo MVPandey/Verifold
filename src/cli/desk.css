@@ -1568,6 +1568,73 @@ body[data-detail='details'] .summary-only {
   font-synthesis: style;
 }
 
+/* Compare the directions: one row each. A row opens the direction in the panel. */
+.compare th[scope='row'] {
+  min-width: 180px;
+  color: var(--ink);
+  font-weight: 650;
+  white-space: normal;
+}
+.compare td {
+  color: var(--muted);
+}
+.compare td:nth-child(n + 3) {
+  width: 1%;
+  color: var(--ink);
+  text-align: center;
+  white-space: nowrap;
+}
+.compare tr.chosen th,
+.compare tr.chosen td {
+  background: var(--lavender);
+}
+.row-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.row-button[aria-pressed='true'] {
+  text-decoration-thickness: 2px;
+}
+.compare .selected-label {
+  display: inline-block;
+  margin-top: 4px;
+}
+/* Sources as they arrive. */
+.sources-live {
+  list-style: none;
+  padding: 0;
+}
+.sources-live li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.sources-live li:first-child {
+  border-top: 0;
+}
+.sources-live time {
+  color: var(--muted);
+  font-size: 12px;
+}
+.checks-list {
+  padding-left: 20px;
+}
+.checks-list li + li {
+  margin-top: 4px;
+}
+
 /* ---------- Tasks ---------- */
 .task-list {
   display: flex;
@@ -2566,6 +2633,31 @@ body.terminal-page {
   .task-fields,
   .review-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Each direction becomes a card. */
+  .compare thead {
+    display: none;
+  }
+  .compare tr {
+    display: grid;
+    gap: 2px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+  }
+  .compare th,
+  .compare td {
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .compare td:nth-child(n + 3) {
+    width: auto;
+    text-align: left;
+  }
+  .compare td[data-label]::before {
+    content: attr(data-label) ': ';
+    color: var(--muted);
+    font-weight: 650;
   }
   /* The map stacks in reading order, and each box names what it waits for. */
   .map {
