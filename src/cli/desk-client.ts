@@ -21,6 +21,8 @@ const actionLabel = requiredElement(document, '#action-status', HTMLElement);
 const projectTitle = requiredElement(document, '#project-title', HTMLElement);
 const stageLabel = requiredElement(document, '#stage', HTMLElement);
 const menuButton = requiredElement(document, '#menu', HTMLElement);
+const needsButton = requiredElement(document, '#needs', HTMLElement);
+const needsCount = requiredElement(document, '#needs-count', HTMLElement);
 /** The open view and panel. Like the selections, they last for this tab. */
 let view = 'home';
 let panel = '';
@@ -76,6 +78,8 @@ let pendingFocus = '';
 let pendingScroll: ScrollLogicalPosition = 'nearest';
 /** The control that opened the panel. Focus returns to it when the panel closes. */
 let opener: string | undefined;
+/** Keys of the items in Needs you. The first view only records them, so opening the desk notifies nothing. */
+let knownNeeds: Set<string> | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let loading = false;
 let stopped = false;
@@ -273,6 +277,68 @@ function render(html: string): void {
   lastHtml = html;
 }
 
+/** The items in Needs you from a view reply, or nothing for setup. */
+function needsFrom(
+  reply: object,
+): { key: string; title: string }[] | undefined {
+  if (!('needs' in reply) || !Array.isArray(reply.needs)) return undefined;
+  return reply.needs.flatMap((item: unknown) =>
+    item &&
+    typeof item === 'object' &&
+    'key' in item &&
+    typeof item.key === 'string' &&
+    'title' in item &&
+    typeof item.title === 'string'
+      ? [{ key: item.key, title: item.title }]
+      : [],
+  );
+}
+
+/**
+ * One desktop notification for each new item, while the desk is in the
+ * background. A click on it opens Needs you.
+ */
+function notifyNeeds(needs: readonly { key: string; title: string }[]): void {
+  const known = knownNeeds;
+  knownNeeds = new Set(needs.map((item) => item.key));
+  if (
+    !known ||
+    !('Notification' in window) ||
+    Notification.permission !== 'granted' ||
+    (!document.hidden && document.hasFocus())
+  )
+    return;
+  for (const item of needs.filter((entry) => !known.has(entry.key))) {
+    const note = new Notification(
+      `${projectTitle.textContent ?? 'Verifold'} needs you`,
+      { body: item.title, tag: item.key, icon: '/symbol.webp' },
+    );
+    note.addEventListener('click', () => {
+      window.focus();
+      navigate({ view: 'needs' }, '#view-title');
+      note.close();
+    });
+  }
+}
+
+/** The notification setting in Needs you says what the browser allows. */
+function showNotify(): void {
+  const button = document.getElementById('notify');
+  const state = document.getElementById('notify-state');
+  if (!button || !state) return;
+  const permission =
+    'Notification' in window ? Notification.permission : undefined;
+  button.hidden = permission !== 'default';
+  state.textContent =
+    permission === 'granted'
+      ? 'Desktop notifications are on. Each new item sends one while the desk is in the background.'
+      : permission === 'denied'
+        ? 'The browser blocks notifications from this desk. Allow them in its site settings.'
+        : permission === 'default'
+          ? 'Get a desktop notification for each new item while the desk is in the background.'
+          : 'This browser cannot show desktop notifications.';
+}
+
 /** After the person opens a view or a panel, focus moves there, so keyboard and screen reader users follow. */
 function focusPending(): void {
   if (!pendingFocus) return;
@@ -335,10 +401,19 @@ async function refresh(): Promise<void> {
       'title' in reply && typeof reply.title === 'string' ? reply.title : '';
     const stage =
       'stage' in reply && typeof reply.stage === 'string' ? reply.stage : '';
+    const needs = needsFrom(reply);
     projectTitle.textContent = title || 'Research desk';
     stageLabel.textContent = stage;
     stageLabel.hidden = !stage;
-    document.title = title ? `${title} – Verifold` : 'Verifold';
+    // The tab title counts what waits for the person, so the count shows from another tab.
+    document.title = `${needs?.length ? `(${needs.length}) ` : ''}${title ? `${title} – Verifold` : 'Verifold'}`;
+    needsButton.hidden = needs === undefined;
+    needsCount.textContent = String(needs?.length ?? 0);
+    needsButton.classList.toggle('has', !!needs?.length);
+    if (view === 'needs') needsButton.setAttribute('aria-current', 'page');
+    else needsButton.removeAttribute('aria-current');
+    if (needs) notifyNeeds(needs);
+    showNotify();
     observationLabel.textContent = reply.observation;
     showConnection(undefined);
   } catch (error) {
@@ -850,6 +925,8 @@ document.addEventListener('click', (event) => {
   }
   if (target.dataset.action) void act(target);
   if (target.id === 'retry') void refresh();
+  if (target.id === 'notify' && 'Notification' in window)
+    void Notification.requestPermission().then(showNotify);
   if (target.id === 'theme') {
     const dark = document.documentElement.dataset.theme
       ? document.documentElement.dataset.theme === 'dark'

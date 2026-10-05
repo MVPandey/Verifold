@@ -5,7 +5,12 @@ import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
 import type { ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
-import { replaced, type TaskRecord, type TaskVersion } from './tasks.ts';
+import {
+  forPerson,
+  replaced,
+  type TaskRecord,
+  type TaskVersion,
+} from './tasks.ts';
 import type { Message } from './messages.ts';
 import {
   coordinatorLimits,
@@ -56,8 +61,14 @@ export interface TaskView {
   readonly messages?: readonly Message[];
 }
 
-/** The views of the desk, in the order of the rail. */
-export const deskViews = ['home', 'research', 'tasks', 'records'] as const;
+/** The views of the desk. The rail lists them in this order, except Needs you, which the top bar opens. */
+export const deskViews = [
+  'home',
+  'research',
+  'tasks',
+  'records',
+  'needs',
+] as const;
 export type DeskView = (typeof deskViews)[number];
 
 /** What the side panel shows: one item, or the form for a new one. */
@@ -163,6 +174,13 @@ function time(value: string): string {
   });
 }
 
+/** A time of today as the clock time, an earlier one with its date. */
+function since(value: string): string {
+  return new Date(value).toDateString() === new Date().toDateString()
+    ? clock(value)
+    : time(value);
+}
+
 function clock(value: string): string {
   return new Date(value).toLocaleTimeString('en-GB', {
     hour: '2-digit',
@@ -214,8 +232,9 @@ function renderResearch(
 }
 
 /**
- * The research decision that waits for the person, with one primary action.
- * Home shows it as the next step. Research shows it beside the records that it is about.
+ * The research step for the person, with one primary action. Research shows
+ * each decision beside the records that it is about. Home shows only the
+ * status, because Needs you lists the decisions.
  */
 function renderDecision(
   workspace: Workspace,
@@ -229,17 +248,19 @@ function renderDecision(
     return home
       ? `<section class="card lead"><h2>Research is running</h2><p>${e(research.step ? `${research.step}.` : 'A research step runs.')} Follow it in Research.</p><p class="fine">If you cancel, the saved checkpoint and the attempt files stay.</p><div class="actions"><button type="button" class="primary" data-view="research">Follow the research</button><button type="button" data-action="cancel-research">Cancel research</button></div></section>`
       : '';
+  const phase = workspace.research?.phase;
+  if (phase === undefined)
+    return `<section class="card lead"><h2>Start research</h2><p>Write the question that research should explore. The harness plans the research first.</p><label class="field" for="research-topic">Question</label><textarea id="research-topic" rows="3" maxlength="4000"></textarea><label class="check" for="research-guided"><input type="checkbox" id="research-guided" checked> Stop at the plan for my approval</label><div class="actions"><button type="button" class="primary" data-action="research" data-research="start">Start research</button></div></section>`;
+  if (home) return '';
   const feedback = (label: string): string =>
     `<label class="field" for="research-feedback">Changes</label><textarea id="research-feedback" rows="3" maxlength="4000" placeholder="${e(label)}"></textarea><div class="actions"><button type="button" data-action="research" data-research="feedback">Ask for changes</button></div>`;
-  switch (workspace.research?.phase) {
-    case undefined:
-      return `<section class="card lead"><h2>Start research</h2><p>Write the question that research should explore. The harness plans the research first.</p><label class="field" for="research-topic">Question</label><textarea id="research-topic" rows="3" maxlength="4000"></textarea><label class="check" for="research-guided"><input type="checkbox" id="research-guided" checked> Stop at the plan for my approval</label><div class="actions"><button type="button" class="primary" data-action="research" data-research="start">Start research</button></div></section>`;
+  switch (phase) {
     case 'awaiting-plan-review':
-      return `<section class="card needs"><h2>Review the plan</h2><p>Read the research scope${home ? ' in Research' : ' below'}. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button>${home ? '<button type="button" data-view="research">Read the scope</button>' : ''}</div>${feedback('What should change in the plan?')}</section>`;
+      return `<section class="card needs"><h2>Review the plan</h2><p>Read the research scope below. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
     case 'directions':
-      return `<section class="card needs"><h2>Choose a direction</h2><p>${home ? 'Compare the directions in Research, then choose one.' : 'Choose one of the directions below.'} The choice locks it for this project. You can ask for changes first.</p>${home ? '<div class="actions"><button type="button" class="primary" data-view="research">Compare the directions</button></div>' : ''}${feedback('What should change in the directions?')}</section>`;
+      return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The choice locks it for this project. You can ask for changes first.</p>${feedback('What should change in the directions?')}</section>`;
     default:
-      return `<section class="card lead"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
+      return `<section class="card needs"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
   }
 }
 
@@ -336,13 +357,18 @@ function workerName(
   return tasks.find((task) => task.id === id)?.assignment.title ?? id;
 }
 
-/** One permission request and its answer. Home and the worker's panel show it. */
+/** What a permission request asks for, and its answer. */
+function requestBody(request: PendingRequest): string {
+  return `<code class="request-action">${e(request.action)}</code>${request.detail ? `<p class="fine">Change to review:</p><code class="detail">${e(request.detail)}</code>` : ''}${request.reason ? `<p class="fine">Reason from the harness: ${e(request.reason)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="answer" data-request="${e(request.id)}" data-decision="allow">Allow once</button><button type="button" data-action="answer" data-request="${e(request.id)}" data-decision="deny">Deny</button></div>`;
+}
+
+/** One permission request in the worker's panel. */
 function requestItem(
   record: SessionRecord,
   request: PendingRequest,
   tasks: readonly TaskRecord[],
 ): string {
-  return `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type"><span class="mark you" aria-hidden="true"></span>${e(workerName(record, tasks))} asks to use ${e(request.tool)}<span class="ref">${e(request.id)}</span></p><code>${e(request.action)}</code>${request.detail ? `<p class="fine">Change to review:</p><code class="detail">${e(request.detail)}</code>` : ''}${request.reason ? `<p class="fine">Reason from the harness: ${e(request.reason)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="answer" data-request="${e(request.id)}" data-decision="allow">Allow once</button><button type="button" data-action="answer" data-request="${e(request.id)}" data-decision="deny">Deny</button></div></article>`;
+  return `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type"><span class="mark you" aria-hidden="true"></span>${e(workerName(record, tasks))} asks to use ${e(request.tool)}<span class="ref">${e(request.id)}</span></p>${requestBody(request)}</article>`;
 }
 
 /** What the side panel shows. `sub` is HTML, already escaped. */
@@ -546,35 +572,13 @@ function messageItem(message: Message): string {
   return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}<p class="pre">${e(message.text)}</p>${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
-/** What waits for the person on Home: permission requests, then open blockers and objections. */
-function renderNeeds(
-  messages: readonly Message[],
-  workers: readonly SessionView[],
-  tasks: readonly TaskRecord[],
-): string {
-  const requests = workers.flatMap((worker) =>
-    worker.record.requests
-      .slice(0, 10)
-      .map((request) => requestItem(worker.record, request, tasks)),
-  );
-  const open = messages.filter((message) => message.status === 'open');
-  if (!requests.length && !open.length) return '';
-  return `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${requests.join('')}${
-    open.length
-      ? `<ul class="messages">${open
-          .map(
-            (message) =>
-              `${messageItem(message)}<li class="decide"><label class="field" for="decide-${e(message.id)}">Reason for your decision on ${e(message.id)}</label><input id="decide-${e(message.id)}" type="text" maxlength="2000"><div class="actions">${
-                message.kind === 'objection'
-                  ? `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="upheld">Uphold</button><button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="overruled">Overrule</button>`
-                  : `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved">Resolve</button>`
-              }</div></li>`,
-          )
-          .join(
-            '',
-          )}</ul><p class="fine">Your decision and its reason go to the task that raised the message, with its next turn. To change the work, revise the task.</p>`
-      : ''
-  }</section>`;
+/** The answer to an open blocker or objection. A decision changes no file. Its reason goes to the task that raised it. */
+function decideForm(message: Message): string {
+  return `<label class="field" for="decide-${e(message.id)}">Reason for your decision on ${e(message.id)}</label><input id="decide-${e(message.id)}" type="text" maxlength="2000"><div class="actions">${
+    message.kind === 'objection'
+      ? `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="upheld">Uphold</button><button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="overruled">Overrule</button>`
+      : `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved">Resolve</button>`
+  }</div><p class="fine">${message.kind === 'objection' ? 'Uphold when the objection is right. Overrule when it is wrong. ' : ''}Your decision and its reason go to the task that raised it, with its next turn. To change the work, revise the task.</p>`;
 }
 
 /** Notes that the coordinator wrote to the person, newest first. */
@@ -610,48 +614,204 @@ function planWaits(
   );
 }
 
-/** The next step after a direction: what the coordinator does, and what waits for the person. */
+/** A decision that only the person can make. Its key stays the same while it waits, so the page notifies once. */
+interface Need {
+  readonly key: string;
+  /** The view that holds the item, for the count in the rail. */
+  readonly view: DeskView;
+  /** The task that the item is about. */
+  readonly task?: string;
+  readonly kind: string;
+  readonly title: string;
+  /** Why only the person can settle it. */
+  readonly why: string;
+  readonly since: string | null;
+  /** HTML: the answer itself, or a button that opens the place of the decision. */
+  readonly body: string;
+}
+
+/**
+ * Every decision that waits for the person, from the records that the desk
+ * reads. An item leaves when it is settled, never because the person saw it.
+ */
+function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
+  const { workspace } = snapshot;
+  const items: Need[] = [];
+  const tasks = live.tasks?.list ?? [];
+  const messages = live.tasks?.messages ?? [];
+  const latest = workspace.research?.latestAttempt;
+  const record = snapshot.attempts.find((entry) => entry.id === latest)?.record;
+  const since = record?.finishedAt ?? record?.startedAt ?? null;
+  const phase = workspace.research?.phase;
+  if (live.research && !live.research.running && !workspace.selectedId) {
+    if (phase === 'awaiting-plan-review')
+      items.push({
+        key: `research-plan:${latest ?? ''}`,
+        view: 'research',
+        kind: 'Research plan',
+        title: 'Review the plan',
+        why: 'Guided research stops at its plan for your approval.',
+        since,
+        body: '<div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button><button type="button" data-view="research">Read the scope</button></div>',
+      });
+    else if (phase === 'directions')
+      items.push({
+        key: `direction:${latest ?? ''}`,
+        view: 'research',
+        kind: 'Direction',
+        title: 'Choose a direction',
+        why: 'Only you choose the direction. The choice locks it for this project.',
+        since,
+        body: '<div class="actions"><button type="button" class="primary" data-view="research">Compare the directions</button></div>',
+      });
+    else if (phase)
+      items.push({
+        key: `research-stopped:${latest ?? ''}`,
+        view: 'research',
+        kind: 'Stopped work',
+        title: 'Research stopped before its step ended',
+        why: 'Only you can continue it. It continues from the saved checkpoint.',
+        since,
+        body: '<div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div>',
+      });
+  }
+  const coordinator = live.coordinator;
+  const state = coordinator?.state;
+  // A coordinator that has not stopped settles versions, blockers, and objections itself.
+  const coordinated = !!state && !state.stoppedAt;
+  const status = coordinator?.session?.record.status;
+  if (coordinated && (status === 'paused' || status === 'interrupted'))
+    items.push({
+      key: `coordinator-paused:${state.session ?? ''}`,
+      view: 'home',
+      kind: 'Stopped work',
+      title: 'The coordinator is paused',
+      why: 'It paused when Verifold stopped. Only you can resume it.',
+      since: null,
+      body: '<div class="actions"><button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button></div>',
+    });
+  if (planWaits(coordinator, tasks))
+    items.push({
+      key: `task-plan:${state?.created ?? 0}`,
+      view: 'home',
+      kind: 'Task plan',
+      title: 'The task plan waits for you',
+      why: "Guided research stops at the coordinator's task plan. No task starts before your approval.",
+      since:
+        tasks
+          .filter((task) => task.assignment.by === 'coordinator')
+          .map((task) => task.createdAt)
+          .sort()
+          .at(-1) ?? null,
+      body: '<div class="actions"><button type="button" class="primary" data-view="home" data-focus="plan-title">Open the plan</button></div>',
+    });
+  const workers = live.workers ?? (live.session ? [live.session] : []);
+  for (const worker of workers)
+    for (const request of worker.record.requests.slice(0, 10))
+      items.push({
+        key: `request:${worker.record.id}:${request.id}`,
+        view: 'home',
+        ...(worker.record.task ? { task: worker.record.task.id } : {}),
+        kind: 'Permission',
+        title: `${workerName(worker.record, tasks)} asks to use ${request.tool}`,
+        why: `It waits for your answer before it continues. Request ${request.id}.`,
+        since: request.at,
+        body: requestBody(request),
+      });
+  for (const message of messages) {
+    if (
+      message.status !== 'open' ||
+      (coordinated && !forPerson(message, messages))
+    )
+      continue;
+    const from =
+      tasks.find((task) => task.id === message.from)?.assignment.title ??
+      message.from;
+    items.push({
+      key: `message:${message.id}`,
+      view: 'home',
+      task: message.from,
+      kind: kindLabels[message.kind],
+      title:
+        message.text.length > 160
+          ? `${message.text.slice(0, 160)}…`
+          : message.text,
+      why: `From ${from}. ${coordinated ? 'The coordinator overruled two objections from this task, so this one goes to you.' : 'No coordinator runs, so only you can settle it.'}`,
+      since: message.at,
+      body: `${message.text.length > 160 ? `<p class="pre">${e(message.text)}</p>` : ''}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
+    });
+  }
+  if (!coordinated)
+    for (const task of tasks) {
+      const attempt = task.attempts.at(-1);
+      const version = attempt?.versions.at(-1);
+      const open = `<div class="actions"><button type="button" class="primary" data-task-select="${e(task.id)}">Open the task</button></div>`;
+      if (task.state === 'review' && version && !version.decision)
+        items.push({
+          key: `review:${task.id}:${attempt?.number ?? 0}:${version.number}`,
+          view: 'tasks',
+          task: task.id,
+          kind: 'Review',
+          title: `Version ${version.number} of ${task.assignment.title} waits for your review`,
+          why: 'No coordinator runs, so only you can accept or reject it.',
+          since: version.at,
+          body: open,
+        });
+      else if (
+        task.state === 'open' &&
+        (attempt?.outcome === 'start-failed' ||
+          attempt?.outcome === 'allocation-failed')
+      )
+        items.push({
+          key: `task-failed:${task.id}:${attempt.number}`,
+          view: 'tasks',
+          task: task.id,
+          kind: 'Stopped work',
+          title: `${task.assignment.title} could not start`,
+          why: `${attempt.note ?? 'Its harness did not start.'} No coordinator runs, so only you can start it again.`,
+          since: attempt.endedAt,
+          body: open,
+        });
+    }
+  return items;
+}
+
+/** The items that wait for the person, each with why it is theirs and its answer. */
+function renderNeedList(items: readonly Need[]): string {
+  return `<ul class="needs-list">${items
+    .map(
+      (item) =>
+        `<li class="need"><div class="need-head"><span class="mark you" aria-hidden="true"></span><div><p class="need-kind">${e(item.kind)}</p><h3>${e(item.title)}</h3><p class="fine">${item.since ? `Since ${e(since(item.since))}. ` : ''}${e(item.why)}</p></div></div><div class="need-body">${item.body}</div></li>`,
+    )
+    .join('')}</ul>`;
+}
+
+/** Needs you: one list of every decision that only the person can make. */
+function renderNeedsView(items: readonly Need[]): string {
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Needs you</h1><p>${items.length ? `${items.length} ${items.length === 1 ? 'item waits' : 'items wait'} for you` : 'Nothing waits for you'}</p></div>
+  <p class="notify"><span id="notify-state"></span><button type="button" id="notify" hidden>Turn on desktop notifications</button></p>
+  ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p><strong>Nothing needs you.</strong></p><p class="fine">An item shows here when only you can settle it: a plan to approve, a direction to choose, a permission request, an objection that comes to you, or work that stopped. It leaves when you settle it.</p></section>'}</div>`;
+}
+
+/** What the coordinator does after a direction. Needs you lists what waits for the person. */
 function renderTeamNext(
   view: CoordinatorView | null,
-  messages: readonly Message[],
+  needs: number,
   tasks: readonly TaskRecord[],
 ): string {
   const state = view?.state;
   const session = view?.session?.record;
-  const open = messages.filter((message) => message.status === 'open').length;
-  const [title, text, tone] =
-    !state || state.stoppedAt
-      ? [
-          'The coordinator is not running',
-          'Start it under Coordinator. It plans the tasks for the chosen direction.',
-          'lead',
-        ]
-      : planWaits(view, tasks)
-        ? [
-            'The task plan waits for you',
-            'Approve it under Coordinator. No task starts before your approval.',
-            'needs',
-          ]
-        : !state.planApproved
-          ? [
-              'No task plan yet',
-              'The coordinator writes the task plan. No task starts before you approve it.',
-              '',
-            ]
-          : session?.status === 'paused' || session?.status === 'interrupted'
-            ? [
-                'The coordinator is paused',
-                'Resume it under Coordinator to continue the same conversation.',
-                'lead',
-              ]
-            : [
-                'The coordinator runs the team',
-                open
-                  ? `${open} ${open === 1 ? 'message needs' : 'messages need'} your decision below.`
-                  : 'Nothing needs you. Follow the work under Coordinator and Tasks.',
-                open ? 'needs' : '',
-              ];
-  return `<section class="card${tone ? ` ${tone}` : ''}"><h2>${e(title)}</h2><p>${e(text)}</p></section>`;
+  if (!state || state.stoppedAt)
+    return '<section class="card lead"><h2>The coordinator is not running</h2><p>Start it under Coordinator. It plans the tasks for the chosen direction.</p></section>';
+  if (
+    planWaits(view, tasks) ||
+    session?.status === 'paused' ||
+    session?.status === 'interrupted'
+  )
+    return '';
+  if (!state.planApproved)
+    return '<section class="card"><h2>No task plan yet</h2><p>The coordinator writes the task plan. No task starts before you approve it.</p></section>';
+  return `<section class="card"><h2>The coordinator runs the team</h2><p>${needs ? `${needs} ${needs === 1 ? 'item needs' : 'items need'} you above.` : 'Nothing needs you. Follow the work under Coordinator and Tasks.'}</p></section>`;
 }
 
 const coordinatorStates: Record<string, string> = {
@@ -697,7 +857,7 @@ function renderCoordinator(
   const waits = planWaits(view, tasks);
   const plan = state.planApproved
     ? ''
-    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator below, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(task.assignment.objective.slice(0, 300))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
+    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator below, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(task.assignment.objective.slice(0, 300))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
   return `<section class="card coordinator" aria-labelledby="coordinator-title"><div class="section-title"><h2 id="coordinator-title" tabindex="-1">Coordinator</h2><span class="status ${paused || session?.status === 'failed' ? 'muted' : 'active'}">${e(status)}</span></div>
   <p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span>${state.created} of ${coordinatorLimits.tasks} tasks created</span><span>${wakeups} of ${coordinatorLimits.wakeupsPerHour} wakeups this hour</span><span>${view.waiting} ${view.waiting === 1 ? 'event waits' : 'events wait'}</span></p>
   ${view.limitedUntil ? `<p class="notice">The coordinator used its wakeups for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
@@ -718,6 +878,7 @@ function taskPanel(
   view: TaskView,
   live: DeskSession,
   host: string,
+  needKeys: ReadonlySet<string>,
 ): Panel {
   const [label, tone] = taskStates[task.state];
   const others = view.list.filter((entry) => entry.id !== task.id);
@@ -799,7 +960,7 @@ function taskPanel(
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
     ${task.state !== 'running' && agent ? `<div class="actions">${agent}</div>` : ''}
-    <details id="task-messages"><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map(messageItem).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}<label class="field" for="task-message">Message to this task's worker</label><textarea id="task-message" rows="2" maxlength="4000"></textarea><p class="fine">The worker receives it with its next turn. A message cannot change the task's paths, permissions, or limits.</p><div class="actions"><button type="button" data-action="task-message" data-task="${e(task.id)}" data-to="${e(task.id)}">Send</button></div></details>
+    <details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}<label class="field" for="task-message">Message to this task's worker</label><textarea id="task-message" rows="2" maxlength="4000"></textarea><p class="fine">The worker receives it with its next turn. A message cannot change the task's paths, permissions, or limits.</p><div class="actions"><button type="button" data-action="task-message" data-task="${e(task.id)}" data-to="${e(task.id)}">Send</button></div></details>
     ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
     ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}`;
   return {
@@ -815,19 +976,18 @@ function renderTasksView(
   view: TaskView,
   shown: string | undefined,
   coordinator: string,
+  needs: readonly Need[],
 ): string {
-  const messages = view.messages ?? [];
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Tasks</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
   ${
     view.list.length
       ? `<ol class="task-list">${view.list
           .map((entry) => {
-            const raised = messages.filter(
-              (message) =>
-                message.status === 'open' && message.from === entry.id,
+            const raised = needs.filter(
+              (item) => item.task === entry.id,
             ).length;
-            return `<li><button type="button" data-task-select="${e(entry.id)}" aria-pressed="${entry.id === shown}"><span class="mark ${taskMarks[entry.state]}" aria-hidden="true"></span><span class="task-name">${e(entry.assignment.title)}</span><span class="task-id">${e(entry.id)}</span><span class="attempt-status">${e(taskStates[entry.state][0])}</span>${raised ? `<span class="flag">${raised} ${raised === 1 ? 'message waits' : 'messages wait'} for you on Home</span>` : ''}</button></li>`;
+            return `<li><button type="button" data-task-select="${e(entry.id)}" aria-pressed="${entry.id === shown}"><span class="mark ${taskMarks[entry.state]}" aria-hidden="true"></span><span class="task-name">${e(entry.assignment.title)}</span><span class="task-id">${e(entry.id)}</span><span class="attempt-status">${e(taskStates[entry.state][0])}</span>${raised ? `<span class="flag">${raised} ${raised === 1 ? 'item needs' : 'items need'} you</span>` : ''}</button></li>`;
           })
           .join('')}</ol>`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write a task yourself with New task.</p></section>'
@@ -933,7 +1093,7 @@ export const terminalPage = `<!doctype html><html lang="en"><head><meta charset=
  * The desk shell. The page fills #content with the rail, one view, and the
  * panel, and keeps the top bar.
  */
-export const deskPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Verifold</title><link rel="icon" href="/symbol.webp"><link rel="stylesheet" href="/desk.css"><script type="module" src="/desk-client.js"></script></head><body><a class="skip" href="#view">Skip to the main view</a><header class="topbar"><button id="menu" class="icon-button menu-button" type="button" aria-label="Show the views and the team" aria-expanded="false">☰</button><a class="brand" href="/" aria-label="Verifold research desk"><img src="/symbol.webp" alt="" width="26" height="26"><span>verifold</span></a><div class="project"><strong id="project-title">Research desk</strong><span class="stage" id="stage" hidden></span></div><span class="spacer"></span><span id="action-status" role="status"></span><span id="observation"></span><span id="connection" role="status">Connecting…</span><button id="theme" class="icon-button" type="button" aria-label="Switch the color theme" title="Switch the color theme">◐</button></header><div class="connection-note" id="connection-note" hidden><span id="connection-message"></span><button id="retry" type="button">Refresh</button></div><div id="content" class="frame"><main id="view" class="solo" tabindex="-1"><div class="empty"><h1>Opening your research desk</h1><p>Reading the selected project. This does not start research.</p></div></main></div></body></html>`;
+export const deskPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Verifold</title><link rel="icon" href="/symbol.webp"><link rel="stylesheet" href="/desk.css"><script type="module" src="/desk-client.js"></script></head><body><a class="skip" href="#view">Skip to the main view</a><header class="topbar"><button id="menu" class="icon-button menu-button" type="button" aria-label="Show the views and the team" aria-expanded="false">☰</button><a class="brand" href="/" aria-label="Verifold research desk"><img src="/symbol.webp" alt="" width="26" height="26"><span>verifold</span></a><div class="project"><strong id="project-title">Research desk</strong><span class="stage" id="stage" hidden></span></div><span class="spacer"></span><span id="action-status" role="status"></span><span id="observation"></span><span id="connection" role="status">Connecting…</span><button id="needs" class="needs-button" type="button" data-view="needs" hidden><span class="needs-label">Needs you</span><span class="count" id="needs-count">0</span></button><button id="theme" class="icon-button" type="button" aria-label="Switch the color theme" title="Switch the color theme">◐</button></header><div class="connection-note" id="connection-note" hidden><span id="connection-message"></span><button id="retry" type="button">Refresh</button></div><div id="content" class="frame"><main id="view" class="solo" tabindex="-1"><div class="empty"><h1>Opening your research desk</h1><p>Reading the selected project. This does not start research.</p></div></main></div></body></html>`;
 
 /** The stages of a project, from the question to the answer. Home draws them as an arc. */
 const stageNames = [
@@ -1064,14 +1224,18 @@ function renderArc(at: Progress): string {
     )}</svg><p class="arc-caption${at.waits ? ' you' : ''}" aria-hidden="true">${e(now)}</p></div>`;
 }
 
-const viewNames: Record<DeskView, string> = {
+/** The views in the rail. The top bar opens Needs you. */
+const railViews = ['home', 'research', 'tasks', 'records'] as const;
+type RailView = (typeof railViews)[number];
+
+const viewNames: Record<RailView, string> = {
   home: 'Home',
   research: 'Research',
   tasks: 'Tasks',
   records: 'Records',
 };
 
-const viewIcons: Record<DeskView, string> = {
+const viewIcons: Record<RailView, string> = {
   home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
   research:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>',
@@ -1097,11 +1261,18 @@ function renderRail(
   frame: DeskFrame,
   live: DeskSession,
   tasks: readonly TaskRecord[],
-  needs: number,
+  needs: readonly Need[],
 ): string {
   const workers = live.workers ?? (live.session ? [live.session] : []);
   const running = workers.filter((worker) => worker.live).length;
   const shown = frame.panel === 'worker' ? live.session?.record.id : undefined;
+  // Each view shows how many items for the person it holds.
+  const count = (view: RailView): string => {
+    const held = needs.filter((item) => item.view === view).length;
+    return held
+      ? `<span class="n"><span aria-hidden="true">◆ </span>${held}<span class="visually-hidden"> ${held === 1 ? 'item waits' : 'items wait'} for you</span></span>`
+      : '';
+  };
   const team: string[] = [];
   if (live.research?.running)
     team.push(
@@ -1171,11 +1342,11 @@ function renderRail(
       ? '<button type="button" data-panel="new-session">New session<small>Start a Claude Code or Codex session that you control.</small></button>'
       : '',
   ].join('');
-  return `<nav class="rail" id="rail" aria-label="Views and team"><ul class="views">${deskViews
+  return `<nav class="rail" id="rail" aria-label="Views and team"><ul class="views">${railViews
     .filter((view) => view !== 'tasks' || live.tasks)
     .map(
       (view) =>
-        `<li><button type="button" data-view="${view}"${view === frame.view ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${view === 'home' && needs ? `<span class="n"><span aria-hidden="true">◆ </span>${needs}<span class="visually-hidden"> ${needs === 1 ? 'item waits' : 'items wait'} for you</span></span>` : ''}</button></li>`,
+        `<li><button type="button" data-view="${view}"${view === frame.view ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
     )
     .join('')}</ul>
   <div class="rail-team"><div class="rail-title"><h2>Team</h2>${live.controllable ? `<span class="count">${running} of ${workerLimit} workers run</span>` : ''}</div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
@@ -1190,13 +1361,13 @@ function renderHome(
   researching: boolean,
   coordinator: string,
   tasks: readonly TaskRecord[],
+  needs: readonly Need[],
 ): string {
-  const workers = live.workers ?? (live.session ? [live.session] : []);
   let lead: string;
   if (live.research && !workspace.selectedId)
     lead = renderDecision(workspace, live, 'home');
   else if (workspace.selectedId && live.coordinator !== undefined)
-    lead = renderTeamNext(live.coordinator, live.tasks?.messages ?? [], tasks);
+    lead = renderTeamNext(live.coordinator, needs.length, tasks);
   else if (researching)
     lead =
       '<section class="card lead"><h2>Research is running</h2><p>Research runs in your terminal. The results show here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>';
@@ -1205,7 +1376,7 @@ function renderHome(
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose New, then New session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
   }
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${lead}${renderNeeds(live.tasks?.messages ?? [], workers, tasks)}${coordinator}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${coordinator}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -1215,6 +1386,7 @@ function renderPanel(
   live: DeskSession,
   chosen: DeskAttempt | undefined,
   report: ResearchReport | null,
+  needKeys: ReadonlySet<string>,
 ): string {
   const tasks = live.tasks?.list ?? [];
   const gone = (kind: string, title: string, text: string): Panel => ({
@@ -1227,7 +1399,13 @@ function renderPanel(
   if (panel === 'task')
     shown =
       live.tasks?.selected && live.tasks
-        ? taskPanel(live.tasks.selected, live.tasks, live, workspace.host)
+        ? taskPanel(
+            live.tasks.selected,
+            live.tasks,
+            live,
+            workspace.host,
+            needKeys,
+          )
         : gone('Task', 'No task', 'This task is not in the list.');
   else if (panel === 'worker')
     shown = live.session
@@ -1274,7 +1452,14 @@ export function renderDesk(
   report: ResearchReport | null,
   live: DeskSession = { session: null, controllable: false },
   frame: DeskFrame = { view: 'home', panel: null },
-): { html: string; observation: string; title: string; stage: string } {
+): {
+  html: string;
+  observation: string;
+  title: string;
+  stage: string;
+  /** What waits for the person. The page counts it in the tab title and notifies about new keys. */
+  needs: { key: string; title: string }[];
+} {
   const { workspace, attempts } = snapshot;
   const active = attempts.filter((attempt) => attempt.activity === 'recent');
   const chosen =
@@ -1300,41 +1485,48 @@ export function renderDesk(
           tasks,
           messages,
         );
-  const needs =
-    workers.reduce((sum, worker) => sum + worker.record.requests.length, 0) +
-    messages.filter((message) => message.status === 'open').length +
-    (at.waits ? 1 : 0);
+  const needs = needsOf(snapshot, live);
   const main =
-    view === 'research'
-      ? renderResearchView(workspace, live, report, chosen)
-      : view === 'tasks' && live.tasks
-        ? renderTasksView(
-            live.tasks,
-            frame.panel === 'task' ? live.tasks.selected?.id : undefined,
-            onHome ? '' : coordinator,
-          )
-        : view === 'records'
-          ? renderRecords(
-              snapshot,
-              workers,
-              tasks,
-              frame.panel === 'attempt' ? chosen?.id : undefined,
+    view === 'needs'
+      ? renderNeedsView(needs)
+      : view === 'research'
+        ? renderResearchView(workspace, live, report, chosen)
+        : view === 'tasks' && live.tasks
+          ? renderTasksView(
+              live.tasks,
+              frame.panel === 'task' ? live.tasks.selected?.id : undefined,
+              onHome ? '' : coordinator,
+              needs,
             )
-          : renderHome(
-              workspace,
-              live,
-              at,
-              active.length > 0,
-              onHome ? coordinator : '',
-              tasks,
-            );
+          : view === 'records'
+            ? renderRecords(
+                snapshot,
+                workers,
+                tasks,
+                frame.panel === 'attempt' ? chosen?.id : undefined,
+              )
+            : renderHome(
+                workspace,
+                live,
+                at,
+                active.length > 0,
+                onHome ? coordinator : '',
+                tasks,
+                needs,
+              );
   // The top bar names the research owner only when exactly one reported recently.
   const observation =
     active.length === 1 && active[0]?.record?.observedAt
       ? `Research owner last observed ${time(active[0].record.observedAt)}`
       : '';
-  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report) : ''}`;
-  return { html, observation, title: snapshot.project, stage: stageText(at) };
+  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key))) : ''}`;
+  return {
+    html,
+    observation,
+    title: snapshot.project,
+    stage: stageText(at),
+    needs: needs.map(({ key, title }) => ({ key, title })),
+  };
 }
 
 const setupSteps = [
