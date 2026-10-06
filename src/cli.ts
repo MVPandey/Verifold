@@ -23,6 +23,51 @@ stdout.on('error', (error: NodeJS.ErrnoException) => {
   }
 });
 const interactive = Boolean(stdin.isTTY && stderr.isTTY);
+
+/** Read a secret: hidden input on a terminal, or all of stdin (up to 4 KB). It is never echoed. */
+function readSecret(prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let text = '';
+    if (!stdin.isTTY) {
+      stdin.setEncoding('utf8');
+      stdin.on('data', (chunk: string) => {
+        text += chunk;
+        if (text.length > 4096) {
+          stdin.destroy();
+          reject(new Error('The input exceeds 4 KB.'));
+        }
+      });
+      stdin.once('end', () => resolve(text));
+      stdin.once('error', reject);
+      return;
+    }
+    const finish = (error?: Error): void => {
+      stdin.off('data', onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      stderr.write('\n');
+      if (error) reject(error);
+      else resolve(text);
+    };
+    const onData = (chunk: Buffer): void => {
+      for (const char of chunk.toString('utf8')) {
+        if (char === '\r' || char === '\n') return finish();
+        if (char === '\u0003') {
+          controller.abort();
+          return finish(new Error('Cancelled.'));
+        }
+        if (char === '\u007f' || char === '\b') text = text.slice(0, -1);
+        else if (char >= ' ') text += char;
+        if (text.length > 4096)
+          return finish(new Error('The input exceeds 4 KB.'));
+      }
+    };
+    stderr.write(prompt);
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on('data', onData);
+  });
+}
 const color =
   interactive &&
   process.env.NO_COLOR === undefined &&
@@ -57,6 +102,7 @@ try {
             busy: terminal.busy.bind(terminal),
           }
         : {}),
+      readSecret,
       // Harness tool events belong in the desk, so the terminal skips them.
       progress: (value, source) => {
         if (source !== 'tool') terminal?.progress(value);

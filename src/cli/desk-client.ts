@@ -32,6 +32,7 @@ let hiddenAt: number | undefined;
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
+let selectedDirection: string | undefined;
 /** The diff that the review pane shows, kept across page renders. */
 let shownDiff:
   | {
@@ -58,6 +59,8 @@ try {
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
   selectedWorker = sessionStorage.getItem('verifold-desk-worker') ?? undefined;
+  selectedDirection =
+    sessionStorage.getItem('verifold-desk-direction') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
 } catch {
@@ -125,6 +128,8 @@ function viewQuery(): string {
   if (panel === 'task' && selectedTask) query.set('task', selectedTask);
   // A worker that left its slot is not an error. The server shows another one.
   if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
+  if (panel === 'direction' && selectedDirection)
+    query.set('direction', selectedDirection);
   if (since) query.set('since', since);
   return query.toString();
 }
@@ -138,7 +143,9 @@ function panelKey(): string {
         ? selectedWorker
         : panel === 'attempt'
           ? selected
-          : '';
+          : panel === 'direction'
+            ? selectedDirection
+            : '';
   return `${panel}:${item ?? ''}`;
 }
 
@@ -266,6 +273,7 @@ function render(html: string): void {
   }
   rendered = { view, panel: panelKey() };
   showReview();
+  drawMaps();
   mountTranscripts(content, () => token);
   mountTerminals(content);
   inPanel?.focus({ preventScroll: true });
@@ -342,6 +350,53 @@ function showNotify(): void {
         : permission === 'default'
           ? 'Get a desktop notification for each new item while the desk is in the background.'
           : 'This browser cannot show desktop notifications.';
+}
+
+/**
+ * Draw the arrows of each task map, from what a task waits for to the task.
+ * The boxes say the same in words, so the arrows are decoration.
+ */
+function drawMaps(): void {
+  for (const map of content.querySelectorAll<HTMLElement>('[data-map]')) {
+    const svg = map.querySelector('svg.map-links');
+    const layer = svg?.querySelector('g');
+    if (!svg || !layer) continue;
+    const origin = map.getBoundingClientRect();
+    const left = origin.left - map.scrollLeft;
+    const top = origin.top - map.scrollTop;
+    const paths: SVGPathElement[] = [];
+    for (const node of map.querySelectorAll<HTMLElement>('[data-from]')) {
+      const to = node.getBoundingClientRect();
+      for (const id of (node.dataset.from ?? '').split(' ')) {
+        const source = map.querySelector<HTMLElement>(
+          `[data-node="${CSS.escape(id)}"]`,
+        );
+        if (!source) continue;
+        const from = source.getBoundingClientRect();
+        const x1 = from.right - left;
+        const y1 = from.top + Math.min(28, from.height / 2) - top;
+        const x2 = to.left - left - 2;
+        const y2 = to.top + Math.min(28, to.height / 2) - top;
+        const bend = Math.max(16, (x2 - x1) / 2);
+        const path = document.createElementNS(
+          'http://www.w3.org/2000/svg',
+          'path',
+        );
+        path.setAttribute(
+          'd',
+          `M${x1} ${y1}C${x1 + bend} ${y1} ${x2 - bend} ${y2} ${x2} ${y2}`,
+        );
+        path.setAttribute('marker-end', 'url(#map-arrow)');
+        // A finished source or the objective gives a solid line. A dashed line still waits.
+        if (id === 'objective' || source.dataset.state === 'done')
+          path.setAttribute('class', 'done');
+        paths.push(path);
+      }
+    }
+    svg.setAttribute('width', String(map.scrollWidth));
+    svg.setAttribute('height', String(map.scrollHeight));
+    layer.replaceChildren(...paths);
+  }
 }
 
 /** After the person opens a view or a panel, focus moves there, so keyboard and screen reader users follow. */
@@ -469,12 +524,13 @@ function navigate(
 
 /** Open one item in the panel. Closing the panel returns focus to the control that opened it. */
 function openItem(
-  kind: 'task' | 'worker' | 'attempt',
+  kind: 'task' | 'worker' | 'attempt' | 'direction',
   id: string,
   from: HTMLElement,
 ): void {
   if (kind === 'task') selectedTask = id;
   else if (kind === 'worker') selectedWorker = id;
+  else if (kind === 'direction') selectedDirection = id;
   else selected = id;
   remember(kind, id);
   opener = selectorOf(from);
@@ -641,6 +697,19 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         host: field('coordinator-host'),
         model: field('coordinator-model').trim(),
       };
+    case 'coordinator-rule':
+      return {
+        action,
+        check: Number(button.dataset.check),
+        result: button.dataset.result,
+        reason: field(`rule-${button.dataset.check ?? ''}`),
+      };
+    case 'coordinator-answer':
+      return {
+        action,
+        decision: button.dataset.decision,
+        note: field('answer-note'),
+      };
     case 'coordinator-message':
       // A question from a task's panel names its task.
       return button.dataset.about
@@ -660,6 +729,45 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
     default:
       return { action, task };
   }
+}
+
+/** A compute action. The RunPod key goes only into this request body. */
+function computeRequest(button: HTMLElement): Record<string, unknown> {
+  const action = button.dataset.action ?? '';
+  if (action === 'compute-key-save') {
+    const box = document.getElementById('runpod-key-file');
+    return {
+      action,
+      key: field('runpod-key').trim(),
+      file:
+        button.dataset.file === 'always' ||
+        (box instanceof HTMLInputElement && box.checked),
+    };
+  }
+  if (action.startsWith('compute-lease-'))
+    return { action, lease: button.dataset.lease };
+  if (action !== 'compute-settings') return { action };
+  // Without the GPU table, the saved GPU list stays.
+  const boxes = Array.from(
+    content.querySelectorAll<HTMLInputElement>('input[data-gpu]'),
+  );
+  return {
+    action,
+    limitUsd: field('compute-limit'),
+    maxUsdPerHour: field('compute-rate'),
+    maxHoursPerLease: field('compute-hours'),
+    idleMinutes: field('compute-idle'),
+    maxRunningPods: field('compute-pods'),
+    diskGb: field('compute-disk'),
+    images: field('compute-images'),
+    ...(boxes.length
+      ? {
+          gpuTypes: boxes
+            .filter((box) => box.checked)
+            .map((box) => box.dataset.gpu),
+        }
+      : {}),
+  };
 }
 
 /** The answer to the open setup question. */
@@ -742,7 +850,9 @@ async function act(button: HTMLElement): Promise<void> {
                         : action?.startsWith('task-') ||
                             action?.startsWith('coordinator-')
                           ? taskRequest(button)
-                          : { action };
+                          : action?.startsWith('compute-')
+                            ? computeRequest(button)
+                            : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -756,6 +866,9 @@ async function act(button: HTMLElement): Promise<void> {
     ['version', button.dataset.version],
     ['message', button.dataset.message],
     ['decision', button.dataset.decision],
+    ['check', button.dataset.check],
+    ['result', button.dataset.result],
+    ['lease', button.dataset.lease],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -771,7 +884,10 @@ async function act(button: HTMLElement): Promise<void> {
       },
       body: JSON.stringify(body),
       cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
+      // A compute action waits for RunPod, for up to 8 seconds.
+      signal: AbortSignal.timeout(
+        action?.startsWith('compute-') ? 15000 : 5000,
+      ),
     });
     const reply: unknown = await response.json().catch(() => null);
     if (!response.ok)
@@ -808,6 +924,10 @@ async function act(button: HTMLElement): Promise<void> {
       'task-message',
       'coordinator-message',
       'task-coordinator-message',
+      'answer-note',
+      ...(body.action === 'coordinator-rule'
+        ? [`rule-${String(body.check)}`]
+        : []),
       ...(body.action === 'task-create'
         ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
             (name) => `task-new-${name}`,
@@ -829,6 +949,10 @@ async function act(button: HTMLElement): Promise<void> {
         : 'The desk did not answer. Check that Verifold still runs in your terminal.';
     failure = { selector, message: actionLabel.textContent };
   } finally {
+    // The key field is empty after each try, so the key stays on the page no longer than needed.
+    const key = document.getElementById('runpod-key');
+    if (action === 'compute-key-save' && key instanceof HTMLInputElement)
+      key.value = '';
     showFailure();
     if (button instanceof HTMLButtonElement) button.disabled = false;
     void refresh();
@@ -898,6 +1022,10 @@ document.addEventListener('click', (event) => {
   }
   if (target.dataset.attempt) {
     openItem('attempt', target.dataset.attempt, target);
+    return;
+  }
+  if (target.dataset.direction) {
+    openItem('direction', target.dataset.direction, target);
     return;
   }
   if (target.dataset.diff) void loadDiff(target);
@@ -1000,6 +1128,7 @@ document.addEventListener('visibilitychange', () => {
   }
   hiddenAt = undefined;
 });
+window.addEventListener('resize', drawMaps);
 window.addEventListener('pagehide', () => {
   stopped = true;
   clearTimeout(timer);

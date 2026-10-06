@@ -35,6 +35,7 @@
   --caution-bg: #fff7ed;
   --caution-line: #f3c9a5;
   --green: #1e6b47;
+  --ok-bg: #e5f4ec;
   --red: #a3263d;
   --masthead: linear-gradient(180deg, #efeaf8 0%, var(--paper) 100%);
   --contour: rgb(76 29 149 / 16%);
@@ -71,6 +72,7 @@
     --caution-bg: #2a1a10;
     --caution-line: #6b4426;
     --green: #86d3a8;
+    --ok-bg: #14271d;
     --red: #ff9fb0;
     --masthead: linear-gradient(180deg, #221833 0%, var(--paper) 100%);
     --contour: rgb(183 148 246 / 16%);
@@ -100,6 +102,7 @@
   --caution-bg: #2a1a10;
   --caution-line: #6b4426;
   --green: #86d3a8;
+  --ok-bg: #14271d;
   --red: #ff9fb0;
   --masthead: linear-gradient(180deg, #221833 0%, var(--paper) 100%);
   --contour: rgb(183 148 246 / 16%);
@@ -1312,6 +1315,136 @@ textarea {
   background: var(--lavender);
 }
 
+/* Long text shows its lead. Show all opens the rest in place. */
+details.more > summary {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  list-style: none;
+}
+details.more > summary::-webkit-details-marker {
+  display: none;
+}
+/* Section summaries float their note to the right. The lead and its hint stay in the line. */
+details.more > summary > span {
+  float: none;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+details.more > summary > .more-hint {
+  color: var(--violet);
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+details.more[open] > summary .lead,
+details.more:not([open]) .opened,
+details.more[open] .closed {
+  display: none;
+}
+details.more > * + * {
+  margin-top: 4px;
+}
+
+/* The team feed: one compact row for each message. */
+.feed-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+}
+.feed-row .avatar {
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 6px;
+}
+.feed-row .avatar svg {
+  width: 13px;
+  height: 13px;
+}
+.feed-row .avatar img {
+  width: 15px;
+  height: 15px;
+}
+.feed-body {
+  min-width: 0;
+}
+.feed-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  max-width: none;
+  font-size: 12.5px;
+}
+.feed-to {
+  color: var(--muted);
+}
+.feed-head time {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* The kind of a message is a label. A blocker or an objection is a warning, not a decision for the person. */
+.chip {
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.chip.blocker,
+.chip.objection {
+  border-color: var(--caution-line);
+  background: var(--caution-bg);
+  color: var(--caution);
+}
+.chip.decision {
+  border-color: var(--tint-line);
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+
+/* The coordinator's actions: what Verifold recorded, with its reason folded. */
+.actions-log {
+  list-style: none;
+  padding: 0;
+}
+.actions-log li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.actions-log li:first-child {
+  border-top: 0;
+}
+.actions-log time {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tool {
+  margin-right: 4px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--sunken);
+  color: var(--muted);
+  font:
+    11.5px/1.6 ui-monospace,
+    monospace;
+}
+.why {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* ---------- Research ---------- */
 .research-step {
   font-weight: 600;
@@ -1436,6 +1569,73 @@ body[data-detail='details'] .summary-only {
 /* Manrope has no italic face, so emphasis uses a synthesized slant. */
 .md em {
   font-synthesis: style;
+}
+
+/* Compare the directions: one row each. A row opens the direction in the panel. */
+.compare th[scope='row'] {
+  min-width: 180px;
+  color: var(--ink);
+  font-weight: 650;
+  white-space: normal;
+}
+.compare td {
+  color: var(--muted);
+}
+.compare td:nth-child(n + 3) {
+  width: 1%;
+  color: var(--ink);
+  text-align: center;
+  white-space: nowrap;
+}
+.compare tr.chosen th,
+.compare tr.chosen td {
+  background: var(--lavender);
+}
+.row-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.row-button[aria-pressed='true'] {
+  text-decoration-thickness: 2px;
+}
+.compare .selected-label {
+  display: inline-block;
+  margin-top: 4px;
+}
+/* Sources as they arrive. */
+.sources-live {
+  list-style: none;
+  padding: 0;
+}
+.sources-live li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.sources-live li:first-child {
+  border-top: 0;
+}
+.sources-live time {
+  color: var(--muted);
+  font-size: 12px;
+}
+.checks-list {
+  padding-left: 20px;
+}
+.checks-list li + li {
+  margin-top: 4px;
 }
 
 /* ---------- Tasks ---------- */
@@ -1596,6 +1796,310 @@ body[data-detail='details'] .summary-only {
 .worker-reply {
   padding: 8px 10px;
   border-left: 3px dashed var(--control);
+}
+
+/* The plan as a map: the objective, then a column for each depth. Arrows come from what a task waits for. */
+.view.wide {
+  max-width: 1180px;
+}
+.map {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 44px;
+  overflow-x: auto;
+  padding: 4px 2px 12px;
+}
+.map-col {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.map-root {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #4c1d95, #7c3aed 60%, #b794f6);
+  color: #fff;
+}
+.map-root .map-label {
+  color: rgb(255 255 255 / 85%);
+}
+.map-box {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-weight: 500;
+  text-align: left;
+}
+.map-box:hover,
+.map-box[aria-pressed='true'] {
+  border-color: var(--violet);
+}
+.map-box[aria-pressed='true'] {
+  box-shadow: inset 3px 0 0 var(--violet);
+}
+.map-box[data-state='running'],
+.map-box[data-state='claimed'] {
+  border-color: var(--tint-line);
+  box-shadow: 0 0 0 3px var(--lavender);
+}
+.map-box[data-state='done'],
+.map-box[data-state='cancelled'] {
+  background: var(--sunken);
+}
+.map-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.map-turn {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.map-turn.yours {
+  color: var(--needs);
+}
+.map-turn.yours::before {
+  content: '◆ ';
+  content: '◆ ' / '';
+}
+.map-now,
+.map-why {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12.5px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.map-why {
+  color: var(--muted);
+}
+.map-label {
+  margin-right: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.map-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.map-links {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.map-links path {
+  fill: none;
+  stroke: var(--control);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+.map-links path.done {
+  stroke: var(--violet);
+  stroke-dasharray: none;
+}
+.map-links marker path {
+  fill: var(--control);
+  stroke: none;
+}
+/* Team now on Home. */
+.now-list {
+  list-style: none;
+  padding: 0;
+}
+.now-list button {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 6px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  font-weight: 500;
+  text-align: left;
+}
+.now-list li:first-child button {
+  border-top: 0;
+}
+.now-list button:hover {
+  background: var(--sunken);
+}
+.now-list .who .line {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* Results: each check with its result. Green marks only a pass, red only a failure, and amber only a judgement that waits for you. */
+.checks {
+  list-style: none;
+  padding: 0;
+}
+.check-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.check-row:first-child {
+  border-top: 0;
+}
+.check-num {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sunken);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.check-body {
+  min-width: 0;
+}
+.check-body > * + * {
+  margin-top: 6px;
+}
+.check-text {
+  font-weight: 650;
+}
+.check-result {
+  padding: 2px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.check-row[data-result='passed'] .check-result {
+  border-color: var(--green);
+  background: var(--ok-bg);
+  color: var(--green);
+}
+.check-row[data-result='passed'] .check-result::before {
+  content: '✓ ';
+  content: '✓ ' / '';
+}
+.check-row[data-result='failed'] .check-result {
+  border-color: var(--red);
+  color: var(--red);
+}
+.check-row[data-result='failed'] .check-result::before {
+  content: '✕ ';
+  content: '✕ ' / '';
+}
+.check-row[data-result='partial'] .check-result {
+  color: var(--ink);
+}
+.check-row[data-result='partial'] .check-result::before {
+  content: '◐ ';
+  content: '◐ ' / '';
+}
+.check-row[data-result='judgement'] .check-result,
+.check-row[data-result='judgement'] .check-num {
+  border-color: var(--needs-line);
+  background: var(--needs-bg);
+  color: var(--needs);
+}
+.check-row[data-result='judgement'] .check-result::before {
+  content: '◆ ';
+  content: '◆ ' / '';
+}
+.check-body code,
+.claims code {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--sunken);
+}
+.ruling {
+  font-weight: 600;
+}
+.ruling-question {
+  color: var(--needs);
+}
+.statement {
+  font-size: 15px;
+  font-weight: 600;
+}
+.claims {
+  padding-left: 20px;
+}
+.claims li + li {
+  margin-top: 8px;
+}
+.notice-ok {
+  padding: 6px 10px;
+  border-left: 3px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  background: var(--ok-bg);
+  font-size: 13px;
+}
+.sign-off > * + * {
+  margin-top: 8px;
+}
+
+/* ---------- Compute ---------- */
+.gpus td:first-child {
+  width: 1%;
+}
+.gpus th[scope='row'] {
+  color: var(--ink);
+  white-space: normal;
+}
+.gpus td:nth-child(n + 3) {
+  white-space: nowrap;
+}
+.tag.over-cap {
+  padding: 0 6px;
+  border: 1px solid var(--caution-line);
+  border-radius: 6px;
+  background: var(--caution-bg);
+  color: var(--caution);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+#key-replace {
+  margin-top: 10px;
+}
+#key-replace > summary {
+  font-weight: 650;
+  cursor: pointer;
+}
+#key-replace[open] > summary {
+  margin-bottom: 8px;
 }
 
 /* ---------- Records ---------- */
@@ -1801,12 +2305,7 @@ body[data-pane='terminal'] .panel:has(.pane-terminal) {
 }
 .event-text {
   min-width: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-/* Harness Markdown is HTML, so its line breaks are already elements. */
-.event-text.md {
-  white-space: normal;
 }
 .event time {
   color: var(--muted);
@@ -2281,6 +2780,50 @@ body.terminal-page {
   .task-fields,
   .review-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* A check's result goes under its text. */
+  .check-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+  .check-result {
+    grid-column: 2;
+    justify-self: start;
+  }
+  /* Each direction becomes a card. */
+  .compare thead {
+    display: none;
+  }
+  .compare tr {
+    display: grid;
+    gap: 2px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+  }
+  .compare th,
+  .compare td {
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .compare td:nth-child(n + 3) {
+    width: auto;
+    text-align: left;
+  }
+  .compare td[data-label]::before {
+    content: attr(data-label) ': ';
+    color: var(--muted);
+    font-weight: 650;
+  }
+  /* The map stacks in reading order, and each box names what it waits for. */
+  .map {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .map-col {
+    width: 100%;
+  }
+  .map-links {
+    display: none;
   }
   .event {
     grid-template-columns: minmax(0, 1fr) auto;

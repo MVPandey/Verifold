@@ -228,7 +228,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
     '?attempt=../../secret',
     '?file=workspace.json',
     `?attempt=${randomUUID()}&attempt=${randomUUID()}`,
-    '?view=results',
+    '?view=unknown',
     '?panel=page',
     '?view=home&view=records',
   ])
@@ -736,6 +736,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     attempts: [],
     assignment: {
       by: 'coordinator',
+      reason: 'Created by the coordinator: The plan needs it.',
       title: `Title of ${id}`,
       objective: 'Work.',
       inputs: [],
@@ -1091,4 +1092,462 @@ await test('desk Home lists what changed since the person left, the team feed, a
   // The coordinator's actions and controls are in its panel, which the rail opens.
   assert.match(away, /data-panel="coordinator" aria-pressed="false"/);
   assert.doesNotMatch(away, /What it did/);
+});
+
+await test('desk shows long text as its lead with Show all, and short text in full', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-04T12:00:00.000Z';
+  const long = `The benchmark ran on 3 graphs. ${'Each stratum has 200 queries and a negative control. '.repeat(6)}`;
+  const messages = [
+    {
+      schemaVersion: 1,
+      id: 'm-1',
+      at,
+      from: 'task-1',
+      to: 'coordinator',
+      kind: 'note',
+      text: long,
+      delivery: 'delivered',
+    },
+    {
+      schemaVersion: 1,
+      id: 'm-2',
+      at,
+      from: 'coordinator',
+      to: 'task-1',
+      kind: 'objection',
+      status: 'open',
+      text: 'Short and clear.',
+      delivery: 'delivered',
+    },
+  ];
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261004T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'idle',
+      mode: 'ask',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: at,
+      requests: [],
+      commands: [],
+      events: [
+        { at, kind: 'you', text: 'Run it.' },
+        {
+          at,
+          kind: 'agent',
+          text: `**Done.** ${'The *settled* nodes fell by 41 percent. '.repeat(8)}`,
+        },
+      ],
+    },
+  };
+  const { html } = renderDesk(
+    snapshot,
+    undefined,
+    null,
+    {
+      session: worker,
+      workers: [worker],
+      controllable: true,
+      tasks: { list: [], selected: null, idle: [], messages },
+    } as never,
+    { view: 'home', panel: 'worker' },
+  );
+  // The feed folds the long note at its first sentence. The short objection shows in full.
+  assert.match(
+    html,
+    /<details class="more" id="feed-m-1"><summary><span class="lead">The benchmark ran on 3 graphs\.<\/span> <span class="more-hint"><span class="closed">Show all<\/span>/,
+  );
+  assert.doesNotMatch(html, /id="feed-m-2"/);
+  assert.match(html, /<span class="chip objection">Objection, open<\/span>/);
+  // An agent's Markdown reply folds with a plain lead and renders in full behind Show all.
+  assert.match(
+    html,
+    /<details class="more" id="event-20261004T120000000Z-abcdef12-1"><summary><span class="lead">Done\.<\/span>[\s\S]*<strong>Done\.<\/strong>/,
+  );
+  assert.doesNotMatch(html, /id="event-20261004T120000000Z-abcdef12-0"/);
+});
+
+await test('desk maps the tasks with what each agent does now and why', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'proof',
+        title: 'Proof search',
+        recommendation: 'Pilot.',
+        gates: ['A check.'],
+      },
+    ],
+    selectedId: 'proof',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const recent = new Date(Date.now() - 60_000).toISOString();
+  const quiet = new Date(Date.now() - 20 * 60_000).toISOString();
+  const task = (
+    id: string,
+    state: string,
+    dependencies: string[],
+    reason: string,
+    extra: object = {},
+  ): object => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: recent,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason,
+      title: `Title ${id}`,
+      objective: 'Work on it. Then report.',
+      inputs: [],
+      writable: ['results'],
+      output: 'A report.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies,
+    },
+    ...extra,
+  });
+  const worker = (at: string): object => ({
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261004T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'running',
+      mode: 'strict',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: recent,
+      task: { id: 'task-2', claim: 'c' },
+      requests: [],
+      commands: [],
+      events: [
+        { at, kind: 'tool', text: 'Claude Code ran Bash: python bench.py' },
+      ],
+    },
+  });
+  const list = [
+    task(
+      'task-1',
+      'done',
+      [],
+      'Created by the coordinator: A baseline comes first.',
+    ),
+    task(
+      'task-2',
+      'running',
+      ['task-1'],
+      'Created by the coordinator: The checks need timings.',
+      {
+        attempts: [
+          {
+            number: 1,
+            session: '20261004T120000000Z-abcdef12',
+            startedAt: recent,
+            versions: [],
+            restrictions: [],
+            outcome: null,
+            note: null,
+          },
+        ],
+      },
+    ),
+    task('task-3', 'open', ['task-2'], 'Created'),
+  ];
+  const desk = (at: string, view: DeskView): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: worker(at),
+        workers: [worker(at)],
+        controllable: true,
+        tasks: { list, selected: null, idle: [], messages: [] },
+      } as never,
+      { view, panel: null },
+    ).html;
+  const map = desk(recent, 'tasks');
+  // The objective starts the map. Each task sits in the column of its depth, with the arrow source named.
+  assert.match(
+    map,
+    /data-node="objective"><span class="map-label">Objective<\/span><span class="map-title">Proof search<\/span>/,
+  );
+  assert.match(
+    map,
+    /data-node="task-1" data-state="done" data-from="objective"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-2" data-state="running" data-from="task-1"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-3" data-state="open" data-from="task-2"/,
+  );
+  // A running task says whose turn it is, what its agent does now, and why the task exists.
+  assert.match(
+    map,
+    /Agent&#39;s turn<\/span><span class="map-now"><span class="map-label">Now<\/span> Claude Code ran Bash: python bench\.py<\/span><span class="map-why"><span class="map-label">Why<\/span> The checks need timings\./,
+  );
+  // A task that the person wrote has the start of its objective as its reason.
+  assert.match(
+    map,
+    /Waits for Title task-2<\/span><span class="map-why"><span class="map-label">Why<\/span> Work on it\./,
+  );
+  // A quiet agent shows how long it has been quiet.
+  assert.match(desk(quiet, 'tasks'), /Now<\/span> No update in 20 min/);
+  // Home shows each running task in Team now.
+  assert.match(
+    desk(recent, 'home'),
+    /Team now[\s\S]*Title task-2[\s\S]*Now<\/span> Claude Code ran Bash: python bench\.py/,
+  );
+});
+
+await test('desk compares the directions in a table and lists sources as they arrive', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Graphs',
+      autonomy: 'guided',
+      phase: 'directions',
+      plan: {
+        scope: 'Scope.',
+        personas: [
+          { name: 'Historian', task: 'Prior art.' },
+          { name: 'Skeptic', task: 'Counterexamples.' },
+        ],
+      },
+    },
+    candidates: [
+      {
+        id: 'bidir',
+        title: 'Bidirectional Dijkstra',
+        recommendation:
+          '**Replication.** Feasibility is high. It needs no preprocessing.',
+        gates: ['Distances match.', 'Settled nodes fall by 30 percent.'],
+        sources: ['https://example.org/papers/bidir'],
+      },
+      {
+        id: 'alt',
+        title: 'ALT with few landmarks',
+        recommendation: 'Moderate feasibility.',
+        gates: ['Preprocessing pays off.'],
+      },
+    ],
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-05T12:00:00.000Z';
+  const research = (running: boolean): object => ({
+    running,
+    step: 'Searching sources and comparing directions',
+    startedAt: at,
+    events: [],
+    sources: [
+      { at, kind: 'search', text: 'bidirectional dijkstra stopping rule' },
+      { at, kind: 'read', text: 'https://example.org/papers/bidir' },
+      { at, kind: 'read', text: 'javascript:alert(1)' },
+    ],
+  });
+  const desk = (running: boolean, panel: DeskPanel | null): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        research: research(running),
+      } as never,
+      { view: 'research', panel, ...(panel ? { direction: 'bidir' } : {}) },
+    ).html;
+  const view = desk(true, null);
+  // Each search and page of the step, newest first. Only a web address becomes a link.
+  assert.match(
+    view,
+    /Sources so far<\/h2><span class="count">1 search, 2 pages read/,
+  );
+  assert.match(
+    view,
+    /<a href="https:\/\/example\.org\/papers\/bidir" target="_blank" rel="noopener noreferrer">example\.org\/papers\/bidir<\/a>/,
+  );
+  assert.match(view, /<span>javascript:alert\(1\)<\/span>/);
+  assert.doesNotMatch(view, /href="javascript:/);
+  // One row for each direction, with its lead, its checks, and its sources.
+  assert.match(
+    view,
+    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><\/th><td data-label="Its case">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
+  );
+  assert.match(
+    view,
+    /data-direction="alt" aria-pressed="false">ALT with few landmarks[\s\S]*<td data-label="Sources">0<\/td>/,
+  );
+  // The panel of a direction holds its case, its checks, its sources, and the choice.
+  const panel = desk(false, 'direction');
+  assert.match(panel, /data-direction="bidir" aria-pressed="true"/);
+  assert.match(
+    panel,
+    /<h2 id="panel-title" tabindex="-1">Bidirectional Dijkstra<\/h2>/,
+  );
+  assert.match(
+    panel,
+    /Its checks<\/h3><ul class="checks-list"><li>Distances match\.<\/li>/,
+  );
+  assert.match(
+    panel,
+    /data-action="select" data-idea="bidir" data-confirm="Click again to lock this direction">Choose this direction/,
+  );
+  // While a step runs, a direction cannot be chosen.
+  assert.doesNotMatch(desk(true, 'direction'), /data-action="select"/);
+});
+
+await test('desk leads Results with the checks, then the answer and its sign-off', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'bidir',
+        title: 'Bidirectional search',
+        recommendation: 'A pilot.',
+        gates: [
+          'Distances match.',
+          'Settled nodes fall by 30 percent.',
+          'The gain survives a control.',
+        ],
+      },
+    ],
+    selectedId: 'bidir',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-05T12:00:00.000Z';
+  const results = (decision?: object): object => ({
+    schemaVersion: 1,
+    direction: 'bidir',
+    checks: [
+      {
+        check: 1,
+        result: 'passed',
+        value: '0 mismatches in 1,800 queries',
+        evidence: ['results/summary.json'],
+        reason: 'Every query matches.',
+        at,
+      },
+      {
+        check: 2,
+        result: 'judgement',
+        value: '7 of 9 groups gain 30 percent',
+        evidence: ['results/summary.json'],
+        reason: 'The check does not say whether every group must gain.',
+        question: 'Does a gain in 7 of 9 groups count as a pass?',
+        at,
+      },
+    ],
+    answer: {
+      statement: 'Bidirectional search settles fewer nodes in most groups.',
+      claims: [
+        {
+          text: 'Distances match.',
+          evidence: [
+            'results/summary.json',
+            'https://arxiv.org/abs/1504.05140',
+          ],
+        },
+      ],
+      at,
+      ...(decision ? { decision } : {}),
+    },
+  });
+  const desk = (
+    view: DeskView,
+    decision?: object,
+  ): ReturnType<typeof renderDesk> =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [], selected: null, idle: [], messages: [] },
+        coordinator: {
+          state: {
+            objective: 'Pilot.',
+            host: 'claude',
+            model: null,
+            startedAt: at,
+            stoppedAt: null,
+            session: 'C1',
+            created: 0,
+            planApproved: true,
+            cursor: 0,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          session: {
+            live: true,
+            saveFailed: false,
+            record: { id: 'C1', status: 'idle', host: 'claude' },
+          },
+          waiting: 0,
+          limitedUntil: null,
+          results: results(decision),
+        },
+      } as never,
+      { view, panel: null },
+    );
+  const view = desk('results');
+  // The checks come first, each with its result. A check without a report says so.
+  assert.match(view.html, /2 of 3 reported/);
+  assert.match(
+    view.html,
+    /data-result="passed"[\s\S]*Distances match\.[\s\S]*0 mismatches in 1,800 queries[\s\S]*<code>results\/summary\.json<\/code>[\s\S]*<span class="check-result">Passed<\/span>/,
+  );
+  assert.match(
+    view.html,
+    /data-result="judgement"[\s\S]*Does a gain in 7 of 9 groups count as a pass\?[\s\S]*data-action="coordinator-rule" data-check="2" data-result="partial">It partly passed/,
+  );
+  assert.match(
+    view.html,
+    /data-result="none"[\s\S]*The gain survives a control\.[\s\S]*Not reported yet/,
+  );
+  // Then the answer. It cannot be accepted while a judgement is open.
+  assert.match(
+    view.html,
+    /The answer<\/h2><span class="tag reading">The coordinator's reading<\/span>/,
+  );
+  assert.match(view.html, /<a href="https:\/\/arxiv\.org\/abs\/1504\.05140"/);
+  assert.match(view.html, /Settle the 1 open judgement above first\./);
+  assert.match(
+    view.html,
+    /data-action="coordinator-answer" data-decision="accepted" disabled>Accept the answer/,
+  );
+  // Needs you lists the judgement and the sign-off. The rail counts them on Results. The arc waits at the answer.
+  assert.deepEqual(
+    view.needs.map((item) => item.title),
+    [
+      'Check 2: Does a gain in 7 of 9 groups count as a pass?',
+      'The answer waits for your sign-off',
+    ],
+  );
+  assert.match(
+    view.html,
+    /<span>Results<\/span><span class="n"><span aria-hidden="true">◆ <\/span>2/,
+  );
+  assert.equal(view.stage, 'Answer: waits for you');
+  // After the sign-off the answer stays, marked with its time.
+  const accepted = desk('results', { kind: 'accepted', at });
+  assert.match(accepted.html, /You accepted the answer at/);
+  assert.equal(accepted.stage, 'Answer: accepted');
 });
