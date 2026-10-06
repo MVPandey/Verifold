@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { harnessEnvironment } from './harness.ts';
+import { childEnvironment } from './harness.ts';
 import { SessionActionError } from './session.ts';
 import { inScope, projectPath } from './workspaces.ts';
 
@@ -76,7 +76,7 @@ function program(
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: harnessEnvironment(),
+      env: childEnvironment(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const keep = options.keep ?? podLimits.output;
@@ -392,7 +392,7 @@ echo watching
     // macOS tar adds AppleDouble `._` files for extended attributes unless COPYFILE_DISABLE is set.
     const archive = spawn('tar', ['-cf', '-', '--', ...chosen], {
       cwd: folder,
-      env: { ...harnessEnvironment(), COPYFILE_DISABLE: '1' },
+      env: { ...childEnvironment(), COPYFILE_DISABLE: '1' },
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const remote = remoteFolder(task);
@@ -438,7 +438,7 @@ echo watching
           ...this.args(target),
           `cd ${remoteFolder(task)} && tar -cf - -- ${chosen.map(quote).join(' ')}`,
         ],
-        { env: harnessEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] },
+        { env: childEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] },
       );
       let size = 0;
       let errors = '';

@@ -5,6 +5,8 @@ import { paragraph } from './cli/terminal.ts';
 import { TerminalSession } from './cli/terminal-session.ts';
 import { stripVTControlCharacters } from 'node:util';
 import { createInterface } from 'node:readline';
+// A diagnostic report leaves out the environment, which can hold keys.
+process.report.excludeEnv = true;
 const controller = new AbortController();
 const cancel = (): void => {
   controller.abort();
