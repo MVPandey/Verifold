@@ -280,13 +280,69 @@ export class RunPod {
     }
   }
 
+  /**
+   * The last lines of a pod's container log. The log is a live stream, so the
+   * read stops after 4 seconds or 256 KB. A failed read returns no lines.
+   */
+  async logs(id: string): Promise<string[]> {
+    let text = '';
+    try {
+      const response = await fetch(
+        new URL(
+          `/v2/pods/${encodeURIComponent(id)}/logs?source=container&tail=200`,
+          this.#base,
+        ),
+        {
+          headers: {
+            Authorization: `Bearer ${this.#key}`,
+            Accept: 'text/event-stream',
+          },
+          redirect: 'error',
+          signal: AbortSignal.timeout(4000),
+        },
+      );
+      const reader = response.ok ? response.body?.getReader() : undefined;
+      if (!reader) return [];
+      try {
+        while (text.length < 256 * 1024) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += Buffer.from(value).toString('utf8');
+          // The start script prints the host keys before it starts sshd, so the read can end here.
+          if (text.includes('(ED25519)')) break;
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+    } catch {
+      /* The deadline ends the live stream; what arrived counts. */
+    }
+    const lines: string[] = [];
+    for (const event of text.split('\n')) {
+      if (!event.startsWith('data:')) continue;
+      const data = event.slice(5).trim();
+      let line: unknown = data;
+      try {
+        line = field(JSON.parse(data), 'line');
+      } catch {
+        /* Plain text data. */
+      }
+      if (typeof line === 'string')
+        lines.push(stripVTControlCharacters(line).slice(0, 500));
+    }
+    return lines.slice(-500);
+  }
+
   /** What RunPod billed for one pod since a time, in USD, from its hourly records. */
   async billed(id: string, since: string): Promise<number> {
-    const hour = new Date(since);
-    hour.setUTCMinutes(0, 0, 0);
+    // RunPod needs the start and the end together; both fall on hour boundaries.
+    const start = new Date(since);
+    start.setUTCMinutes(0, 0, 0);
+    const end = new Date();
+    end.setUTCHours(end.getUTCHours() + 1, 0, 0, 0);
     const value = await this.#call(
       'GET',
-      `/v2/billing/pods?podId=${encodeURIComponent(id)}&bucketSize=hour&startTime=${encodeURIComponent(hour.toISOString())}`,
+      `/v2/billing/pods?podId=${encodeURIComponent(id)}&bucketSize=hour&startTime=${encodeURIComponent(start.toISOString())}&endTime=${encodeURIComponent(end.toISOString())}`,
     );
     const records = field(value, 'records');
     return Array.isArray(records)
