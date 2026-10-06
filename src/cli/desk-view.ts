@@ -1,9 +1,9 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import { markdownHtml } from './markdown.ts';
-import type { Workspace } from './contracts.ts';
+import type { Candidate, Workspace } from './contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
-import type { ResearchView } from './research-runner.ts';
+import type { ResearchSource, ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import {
   forPerson,
@@ -12,6 +12,17 @@ import {
   type TaskVersion,
 } from './tasks.ts';
 import type { Message } from './messages.ts';
+import type { CheckResult, Results } from './results.ts';
+import type { ComputeView } from './compute.ts';
+import { placeNames } from './credentials.ts';
+import {
+  isOpen,
+  isRunning,
+  maxCost,
+  spent,
+  usd,
+  type Lease,
+} from './leases.ts';
 import {
   coordinatorLimits,
   directionObjective,
@@ -49,6 +60,8 @@ export interface DeskSession {
   readonly tasks?: TaskView;
   /** The coordinator of this owner. Null: none has started in this project. */
   readonly coordinator?: CoordinatorView | null;
+  /** RunPod key, limits, and GPUs. Only a project owner has them. */
+  readonly compute?: ComputeView;
 }
 
 export interface TaskView {
@@ -66,6 +79,8 @@ export const deskViews = [
   'home',
   'research',
   'tasks',
+  'results',
+  'compute',
   'records',
   'needs',
 ] as const;
@@ -76,6 +91,7 @@ export const deskPanels = [
   'task',
   'worker',
   'attempt',
+  'direction',
   'coordinator',
   'new-task',
   'new-session',
@@ -88,6 +104,8 @@ export interface DeskFrame {
   readonly panel: DeskPanel | null;
   /** When the page went to the background for a while. Home lists what changed after it. */
   readonly since?: string;
+  /** The direction that the direction panel shows. */
+  readonly direction?: string;
 }
 
 /** The frame from the query of /api/view, or null when a value is unknown. No view means Home. */
@@ -95,6 +113,7 @@ export function parseFrame(
   view: string | null,
   panel: string | null,
   since: string | null = null,
+  direction: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -102,8 +121,16 @@ export function parseFrame(
     since !== null &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,3})?Z$/.test(since) &&
     Number.isFinite(Date.parse(since));
-  return shown && (panel === null || opened) && (since === null || time)
-    ? { view: shown, panel: opened, ...(since ? { since } : {}) }
+  // Direction IDs are lowercase slugs, as the research report contract says.
+  const idea =
+    direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
+  return shown && (panel === null || opened) && (since === null || time) && idea
+    ? {
+        view: shown,
+        panel: opened,
+        ...(since ? { since } : {}),
+        ...(direction ? { direction } : {}),
+      }
     : null;
 }
 
@@ -203,6 +230,52 @@ function elapsed(since: string): string {
   );
   const minutes = Math.floor(seconds / 60);
   return minutes ? `${minutes} min ${seconds % 60} s` : `${seconds} s`;
+}
+
+/** The first sentence of a text, or its start, as a lead of at most `max` characters. */
+function lead(text: string, max = 160): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const sentence = /^.+?[.!?](?=\s|$)/.exec(flat)?.[0] ?? flat;
+  if (sentence.length <= max) return sentence;
+  return `${flat.slice(0, max).replace(/\s+\S*$/, '')}…`;
+}
+
+/** Markdown as plain text, for a lead. The full text renders as Markdown. */
+function plain(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/[*_`~|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Long text as its lead with Show all. Short text shows in full. The full
+ * text is one click away, and the page keeps an open one open by its ID.
+ * `full` is HTML, already escaped or sanitized Markdown.
+ */
+function fold(id: string, text: string, full: string, max: number): string {
+  const short = lead(text, max);
+  if (short === text.replace(/\s+/g, ' ').trim()) return full;
+  return `<details class="more" id="${e(id)}"><summary><span class="lead">${e(short)}</span> <span class="more-hint"><span class="closed">Show all</span><span class="opened">Show less</span></span></summary>${full}</details>`;
+}
+
+/** Plain text, folded when it is long. */
+function more(id: string, text: string, max = 160): string {
+  return fold(id, text, `<p class="pre">${e(text)}</p>`, max);
+}
+
+/** Markdown, folded when it is long. The lead is plain text. */
+function moreMd(id: string, markdown: string, max = 220): string {
+  return fold(
+    id,
+    plain(markdown),
+    `<div class="md">${markdownHtml(markdown)}</div>`,
+    max,
+  );
 }
 
 const detailSwitch =
@@ -410,10 +483,11 @@ function workerPanel(
   ${paneSwitch}
   <ol class="session-events pane-summary">${record.events
     .slice(-60)
-    .map(
-      (event) =>
-        `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span>${event.kind === 'agent' ? `<div class="event-text md">${markdownHtml(event.text)}</div>` : `<span class="event-text">${e(event.text)}</span>`}<time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`,
-    )
+    .map((event, index, shown) => {
+      // The position in the whole record stays the same as events arrive, so an open one stays open.
+      const id = `event-${record.id}-${record.events.length - shown.length + index}`;
+      return `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span><div class="event-text">${event.kind === 'agent' ? moreMd(id, event.text, 200) : more(id, event.text, 200)}</div><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`;
+    })
     .join('')}</ol>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
   <div class="pane-terminal">${renderTerminal(view, live)}</div>
@@ -534,7 +608,7 @@ function renderReview(
   return `<div class="review" aria-labelledby="review-title"><h3 id="review-title">Version ${version.number}: ${e(turnLabels[version.turn])}</h3>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
-  ${version.reply ? `<div class="worker-reply"><p class="fine">The worker said (a model claim):</p><p class="pre">${e(version.reply)}</p></div>` : ''}
+  ${version.reply ? `<div class="worker-reply"><p class="fine">The worker said (a model claim):</p>${more(`reply-${task.id}-${version.number}`, version.reply, 200)}</div>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
   ${
@@ -577,7 +651,7 @@ function messageItem(message: Message): string {
     message.to === 'coordinator' && message.delivery === 'queued'
       ? 'Waits for the coordinator'
       : deliveryLabels[message.delivery];
-  return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}<p class="pre">${e(message.text)}</p>${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
+  return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, message.text, 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 /** The answer to an open blocker or objection. A decision changes no file. Its reason goes to the task that raised it. */
@@ -620,6 +694,26 @@ function planWaits(
     status !== 'starting' &&
     tasks.some((task) => task.assignment.by === 'coordinator')
   );
+}
+
+/** The results of the chosen direction, if the coordinator reported any. */
+function resultsOf(workspace: Workspace, live: DeskSession): Results | null {
+  const results = live.coordinator?.results;
+  return results && results.direction === workspace.selectedId ? results : null;
+}
+
+const outcomeLabels = {
+  passed: 'Passed',
+  failed: 'Failed',
+  partial: 'Partly passed',
+  judgement: 'Needs your judgement',
+} as const;
+
+/** The person's ruling on a check that waits for their judgement. The options name outcomes, and none is the default. */
+function judgementForm(entry: CheckResult): string {
+  const button = (result: string, label: string): string =>
+    `<button type="button" data-action="coordinator-rule" data-check="${entry.check}" data-result="${result}">${label}</button>`;
+  return `<label class="field" for="rule-${entry.check}">Your ruling and its reason</label><input id="rule-${entry.check}" type="text" maxlength="2000"><div class="actions">${button('passed', 'It passed')}${button('partial', 'It partly passed')}${button('failed', 'It failed')}</div><p class="fine">Your ruling is final. The coordinator gets it with its next wakeup.</p>`;
 }
 
 /** A decision that only the person can make. Its key stays the same while it waits, so the page notifies once. */
@@ -740,15 +834,37 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       view: 'home',
       task: message.from,
       kind: kindLabels[message.kind],
-      title:
-        message.text.length > 160
-          ? `${message.text.slice(0, 160)}…`
-          : message.text,
+      title: lead(message.text, 160),
       why: `From ${from}. ${coordinated ? 'The coordinator overruled two objections from this task, so this one goes to you.' : 'No coordinator runs, so only you can settle it.'}`,
       since: message.at,
-      body: `${message.text.length > 160 ? `<p class="pre">${e(message.text)}</p>` : ''}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
+      body: `${lead(message.text, 160) === message.text.replace(/\s+/g, ' ').trim() ? '' : `<details class="more" id="need-${e(message.id)}"><summary>Read the whole message</summary><p class="pre">${e(message.text)}</p></details>`}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
     });
   }
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  const results = resultsOf(workspace, live);
+  for (const entry of results?.checks ?? [])
+    if (entry.result === 'judgement' && !entry.ruling)
+      items.push({
+        key: `judgement:${results?.direction ?? ''}:${entry.check}:${entry.at}`,
+        view: 'results',
+        kind: 'Judgement',
+        title: `Check ${entry.check}: ${entry.question ?? 'needs your judgement'}`,
+        why: 'The evidence does not settle it, so only you can decide it.',
+        since: entry.at,
+        body: `<p class="fine">${e(idea?.gates[entry.check - 1] ?? '')}</p><p><span class="tag reading">Its reading</span> ${e(entry.value)}</p>${judgementForm(entry)}`,
+      });
+  if (results?.answer && !results.answer.decision)
+    items.push({
+      key: `answer:${results.answer.at}`,
+      view: 'results',
+      kind: 'Sign-off',
+      title: 'The answer waits for your sign-off',
+      why: 'Only you accept the answer or ask for more work.',
+      since: results.answer.at,
+      body: '<div class="actions"><button type="button" class="primary" data-view="results">Read the answer</button></div>',
+    });
   if (!coordinated)
     for (const task of tasks) {
       const attempt = task.attempts.at(-1);
@@ -781,7 +897,41 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           body: open,
         });
     }
+  const compute = live.compute;
+  if (compute)
+    for (const lease of compute.leases) {
+      if (lease.state === 'requested')
+        items.push({
+          key: `lease:${lease.id}`,
+          view: 'compute',
+          kind: 'GPU pod',
+          title: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod`,
+          why: 'A pod costs money from the moment that RunPod creates it, so only you approve it. Nothing is billed before you do.',
+          since: lease.requestedAt,
+          body: leaseRequest(lease, compute),
+        });
+      if (lease.notice)
+        items.push({
+          key: `lease-notice:${lease.id}:${lease.history.at(-1)?.at ?? ''}`,
+          view: 'compute',
+          kind: 'GPU pod',
+          title: lease.notice,
+          why: 'Verifold acted on a pod. Dismiss this when you have read it.',
+          since: lease.history.at(-1)?.at ?? null,
+          body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,
+        });
+    }
   return items;
+}
+
+/** What the person approves for a lease: its cost, what is left after it, what the pod allows, and the coordinator's reason. */
+function leaseRequest(lease: Lease, compute: ComputeView): string {
+  const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
+  const left = compute.budget.left;
+  return `<dl class="facts"><div><dt>For</dt><dd>${lease.tasks.map((task) => e(task)).join(', ')}</dd></div><div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
+  <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'Its reason' : 'Your reason'}</span> ${e(lease.reason)}</div>
+  <p class="fine">The pod runs any command as root, with internet access. Files that a task copies to it leave this computer. RunPod erases the disk of the pod when the pod stops. Verifold stops the pod after ${compute.settings.idleMinutes} idle minutes and when Verifold stops, and deletes it at the end of the lease or at your spend limit.</p>
+  <div class="actions"><button type="button" class="primary" data-action="compute-lease-approve" data-lease="${e(lease.id)}">Approve, up to ${usd(cost)}</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny</button></div>`;
 }
 
 /** The items that wait for the person, each with why it is theirs and its answer. */
@@ -799,6 +949,14 @@ function renderNeedsView(items: readonly Need[]): string {
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Needs you</h1><p>${items.length ? `${items.length} ${items.length === 1 ? 'item waits' : 'items wait'} for you` : 'Nothing waits for you'}</p></div>
   <p class="notify"><span id="notify-state"></span><button type="button" id="notify" hidden>Turn on desktop notifications</button></p>
   ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p><strong>Nothing needs you.</strong></p><p class="fine">An item shows here when only you can settle it: a plan to approve, a direction to choose, a permission request, an objection that comes to you, or work that stopped. It leaves when you settle it.</p></section>'}</div>`;
+}
+
+/** One line on Home while pods run, with the cost against the limit. */
+function renderPodsLine(compute: ComputeView | undefined): string {
+  const running = compute?.leases.filter(isRunning).length ?? 0;
+  if (!compute || !running) return '';
+  const { budget, settings } = compute;
+  return `<section class="card pods-line"><p>${running === 1 ? '1 pod runs' : `${running} pods run`} at ${usd(budget.rate)} per hour. Spent ${usd(budget.spent)} of ${usd(settings.limitUsd ?? 0)}.</p><button type="button" data-view="compute">Open Compute</button></section>`;
 }
 
 /** What the coordinator does after a direction. Needs you lists what waits for the person. */
@@ -869,7 +1027,7 @@ function coordinatorPanel(
   const waits = planWaits(view, tasks);
   const plan = state.planApproved
     ? ''
-    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(task.assignment.objective.slice(0, 300))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
+    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
   return {
     kind: 'Agent',
     title: 'Coordinator',
@@ -880,7 +1038,7 @@ function coordinatorPanel(
   ${plan}
   ${notesToPerson(messages)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
-  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="messages">${actions.map((action) => `<li class="message"><p class="message-meta"><span>${e(action.tool.replace(/^verifold_/, ''))}</span><span>${action.ok ? 'Done' : 'Refused'}</span><time datetime="${e(action.at)}">${e(clock(action.at))}</time></p>${action.reason ? `<p class="pre">${e(action.reason)}</p>` : ''}<p class="fine">${e(action.result)}</p></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Reasons are the coordinator's reading, a model claim. Results come from Verifold.</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p><span class="tool">${e(action.tool.replace(/^verifold_/, ''))}</span> ${action.ok ? '' : '<strong>Verifold refused this.</strong> '}${e(action.result)}</p>${action.reason ? `<div class="why"><span class="tag reading">Its reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}</div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Results come from Verifold. Reasons are the coordinator's reading, a model claim.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
   <div class="actions">${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
   <p class="fine">If you stop it, running workers finish their turns, and their versions wait for your review.</p>`,
@@ -902,7 +1060,7 @@ function bubble(message: Message): string {
     : message.delivery === 'delivered'
       ? `<span>Read by the coordinator${message.deliveredAt ? ` at ${e(clock(message.deliveredAt))}` : ''}</span>`
       : '<span>Waits for the coordinator</span>';
-  return `<li class="msg${mine ? ' mine' : ''}"><p class="msg-meta"><strong>${mine ? 'You' : 'Coordinator'}</strong><time datetime="${e(message.at)}">${e(since(message.at))}</time>${state}</p><p class="pre">${e(message.text)}</p></li>`;
+  return `<li class="msg${mine ? ' mine' : ''}"><p class="msg-meta"><strong>${mine ? 'You' : 'Coordinator'}</strong><time datetime="${e(message.at)}">${e(since(message.at))}</time>${state}</p>${more(`talk-${message.id}`, message.text, 200)}</li>`;
 }
 
 /** The coordinator on Home: its latest note, the person's messages, and the one box to write to it. */
@@ -927,7 +1085,7 @@ function renderCoordinatorHome(
     .filter((message) => message !== note && !waiting.includes(message))
     .slice(-20);
   return `<section class="card coordinator-home" aria-labelledby="coordinator-title"><div class="section-title"><h2 id="coordinator-title" tabindex="-1">The coordinator</h2><span class="status ${status === 'running' || status === 'starting' ? 'active' : 'muted'}">${e(coordinatorStates[status ?? 'starting'] ?? 'Starting')}</span></div>
-  ${note ? `<div class="note"><p class="msg-meta"><strong>Its latest note</strong><time datetime="${e(note.at)}">${e(since(note.at))}</time><span class="tag reading">Its reading</span></p><p class="pre">${e(note.text)}</p></div>` : '<p class="empty-note">No note yet. The coordinator writes a note at milestones and when you ask.</p>'}
+  ${note ? `<div class="note"><p class="msg-meta"><strong>Its latest note</strong><time datetime="${e(note.at)}">${e(since(note.at))}</time><span class="tag reading">Its reading</span></p>${more(`note-${note.id}`, note.text, 280)}</div>` : '<p class="empty-note">No note yet. The coordinator writes a note at milestones and when you ask.</p>'}
   ${waiting.length ? `<ol class="convo">${waiting.map(bubble).join('')}</ol>` : ''}
   ${earlier.length ? `<details id="conversation"><summary>Earlier messages (${earlier.length})</summary><ol class="convo">${earlier.map(bubble).join('')}</ol></details>` : ''}
   <label class="field" for="coordinator-message">Message the coordinator</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: why is the data synthetic?"></textarea>
@@ -948,7 +1106,7 @@ function renderFeed(
   return `<section class="card" aria-labelledby="feed-title"><div class="section-title"><h2 id="feed-title">Team feed</h2><span class="count">Newest first</span></div><ul class="feed">${feed
     .map(
       (message) =>
-        `<li><p class="msg-meta"><strong>${e(sender(message.from, tasks))}</strong><span>to ${e(sender(message.to, tasks))}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p><p class="feed-text">${e(message.text.length > 280 ? `${message.text.slice(0, 280)}…` : message.text)}</p></li>`,
+        `<li class="feed-row">${avatar(message.from === 'coordinator' ? 'coordinator' : 'task', '')}<div class="feed-body"><p class="feed-head"><strong>${e(sender(message.from, tasks))}</strong><span class="feed-to">to ${e(sender(message.to, tasks))}</span><span class="chip ${message.kind}">${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p>${more(`feed-${message.id}`, message.text, 140)}</div></li>`,
     )
     .join(
       '',
@@ -1026,6 +1184,17 @@ function renderSince(
 }
 
 /** One task in full: its assignment, its next step, the review of its latest version, and its messages. */
+/** The pod of a task: its lease, GPU, state, and end, and what the pod allows. */
+function taskPod(task: string, compute: ComputeView | undefined): string {
+  const lease = compute?.leases.findLast(
+    (entry) =>
+      entry.tasks.includes(task) &&
+      (isOpen(entry) || entry.state === 'requested'),
+  );
+  if (!lease) return '';
+  return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.id)}, ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. Verifold runs SSH; the worker uses Verifold's pod tools.</p>`;
+}
+
 function taskPanel(
   task: TaskRecord,
   view: TaskView,
@@ -1109,12 +1278,13 @@ function taskPanel(
     .filter((message) => message.to === task.id || message.from === task.id)
     .slice(-50);
   const body = `<p class="session-meta"><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>
-    <dl class="task-fields"><dt>Objective</dt><dd class="pre">${e(task.assignment.objective)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${task.assignment.network ? `${e(task.assignment.network.domains.join(', '))}: ${e(task.assignment.network.reason)}${task.assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd><dt>Expected output</dt><dd class="pre">${e(task.assignment.output)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
+    <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, task.assignment.objective, 220)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${task.assignment.network ? `${e(task.assignment.network.domains.join(', '))}: ${e(task.assignment.network.reason)}${task.assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, task.assignment.output, 160)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
     ${task.state !== 'running' && agent ? `<div class="actions">${agent}</div>` : ''}
     ${live.coordinator?.state && !live.coordinator.state.stoppedAt ? `<label class="field" for="task-coordinator-message">Ask the coordinator about this task</label><textarea id="task-coordinator-message" rows="2" maxlength="3950"></textarea><div class="actions"><button type="button" data-action="coordinator-message" data-about="${e(task.id)}">Ask the coordinator</button></div><p class="fine">The coordinator gets your message with this task named. It answers in its note on Home.</p>` : ''}
     <details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}<label class="field" for="task-message">Message to this task's worker</label><textarea id="task-message" rows="2" maxlength="4000"></textarea><p class="fine">The worker receives it with its next turn. A message cannot change the task's paths, permissions, or limits.</p><div class="actions"><button type="button" data-action="task-message" data-task="${e(task.id)}" data-to="${e(task.id)}">Send</button></div></details>
+    ${taskPod(task.id, live.compute)}
     ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
     ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}`;
   return {
@@ -1125,27 +1295,164 @@ function taskPanel(
   };
 }
 
-/** The tasks of this project. The panel shows one task in full. */
+/** Why a task exists: the coordinator's reason when it created the task, or the start of its objective. */
+function taskWhy(task: TaskRecord): string {
+  const reason = task.assignment.reason.replace(
+    /^Created by the coordinator:\s*/,
+    '',
+  );
+  return lead(
+    reason && reason !== 'Created' ? reason : task.assignment.objective,
+    140,
+  );
+}
+
+/** What a task's agent does now: its latest step, or how long it has been quiet. */
+function taskNow(
+  task: TaskRecord,
+  workers: readonly SessionView[],
+): string | null {
+  if (task.state !== 'running' && task.state !== 'claimed') return null;
+  const session = task.attempts.at(-1)?.session;
+  const record = workers.find((worker) => worker.record.id === session)?.record;
+  const last = record?.events.filter((event) => event.kind !== 'status').at(-1);
+  if (!last)
+    return task.state === 'claimed' ? 'Preparing the task folder' : null;
+  const quiet = Math.floor((Date.now() - Date.parse(last.at)) / 60_000);
+  return quiet >= 5
+    ? `No update in ${quiet} min`
+    : lead(last.kind === 'agent' ? plain(last.text) : last.text, 110);
+}
+
+/** Whose turn it is in a task, and whether the turn is the person's. */
+function taskTurn(
+  task: TaskRecord,
+  all: readonly TaskRecord[],
+  coordinated: boolean,
+): [string, boolean] {
+  const waiting = task.assignment.dependencies.filter(
+    (id) => all.find((entry) => entry.id === id)?.state !== 'done',
+  );
+  switch (task.state) {
+    case 'open':
+      return waiting.length
+        ? [
+            `Waits for ${waiting.map((id) => all.find((entry) => entry.id === id)?.assignment.title ?? id).join(', ')}`,
+            false,
+          ]
+        : [
+            coordinated ? "Coordinator's turn to start it" : 'Ready to start',
+            !coordinated,
+          ];
+    case 'claimed':
+      return ['Starting', false];
+    case 'running':
+      return ["Agent's turn", false];
+    case 'review':
+      return coordinated
+        ? ["Coordinator's turn to review", false]
+        : ['Your turn to review', true];
+    case 'done':
+      return ['Done', false];
+    case 'cancelled':
+      return ['Cancelled', false];
+  }
+}
+
+/**
+ * The plan as a map: the objective, then each task in the column of its
+ * depth, with arrows from what it waits for. The page draws the arrows. Each
+ * box says the same in words, so the map reads without them.
+ */
+function renderMap(
+  view: TaskView,
+  live: DeskSession,
+  objective: string,
+  shown: string | undefined,
+  needs: readonly Need[],
+): string {
+  const tasks = view.list;
+  const workers = live.workers ?? (live.session ? [live.session] : []);
+  const state = live.coordinator?.state;
+  const coordinated = !!state && !state.stoppedAt;
+  const depth = new Map<string, number>();
+  const measure = (task: TaskRecord, seen: ReadonlySet<string>): number => {
+    const known = depth.get(task.id);
+    if (known !== undefined) return known;
+    const parents = task.assignment.dependencies
+      .map((id) => tasks.find((entry) => entry.id === id))
+      .filter((entry) => entry !== undefined && !seen.has(entry.id));
+    const value =
+      1 +
+      Math.max(
+        0,
+        ...parents.map((parent) =>
+          parent ? measure(parent, new Set([...seen, task.id])) : 0,
+        ),
+      );
+    depth.set(task.id, value);
+    return value;
+  };
+  for (const task of tasks) measure(task, new Set());
+  const columns = Math.max(1, ...depth.values());
+  const box = (task: TaskRecord): string => {
+    const [turn, yours] = taskTurn(task, tasks, coordinated);
+    const now = taskNow(task, workers);
+    const version = task.attempts.at(-1)?.versions.at(-1);
+    const raised = needs.filter((item) => item.task === task.id).length;
+    const from = task.assignment.dependencies.length
+      ? task.assignment.dependencies.join(' ')
+      : 'objective';
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta"><span>${e(task.id)}</span>${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
+  };
+  return `<div class="map" data-map><div class="map-col"><div class="map-root" data-node="objective"><span class="map-label">Objective</span><span class="map-title">${e(lead(objective, 140))}</span></div></div>${Array.from(
+    { length: columns },
+    (_, index) =>
+      `<div class="map-col">${tasks
+        .filter((task) => depth.get(task.id) === index + 1)
+        .map(box)
+        .join('')}</div>`,
+  ).join(
+    '',
+  )}<svg class="map-links" aria-hidden="true"><defs><marker id="map-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L8 4L0 8z"/></marker></defs><g></g></svg></div>`;
+}
+
+/** Team now, on Home: each running task with what its agent does and why the task exists. */
+function renderTeamNow(
+  tasks: readonly TaskRecord[],
+  workers: readonly SessionView[],
+): string {
+  const running = tasks.filter(
+    (task) => task.state === 'running' || task.state === 'claimed',
+  );
+  if (!running.length) return '';
+  return `<section class="card" aria-labelledby="now-title"><div class="section-title"><h2 id="now-title">Team now</h2><button type="button" class="quiet" data-view="tasks">See the plan</button></div><ul class="now-list">${running
+    .map(
+      (task) =>
+        `<li><button type="button" data-task-select="${e(task.id)}">${avatar('task', 'working')}<span class="who"><span class="name">${e(task.assignment.title)}</span><span class="line"><span class="map-label">Now</span> ${e(taskNow(task, workers) ?? 'Working')}</span><span class="line"><span class="map-label">Why</span> ${e(taskWhy(task))}</span></span></button></li>`,
+    )
+    .join('')}</ul></section>`;
+}
+
+/** The tasks of this project as a live map. The panel shows one task in full. */
 function renderTasksView(
   view: TaskView,
+  live: DeskSession,
+  objective: string,
   shown: string | undefined,
   offerCoordinator: boolean,
   needs: readonly Need[],
 ): string {
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Tasks</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
-  <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
+  const running = view.list.filter(
+    (task) => task.state === 'running' || task.state === 'claimed',
+  ).length;
+  return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Tasks</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   ${
     view.list.length
-      ? `<ol class="task-list">${view.list
-          .map((entry) => {
-            const raised = needs.filter(
-              (item) => item.task === entry.id,
-            ).length;
-            return `<li><button type="button" data-task-select="${e(entry.id)}" aria-pressed="${entry.id === shown}"><span class="mark ${taskMarks[entry.state]}" aria-hidden="true"></span><span class="task-name">${e(entry.assignment.title)}</span><span class="task-id">${e(entry.id)}</span><span class="attempt-status">${e(taskStates[entry.state][0])}</span>${raised ? `<span class="flag">${raised} ${raised === 1 ? 'item needs' : 'items need'} you</span>` : ''}</button></li>`;
-          })
-          .join('')}</ol>`
+      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The plan</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for. A box opens the task.</p></section>`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write a task yourself with New task.</p></section>'
   }
+  <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
 }
 
@@ -1160,6 +1467,154 @@ function commandTable(view: SessionView, name: string): string {
         `<tr><td>${e(clock(command.at))}</td><td>${e(command.tool)}</td><td><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`,
     )
     .join('')}</tbody></table></div>`;
+}
+
+/** Results: the checks of the chosen direction with their results, then the answer and the sign-off. */
+function renderResultsView(workspace: Workspace, live: DeskSession): string {
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  const head = `<div class="view-head"><h1 id="view-title" tabindex="-1">Results</h1><p>${idea ? `Direction: ${e(idea.title)}` : 'No direction yet'}</p></div>`;
+  if (!idea)
+    return `<div class="view">${head}<section class="card empty-state"><h2>No direction yet</h2><p class="fine">Results show here after you choose a direction and the team works on it.</p></section></div>`;
+  const results = resultsOf(workspace, live);
+  const answer = results?.answer;
+  const open = (results?.checks ?? []).filter(
+    (entry) => entry.result === 'judgement' && !entry.ruling,
+  ).length;
+  const checks = idea.gates
+    .map((gate, index) => {
+      const entry = results?.checks.find((saved) => saved.check === index + 1);
+      const outcome = entry?.ruling?.result ?? entry?.result;
+      return `<li class="check-row" data-result="${outcome ?? 'none'}"><span class="check-num">${index + 1}</span><div class="check-body"><p class="check-text">${e(gate)}</p>${
+        entry
+          ? `<p class="check-value"><span class="tag reading">Its reading</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p><div class="why"><span class="tag reading">Its reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
+          : ''
+      }</div><span class="check-result">${outcome ? e(outcomeLabels[outcome]) : 'Not reported yet'}</span></li>`;
+    })
+    .join('');
+  const signOff = !answer
+    ? ''
+    : answer.decision?.kind === 'accepted'
+      ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>`
+      : answer.decision?.kind === 'more'
+        ? `<p class="fine">You asked for more work at ${e(since(answer.decision.at))}: ${e(answer.decision.note ?? '')}</p>`
+        : `<div class="sign-off">${open ? `<p class="notice">Settle the ${open} open ${open === 1 ? 'judgement' : 'judgements'} above first.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="coordinator-answer" data-decision="accepted"${open ? ' disabled' : ''}>Accept the answer</button></div><label class="field" for="answer-note">What more work is needed</label><textarea id="answer-note" rows="3" maxlength="4000"></textarea><div class="actions"><button type="button" data-action="coordinator-answer" data-decision="more">Ask for more work</button></div></div>`;
+  return `<div class="view">${head}
+  <section class="card" aria-labelledby="checks-title"><div class="section-title"><h2 id="checks-title">The checks</h2><span class="count">${results?.checks.length ?? 0} of ${idea.gates.length} reported</span></div><ol class="checks">${checks}</ol><p class="fine">The coordinator reports each result with the accepted files that show it. Verifold checks that the files were accepted. The values and reasons are its reading.</p></section>
+  ${
+    answer
+      ? `<section class="card answer" aria-labelledby="answer-title"><div class="section-title"><h2 id="answer-title">The answer</h2><span class="tag reading">The coordinator's reading</span></div><p class="statement">${e(answer.statement)}</p><ol class="claims">${answer.claims.map((claim) => `<li><p>${e(claim.text)}</p>${claim.evidence.length ? `<p class="fine">Evidence: ${claim.evidence.map((item) => (/^https?:\/\//.test(item) ? link(item) : `<code>${e(item)}</code>`)).join(' ')}</p>` : ''}</li>`).join('')}</ol>${signOff}</section>`
+      : '<section class="card"><h2>The answer</h2><p class="fine">The coordinator proposes the answer when the checks have results. You sign it off here.</p></section>'
+  }</div>`;
+}
+
+const leaseStates: Record<Lease['state'], string> = {
+  requested: 'Waits for you',
+  denied: 'Denied',
+  starting: 'Starting',
+  ready: 'Ready',
+  stopped: 'Stopped',
+  ended: 'Ended',
+  failed: 'Failed',
+};
+
+/** The pods card: what is spent and reserved, the open leases with their controls, and earlier leases. */
+function renderPods(compute: ComputeView): string {
+  const { budget, settings } = compute;
+  const now = Date.now();
+  const row = (lease: Lease): string => {
+    const actions =
+      lease.state === 'ready' || lease.state === 'starting'
+        ? `<button type="button" data-action="compute-lease-stop" data-lease="${e(lease.id)}">Stop</button><button type="button" data-action="compute-lease-end" data-lease="${e(lease.id)}">End</button>`
+        : lease.state === 'stopped'
+          ? `<button type="button" data-action="compute-lease-start" data-lease="${e(lease.id)}">Start</button><button type="button" data-action="compute-lease-end" data-lease="${e(lease.id)}">End</button>`
+          : lease.state === 'requested'
+            ? '<button type="button" data-view="needs">Decide</button>'
+            : '';
+    const idle =
+      lease.state === 'ready' && lease.activeAt
+        ? Math.floor((now - Date.parse(lease.activeAt)) / 60_000)
+        : 0;
+    return `<tr data-state="${lease.state}"><th scope="row">${e(lease.id)}</th><td>${lease.tasks.map((task) => e(task)).join(', ')}</td><td>${e(lease.gpu)}</td><td>${e(leaseStates[lease.state])}${idle >= 5 ? `<span class="fine">Idle ${idle} min</span>` : ''}</td><td>${usd(spent(lease, now))}${isRunning(lease) ? `<span class="fine">${usd(lease.rate)} per hour</span>` : ''}</td><td>${lease.deadline && isOpen(lease) ? e(since(lease.deadline)) : lease.end ? e(lease.end.reason) : '—'}</td><td class="row-actions">${actions}</td></tr>`;
+  };
+  const current = compute.leases.filter(
+    (lease) => isOpen(lease) || lease.state === 'requested',
+  );
+  const earlier = compute.leases.filter((lease) => !current.includes(lease));
+  const head =
+    '<thead><tr><th scope="col">Lease</th><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
+  return `<section class="card" aria-labelledby="pods-title"><div class="section-title"><h2 id="pods-title">Pods</h2>${budget.rate ? `<span class="count">${usd(budget.rate)} per hour now</span>` : ''}</div>
+  ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for open leases ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
+  ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
+  ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU, and you approve it in Needs you.</p>`}
+  ${earlier.length ? `<details id="earlier-leases"><summary>Earlier leases (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}
+  <p class="fine">Costs count each running minute at the billed rate, with the disk. When RunPod's bill is higher, Verifold uses it.</p></section>`;
+}
+
+const stockNames = {
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+  NONE: 'None',
+} as const;
+
+/** The form for a new or replacement RunPod key. The key field is never filled by the server. */
+function keyForm(keyring: ComputeView['keyring']): string {
+  return `<label class="field" for="runpod-key">RunPod API key</label><input id="runpod-key" type="password" autocomplete="off" spellcheck="false" maxlength="256">
+  ${keyring ? `<label class="check" for="runpod-key-file"><input type="checkbox" id="runpod-key-file"> Keep it in a private file instead of ${e(placeNames[keyring])}</label>` : '<p class="fine">This computer has no keyring that Verifold can use, so the key goes into a private file that only you can read.</p>'}
+  <div class="actions"><button type="button" class="primary" data-action="compute-key-save"${keyring ? '' : ' data-file="always"'}>Check and save</button></div>
+  <p class="fine">Verifold checks the key with one read-only call to RunPod before it saves it. Use a separate key for Verifold, so that you can revoke it alone in the RunPod console.</p>`;
+}
+
+/** Compute: the RunPod key, the limits that only the person sets, and the GPUs that leases can use. */
+function renderComputeView(compute: ComputeView): string {
+  const { key, settings, gpus } = compute;
+  const keyCard = key
+    ? `<p>The key is in ${e(placeNames[key.place])}. It ends in <code>${e(key.last4)}</code>.</p>
+      ${key.problem ? `<p class="notice">The check at ${e(since(key.checkedAt ?? key.savedAt))} failed. ${e(key.problem)}</p>` : key.checkedAt ? `<p class="notice-ok">It worked at ${e(since(key.checkedAt))}.</p>` : ''}
+      <div class="actions"><button type="button" data-action="compute-key-check">Check</button><button type="button" data-action="compute-key-remove">Remove</button></div>
+      <details id="key-replace"><summary>Replace the key</summary>${keyForm(compute.keyring)}</details>`
+    : keyForm(compute.keyring);
+  const number = (
+    id: string,
+    label: string,
+    value: number | null,
+    min: number,
+    max: number,
+    step = 1,
+  ): string =>
+    `<label class="field" for="${id}">${e(label)}<input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${value ?? ''}"></label>`;
+  const offered = new Set(gpus?.map((gpu) => gpu.id));
+  // An allowed type that RunPod does not offer now stays in the list, so a save keeps it.
+  const rows = [
+    ...(gpus ?? []),
+    ...settings.gpuTypes
+      .filter((id) => !offered.has(id))
+      .map((id) => ({ id, name: id, memoryGb: 0, price: 0, stock: null })),
+  ];
+  const gpuCard = !key
+    ? '<p class="fine">Store a RunPod key to see the GPUs with their price and stock.</p>'
+    : !gpus
+      ? `${settings.gpuTypes.length ? `<p>Leases can use ${settings.gpuTypes.map((id) => `<code>${e(id)}</code>`).join(', ')}.</p>` : '<p class="fine">No GPU type is allowed yet.</p>'}<div class="actions"><button type="button" data-action="compute-gpus">Show the GPUs</button></div>`
+      : `<div class="table"><table class="gpus"><thead><tr><th scope="col">Allow</th><th scope="col">GPU</th><th scope="col">Memory</th><th scope="col">Per hour</th><th scope="col">Stock</th></tr></thead><tbody>${rows
+          .map((gpu) => {
+            const box = `gpu-${gpu.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            return `<tr><td><input type="checkbox" id="${e(box)}" data-gpu="${e(gpu.id)}"${settings.gpuTypes.includes(gpu.id) ? ' checked' : ''} aria-label="Allow ${e(gpu.name)}"></td><th scope="row">${e(gpu.name)}</th><td>${gpu.memoryGb ? `${gpu.memoryGb} GB` : '—'}</td><td>${gpu.price ? `$${gpu.price.toFixed(2)}${gpu.price > settings.maxUsdPerHour ? ' <span class="tag over-cap">Above your cap</span>' : ''}` : 'Not offered now'}</td><td>${gpu.stock ? stockNames[gpu.stock] : '—'}</td></tr>`;
+          })
+          .join(
+            '',
+          )}</tbody></table></div><p class="fine">List prices for one GPU on Secure Cloud, from RunPod at ${e(since(compute.gpusAt ?? ''))}.</p><div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the GPU choice</button><button type="button" data-action="compute-gpus">Refresh the prices</button></div>`;
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Compute</h1><p>GPU pods on RunPod for your tasks</p></div>
+  ${renderPods(compute)}
+  <section class="card" aria-labelledby="key-title"><h2 id="key-title">RunPod key</h2>${keyCard}</section>
+  <section class="card" aria-labelledby="limits-title"><div class="section-title"><h2 id="limits-title">Limits</h2>${settings.limitUsd !== null ? `<span class="count">$${settings.limitUsd} for this project</span>` : ''}</div>
+  ${settings.limitUsd === null ? '<p class="notice">Pods stay off until you set a spend limit.</p>' : ''}
+  <div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours of one lease, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
+  <label class="field" for="compute-images">RunPod images that a lease can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
+  <div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the limits</button></div>
+  <p class="fine">Only you can change these limits. RunPod erases the disk of a pod when the pod stops.</p></section>
+  <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2>${gpuCard}</section></div>`;
 }
 
 /** The record of this owner: every worker's commands, then every research attempt. */
@@ -1178,7 +1633,68 @@ function renderRecords(
 
 /** The summary and the sources of one research report. Source links are validated before rendering. */
 function findingsBody(report: ResearchReport, attempt: string): string {
-  return `<div class="prose md">${markdownHtml(report.summary)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(attempt)}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>`;
+  return `<div class="prose">${moreMd(`findings-${attempt}`, report.summary, 400)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(attempt)}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>`;
+}
+
+/** A web address as a link with its host and path. Text that is not an http(s) address stays text. */
+function link(address: string): string {
+  try {
+    const url = new URL(address);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      throw new Error();
+    const shown = `${url.hostname}${url.pathname === '/' ? '' : url.pathname}`;
+    return `<a href="${e(url.href)}" target="_blank" rel="noopener noreferrer">${e(shown.length > 80 ? `${shown.slice(0, 80)}…` : shown)}</a>`;
+  } catch {
+    return `<span>${e(address)}</span>`;
+  }
+}
+
+/** The searches and pages of the current research step, newest first. They come from its transcript and stay in the desk. */
+function renderSources(
+  sources: readonly ResearchSource[],
+  running: boolean,
+): string {
+  if (!sources.length) return '';
+  const read = sources.filter((source) => source.kind === 'read').length;
+  const searched = sources.length - read;
+  const shown = [...sources].reverse().slice(0, 15);
+  return `<section class="card" aria-labelledby="sources-live-title"><div class="section-title"><h2 id="sources-live-title">${running ? 'Sources so far' : 'Sources of the latest step'}</h2><span class="count">${searched} ${searched === 1 ? 'search' : 'searches'}, ${read} ${read === 1 ? 'page' : 'pages'} read</span></div><ul class="sources-live">${shown
+    .map(
+      (source) =>
+        `<li><span class="chip">${source.kind === 'read' ? 'Read' : 'Searched'}</span>${source.kind === 'read' ? link(source.text) : `<span>${e(source.text)}</span>`}<time datetime="${e(source.at)}">${e(clock(source.at))}</time></li>`,
+    )
+    .join(
+      '',
+    )}</ul>${sources.length > shown.length ? `<p class="fine">The latest ${shown.length} of ${sources.length}.</p>` : ''}</section>`;
+}
+
+/** Research can still take a choice of direction: no direction yet, and no step runs. */
+function choosable(workspace: Workspace, live: DeskSession): boolean {
+  return (
+    live.research !== undefined &&
+    !live.research.running &&
+    !workspace.selectedId &&
+    workspace.research?.phase === 'directions'
+  );
+}
+
+/** One direction in full: its case, its checks, its sources, and the choice. */
+function directionPanel(
+  idea: Candidate,
+  workspace: Workspace,
+  live: DeskSession,
+): Panel {
+  const chosen = workspace.selectedId === idea.id;
+  return {
+    kind: 'Direction',
+    title: idea.title,
+    sub: `<span class="status ${chosen ? 'active' : 'muted'}">${chosen ? 'Chosen' : workspace.selectedId ? 'Not chosen' : 'Proposed'}</span>`,
+    body: `<div class="md">${markdownHtml(idea.recommendation)}</div>
+    <h3>Its checks</h3><ul class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul>
+    <p class="fine">The coordinator gets these checks with the direction, and plans tasks that give evidence for them.</p>
+    ${idea.sources?.length ? `<h3>Its sources</h3><ol class="sources">${idea.sources.map((source) => `<li>${link(source)}</li>`).join('')}</ol>` : ''}
+    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div><p class="fine">The choice locks it for this project. Then the coordinator plans its tasks.</p>` : ''}`,
+  };
 }
 
 /** The research record: the decision, the live step, the directions, the scope, the findings, and the brief. */
@@ -1187,18 +1703,15 @@ function renderResearchView(
   live: DeskSession,
   report: ResearchReport | null,
   chosen: DeskAttempt | undefined,
+  shown: string | undefined,
 ): string {
   const research = workspace.research;
-  const choosable =
-    live.research !== undefined &&
-    !live.research.running &&
-    !workspace.selectedId &&
-    research?.phase === 'directions';
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Research</h1><p>${e(phaseLabel(research?.phase))}</p></div>
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
+  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Its case</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</th><td data-label="Its case">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
   ${renderResearch(live.research, research?.latestAttempt)}
-  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Research directions</h2><span class="count">${workspace.candidates.length} proposed</span></div>${workspace.candidates.map((idea) => `<article class="direction"><div class="direction-heading"><h3>${e(idea.title)}</h3>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</div><div class="md">${markdownHtml(idea.recommendation)}</div>${choosable ? `<div class="actions"><button type="button" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div>` : ''}<details id="gates-${e(idea.id)}"><summary>Proposed verification gates</summary><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></details></article>`).join('')}</section>` : ''}
+  ${renderSources(live.research?.sources ?? [], live.research?.running === true)}
   ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="card findings" aria-labelledby="findings-title"><div class="section-title"><h2 id="findings-title">Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
   ${report ? findingsBody(report, chosen?.id ?? '') : `<div class="empty-note"><p>${chosen ? 'No readable source report is available for this attempt.' : 'Your source record starts here.'}</p><p>${chosen ? 'Planning, failed, and interrupted attempts may have no report. Their evidence remains in the project.' : 'Sources and findings show here when research saves a report.'}</p></div>`}</section>
@@ -1309,6 +1822,12 @@ function progress(workspace: Workspace, live: DeskSession): Progress {
     (task) => task.state === 'done' || task.state === 'cancelled',
   ).length;
   notes[4] = `${settled} of ${planned.length} done`;
+  // A proposed answer waits for the person's sign-off. A request for more work returns to the tasks.
+  const answer = resultsOf(workspace, live)?.answer;
+  if (answer && answer.decision?.kind !== 'more') {
+    notes[5] = answer.decision ? 'Accepted' : 'Waits for you';
+    return { current: 5, notes, waits: !answer.decision, working: false };
+  }
   if (planned.length && settled === planned.length) {
     notes[5] = 'Tasks done';
     return { current: 5, notes, waits: false, working: false };
@@ -1379,13 +1898,22 @@ function renderArc(at: Progress): string {
 }
 
 /** The views in the rail. The top bar opens Needs you. */
-const railViews = ['home', 'research', 'tasks', 'records'] as const;
+const railViews = [
+  'home',
+  'research',
+  'tasks',
+  'results',
+  'compute',
+  'records',
+] as const;
 type RailView = (typeof railViews)[number];
 
 const viewNames: Record<RailView, string> = {
   home: 'Home',
   research: 'Research',
   tasks: 'Tasks',
+  results: 'Results',
+  compute: 'Compute',
   records: 'Records',
 };
 
@@ -1395,6 +1923,10 @@ const viewIcons: Record<RailView, string> = {
     '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>',
   tasks:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h6v6H3zM15 14h6v6h-6zM6 10v3a3 3 0 0 0 3 3h6"/></svg>',
+  results:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-8M3 20h18"/></svg>',
+  compute:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>',
   records:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 8h6M9 12h6M9 16h3"/></svg>',
 };
@@ -1497,7 +2029,11 @@ function renderRail(
       : '',
   ].join('');
   return `<nav class="rail" id="rail" aria-label="Views and team"><ul class="views">${railViews
-    .filter((view) => view !== 'tasks' || live.tasks)
+    .filter(
+      (view) =>
+        (view !== 'tasks' || live.tasks) &&
+        (view !== 'compute' || live.compute),
+    )
     .map(
       (view) =>
         `<li><button type="button" data-view="${view}"${view === frame.view ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
@@ -1541,7 +2077,7 @@ function renderHome(
       ? renderCoordinatorHome(coordinator, messages)
       : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${renderTeamNow(tasks, live.workers ?? (live.session ? [live.session] : []))}${renderPodsLine(live.compute)}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -1553,6 +2089,7 @@ function renderPanel(
   report: ResearchReport | null,
   needKeys: ReadonlySet<string>,
   messages: readonly Message[],
+  direction: string | undefined,
 ): string {
   const tasks = live.tasks?.list ?? [];
   const gone = (kind: string, title: string, text: string): Panel => ({
@@ -1581,7 +2118,18 @@ function renderPanel(
           'No session',
           'No agent session is open. To start one, choose New, then New session.',
         );
-  else if (panel === 'coordinator')
+  else if (panel === 'direction') {
+    const idea =
+      workspace.candidates.find((entry) => entry.id === direction) ??
+      workspace.candidates[0];
+    shown = idea
+      ? directionPanel(idea, workspace, live)
+      : gone(
+          'Direction',
+          'No direction yet',
+          'Research proposes directions after it searches the sources.',
+        );
+  } else if (panel === 'coordinator')
     shown = coordinatorPanel(
       live.coordinator ?? null,
       workspace,
@@ -1645,45 +2193,65 @@ export function renderDesk(
   const messages = live.tasks?.messages ?? [];
   const workers = live.workers ?? (live.session ? [live.session] : []);
   const at = progress(workspace, live);
-  // Without a task owner there are no tasks, so the Tasks view is not in the rail.
-  const view = frame.view === 'tasks' && !live.tasks ? 'home' : frame.view;
+  // Without a project owner there are no tasks and no compute, so these views are not in the rail.
+  const view =
+    (frame.view === 'tasks' && !live.tasks) ||
+    (frame.view === 'compute' && !live.compute)
+      ? 'home'
+      : frame.view;
   const needs = needsOf(snapshot, live);
   const main =
     view === 'needs'
       ? renderNeedsView(needs)
-      : view === 'research'
-        ? renderResearchView(workspace, live, report, chosen)
-        : view === 'tasks' && live.tasks
-          ? renderTasksView(
-              live.tasks,
-              frame.panel === 'task' ? live.tasks.selected?.id : undefined,
-              // Before a direction and a coordinator, Tasks offers to start one with your own objective.
-              live.coordinator !== undefined &&
-                !workspace.selectedId &&
-                !live.coordinator?.state,
-              needs,
-            )
-          : view === 'records'
-            ? renderRecords(
-                snapshot,
-                workers,
-                tasks,
-                frame.panel === 'attempt' ? chosen?.id : undefined,
-              )
-            : renderHome(
-                snapshot,
+      : view === 'results'
+        ? renderResultsView(workspace, live)
+        : view === 'compute' && live.compute
+          ? renderComputeView(live.compute)
+          : view === 'research'
+            ? renderResearchView(
+                workspace,
                 live,
-                at,
-                active.length > 0,
-                needs,
-                frame.since,
-              );
+                report,
+                chosen,
+                frame.panel === 'direction' ? frame.direction : undefined,
+              )
+            : view === 'tasks' && live.tasks
+              ? renderTasksView(
+                  live.tasks,
+                  live,
+                  workspace.candidates.find(
+                    (idea) => idea.id === workspace.selectedId,
+                  )?.title ??
+                    live.coordinator?.state?.objective ??
+                    'Your tasks',
+                  frame.panel === 'task' ? live.tasks.selected?.id : undefined,
+                  // Before a direction and a coordinator, Tasks offers to start one with your own objective.
+                  live.coordinator !== undefined &&
+                    !workspace.selectedId &&
+                    !live.coordinator?.state,
+                  needs,
+                )
+              : view === 'records'
+                ? renderRecords(
+                    snapshot,
+                    workers,
+                    tasks,
+                    frame.panel === 'attempt' ? chosen?.id : undefined,
+                  )
+                : renderHome(
+                    snapshot,
+                    live,
+                    at,
+                    active.length > 0,
+                    needs,
+                    frame.since,
+                  );
   // The top bar names the research owner only when exactly one reported recently.
   const observation =
     active.length === 1 && active[0]?.record?.observedAt
       ? `Research owner last observed ${time(active[0].record.observedAt)}`
       : '';
-  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages) : ''}`;
+  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
   return {
     html,
     observation,

@@ -27,7 +27,7 @@ import { runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
-import { TaskManager } from './tasks.ts';
+import { TaskManager, type TaskPlace } from './tasks.ts';
 import { SessionPool } from './workers.ts';
 import { Coordinator } from './coordinator.ts';
 import { withTranscript } from './transcript.ts';
@@ -41,6 +41,9 @@ import {
   type SessionEvent,
 } from './session.ts';
 import { claimOwner } from './owner.ts';
+import { Compute } from './compute.ts';
+import { KeyStore, type KeyStoreOptions } from './credentials.ts';
+import { spent, type Lease } from './leases.ts';
 /** How a view can show a question. The terminal shows only the question text. */
 export type AskHint =
   | { readonly kind: 'confirm'; readonly yes: string; readonly no: string }
@@ -92,6 +95,18 @@ export interface CliIO {
     initial: string,
   ) => Promise<string>;
   readonly busy?: <T>(label: string, work: () => Promise<T>) => Promise<T>;
+  /** Read a secret without echo, or from piped input. */
+  readonly readSecret?: (prompt: string) => Promise<string>;
+  /** Tests point the RunPod client at a fake server and the key store at fake programs. */
+  readonly compute?: {
+    readonly url?: string;
+    readonly store?: KeyStoreOptions;
+    readonly programs?: {
+      readonly ssh?: string;
+      readonly keyscan?: string;
+      readonly keygen?: string;
+    };
+  };
   /** Read terminal lines until the signal aborts. Only an interactive terminal provides it. */
   readonly listen?: (
     onLine: (line: string) => void,
@@ -115,6 +130,10 @@ verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model 
                                       Run one harness session; answer its requests here or on the desk
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
+verifold runpod key set [--file]      Store a RunPod API key from hidden input or stdin, after a check
+verifold runpod key status|check|remove
+                                      Show where the key is, check it with RunPod, or remove it
+verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when the desk does not run
 
 Options: --workspace path (default: current directory), --help, --version
 Init connects your harness and profile, then asks for a project directory and context.
@@ -455,16 +474,30 @@ async function serveDesk(
         onSelect: async () =>
           owned.coordinator?.startForDirection(await loadWorkspace(root)),
       });
+      // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
+      // Before a pod stops, its tasks' results come back into their folders.
+      const compute = computeFor(
+        root,
+        io,
+        (lease, line) => {
+          io.progress?.(`Pod ${line}`);
+          if (lease.history.at(-1)?.by !== 'coordinator')
+            owned.coordinator?.notify({ kind: 'pod', text: line });
+        },
+        (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
+      );
       const tasks = new TaskManager(root, {
         ownerId: owner.ownerId,
         sessions,
         ...(io.progress ? { progress: io.progress } : {}),
         onEvent: (event) => owned.coordinator?.notify(event),
+        pods: compute.podTools(),
       });
       owned.tasks = tasks;
       // The coordinator has its own session, outside the worker slots.
       const coordinator = new Coordinator(root, {
         tasks,
+        compute,
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
@@ -475,6 +508,10 @@ async function serveDesk(
       try {
         await sessions.load();
         await coordinator.load();
+        await compute.load();
+        // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
+        await compute.leases.recover();
+        compute.watch();
         const stopped = await tasks.settle();
         if (stopped)
           io.progress?.(
@@ -482,7 +519,15 @@ async function serveDesk(
           );
         // Start the session first, so invalid input fails before a desk opens.
         if (session) owned.session = await sessions.start(session);
-        if (desk) await desk.attach(root, sessions, runner, tasks, coordinator);
+        if (desk)
+          await desk.attach(
+            root,
+            sessions,
+            runner,
+            tasks,
+            coordinator,
+            compute,
+          );
         else {
           desk = await startDesk(
             root,
@@ -493,6 +538,7 @@ async function serveDesk(
             undefined,
             tasks,
             coordinator,
+            compute,
           );
           await announce(
             desk,
@@ -559,7 +605,9 @@ async function serveDesk(
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
           );
-        // A task turn that Ctrl+C stopped becomes a version for review.
+        // Pods stop when Verifold stops, so billing stops. Their results come back first.
+        for (const line of await compute.close()) io.progress?.(line);
+        // A task turn that Ctrl+C stopped becomes a version for review, with the results from its pod.
         await tasks.settle();
       }
     } finally {
@@ -592,6 +640,117 @@ async function recover(
     io.progress?.(
       `Verifold stopped earlier without saving the end of its work. ${parts.join(' and ')} stopped with an unknown outcome.${stopped ? ` Verifold stopped ${stopped} harness ${stopped === 1 ? 'process' : 'processes'} that kept running.` : ''} Resume a session in the desk or with /resume. Continue research to run the step again.`,
     );
+}
+
+/** The compute settings, RunPod key, and pod leases of a project, with the test hooks of the I/O. */
+function computeFor(
+  root: string,
+  io: CliIO,
+  onChange?: (lease: Lease, line: string) => void,
+  taskFolder?: (task: string) => Promise<TaskPlace | null>,
+): Compute {
+  return new Compute(root, {
+    store: new KeyStore(io.compute?.store),
+    ...(io.compute?.url ? { url: io.compute.url } : {}),
+    ...(io.compute?.programs ? { programs: io.compute.programs } : {}),
+    ...(onChange ? { onChange } : {}),
+    ...(taskFolder ? { taskFolder } : {}),
+  });
+}
+
+/** `verifold runpod key set|status|check|remove`. The key belongs to this computer, and no output holds it. */
+async function runpodCommand(
+  noun: string | undefined,
+  verb: string | undefined,
+  file: boolean | undefined,
+  root: string,
+  io: CliIO,
+): Promise<void> {
+  if (
+    noun !== 'key' ||
+    (verb !== 'set' &&
+      verb !== 'status' &&
+      verb !== 'check' &&
+      verb !== 'remove')
+  )
+    throw new Error('Use verifold runpod key set, status, check, or remove.');
+  if (file !== undefined && verb !== 'set')
+    throw new Error('--file is valid only for verifold runpod key set.');
+  const compute = computeFor(root, io);
+  await compute.load();
+  if (verb === 'set') {
+    if (!io.readSecret)
+      throw new Error(
+        'Pipe the key into this command, or run it in a terminal.',
+      );
+    const key = (await io.readSecret('RunPod API key (input hidden): ')).trim();
+    await compute.setKey(key, file === true);
+  } else if (verb === 'check') await compute.checkKey();
+  else if (verb === 'remove') await compute.removeKey();
+  const key = compute.view().key;
+  io.out(
+    JSON.stringify(
+      key
+        ? {
+            key: 'stored',
+            place: key.place,
+            last4: key.last4,
+            ...(key.checkedAt ? { checkedAt: key.checkedAt } : {}),
+            ...(key.problem ? { problem: key.problem } : {}),
+          }
+        : { key: 'none' },
+    ),
+  );
+  if (verb === 'remove')
+    io.progress?.(
+      'RunPod keeps the key valid until you revoke it in the RunPod console.',
+    );
+}
+
+/**
+ * `verifold pods` lists the leases. `verifold pods stop <lease|all>` stops pods
+ * without the desk, as the project owner, so it refuses while Verifold runs.
+ */
+async function podsCommand(
+  verb: string | undefined,
+  target: string | undefined,
+  root: string,
+  io: CliIO,
+): Promise<void> {
+  if (verb !== undefined && verb !== 'stop')
+    throw new Error('Use verifold pods, or verifold pods stop <lease or all>.');
+  const compute = computeFor(root, io);
+  if (verb === 'stop')
+    await owned(root, io, async () => {
+      await compute.load();
+      // Pods that run now outlived their owner, so recovery stops them first.
+      await compute.leases.recover();
+      if (target === 'all') await compute.close();
+      else {
+        const lease = compute.leases.get(target);
+        if (lease.state === 'ready' || lease.state === 'starting')
+          await compute.leases.stop(
+            lease.id,
+            'person',
+            'you stopped it in the terminal.',
+          );
+      }
+    });
+  else await compute.load();
+  const now = Date.now();
+  io.out(
+    JSON.stringify(
+      compute.view().leases.map((lease) => ({
+        lease: lease.id,
+        state: lease.state,
+        gpu: lease.gpu,
+        pod: lease.podId,
+        tasks: lease.tasks,
+        costUsd: Number(spent(lease, now).toFixed(2)),
+        endsAt: lease.deadline,
+      })),
+    ),
+  );
 }
 
 /** Run foreground work as the project owner, so no desk owner runs at the same time. */
@@ -638,6 +797,7 @@ export async function runCli(
       from: { type: 'string' },
       id: { type: 'string' },
       'no-open': { type: 'boolean' },
+      file: { type: 'boolean' },
       mode: { type: 'string' },
       prompt: { type: 'string' },
     },
@@ -669,8 +829,22 @@ export async function runCli(
         throw error;
     }
   }
-  if (!command || positionals.length > 1)
-    throw new Error('Provide one command. Use --help.');
+  // `runpod key <action>` and `pods stop <lease>` are the only commands with more words.
+  if (
+    !command ||
+    (command === 'runpod'
+      ? positionals.length !== 3
+      : command === 'pods'
+        ? positionals.length !== 1 && positionals.length !== 3
+        : positionals.length > 1)
+  )
+    throw new Error(
+      command === 'runpod'
+        ? 'Use verifold runpod key set, status, check, or remove.'
+        : command === 'pods'
+          ? 'Use verifold pods, or verifold pods stop <lease or all>.'
+          : 'Provide one command. Use --help.',
+    );
   const allowed: Record<string, readonly string[]> = {
     init: [
       'profile',
@@ -692,6 +866,8 @@ export async function runCli(
     ui: ['no-open'],
     session: ['host', 'mode', 'model', 'prompt', 'no-open'],
     profile: ['setup', 'agency-dir', 'host', 'model'],
+    runpod: ['file'],
+    pods: [],
   };
   if (!Object.hasOwn(allowed, command))
     throw new Error(`Unknown command: ${command}. Use --help.`);
@@ -722,6 +898,14 @@ export async function runCli(
       signal,
       harness,
     );
+    return;
+  }
+  if (command === 'runpod') {
+    await runpodCommand(positionals[1], positionals[2], values.file, root, io);
+    return;
+  }
+  if (command === 'pods') {
+    await podsCommand(positionals[1], positionals[2], root, io);
     return;
   }
   if (command === 'ui') {

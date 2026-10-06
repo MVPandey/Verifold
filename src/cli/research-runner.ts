@@ -3,11 +3,24 @@ import { runHarness } from './harness.ts';
 import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
 import { SessionActionError } from './session.ts';
 import { loadWorkspace } from './storage.ts';
+import type { TranscriptUpdate } from './transcript.ts';
 
 /** One line of the research feed. Tool lines come from the harness protocol. Status lines come from Verifold. */
 export interface ResearchActivity {
   readonly at: string;
   readonly kind: 'tool' | 'status';
+  readonly text: string;
+}
+
+/**
+ * A search or a page that the current step used, from its transcript. Like the
+ * transcript, it stays in the desk: the terminal and the activity lines never
+ * carry it.
+ */
+export interface ResearchSource {
+  readonly at: string;
+  readonly kind: 'search' | 'read';
+  /** The query of a search, or the address of a page. */
   readonly text: string;
 }
 
@@ -17,6 +30,8 @@ export interface ResearchView {
   readonly step: string | null;
   readonly startedAt: string | null;
   readonly events: readonly ResearchActivity[];
+  /** Searches and pages of the current or the latest step, oldest first. */
+  readonly sources?: readonly ResearchSource[];
 }
 
 export interface ResearchRunnerOptions {
@@ -47,6 +62,7 @@ export class ResearchRunner {
   private step: string | null = null;
   private startedAt: string | null = null;
   private events: ResearchActivity[] = [];
+  private sources: ResearchSource[] = [];
 
   constructor(root: string, options: ResearchRunnerOptions) {
     this.root = root;
@@ -64,6 +80,7 @@ export class ResearchRunner {
       step: this.step,
       startedAt: this.startedAt,
       events: this.events,
+      sources: this.sources,
     };
   }
 
@@ -103,6 +120,7 @@ export class ResearchRunner {
       : 'Planning research roles and scope';
     this.startedAt = new Date().toISOString();
     this.events = [];
+    this.sources = [];
     const controller = new AbortController();
     this.controller = controller;
     const signal = AbortSignal.any([this.options.signal, controller.signal]);
@@ -126,6 +144,10 @@ export class ResearchRunner {
           ...request,
           onActivity: (message, kind) =>
             this.note('tool', message, undefined, kind === 'notice'),
+          onTranscript: (update) => {
+            this.observe(update);
+            request.onTranscript?.(update);
+          },
         }),
     )
       .then((workspace) => {
@@ -181,7 +203,7 @@ export class ResearchRunner {
     } catch (error) {
       this.note(
         'status',
-        `The coordinator did not start: ${error instanceof Error ? error.message : 'unknown error'} Start it under Coordinator.`,
+        `The coordinator did not start: ${error instanceof Error ? error.message : 'unknown error'} Start it from Home in the desk.`,
       );
     }
   }
@@ -189,6 +211,30 @@ export class ResearchRunner {
   /** Wait until the current step ends. */
   async settled(): Promise<void> {
     await this.work;
+  }
+
+  /** A web search or a page fetch in the transcript becomes a source. A repeat adds nothing. */
+  private observe(update: TranscriptUpdate): void {
+    const kind: ResearchSource['kind'] | null =
+      update.name === 'WebFetch'
+        ? 'read'
+        : update.name === 'WebSearch' || update.name === 'Web search'
+          ? 'search'
+          : null;
+    const text = update.title?.trim().slice(0, 300);
+    if (
+      update.kind !== 'tool' ||
+      !kind ||
+      !text ||
+      this.sources.some(
+        (source) => source.kind === kind && source.text === text,
+      )
+    )
+      return;
+    this.sources = [
+      ...this.sources,
+      { at: new Date().toISOString(), kind, text },
+    ].slice(-100);
   }
 
   /** Status lines and notices also go to the terminal. Harness events stay in the desk. */

@@ -148,6 +148,12 @@ await test('research runs in the owner, records observed activity, and waits for
   assert.ok(lines.some((line) => line.includes('/approve')));
   // The terminal gets status lines. Harness events stay in the desk.
   assert.ok(!lines.some((line) => line.includes('requested WebSearch')));
+  // The step's search is a source in the desk, from its transcript. The terminal never gets it.
+  assert.deepEqual(
+    planned.sources?.map(({ kind, text }) => [kind, text]),
+    [['search', 'proof search benchmarks']],
+  );
+  assert.ok(!lines.some((line) => line.includes('proof search benchmarks')));
   assert.equal(
     (await loadWorkspace(root)).research?.phase,
     'awaiting-plan-review',
@@ -161,6 +167,8 @@ await test('research runs in the owner, records observed activity, and waits for
   );
   await runner.settled();
   assert.match(runner.view().events.at(-1)?.text ?? '', /directions are ready/);
+  // Each step starts its own list of sources.
+  assert.equal(runner.view().sources?.length, 1);
   await assert.rejects(runner.select('missing'), /Choose an ID/);
   await runner.select('proof');
   assert.equal((await loadWorkspace(root)).selectedId, 'proof');
@@ -168,7 +176,7 @@ await test('research runs in the owner, records observed activity, and waits for
   assert.equal(selected, 1);
   assert.match(
     runner.view().events.at(-1)?.text ?? '',
-    /The coordinator did not start: Codex is not installed\. Start it under Coordinator\./,
+    /The coordinator did not start: Codex is not installed\. Start it from Home in the desk\./,
   );
   await assert.rejects(
     runner.start({ feedback: 'More sources' }),
@@ -346,8 +354,13 @@ await test('terminal commands and desk actions call the same research operations
   await deskResearch.settled();
   // Home sends the person to Research, where each direction has its choice.
   assert.match(await view(), /data-view="research">Compare the directions/);
+  // Research compares the directions. The panel of a direction holds its choice.
   assert.match(
     await view('?view=research'),
+    /data-direction="proof" aria-pressed="false">Compare proof search/,
+  );
+  assert.match(
+    await view('?view=research&panel=direction&direction=proof'),
     /data-action="select" data-idea="proof"/,
   );
   assert.equal((await post({ action: 'select', idea: 'proof' }))[0], 200);
