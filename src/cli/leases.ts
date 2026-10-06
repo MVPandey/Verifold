@@ -216,6 +216,8 @@ export interface LeaseHooks {
   readonly beforeStop?: (lease: Lease) => Promise<string | null>;
   /** A lease closed: forget its key. */
   readonly closed?: (lease: Lease) => Promise<void>;
+  /** Each read of a ready pod: tell its watchdog that Verifold still runs. */
+  readonly alive?: (lease: Lease) => Promise<void>;
 }
 
 /**
@@ -797,6 +799,8 @@ export class Leases {
                   { start: at, end: null, rate: pod.cost },
                 ],
               });
+            if (lease.state === 'ready')
+              await this.hooks.alive?.(lease).catch(() => undefined);
             if (lease.state === 'starting' && pod.ssh) {
               // A pod whose SSH does not answer yet stays starting until the next read.
               const note = this.hooks.prepare

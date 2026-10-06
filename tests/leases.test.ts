@@ -262,6 +262,13 @@ async function setup(
     `#!/usr/bin/env node\nconst args = process.argv.slice(2);\nprocess.stdout.write('[' + args.at(-1) + ']:' + args[args.indexOf('-p') + 1] + ' ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOmpawy8ACLANKLqK6tdKsFJ55Erhu5/b+MUJUrQrH1M\\n');\n`,
   );
   await chmod(keyscan, 0o755);
+  // An ssh that answers every call, so the watchdog starts without a real connection.
+  const ssh = join(dir, 'ssh');
+  await writeFile(
+    ssh,
+    `#!/usr/bin/env node\nprocess.stdout.write('watching\\n');\n`,
+  );
+  await chmod(ssh, 0o755);
   const store = new KeyStore({
     home: join(dir, 'home'),
     platform: 'linux',
@@ -273,7 +280,7 @@ async function setup(
     const compute = new Compute(root, {
       store,
       url: api.url,
-      programs: { keyscan },
+      programs: { keyscan, ssh },
       now: () => clock.now,
       onChange: (_lease, line) => lines.push(line),
     });

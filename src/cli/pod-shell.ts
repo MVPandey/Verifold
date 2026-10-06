@@ -37,6 +37,9 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
+/** The watchdog's folder on the pod. */
+const watchFolder = '/root/verifold/.watchdog';
+
 /** A value inside single quotes for the remote shell. */
 function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -230,6 +233,54 @@ export class PodShell {
     ];
   }
 
+  /**
+   * Start the watchdog on a pod. Each minute it stops the pod with the pod's
+   * own RunPod key when the lease ends, or when Verifold's heartbeat is older
+   * than 15 minutes, so a pod stops even when Verifold is gone. The watchdog
+   * ends with the container, so Verifold starts it after each start.
+   */
+  async watch(target: PodTarget, deadline: string): Promise<void> {
+    const end = Math.floor(Date.parse(deadline) / 1000);
+    if (!Number.isFinite(end)) fail('The lease has no end time.');
+    const script = `set -e
+mkdir -p ${watchFolder}
+touch ${watchFolder}/heartbeat
+echo ${end} > ${watchFolder}/deadline
+cat > ${watchFolder}/watchdog.sh <<'WATCH'
+while sleep 60; do
+  now=$(date +%s)
+  beat=$(stat -c %Y ${watchFolder}/heartbeat 2>/dev/null || echo 0)
+  if [ "$now" -ge "$(cat ${watchFolder}/deadline)" ] || [ $((now - beat)) -ge 900 ]; then
+    set -a; . /etc/rp_environment; set +a
+    runpodctl stop pod "$RUNPOD_POD_ID" || runpodctl pod stop "$RUNPOD_POD_ID"
+    sleep 60
+  fi
+done
+WATCH
+pkill -f ${watchFolder}/watchdog.sh || true
+nohup bash ${watchFolder}/watchdog.sh > ${watchFolder}/watchdog.log 2>&1 &
+echo watching
+`;
+    const result = await program(this.ssh, [...this.args(target), 'bash -s'], {
+      input: script,
+      timeoutMs: 60_000,
+      keep: 1024,
+    });
+    if (result.code !== 0 || !result.stdout.toString().includes('watching'))
+      fail(
+        `Verifold could not start the watchdog on the pod. ${result.stderr.trim().slice(0, 300)}`,
+      );
+  }
+
+  /** Tell the watchdog that Verifold still runs. */
+  async beat(target: PodTarget): Promise<void> {
+    await program(
+      this.ssh,
+      [...this.args(target), `touch ${watchFolder}/heartbeat`],
+      { timeoutMs: 30_000, keep: 1024 },
+    );
+  }
+
   /** Run a command in the task's folder on the pod, under `timeout`. The command goes on stdin. */
   async run(
     target: PodTarget,
@@ -338,15 +389,19 @@ export class PodShell {
         fail('A copy can hold at most 2,000 files and 200 MB.');
     };
     for (const path of chosen) await walk(path);
+    // macOS tar adds AppleDouble `._` files for extended attributes unless COPYFILE_DISABLE is set.
     const archive = spawn('tar', ['-cf', '-', '--', ...chosen], {
       cwd: folder,
-      env: harnessEnvironment(),
+      env: { ...harnessEnvironment(), COPYFILE_DISABLE: '1' },
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const remote = remoteFolder(task);
     const result = await program(
       this.ssh,
-      [...this.args(target), `mkdir -p ${remote} && tar -xf - -C ${remote}`],
+      [
+        ...this.args(target),
+        `mkdir -p ${remote} && tar -xf - --no-same-owner -C ${remote}`,
+      ],
       { input: archive.stdout, timeoutMs: 600_000, keep: 4096 },
     );
     if (result.code !== 0)
