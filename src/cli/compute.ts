@@ -224,6 +224,8 @@ export class Compute {
   private queue: Promise<unknown> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   private readonly shell: PodShell;
+  /** When Verifold last told each pod's watchdog that it runs. */
+  private readonly beats = new Map<string, number>();
   private readonly taskFolder:
     | ((task: string) => Promise<TaskPlace | null>)
     | undefined;
@@ -270,15 +272,43 @@ export class Compute {
       sshKey: (lease) => this.shell.newKey(lease.id),
       prepare: async (lease, pod) => {
         if (!pod.ssh) throw new Error('No SSH yet.');
+        const target = {
+          lease: lease.id,
+          host: pod.ssh.host,
+          port: pod.ssh.port,
+        };
         const logged = await new RunPod(await this.key(), this.url).logs(
           pod.id,
         );
-        return (await this.shell.pin(
-          { lease: lease.id, host: pod.ssh.host, port: pod.ssh.port },
-          logged,
-        )) === 'verified'
-          ? 'Its SSH host key matches the key in its log.'
-          : 'Its log shows no host key, so Verifold trusted the first key that it saw.';
+        const pinned =
+          (await this.shell.pin(target, logged)) === 'verified'
+            ? 'Its SSH host key matches the key in its log.'
+            : 'Its log shows no host key, so Verifold trusted the first key that it saw.';
+        // The watchdog is a backstop. A pod without it still works, and the history says so.
+        try {
+          await this.shell.watch(
+            target,
+            lease.deadline ??
+              new Date(Date.now() + lease.hours * 3_600_000).toISOString(),
+          );
+          this.beats.set(lease.id, Date.now());
+          return `${pinned} Its watchdog stops it at the end of the lease, or 15 minutes after Verifold stops answering.`;
+        } catch (error) {
+          return `${pinned} Its watchdog did not start: ${error instanceof Error ? error.message : 'unknown error'}`;
+        }
+      },
+      alive: async (lease) => {
+        if (
+          !lease.ssh ||
+          Date.now() - (this.beats.get(lease.id) ?? 0) < 120_000
+        )
+          return;
+        this.beats.set(lease.id, Date.now());
+        await this.shell.beat({
+          lease: lease.id,
+          host: lease.ssh.host,
+          port: lease.ssh.port,
+        });
       },
       beforeStop: (lease) => this.copyBack(lease),
       closed: (lease) => this.shell.forget(lease.id),

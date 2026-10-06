@@ -43,6 +43,13 @@ if (!fs.existsSync(identity) || !known.startsWith('[' + host + ']:' + port + ' '
   process.stderr.write('Host key verification failed.\\n');
   process.exit(255);
 }
+// The watchdog loop runs for the life of a pod, so the fake records its script instead of starting it.
+if (args.slice(at + 1).join(' ') === 'bash -s') {
+  fs.writeFileSync(process.env.FAKE_DIR + '/watchdog.txt', fs.readFileSync(0, 'utf8'));
+  fs.mkdirSync(process.env.FAKE_POD + '/verifold/.watchdog', { recursive: true });
+  process.stdout.write('watching\\n');
+  process.exit(0);
+}
 const remote = args.slice(at + 1).join(' ').replaceAll('/root/verifold', process.env.FAKE_POD + '/verifold').replace(/timeout \\d+ /, '');
 const result = spawnSync('bash', ['-c', remote], { stdio: ['inherit', 'inherit', 'inherit'] });
 process.exit(result.status ?? 1);
@@ -287,9 +294,18 @@ await test('a pod gets its own SSH key, and Verifold pins the host key from the 
   assert.equal(lease.state, 'ready');
   assert.match(
     lease.history.at(-1)?.text ?? '',
-    /host key matches the key in its log/,
+    /host key matches the key in its log\. Its watchdog stops it at the end of the lease/,
   );
-  void dir;
+  // The watchdog stops the pod with the pod's own key at the deadline, or 15 minutes after the last heartbeat.
+  const watchdog = await readFile(join(dir, 'watchdog.txt'), 'utf8');
+  assert.match(
+    watchdog,
+    new RegExp(
+      `echo ${Math.floor(Date.parse(lease.deadline ?? '') / 1000)} > /root/verifold/\\.watchdog/deadline`,
+    ),
+  );
+  assert.match(watchdog, /\$\(\(now - beat\)\) -ge 900/);
+  assert.match(watchdog, /runpodctl stop pod "\$RUNPOD_POD_ID"/);
 });
 
 await test('a task runs commands and jobs on its pod and copies files both ways, inside its writable paths', async (t) => {
