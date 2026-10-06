@@ -736,6 +736,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     attempts: [],
     assignment: {
       by: 'coordinator',
+      reason: 'Created by the coordinator: The plan needs it.',
       title: `Title of ${id}`,
       objective: 'Work.',
       inputs: [],
@@ -1172,4 +1173,140 @@ await test('desk shows long text as its lead with Show all, and short text in fu
     /<details class="more" id="event-20261004T120000000Z-abcdef12-1"><summary><span class="lead">Done\.<\/span>[\s\S]*<strong>Done\.<\/strong>/,
   );
   assert.doesNotMatch(html, /id="event-20261004T120000000Z-abcdef12-0"/);
+});
+
+await test('desk maps the tasks with what each agent does now and why', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'proof',
+        title: 'Proof search',
+        recommendation: 'Pilot.',
+        gates: ['A check.'],
+      },
+    ],
+    selectedId: 'proof',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const recent = new Date(Date.now() - 60_000).toISOString();
+  const quiet = new Date(Date.now() - 20 * 60_000).toISOString();
+  const task = (
+    id: string,
+    state: string,
+    dependencies: string[],
+    reason: string,
+    extra: object = {},
+  ): object => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: recent,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason,
+      title: `Title ${id}`,
+      objective: 'Work on it. Then report.',
+      inputs: [],
+      writable: ['results'],
+      output: 'A report.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies,
+    },
+    ...extra,
+  });
+  const worker = (at: string): object => ({
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261004T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'running',
+      mode: 'strict',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: recent,
+      task: { id: 'task-2', claim: 'c' },
+      requests: [],
+      commands: [],
+      events: [
+        { at, kind: 'tool', text: 'Claude Code ran Bash: python bench.py' },
+      ],
+    },
+  });
+  const list = [
+    task(
+      'task-1',
+      'done',
+      [],
+      'Created by the coordinator: A baseline comes first.',
+    ),
+    task(
+      'task-2',
+      'running',
+      ['task-1'],
+      'Created by the coordinator: The checks need timings.',
+      {
+        attempts: [
+          {
+            number: 1,
+            session: '20261004T120000000Z-abcdef12',
+            startedAt: recent,
+            versions: [],
+            restrictions: [],
+            outcome: null,
+            note: null,
+          },
+        ],
+      },
+    ),
+    task('task-3', 'open', ['task-2'], 'Created'),
+  ];
+  const desk = (at: string, view: DeskView): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: worker(at),
+        workers: [worker(at)],
+        controllable: true,
+        tasks: { list, selected: null, idle: [], messages: [] },
+      } as never,
+      { view, panel: null },
+    ).html;
+  const map = desk(recent, 'tasks');
+  // The objective starts the map. Each task sits in the column of its depth, with the arrow source named.
+  assert.match(
+    map,
+    /data-node="objective"><span class="map-label">Objective<\/span><span class="map-title">Proof search<\/span>/,
+  );
+  assert.match(
+    map,
+    /data-node="task-1" data-state="done" data-from="objective"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-2" data-state="running" data-from="task-1"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-3" data-state="open" data-from="task-2"/,
+  );
+  // A running task says whose turn it is, what its agent does now, and why the task exists.
+  assert.match(
+    map,
+    /Agent&#39;s turn<\/span><span class="map-now"><span class="map-label">Now<\/span> Claude Code ran Bash: python bench\.py<\/span><span class="map-why"><span class="map-label">Why<\/span> The checks need timings\./,
+  );
+  // A task that the person wrote has the start of its objective as its reason.
+  assert.match(
+    map,
+    /Waits for Title task-2<\/span><span class="map-why"><span class="map-label">Why<\/span> Work on it\./,
+  );
+  // A quiet agent shows how long it has been quiet.
+  assert.match(desk(quiet, 'tasks'), /Now<\/span> No update in 20 min/);
+  // Home shows each running task in Team now.
+  assert.match(
+    desk(recent, 'home'),
+    /Team now[\s\S]*Title task-2[\s\S]*Now<\/span> Claude Code ran Bash: python bench\.py/,
+  );
 });

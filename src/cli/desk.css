@@ -1728,6 +1728,166 @@ body[data-detail='details'] .summary-only {
   border-left: 3px dashed var(--control);
 }
 
+/* The plan as a map: the objective, then a column for each depth. Arrows come from what a task waits for. */
+.view.wide {
+  max-width: 1180px;
+}
+.map {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 44px;
+  overflow-x: auto;
+  padding: 4px 2px 12px;
+}
+.map-col {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.map-root {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #4c1d95, #7c3aed 60%, #b794f6);
+  color: #fff;
+}
+.map-root .map-label {
+  color: rgb(255 255 255 / 85%);
+}
+.map-box {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-weight: 500;
+  text-align: left;
+}
+.map-box:hover,
+.map-box[aria-pressed='true'] {
+  border-color: var(--violet);
+}
+.map-box[aria-pressed='true'] {
+  box-shadow: inset 3px 0 0 var(--violet);
+}
+.map-box[data-state='running'],
+.map-box[data-state='claimed'] {
+  border-color: var(--tint-line);
+  box-shadow: 0 0 0 3px var(--lavender);
+}
+.map-box[data-state='done'],
+.map-box[data-state='cancelled'] {
+  background: var(--sunken);
+}
+.map-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.map-turn {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.map-turn.yours {
+  color: var(--needs);
+}
+.map-turn.yours::before {
+  content: '◆ ';
+  content: '◆ ' / '';
+}
+.map-now,
+.map-why {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12.5px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.map-why {
+  color: var(--muted);
+}
+.map-label {
+  margin-right: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.map-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.map-links {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.map-links path {
+  fill: none;
+  stroke: var(--control);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+.map-links path.done {
+  stroke: var(--violet);
+  stroke-dasharray: none;
+}
+.map-links marker path {
+  fill: var(--control);
+  stroke: none;
+}
+/* Team now on Home. */
+.now-list {
+  list-style: none;
+  padding: 0;
+}
+.now-list button {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 6px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  font-weight: 500;
+  text-align: left;
+}
+.now-list li:first-child button {
+  border-top: 0;
+}
+.now-list button:hover {
+  background: var(--sunken);
+}
+.now-list .who .line {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 /* ---------- Records ---------- */
 .table {
   overflow-x: auto;
@@ -2406,6 +2566,17 @@ body.terminal-page {
   .task-fields,
   .review-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* The map stacks in reading order, and each box names what it waits for. */
+  .map {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .map-col {
+    width: 100%;
+  }
+  .map-links {
+    display: none;
   }
   .event {
     grid-template-columns: minmax(0, 1fr) auto;
