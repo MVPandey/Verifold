@@ -8,6 +8,7 @@ import {
   type KeyStatus,
 } from './credentials.ts';
 import { RunPod, type GpuOffer } from './runpod.ts';
+import { Leases, isOpen, type Budget, type Lease } from './leases.ts';
 import { SessionActionError } from './session.ts';
 
 /** Limits for pods in one project. Only the person changes them. Without a spend limit, pods stay off. */
@@ -47,9 +48,14 @@ export interface ComputeView {
   /** The keyring of this computer, or null when the key can go only into a file. */
   readonly keyring: 'keychain' | 'secret-service' | null;
   readonly settings: ComputeSettings;
-  /** Secure Cloud GPU types, after the person asked for them. */
+  /** Secure Cloud GPU types, after the person or the coordinator asked for them. */
   readonly gpus: readonly GpuOffer[] | null;
   readonly gpusAt: string | null;
+  /** Every lease, oldest first. */
+  readonly leases: readonly Lease[];
+  readonly budget: Budget;
+  /** The last problem that a check of the pods met. */
+  readonly problem: { readonly at: string; readonly text: string } | null;
 }
 
 function fail(message: string): never {
@@ -156,7 +162,7 @@ export class Compute {
   private readonly root: string;
   private readonly store: KeyStore;
   private readonly url: string | undefined;
-  private state: ComputeView = {
+  private state: Omit<ComputeView, 'leases' | 'budget' | 'problem'> = {
     key: null,
     keyring: null,
     settings: computeDefaults,
@@ -164,15 +170,34 @@ export class Compute {
     gpusAt: null,
   };
   private queue: Promise<unknown> = Promise.resolve();
+  private timer: NodeJS.Timeout | undefined;
+  /** The pod leases of the project. The desk and the coordinator act on them. */
+  readonly leases: Leases;
 
-  /** `url` is the RunPod API origin. Tests use a fake server and a fake key store. */
+  /**
+   * `url` is the RunPod API origin. Tests use a fake server, a fake key store,
+   * and a clock. `onChange` gets one line for each lease change.
+   */
   constructor(
     root: string,
-    options: { readonly store?: KeyStore; readonly url?: string } = {},
+    options: {
+      readonly store?: KeyStore;
+      readonly url?: string;
+      readonly onChange?: (lease: Lease, line: string) => void;
+      readonly now?: () => number;
+    } = {},
   ) {
     this.root = root;
     this.store = options.store ?? new KeyStore();
     this.url = options.url;
+    this.leases = new Leases(root, {
+      client: async () => new RunPod(await this.key(), this.url),
+      settings: () => this.state.settings,
+      offer: async (gpu) =>
+        (await this.catalog()).find((entry) => entry.id === gpu) ?? null,
+      ...(options.onChange ? { onChange: options.onChange } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
   }
 
   private get file(): string {
@@ -201,10 +226,47 @@ export class Compute {
       key: await this.store.status(),
       keyring: await this.store.osPlace(),
     };
+    await this.leases.load();
   }
 
   view(): ComputeView {
-    return this.state;
+    return {
+      ...this.state,
+      leases: this.leases.list(),
+      budget: this.leases.budget(),
+      problem: this.leases.lastProblem(),
+    };
+  }
+
+  /** Check the pods every 30 seconds, until close(). */
+  watch(): void {
+    this.timer ??= setInterval(() => {
+      this.leases.poll().catch(() => {
+        /* poll() keeps its problem for the view. */
+      });
+    }, 30_000);
+    this.timer.unref();
+  }
+
+  /** Verifold stops: the pods stop, so billing stops. Returns a line for each pod that did not stop. */
+  async close(): Promise<string[]> {
+    clearInterval(this.timer);
+    this.timer = undefined;
+    return this.leases.close();
+  }
+
+  /** The Secure Cloud GPU types, read again when they are older than 10 minutes. */
+  async catalog(): Promise<readonly GpuOffer[]> {
+    const { gpus, gpusAt } = this.state;
+    if (gpus && gpusAt && Date.now() - Date.parse(gpusAt) < 600_000)
+      return gpus;
+    const fresh = await new RunPod(await this.key(), this.url).gpus();
+    this.state = {
+      ...this.state,
+      gpus: fresh,
+      gpusAt: new Date().toISOString(),
+    };
+    return fresh;
   }
 
   /** Run one change after the earlier ones. */
@@ -253,6 +315,10 @@ export class Compute {
   /** Remove the key from this computer. It stays valid at RunPod until the person revokes it. */
   removeKey(): Promise<void> {
     return this.serial(async () => {
+      if (this.leases.list().some(isOpen))
+        fail(
+          'End the open leases first. Verifold needs the key to stop and delete their pods.',
+        );
       await this.store.remove();
       this.state = { ...this.state, key: null, gpus: null, gpusAt: null };
     });

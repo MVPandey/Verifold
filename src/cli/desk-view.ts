@@ -16,6 +16,14 @@ import type { CheckResult, Results } from './results.ts';
 import type { ComputeView } from './compute.ts';
 import { placeNames } from './credentials.ts';
 import {
+  isOpen,
+  isRunning,
+  maxCost,
+  spent,
+  usd,
+  type Lease,
+} from './leases.ts';
+import {
   coordinatorLimits,
   directionObjective,
   type CoordinatorView,
@@ -889,7 +897,41 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           body: open,
         });
     }
+  const compute = live.compute;
+  if (compute)
+    for (const lease of compute.leases) {
+      if (lease.state === 'requested')
+        items.push({
+          key: `lease:${lease.id}`,
+          view: 'compute',
+          kind: 'GPU pod',
+          title: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod`,
+          why: 'A pod costs money from the moment that RunPod creates it, so only you approve it. Nothing is billed before you do.',
+          since: lease.requestedAt,
+          body: leaseRequest(lease, compute),
+        });
+      if (lease.notice)
+        items.push({
+          key: `lease-notice:${lease.id}:${lease.history.at(-1)?.at ?? ''}`,
+          view: 'compute',
+          kind: 'GPU pod',
+          title: lease.notice,
+          why: 'Verifold acted on a pod. Dismiss this when you have read it.',
+          since: lease.history.at(-1)?.at ?? null,
+          body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,
+        });
+    }
   return items;
+}
+
+/** What the person approves for a lease: its cost, what is left after it, what the pod allows, and the coordinator's reason. */
+function leaseRequest(lease: Lease, compute: ComputeView): string {
+  const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
+  const left = compute.budget.left;
+  return `<dl class="facts"><div><dt>For</dt><dd>${lease.tasks.map((task) => e(task)).join(', ')}</dd></div><div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
+  <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'Its reason' : 'Your reason'}</span> ${e(lease.reason)}</div>
+  <p class="fine">The pod runs any command as root, with internet access. Files that a task copies to it leave this computer. RunPod erases the disk of the pod when the pod stops. Verifold stops the pod after ${compute.settings.idleMinutes} idle minutes and when Verifold stops, and deletes it at the end of the lease or at your spend limit.</p>
+  <div class="actions"><button type="button" class="primary" data-action="compute-lease-approve" data-lease="${e(lease.id)}">Approve, up to ${usd(cost)}</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny</button></div>`;
 }
 
 /** The items that wait for the person, each with why it is theirs and its answer. */
@@ -907,6 +949,14 @@ function renderNeedsView(items: readonly Need[]): string {
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Needs you</h1><p>${items.length ? `${items.length} ${items.length === 1 ? 'item waits' : 'items wait'} for you` : 'Nothing waits for you'}</p></div>
   <p class="notify"><span id="notify-state"></span><button type="button" id="notify" hidden>Turn on desktop notifications</button></p>
   ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p><strong>Nothing needs you.</strong></p><p class="fine">An item shows here when only you can settle it: a plan to approve, a direction to choose, a permission request, an objection that comes to you, or work that stopped. It leaves when you settle it.</p></section>'}</div>`;
+}
+
+/** One line on Home while pods run, with the cost against the limit. */
+function renderPodsLine(compute: ComputeView | undefined): string {
+  const running = compute?.leases.filter(isRunning).length ?? 0;
+  if (!compute || !running) return '';
+  const { budget, settings } = compute;
+  return `<section class="card pods-line"><p>${running === 1 ? '1 pod runs' : `${running} pods run`} at ${usd(budget.rate)} per hour. Spent ${usd(budget.spent)} of ${usd(settings.limitUsd ?? 0)}.</p><button type="button" data-view="compute">Open Compute</button></section>`;
 }
 
 /** What the coordinator does after a direction. Needs you lists what waits for the person. */
@@ -1447,6 +1497,49 @@ function renderResultsView(workspace: Workspace, live: DeskSession): string {
   }</div>`;
 }
 
+const leaseStates: Record<Lease['state'], string> = {
+  requested: 'Waits for you',
+  denied: 'Denied',
+  starting: 'Starting',
+  ready: 'Ready',
+  stopped: 'Stopped',
+  ended: 'Ended',
+  failed: 'Failed',
+};
+
+/** The pods card: what is spent and reserved, the open leases with their controls, and earlier leases. */
+function renderPods(compute: ComputeView): string {
+  const { budget, settings } = compute;
+  const now = Date.now();
+  const row = (lease: Lease): string => {
+    const actions =
+      lease.state === 'ready' || lease.state === 'starting'
+        ? `<button type="button" data-action="compute-lease-stop" data-lease="${e(lease.id)}">Stop</button><button type="button" data-action="compute-lease-end" data-lease="${e(lease.id)}">End</button>`
+        : lease.state === 'stopped'
+          ? `<button type="button" data-action="compute-lease-start" data-lease="${e(lease.id)}">Start</button><button type="button" data-action="compute-lease-end" data-lease="${e(lease.id)}">End</button>`
+          : lease.state === 'requested'
+            ? '<button type="button" data-view="needs">Decide</button>'
+            : '';
+    const idle =
+      lease.state === 'ready' && lease.activeAt
+        ? Math.floor((now - Date.parse(lease.activeAt)) / 60_000)
+        : 0;
+    return `<tr data-state="${lease.state}"><th scope="row">${e(lease.id)}</th><td>${lease.tasks.map((task) => e(task)).join(', ')}</td><td>${e(lease.gpu)}</td><td>${e(leaseStates[lease.state])}${idle >= 5 ? `<span class="fine">Idle ${idle} min</span>` : ''}</td><td>${usd(spent(lease, now))}${isRunning(lease) ? `<span class="fine">${usd(lease.rate)} per hour</span>` : ''}</td><td>${lease.deadline && isOpen(lease) ? e(since(lease.deadline)) : lease.end ? e(lease.end.reason) : '—'}</td><td class="row-actions">${actions}</td></tr>`;
+  };
+  const current = compute.leases.filter(
+    (lease) => isOpen(lease) || lease.state === 'requested',
+  );
+  const earlier = compute.leases.filter((lease) => !current.includes(lease));
+  const head =
+    '<thead><tr><th scope="col">Lease</th><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
+  return `<section class="card" aria-labelledby="pods-title"><div class="section-title"><h2 id="pods-title">Pods</h2>${budget.rate ? `<span class="count">${usd(budget.rate)} per hour now</span>` : ''}</div>
+  ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for open leases ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
+  ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
+  ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU, and you approve it in Needs you.</p>`}
+  ${earlier.length ? `<details id="earlier-leases"><summary>Earlier leases (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}
+  <p class="fine">Costs count each running minute at the billed rate, with the disk. When RunPod's bill is higher, Verifold uses it.</p></section>`;
+}
+
 const stockNames = {
   HIGH: 'High',
   MEDIUM: 'Medium',
@@ -1501,6 +1594,7 @@ function renderComputeView(compute: ComputeView): string {
             '',
           )}</tbody></table></div><p class="fine">List prices for one GPU on Secure Cloud, from RunPod at ${e(since(compute.gpusAt ?? ''))}.</p><div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the GPU choice</button><button type="button" data-action="compute-gpus">Refresh the prices</button></div>`;
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Compute</h1><p>GPU pods on RunPod for your tasks</p></div>
+  ${renderPods(compute)}
   <section class="card" aria-labelledby="key-title"><h2 id="key-title">RunPod key</h2>${keyCard}</section>
   <section class="card" aria-labelledby="limits-title"><div class="section-title"><h2 id="limits-title">Limits</h2>${settings.limitUsd !== null ? `<span class="count">$${settings.limitUsd} for this project</span>` : ''}</div>
   ${settings.limitUsd === null ? '<p class="notice">Pods stay off until you set a spend limit.</p>' : ''}
@@ -1971,7 +2065,7 @@ function renderHome(
       ? renderCoordinatorHome(coordinator, messages)
       : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${renderTeamNow(tasks, live.workers ?? (live.session ? [live.session] : []))}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${renderTeamNow(tasks, live.workers ?? (live.session ? [live.session] : []))}${renderPodsLine(live.compute)}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */

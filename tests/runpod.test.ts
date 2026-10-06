@@ -321,6 +321,9 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
       settings: computeDefaults,
       gpus: null,
       gpusAt: null,
+      leases: [],
+      budget: { limit: null, spent: 0, reserved: 0, left: null, rate: 0 },
+      problem: null,
     },
   };
   let html = renderDesk(snapshot as never, undefined, null, live, frame).html;
@@ -368,6 +371,9 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
           },
         ],
         gpusAt: new Date().toISOString(),
+        leases: [],
+        budget: { limit: 25, spent: 0, reserved: 0, left: 25, rate: 0 },
+        problem: null,
       },
     },
     frame,

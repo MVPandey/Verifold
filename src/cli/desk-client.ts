@@ -744,6 +744,8 @@ function computeRequest(button: HTMLElement): Record<string, unknown> {
         (box instanceof HTMLInputElement && box.checked),
     };
   }
+  if (action.startsWith('compute-lease-'))
+    return { action, lease: button.dataset.lease };
   if (action !== 'compute-settings') return { action };
   // Without the GPU table, the saved GPU list stays.
   const boxes = Array.from(
@@ -866,6 +868,7 @@ async function act(button: HTMLElement): Promise<void> {
     ['decision', button.dataset.decision],
     ['check', button.dataset.check],
     ['result', button.dataset.result],
+    ['lease', button.dataset.lease],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
