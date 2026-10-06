@@ -842,3 +842,144 @@ await test('a question from a task panel names its task for the coordinator', as
   assert.equal(await view('?since=yesterday'), 400);
   assert.equal(await view(`?since=${new Date().toISOString()}`), 200);
 });
+
+await test('the coordinator reports checks with accepted evidence and proposes the answer, and the person rules and signs off', async (t) => {
+  const { root, tasks, workers, coordinator, script, results, turns } =
+    await team(t);
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'bidir',
+        title: 'Bidirectional search',
+        recommendation: 'A bounded pilot.',
+        gates: [
+          'The notes name both baselines.',
+          'Settled nodes fall by 30 percent.',
+        ],
+      },
+    ],
+    selectedId: 'bidir',
+  }));
+  await script([
+    [
+      { name: 'verifold_create_task', arguments: prior },
+      { name: 'verifold_start_task', arguments: { task: 'task-1' } },
+    ],
+    [
+      {
+        name: 'verifold_accept',
+        arguments: {
+          task: 'task-1',
+          version: 1,
+          reason: 'It lists both baselines.',
+        },
+      },
+      {
+        name: 'verifold_report_check',
+        arguments: {
+          check: 1,
+          result: 'passed',
+          value: 'Both baselines are named.',
+          evidence: ['literature/prior/notes.md'],
+          reason: 'The accepted notes name both.',
+        },
+      },
+      {
+        name: 'verifold_report_check',
+        arguments: {
+          check: 2,
+          result: 'passed',
+          value: 'Faster.',
+          evidence: ['literature/prior/draft.md'],
+          reason: 'A file that nobody accepted.',
+        },
+      },
+      {
+        name: 'verifold_report_check',
+        arguments: {
+          check: 2,
+          result: 'judgement',
+          value: '7 of 9 groups gain 30 percent.',
+          evidence: ['literature/prior/notes.md'],
+          question: 'Does a gain in 7 of 9 groups count as a pass?',
+          reason: 'The check does not say whether every group must gain.',
+        },
+      },
+      {
+        name: 'verifold_propose_answer',
+        arguments: {
+          statement: 'Bidirectional search settles fewer nodes in most groups.',
+          claims: [
+            {
+              text: 'Both baselines are named.',
+              evidence: ['literature/prior/notes.md'],
+            },
+          ],
+          reason: 'Every check has a result.',
+        },
+      },
+    ],
+  ]);
+  await coordinator.start({
+    objective: 'Compare two baselines.',
+    host: 'claude',
+    context: 'Research brief:\nSparse graphs.',
+    guided: false,
+  });
+  await turns(1);
+  await work(root, tasks, workers, 'task-1', {
+    'literature/prior/notes.md': 'Dijkstra and bidirectional Dijkstra.\n',
+  });
+  await turns(2);
+  const answers = (await results()).slice(-5);
+  assert.deepEqual(
+    answers.map((answer) => [answer.call, answer.result.isError]),
+    [
+      ['verifold_accept', false],
+      ['verifold_report_check', false],
+      ['verifold_report_check', true],
+      ['verifold_report_check', false],
+      ['verifold_propose_answer', false],
+    ],
+  );
+  assert.equal(
+    answers[1]?.result.content[0]?.text,
+    'Recorded check 1: passed.',
+  );
+  // Evidence must be a file that someone accepted.
+  assert.match(
+    answers[2]?.result.content[0]?.text ?? '',
+    /Accepted files: literature\/prior\/notes\.md/,
+  );
+  assert.match(
+    answers[3]?.result.content[0]?.text ?? '',
+    /needs the person's judgement\. The person decides it\./,
+  );
+  const view = coordinator.view();
+  assert.equal(view?.results?.direction, 'bidir');
+  assert.equal(
+    view?.results?.answer?.statement,
+    'Bidirectional search settles fewer nodes in most groups.',
+  );
+  // The person settles the judgement, then signs off. The coordinator gets each decision.
+  await assert.rejects(
+    coordinator.decideAnswer('accepted', ''),
+    /Settle the open judgements first/,
+  );
+  await coordinator.ruleCheck(
+    2,
+    'partial',
+    'Seven of nine groups is not every group.',
+  );
+  await coordinator.decideAnswer('accepted', '');
+  assert.deepEqual(
+    (await tasks.messageList())
+      .filter((message) => message.from === 'person')
+      .map((message) => message.text),
+    [
+      'My ruling on check 2 (Settled nodes fall by 30 percent.): partly passed. Seven of nine groups is not every group.',
+      'I accept the answer.',
+    ],
+  );
+});

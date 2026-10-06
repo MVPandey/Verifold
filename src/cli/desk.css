@@ -35,6 +35,7 @@
   --caution-bg: #fff7ed;
   --caution-line: #f3c9a5;
   --green: #1e6b47;
+  --ok-bg: #e5f4ec;
   --red: #a3263d;
   --masthead: linear-gradient(180deg, #efeaf8 0%, var(--paper) 100%);
   --contour: rgb(76 29 149 / 16%);
@@ -71,6 +72,7 @@
     --caution-bg: #2a1a10;
     --caution-line: #6b4426;
     --green: #86d3a8;
+    --ok-bg: #14271d;
     --red: #ff9fb0;
     --masthead: linear-gradient(180deg, #221833 0%, var(--paper) 100%);
     --contour: rgb(183 148 246 / 16%);
@@ -100,6 +102,7 @@
   --caution-bg: #2a1a10;
   --caution-line: #6b4426;
   --green: #86d3a8;
+  --ok-bg: #14271d;
   --red: #ff9fb0;
   --masthead: linear-gradient(180deg, #221833 0%, var(--paper) 100%);
   --contour: rgb(183 148 246 / 16%);
@@ -1955,6 +1958,119 @@ body[data-detail='details'] .summary-only {
   -webkit-line-clamp: 2;
 }
 
+/* Results: each check with its result. Green marks only a pass, red only a failure, and amber only a judgement that waits for you. */
+.checks {
+  list-style: none;
+  padding: 0;
+}
+.check-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.check-row:first-child {
+  border-top: 0;
+}
+.check-num {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sunken);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.check-body {
+  min-width: 0;
+}
+.check-body > * + * {
+  margin-top: 6px;
+}
+.check-text {
+  font-weight: 650;
+}
+.check-result {
+  padding: 2px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.check-row[data-result='passed'] .check-result {
+  border-color: var(--green);
+  background: var(--ok-bg);
+  color: var(--green);
+}
+.check-row[data-result='passed'] .check-result::before {
+  content: '✓ ';
+  content: '✓ ' / '';
+}
+.check-row[data-result='failed'] .check-result {
+  border-color: var(--red);
+  color: var(--red);
+}
+.check-row[data-result='failed'] .check-result::before {
+  content: '✕ ';
+  content: '✕ ' / '';
+}
+.check-row[data-result='partial'] .check-result {
+  color: var(--ink);
+}
+.check-row[data-result='partial'] .check-result::before {
+  content: '◐ ';
+  content: '◐ ' / '';
+}
+.check-row[data-result='judgement'] .check-result,
+.check-row[data-result='judgement'] .check-num {
+  border-color: var(--needs-line);
+  background: var(--needs-bg);
+  color: var(--needs);
+}
+.check-row[data-result='judgement'] .check-result::before {
+  content: '◆ ';
+  content: '◆ ' / '';
+}
+.check-body code,
+.claims code {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--sunken);
+}
+.ruling {
+  font-weight: 600;
+}
+.ruling-question {
+  color: var(--needs);
+}
+.statement {
+  font-size: 15px;
+  font-weight: 600;
+}
+.claims {
+  padding-left: 20px;
+}
+.claims li + li {
+  margin-top: 8px;
+}
+.notice-ok {
+  padding: 6px 10px;
+  border-left: 3px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  background: var(--ok-bg);
+  font-size: 13px;
+}
+.sign-off > * + * {
+  margin-top: 8px;
+}
+
 /* ---------- Records ---------- */
 .table {
   overflow-x: auto;
@@ -2633,6 +2749,14 @@ body.terminal-page {
   .task-fields,
   .review-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* A check's result goes under its text. */
+  .check-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+  .check-result {
+    grid-column: 2;
+    justify-self: start;
   }
   /* Each direction becomes a card. */
   .compare thead {
