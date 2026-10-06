@@ -39,6 +39,7 @@ import {
   type TaskManager,
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
+import type { Compute } from './compute.ts';
 import { loadWorkspace } from './storage.ts';
 
 export interface DeskServer {
@@ -53,6 +54,7 @@ export interface DeskServer {
     research: ResearchRunner,
     tasks: TaskManager,
     coordinator: Coordinator,
+    compute: Compute,
   ): Promise<void>;
   readonly closed: Promise<void>;
 }
@@ -148,6 +150,32 @@ async function terminalSupport(): Promise<true | string> {
   return typeof library === 'string' ? library : true;
 }
 
+/** Compute actions. The key comes only in a request body, and no reply or record holds it. */
+async function computeAction(
+  compute: Compute,
+  body: Record<string, unknown>,
+): Promise<number> {
+  switch (body.action) {
+    case 'compute-key-save':
+      await compute.setKey(body.key, body.file);
+      return 200;
+    case 'compute-key-check':
+      await compute.checkKey();
+      return 200;
+    case 'compute-key-remove':
+      await compute.removeKey();
+      return 200;
+    case 'compute-gpus':
+      await compute.refreshGpus();
+      return 200;
+    case 'compute-settings':
+      await compute.saveSettings(body);
+      return 200;
+    default:
+      return 400;
+  }
+}
+
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionPool | undefined,
@@ -155,6 +183,7 @@ async function act(
   setup: SetupBridge | undefined,
   tasks: TaskManager | undefined,
   coordinator: Coordinator | undefined,
+  compute: Compute | undefined,
   root: string,
   body: Record<string, unknown>,
 ): Promise<number> {
@@ -196,6 +225,12 @@ async function act(
     await taskAction(tasks, body);
     return 200;
   }
+  if (
+    compute &&
+    typeof body.action === 'string' &&
+    body.action.startsWith('compute-')
+  )
+    return computeAction(compute, body);
   if (
     coordinator &&
     tasks &&
@@ -308,6 +343,7 @@ export async function startDesk(
   setup?: SetupBridge,
   tasks?: TaskManager,
   coordinator?: Coordinator,
+  compute?: Compute,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
@@ -483,6 +519,7 @@ export async function startDesk(
             setup,
             tasks,
             coordinator,
+            compute,
             project ?? '',
             body,
           );
@@ -812,6 +849,7 @@ export async function startDesk(
             paused: sessions?.paused() ?? [],
             ...(research ? { research: research.view() } : {}),
             ...(coordinator ? { coordinator: coordinator.view() } : {}),
+            ...(compute ? { compute: compute.view() } : {}),
             ...(tasks
               ? {
                   tasks: {
@@ -865,13 +903,14 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner, taskManager, lead) => {
+    attach: async (next, owner, runner, taskManager, lead, pods) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
       research = runner;
       tasks = taskManager;
       coordinator = lead;
+      compute = pods;
       project = resolved;
     },
     closed,
