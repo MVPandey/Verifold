@@ -1,9 +1,9 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import { markdownHtml } from './markdown.ts';
-import type { Workspace } from './contracts.ts';
+import type { Candidate, Workspace } from './contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
-import type { ResearchView } from './research-runner.ts';
+import type { ResearchSource, ResearchView } from './research-runner.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import {
   forPerson,
@@ -76,6 +76,7 @@ export const deskPanels = [
   'task',
   'worker',
   'attempt',
+  'direction',
   'coordinator',
   'new-task',
   'new-session',
@@ -88,6 +89,8 @@ export interface DeskFrame {
   readonly panel: DeskPanel | null;
   /** When the page went to the background for a while. Home lists what changed after it. */
   readonly since?: string;
+  /** The direction that the direction panel shows. */
+  readonly direction?: string;
 }
 
 /** The frame from the query of /api/view, or null when a value is unknown. No view means Home. */
@@ -95,6 +98,7 @@ export function parseFrame(
   view: string | null,
   panel: string | null,
   since: string | null = null,
+  direction: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -102,8 +106,16 @@ export function parseFrame(
     since !== null &&
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,3})?Z$/.test(since) &&
     Number.isFinite(Date.parse(since));
-  return shown && (panel === null || opened) && (since === null || time)
-    ? { view: shown, panel: opened, ...(since ? { since } : {}) }
+  // Direction IDs are lowercase slugs, as the research report contract says.
+  const idea =
+    direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
+  return shown && (panel === null || opened) && (since === null || time) && idea
+    ? {
+        view: shown,
+        panel: opened,
+        ...(since ? { since } : {}),
+        ...(direction ? { direction } : {}),
+      }
     : null;
 }
 
@@ -1362,24 +1374,82 @@ function findingsBody(report: ResearchReport, attempt: string): string {
   return `<div class="prose">${moreMd(`findings-${attempt}`, report.summary, 400)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(attempt)}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>`;
 }
 
+/** A web address as a link with its host and path. Text that is not an http(s) address stays text. */
+function link(address: string): string {
+  try {
+    const url = new URL(address);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      throw new Error();
+    const shown = `${url.hostname}${url.pathname === '/' ? '' : url.pathname}`;
+    return `<a href="${e(url.href)}" target="_blank" rel="noopener noreferrer">${e(shown.length > 80 ? `${shown.slice(0, 80)}…` : shown)}</a>`;
+  } catch {
+    return `<span>${e(address)}</span>`;
+  }
+}
+
+/** The searches and pages of the current research step, newest first. They come from its transcript and stay in the desk. */
+function renderSources(
+  sources: readonly ResearchSource[],
+  running: boolean,
+): string {
+  if (!sources.length) return '';
+  const read = sources.filter((source) => source.kind === 'read').length;
+  const searched = sources.length - read;
+  const shown = [...sources].reverse().slice(0, 15);
+  return `<section class="card" aria-labelledby="sources-live-title"><div class="section-title"><h2 id="sources-live-title">${running ? 'Sources so far' : 'Sources of the latest step'}</h2><span class="count">${searched} ${searched === 1 ? 'search' : 'searches'}, ${read} ${read === 1 ? 'page' : 'pages'} read</span></div><ul class="sources-live">${shown
+    .map(
+      (source) =>
+        `<li><span class="chip">${source.kind === 'read' ? 'Read' : 'Searched'}</span>${source.kind === 'read' ? link(source.text) : `<span>${e(source.text)}</span>`}<time datetime="${e(source.at)}">${e(clock(source.at))}</time></li>`,
+    )
+    .join(
+      '',
+    )}</ul>${sources.length > shown.length ? `<p class="fine">The latest ${shown.length} of ${sources.length}.</p>` : ''}</section>`;
+}
+
+/** Research can still take a choice of direction: no direction yet, and no step runs. */
+function choosable(workspace: Workspace, live: DeskSession): boolean {
+  return (
+    live.research !== undefined &&
+    !live.research.running &&
+    !workspace.selectedId &&
+    workspace.research?.phase === 'directions'
+  );
+}
+
+/** One direction in full: its case, its checks, its sources, and the choice. */
+function directionPanel(
+  idea: Candidate,
+  workspace: Workspace,
+  live: DeskSession,
+): Panel {
+  const chosen = workspace.selectedId === idea.id;
+  return {
+    kind: 'Direction',
+    title: idea.title,
+    sub: `<span class="status ${chosen ? 'active' : 'muted'}">${chosen ? 'Chosen' : workspace.selectedId ? 'Not chosen' : 'Proposed'}</span>`,
+    body: `<div class="md">${markdownHtml(idea.recommendation)}</div>
+    <h3>Its checks</h3><ul class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul>
+    <p class="fine">The coordinator gets these checks with the direction, and plans tasks that give evidence for them.</p>
+    ${idea.sources?.length ? `<h3>Its sources</h3><ol class="sources">${idea.sources.map((source) => `<li>${link(source)}</li>`).join('')}</ol>` : ''}
+    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div><p class="fine">The choice locks it for this project. Then the coordinator plans its tasks.</p>` : ''}`,
+  };
+}
+
 /** The research record: the decision, the live step, the directions, the scope, the findings, and the brief. */
 function renderResearchView(
   workspace: Workspace,
   live: DeskSession,
   report: ResearchReport | null,
   chosen: DeskAttempt | undefined,
+  shown: string | undefined,
 ): string {
   const research = workspace.research;
-  const choosable =
-    live.research !== undefined &&
-    !live.research.running &&
-    !workspace.selectedId &&
-    research?.phase === 'directions';
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Research</h1><p>${e(phaseLabel(research?.phase))}</p></div>
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
+  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Its case</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</th><td data-label="Its case">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
   ${renderResearch(live.research, research?.latestAttempt)}
-  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Research directions</h2><span class="count">${workspace.candidates.length} proposed</span></div>${workspace.candidates.map((idea) => `<article class="direction"><div class="direction-heading"><h3>${e(idea.title)}</h3>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</div>${moreMd(`direction-${idea.id}`, idea.recommendation, 260)}${choosable ? `<div class="actions"><button type="button" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div>` : ''}<details id="gates-${e(idea.id)}"><summary>Proposed verification gates</summary><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></details></article>`).join('')}</section>` : ''}
+  ${renderSources(live.research?.sources ?? [], live.research?.running === true)}
   ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="card findings" aria-labelledby="findings-title"><div class="section-title"><h2 id="findings-title">Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
   ${report ? findingsBody(report, chosen?.id ?? '') : `<div class="empty-note"><p>${chosen ? 'No readable source report is available for this attempt.' : 'Your source record starts here.'}</p><p>${chosen ? 'Planning, failed, and interrupted attempts may have no report. Their evidence remains in the project.' : 'Sources and findings show here when research saves a report.'}</p></div>`}</section>
@@ -1734,6 +1804,7 @@ function renderPanel(
   report: ResearchReport | null,
   needKeys: ReadonlySet<string>,
   messages: readonly Message[],
+  direction: string | undefined,
 ): string {
   const tasks = live.tasks?.list ?? [];
   const gone = (kind: string, title: string, text: string): Panel => ({
@@ -1762,7 +1833,18 @@ function renderPanel(
           'No session',
           'No agent session is open. To start one, choose New, then New session.',
         );
-  else if (panel === 'coordinator')
+  else if (panel === 'direction') {
+    const idea =
+      workspace.candidates.find((entry) => entry.id === direction) ??
+      workspace.candidates[0];
+    shown = idea
+      ? directionPanel(idea, workspace, live)
+      : gone(
+          'Direction',
+          'No direction yet',
+          'Research proposes directions after it searches the sources.',
+        );
+  } else if (panel === 'coordinator')
     shown = coordinatorPanel(
       live.coordinator ?? null,
       workspace,
@@ -1833,7 +1915,13 @@ export function renderDesk(
     view === 'needs'
       ? renderNeedsView(needs)
       : view === 'research'
-        ? renderResearchView(workspace, live, report, chosen)
+        ? renderResearchView(
+            workspace,
+            live,
+            report,
+            chosen,
+            frame.panel === 'direction' ? frame.direction : undefined,
+          )
         : view === 'tasks' && live.tasks
           ? renderTasksView(
               live.tasks,
@@ -1870,7 +1958,7 @@ export function renderDesk(
     active.length === 1 && active[0]?.record?.observedAt
       ? `Research owner last observed ${time(active[0].record.observedAt)}`
       : '';
-  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages) : ''}`;
+  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
   return {
     html,
     observation,
