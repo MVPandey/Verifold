@@ -1092,3 +1092,84 @@ await test('desk Home lists what changed since the person left, the team feed, a
   assert.match(away, /data-panel="coordinator" aria-pressed="false"/);
   assert.doesNotMatch(away, /What it did/);
 });
+
+await test('desk shows long text as its lead with Show all, and short text in full', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-04T12:00:00.000Z';
+  const long = `The benchmark ran on 3 graphs. ${'Each stratum has 200 queries and a negative control. '.repeat(6)}`;
+  const messages = [
+    {
+      schemaVersion: 1,
+      id: 'm-1',
+      at,
+      from: 'task-1',
+      to: 'coordinator',
+      kind: 'note',
+      text: long,
+      delivery: 'delivered',
+    },
+    {
+      schemaVersion: 1,
+      id: 'm-2',
+      at,
+      from: 'coordinator',
+      to: 'task-1',
+      kind: 'objection',
+      status: 'open',
+      text: 'Short and clear.',
+      delivery: 'delivered',
+    },
+  ];
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261004T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'idle',
+      mode: 'ask',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: at,
+      requests: [],
+      commands: [],
+      events: [
+        { at, kind: 'you', text: 'Run it.' },
+        {
+          at,
+          kind: 'agent',
+          text: `**Done.** ${'The *settled* nodes fell by 41 percent. '.repeat(8)}`,
+        },
+      ],
+    },
+  };
+  const { html } = renderDesk(
+    snapshot,
+    undefined,
+    null,
+    {
+      session: worker,
+      workers: [worker],
+      controllable: true,
+      tasks: { list: [], selected: null, idle: [], messages },
+    } as never,
+    { view: 'home', panel: 'worker' },
+  );
+  // The feed folds the long note at its first sentence. The short objection shows in full.
+  assert.match(
+    html,
+    /<details class="more" id="feed-m-1"><summary><span class="lead">The benchmark ran on 3 graphs\.<\/span> <span class="more-hint"><span class="closed">Show all<\/span>/,
+  );
+  assert.doesNotMatch(html, /id="feed-m-2"/);
+  assert.match(html, /<span class="chip objection">Objection, open<\/span>/);
+  // An agent's Markdown reply folds with a plain lead and renders in full behind Show all.
+  assert.match(
+    html,
+    /<details class="more" id="event-20261004T120000000Z-abcdef12-1"><summary><span class="lead">Done\.<\/span>[\s\S]*<strong>Done\.<\/strong>/,
+  );
+  assert.doesNotMatch(html, /id="event-20261004T120000000Z-abcdef12-0"/);
+});
