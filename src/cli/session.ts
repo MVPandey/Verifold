@@ -17,6 +17,7 @@ import {
   startHostSession,
   strictClaudeEnvironment,
   strictClaudeSettings,
+  strictCodexOptions,
   validDomain,
   type AgentTools,
   type HostEvent,
@@ -845,8 +846,7 @@ export class SessionManager {
           ? [
               '-c',
               'approval_policy="never"',
-              '-c',
-              'sandbox_mode="workspace-write"',
+              ...strictCodexOptions(Boolean(record.network?.length)),
             ]
           : []),
         // The terminal keeps the worker's MCP isolation.
@@ -986,7 +986,8 @@ export class SessionManager {
 
   /**
    * Start the coordinator in the project folder. It has only Verifold's tools:
-   * Claude Code gets no built-in tools, and Codex a read-only sandbox.
+   * Claude Code gets no built-in tools, and Codex a read-only permission
+   * profile that cannot read credential files.
    */
   async startCoordinator(input: {
     readonly host: HarnessName;

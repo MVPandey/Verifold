@@ -2080,9 +2080,11 @@ function cycle(
   return false;
 }
 
-/** What the harness enforces in a strict task session. Reads are never limited. */
+/** What the harness enforces in a strict task session. Only credential reads are limited. */
 function restrictions(host: HarnessName, net: Assignment['network']): string[] {
   const domains = net?.domains.join(', ');
+  const credentials =
+    "cannot read credential files: SSH keys, Verifold's credentials, the RunPod, GitHub, and AWS logins, Git and netrc passwords, the logins of both harnesses, and the macOS login keychain. Other reads are not limited.";
   return host === 'claude'
     ? [
         'Shell commands can write only in the task folder and in temporary folders (Claude Code sandbox).',
@@ -2091,16 +2093,16 @@ function restrictions(host: HarnessName, net: Assignment['network']): string[] {
           : 'Shell commands cannot reach the network (Claude Code sandbox).',
         'File tools can edit only in the task folder. Claude Code denies other edits without a prompt (permission rules, dontAsk mode).',
         'Other tools that need permission are denied, except web search and web fetch.',
-        'Reads are not limited. The harness can read files outside the task folder.',
+        `Shell commands and file tools ${credentials}`,
       ]
     : [
-        'Shell commands and file changes can write only in the task folder and in temporary folders (Codex workspace-write sandbox).',
+        'Shell commands and file changes can write only in the task folder and in temporary folders (Codex permission profile).',
         domains
           ? `Shell commands can reach the network. Codex cannot limit it to the task's domains (${domains}).`
-          : 'Shell commands cannot reach the network (Codex workspace-write sandbox).',
+          : 'Shell commands cannot reach the network (Codex permission profile).',
         'Codex asks for no approvals. An action outside the sandbox fails (approval policy never).',
         'Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt.',
-        'Reads are not limited. The harness can read files outside the task folder.',
+        `Shell commands ${credentials}`,
       ];
 }
 

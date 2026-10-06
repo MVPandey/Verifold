@@ -232,10 +232,19 @@ const parentSessionVariables = [
   'CLAUDE_PID',
 ];
 
-/** The environment for a harness process: the person's environment without the variables of a parent harness session. */
-export function harnessEnvironment(): NodeJS.ProcessEnv {
+/**
+ * The environment for a child process (a harness, a terminal, or Git): the
+ * person's environment without the variables of a parent harness session, and
+ * without RunPod variables. A RunPod key that the person exported for runpodctl
+ * would otherwise reach the shell of each worker, and a worker that runs `env`
+ * would put it in its transcript. Harnesses keep their own keys, such as
+ * ANTHROPIC_API_KEY, because they need them.
+ */
+export function childEnvironment(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
   for (const name of parentSessionVariables) delete environment[name];
+  for (const name of Object.keys(environment))
+    if (name.startsWith('RUNPOD_')) delete environment[name];
   return environment;
 }
 
@@ -307,7 +316,7 @@ export async function runHarness(
   return new Promise<HarnessResult>((resolve, reject) => {
     const child = spawn(options.executable ?? request.host, args, {
       cwd: request.cwd,
-      env: harnessEnvironment(),
+      env: childEnvironment(),
       shell: false,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
