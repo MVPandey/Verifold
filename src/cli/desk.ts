@@ -223,6 +223,12 @@ async function act(
       case 'coordinator-resume':
         await coordinator.resume();
         return 200;
+      case 'coordinator-rule':
+        await coordinator.ruleCheck(body.check, body.result, body.reason);
+        return 200;
+      case 'coordinator-answer':
+        await coordinator.decideAnswer(body.decision, body.note);
+        return 200;
       case 'coordinator-message':
         // A question from a task's panel names the task, so the coordinator knows what it is about.
         if (body.about !== undefined && !validTaskId(body.about))

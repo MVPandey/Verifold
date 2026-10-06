@@ -14,6 +14,8 @@ import {
 } from './session.ts';
 import type { AgentTool, AgentTools } from './session-hosts.ts';
 import { replaced, type TaskEvent, type TaskManager } from './tasks.ts';
+import { ResultsStore, type Results } from './results.ts';
+import { loadWorkspace } from './storage.ts';
 import { workerLimit } from './workers.ts';
 
 /**
@@ -76,6 +78,8 @@ export interface CoordinatorState {
 
 export interface CoordinatorView {
   readonly state: CoordinatorState;
+  /** The checks and the answer, for the direction that they belong to. */
+  readonly results?: Results | null;
   readonly session: SessionView | null;
   /** Events that wait for the next wakeup. */
   readonly waiting: number;
@@ -130,6 +134,8 @@ export class Coordinator {
   private saved: SessionRecord | null = null;
   /** Verifold is stopping. Tool calls change nothing. */
   private closing = false;
+  /** The checks and the answer of the chosen direction. */
+  private readonly results: ResultsStore;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -143,6 +149,7 @@ export class Coordinator {
     this.root = root;
     this.tasks = options.tasks;
     this.sessions = options.sessions;
+    this.results = new ResultsStore(root);
     this.debounceMs = options.debounceMs ?? coordinatorLimits.debounceMs;
   }
 
@@ -150,8 +157,9 @@ export class Coordinator {
     return join(this.root, '.verifold', 'coordinator', 'state.json');
   }
 
-  /** Read the saved coordinator, if any. */
+  /** Read the saved coordinator and the results, if any. */
   async load(): Promise<void> {
+    await this.results.load();
     try {
       const stats = await lstat(this.file);
       if (!stats.isFile() || stats.size > 4_000_000) return;
@@ -189,6 +197,7 @@ export class Coordinator {
         : null,
       waiting: state.events.filter((event) => event.seq > state.cursor).length,
       limitedUntil: this.limitedUntil,
+      results: this.results.current(),
     };
   }
 
@@ -612,9 +621,79 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           'coordinator',
         );
         return `Recorded your decision on ${String(args.message)}.`;
+      case 'verifold_report_check': {
+        const { id, checks } = await this.direction();
+        const entry = await this.results.report(
+          id,
+          checks,
+          await this.accepted(),
+          { ...args, reason: why() },
+        );
+        return `Recorded check ${entry.check}: ${outcomeWords[entry.result]}.${entry.result === 'judgement' ? ' The person decides it.' : ''}`;
+      }
+      case 'verifold_propose_answer': {
+        why();
+        const { id } = await this.direction();
+        await this.results.propose(id, await this.accepted(), args);
+        return 'Recorded the answer. The person signs off.';
+      }
       default:
         fail(`Verifold has no tool named ${name}.`);
     }
+  }
+
+  /** The person rules on a check that waits for their judgement. The coordinator reads it at its next wakeup. */
+  ruleCheck(check: unknown, result: unknown, reason: unknown): Promise<void> {
+    return this.serial(async () => {
+      const { id, checks } = await this.direction();
+      const entry = await this.results.rule(id, check, result, reason);
+      if (entry.ruling)
+        await this.tasks.post(
+          'coordinator',
+          `My ruling on check ${entry.check} (${checks[entry.check - 1] ?? ''}): ${outcomeWords[entry.ruling.result]}. ${entry.ruling.reason}`,
+          'person',
+        );
+    });
+  }
+
+  /** The person accepts the answer, or asks for more work. The coordinator reads it at its next wakeup. */
+  decideAnswer(kind: unknown, note: unknown): Promise<void> {
+    return this.serial(async () => {
+      const { id } = await this.direction();
+      const answer = await this.results.decide(id, kind, note);
+      await this.tasks.post(
+        'coordinator',
+        answer.decision?.kind === 'accepted'
+          ? 'I accept the answer.'
+          : `More work, please: ${answer.decision?.note ?? ''}`,
+        'person',
+      );
+    });
+  }
+
+  /** The chosen direction and its checks. Results belong to it. */
+  private async direction(): Promise<{
+    readonly id: string;
+    readonly checks: readonly string[];
+  }> {
+    const workspace = await loadWorkspace(this.root);
+    const idea = workspace.candidates.find(
+      (candidate) => candidate.id === workspace.selectedId,
+    );
+    return idea
+      ? { id: idea.id, checks: idea.gates }
+      : fail('No direction is chosen, so it has no checks.');
+  }
+
+  /** The project files that a person or the coordinator accepted from a task version. */
+  private async accepted(): Promise<ReadonlySet<string>> {
+    return new Set(
+      (await this.tasks.list()).flatMap((task) =>
+        (task.artifacts ?? []).flatMap((artifact) =>
+          artifact.files.map((file) => file.path),
+        ),
+      ),
+    );
   }
 
   /** The state that the coordinator reads: tasks, latest versions, open messages, and limits. */
@@ -686,6 +765,36 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           text: message.text.slice(0, messageLimits.text),
           evidence: message.evidence,
         })),
+      ...(await this.direction().then(
+        ({ id, checks }) => {
+          const results = this.results.read(id);
+          return {
+            checks: checks.map((text, index) => {
+              const entry = results?.checks.find(
+                (saved) => saved.check === index + 1,
+              );
+              return {
+                check: index + 1,
+                text,
+                ...(entry
+                  ? {
+                      result: entry.result,
+                      value: entry.value,
+                      ...(entry.ruling ? { personRuling: entry.ruling } : {}),
+                    }
+                  : { result: 'not reported' }),
+              };
+            }),
+            answer: results?.answer
+              ? {
+                  statement: results.answer.statement,
+                  decision: results.answer.decision ?? 'waits for the person',
+                }
+              : null,
+          };
+        },
+        () => ({}),
+      )),
     };
     return JSON.stringify(value, null, 2).slice(0, 60_000);
   }
@@ -722,6 +831,14 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     }
   }
 }
+
+/** A check's outcome in words, for tool replies and messages. */
+const outcomeWords = {
+  passed: 'passed',
+  failed: 'failed',
+  partial: 'partly passed',
+  judgement: "needs the person's judgement",
+} as const;
 
 const task = { type: 'string', description: 'A task ID, such as task-2' };
 const reason = {
@@ -918,6 +1035,80 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         reason,
       },
       required: ['message', 'decision', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_report_check',
+    description:
+      "Report the result of one check of the chosen direction, with the accepted files that show it. Use judgement when only the person can decide, and ask them one question. The person's ruling is final.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        check: {
+          type: 'integer',
+          minimum: 1,
+          description: 'The check number from verifold_state',
+        },
+        result: {
+          type: 'string',
+          enum: ['passed', 'failed', 'partial', 'judgement'],
+        },
+        value: {
+          type: 'string',
+          maxLength: 500,
+          description:
+            'What the evidence shows, for example "0 mismatches in 1,800 queries" or "7 of 9 groups pass"',
+        },
+        evidence: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 10,
+          description: 'Accepted project files that show the result',
+        },
+        question: {
+          type: 'string',
+          maxLength: 500,
+          description:
+            'For judgement only: the question that the person decides',
+        },
+        reason,
+      },
+      required: ['check', 'result', 'value', 'evidence', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_propose_answer',
+    description:
+      'Propose the answer to the objective when the checks have results: a short statement, and the claims that support it with their evidence. The person signs off.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        statement: { type: 'string', maxLength: 2000 },
+        claims: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 12,
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', maxLength: 500 },
+              evidence: {
+                type: 'array',
+                items: { type: 'string' },
+                maxItems: 10,
+                description: 'Accepted project files or web addresses',
+              },
+            },
+            required: ['text', 'evidence'],
+            additionalProperties: false,
+          },
+        },
+        reason,
+      },
+      required: ['statement', 'claims', 'reason'],
       additionalProperties: false,
     },
   },

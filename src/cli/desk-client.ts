@@ -697,6 +697,19 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         host: field('coordinator-host'),
         model: field('coordinator-model').trim(),
       };
+    case 'coordinator-rule':
+      return {
+        action,
+        check: Number(button.dataset.check),
+        result: button.dataset.result,
+        reason: field(`rule-${button.dataset.check ?? ''}`),
+      };
+    case 'coordinator-answer':
+      return {
+        action,
+        decision: button.dataset.decision,
+        note: field('answer-note'),
+      };
     case 'coordinator-message':
       // A question from a task's panel names its task.
       return button.dataset.about
@@ -812,6 +825,8 @@ async function act(button: HTMLElement): Promise<void> {
     ['version', button.dataset.version],
     ['message', button.dataset.message],
     ['decision', button.dataset.decision],
+    ['check', button.dataset.check],
+    ['result', button.dataset.result],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -864,6 +879,10 @@ async function act(button: HTMLElement): Promise<void> {
       'task-message',
       'coordinator-message',
       'task-coordinator-message',
+      'answer-note',
+      ...(body.action === 'coordinator-rule'
+        ? [`rule-${String(body.check)}`]
+        : []),
       ...(body.action === 'task-create'
         ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
             (name) => `task-new-${name}`,

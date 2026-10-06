@@ -12,6 +12,7 @@ import {
   type TaskVersion,
 } from './tasks.ts';
 import type { Message } from './messages.ts';
+import type { CheckResult, Results } from './results.ts';
 import {
   coordinatorLimits,
   directionObjective,
@@ -66,6 +67,7 @@ export const deskViews = [
   'home',
   'research',
   'tasks',
+  'results',
   'records',
   'needs',
 ] as const;
@@ -681,6 +683,26 @@ function planWaits(
   );
 }
 
+/** The results of the chosen direction, if the coordinator reported any. */
+function resultsOf(workspace: Workspace, live: DeskSession): Results | null {
+  const results = live.coordinator?.results;
+  return results && results.direction === workspace.selectedId ? results : null;
+}
+
+const outcomeLabels = {
+  passed: 'Passed',
+  failed: 'Failed',
+  partial: 'Partly passed',
+  judgement: 'Needs your judgement',
+} as const;
+
+/** The person's ruling on a check that waits for their judgement. The options name outcomes, and none is the default. */
+function judgementForm(entry: CheckResult): string {
+  const button = (result: string, label: string): string =>
+    `<button type="button" data-action="coordinator-rule" data-check="${entry.check}" data-result="${result}">${label}</button>`;
+  return `<label class="field" for="rule-${entry.check}">Your ruling and its reason</label><input id="rule-${entry.check}" type="text" maxlength="2000"><div class="actions">${button('passed', 'It passed')}${button('partial', 'It partly passed')}${button('failed', 'It failed')}</div><p class="fine">Your ruling is final. The coordinator gets it with its next wakeup.</p>`;
+}
+
 /** A decision that only the person can make. Its key stays the same while it waits, so the page notifies once. */
 interface Need {
   readonly key: string;
@@ -805,6 +827,31 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       body: `${lead(message.text, 160) === message.text.replace(/\s+/g, ' ').trim() ? '' : `<details class="more" id="need-${e(message.id)}"><summary>Read the whole message</summary><p class="pre">${e(message.text)}</p></details>`}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
     });
   }
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  const results = resultsOf(workspace, live);
+  for (const entry of results?.checks ?? [])
+    if (entry.result === 'judgement' && !entry.ruling)
+      items.push({
+        key: `judgement:${results?.direction ?? ''}:${entry.check}:${entry.at}`,
+        view: 'results',
+        kind: 'Judgement',
+        title: `Check ${entry.check}: ${entry.question ?? 'needs your judgement'}`,
+        why: 'The evidence does not settle it, so only you can decide it.',
+        since: entry.at,
+        body: `<p class="fine">${e(idea?.gates[entry.check - 1] ?? '')}</p><p><span class="tag reading">Its reading</span> ${e(entry.value)}</p>${judgementForm(entry)}`,
+      });
+  if (results?.answer && !results.answer.decision)
+    items.push({
+      key: `answer:${results.answer.at}`,
+      view: 'results',
+      kind: 'Sign-off',
+      title: 'The answer waits for your sign-off',
+      why: 'Only you accept the answer or ask for more work.',
+      since: results.answer.at,
+      body: '<div class="actions"><button type="button" class="primary" data-view="results">Read the answer</button></div>',
+    });
   if (!coordinated)
     for (const task of tasks) {
       const attempt = task.attempts.at(-1);
@@ -1355,6 +1402,46 @@ function commandTable(view: SessionView, name: string): string {
     .join('')}</tbody></table></div>`;
 }
 
+/** Results: the checks of the chosen direction with their results, then the answer and the sign-off. */
+function renderResultsView(workspace: Workspace, live: DeskSession): string {
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  const head = `<div class="view-head"><h1 id="view-title" tabindex="-1">Results</h1><p>${idea ? `Direction: ${e(idea.title)}` : 'No direction yet'}</p></div>`;
+  if (!idea)
+    return `<div class="view">${head}<section class="card empty-state"><h2>No direction yet</h2><p class="fine">Results show here after you choose a direction and the team works on it.</p></section></div>`;
+  const results = resultsOf(workspace, live);
+  const answer = results?.answer;
+  const open = (results?.checks ?? []).filter(
+    (entry) => entry.result === 'judgement' && !entry.ruling,
+  ).length;
+  const checks = idea.gates
+    .map((gate, index) => {
+      const entry = results?.checks.find((saved) => saved.check === index + 1);
+      const outcome = entry?.ruling?.result ?? entry?.result;
+      return `<li class="check-row" data-result="${outcome ?? 'none'}"><span class="check-num">${index + 1}</span><div class="check-body"><p class="check-text">${e(gate)}</p>${
+        entry
+          ? `<p class="check-value"><span class="tag reading">Its reading</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p><div class="why"><span class="tag reading">Its reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
+          : ''
+      }</div><span class="check-result">${outcome ? e(outcomeLabels[outcome]) : 'Not reported yet'}</span></li>`;
+    })
+    .join('');
+  const signOff = !answer
+    ? ''
+    : answer.decision?.kind === 'accepted'
+      ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>`
+      : answer.decision?.kind === 'more'
+        ? `<p class="fine">You asked for more work at ${e(since(answer.decision.at))}: ${e(answer.decision.note ?? '')}</p>`
+        : `<div class="sign-off">${open ? `<p class="notice">Settle the ${open} open ${open === 1 ? 'judgement' : 'judgements'} above first.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="coordinator-answer" data-decision="accepted"${open ? ' disabled' : ''}>Accept the answer</button></div><label class="field" for="answer-note">What more work is needed</label><textarea id="answer-note" rows="3" maxlength="4000"></textarea><div class="actions"><button type="button" data-action="coordinator-answer" data-decision="more">Ask for more work</button></div></div>`;
+  return `<div class="view">${head}
+  <section class="card" aria-labelledby="checks-title"><div class="section-title"><h2 id="checks-title">The checks</h2><span class="count">${results?.checks.length ?? 0} of ${idea.gates.length} reported</span></div><ol class="checks">${checks}</ol><p class="fine">The coordinator reports each result with the accepted files that show it. Verifold checks that the files were accepted. The values and reasons are its reading.</p></section>
+  ${
+    answer
+      ? `<section class="card answer" aria-labelledby="answer-title"><div class="section-title"><h2 id="answer-title">The answer</h2><span class="tag reading">The coordinator's reading</span></div><p class="statement">${e(answer.statement)}</p><ol class="claims">${answer.claims.map((claim) => `<li><p>${e(claim.text)}</p>${claim.evidence.length ? `<p class="fine">Evidence: ${claim.evidence.map((item) => (/^https?:\/\//.test(item) ? link(item) : `<code>${e(item)}</code>`)).join(' ')}</p>` : ''}</li>`).join('')}</ol>${signOff}</section>`
+      : '<section class="card"><h2>The answer</h2><p class="fine">The coordinator proposes the answer when the checks have results. You sign it off here.</p></section>'
+  }</div>`;
+}
+
 /** The record of this owner: every worker's commands, then every research attempt. */
 function renderRecords(
   snapshot: DeskSnapshot,
@@ -1560,6 +1647,12 @@ function progress(workspace: Workspace, live: DeskSession): Progress {
     (task) => task.state === 'done' || task.state === 'cancelled',
   ).length;
   notes[4] = `${settled} of ${planned.length} done`;
+  // A proposed answer waits for the person's sign-off. A request for more work returns to the tasks.
+  const answer = resultsOf(workspace, live)?.answer;
+  if (answer && answer.decision?.kind !== 'more') {
+    notes[5] = answer.decision ? 'Accepted' : 'Waits for you';
+    return { current: 5, notes, waits: !answer.decision, working: false };
+  }
   if (planned.length && settled === planned.length) {
     notes[5] = 'Tasks done';
     return { current: 5, notes, waits: false, working: false };
@@ -1630,13 +1723,14 @@ function renderArc(at: Progress): string {
 }
 
 /** The views in the rail. The top bar opens Needs you. */
-const railViews = ['home', 'research', 'tasks', 'records'] as const;
+const railViews = ['home', 'research', 'tasks', 'results', 'records'] as const;
 type RailView = (typeof railViews)[number];
 
 const viewNames: Record<RailView, string> = {
   home: 'Home',
   research: 'Research',
   tasks: 'Tasks',
+  results: 'Results',
   records: 'Records',
 };
 
@@ -1646,6 +1740,8 @@ const viewIcons: Record<RailView, string> = {
     '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>',
   tasks:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h6v6H3zM15 14h6v6h-6zM6 10v3a3 3 0 0 0 3 3h6"/></svg>',
+  results:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-8M3 20h18"/></svg>',
   records:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 8h6M9 12h6M9 16h3"/></svg>',
 };
@@ -1914,45 +2010,47 @@ export function renderDesk(
   const main =
     view === 'needs'
       ? renderNeedsView(needs)
-      : view === 'research'
-        ? renderResearchView(
-            workspace,
-            live,
-            report,
-            chosen,
-            frame.panel === 'direction' ? frame.direction : undefined,
-          )
-        : view === 'tasks' && live.tasks
-          ? renderTasksView(
-              live.tasks,
+      : view === 'results'
+        ? renderResultsView(workspace, live)
+        : view === 'research'
+          ? renderResearchView(
+              workspace,
               live,
-              workspace.candidates.find(
-                (idea) => idea.id === workspace.selectedId,
-              )?.title ??
-                live.coordinator?.state?.objective ??
-                'Your tasks',
-              frame.panel === 'task' ? live.tasks.selected?.id : undefined,
-              // Before a direction and a coordinator, Tasks offers to start one with your own objective.
-              live.coordinator !== undefined &&
-                !workspace.selectedId &&
-                !live.coordinator?.state,
-              needs,
+              report,
+              chosen,
+              frame.panel === 'direction' ? frame.direction : undefined,
             )
-          : view === 'records'
-            ? renderRecords(
-                snapshot,
-                workers,
-                tasks,
-                frame.panel === 'attempt' ? chosen?.id : undefined,
-              )
-            : renderHome(
-                snapshot,
+          : view === 'tasks' && live.tasks
+            ? renderTasksView(
+                live.tasks,
                 live,
-                at,
-                active.length > 0,
+                workspace.candidates.find(
+                  (idea) => idea.id === workspace.selectedId,
+                )?.title ??
+                  live.coordinator?.state?.objective ??
+                  'Your tasks',
+                frame.panel === 'task' ? live.tasks.selected?.id : undefined,
+                // Before a direction and a coordinator, Tasks offers to start one with your own objective.
+                live.coordinator !== undefined &&
+                  !workspace.selectedId &&
+                  !live.coordinator?.state,
                 needs,
-                frame.since,
-              );
+              )
+            : view === 'records'
+              ? renderRecords(
+                  snapshot,
+                  workers,
+                  tasks,
+                  frame.panel === 'attempt' ? chosen?.id : undefined,
+                )
+              : renderHome(
+                  snapshot,
+                  live,
+                  at,
+                  active.length > 0,
+                  needs,
+                  frame.since,
+                );
   // The top bar names the research owner only when exactly one reported recently.
   const observation =
     active.length === 1 && active[0]?.record?.observedAt
