@@ -731,6 +731,43 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
+/** A compute action. The RunPod key goes only into this request body. */
+function computeRequest(button: HTMLElement): Record<string, unknown> {
+  const action = button.dataset.action ?? '';
+  if (action === 'compute-key-save') {
+    const box = document.getElementById('runpod-key-file');
+    return {
+      action,
+      key: field('runpod-key').trim(),
+      file:
+        button.dataset.file === 'always' ||
+        (box instanceof HTMLInputElement && box.checked),
+    };
+  }
+  if (action !== 'compute-settings') return { action };
+  // Without the GPU table, the saved GPU list stays.
+  const boxes = Array.from(
+    content.querySelectorAll<HTMLInputElement>('input[data-gpu]'),
+  );
+  return {
+    action,
+    limitUsd: field('compute-limit'),
+    maxUsdPerHour: field('compute-rate'),
+    maxHoursPerLease: field('compute-hours'),
+    idleMinutes: field('compute-idle'),
+    maxRunningPods: field('compute-pods'),
+    diskGb: field('compute-disk'),
+    images: field('compute-images'),
+    ...(boxes.length
+      ? {
+          gpuTypes: boxes
+            .filter((box) => box.checked)
+            .map((box) => box.dataset.gpu),
+        }
+      : {}),
+  };
+}
+
 /** The answer to the open setup question. */
 function setupBody(button: HTMLElement): Record<string, unknown> {
   const prompt = Number(button.dataset.prompt);
@@ -811,7 +848,9 @@ async function act(button: HTMLElement): Promise<void> {
                         : action?.startsWith('task-') ||
                             action?.startsWith('coordinator-')
                           ? taskRequest(button)
-                          : { action };
+                          : action?.startsWith('compute-')
+                            ? computeRequest(button)
+                            : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -842,7 +881,10 @@ async function act(button: HTMLElement): Promise<void> {
       },
       body: JSON.stringify(body),
       cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
+      // A compute action waits for RunPod, for up to 8 seconds.
+      signal: AbortSignal.timeout(
+        action?.startsWith('compute-') ? 15000 : 5000,
+      ),
     });
     const reply: unknown = await response.json().catch(() => null);
     if (!response.ok)
@@ -904,6 +946,10 @@ async function act(button: HTMLElement): Promise<void> {
         : 'The desk did not answer. Check that Verifold still runs in your terminal.';
     failure = { selector, message: actionLabel.textContent };
   } finally {
+    // The key field is empty after each try, so the key stays on the page no longer than needed.
+    const key = document.getElementById('runpod-key');
+    if (action === 'compute-key-save' && key instanceof HTMLInputElement)
+      key.value = '';
     showFailure();
     if (button instanceof HTMLButtonElement) button.disabled = false;
     void refresh();

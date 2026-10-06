@@ -13,6 +13,8 @@ import {
 } from './tasks.ts';
 import type { Message } from './messages.ts';
 import type { CheckResult, Results } from './results.ts';
+import type { ComputeView } from './compute.ts';
+import { placeNames } from './credentials.ts';
 import {
   coordinatorLimits,
   directionObjective,
@@ -50,6 +52,8 @@ export interface DeskSession {
   readonly tasks?: TaskView;
   /** The coordinator of this owner. Null: none has started in this project. */
   readonly coordinator?: CoordinatorView | null;
+  /** RunPod key, limits, and GPUs. Only a project owner has them. */
+  readonly compute?: ComputeView;
 }
 
 export interface TaskView {
@@ -68,6 +72,7 @@ export const deskViews = [
   'research',
   'tasks',
   'results',
+  'compute',
   'records',
   'needs',
 ] as const;
@@ -1442,6 +1447,70 @@ function renderResultsView(workspace: Workspace, live: DeskSession): string {
   }</div>`;
 }
 
+const stockNames = {
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+  NONE: 'None',
+} as const;
+
+/** The form for a new or replacement RunPod key. The key field is never filled by the server. */
+function keyForm(keyring: ComputeView['keyring']): string {
+  return `<label class="field" for="runpod-key">RunPod API key</label><input id="runpod-key" type="password" autocomplete="off" spellcheck="false" maxlength="256">
+  ${keyring ? `<label class="check" for="runpod-key-file"><input type="checkbox" id="runpod-key-file"> Keep it in a private file instead of ${e(placeNames[keyring])}</label>` : '<p class="fine">This computer has no keyring that Verifold can use, so the key goes into a private file that only you can read.</p>'}
+  <div class="actions"><button type="button" class="primary" data-action="compute-key-save"${keyring ? '' : ' data-file="always"'}>Check and save</button></div>
+  <p class="fine">Verifold checks the key with one read-only call to RunPod before it saves it. Use a separate key for Verifold, so that you can revoke it alone in the RunPod console.</p>`;
+}
+
+/** Compute: the RunPod key, the limits that only the person sets, and the GPUs that leases can use. */
+function renderComputeView(compute: ComputeView): string {
+  const { key, settings, gpus } = compute;
+  const keyCard = key
+    ? `<p>The key is in ${e(placeNames[key.place])}. It ends in <code>${e(key.last4)}</code>.</p>
+      ${key.problem ? `<p class="notice">The check at ${e(since(key.checkedAt ?? key.savedAt))} failed. ${e(key.problem)}</p>` : key.checkedAt ? `<p class="notice-ok">It worked at ${e(since(key.checkedAt))}.</p>` : ''}
+      <div class="actions"><button type="button" data-action="compute-key-check">Check</button><button type="button" data-action="compute-key-remove">Remove</button></div>
+      <details id="key-replace"><summary>Replace the key</summary>${keyForm(compute.keyring)}</details>`
+    : keyForm(compute.keyring);
+  const number = (
+    id: string,
+    label: string,
+    value: number | null,
+    min: number,
+    max: number,
+    step = 1,
+  ): string =>
+    `<label class="field" for="${id}">${e(label)}<input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${value ?? ''}"></label>`;
+  const offered = new Set(gpus?.map((gpu) => gpu.id));
+  // An allowed type that RunPod does not offer now stays in the list, so a save keeps it.
+  const rows = [
+    ...(gpus ?? []),
+    ...settings.gpuTypes
+      .filter((id) => !offered.has(id))
+      .map((id) => ({ id, name: id, memoryGb: 0, price: 0, stock: null })),
+  ];
+  const gpuCard = !key
+    ? '<p class="fine">Store a RunPod key to see the GPUs with their price and stock.</p>'
+    : !gpus
+      ? `${settings.gpuTypes.length ? `<p>Leases can use ${settings.gpuTypes.map((id) => `<code>${e(id)}</code>`).join(', ')}.</p>` : '<p class="fine">No GPU type is allowed yet.</p>'}<div class="actions"><button type="button" data-action="compute-gpus">Show the GPUs</button></div>`
+      : `<div class="table"><table class="gpus"><thead><tr><th scope="col">Allow</th><th scope="col">GPU</th><th scope="col">Memory</th><th scope="col">Per hour</th><th scope="col">Stock</th></tr></thead><tbody>${rows
+          .map((gpu) => {
+            const box = `gpu-${gpu.id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            return `<tr><td><input type="checkbox" id="${e(box)}" data-gpu="${e(gpu.id)}"${settings.gpuTypes.includes(gpu.id) ? ' checked' : ''} aria-label="Allow ${e(gpu.name)}"></td><th scope="row">${e(gpu.name)}</th><td>${gpu.memoryGb ? `${gpu.memoryGb} GB` : '—'}</td><td>${gpu.price ? `$${gpu.price.toFixed(2)}${gpu.price > settings.maxUsdPerHour ? ' <span class="tag over-cap">Above your cap</span>' : ''}` : 'Not offered now'}</td><td>${gpu.stock ? stockNames[gpu.stock] : '—'}</td></tr>`;
+          })
+          .join(
+            '',
+          )}</tbody></table></div><p class="fine">List prices for one GPU on Secure Cloud, from RunPod at ${e(since(compute.gpusAt ?? ''))}.</p><div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the GPU choice</button><button type="button" data-action="compute-gpus">Refresh the prices</button></div>`;
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Compute</h1><p>GPU pods on RunPod for your tasks</p></div>
+  <section class="card" aria-labelledby="key-title"><h2 id="key-title">RunPod key</h2>${keyCard}</section>
+  <section class="card" aria-labelledby="limits-title"><div class="section-title"><h2 id="limits-title">Limits</h2>${settings.limitUsd !== null ? `<span class="count">$${settings.limitUsd} for this project</span>` : ''}</div>
+  ${settings.limitUsd === null ? '<p class="notice">Pods stay off until you set a spend limit.</p>' : ''}
+  <div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours of one lease, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
+  <label class="field" for="compute-images">RunPod images that a lease can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
+  <div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the limits</button></div>
+  <p class="fine">Only you can change these limits. RunPod erases the disk of a pod when the pod stops.</p></section>
+  <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2>${gpuCard}</section></div>`;
+}
+
 /** The record of this owner: every worker's commands, then every research attempt. */
 function renderRecords(
   snapshot: DeskSnapshot,
@@ -1723,7 +1792,14 @@ function renderArc(at: Progress): string {
 }
 
 /** The views in the rail. The top bar opens Needs you. */
-const railViews = ['home', 'research', 'tasks', 'results', 'records'] as const;
+const railViews = [
+  'home',
+  'research',
+  'tasks',
+  'results',
+  'compute',
+  'records',
+] as const;
 type RailView = (typeof railViews)[number];
 
 const viewNames: Record<RailView, string> = {
@@ -1731,6 +1807,7 @@ const viewNames: Record<RailView, string> = {
   research: 'Research',
   tasks: 'Tasks',
   results: 'Results',
+  compute: 'Compute',
   records: 'Records',
 };
 
@@ -1742,6 +1819,8 @@ const viewIcons: Record<RailView, string> = {
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h6v6H3zM15 14h6v6h-6zM6 10v3a3 3 0 0 0 3 3h6"/></svg>',
   results:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-8M3 20h18"/></svg>',
+  compute:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>',
   records:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 8h6M9 12h6M9 16h3"/></svg>',
 };
@@ -1844,7 +1923,11 @@ function renderRail(
       : '',
   ].join('');
   return `<nav class="rail" id="rail" aria-label="Views and team"><ul class="views">${railViews
-    .filter((view) => view !== 'tasks' || live.tasks)
+    .filter(
+      (view) =>
+        (view !== 'tasks' || live.tasks) &&
+        (view !== 'compute' || live.compute),
+    )
     .map(
       (view) =>
         `<li><button type="button" data-view="${view}"${view === frame.view ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
@@ -2004,53 +2087,59 @@ export function renderDesk(
   const messages = live.tasks?.messages ?? [];
   const workers = live.workers ?? (live.session ? [live.session] : []);
   const at = progress(workspace, live);
-  // Without a task owner there are no tasks, so the Tasks view is not in the rail.
-  const view = frame.view === 'tasks' && !live.tasks ? 'home' : frame.view;
+  // Without a project owner there are no tasks and no compute, so these views are not in the rail.
+  const view =
+    (frame.view === 'tasks' && !live.tasks) ||
+    (frame.view === 'compute' && !live.compute)
+      ? 'home'
+      : frame.view;
   const needs = needsOf(snapshot, live);
   const main =
     view === 'needs'
       ? renderNeedsView(needs)
       : view === 'results'
         ? renderResultsView(workspace, live)
-        : view === 'research'
-          ? renderResearchView(
-              workspace,
-              live,
-              report,
-              chosen,
-              frame.panel === 'direction' ? frame.direction : undefined,
-            )
-          : view === 'tasks' && live.tasks
-            ? renderTasksView(
-                live.tasks,
+        : view === 'compute' && live.compute
+          ? renderComputeView(live.compute)
+          : view === 'research'
+            ? renderResearchView(
+                workspace,
                 live,
-                workspace.candidates.find(
-                  (idea) => idea.id === workspace.selectedId,
-                )?.title ??
-                  live.coordinator?.state?.objective ??
-                  'Your tasks',
-                frame.panel === 'task' ? live.tasks.selected?.id : undefined,
-                // Before a direction and a coordinator, Tasks offers to start one with your own objective.
-                live.coordinator !== undefined &&
-                  !workspace.selectedId &&
-                  !live.coordinator?.state,
-                needs,
+                report,
+                chosen,
+                frame.panel === 'direction' ? frame.direction : undefined,
               )
-            : view === 'records'
-              ? renderRecords(
-                  snapshot,
-                  workers,
-                  tasks,
-                  frame.panel === 'attempt' ? chosen?.id : undefined,
-                )
-              : renderHome(
-                  snapshot,
+            : view === 'tasks' && live.tasks
+              ? renderTasksView(
+                  live.tasks,
                   live,
-                  at,
-                  active.length > 0,
+                  workspace.candidates.find(
+                    (idea) => idea.id === workspace.selectedId,
+                  )?.title ??
+                    live.coordinator?.state?.objective ??
+                    'Your tasks',
+                  frame.panel === 'task' ? live.tasks.selected?.id : undefined,
+                  // Before a direction and a coordinator, Tasks offers to start one with your own objective.
+                  live.coordinator !== undefined &&
+                    !workspace.selectedId &&
+                    !live.coordinator?.state,
                   needs,
-                  frame.since,
-                );
+                )
+              : view === 'records'
+                ? renderRecords(
+                    snapshot,
+                    workers,
+                    tasks,
+                    frame.panel === 'attempt' ? chosen?.id : undefined,
+                  )
+                : renderHome(
+                    snapshot,
+                    live,
+                    at,
+                    active.length > 0,
+                    needs,
+                    frame.since,
+                  );
   // The top bar names the research owner only when exactly one reported recently.
   const observation =
     active.length === 1 && active[0]?.record?.observedAt
