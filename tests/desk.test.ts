@@ -1310,3 +1310,102 @@ await test('desk maps the tasks with what each agent does now and why', async (t
     /Team now[\s\S]*Title task-2[\s\S]*Now<\/span> Claude Code ran Bash: python bench\.py/,
   );
 });
+
+await test('desk compares the directions in a table and lists sources as they arrive', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Graphs',
+      autonomy: 'guided',
+      phase: 'directions',
+      plan: {
+        scope: 'Scope.',
+        personas: [
+          { name: 'Historian', task: 'Prior art.' },
+          { name: 'Skeptic', task: 'Counterexamples.' },
+        ],
+      },
+    },
+    candidates: [
+      {
+        id: 'bidir',
+        title: 'Bidirectional Dijkstra',
+        recommendation:
+          '**Replication.** Feasibility is high. It needs no preprocessing.',
+        gates: ['Distances match.', 'Settled nodes fall by 30 percent.'],
+        sources: ['https://example.org/papers/bidir'],
+      },
+      {
+        id: 'alt',
+        title: 'ALT with few landmarks',
+        recommendation: 'Moderate feasibility.',
+        gates: ['Preprocessing pays off.'],
+      },
+    ],
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-05T12:00:00.000Z';
+  const research = (running: boolean): object => ({
+    running,
+    step: 'Searching sources and comparing directions',
+    startedAt: at,
+    events: [],
+    sources: [
+      { at, kind: 'search', text: 'bidirectional dijkstra stopping rule' },
+      { at, kind: 'read', text: 'https://example.org/papers/bidir' },
+      { at, kind: 'read', text: 'javascript:alert(1)' },
+    ],
+  });
+  const desk = (running: boolean, panel: DeskPanel | null): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        research: research(running),
+      } as never,
+      { view: 'research', panel, ...(panel ? { direction: 'bidir' } : {}) },
+    ).html;
+  const view = desk(true, null);
+  // Each search and page of the step, newest first. Only a web address becomes a link.
+  assert.match(
+    view,
+    /Sources so far<\/h2><span class="count">1 search, 2 pages read/,
+  );
+  assert.match(
+    view,
+    /<a href="https:\/\/example\.org\/papers\/bidir" target="_blank" rel="noopener noreferrer">example\.org\/papers\/bidir<\/a>/,
+  );
+  assert.match(view, /<span>javascript:alert\(1\)<\/span>/);
+  assert.doesNotMatch(view, /href="javascript:/);
+  // One row for each direction, with its lead, its checks, and its sources.
+  assert.match(
+    view,
+    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><\/th><td data-label="Its case">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
+  );
+  assert.match(
+    view,
+    /data-direction="alt" aria-pressed="false">ALT with few landmarks[\s\S]*<td data-label="Sources">0<\/td>/,
+  );
+  // The panel of a direction holds its case, its checks, its sources, and the choice.
+  const panel = desk(false, 'direction');
+  assert.match(panel, /data-direction="bidir" aria-pressed="true"/);
+  assert.match(
+    panel,
+    /<h2 id="panel-title" tabindex="-1">Bidirectional Dijkstra<\/h2>/,
+  );
+  assert.match(
+    panel,
+    /Its checks<\/h3><ul class="checks-list"><li>Distances match\.<\/li>/,
+  );
+  assert.match(
+    panel,
+    /data-action="select" data-idea="bidir" data-confirm="Click again to lock this direction">Choose this direction/,
+  );
+  // While a step runs, a direction cannot be chosen.
+  assert.doesNotMatch(desk(true, 'direction'), /data-action="select"/);
+});
