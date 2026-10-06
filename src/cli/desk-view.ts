@@ -205,6 +205,52 @@ function elapsed(since: string): string {
   return minutes ? `${minutes} min ${seconds % 60} s` : `${seconds} s`;
 }
 
+/** The first sentence of a text, or its start, as a lead of at most `max` characters. */
+function lead(text: string, max = 160): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const sentence = /^.+?[.!?](?=\s|$)/.exec(flat)?.[0] ?? flat;
+  if (sentence.length <= max) return sentence;
+  return `${flat.slice(0, max).replace(/\s+\S*$/, '')}…`;
+}
+
+/** Markdown as plain text, for a lead. The full text renders as Markdown. */
+function plain(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/[*_`~|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Long text as its lead with Show all. Short text shows in full. The full
+ * text is one click away, and the page keeps an open one open by its ID.
+ * `full` is HTML, already escaped or sanitized Markdown.
+ */
+function fold(id: string, text: string, full: string, max: number): string {
+  const short = lead(text, max);
+  if (short === text.replace(/\s+/g, ' ').trim()) return full;
+  return `<details class="more" id="${e(id)}"><summary><span class="lead">${e(short)}</span> <span class="more-hint"><span class="closed">Show all</span><span class="opened">Show less</span></span></summary>${full}</details>`;
+}
+
+/** Plain text, folded when it is long. */
+function more(id: string, text: string, max = 160): string {
+  return fold(id, text, `<p class="pre">${e(text)}</p>`, max);
+}
+
+/** Markdown, folded when it is long. The lead is plain text. */
+function moreMd(id: string, markdown: string, max = 220): string {
+  return fold(
+    id,
+    plain(markdown),
+    `<div class="md">${markdownHtml(markdown)}</div>`,
+    max,
+  );
+}
+
 const detailSwitch =
   '<div class="seg detail-switch" role="group" aria-label="Level of detail"><button type="button" data-detail="summary">Summary</button><button type="button" data-detail="details">Details</button></div>';
 
@@ -410,10 +456,11 @@ function workerPanel(
   ${paneSwitch}
   <ol class="session-events pane-summary">${record.events
     .slice(-60)
-    .map(
-      (event) =>
-        `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span>${event.kind === 'agent' ? `<div class="event-text md">${markdownHtml(event.text)}</div>` : `<span class="event-text">${e(event.text)}</span>`}<time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`,
-    )
+    .map((event, index, shown) => {
+      // The position in the whole record stays the same as events arrive, so an open one stays open.
+      const id = `event-${record.id}-${record.events.length - shown.length + index}`;
+      return `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span><div class="event-text">${event.kind === 'agent' ? moreMd(id, event.text, 200) : more(id, event.text, 200)}</div><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`;
+    })
     .join('')}</ol>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
   <div class="pane-terminal">${renderTerminal(view, live)}</div>
@@ -534,7 +581,7 @@ function renderReview(
   return `<div class="review" aria-labelledby="review-title"><h3 id="review-title">Version ${version.number}: ${e(turnLabels[version.turn])}</h3>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
-  ${version.reply ? `<div class="worker-reply"><p class="fine">The worker said (a model claim):</p><p class="pre">${e(version.reply)}</p></div>` : ''}
+  ${version.reply ? `<div class="worker-reply"><p class="fine">The worker said (a model claim):</p>${more(`reply-${task.id}-${version.number}`, version.reply, 200)}</div>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
   ${
@@ -577,7 +624,7 @@ function messageItem(message: Message): string {
     message.to === 'coordinator' && message.delivery === 'queued'
       ? 'Waits for the coordinator'
       : deliveryLabels[message.delivery];
-  return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}<p class="pre">${e(message.text)}</p>${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
+  return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, message.text, 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 /** The answer to an open blocker or objection. A decision changes no file. Its reason goes to the task that raised it. */
@@ -740,13 +787,10 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       view: 'home',
       task: message.from,
       kind: kindLabels[message.kind],
-      title:
-        message.text.length > 160
-          ? `${message.text.slice(0, 160)}…`
-          : message.text,
+      title: lead(message.text, 160),
       why: `From ${from}. ${coordinated ? 'The coordinator overruled two objections from this task, so this one goes to you.' : 'No coordinator runs, so only you can settle it.'}`,
       since: message.at,
-      body: `${message.text.length > 160 ? `<p class="pre">${e(message.text)}</p>` : ''}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
+      body: `${lead(message.text, 160) === message.text.replace(/\s+/g, ' ').trim() ? '' : `<details class="more" id="need-${e(message.id)}"><summary>Read the whole message</summary><p class="pre">${e(message.text)}</p></details>`}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
     });
   }
   if (!coordinated)
@@ -869,7 +913,7 @@ function coordinatorPanel(
   const waits = planWaits(view, tasks);
   const plan = state.planApproved
     ? ''
-    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(task.assignment.objective.slice(0, 300))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
+    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
   return {
     kind: 'Agent',
     title: 'Coordinator',
@@ -880,7 +924,7 @@ function coordinatorPanel(
   ${plan}
   ${notesToPerson(messages)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
-  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="messages">${actions.map((action) => `<li class="message"><p class="message-meta"><span>${e(action.tool.replace(/^verifold_/, ''))}</span><span>${action.ok ? 'Done' : 'Refused'}</span><time datetime="${e(action.at)}">${e(clock(action.at))}</time></p>${action.reason ? `<p class="pre">${e(action.reason)}</p>` : ''}<p class="fine">${e(action.result)}</p></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Reasons are the coordinator's reading, a model claim. Results come from Verifold.</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p><span class="tool">${e(action.tool.replace(/^verifold_/, ''))}</span> ${action.ok ? '' : '<strong>Verifold refused this.</strong> '}${e(action.result)}</p>${action.reason ? `<div class="why"><span class="tag reading">Its reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}</div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Results come from Verifold. Reasons are the coordinator's reading, a model claim.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
   <div class="actions">${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
   <p class="fine">If you stop it, running workers finish their turns, and their versions wait for your review.</p>`,
@@ -902,7 +946,7 @@ function bubble(message: Message): string {
     : message.delivery === 'delivered'
       ? `<span>Read by the coordinator${message.deliveredAt ? ` at ${e(clock(message.deliveredAt))}` : ''}</span>`
       : '<span>Waits for the coordinator</span>';
-  return `<li class="msg${mine ? ' mine' : ''}"><p class="msg-meta"><strong>${mine ? 'You' : 'Coordinator'}</strong><time datetime="${e(message.at)}">${e(since(message.at))}</time>${state}</p><p class="pre">${e(message.text)}</p></li>`;
+  return `<li class="msg${mine ? ' mine' : ''}"><p class="msg-meta"><strong>${mine ? 'You' : 'Coordinator'}</strong><time datetime="${e(message.at)}">${e(since(message.at))}</time>${state}</p>${more(`talk-${message.id}`, message.text, 200)}</li>`;
 }
 
 /** The coordinator on Home: its latest note, the person's messages, and the one box to write to it. */
@@ -927,7 +971,7 @@ function renderCoordinatorHome(
     .filter((message) => message !== note && !waiting.includes(message))
     .slice(-20);
   return `<section class="card coordinator-home" aria-labelledby="coordinator-title"><div class="section-title"><h2 id="coordinator-title" tabindex="-1">The coordinator</h2><span class="status ${status === 'running' || status === 'starting' ? 'active' : 'muted'}">${e(coordinatorStates[status ?? 'starting'] ?? 'Starting')}</span></div>
-  ${note ? `<div class="note"><p class="msg-meta"><strong>Its latest note</strong><time datetime="${e(note.at)}">${e(since(note.at))}</time><span class="tag reading">Its reading</span></p><p class="pre">${e(note.text)}</p></div>` : '<p class="empty-note">No note yet. The coordinator writes a note at milestones and when you ask.</p>'}
+  ${note ? `<div class="note"><p class="msg-meta"><strong>Its latest note</strong><time datetime="${e(note.at)}">${e(since(note.at))}</time><span class="tag reading">Its reading</span></p>${more(`note-${note.id}`, note.text, 280)}</div>` : '<p class="empty-note">No note yet. The coordinator writes a note at milestones and when you ask.</p>'}
   ${waiting.length ? `<ol class="convo">${waiting.map(bubble).join('')}</ol>` : ''}
   ${earlier.length ? `<details id="conversation"><summary>Earlier messages (${earlier.length})</summary><ol class="convo">${earlier.map(bubble).join('')}</ol></details>` : ''}
   <label class="field" for="coordinator-message">Message the coordinator</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: why is the data synthetic?"></textarea>
@@ -948,7 +992,7 @@ function renderFeed(
   return `<section class="card" aria-labelledby="feed-title"><div class="section-title"><h2 id="feed-title">Team feed</h2><span class="count">Newest first</span></div><ul class="feed">${feed
     .map(
       (message) =>
-        `<li><p class="msg-meta"><strong>${e(sender(message.from, tasks))}</strong><span>to ${e(sender(message.to, tasks))}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p><p class="feed-text">${e(message.text.length > 280 ? `${message.text.slice(0, 280)}…` : message.text)}</p></li>`,
+        `<li class="feed-row">${avatar(message.from === 'coordinator' ? 'coordinator' : 'task', '')}<div class="feed-body"><p class="feed-head"><strong>${e(sender(message.from, tasks))}</strong><span class="feed-to">to ${e(sender(message.to, tasks))}</span><span class="chip ${message.kind}">${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p>${more(`feed-${message.id}`, message.text, 140)}</div></li>`,
     )
     .join(
       '',
@@ -1109,7 +1153,7 @@ function taskPanel(
     .filter((message) => message.to === task.id || message.from === task.id)
     .slice(-50);
   const body = `<p class="session-meta"><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>
-    <dl class="task-fields"><dt>Objective</dt><dd class="pre">${e(task.assignment.objective)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${task.assignment.network ? `${e(task.assignment.network.domains.join(', '))}: ${e(task.assignment.network.reason)}${task.assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd><dt>Expected output</dt><dd class="pre">${e(task.assignment.output)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
+    <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, task.assignment.objective, 220)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${task.assignment.network ? `${e(task.assignment.network.domains.join(', '))}: ${e(task.assignment.network.reason)}${task.assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, task.assignment.output, 160)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
     ${task.state !== 'running' && agent ? `<div class="actions">${agent}</div>` : ''}
@@ -1178,7 +1222,7 @@ function renderRecords(
 
 /** The summary and the sources of one research report. Source links are validated before rendering. */
 function findingsBody(report: ResearchReport, attempt: string): string {
-  return `<div class="prose md">${markdownHtml(report.summary)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(attempt)}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>`;
+  return `<div class="prose">${moreMd(`findings-${attempt}`, report.summary, 400)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(attempt)}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>`;
 }
 
 /** The research record: the decision, the live step, the directions, the scope, the findings, and the brief. */
@@ -1198,7 +1242,7 @@ function renderResearchView(
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
   ${renderResearch(live.research, research?.latestAttempt)}
-  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Research directions</h2><span class="count">${workspace.candidates.length} proposed</span></div>${workspace.candidates.map((idea) => `<article class="direction"><div class="direction-heading"><h3>${e(idea.title)}</h3>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</div><div class="md">${markdownHtml(idea.recommendation)}</div>${choosable ? `<div class="actions"><button type="button" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div>` : ''}<details id="gates-${e(idea.id)}"><summary>Proposed verification gates</summary><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></details></article>`).join('')}</section>` : ''}
+  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Research directions</h2><span class="count">${workspace.candidates.length} proposed</span></div>${workspace.candidates.map((idea) => `<article class="direction"><div class="direction-heading"><h3>${e(idea.title)}</h3>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</div>${moreMd(`direction-${idea.id}`, idea.recommendation, 260)}${choosable ? `<div class="actions"><button type="button" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div>` : ''}<details id="gates-${e(idea.id)}"><summary>Proposed verification gates</summary><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></details></article>`).join('')}</section>` : ''}
   ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="card findings" aria-labelledby="findings-title"><div class="section-title"><h2 id="findings-title">Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
   ${report ? findingsBody(report, chosen?.id ?? '') : `<div class="empty-note"><p>${chosen ? 'No readable source report is available for this attempt.' : 'Your source record starts here.'}</p><p>${chosen ? 'Planning, failed, and interrupted attempts may have no report. Their evidence remains in the project.' : 'Sources and findings show here when research saves a report.'}</p></div>`}</section>
