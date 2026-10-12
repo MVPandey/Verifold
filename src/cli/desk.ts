@@ -302,7 +302,9 @@ async function act(
         return 200;
       }
       case 'coordinator-approve':
-        await coordinator.approvePlan();
+        await coordinator.approvePlan(
+          Array.isArray(body.extras) ? body.extras : [],
+        );
         return 200;
       case 'coordinator-stop':
         await coordinator.stop();

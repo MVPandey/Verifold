@@ -628,6 +628,17 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   const task = button.dataset.task;
   const version = Number(button.dataset.version);
   switch (action) {
+    case 'coordinator-approve':
+      // The extras that the person ticked start with the plan. Verifold cancels the others.
+      return {
+        action,
+        extras: Array.from(
+          content.querySelectorAll<HTMLInputElement>(
+            'input[data-extra]:checked',
+          ),
+          (box) => box.dataset.extra,
+        ),
+      };
     case 'task-create':
       return { action, ...taskBody('task-new') };
     case 'task-edit':
