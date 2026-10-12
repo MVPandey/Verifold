@@ -91,8 +91,8 @@ await test('init asks the question first, with the harness, model, and folder in
     ui.questions[0] ?? '',
     /Claude Code, with its default model\. Folder: /,
   );
-  assert.match(ui.questions[1] ?? '', /Which harness runs the research/);
-  assert.match(ui.questions[2] ?? '', /Model \[harness default\]/);
+  assert.match(ui.questions[1] ?? '', /Which harnesses run the research/);
+  assert.match(ui.questions[2] ?? '', /Model for Codex \[harness default\]/);
   assert.match(ui.questions[3] ?? '', /Project folder/);
   assert.match(ui.questions[4] ?? '', /Ask you before the source search/);
   assert.match(
@@ -132,6 +132,49 @@ await test('init asks the question first, with the harness, model, and folder in
   assert.equal(requests.length, 1);
   assert.equal(requests[0]?.host, 'codex');
   assert.match(requests[0]?.prompt ?? '', /heuristic failures/);
+});
+
+await test('setup offers a team: with both harnesses installed, a lead and a helper by default', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-init-team-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const agencyDir = join(root, 'agency');
+  const first = join(root, 'first');
+  await mkdir(first);
+  const ui = prompts(['Tiny graph search', '']);
+  const initialized = await initializeProject(
+    first,
+    root,
+    { agencyDir, harnesses: ['claude', 'codex'] },
+    ui.io,
+    signal(),
+    readyHost,
+  );
+  assert.match(
+    ui.questions[0] ?? '',
+    /Claude Code leads, with its default model, and Codex helps\. Folder: /,
+  );
+  assert.equal(initialized.workspace.host, 'claude');
+  assert.equal(initialized.workspace.helper, 'codex');
+  // The next project starts from the saved team. Its settings can choose one harness.
+  const second = join(root, 'second');
+  await mkdir(second);
+  const solo = prompts(['/settings', 'codex', '', '', '', 'Graph search', '']);
+  const single = await initializeProject(
+    second,
+    root,
+    { agencyDir, harnesses: ['claude'] },
+    solo.io,
+    signal(),
+    readyHost,
+  );
+  assert.match(solo.questions[0] ?? '', /Claude Code leads[\s\S]*Codex helps/);
+  // A team whose command is not on the PATH says so.
+  assert.match(
+    solo.questions[1] ?? '',
+    /Which harnesses run the research\?[\s\S]*Codex runs research, the coordinator, and every task\. Codex is not on your PATH\./,
+  );
+  assert.equal(single.workspace.host, 'codex');
+  assert.equal(single.workspace.helper, undefined);
 });
 
 await test('reviewed context and model are reused in another project and reach its harness', async (t) => {
@@ -357,7 +400,7 @@ for (const outcome of ['accept', 'reject', 'decline', 'failure'] as const) {
       },
     );
     assert.deepEqual(ui.remaining, []);
-    assert.match(ui.questions[0] ?? '', /Which harness runs the research/);
+    assert.match(ui.questions[0] ?? '', /Which harnesses run the research/);
     assert.equal(requests.length, outcome === 'decline' ? 0 : 1);
     assert.doesNotMatch(ui.messages.join('\n'), /PRIVATE_SOURCE_CONTENT/);
     if (outcome === 'accept') {

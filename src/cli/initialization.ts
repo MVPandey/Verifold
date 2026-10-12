@@ -11,7 +11,7 @@ import {
   memorySummary,
   type Agency,
 } from './agency.ts';
-import { validateModel, runHarness } from './harness.ts';
+import { validateModel, runHarness, type HarnessName } from './harness.ts';
 import { choose } from './choices.ts';
 import { parseProfile } from '../domain/profile.ts';
 import type { CliIO } from './commands.ts';
@@ -32,6 +32,8 @@ export interface InitializationOptions {
   readonly autonomy?: string;
   readonly setupOnly?: boolean;
   readonly workspaceSpecified?: boolean;
+  /** The harness commands on PATH, which the CLI looks up. With both, a new team has a helper by default. */
+  readonly harnesses?: readonly HarnessName[];
 }
 export interface Initialization {
   readonly root: string;
@@ -53,52 +55,103 @@ export function parseAutonomy(
   return autonomy;
 }
 
-/** Ask for the harness and its model. The current values are the defaults. */
-async function askHarness(
+/** The teams that setup offers: one harness, or a lead and a helper. */
+const teams: readonly {
+  readonly value: string;
+  readonly host: HarnessName;
+  readonly helper?: HarnessName;
+  readonly label: string;
+  readonly description: string;
+}[] = [
+  {
+    value: 'claude',
+    host: 'claude',
+    label: 'Claude Code',
+    description: 'Claude Code runs research, the coordinator, and every task.',
+  },
+  {
+    value: 'codex',
+    host: 'codex',
+    label: 'Codex',
+    description: 'Codex runs research, the coordinator, and every task.',
+  },
+  {
+    value: 'claude+codex',
+    host: 'claude',
+    helper: 'codex',
+    label: 'Claude Code leads and Codex helps',
+    description:
+      'Claude Code runs research and the coordinator. The coordinator gives tasks to both, for example the independent half of a check.',
+  },
+  {
+    value: 'codex+claude',
+    host: 'codex',
+    helper: 'claude',
+    label: 'Codex leads and Claude Code helps',
+    description:
+      'Codex runs research and the coordinator. The coordinator gives tasks to both, for example the independent half of a check.',
+  },
+];
+
+/** Ask for the team and the lead's model. The current values are the defaults. */
+async function askTeam(
   io: CliIO,
   host: string,
+  helper: HarnessName | undefined,
   model: string | undefined,
-): Promise<{ host: string; model: string | undefined }> {
+  installed: readonly HarnessName[] | undefined,
+): Promise<{
+  host: HarnessName;
+  helper: HarnessName | undefined;
+  model: string | undefined;
+}> {
+  // A team whose command the PATH does not hold says so. The person can still choose it.
+  const missing = (names: readonly HarnessName[]): string => {
+    const absent = installed
+      ? names.filter((name) => !installed.includes(name))
+      : [];
+    return absent.length
+      ? ` ${absent.map(hostName).join(' and ')} is not on your PATH.`
+      : '';
+  };
+  const current =
+    teams.find((team) => team.host === host && team.helper === helper)?.value ??
+    (host === 'codex' ? 'codex' : 'claude');
   const chosen = (
     await choose(
       io,
-      'Which harness runs the research?',
-      [
-        {
-          value: 'claude',
-          label: 'Claude Code',
-          description: 'It runs with your Claude Code sign-in and settings.',
-        },
-        {
-          value: 'codex',
-          label: 'Codex',
-          description: 'It runs with your Codex sign-in and settings.',
-        },
-      ],
-      host === 'codex' ? 'codex' : 'claude',
+      'Which harnesses run the research?',
+      teams.map((team) => ({
+        value: team.value,
+        label: team.label,
+        description: `${team.description}${missing(team.helper ? [team.host, team.helper] : [team.host])}`,
+      })),
+      current,
     )
   ).trim();
-  const current = chosen === host ? model : undefined;
+  const team = teams.find((entry) => entry.value === chosen) ?? teams[0];
+  if (!team) throw new Error('Choose a listed team.');
+  const kept = team.host === host ? model : undefined;
   const input = (
     await io.ask(
-      `Model [${current ?? 'harness default'}]; enter default to use the harness default: `,
+      `Model for ${hostName(team.host)} [${kept ?? 'harness default'}]; enter default to use the harness default: `,
       {
         kind: 'text',
-        label:
-          'Which model should it use? Leave it empty to keep the current choice.',
-        placeholder: current ?? 'Harness default',
+        label: `Which model should ${hostName(team.host)} use? Leave it empty to keep the current choice.`,
+        placeholder: kept ?? 'Harness default',
         actions: [{ label: 'Use the harness default', value: 'default' }],
       },
     )
   ).trim();
-  const next = input === 'default' ? undefined : input || current;
+  const next = input === 'default' ? undefined : input || kept;
   validateModel(next);
-  return { host: chosen, model: next };
+  return { host: team.host, helper: team.helper, model: next };
 }
 
-/** The harness, the model, the folder, and the optional research stop of a new project, in one line. */
+/** The team, the lead's model, the folder, and the optional research stop of a new project, in one line. */
 function settingsLine(
   host: string,
+  helper: HarnessName | undefined,
   model: string | undefined,
   root: string,
   askFirst: boolean,
@@ -109,7 +162,8 @@ function settingsLine(
       ? `~${root.slice(home.length)}`
       : root;
   const name = host === 'claude' || host === 'codex' ? hostName(host) : host;
-  return `${name}, with ${model ? `the model ${model}` : 'its default model'}. Folder: ${folder}.${askFirst ? ' Asks you before the source search.' : ''}`;
+  const lead = `with ${model ? `the model ${model}` : 'its default model'}`;
+  return `${helper ? `${name} leads, ${lead}, and ${hostName(helper)} helps` : `${name}, ${lead}`}. Folder: ${folder}.${askFirst ? ' Asks you before the source search.' : ''}`;
 }
 
 /**
@@ -158,8 +212,25 @@ export async function initializeProject(
   ).trim();
   let model = options.model ?? (saved?.host === host ? saved.model : undefined);
   validateModel(model);
+  // The saved team, or a lead and a helper when the PATH holds both harnesses.
+  const other: HarnessName = host === 'codex' ? 'claude' : 'codex';
+  let helper: HarnessName | undefined =
+    saved?.host === host
+      ? saved.helper
+      : io.interactive &&
+          !options.host &&
+          options.harnesses?.includes('claude') &&
+          options.harnesses.includes('codex')
+        ? other
+        : undefined;
   if (options.setupOnly && io.interactive && !options.host && !options.profile)
-    ({ host, model } = await askHarness(io, host, model));
+    ({ host, helper, model } = await askTeam(
+      io,
+      host,
+      helper,
+      model,
+      options.harnesses,
+    ));
   const profile = options.profile
     ? parseProfile(await readJson(resolve(cwd, options.profile)))
     : {
@@ -177,7 +248,7 @@ export async function initializeProject(
   if (!options.setupOnly && io.interactive) {
     io.step?.('Question');
     for (;;) {
-      const settings = settingsLine(host, model, root, askFirst);
+      const settings = settingsLine(host, helper, model, root, askFirst);
       const answer = (
         topic ??
         (await io.ask(
@@ -199,7 +270,13 @@ export async function initializeProject(
         topic = answer;
         break;
       }
-      ({ host, model } = await askHarness(io, host, model));
+      ({ host, helper, model } = await askTeam(
+        io,
+        host,
+        helper,
+        model,
+        options.harnesses,
+      ));
       if (!options.workspaceSpecified) {
         const selected = (
           await io.ask(`Project folder [${root}]: `, {
@@ -237,7 +314,11 @@ export async function initializeProject(
     );
   let context: string | undefined;
   if (!options.profile && (host === 'claude' || host === 'codex')) {
-    const agency: Agency = { host, ...(model ? { model } : {}) };
+    const agency: Agency = {
+      host,
+      ...(model ? { model } : {}),
+      ...(helper ? { helper } : {}),
+    };
     context = await loadMemory(directory);
     // Setup without research offers the reusable profile. Research setup starts with the question instead.
     if (
@@ -353,6 +434,7 @@ export async function initializeProject(
       profile,
       host,
       ...(model ? { model } : {}),
+      ...(helper && helper !== host ? { helper } : {}),
       ...(context ? { context } : {}),
       candidates: [],
       selectedId: null,

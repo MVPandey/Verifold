@@ -1294,10 +1294,18 @@ function taskPanel(
     (live.workers ?? []).some((worker) => worker.record.id === attempt.session)
       ? `<button type="button" data-worker="${e(attempt.session)}">Follow its agent</button>`
       : '';
+  // A failed start can move to the other harness of the team.
+  const team = live.coordinator?.state;
+  const moveTo =
+    attempt?.outcome === 'start-failed' && team
+      ? [team.host, ...(team.helper ? [team.helper] : [])].find(
+          (name) => name !== task.assignment.host,
+        )
+      : undefined;
   let next = '';
   switch (task.state) {
     case 'open':
-      next = `${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>
+      next = `${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}">Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(task.assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>
         ${editForm}`;
       break;
     case 'claimed':
@@ -1346,7 +1354,7 @@ function taskPanel(
   const thread = (view.messages ?? [])
     .filter((message) => message.to === task.id || message.from === task.id)
     .slice(-50);
-  const body = `<p class="session-meta"><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>
+  const body = `<p class="session-meta"><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>${task.assignment.hostReason ? `<p class="host-why"><span class="map-label">Why this harness</span> ${e(task.assignment.hostReason)}</p>` : ''}
     <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, task.assignment.objective, 220)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${task.assignment.network ? `${e(task.assignment.network.domains.join(', '))}: ${e(task.assignment.network.reason)}${task.assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, task.assignment.output, 160)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
@@ -1561,7 +1569,7 @@ function renderMap(
     const from = task.assignment.dependencies.length
       ? task.assignment.dependencies.join(' ')
       : 'objective';
-    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta"><span>${e(task.id)}</span>${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta">${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
   };
   return `<div class="map" data-map><div class="map-col"><div class="map-root" data-node="objective"><span class="map-label">Objective</span><span class="map-title">${e(lead(objective, 140))}</span></div></div>${Array.from(
     { length: columns },
@@ -1895,7 +1903,7 @@ function renderPlanCard(workspace: Workspace, live: DeskSession): string {
     : view.session?.record.events.findLast((event) => event.kind === 'agent')
         ?.text;
   const line = (task: TaskRecord): string =>
-    `<strong>${e(task.assignment.title)}</strong> <span class="fine">${e(hostName(task.assignment.host))}${task.assignment.dependencies.length ? `, after ${e(task.assignment.dependencies.map((id) => sender(id, all)).join(', '))}` : ''}</span>`;
+    `<strong>${e(task.assignment.title)}</strong> <span class="fine">${e(hostName(task.assignment.host))}${task.assignment.dependencies.length ? `, after ${e(task.assignment.dependencies.map((id) => sender(id, all)).join(', '))}` : ''}</span>${task.assignment.hostReason ? `<span class="fine host-why">${e(task.assignment.hostReason)}</span>` : ''}`;
   return `<section class="card plan${drafting ? '' : ' needs'}" aria-labelledby="plan-card-title"><div class="section-title"><h2 id="plan-card-title" tabindex="-1">The plan</h2><span class="status ${drafting ? 'active' : 'muted'}">${drafting ? 'The coordinator drafts it' : 'Waits for you'}</span></div>
   <h3>Direction</h3><p><strong>${e(idea.title)}</strong></p>${more(`plan-case-${idea.id}`, idea.recommendation, 280)}
   <h3>Checks</h3><ol class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ol>
