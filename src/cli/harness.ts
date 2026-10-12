@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { access, constants } from 'node:fs/promises';
+import { delimiter, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import {
   claudeUpdates,
@@ -8,6 +10,27 @@ import {
 } from './transcript.ts';
 
 export type HarnessName = 'claude' | 'codex';
+
+/**
+ * The harness commands that the PATH holds. This does not check the sign-in:
+ * a harness that is not signed in fails at its first run, with that reason.
+ */
+export async function installedHarnesses(
+  path = process.env.PATH ?? '',
+): Promise<HarnessName[]> {
+  const folders = path.split(delimiter).filter(Boolean);
+  const found: HarnessName[] = [];
+  for (const name of ['claude', 'codex'] as const)
+    for (const folder of folders)
+      try {
+        await access(join(folder, name), constants.X_OK);
+        found.push(name);
+        break;
+      } catch {
+        // Not in this folder.
+      }
+  return found;
+}
 
 export interface HarnessRequest {
   readonly host: HarnessName;
