@@ -16,6 +16,7 @@ import {
   SessionActionError,
   SessionManager,
   decisionLabel,
+  denialNote,
   needsReview,
   riskTags,
   type CommandEntry,
@@ -318,6 +319,17 @@ await test('risk tags read paths from the folder of the session', () => {
     'Outside folder',
   ]);
   assert.deepEqual(riskTags('Bash', 'cd ..', folder), ['Outside folder']);
+});
+
+await test('a denial note names the reason in plain words', () => {
+  assert.equal(
+    denialNote('Claude Code', 'mode'),
+    'Claude Code denied a tool call. In Strict mode it denies each call that would need approval.',
+  );
+  assert.equal(
+    denialNote('Claude Code', 'hook'),
+    'Claude Code denied a tool call. It gave the reason "hook".',
+  );
 });
 
 await test('decision labels do not claim more than the harness reported', () => {
@@ -1064,6 +1076,13 @@ await test('withdrawn and harness-denied Claude Code calls keep accurate labels'
     assert.equal(denied.outcome, 'denied');
     assert.equal(decisionLabel(denied, 'claude'), 'Denied by Claude Code');
     assert.equal(needsReview(denied), false);
+    assert.ok(
+      record.events.some(
+        (event) =>
+          event.text ===
+          'Claude Code denied a tool call. Its auto-mode classifier blocked the call.',
+      ),
+    );
     sessions.end();
 
     // A second session in the same desk process does not reuse R1.

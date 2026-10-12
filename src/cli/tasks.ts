@@ -2137,6 +2137,12 @@ ${assignment.output}
 Network: ${assignment.network ? `shell commands can reach ${assignment.network.domains.join(', ')}. Download only what the task needs.` : 'shell commands cannot reach the network. Use web search and web fetch to read sources.'}
 
 Time limit for this turn: ${assignment.minutes} minutes.${
+    assignment.host === 'claude'
+      ? `
+
+Shell commands: Claude Code can deny a shell command here without a reason. A denial stops only that command. Other shell commands still run. Simple commands are more likely to run: one command per call, paths from the task folder without cd or ../, and no variable inside double quotes, such as "$name" or "$?". Write files with the file tools, not with a shell redirect such as cat > file <<EOF. After a denial, try a simpler form.`
+      : ''
+  }${
     pods
       ? `
 
