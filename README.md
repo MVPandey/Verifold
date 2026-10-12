@@ -123,11 +123,11 @@ verifold handoff
 verifold view
 ```
 
-`recommend` prints a host request. `ideas --from` imports an array with `id`, `title`, `recommendation`, and a nonempty `gates` array.
+`recommend` prints a host request. `ideas --from` imports an array with `id`, `title`, `recommendation`, and a nonempty `checks` array. An older `gates` array is also accepted.
 
 After selection, `literature` prints an optional retention request. `--memory` also requests a Markdown memory file with source-to-file mappings. Both forms only print instructions. They do not invoke the harness or verify downloads. Official citation exports must remain separate from generated summaries.
 
-`handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and gates before execution. Verifold does not execute Automative in this version.
+`handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and checks before execution. Verifold does not execute Automative in this version.
 
 ### Manage your global profile
 
@@ -255,7 +255,7 @@ After Accept or Reject, Verifold removes the task folder if all its changes are 
 
 ### Coordinator
 
-The coordinator turns an objective into tasks for the workers. When you choose a research direction, the coordinator starts with the project's harness and model. Its first turn gets the direction as the objective, the research brief, and the direction's gates. You can also start it under Coordinator in the desk with an objective that you write.
+The coordinator turns an objective into tasks for the workers. When you choose a research direction, the coordinator starts with the project's harness and model. Its first turn gets the direction as the objective, the research brief, and the direction's checks. You can also start it under Coordinator in the desk with an objective that you write.
 
 The research mode applies here too. In Guided research, no task starts until you approve the coordinator's task plan under Coordinator. To change the plan first, write to the coordinator or edit a task. In Autonomous research, the coordinator starts tasks at once.
 

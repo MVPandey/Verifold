@@ -120,16 +120,24 @@ await test('private CLI workflow preserves explicit selection and host ownership
     await rm(root, { recursive: true, force: true });
   }
 });
-await test('host recommendations require unique IDs and gates', () => {
+await test('host recommendations require unique IDs and checks', () => {
   assert.throws(
     () =>
       parseCandidates([
-        { id: 'x', title: 'x', recommendation: 'x', gates: [] },
+        { id: 'x', title: 'x', recommendation: 'x', checks: [] },
       ]),
-    /verification gates/,
+    /proposed checks/,
   );
-  const item = { id: 'x', title: 'x', recommendation: 'x', gates: ['check'] };
+  const item = { id: 'x', title: 'x', recommendation: 'x', checks: ['check'] };
   assert.throws(() => parseCandidates([item, item]), /unique/);
+  // Older hosts and saved projects name them `gates`. Both keep the stored field.
+  assert.deepEqual(parseCandidates([item])[0]?.gates, ['check']);
+  assert.deepEqual(
+    parseCandidates([
+      { id: 'y', title: 'y', recommendation: 'y', gates: ['old'] },
+    ])[0]?.gates,
+    ['old'],
+  );
 });
 await test('harness-first onboarding and recommendation choice use injected prompts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-prompts-'));
