@@ -124,7 +124,7 @@ export async function runResearch(
       );
     let state: ResearchState = previous ?? {
       topic,
-      autonomy: options.autonomy ?? 'guided',
+      autonomy: options.autonomy ?? 'autonomous',
       phase: 'needs-plan',
     };
     if (options.autonomy && options.autonomy !== state.autonomy) {
@@ -364,16 +364,18 @@ export async function runResearch(
 }
 
 /**
- * Lock one direction for the project. With `expected`, the choice fails when
- * the list changed after the person read it. Selection starts no pilot or experiment.
+ * Choose one direction for the project. With `expected`, the choice fails when
+ * the list changed after the person read it. `replace` changes an earlier
+ * choice. Selection starts no pilot or experiment.
  */
 export async function selectIdea(
   root: string,
   id: unknown,
   expected?: readonly Candidate[],
+  replace = false,
 ): Promise<Workspace> {
   return changeWorkspace(root, (current) => {
-    if (!current || current.selectedId)
+    if (!current || (current.selectedId && !replace))
       throw new Error('Workspace missing or selection already locked.');
     if (
       expected &&

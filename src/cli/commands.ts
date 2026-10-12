@@ -155,7 +155,7 @@ const terminalHelp = `Commands in this terminal:
 - \`/research\`: continue research. In a project without research, add the question.
 - \`/approve\`: approve the research plan.
 - \`/feedback\` and your changes: revise the plan or the directions.
-- \`/select\` and a direction ID: choose a direction. This locks it.
+- \`/select\` and a direction ID: choose the direction when research did not draft a plan. The coordinator then drafts it.
 - \`a\` or \`d\`: allow once or deny the open request. If several are open, add the ID, for example \`a R2\`.
 - \`/cancel\`: stop the research step or the current turn. If both run, choose in the desk.
 - \`/end\`: end the session.
@@ -493,6 +493,7 @@ async function serveDesk(
       const coordinator = new Coordinator(root, {
         tasks,
         compute,
+        ...(io.progress ? { progress: io.progress } : {}),
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,

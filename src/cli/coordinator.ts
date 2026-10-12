@@ -140,6 +140,8 @@ export class Coordinator {
   private readonly results: ResultsStore;
   /** GPU pods: the person's limits and the leases. */
   private readonly compute: Compute | undefined;
+  /** A status line for the terminal. */
+  private readonly progress: ((line: string) => void) | undefined;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -149,11 +151,13 @@ export class Coordinator {
       readonly sessions: SessionManager;
       readonly debounceMs?: number;
       readonly compute?: Compute;
+      readonly progress?: (line: string) => void;
     },
   ) {
     this.root = root;
     this.tasks = options.tasks;
     this.sessions = options.sessions;
+    this.progress = options.progress;
     this.compute = options.compute;
     this.results = new ResultsStore(root);
     this.debounceMs = options.debounceMs ?? coordinatorLimits.debounceMs;
@@ -291,7 +295,8 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       host: workspace.host,
       ...(workspace.model ? { model: workspace.model } : {}),
       context: coordinatorContext(workspace),
-      guided: workspace.research?.autonomy !== 'autonomous',
+      // The plan always waits for the person: only they choose the direction and start the work.
+      guided: true,
     });
   }
 
@@ -374,6 +379,14 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
   turnEnded(record?: SessionRecord): void {
     if (record)
       this.tasks.coordinatorTurnEnded(record.status === 'idle').catch(() => {});
+    const state = this.state;
+    if (
+      record?.status === 'idle' &&
+      state &&
+      !state.stoppedAt &&
+      !state.planApproved
+    )
+      this.progress?.('The plan waits for you in the desk.');
     this.schedule();
   }
 

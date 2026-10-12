@@ -2867,3 +2867,30 @@ body.terminal-page {
 body:not(:has(.rail)) .menu-button {
   display: none;
 }
+
+/* ---------- The plan ---------- */
+.plan-tasks,
+.plan-others {
+  display: grid;
+  gap: 8px;
+  padding-left: 0;
+  list-style: none;
+}
+.plan-tasks {
+  padding-left: 20px;
+  list-style: decimal;
+}
+.plan-others li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.plan-others li > div {
+  flex: 1 1 260px;
+  min-width: 0;
+}
