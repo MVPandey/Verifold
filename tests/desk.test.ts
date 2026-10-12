@@ -1446,7 +1446,11 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
       dependencies,
     },
   });
-  const desk = (status: string, view: 'home' | 'research'): string =>
+  const desk = (
+    status: string,
+    view: 'home' | 'research',
+    approved = false,
+  ): string =>
     renderDesk(
       snapshot,
       undefined,
@@ -1481,7 +1485,7 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
             stoppedAt: null,
             session: 'C1',
             created: 2,
-            planApproved: false,
+            planApproved: approved,
             cursor: 0,
             wakeups: [],
             events: [],
@@ -1506,7 +1510,9 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
           limitedUntil: null,
         },
       } as never,
-      { view, panel: null },
+      approved
+        ? { view, panel: 'direction', direction: 'alt' }
+        : { view, panel: null },
     ).html;
   // Home opens the plan where it can be read. It does not approve it.
   const home = desk('idle', 'home');
@@ -1542,6 +1548,14 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
   );
   assert.match(plan, /<span class="selected-label">In the plan<\/span>/);
   // While the coordinator drafts, the plan cannot start.
+  // After the work started, the plan card goes, and another direction offers a change.
+  const started = desk('idle', 'research', true);
+  assert.doesNotMatch(started, /plan-card-title/);
+  assert.match(
+    started,
+    /data-action="change-direction" data-idea="alt" data-confirm="Click again to stop the work and change the direction">Change to this direction/,
+  );
+  assert.doesNotMatch(started, /data-action="redraft"/);
   const drafting = desk('running', 'research');
   assert.match(drafting, /The coordinator drafts it/);
   assert.match(

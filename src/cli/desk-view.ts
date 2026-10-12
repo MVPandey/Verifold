@@ -1837,6 +1837,19 @@ function redraftable(workspace: Workspace, live: DeskSession): boolean {
   );
 }
 
+/** The work on the chosen direction started, and no research step runs, so the direction can change. */
+function changeable(workspace: Workspace, live: DeskSession): boolean {
+  const state = live.coordinator?.state;
+  return (
+    live.research !== undefined &&
+    !live.research.running &&
+    !!workspace.selectedId &&
+    !!state &&
+    !state.stoppedAt &&
+    state.planApproved
+  );
+}
+
 /** How a direction relates to the plan. */
 function directionRole(
   idea: Candidate,
@@ -1927,7 +1940,7 @@ function directionPanel(
     <h3>Its checks</h3><ul class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul>
     <p class="fine">The coordinator gets these checks with the direction, and plans tasks that give evidence for them.</p>
     ${idea.sources?.length ? `<h3>Its sources</h3><ol class="sources">${idea.sources.map((source) => `<li>${link(source)}</li>`).join('')}</ol>` : ''}
-    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}">Choose this direction</button></div><p class="fine">The coordinator then drafts the plan for it. No task starts before you start the work.</p>` : !chosen && redraftable(workspace, live) ? `<div class="actions"><button type="button" data-action="redraft" data-idea="${e(idea.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button></div><p class="fine">The coordinator stops its draft and drafts the plan for this direction. No task has started.</p>` : ''}`,
+    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}">Choose this direction</button></div><p class="fine">The coordinator then drafts the plan for it. No task starts before you start the work.</p>` : !chosen && redraftable(workspace, live) ? `<div class="actions"><button type="button" data-action="redraft" data-idea="${e(idea.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button></div><p class="fine">The coordinator stops its draft and drafts the plan for this direction. No task has started.</p>` : !chosen && changeable(workspace, live) ? `<div class="actions"><button type="button" data-action="change-direction" data-idea="${e(idea.id)}" data-confirm="Click again to stop the work and change the direction">Change to this direction</button></div><p class="fine">The coordinator stops, and so do the running turns. Their work waits for your review, and done work stays in the project. The coordinator then drafts the plan for this direction, and the plan waits for you.</p>` : ''}`,
   };
 }
 
