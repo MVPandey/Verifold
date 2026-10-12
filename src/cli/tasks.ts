@@ -84,6 +84,8 @@ export interface Assignment {
   readonly by?: 'coordinator';
   /** An add-on in the coordinator's draft plan. The person can leave it out before the work starts. */
   readonly extra?: true;
+  /** Why the coordinator gave the task its harness. */
+  readonly hostReason?: string;
 }
 
 export interface VersionFile extends ChangedFile {
@@ -198,6 +200,8 @@ export interface TaskInputFields {
   readonly network?: unknown;
   /** True for an add-on of the coordinator's draft plan. */
   readonly extra?: unknown;
+  /** The coordinator's reason for the harness. */
+  readonly hostReason?: unknown;
 }
 
 /**
@@ -1614,6 +1618,17 @@ export class TaskManager {
       ...(by === 'coordinator' && fields.extra === true
         ? { extra: true as const }
         : {}),
+      ...(by === 'coordinator' &&
+      typeof fields.hostReason === 'string' &&
+      fields.hostReason.trim()
+        ? {
+            hostReason: line(
+              fields.hostReason,
+              'reason for the harness',
+              300,
+            ).replace(/\s+/g, ' '),
+          }
+        : {}),
     };
     const file = await open(
       join(this.revisionFolder(id, revision), 'assignment.json'),
@@ -1757,6 +1772,7 @@ function parseAssignment(value: unknown): Assignment | null {
     !Array.isArray(entry.inputs) ||
     !entry.inputs.every(savedFile) ||
     !(entry.extra === undefined || entry.extra === true) ||
+    !(entry.hostReason === undefined || text(entry.hostReason)) ||
     !(
       entry.network === undefined ||
       entry.network === null ||
