@@ -444,14 +444,11 @@ async function serveDesk(
               ),
             ),
         onEvent: (event, view) => {
-          const line = io.interactive
-            ? feedLine(
-                event,
-                view
-                  ? `${hostName(view.record.host)}${view.record.task ? ` ${view.record.task.id}` : ''}`
-                  : undefined,
-              )
-            : null;
+          // The events of task workers stay in the desk. A session that the person controls prints its events here.
+          const line =
+            io.interactive && !view?.record.task
+              ? feedLine(event, view ? hostName(view.record.host) : undefined)
+              : null;
           if (line) io.progress?.(line);
           // The session that `verifold session` started decides when this command ends.
           if (!owned.session || view?.record.id !== owned.session) return;
