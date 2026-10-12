@@ -244,6 +244,7 @@ await test('terminal commands and desk actions call the same research operations
     'desk-terminal.js',
     'desk-terminals.js',
     'desk-lease.js',
+    'desk-map.js',
     'manrope.ttf',
     'symbol.webp',
   ])

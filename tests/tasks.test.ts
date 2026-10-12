@@ -961,6 +961,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     'desk-terminal.js',
     'desk-terminals.js',
     'desk-lease.js',
+    'desk-map.js',
     'manrope.ttf',
     'symbol.webp',
   ])

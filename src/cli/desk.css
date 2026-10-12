@@ -1806,7 +1806,7 @@ body[data-detail='details'] .summary-only {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 44px;
+  gap: 56px;
   overflow-x: auto;
   padding: 4px 2px 12px;
 }

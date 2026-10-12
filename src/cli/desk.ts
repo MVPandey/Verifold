@@ -380,6 +380,7 @@ export async function startDesk(
     ['/desk-client.js', 'desk-client.js', 'text/javascript; charset=utf-8'],
     ['/desk-terminal.js', 'desk-terminal.js', 'text/javascript; charset=utf-8'],
     ['/desk-lease.js', 'desk-lease.js', 'text/javascript; charset=utf-8'],
+    ['/desk-map.js', 'desk-map.js', 'text/javascript; charset=utf-8'],
     [
       '/desk-terminals.js',
       'desk-terminals.js',
