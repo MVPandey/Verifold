@@ -569,6 +569,88 @@ await test('desk points to the coordinator after a direction and shows its notes
   );
 });
 
+await test('the rail lists each task, also after its worker slot goes to another task', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-04T12:00:00.000Z';
+  const task = (id: string, state: string, session: string, title: string) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    attempts: [
+      {
+        number: 1,
+        startedAt: at,
+        session,
+        outcome: null,
+        note: null,
+        restrictions: [],
+        versions: [],
+      },
+    ],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title,
+      objective: 'Run.',
+      inputs: [],
+      writable: ['results'],
+      output: 'A report.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies: [],
+    },
+  });
+  // Task 3 runs in the slot that task 1's worker held, so task 1 has no worker now.
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: 'S3',
+      host: 'claude',
+      status: 'running',
+      mode: 'strict',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: at,
+      events: [],
+      commands: [],
+      requests: [],
+      task: { id: 'task-3', claim: 'c-3' },
+    },
+  };
+  const html = renderDesk(snapshot, undefined, null, {
+    session: null,
+    workers: [worker],
+    controllable: true,
+    tasks: {
+      list: [
+        task('task-1', 'done', 'S1', 'Implementation A'),
+        task('task-2', 'cancelled', 'S2', 'Dropped idea'),
+        task('task-3', 'running', 'S3', 'Compare'),
+      ],
+      selected: null,
+      idle: [],
+      messages: [],
+    },
+  } as never).html;
+  const rail = html.slice(
+    html.indexOf('<div class="rail-team">'),
+    html.indexOf('<div class="rail-foot">'),
+  );
+  assert.match(
+    rail,
+    /data-task-select="task-1" aria-pressed="false">[\s\S]*?Implementation A[\s\S]*?Done/,
+  );
+  assert.match(rail, /data-worker="S3"[\s\S]*?Compare/);
+  assert.doesNotMatch(rail, /Dropped idea/);
+});
+
 await test('desk frame shows one view, the team, and one panel', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
