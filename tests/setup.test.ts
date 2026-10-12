@@ -23,7 +23,7 @@ await test('the setup bridge turns each question into one desk prompt', async ()
   const controller = new AbortController();
   const bridge = new SetupBridge(terminal(lines), controller.signal);
   const { io } = bridge;
-  io.step?.('Connect');
+  io.step?.('Question');
   const host = io.select?.(
     '01 / Connect · Choose your agent harness',
     [
@@ -33,7 +33,7 @@ await test('the setup bridge turns each question into one desk prompt', async ()
     'claude',
   );
   let view = bridge.view();
-  assert.equal(view.step, 'Connect');
+  assert.equal(view.step, 'Question');
   assert.equal(view.prompt?.kind, 'choice');
   const choice = view.prompt?.id ?? 0;
   assert.throws(() => bridge.answer(choice, 'gemini'), /listed options/);
@@ -70,7 +70,7 @@ await test('the setup bridge turns each question into one desk prompt', async ()
       ['agent', 'Which baseline?'],
     ],
   );
-  assert.ok(lines.some((line) => line.includes('Connect')));
+  assert.ok(lines.some((line) => line.includes('Question')));
   const waiting = io.ask('Anything else? ');
   controller.abort();
   await assert.rejects(waiting, { name: 'AbortError' });
@@ -149,10 +149,11 @@ await test('bare verifold sets up a new project in the desk and opens the projec
         Promise.reject(
           new Error('The terminal must not ask during desk setup.'),
         ),
-      select: (question, _choices, initial) => {
-        assert.match(question, /set up this project/);
-        return Promise.resolve(initial);
-      },
+      // Bare verifold opens setup in the desk without a choice in the terminal.
+      select: () =>
+        Promise.reject(
+          new Error('The terminal must not choose during desk setup.'),
+        ),
       out: (value) => urls.push(value),
       progress: (line) => lines.push(line),
       browse: (url) => {
@@ -183,17 +184,20 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     });
     assert.equal(response.status, 200, await response.text());
   };
+  // One question at a time: the question with its settings, at most three quick questions, then the brief.
   const answers: [RegExp, unknown][] = [
-    [/Choose your agent harness/, 'claude'],
-    [/Which model should your harness use/, ''],
-    [/Give your agents useful research context/, 'skip'],
-    [/What do you want to research/, 'Fast graph search on CPUs'],
-    [/Reply to your harness/, 'The speedrun baseline'],
+    [
+      /What do you want to find out\?[\s\S]*Claude Code, with its default model\. Folder: /,
+      'Fast graph search on CPUs',
+    ],
+    [
+      /class="setup-said"[\s\S]*Which baseline do you trust\?[\s\S]*Question 1 of up to 3/,
+      'The speedrun baseline',
+    ],
     [
       /Review the brief/,
       { action: 'edit', brief: '# Research brief\n\nEdited by me.' },
     ],
-    [/How should your agents explore/, 'guided'],
   ];
   const seen: string[] = [];
   for (const [pattern, value] of answers) {
@@ -206,8 +210,11 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     assert.match(html, pattern);
     seen.push(pattern.source);
     if (pattern.source === 'Review the brief') {
-      // Details shows the harness runs of setup, with Markdown as HTML.
-      assert.match(html, /data-source="setup"/);
+      // The setup log holds the earlier steps and, under Details, the harness runs of setup.
+      assert.match(
+        html,
+        /<details class="setup-log"[\s\S]*data-source="setup"/,
+      );
       const page = (await (
         await fetch(`${url.origin}/api/transcript?source=setup`, { headers })
       ).json()) as { entries: { kind: string; html?: string }[] };
@@ -235,7 +242,9 @@ await test('bare verifold sets up a new project in the desk and opens the projec
   assert.equal(workspace.context, '# Research brief\n\nEdited by me.');
   assert.equal(workspace.research?.phase, 'awaiting-plan-review');
   assert.ok(
-    lines.some((line) => line.includes('Setup step in the desk: Interview')),
+    lines.some((line) =>
+      line.includes('Setup step in the desk: Quick questions'),
+    ),
   );
   assert.ok(existsSync(join(project, '.verifold', 'owner.json')));
   controller.abort();

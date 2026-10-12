@@ -137,14 +137,14 @@ await test('harness events remain in scrollback when an active indicator complet
 
 await test('guided initialization collects a broad topic without launching research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-initialization-'));
+  // The question first. /settings changes the harness on the way.
   const answers = [
+    '/settings',
     'codex',
     '',
-    'skip',
     '',
-    'no',
     'Formal proof search',
-    '',
+    'no',
     '',
   ];
   try {
