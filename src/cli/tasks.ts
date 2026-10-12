@@ -82,6 +82,8 @@ export interface Assignment {
   } | null;
   /** Absent when the person wrote this revision. */
   readonly by?: 'coordinator';
+  /** An add-on in the coordinator's draft plan. The person can leave it out before the work starts. */
+  readonly extra?: true;
 }
 
 export interface VersionFile extends ChangedFile {
@@ -194,6 +196,8 @@ export interface TaskInputFields {
   readonly dependencies?: unknown;
   /** `{ domains, reason }`. No domains: no network. */
   readonly network?: unknown;
+  /** True for an add-on of the coordinator's draft plan. */
+  readonly extra?: unknown;
 }
 
 /**
@@ -1607,6 +1611,9 @@ export class TaskManager {
       dependencies: dependencies.filter(validTaskId),
       network: network(fields.network),
       ...(by === 'coordinator' ? { by } : {}),
+      ...(by === 'coordinator' && fields.extra === true
+        ? { extra: true as const }
+        : {}),
     };
     const file = await open(
       join(this.revisionFolder(id, revision), 'assignment.json'),
@@ -1749,6 +1756,7 @@ function parseAssignment(value: unknown): Assignment | null {
     !entry.dependencies.every(validTaskId) ||
     !Array.isArray(entry.inputs) ||
     !entry.inputs.every(savedFile) ||
+    !(entry.extra === undefined || entry.extra === true) ||
     !(
       entry.network === undefined ||
       entry.network === null ||

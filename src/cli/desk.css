@@ -2894,3 +2894,14 @@ body:not(:has(.rail)) .menu-button {
   flex: 1 1 260px;
   min-width: 0;
 }
+.plan-extras {
+  display: grid;
+  gap: 6px;
+  padding-left: 0;
+  list-style: none;
+}
+.plan-extras label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
