@@ -263,7 +263,12 @@ await test('Claude Code and Codex workers reach Verifold tools over their own pi
     state(tasks, a, 'review'),
     state(tasks, b, 'review'),
   ]);
-  const messages = await tasks.messageList();
+  // A tool call can be saved just after its turn ends, so wait for both messages.
+  let messages = await tasks.messageList();
+  for (let tries = 0; tries < 250 && messages.length < 2; tries++) {
+    await delay(20);
+    messages = await tasks.messageList();
+  }
   assert.deepEqual(
     messages.map((message) => [message.from, message.to, message.text]).sort(),
     [
