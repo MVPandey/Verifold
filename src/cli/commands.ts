@@ -22,7 +22,7 @@ import {
 import { ResearchRunner } from './research-runner.ts';
 import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
-import { runHarness } from './harness.ts';
+import { installedHarnesses, runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
@@ -950,6 +950,7 @@ export async function runCli(
       ...(values.autonomy !== undefined ? { autonomy: values.autonomy } : {}),
       setupOnly: values['setup-only'] ?? false,
       workspaceSpecified: values.workspace !== undefined,
+      harnesses: await installedHarnesses(),
     };
     // Bare verifold in a new folder sets up in the desk. init and --no-open stay the terminal path.
     if (launch && !values['no-open']) {

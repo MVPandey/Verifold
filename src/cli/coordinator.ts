@@ -6,6 +6,7 @@ import { validateModel, type HarnessName } from './harness.ts';
 import { messageLimits } from './messages.ts';
 import { loadPrompt } from './prompts.ts';
 import {
+  hostName,
   readRecord,
   SessionActionError,
   type SessionManager,
@@ -63,6 +64,8 @@ export interface CoordinatorState {
   readonly objective: string;
   readonly host: HarnessName;
   readonly model: string | null;
+  /** The second harness of the team. Absent in older records: the team is the lead alone. */
+  readonly helper?: HarnessName | null;
   readonly startedAt: string;
   /** The person stopped the coordinator. It gets no more wakeups. */
   readonly stoppedAt: string | null;
@@ -222,6 +225,8 @@ export class Coordinator {
     readonly objective: unknown;
     readonly host: unknown;
     readonly model?: unknown;
+    /** The second harness of the team, if any. */
+    readonly helper?: unknown;
     /** The research brief and the chosen direction. */
     readonly context?: string;
     /** The person approves the first task plan before any task starts. */
@@ -249,11 +254,17 @@ export class Coordinator {
       } catch (error) {
         fail(error instanceof Error ? error.message : 'Invalid model.');
       }
+      const helper =
+        (input.helper === 'claude' || input.helper === 'codex') &&
+        input.helper !== host
+          ? input.helper
+          : null;
       await this.save({
         schemaVersion: 1,
         objective,
         host,
         model,
+        helper,
         startedAt: new Date().toISOString(),
         stoppedAt: null,
         session: null,
@@ -274,7 +285,7 @@ export class Coordinator {
 Objective:
 ${objective}
 ${input.context ? `\n${input.context}\n` : ''}
-Default harness for workers: ${host === 'claude' ? 'Claude Code' : 'Codex'}${model ? `, model ${model}` : ''}. Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
+${helper ? `The team: ${hostName(host)} leads: it runs research and you. ${hostName(helper)} helps. Give each task the harness that fits it, and say why in hostReason. When a check compares two results, run the second one on the other harness, so that a mistake of one model family cannot pass both. Tasks run on ${hostName(host)} when you name no harness${model ? `, with the model ${model}` : ''}.` : `Workers run on ${hostName(host)}${model ? `, with the model ${model}` : ''}.`} Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
 ${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan for the person: what the tasks do, about how long the work takes, and why each task runs on its harness. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
           tools: this.tools(),
@@ -291,6 +302,16 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
   }
 
+  /** A task can run only on a harness of the team. */
+  private inTeam(host: unknown): void {
+    const state = this.current();
+    const team = [state.host, ...(state.helper ? [state.helper] : [])];
+    if (!team.some((name) => name === host))
+      fail(
+        `Give the task a harness of the team: ${team.map(hostName).join(' or ')}.`,
+      );
+  }
+
   /** Start the coordinator for the chosen direction, unless one already runs. */
   async startForDirection(workspace: Workspace): Promise<void> {
     if (this.state && !this.state.stoppedAt) return;
@@ -300,6 +321,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       objective,
       host: workspace.host,
       ...(workspace.model ? { model: workspace.model } : {}),
+      ...(workspace.helper ? { helper: workspace.helper } : {}),
       context: coordinatorContext(workspace),
       // The plan always waits for the person: only they choose the direction and start the work.
       guided: true,
@@ -548,6 +570,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           fail(
             `You created ${coordinatorLimits.tasks} tasks, the limit for this objective.`,
           );
+        this.inTeam(args.host ?? state.host);
         const id = await this.tasks.create(
           {
             title: args.title,
@@ -565,6 +588,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             dependencies: args.dependencies,
             network: args.network,
             extra: args.extra,
+            hostReason: args.hostReason,
           },
           'coordinator',
           `Created by the coordinator: ${why()}`,
@@ -577,6 +601,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           (await this.tasks.get(args.task)) ??
           fail('That task does not exist.');
         const current = task.assignment;
+        this.inTeam(args.host ?? current.host);
         await this.tasks.edit(
           task.id,
           {
@@ -596,6 +621,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             dependencies: args.dependencies ?? current.dependencies,
             network: args.network ?? current.network,
             extra: args.extra ?? current.extra,
+            hostReason: args.hostReason ?? current.hostReason,
             reason: `The coordinator: ${why()}`,
           },
           'coordinator',
@@ -1115,6 +1141,11 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
           description:
             'True for an add-on: work that the person can include in the plan or leave out before the work starts.',
         },
+        hostReason: {
+          type: 'string',
+          maxLength: 300,
+          description: 'Why the task runs on its harness. The person reads it.',
+        },
         reason,
       },
       required: ['title', 'objective', 'writable', 'output', 'reason'],
@@ -1142,6 +1173,11 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
           type: 'boolean',
           description:
             'True for an add-on: work that the person can include in the plan or leave out before the work starts.',
+        },
+        hostReason: {
+          type: 'string',
+          maxLength: 300,
+          description: 'Why the task runs on its harness. The person reads it.',
         },
         reason,
       },

@@ -188,11 +188,12 @@ await test('bare verifold sets up a new project in the desk and opens the projec
   // The settings turn on the stop before the source search, so research waits at its plan and starts no coordinator.
   const answers: [RegExp, unknown][] = [
     [
-      /What do you want to find out\?[\s\S]*Claude Code, with its default model\. Folder: /,
+      // With both harnesses on the PATH, the default team has a helper.
+      /What do you want to find out\?[\s\S]*Claude Code(?: leads)?, with its default model(?:, and Codex helps)?\. Folder: /,
       '/settings',
     ],
-    [/Which harness runs the research/, 'claude'],
-    [/Which model should it use/, ''],
+    [/Which harnesses run the research/, 'claude'],
+    [/Which model should Claude Code use/, ''],
     [/Ask you before the source search/, 'y'],
     [/Asks you before the source search\./, 'Fast graph search on CPUs'],
     [

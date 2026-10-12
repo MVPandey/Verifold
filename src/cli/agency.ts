@@ -28,6 +28,8 @@ import { contextFiles } from './context-files.ts';
 export interface Agency {
   readonly host: HarnessName;
   readonly model?: string;
+  /** The second harness of the team, saved as the default for the next project. */
+  readonly helper?: HarnessName;
 }
 
 export interface ProfileState {
@@ -119,9 +121,14 @@ export async function loadAgency(
     if (data.host !== 'claude' && data.host !== 'codex')
       throw new Error('Saved agency harness must be claude or codex.');
     validateModel(data.model);
+    const host = data.host;
+    const helper = (['claude', 'codex'] as const).find(
+      (name) => name === data.helper && name !== host,
+    );
     return {
-      host: data.host,
+      host,
       ...(data.model === undefined ? {} : { model: data.model }),
+      ...(helper ? { helper } : {}),
     };
   } catch (error) {
     if (missing(error)) return undefined;
