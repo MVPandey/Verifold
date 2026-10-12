@@ -79,7 +79,11 @@ class Workers implements TaskSessions {
     task: { id: string; claim: string };
     tools?: AgentTools;
   }[] = [];
+  /** The next starts fail, as when a harness is not signed in. */
+  failStart = false;
   startTask(input: (typeof this.started)[number]): Promise<string> {
+    if (this.failStart)
+      return Promise.reject(new Error('Could not start Claude Code.'));
     this.started.push(input);
     return Promise.resolve(`S${this.started.length}`);
   }
@@ -729,9 +733,18 @@ await test('in Guided research no task starts before the person approves the pla
 
 await test('a chosen direction starts the coordinator, which drafts the plan for the person to approve', async (t) => {
   const { coordinator, inputs, script, tasks, turns } = await team(t);
-  // A worker on another harness does not get the coordinator's model.
+  // A task on the helper harness does not get the coordinator's model, and it keeps its reason.
   await script([
-    [{ name: 'verifold_create_task', arguments: { ...prior, host: 'codex' } }],
+    [
+      {
+        name: 'verifold_create_task',
+        arguments: {
+          ...prior,
+          host: 'codex',
+          hostReason: 'Codex writes the code, so Claude Code tests it.',
+        },
+      },
+    ],
   ]);
   const workspace = {
     schemaVersion: 1 as const,
@@ -739,6 +752,7 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
     profile: { name: 'R', interests: [], scholar: '', github: '', session: '' },
     host: 'claude',
     model: 'sonnet',
+    helper: 'codex',
     context: 'Shortest paths on sparse graphs.',
     candidates: [
       {
@@ -768,8 +782,16 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
   assert.equal(state?.model, 'sonnet');
   // Also in a project that searched without a stop, the plan waits for the person.
   assert.equal(state?.planApproved, false);
+  assert.equal(state?.helper, 'codex');
   const created = (await tasks.list())[0]?.assignment;
-  assert.deepEqual([created?.host, created?.model], ['codex', null]);
+  assert.deepEqual(
+    [created?.host, created?.model, created?.hostReason],
+    ['codex', null, 'Codex writes the code, so Claude Code tests it.'],
+  );
+  assert.match(
+    (await inputs())[0] ?? '',
+    /The team: Claude Code leads: it runs research and you\. Codex helps\.[\s\S]*run the second one on the other harness/,
+  );
   assert.match(
     (await inputs())[0] ?? '',
     /Research brief:\nShortest paths on sparse graphs\.\n\nChosen direction: Compare sparse-graph baselines[\s\S]*- Both run on the same graphs\.[\s\S]*Add-ons from research\. Draft each one as an extra task[\s\S]*- Profile memory use: Measure the peak memory of both\.[\s\S]*the person approves your first task plan before any task starts[\s\S]*about how long the work takes/,
@@ -777,6 +799,106 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
   // A running coordinator is not started again.
   await coordinator.startForDirection(workspace);
   assert.equal(coordinator.view()?.state.startedAt, state?.startedAt);
+});
+
+await test('a task gets only a harness of the team', async (t) => {
+  const { coordinator, script, results, turns } = await team(t);
+  await script([
+    [{ name: 'verifold_create_task', arguments: { ...prior, host: 'codex' } }],
+  ]);
+  // Without a helper, the team is the lead alone.
+  await coordinator.start({
+    objective: 'Compare baselines.',
+    host: 'claude',
+    guided: true,
+  });
+  await turns(1);
+  const [refused] = await results();
+  assert.equal(refused?.result.isError, true);
+  assert.match(
+    refused?.result.content[0]?.text ?? '',
+    /Give the task a harness of the team: Claude Code\./,
+  );
+});
+
+await test('a task whose start failed runs on the other harness of the team', async (t) => {
+  const { root, tasks, workers, coordinator } = await team(t);
+  await coordinator.start({
+    objective: 'Compare baselines.',
+    host: 'claude',
+    helper: 'codex',
+    guided: true,
+  });
+  const id = await tasks.create({
+    title: 'Pilot',
+    objective: 'Run the pilot.',
+    writable: 'results',
+    output: 'results/pilot.md',
+    host: 'claude',
+  });
+  workers.failStart = true;
+  await assert.rejects(tasks.start(id), /Could not start Claude Code/);
+  workers.failStart = false;
+  const assets = join(root, 'assets');
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
+    'desk-map.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  for (const name of ['purify.js', 'xterm.js', 'xterm.css', 'addon-fit.js'])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    pathToFileURL(`${assets}/cli/`),
+    new SessionPool(root, { clientVersion: 'test', ownerId: 'owner-1' }),
+    undefined,
+    undefined,
+    tasks,
+    coordinator,
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  // The task panel offers the other harness of the team.
+  const panel = (await (
+    await fetch(`${url.origin}/api/view?view=tasks&panel=task&task=${id}`, {
+      headers,
+    })
+  ).json()) as { html: string };
+  assert.match(
+    panel.html,
+    /data-action="task-switch-host" data-task="task-1">Run it on Codex/,
+  );
+  const response = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'task-switch-host', task: id }),
+  });
+  assert.equal(response.status, 200, await response.text());
+  const moved = await tasks.get(id);
+  assert.equal(moved?.assignment.host, 'codex');
+  assert.equal(moved?.state, 'running');
+  assert.match(moved?.assignment.reason ?? '', /moved the task to Codex/);
+  // On the map, a task off the lead harness carries the mark of its harness.
+  const map = (await (
+    await fetch(`${url.origin}/api/view?view=tasks`, { headers })
+  ).json()) as { html: string };
+  assert.match(map.html, /Pilot<span class="host-chip">Codex<\/span>/);
 });
 
 await test('extras: the person ticks the add-ons, and Verifold cancels the others', async (t) => {

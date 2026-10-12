@@ -31,6 +31,8 @@ export interface Workspace {
   readonly profile: Profile;
   readonly host: string;
   readonly model?: string;
+  /** The second harness of the team. The coordinator can give it tasks. The lead (`host`) runs research and the coordinator. */
+  readonly helper?: 'claude' | 'codex';
   readonly context?: string;
   readonly candidates: readonly Candidate[];
   readonly selectedId: string | null;
@@ -97,12 +99,17 @@ export function parseWorkspace(value: unknown): Workspace {
   )
     throw new Error('Selected idea is missing.');
   validateModel(data.model);
+  const host = string(data.host, 'host');
+  const helper = (['claude', 'codex'] as const).find(
+    (name) => name === data.helper && name !== host,
+  );
   return {
     schemaVersion: 1,
     visibility: 'private',
     profile: parseProfile(data.profile),
-    host: string(data.host, 'host'),
+    host,
     ...(data.model ? { model: data.model } : {}),
+    ...(helper ? { helper } : {}),
     ...(data.context === undefined
       ? {}
       : { context: parseContext(data.context) }),

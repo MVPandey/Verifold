@@ -25,6 +25,7 @@ import {
 import type { ResearchReport } from './research.ts';
 import {
   SessionActionError,
+  hostName,
   sessionTranscript,
   validSessionId,
 } from './session.ts';
@@ -102,8 +103,38 @@ function taskFields(body: Record<string, unknown>): TaskInputFields {
 async function taskAction(
   tasks: TaskManager,
   body: Record<string, unknown>,
+  coordinator: Coordinator | undefined,
 ): Promise<void> {
   switch (body.action) {
+    case 'task-switch-host': {
+      // A task whose start failed can run on the other harness of the team, as the person's revision.
+      const task = await tasks.get(body.task);
+      if (!task) throw new SessionActionError('That task does not exist.');
+      const state = coordinator?.view()?.state;
+      const team = state
+        ? [state.host, ...(state.helper ? [state.helper] : [])]
+        : [];
+      const other = team.find((name) => name !== task.assignment.host);
+      if (!other)
+        throw new SessionActionError(
+          'The team has no other harness for this task.',
+        );
+      const current = task.assignment;
+      await tasks.edit(task.id, {
+        title: current.title,
+        objective: current.objective,
+        inputs: current.inputs.map((input) => input.path),
+        writable: current.writable,
+        output: current.output,
+        host: other,
+        minutes: current.minutes,
+        dependencies: current.dependencies,
+        network: current.network,
+        reason: `You moved the task to ${hostName(other)} after its start failed.`,
+      });
+      await tasks.start(task.id);
+      return;
+    }
     case 'task-create':
       await tasks.create(taskFields(body));
       return;
@@ -297,7 +328,7 @@ async function act(
     typeof body.action === 'string' &&
     body.action.startsWith('task-')
   ) {
-    await taskAction(tasks, body);
+    await taskAction(tasks, body, coordinator);
     return 200;
   }
   if (
@@ -319,6 +350,7 @@ async function act(
           objective: body.objective,
           host: body.host,
           model: body.model,
+          ...(workspace.helper ? { helper: workspace.helper } : {}),
           context: coordinatorContext(workspace),
           guided: true,
         });
