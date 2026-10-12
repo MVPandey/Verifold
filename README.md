@@ -157,7 +157,7 @@ Research runs in the same process as the desk. The desk offers the next research
 
 The desk renders Markdown from the harness. Raw HTML stays visible as text. Links keep only http, https, and mailto targets, and images show only their text. The page sanitizes the rendered Markdown again with a bundled copy of DOMPurify.
 
-Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. Research that runs in the desk's process shows the observed harness tool events in the desk. The terminal shows Verifold status, decisions, requests, and permission denials, but not harness tool events. A controlled session shows its events in the desk.
+Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. Research that runs in the desk's process shows the observed harness tool events in the desk. The terminal shows short Verifold status lines, with no commands to type, and the decisions, requests, and permission denials of the sessions that you control. It shows no harness tool events. The events of task workers stay in the desk, and the terminal prints one line when a task starts, when a version is ready for review, and when a version is accepted. A controlled session shows its events in the desk.
 
 ### Harness transcripts
 
@@ -203,7 +203,7 @@ If Verifold stops without saving the end of its work, for example after a forced
 
 Verifold runs up to two harness workers at the same time. Each worker has its own session, launch, native session ID, record, and transcript. A task worker also has its own task, claim, and task folder. Workers lists them with their state and anything that waits for you. Choose one to see its activity, transcript, requests, controls, and Commands table. A third start waits until a worker ends. A cancel, a permission request, an output burst, or a failure in one worker does not change the other.
 
-In the terminal, `a` and `d` with a request ID answer the request of the worker that it belongs to. When two workers could receive a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line names its worker.
+In the terminal, `a` and `d` with a request ID answer the request of the worker that it belongs to. When two workers could receive a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
 
 What each harness supports in Verifold:
 

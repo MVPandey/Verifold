@@ -117,7 +117,7 @@ export class ResearchRunner {
       (phase === 'awaiting-plan-review' && input.approve === true);
     this.step = search
       ? 'Searching sources and comparing directions'
-      : 'Planning research roles and scope';
+      : 'Planning the research';
     this.startedAt = new Date().toISOString();
     this.events = [];
     this.sources = [];
@@ -134,6 +134,8 @@ export class ResearchRunner {
         interactive: false,
         ask: () => Promise.reject(new Error('Research does not ask here.')),
         out: () => {},
+        // The runner prints its own line for the step, so the research step prints none.
+        busy: (_label, work) => work(),
         ...(this.options.io.progress
           ? { progress: this.options.io.progress }
           : {}),
@@ -143,7 +145,7 @@ export class ResearchRunner {
         harness({
           ...request,
           onActivity: (message, kind) =>
-            this.note('tool', message, undefined, kind === 'notice'),
+            this.note('tool', message, kind === 'notice'),
           onTranscript: (update) => {
             this.observe(update);
             request.onTranscript?.(update);
@@ -156,13 +158,11 @@ export class ResearchRunner {
           this.note(
             'status',
             'The plan is ready. Approve it, or ask for changes.',
-            'Type /approve, or /feedback and your changes.',
           );
         else if (next === 'directions')
           this.note(
             'status',
             'The directions are ready. Choose one, or ask for changes.',
-            'Type /select and a direction ID, or /feedback and your changes.',
           );
         else this.note('status', 'The research step ended.');
       })
@@ -237,20 +237,16 @@ export class ResearchRunner {
     ].slice(-100);
   }
 
-  /** Status lines and notices also go to the terminal. Harness events stay in the desk. */
+  /** Status lines and notices also go to the terminal, without commands to type. Harness events stay in the desk. */
   private note(
     kind: ResearchActivity['kind'],
     text: string,
-    terminalHint?: string,
     notice = kind === 'status',
   ): void {
     this.events = [
       ...this.events,
       { at: new Date().toISOString(), kind, text: text.slice(0, 2000) },
     ].slice(-300);
-    if (notice)
-      this.options.io.progress?.(
-        terminalHint ? `${text} ${terminalHint}` : text,
-      );
+    if (notice) this.options.io.progress?.(text);
   }
 }
