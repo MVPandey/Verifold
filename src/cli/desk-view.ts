@@ -1583,23 +1583,6 @@ function renderMap(
   )}<svg class="map-links" aria-hidden="true"><defs><marker id="map-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L8 4L0 8z"/></marker></defs><g></g></svg></div>`;
 }
 
-/** Team now, on Home: each running task with what its agent does and why the task exists. */
-function renderTeamNow(
-  tasks: readonly TaskRecord[],
-  workers: readonly SessionView[],
-): string {
-  const running = tasks.filter(
-    (task) => task.state === 'running' || task.state === 'claimed',
-  );
-  if (!running.length) return '';
-  return `<section class="card" aria-labelledby="now-title"><div class="section-title"><h2 id="now-title">Team now</h2><button type="button" class="quiet" data-view="tasks">See the plan</button></div><ul class="now-list">${running
-    .map(
-      (task) =>
-        `<li><button type="button" data-task-select="${e(task.id)}">${avatar('task', 'working')}<span class="who"><span class="name">${e(task.assignment.title)}</span><span class="line"><span class="map-label">Now</span> ${e(taskNow(task, workers) ?? 'Working')}</span><span class="line"><span class="map-label">Why</span> ${e(taskWhy(task))}</span></span></button></li>`,
-    )
-    .join('')}</ul></section>`;
-}
-
 /** The tasks of this project as a live map. The panel shows one task in full. */
 function renderTasksView(
   view: TaskView,
@@ -2327,6 +2310,80 @@ function renderRail(
  * Home: where the project is, what waits for the person, what the team does,
  * what changed since the person left, and the one box to the coordinator.
  */
+/** What happens now, in one line: the step, who works on it, and how far the work is. */
+function renderNow(workspace: Workspace, live: DeskSession): string {
+  const tasks = (live.tasks?.list ?? []).filter(
+    (task) => task.state !== 'cancelled',
+  );
+  const state = live.coordinator?.state;
+  const answer = resultsOf(workspace, live)?.answer;
+  const done = tasks.filter((task) => task.state === 'done').length;
+  const running = tasks.filter(
+    (task) => task.state === 'running' || task.state === 'claimed',
+  );
+  let line = '';
+  let sub = '';
+  if (live.research?.running) {
+    line = `Research: ${live.research.step ?? 'working'}.`;
+    sub = live.research.startedAt
+      ? `For ${elapsed(live.research.startedAt)}.`
+      : '';
+  } else if (answer?.decision?.kind === 'accepted')
+    line = 'You accepted the answer.';
+  else if (answer && !answer.decision) line = 'The answer waits for you.';
+  else if (state && !state.stoppedAt && !state.planApproved)
+    line = planWaits(live.coordinator, live.tasks?.list ?? [])
+      ? 'The plan waits for you.'
+      : 'The coordinator drafts the plan.';
+  else if (running.length) {
+    line = `${running.map((task) => `${task.assignment.title} runs on ${hostName(task.assignment.host)}`).join('. ')}.`;
+    sub = `${done} of ${tasks.length} tasks done.`;
+  } else if (tasks.length) {
+    line =
+      state && !state.stoppedAt
+        ? 'The coordinator watches the work.'
+        : 'No task runs.';
+    sub = `${done} of ${tasks.length} tasks done.`;
+  }
+  return line
+    ? `<section class="card now-card" aria-label="Now"><p class="now-line"><span class="map-label">Now</span> ${e(line)}</p>${sub ? `<p class="fine">${e(sub)}</p>` : ''}</section>`
+    : '';
+}
+
+/** The answer on Home, under the question: its statement, and the place to read it in full. */
+function renderHomeAnswer(workspace: Workspace, live: DeskSession): string {
+  const answer = resultsOf(workspace, live)?.answer;
+  if (!answer || answer.decision?.kind === 'more') return '';
+  return `<section class="card answer-home" aria-labelledby="home-answer-title"><div class="section-title"><h2 id="home-answer-title">The answer</h2><span class="tag reading">The coordinator's reading</span></div><p class="statement">${e(answer.statement)}</p>${answer.decision?.kind === 'accepted' ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>` : '<div class="actions"><button type="button" class="primary" data-view="results" data-focus="answer-title">Read the answer</button></div><p class="fine">Read it with its checks and evidence, then accept it or ask for more work.</p>'}</section>`;
+}
+
+/** The work on Home after the person started it: the task map, and the results of the checks. */
+function renderHomeWork(
+  workspace: Workspace,
+  live: DeskSession,
+  needs: readonly Need[],
+): string {
+  const view = live.tasks;
+  const state = live.coordinator?.state;
+  if (!view?.list.length || !state?.planApproved) return '';
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  const results = resultsOf(workspace, live);
+  const checks = idea?.gates.length
+    ? `<section class="card" aria-labelledby="home-checks-title"><div class="section-title"><h2 id="home-checks-title">The checks</h2><span class="count">${results?.checks.length ?? 0} of ${idea.gates.length} reported</span></div><ol class="home-checks">${idea.gates
+        .map((gate, index) => {
+          const entry = results?.checks.find(
+            (saved) => saved.check === index + 1,
+          );
+          const outcome = entry?.ruling?.result ?? entry?.result;
+          return `<li data-result="${outcome ?? 'none'}"><span class="check-result">${outcome ? e(outcomeLabels[outcome]) : 'Not yet'}</span> ${e(lead(gate, 140))}</li>`;
+        })
+        .join('')}</ol></section>`
+    : '';
+  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2><button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, undefined, needs)}</section>${checks}`;
+}
+
 function renderHome(
   snapshot: DeskSnapshot,
   live: DeskSession,
@@ -2341,8 +2398,12 @@ function renderHome(
   let lead: string;
   if (live.research && !workspace.selectedId)
     lead = renderDecision(workspace, live, 'home');
+  // The Now line says what the coordinator does. A card shows only when no coordinator runs.
   else if (workspace.selectedId && live.coordinator !== undefined)
-    lead = renderTeamNext(live.coordinator, needs.length, tasks);
+    lead =
+      !live.coordinator?.state || live.coordinator.state.stoppedAt
+        ? renderTeamNext(live.coordinator, needs.length, tasks)
+        : '';
   else if (researching)
     lead =
       '<section class="card lead"><h2>Research is running</h2><p>Research runs in your terminal. The results show here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>';
@@ -2357,7 +2418,7 @@ function renderHome(
       ? renderCoordinatorHome(coordinator, messages)
       : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${lead}${renderTeamNow(tasks, live.workers ?? (live.session ? [live.session] : []))}${renderPodsLine(live.compute)}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs)}${renderPodsLine(live.compute)}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
