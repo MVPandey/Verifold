@@ -120,15 +120,21 @@ await test('a pending request refreshes observations before recording its final 
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   let id = '';
-  await runResearch(root, { topic: 'Math' }, io, signal(), async () => {
-    [id = ''] = await readdir(join(root, '.verifold', 'runs'));
-    const first = await savedAttempt(root, id);
-    await delay(2200);
-    const refreshed = await savedAttempt(root, id);
-    assert.equal(refreshed.status, 'started');
-    assert.notEqual(refreshed.observedAt, first.observedAt);
-    return { text: JSON.stringify(plan) };
-  });
+  await runResearch(
+    root,
+    { topic: 'Math', autonomy: 'guided' },
+    io,
+    signal(),
+    async () => {
+      [id = ''] = await readdir(join(root, '.verifold', 'runs'));
+      const first = await savedAttempt(root, id);
+      await delay(2200);
+      const refreshed = await savedAttempt(root, id);
+      assert.equal(refreshed.status, 'started');
+      assert.notEqual(refreshed.observedAt, first.observedAt);
+      return { text: JSON.stringify(plan) };
+    },
+  );
   assert.equal((await savedAttempt(root, id)).status, 'succeeded');
 });
 
@@ -139,7 +145,7 @@ await test('attempt identity precedes the harness call and survives successful a
   let started: Record<string, unknown> = {};
   const workspace = await runResearch(
     root,
-    { topic: 'Math' },
+    { topic: 'Math', autonomy: 'guided' },
     io,
     signal(),
     async () => {
@@ -200,7 +206,7 @@ await test(
         '-e',
         `
     import { runResearch } from ${JSON.stringify(new URL('../src/cli/research.ts', import.meta.url).href)};
-    await runResearch(${JSON.stringify(root)}, { topic: 'Math' },
+    await runResearch(${JSON.stringify(root)}, { topic: 'Math', autonomy: 'guided' },
       { interactive: false, ask: async () => '', out: () => {} },
       new AbortController().signal, async () => {
         process.stdout.write('ready');
@@ -285,7 +291,13 @@ await test('the terminal shows the plan only for a decision there, and no source
   // The desk owner decides in the desk, so its terminal gets status lines only.
   const desk = await project();
   t.after(() => rm(desk, { recursive: true, force: true }));
-  await runResearch(desk, { topic: 'Math' }, shown, signal(), host);
+  await runResearch(
+    desk,
+    { topic: 'Math', autonomy: 'guided' },
+    shown,
+    signal(),
+    host,
+  );
   await runResearch(desk, { approve: true }, shown, signal(), host);
   assert.deepEqual(lines, [
     'Claude Code: planning the research',
@@ -299,7 +311,7 @@ await test('the terminal shows the plan only for a decision there, and no source
   t.after(() => rm(terminal, { recursive: true, force: true }));
   await runResearch(
     terminal,
-    { topic: 'Math' },
+    { topic: 'Math', autonomy: 'guided' },
     { ...shown, interactive: true, ask: () => Promise.resolve('y') },
     signal(),
     host,
@@ -309,6 +321,19 @@ await test('the terminal shows the plan only for a decision there, and no source
     1,
   );
   assert.ok(lines.every((line) => !/https?:\/\//.test(line)));
+});
+
+await test('research runs without a stop unless the person asks for one', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let calls = 0;
+  const result = await runResearch(root, { topic: 'Math' }, io, signal(), () =>
+    Promise.resolve({ text: JSON.stringify(++calls === 1 ? plan : report) }),
+  );
+  // The plan and the report run in one step. The plan waits for no approval.
+  assert.equal(calls, 2);
+  assert.equal(result.research?.autonomy, 'autonomous');
+  assert.equal(result.research?.phase, 'directions');
 });
 
 await test('guided exploration saves checkpoints, resumes host, and needs no PDFs', async () => {
@@ -324,7 +349,7 @@ await test('guided exploration saves checkpoints, resumes host, and needs no PDF
   try {
     const first = await runResearch(
       root,
-      { topic: 'Proof search' },
+      { topic: 'Proof search', autonomy: 'guided' },
       io,
       signal(),
       host,
@@ -375,7 +400,13 @@ await test('plan feedback requires a new guided approval', async () => {
     return Promise.resolve({ text: JSON.stringify(plan) });
   };
   try {
-    await runResearch(root, { topic: 'Math' }, io, signal(), host);
+    await runResearch(
+      root,
+      { topic: 'Math', autonomy: 'guided' },
+      io,
+      signal(),
+      host,
+    );
     await assert.rejects(
       runResearch(
         root,
@@ -458,7 +489,7 @@ await test('an invalid plan retains the response and records the failed attempt'
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   await assert.rejects(
-    runResearch(root, { topic: 'Math' }, io, signal(), () =>
+    runResearch(root, { topic: 'Math', autonomy: 'guided' }, io, signal(), () =>
       Promise.resolve({ text: JSON.stringify({ ...plan, personas: [] }) }),
     ),
     /personas/,
@@ -489,10 +520,16 @@ await test('research cancellation retains the brief and releases its lock', asyn
   const controller = new AbortController();
   try {
     await assert.rejects(
-      runResearch(root, { topic: 'Math' }, io, controller.signal, () => {
-        controller.abort();
-        return Promise.reject(new Error('Cancelled host'));
-      }),
+      runResearch(
+        root,
+        { topic: 'Math', autonomy: 'guided' },
+        io,
+        controller.signal,
+        () => {
+          controller.abort();
+          return Promise.reject(new Error('Cancelled host'));
+        },
+      ),
       /Cancelled host/,
     );
     const attempts = await readdir(join(root, '.verifold', 'runs'));
@@ -524,8 +561,12 @@ await test('selected ideas cannot be replaced by research', async () => {
       return { ...current, candidates: report.candidates, selectedId: 'proof' };
     });
     await assert.rejects(
-      runResearch(root, { topic: 'Math' }, io, signal(), () =>
-        Promise.reject(new Error('Must not launch')),
+      runResearch(
+        root,
+        { topic: 'Math', autonomy: 'guided' },
+        io,
+        signal(),
+        () => Promise.reject(new Error('Must not launch')),
       ),
       /already selected/,
     );

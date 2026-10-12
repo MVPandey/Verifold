@@ -174,18 +174,26 @@ await test('research runs in the owner, records observed activity, and waits for
     'Searching sources and comparing directions',
   );
   await runner.settled();
-  assert.match(runner.view().events.at(-1)?.text ?? '', /directions are ready/);
-  // Each step starts its own list of sources.
-  assert.equal(runner.view().sources?.length, 1);
-  await assert.rejects(runner.select('missing'), /Choose an ID/);
-  await runner.select('proof');
+  // The recommended direction becomes the draft plan, and its coordinator starts at once.
   assert.equal((await loadWorkspace(root)).selectedId, 'proof');
-  // The choice starts the coordinator. A failed start keeps the choice and says why.
   assert.equal(selected, 1);
+  assert.ok(
+    runner
+      .view()
+      .events.some((event) =>
+        /drafts the plan for the chosen direction/.test(event.text),
+      ),
+  );
+  // A failed start keeps the choice and says why.
   assert.match(
     runner.view().events.at(-1)?.text ?? '',
     /The coordinator did not start: Codex is not installed\. Start it from Home in the desk\./,
   );
+  // Each step starts its own list of sources.
+  assert.equal(runner.view().sources?.length, 1);
+  // Only a redraft replaces the direction, and only with a listed one.
+  await assert.rejects(runner.select('missing', true), /Choose an ID/);
+  await assert.rejects(runner.select('proof'), /already locked/);
   await assert.rejects(
     runner.start({ feedback: 'More sources' }),
     /direction is chosen/,
@@ -232,6 +240,18 @@ await test('terminal commands and desk actions call the same research operations
     progress: (value: string) => messages.push(value),
   };
   const controls = { host: 'claude', open: () => {}, research: runner };
+  // This project asks before the source search, so the desk shows each research decision.
+  await changeWorkspace(root, (current) => {
+    assert.ok(current);
+    return {
+      ...current,
+      research: {
+        topic: 'Proof search',
+        autonomy: 'guided',
+        phase: 'needs-plan',
+      },
+    };
+  });
   const calls = slowCalls;
   terminalInput(sessions, '/research Proof search', io, controls);
   // Cancel only after the harness runs. An early cancel would leave the fake harness waiting.
@@ -361,17 +381,17 @@ await test('terminal commands and desk actions call the same research operations
   assert.equal(missing?.found, false);
   assert.equal((await post({ action: 'research', approve: true }))[0], 200);
   await deskResearch.settled();
-  // Home sends the person to Research, where each direction has its choice.
-  assert.match(await view(), /data-view="research">Compare the directions/);
-  // Research compares the directions. The panel of a direction holds its choice.
+  // The recommended direction becomes the draft plan without a separate choice.
+  assert.equal((await loadWorkspace(root)).selectedId, 'proof');
+  assert.doesNotMatch(await view(), /Choose a direction/);
+  // Research compares the directions and names the one in the plan.
   assert.match(
     await view('?view=research'),
-    /data-direction="proof" aria-pressed="false">Compare proof search/,
+    /data-direction="proof" aria-pressed="false">Compare proof search<\/button><span class="selected-label">In the plan</,
   );
-  assert.match(
-    await view('?view=research&panel=direction&direction=proof'),
-    /data-action="select" data-idea="proof"/,
-  );
-  assert.equal((await post({ action: 'select', idea: 'proof' }))[0], 200);
-  assert.equal((await loadWorkspace(root)).selectedId, 'proof');
+  // Only another listed direction can replace it.
+  assert.deepEqual(await post({ action: 'redraft', idea: 'proof' }), [
+    409,
+    { error: 'The plan already uses this direction.' },
+  ]);
 });

@@ -1,6 +1,7 @@
 import type { CliIO } from './commands.ts';
 import { runHarness } from './harness.ts';
 import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
+import { mainDirection } from './contracts.ts';
 import { SessionActionError } from './session.ts';
 import { loadWorkspace } from './storage.ts';
 import type { TranscriptUpdate } from './transcript.ts';
@@ -152,14 +153,19 @@ export class ResearchRunner {
           },
         }),
     )
-      .then((workspace) => {
+      .then(async (workspace) => {
         const next = workspace.research?.phase;
+        const main = mainDirection(workspace.candidates);
         if (next === 'awaiting-plan-review')
           this.note(
             'status',
             'The plan is ready. Approve it, or ask for changes.',
           );
-        else if (next === 'directions')
+        // The recommended direction becomes the draft plan while research still counts as running, so no choice shows in between.
+        else if (next === 'directions' && !workspace.selectedId && main) {
+          await selectIdea(this.root, main.id);
+          await this.draft();
+        } else if (next === 'directions')
           this.note(
             'status',
             'The directions are ready. Choose one, or ask for changes.',
@@ -185,19 +191,31 @@ export class ResearchRunner {
     this.controller.abort();
   }
 
-  /** Lock one direction. Research cannot change the project afterwards. */
-  async select(id: unknown): Promise<void> {
+  /**
+   * Choose the direction of the plan, and let the coordinator draft its tasks.
+   * `replace` drafts the plan for another direction. The caller checks that the
+   * person has not started the work.
+   */
+  async select(id: unknown, replace = false): Promise<void> {
     if (this.running || this.starting)
       fail('Wait for research to end before you choose a direction.');
     this.starting = true;
     try {
-      await selectIdea(this.root, id);
+      await selectIdea(this.root, id, undefined, replace);
     } catch (error) {
       fail(error instanceof Error ? error.message : 'The choice failed.');
     } finally {
       this.starting = false;
     }
-    this.note('status', 'You chose a direction. Research cannot change it.');
+    await this.draft();
+  }
+
+  /** The coordinator drafts the tasks for the chosen direction. No task starts before the person approves the plan. */
+  private async draft(): Promise<void> {
+    this.note(
+      'status',
+      'The coordinator drafts the plan for the chosen direction.',
+    );
     try {
       await this.options.onSelect?.();
     } catch (error) {

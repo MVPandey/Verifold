@@ -340,7 +340,7 @@ function renderDecision(
     case 'awaiting-plan-review':
       return `<section class="card needs"><h2>Review the plan</h2><p>Read the plan below. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
     case 'directions':
-      return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The choice locks it for this project. You can ask for changes first.</p>${feedback('What should change in the directions?')}</section>`;
+      return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The coordinator then drafts the plan for it. You can ask for changes first.</p>${feedback('What should change in the directions?')}</section>`;
     default:
       return `<section class="card needs"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
   }
@@ -690,7 +690,7 @@ function notesToPerson(messages: readonly Message[]): string {
     : '';
 }
 
-/** The coordinator's task plan waits for the person: it has tasks, and the coordinator ended its turn. */
+/** The plan waits for the person: the coordinator drafted tasks and ended its turn. */
 function planWaits(
   view: CoordinatorView | null | undefined,
   tasks: readonly TaskRecord[],
@@ -773,7 +773,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         view: 'research',
         kind: 'Direction',
         title: 'Choose a direction',
-        why: 'Only you choose the direction. The choice locks it for this project.',
+        why: 'Only you choose the direction. The coordinator then drafts its plan.',
         since,
         body: '<div class="actions"><button type="button" class="primary" data-view="research">Compare the directions</button></div>',
       });
@@ -806,17 +806,20 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   if (planWaits(coordinator, tasks))
     items.push({
       key: `task-plan:${state?.created ?? 0}`,
-      view: 'home',
-      kind: 'Task plan',
-      title: 'The task plan waits for you',
-      why: "Guided research stops at the coordinator's task plan. No task starts before your approval.",
+      view: workspace.selectedId ? 'research' : 'home',
+      kind: 'Plan',
+      title: 'The plan waits for you',
+      why: 'Only you choose the direction and start the work. No task starts before you do.',
       since:
         tasks
           .filter((task) => task.assignment.by === 'coordinator')
           .map((task) => task.createdAt)
           .sort()
           .at(-1) ?? null,
-      body: '<div class="actions"><button type="button" class="primary" data-panel="coordinator" data-focus="plan-title">Open the plan</button></div>',
+      // The need opens the plan, so the person reads it before deciding.
+      body: workspace.selectedId
+        ? '<div class="actions"><button type="button" class="primary" data-view="research" data-focus="plan-card-title">Read the plan</button></div>'
+        : '<div class="actions"><button type="button" class="primary" data-panel="coordinator" data-focus="plan-title">Read the plan</button></div>',
     });
   const workers = live.workers ?? (live.session ? [live.session] : []);
   for (const worker of workers)
@@ -987,7 +990,7 @@ function renderTeamNext(
   )
     return '';
   if (!state.planApproved)
-    return '<section class="card"><h2>No task plan yet</h2><p>The coordinator writes the task plan. No task starts before you approve it.</p></section>';
+    return '<section class="card"><h2>The coordinator drafts the plan</h2><p>No task starts before you start the work.</p></section>';
   return `<section class="card"><h2>The coordinator runs the team</h2><p>${needs ? `${needs} ${needs === 1 ? 'item needs' : 'items need'} you above.` : 'Nothing needs you. Follow the work under Tasks.'}</p></section>`;
 }
 
@@ -1093,7 +1096,7 @@ function coordinatorPanel(
   const waits = planWaits(view, tasks);
   const plan = state.planApproved
     ? ''
-    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.assignment.title)}</strong>: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.map((id) => sender(id, tasks)).join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
+    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The plan waits for you' : planned.length ? 'The coordinator drafts the plan' : 'No plan yet'}</h3><p>No task starts before you start the work. To change the plan, write to the coordinator, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.assignment.title)}</strong>: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.map((id) => sender(id, tasks)).join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Start the work</button>${planning ? '<p class="fine">The coordinator still drafts the plan.</p>' : ''}</div></div>`;
   return {
     kind: 'Agent',
     title: 'Coordinator',
@@ -1823,6 +1826,65 @@ function renderSources(
     )}</ul>${sources.length > shown.length ? `<p class="fine">The latest ${shown.length} of ${sources.length}.</p>` : ''}</section>`;
 }
 
+/** The plan of the chosen direction waits for the person: the work has not started, and no research step runs. */
+function redraftable(workspace: Workspace, live: DeskSession): boolean {
+  const state = live.coordinator?.state;
+  return (
+    live.research !== undefined &&
+    !live.research.running &&
+    !!workspace.selectedId &&
+    !(state && !state.stoppedAt && state.planApproved)
+  );
+}
+
+/** How a direction relates to the plan. */
+function directionRole(
+  idea: Candidate,
+  workspace: Workspace,
+  live: DeskSession,
+): string {
+  if (idea.id === workspace.selectedId)
+    return redraftable(workspace, live) ? 'In the plan' : 'Chosen';
+  return idea.kind === 'main'
+    ? 'Recommended'
+    : idea.kind === 'extra'
+      ? 'Add-on'
+      : idea.kind === 'alternative'
+        ? 'Alternative'
+        : 'Proposed';
+}
+
+/**
+ * The plan that waits for the person: the direction, its checks, and the
+ * tasks that the coordinator drafted, with one approval that starts the work.
+ */
+function renderPlanCard(workspace: Workspace, live: DeskSession): string {
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  const view = live.coordinator;
+  const state = view?.state;
+  if (!idea || !state || state.stoppedAt || state.planApproved) return '';
+  const all = live.tasks?.list ?? [];
+  const drafted = all.filter(
+    (task) =>
+      task.assignment.by === 'coordinator' && task.state !== 'cancelled',
+  );
+  const status = view.session?.record.status;
+  const drafting = status === 'running' || status === 'starting';
+  const others = workspace.candidates.filter(
+    (candidate) => candidate.id !== idea.id,
+  );
+  return `<section class="card plan${drafting ? '' : ' needs'}" aria-labelledby="plan-card-title"><div class="section-title"><h2 id="plan-card-title" tabindex="-1">The plan</h2><span class="status ${drafting ? 'active' : 'muted'}">${drafting ? 'The coordinator drafts it' : 'Waits for you'}</span></div>
+  <h3>Direction</h3><p><strong>${e(idea.title)}</strong></p>${more(`plan-case-${idea.id}`, idea.recommendation, 280)}
+  <h3>Checks</h3><ol class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ol>
+  <h3>The work</h3>${drafted.length ? `<ol class="plan-tasks">${drafted.map((task) => `<li><strong>${e(task.assignment.title)}</strong> <span class="fine">${e(hostName(task.assignment.host))}${task.assignment.dependencies.length ? `, after ${e(task.assignment.dependencies.map((id) => sender(id, all)).join(', '))}` : ''}</span></li>`).join('')}</ol>` : `<p class="empty-note">${drafting ? 'The coordinator drafts the tasks.' : 'No tasks yet. Ask the coordinator for a change.'}</p>`}
+  <div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${drafting || !drafted.length ? ' disabled' : ''}>Start the work</button></div>
+  <label class="field" for="coordinator-message">Ask for a change</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: also test sparse graphs."></textarea><div class="actions"><button type="button" data-action="coordinator-message">Send to the coordinator</button></div>
+  <p class="fine">No task starts before you start the work. The coordinator revises the draft when you ask for a change.</p>
+  ${others.length ? `<h3>Other directions</h3><ul class="plan-others">${others.map((other) => `<li><div><strong>${e(other.title)}</strong> <span class="tag">${e(directionRole(other, workspace, live))}</span><p class="fine">${e(lead(plain(other.recommendation), 160))}${other.kind === 'extra' ? ' To add it, ask for a change.' : ''}</p></div>${redraftable(workspace, live) && other.kind !== 'extra' ? `<button type="button" data-action="redraft" data-idea="${e(other.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button>` : ''}</li>`).join('')}</ul>` : ''}</section>`;
+}
+
 /** Research can still take a choice of direction: no direction yet, and no step runs. */
 function choosable(workspace: Workspace, live: DeskSession): boolean {
   return (
@@ -1843,12 +1905,12 @@ function directionPanel(
   return {
     kind: 'Direction',
     title: idea.title,
-    sub: `<span class="status ${chosen ? 'active' : 'muted'}">${chosen ? 'Chosen' : workspace.selectedId ? 'Not chosen' : 'Proposed'}</span>`,
+    sub: `<span class="status ${chosen ? 'active' : 'muted'}">${e(directionRole(idea, workspace, live))}</span>`,
     body: `<div class="md">${markdownHtml(idea.recommendation)}</div>
     <h3>Its checks</h3><ul class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul>
     <p class="fine">The coordinator gets these checks with the direction, and plans tasks that give evidence for them.</p>
     ${idea.sources?.length ? `<h3>Its sources</h3><ol class="sources">${idea.sources.map((source) => `<li>${link(source)}</li>`).join('')}</ol>` : ''}
-    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}" data-confirm="Click again to lock this direction">Choose this direction</button></div><p class="fine">The choice locks it for this project. Then the coordinator plans its tasks.</p>` : ''}`,
+    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}">Choose this direction</button></div><p class="fine">The coordinator then drafts the plan for it. No task starts before you start the work.</p>` : !chosen && redraftable(workspace, live) ? `<div class="actions"><button type="button" data-action="redraft" data-idea="${e(idea.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button></div><p class="fine">The coordinator stops its draft and drafts the plan for this direction. No task has started.</p>` : ''}`,
   };
 }
 
@@ -1864,7 +1926,8 @@ function renderResearchView(
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Research</h1><p>${e(phaseLabel(research?.phase))}</p></div>
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
-  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Its case</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</th><td data-label="Its case">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
+  ${renderPlanCard(workspace, live)}
+  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Its case</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button><span class="selected-label">${e(directionRole(idea, workspace, live))}</span></th><td data-label="Its case">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
   ${renderResearch(live.research, research?.latestAttempt)}
   ${renderSources(live.research?.sources ?? [], live.research?.running === true)}
   ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research plan</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
@@ -2130,7 +2193,7 @@ function renderRail(
     const [state, line] = coordinator.state.stoppedAt
       ? ['ended', 'Stopped']
       : planWaits(coordinator, tasks)
-        ? ['you', '◆ The task plan waits for you']
+        ? ['you', '◆ The plan waits for you']
         : status === 'paused' || status === 'interrupted'
           ? ['paused', 'Paused']
           : status === 'failed'

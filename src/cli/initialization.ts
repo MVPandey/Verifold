@@ -42,11 +42,11 @@ export interface Initialization {
   } | null;
 }
 
-/** Validate the requested degree of interaction. Guided research is the default. */
+/** Validate the requested degree of interaction. Research runs without a stop unless the person asks for one ("guided"). */
 export function parseAutonomy(
   value: string | undefined,
 ): 'guided' | 'autonomous' {
-  const autonomy = value?.trim() || 'guided';
+  const autonomy = value?.trim() || 'autonomous';
   if (autonomy !== 'guided' && autonomy !== 'autonomous') {
     throw new Error('Choose guided or autonomous research.');
   }
@@ -96,11 +96,12 @@ async function askHarness(
   return { host: chosen, model: next };
 }
 
-/** The harness, the model, and the folder of a new project, in one line. */
+/** The harness, the model, the folder, and the optional research stop of a new project, in one line. */
 function settingsLine(
   host: string,
   model: string | undefined,
   root: string,
+  askFirst: boolean,
 ): string {
   const home = homedir();
   const folder =
@@ -108,7 +109,7 @@ function settingsLine(
       ? `~${root.slice(home.length)}`
       : root;
   const name = host === 'claude' || host === 'codex' ? hostName(host) : host;
-  return `${name}, with ${model ? `the model ${model}` : 'its default model'}. Folder: ${folder}.`;
+  return `${name}, with ${model ? `the model ${model}` : 'its default model'}. Folder: ${folder}.${askFirst ? ' Asks you before the source search.' : ''}`;
 }
 
 /**
@@ -169,12 +170,14 @@ export async function initializeProject(
         session: '',
       };
   let research: Initialization['research'] = null;
+  // The research plan waits for the person only when they ask for that stop.
+  let askFirst = parseAutonomy(options.autonomy) === 'guided';
   let projectReviewed = false;
   let topicFromBrief = false;
   if (!options.setupOnly && io.interactive) {
     io.step?.('Question');
     for (;;) {
-      const settings = settingsLine(host, model, root);
+      const settings = settingsLine(host, model, root, askFirst);
       const answer = (
         topic ??
         (await io.ask(
@@ -210,6 +213,18 @@ export async function initializeProject(
             ? resolve(homedir(), selected.slice(2))
             : resolve(cwd, selected);
       }
+      askFirst = /^(y|yes)$/i.test(
+        (
+          await io.ask(
+            'Ask you before the source search? Research then waits for your approval of its plan. [y/N]: ',
+            {
+              kind: 'confirm',
+              yes: 'Ask me before the source search',
+              no: 'Search without a stop',
+            },
+          )
+        ).trim(),
+      );
     }
   }
   if (
@@ -327,7 +342,7 @@ export async function initializeProject(
       projectReviewed ? 'project' : 'topic',
     );
     if (topicFromBrief) topic = memorySummary(context);
-    research = { topic, autonomy: parseAutonomy(options.autonomy) };
+    research = { topic, autonomy: askFirst ? 'guided' : 'autonomous' };
   }
   signal.throwIfAborted();
   const workspace = await createProject(
