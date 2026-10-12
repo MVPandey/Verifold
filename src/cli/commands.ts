@@ -1091,7 +1091,7 @@ export async function runCli(
       const choices = workspace.candidates
         .map(
           (idea) =>
-            `${idea.id}: ${idea.title}\n  Agent recommendation: ${idea.recommendation}\n  Proposed gates: ${idea.gates.join('; ')}`,
+            `${idea.id}: ${idea.title}\n  Agent recommendation: ${idea.recommendation}\n  Proposed checks: ${idea.gates.join('; ')}`,
         )
         .join('\n\n');
       id = (
