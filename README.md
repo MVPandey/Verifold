@@ -54,7 +54,7 @@ verifold status
 verifold select
 ```
 
-The first question is "What do you want to find out?". One line under it names the harness, the model, and the folder: your saved harness and model, or Claude Code with its default model, and the folder where you started Verifold. To change them, type `/settings` in the terminal or choose Change the settings in the desk. Verifold remembers the harness and the model in a global private agency directory. Setup does not ask for a profile. A saved profile is used as background. `verifold profile --setup` and `verifold init --setup-only` create one.
+The first question is "What do you want to find out?". One line under it names the team, the model of its lead, and the folder. The team is one harness, or a lead and a helper. It is your saved team, or Claude Code with its default model. When both harness commands are on your PATH, Codex helps by default. The folder is the one where you started Verifold. To change them, type `/settings` in the terminal or choose Change the settings in the desk. The settings mark a team whose command is not on your PATH. Verifold does not check the sign-in: a harness that is not signed in fails at its first run, with that reason. Verifold remembers the team and the model in a global private agency directory. Setup does not ask for a profile. A saved profile is used as background. `verifold profile --setup` and `verifold init --setup-only` create one.
 
 The selected harness then asks up to three quick questions, one at a time, using your answers and any saved background. Each question ends with two or three suggested answers. Choose one (in the terminal, type its number), write your own answer, or press Enter to skip the other questions. Its prompt asks only about what changes the research plan, and it records other unknowns as open points. The agent writes Markdown, not a required JSON brief. Each failed turn has one explicit retry. If a reply fails, retry with your answers intact or review a local brief made from those answers.
 
@@ -255,7 +255,7 @@ After Accept or Reject, Verifold removes the task folder if all its changes are 
 
 ### Coordinator
 
-The coordinator turns an objective into tasks for the workers. When research ends, the coordinator starts for the recommended direction with the project's harness and model. Its first turn gets the direction as the objective, the research brief, and the direction's checks. You can also start it under Coordinator in the desk with an objective that you write.
+The coordinator turns an objective into tasks for the workers. When research ends, the coordinator starts for the recommended direction with the project's lead harness and model. In a team with a helper, the coordinator picks the harness for each task from the team and gives a reason. It gives the independent half of a check to the other harness, so that a mistake of one model family cannot pass both. Verifold refuses a harness outside the team. The plan and the task panel show the reason, and a task on the helper harness carries a mark on the map. A task whose start failed offers Run it on the other harness of the team. Its first turn gets the direction as the objective, the research brief, and the direction's checks. You can also start it under Coordinator in the desk with an objective that you write.
 
 No task starts until you start the work in the plan. To change the plan first, ask the coordinator for a change, or edit a task.
 
