@@ -310,6 +310,17 @@ export function decisionLabel(
     : 'No prompt';
 }
 
+/** The desk note for a call that the harness denied, with its reason in plain words. */
+export function denialNote(name: string, reason: string): string {
+  const why =
+    reason === 'mode'
+      ? 'In Strict mode it denies each call that would need approval.'
+      : reason === 'classifier'
+        ? 'Its auto-mode classifier blocked the call.'
+        : `It gave the reason "${reason}".`;
+  return `${name} denied a tool call. ${why}`;
+}
+
 /** A risky command that ran without a person's approval and has no review mark. */
 export function needsReview(command: CommandEntry): boolean {
   return (
@@ -1569,7 +1580,7 @@ export class SessionManager {
               }
             : null,
         );
-        this.event('decision', `${name} denied a tool call (${event.reason}).`);
+        this.event('decision', denialNote(name, event.reason));
         break;
       case 'review':
         this.command(event.toolId, (command) => ({

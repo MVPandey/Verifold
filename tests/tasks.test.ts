@@ -219,6 +219,16 @@ await test('task fields are checked, and inputs are copied with their hash', asy
   );
 });
 
+await test('only a Claude Code worker gets the note about denied shell commands', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  await tasks.start(
+    await tasks.create({ ...fields, host: 'codex', model: '' }),
+  );
+  assert.doesNotMatch(sessions.started[0]?.prompt ?? '', /denial/);
+});
+
 await test('a task runs in its own workspace, versions each turn, and accepts selected files', async (t) => {
   const root = await project(t);
   const sessions = new FakeSessions();
@@ -241,6 +251,7 @@ await test('a task runs in its own workspace, versions each turn, and accepts se
   const started = sessions.started[0];
   assert.match(started?.prompt ?? '', /Writable paths:\n- results/);
   assert.match(started?.prompt ?? '', /Do not commit/);
+  assert.match(started?.prompt ?? '', /A denial stops only that command/);
   assert.equal(started?.cwd, join(root, attempt?.workspace?.path ?? ''));
   assert.equal(
     await readFile(join(started?.cwd ?? '', 'src/bench.py'), 'utf8'),
