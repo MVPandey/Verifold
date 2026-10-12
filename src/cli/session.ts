@@ -208,8 +208,15 @@ function clean(value: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
-/** Tags from the command text. They direct review; they do not prove what a command did. */
-export function riskTags(tool: string, action: string, root: string): string[] {
+/**
+ * Tags from the command text. They direct review; they do not prove what a command did.
+ * `folder` is the working folder of the session: the task folder of a Strict worker, else the project.
+ */
+export function riskTags(
+  tool: string,
+  action: string,
+  folder: string,
+): string[] {
   const text = action.toLowerCase();
   const tags: string[] = [];
   if (
@@ -229,21 +236,53 @@ export function riskTags(tool: string, action: string, root: string): string[] {
     /(^|[\s;&|])(rm|rmdir|unlink)\s|\bgit\s+(reset\s+--hard|clean)\b/.test(text)
   )
     tags.push('Deletes files');
+  // A Strict task folder is under .verifold/, so the path of the folder itself is not a settings path.
+  const own = new RegExp(
+    `${folder.toLowerCase().replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}(?=$|[/\\s'"])`,
+    'g',
+  );
   if (
-    /\.claude\/settings|\.codex\/|\.git\/(config|hooks)|\.verifold\//.test(text)
+    /\.claude\/settings|\.codex\/|\.git\/(config|hooks)|\.verifold\//.test(
+      text.replace(own, ''),
+    )
   )
     tags.push('Settings files');
   if (
-    /(^|[\s'"=])\.\.\//.test(action) ||
+    climbsOut(action) ||
     (/^(write|edit|multiedit|notebookedit|file change)$/i.test(tool) &&
       action
         .split(', ')
         .some(
-          (path) => isAbsolute(path) && relative(root, path).startsWith('..'),
+          (path) => isAbsolute(path) && relative(folder, path).startsWith('..'),
         ))
   )
     tags.push('Outside folder');
   return tags;
+}
+
+/**
+ * Whether a command climbs above its folder with `../`. It follows each `cd` in the order of the text,
+ * so `cd experiments` and then `../results` stays inside. Other ways to change the folder are not followed.
+ */
+function climbsOut(action: string): boolean {
+  let depth = 0;
+  for (const [, target, up] of action.matchAll(
+    /(?:^|[\s;&|(])cd\s+["']?([^\s;&|"')]+)|(?:^|[\s'"=])((?:\.\.\/)+)/g,
+  )) {
+    if (up) {
+      if (up.length / 3 > depth) return true;
+    } else if (!target || /^[/~$-]/.test(target)) {
+      // A cd to an absolute or a home path can go anywhere. Count from the folder again, so a later `../` gets the tag.
+      depth = 0;
+    } else {
+      for (const part of target.split('/')) {
+        if (part === '..') depth -= 1;
+        else if (part && part !== '.') depth += 1;
+        if (depth < 0) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Who let a command run, in words that do not claim more than the harness reported. */
@@ -870,7 +909,7 @@ export class SessionManager {
       terminal = await openTerminal({
         command: this.options.executables?.[record.host] ?? record.host,
         args,
-        cwd: record.cwd ? join(this.root, record.cwd) : this.root,
+        cwd: this.folder(record),
         owner: lease,
         ...(strict && record.host === 'claude'
           ? { env: strictClaudeEnvironment }
@@ -1264,7 +1303,7 @@ export class SessionManager {
       this.prompted = prompt !== undefined;
       this.host = startHostSession({
         host: record.host,
-        cwd: record.cwd ? join(this.root, record.cwd) : this.root,
+        cwd: this.folder(record),
         mode: record.mode,
         clientVersion: this.options.clientVersion,
         ...(record.model ? { model: record.model } : {}),
@@ -1352,6 +1391,11 @@ export class SessionManager {
     });
   }
 
+  /** The working folder of a session: the task folder of a Strict worker, else the project. */
+  private folder(record: SessionRecord | null): string {
+    return record?.cwd ? join(this.root, record.cwd) : this.root;
+  }
+
   private fresh(id: string, tool: string, action: string): CommandEntry {
     const record = this.current;
     return {
@@ -1359,7 +1403,7 @@ export class SessionManager {
       at: new Date().toISOString(),
       tool: clean(tool, 80),
       action: clean(action, 2000),
-      risk: riskTags(tool, action, this.root),
+      risk: riskTags(tool, action, this.folder(record)),
       auto: record?.host === 'claude' && record.reportedMode === 'auto',
       outcome: 'running',
     };
