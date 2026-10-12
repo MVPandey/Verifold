@@ -175,6 +175,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
     'desk-terminal.js',
     'desk-terminals.js',
     'desk-lease.js',
+    'desk-map.js',
     'manrope.ttf',
     'symbol.webp',
   ])

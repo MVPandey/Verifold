@@ -1449,7 +1449,7 @@ function renderTasksView(
   return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Tasks</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   ${
     view.list.length
-      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The plan</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for. A box opens the task.</p></section>`
+      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The plan</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for, and a task waits for every task that leads to it. A box opens the task.</p></section>`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write a task yourself with New task.</p></section>'
   }
   <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
