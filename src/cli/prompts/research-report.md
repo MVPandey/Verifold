@@ -4,16 +4,18 @@ Search for the strongest relevant evidence, including results that weaken the pr
 
 Synthesize findings and disagreements into promising computational research directions. For each direction, explain the question, existing evidence, unresolved gap, competing explanation, feasibility, and a first test that could change the decision. Separate a novel contribution from a replication, diagnostic, or extension. Avoid cosmetic variants of the same idea and forced consensus between workers.
 
+Recommend one direction. Give it the kind "main". Give a direction the kind "extra" when it is an add-on that can run beside the main direction, for example a short diagnostic. Give a direction the kind "alternative" when it replaces the main direction. The person approves one plan for the main direction, can add extras to it, and can choose an alternative instead.
+
 Make proposed checks specific to the research question. For each check, describe the observable result, comparison, or evidence needed to proceed, revise, or stop. Label thresholds and resource estimates as proposals unless the user already fixed them. Do not invent measurements or imply that proposed tests have run.
 
 No PDFs or official citation exports are required at this stage. Reference primary web sources. Propose ideas without selecting one or authorizing an experiment.
 
 Return this JSON object:
-{"summary":"findings, disagreements, and limitations","delegation":"native agents that actually ran and their work, or why delegation was unavailable","sources":[{"title":"primary method source","url":"https://example.org/method"},{"title":"primary comparison source","url":"https://example.org/comparison"}],"candidates":[{"id":"lowercase-slug","title":"research direction","recommendation":"evidence, prior-art uncertainty, feasibility, alternatives, and first test","checks":["proposed check: an observable result that passes or fails"],"sources":["https://example.org/method","https://example.org/comparison"]}]}
+{"summary":"findings, disagreements, and limitations","delegation":"native agents that actually ran and their work, or why delegation was unavailable","sources":[{"title":"primary method source","url":"https://example.org/method"},{"title":"primary comparison source","url":"https://example.org/comparison"}],"candidates":[{"id":"lowercase-slug","title":"research direction","recommendation":"evidence, prior-art uncertainty, feasibility, alternatives, and first test","kind":"main","checks":["proposed check: an observable result that passes or fails"],"sources":["https://example.org/method","https://example.org/comparison"]}]}
 
 The example URLs and descriptive values illustrate the structure only. Replace them with retrieved sources and your actual findings.
 
-The current parser requires 2 to 50 sources and 1 to 20 candidates. Each candidate needs 1 to 20 checks and 1 to 30 source URLs drawn from the report's sources. IDs must be unique, with 1 to 80 lowercase ASCII letters, digits, or hyphens. Do not use periods, underscores, or spaces in IDs.
+The current parser requires 2 to 50 sources and 1 to 20 candidates. Each candidate needs 1 to 20 checks and 1 to 30 source URLs drawn from the report's sources. Exactly one candidate has the kind "main". IDs must be unique, with 1 to 80 lowercase ASCII letters, digits, or hyphens. Do not use periods, underscores, or spaces in IDs.
 
 Keep summary and delegation within 12000 characters each. Keep candidate titles, recommendations, and individual checks within 4000 characters each. Source titles allow 500 characters and URLs allow 2000. Use HTTP or HTTPS URLs without embedded credentials.
 

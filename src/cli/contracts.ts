@@ -13,6 +13,17 @@ export interface Candidate {
   readonly recommendation: string;
   readonly gates: readonly string[];
   readonly sources?: readonly string[];
+  /** The recommended direction, an add-on that fits beside it, or an alternative that replaces it. */
+  readonly kind?: 'main' | 'extra' | 'alternative';
+}
+
+/** The direction that research recommends: the one marked main, else the first. */
+export function mainDirection(
+  candidates: readonly Candidate[],
+): Candidate | undefined {
+  return (
+    candidates.find((candidate) => candidate.kind === 'main') ?? candidates[0]
+  );
 }
 export interface Workspace {
   readonly schemaVersion: 1;
@@ -41,6 +52,9 @@ export function parseCandidates(value: unknown): readonly Candidate[] {
       throw new Error(
         'Idea IDs must contain lowercase letters, digits, or hyphens.',
       );
+    const kind = (['main', 'extra', 'alternative'] as const).find(
+      (value) => value === data.kind,
+    );
     // Older hosts and saved projects name the checks `gates`. The record keeps that field.
     const checks: unknown = data.checks ?? data.gates;
     if (!Array.isArray(checks) || !checks.length || checks.length > 20)
@@ -53,10 +67,13 @@ export function parseCandidates(value: unknown): readonly Candidate[] {
       ...(data.sources === undefined
         ? {}
         : { sources: parseSources(data.sources) }),
+      ...(kind ? { kind } : {}),
     };
   });
   if (new Set(candidates.map((idea) => idea.id)).size !== candidates.length)
     throw new Error('Idea IDs must be unique.');
+  if (candidates.filter((idea) => idea.kind === 'main').length > 1)
+    throw new Error('Mark at most one direction as main.');
   return candidates;
 }
 function parseSources(value: unknown): readonly string[] {

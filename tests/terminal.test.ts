@@ -143,6 +143,7 @@ await test('guided initialization collects a broad topic without launching resea
     'codex',
     '',
     '',
+    '',
     'Formal proof search',
     'no',
     '',
@@ -169,7 +170,7 @@ await test('guided initialization collects a broad topic without launching resea
     assert.equal(result.workspace.host, 'codex');
     assert.deepEqual(result.research, {
       topic: 'Formal proof search',
-      autonomy: 'guided',
+      autonomy: 'autonomous',
     });
     assert.equal(result.workspace.selectedId, null);
     assert.equal(result.workspace.visibility, 'private');
@@ -205,7 +206,7 @@ await test('invalid harness and cancellation do not create a workspace', async (
       /Choose claude or codex/,
     );
     await assert.rejects(access(join(root, '.verifold')));
-    assert.equal(parseAutonomy(undefined), 'guided');
+    assert.equal(parseAutonomy(undefined), 'autonomous');
     assert.throws(() => parseAutonomy('unlimited'), /guided or autonomous/);
   } finally {
     await rm(root, { recursive: true, force: true });

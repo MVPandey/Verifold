@@ -806,7 +806,7 @@ async function act(button: HTMLElement): Promise<void> {
                 ? { action, command: button.dataset.command }
                 : action === 'resume' || action === 'restart'
                   ? { action, session: button.dataset.session }
-                  : action === 'select'
+                  : action === 'select' || action === 'redraft'
                     ? { action, idea: button.dataset.idea }
                     : action === 'research'
                       ? researchBody(button.dataset.research)

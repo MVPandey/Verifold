@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
+import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { SessionManager } from '../src/cli/session.ts';
 import type { AgentTools } from '../src/cli/session-hosts.ts';
 import {
@@ -669,7 +670,7 @@ await test('in Guided research no task starts before the person approves the pla
   ).html;
   assert.match(
     html,
-    /The task plan waits for you[\s\S]*<strong>Prior art<\/strong>[\s\S]*<strong>Method review<\/strong>: Review the methods in the prior work\. \(waits for Prior art\)[\s\S]*data-action="coordinator-approve">Approve the plan/,
+    /The plan waits for you[\s\S]*<strong>Prior art<\/strong>[\s\S]*<strong>Method review<\/strong>: Review the methods in the prior work\. \(waits for Prior art\)[\s\S]*data-action="coordinator-approve">Start the work/,
   );
   await coordinator.approvePlan();
   await turns(2);
@@ -722,7 +723,7 @@ await test('in Guided research no task starts before the person approves the pla
   );
 });
 
-await test('a chosen direction starts the coordinator with the brief, the direction, and the research mode', async (t) => {
+await test('a chosen direction starts the coordinator, which drafts the plan for the person to approve', async (t) => {
   const { coordinator, inputs, script, tasks, turns } = await team(t);
   // A worker on another harness does not get the coordinator's model.
   await script([
@@ -754,16 +755,129 @@ await test('a chosen direction starts the coordinator with the brief, the direct
     'Compare sparse-graph baselines\n\nCompare Dijkstra and Thorup on road networks.',
   );
   assert.equal(state?.model, 'sonnet');
-  assert.equal(state?.planApproved, true);
+  // Also in a project that searched without a stop, the plan waits for the person.
+  assert.equal(state?.planApproved, false);
   const created = (await tasks.list())[0]?.assignment;
   assert.deepEqual([created?.host, created?.model], ['codex', null]);
   assert.match(
     (await inputs())[0] ?? '',
-    /Research brief:\nShortest paths on sparse graphs\.\n\nChosen direction: Compare sparse-graph baselines[\s\S]*- Both run on the same graphs\.[\s\S]*create the tasks for the first step, and start the ones that can run/,
+    /Research brief:\nShortest paths on sparse graphs\.\n\nChosen direction: Compare sparse-graph baselines[\s\S]*- Both run on the same graphs\.[\s\S]*the person approves your first task plan before any task starts/,
   );
   // A running coordinator is not started again.
   await coordinator.startForDirection(workspace);
   assert.equal(coordinator.view()?.state.startedAt, state?.startedAt);
+});
+
+await test('use this instead: before the work starts, another direction gets its own draft plan', async (t) => {
+  const { root, tasks, coordinator, script, turns } = await team(t);
+  await script([
+    [
+      {
+        name: 'verifold_create_task',
+        arguments: { ...prior, title: 'Implement the heap' },
+      },
+    ],
+    [
+      {
+        name: 'verifold_create_task',
+        arguments: { ...prior, title: 'Pick landmarks' },
+      },
+    ],
+  ]);
+  await changeWorkspace(root, (current) => ({
+    ...current!,
+    candidates: [
+      {
+        id: 'heap',
+        title: 'Heap Dijkstra',
+        recommendation: 'Compare a heap with a scan.',
+        gates: ['Same paths.'],
+        kind: 'main',
+      },
+      {
+        id: 'alt',
+        title: 'ALT with landmarks',
+        recommendation: 'Precompute landmarks.',
+        gates: ['Distances match.'],
+        kind: 'alternative',
+      },
+    ],
+    selectedId: 'heap',
+  }));
+  const owner = new AbortController();
+  const research = new ResearchRunner(root, {
+    signal: owner.signal,
+    io: {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    },
+    onSelect: async () =>
+      coordinator.startForDirection(await loadWorkspace(root)),
+  });
+  await coordinator.startForDirection(await loadWorkspace(root));
+  await turns(1);
+  const assets = join(root, 'assets');
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
+    'desk-map.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  for (const name of ['purify.js', 'xterm.js', 'xterm.css', 'addon-fit.js'])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    pathToFileURL(`${assets}/cli/`),
+    new SessionPool(root, { clientVersion: 'test', ownerId: 'owner-1' }),
+    research,
+    undefined,
+    tasks,
+    coordinator,
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const post = async (body: unknown): Promise<number> =>
+    (
+      await fetch(`${url.origin}/api/action`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${url.hash.slice(1)}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+    ).status;
+  assert.equal(await post({ action: 'redraft', idea: 'alt' }), 200);
+  await turns(2);
+  // The first draft stops and its task is cancelled. The other direction gets its own draft.
+  const all = await tasks.list();
+  const state = (title: string): string | undefined =>
+    all.find((task) => task.assignment.title === title)?.state;
+  assert.equal(state('Implement the heap'), 'cancelled');
+  assert.equal(state('Pick landmarks'), 'open');
+  assert.equal((await loadWorkspace(root)).selectedId, 'alt');
+  assert.match(
+    coordinator.view()?.state.objective ?? '',
+    /^ALT with landmarks/,
+  );
+  assert.equal(coordinator.view()?.state.planApproved, false);
+  // After the person starts the work, the direction does not change here.
+  await coordinator.approvePlan();
+  assert.equal(await post({ action: 'redraft', idea: 'heap' }), 409);
 });
 
 await test('a question from a task panel names its task for the coordinator', async (t) => {
