@@ -2372,6 +2372,22 @@ body.rail-open .terminal-layer {
 .setup-busy {
   color: var(--violet);
 }
+/* What the harness or Verifold said since the last answer, above the open question. */
+.setup-said {
+  padding: 12px 16px;
+  border-left: 3px solid var(--violet);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.setup-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+.setup-log > summary {
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
 .setup-prompt {
   padding: 16px;
   border: 1px solid var(--border);

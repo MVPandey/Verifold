@@ -19,6 +19,7 @@ const promptIds = [
   'pilot-request',
   'interview-finish',
   'interview-followup',
+  'interview-quick',
   'task-worker',
   'coordinator',
 ] as const;

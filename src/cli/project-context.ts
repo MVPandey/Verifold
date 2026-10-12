@@ -7,6 +7,7 @@ import { withActivity } from './choices.ts';
 import { activityProgress, runHarness } from './harness.ts';
 import { parseContext } from './contracts.ts';
 import { stripVTControlCharacters } from 'node:util';
+import { hostName } from './session.ts';
 
 /** Offer project-scoped context. Declining never reads file contents or calls a model. */
 export async function investigateProject(
@@ -40,7 +41,7 @@ export async function investigateProject(
   }
   if (!populated) return brief;
   io.progress?.(
-    `## Understand your project\n\nDirectory: ${root}\nHarness: ${agency.host} (${agency.model ?? 'host default model'})\n\n- Verifold supplies up to 10 top-level documentation and manifest files (256 KB each, 512 KB total).\n- Your harness can read project files, search the web, and use native agents to clarify this work.\n- Its existing configuration and permissions apply. Tools that need interactive approval can be denied in this background session.\n- The request forbids edits, installations, and experiments. You review the context and final brief before Verifold saves project memory.\n\nYour harness and model provider may process this context and retain session records.`,
+    `## Understand your project\n\nDirectory: ${root}\nHarness: ${hostName(agency.host)} (${agency.model ?? 'its default model'})\n\n- Verifold supplies up to 10 top-level documentation and manifest files (256 KB each, 512 KB total).\n- Your harness can read project files, search the web, and use native agents to clarify this work.\n- Its existing configuration and permissions apply. Tools that need interactive approval can be denied in this background session.\n- The request forbids edits, installations, and experiments. You review the context and final brief before Verifold saves project memory.\n\nYour harness and model provider may process this context and retain session records.`,
   );
   const consent = await io.ask(
     'Let your harness investigate this project? [y/N]: ',
@@ -55,7 +56,7 @@ export async function investigateProject(
     });
     const result = await withActivity(
       io,
-      `${agency.host} · Understanding this project`,
+      `${hostName(agency.host)} is reading the project`,
       async () =>
         harness({
           ...agency,

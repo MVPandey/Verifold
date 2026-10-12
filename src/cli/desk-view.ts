@@ -2435,13 +2435,7 @@ export function renderDesk(
   };
 }
 
-const setupSteps = [
-  'Connect',
-  'Profile',
-  'Project',
-  'Interview',
-  'Research mode',
-] as const;
+const setupSteps = ['Question', 'Quick questions', 'Brief'] as const;
 
 const setupLabels: Record<SetupView['lines'][number]['source'], string> = {
   verifold: 'Verifold',
@@ -2469,12 +2463,20 @@ function renderSetupPrompt(prompt: SetupPrompt): string {
   const field = hint?.multiline
     ? `<textarea id="setup-answer" rows="4" maxlength="100000" aria-labelledby="setup-question"${hint.placeholder ? ` placeholder="${e(hint.placeholder)}"` : ''}></textarea>`
     : `<input id="setup-answer" type="text" maxlength="4000" aria-labelledby="setup-question"${hint?.placeholder ? ` placeholder="${e(hint.placeholder)}"` : ''}>`;
-  return `<section class="setup-prompt"><div class="md" id="setup-question">${markdownHtml(prompt.question)}</div>${field}<div class="actions"><button type="button" class="primary" data-action="setup" data-prompt="${prompt.id}" data-field="setup-answer">Continue</button>${(
+  const suggestions = hint?.suggestions?.length
+    ? `<div class="choices suggestions">${hint.suggestions
+        .map(
+          (value) =>
+            `<button type="button" class="choice" ${answer(value)}><span class="choice-label">${e(value)}</span></button>`,
+        )
+        .join('')}</div><p class="setup-note">Or write your own answer.</p>`
+    : '';
+  return `<section class="setup-prompt"><div class="md" id="setup-question">${markdownHtml(prompt.question)}</div>${suggestions}${field}${hint?.note ? `<p class="setup-note">${e(hint.note)}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="setup" data-prompt="${prompt.id}" data-field="setup-answer">Continue</button>${(
     hint?.actions ?? []
   )
     .map(
       (action) =>
-        `<button type="button" ${answer(action.value)}>${e(action.label)}</button>`,
+        `<button type="button"${action.value === '/cancel' ? ' class="quiet"' : ''} ${answer(action.value)}>${e(action.label)}</button>`,
     )
     .join('')}</div></section>`;
 }
@@ -2498,24 +2500,39 @@ export function renderSetup(view: SetupView | null): {
       stage: 'Setup',
     };
   const current = view.step ? setupSteps.indexOf(view.step) : -1;
+  const line = (entry: SetupView['lines'][number]): string =>
+    entry.source === 'tool' || entry.source === 'you'
+      ? `<span class="event-text">${e(entry.text)}</span>`
+      : `<div class="event-text md">${markdownHtml(entry.text)}</div>`;
+  // One question at a time: what Verifold and the harness said since the last answer, then the question.
+  const answered = view.lines.findLastIndex((entry) => entry.source === 'you');
+  const said = view.prompt
+    ? view.lines.slice(answered + 1).filter((entry) => entry.source !== 'tool')
+    : [];
   const html =
-    page(`<div class="setup"><h1 id="view-title" tabindex="-1">Set up a project</h1>
+    page(`<div class="setup"><h1 id="view-title" tabindex="-1">New project</h1>
   <ol class="setup-steps" aria-label="Setup steps">${setupSteps
     .map(
       (name, index) =>
         `<li data-state="${index < current ? 'done' : index === current ? 'current' : 'next'}"${index === current ? ' aria-current="step"' : ''}>${e(name)}</li>`,
     )
     .join('')}</ol>
-  ${detailSwitch}<ol class="setup-lines">${view.lines
-    .slice(-60)
-    .map(
-      (line) =>
-        `<li class="event setup-${line.source}"><span class="event-kind">${setupLabels[line.source]}</span>${line.source === 'tool' || line.source === 'you' ? `<span class="event-text">${e(line.text)}</span>` : `<div class="event-text md">${markdownHtml(line.text)}</div>`}<time datetime="${e(line.at)}">${e(clock(line.at))}</time></li>`,
-    )
-    .join('')}</ol>
-  ${transcriptSlot('setup', 'Harness transcript')}
   ${view.busy ? `<p class="setup-busy" role="status">${e(view.busy.label)}, for ${e(elapsed(view.busy.startedAt))}</p>` : ''}
+  ${said.map((entry) => `<div class="setup-said">${line(entry)}</div>`).join('')}
   ${view.prompt ? renderSetupPrompt(view.prompt) : ''}
+  ${
+    view.lines.length
+      ? `<details class="setup-log" id="setup-log"><summary>Setup log (${view.lines.length})</summary>${detailSwitch}<ol class="setup-lines">${view.lines
+          .slice(-60)
+          .map(
+            (entry) =>
+              `<li class="event setup-${entry.source}"><span class="event-kind">${setupLabels[entry.source]}</span>${line(entry)}<time datetime="${e(entry.at)}">${e(clock(entry.at))}</time></li>`,
+          )
+          .join(
+            '',
+          )}</ol>${transcriptSlot('setup', 'Harness transcript')}</details>`
+      : ''
+  }
   ${view.outcome === 'done' ? '<p class="notice">Setup is complete. The project desk opens here.</p>' : ''}
   ${view.outcome === 'stopped' ? `<p class="notice">${e(view.error ?? 'Setup stopped.')}</p><p class="fine">Run verifold again in your terminal to start over.</p>` : ''}</div>`);
   return {

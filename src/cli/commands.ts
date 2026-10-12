@@ -13,7 +13,6 @@ import {
   parseAutonomy,
   type InitializationOptions,
 } from './initialization.ts';
-import { choose } from './choices.ts';
 import {
   reconcileAttempts,
   runResearch,
@@ -53,6 +52,10 @@ export type AskHint =
       readonly label?: string;
       readonly multiline?: boolean;
       readonly placeholder?: string;
+      /** One short line under the field, for example the current settings. */
+      readonly note?: string;
+      /** Likely answers. Each one answers the question with its own text. */
+      readonly suggestions?: readonly string[];
       /** Buttons that answer with a fixed value, for example an empty answer. */
       readonly actions?: readonly {
         readonly label: string;
@@ -68,12 +71,7 @@ export type BriefDecision =
   | { readonly action: 'cancel' };
 
 /** The setup steps, in order. */
-export type SetupStep =
-  | 'Connect'
-  | 'Profile'
-  | 'Project'
-  | 'Interview'
-  | 'Research mode';
+export type SetupStep = 'Question' | 'Quick questions' | 'Brief';
 
 export interface CliIO {
   readonly interactive: boolean;
@@ -952,29 +950,8 @@ export async function runCli(
       setupOnly: values['setup-only'] ?? false,
       workspaceSpecified: values.workspace !== undefined,
     };
-    // Bare verifold in a new folder offers setup in the desk. init stays the terminal path.
-    if (
-      launch &&
-      !values['no-open'] &&
-      (await choose(
-        io,
-        'Where do you want to set up this project?',
-        [
-          {
-            value: 'browser',
-            label: 'Continue in the browser',
-            description:
-              'Set up the project in the desk. This terminal stays open and shows each step.',
-          },
-          {
-            value: 'terminal',
-            label: 'Continue here',
-            description: 'Answer each setup question in this terminal.',
-          },
-        ],
-        'browser',
-      )) === 'browser'
-    ) {
+    // Bare verifold in a new folder sets up in the desk. init and --no-open stay the terminal path.
+    if (launch && !values['no-open']) {
       await serveDesk(root, false, io, signal, undefined, undefined, harness, {
         cwd,
         options,
