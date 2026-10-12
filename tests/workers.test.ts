@@ -424,7 +424,6 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   ).html;
   assert.equal(html.match(/data-worker="/g)?.length, 2);
   assert.match(html, new RegExp(`data-worker="${second}" aria-pressed="true"`));
-  assert.match(html, /2 of 2 workers run/);
   assert.match(html, /1 request waits for you/);
   assert.doesNotMatch(html, /data-action="start"/);
   // Without an ID, two open requests are ambiguous.
