@@ -246,7 +246,7 @@ await test('a display error cannot mark accepted research as failed', async (t) 
       {
         ...io,
         progress: (message) => {
-          if (message.includes(report.summary))
+          if (message.startsWith('Research found'))
             throw new Error('Display unavailable');
         },
       },
@@ -267,6 +267,48 @@ await test('a display error cannot mark accepted research as failed', async (t) 
       'failure.txt',
     ),
   );
+});
+
+await test('the terminal shows the plan only for a decision there, and no source addresses', async (t) => {
+  let calls = 0;
+  const host = (): Promise<HarnessResult> =>
+    Promise.resolve({
+      text: JSON.stringify(++calls % 2 === 1 ? plan : report),
+    });
+  const lines: string[] = [];
+  const shown = {
+    ...io,
+    progress: (message: string) => {
+      lines.push(message);
+    },
+  };
+  // The desk owner decides in the desk, so its terminal gets status lines only.
+  const desk = await project();
+  t.after(() => rm(desk, { recursive: true, force: true }));
+  await runResearch(desk, { topic: 'Math' }, shown, signal(), host);
+  await runResearch(desk, { approve: true }, shown, signal(), host);
+  assert.deepEqual(lines, [
+    'claude · Planning research roles and scope',
+    'Plan saved.',
+    'claude · Searching sources and comparing research directions',
+    'Research found 1 direction.',
+  ]);
+  // A decision in this terminal shows the plan once, before the question.
+  lines.length = 0;
+  const terminal = await project();
+  t.after(() => rm(terminal, { recursive: true, force: true }));
+  await runResearch(
+    terminal,
+    { topic: 'Math' },
+    { ...shown, interactive: true, ask: () => Promise.resolve('y') },
+    signal(),
+    host,
+  );
+  assert.equal(
+    lines.filter((line) => line.startsWith('Research scope:')).length,
+    1,
+  );
+  assert.ok(lines.every((line) => !/https?:\/\//.test(line)));
 });
 
 await test('guided exploration saves checkpoints, resumes host, and needs no PDFs', async () => {
