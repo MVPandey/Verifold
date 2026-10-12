@@ -315,15 +315,17 @@ export async function runResearch(
       );
     }
     if (state.phase === 'awaiting-plan-review') {
-      io.progress?.(
-        `Research scope: ${state.plan?.scope}\n${state.plan?.personas.map((persona) => `${persona.name}: ${persona.task}`).join('\n')}`,
-      );
       let approved =
         state.autonomy === 'autonomous' || options.approve === true;
-      if (!approved && io.interactive)
+      // The plan shows here only for a decision in this terminal. The desk and the saved workspace hold it otherwise.
+      if (!approved && io.interactive) {
+        io.progress?.(
+          `Research scope: ${state.plan?.scope}\n${state.plan?.personas.map((persona) => `${persona.name}: ${persona.task}`).join('\n')}`,
+        );
         approved = /^(y|yes)$/i.test(
           (await io.ask('Approve this research plan? [y/N]: ')).trim(),
         );
+      }
       if (!approved) {
         io.progress?.('Plan saved.');
         return workspace;
@@ -348,8 +350,9 @@ export async function runResearch(
           return report;
         },
       );
+      // The report stays in the desk and in the attempt folder. The terminal never prints source addresses.
       io.progress?.(
-        `${report.summary}\nDelegation reported by host: ${report.delegation}\n\n${report.candidates.map((idea) => `${idea.id}: ${idea.title}\n${idea.recommendation}\n${idea.sources?.join('\n')}`).join('\n\n')}`,
+        `Research found ${report.candidates.length} ${report.candidates.length === 1 ? 'direction' : 'directions'}.`,
       );
     }
     return workspace;
