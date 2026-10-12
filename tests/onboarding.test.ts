@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { researchInterview } from '../src/cli/onboarding.ts';
+import { researchInterview, suggestedAnswers } from '../src/cli/onboarding.ts';
+import type { AskHint } from '../src/cli/commands.ts';
 import type { CliIO } from '../src/cli/commands.ts';
 import type { HarnessRequest } from '../src/cli/harness.ts';
 
@@ -114,6 +115,8 @@ await test('follow-ups are bounded and /finish requests a final brief', async ()
     signal(),
     (request) => {
       calls++;
+      // The profile interview keeps five questions and its own brief.
+      assert.doesNotMatch(request.prompt, /Ask at most three questions/);
       if (calls === 2)
         assert.match(request.prompt, /Write the research brief now/);
       return Promise.resolve({
@@ -278,4 +281,73 @@ await test('local recovery retains supplied project evidence before a long conve
   assert.ok(result.includes(evidence));
   assert.match(result, /no agent review was completed/);
   assert.ok(Buffer.byteLength(result) <= 12000);
+});
+
+await test('suggested answers come from the end of a question', () => {
+  assert.deepEqual(
+    suggestedAnswers(
+      'Which measure decides the answer?\n\nSuggested answers:\n- Wall-clock time\n- Settled nodes\n',
+    ),
+    {
+      question: 'Which measure decides the answer?',
+      answers: ['Wall-clock time', 'Settled nodes'],
+    },
+  );
+  // A list in the middle of the text is not a list of answers.
+  const plain = 'Two options:\n- A\n- B\n\nWhich one?';
+  assert.deepEqual(suggestedAnswers(plain), { question: plain, answers: [] });
+});
+
+await test('project setup asks at most three questions, each with suggested answers', async () => {
+  const asked: { question: string; hint?: AskHint }[] = [];
+  const answers = ['2', 'My own answer', 'Settled nodes', ''];
+  const requests: HarnessRequest[] = [];
+  const result = await researchInterview(
+    'Heap Dijkstra on road graphs',
+    undefined,
+    { host: 'claude' },
+    '.',
+    {
+      interactive: true,
+      out: () => {},
+      progress: () => {},
+      ask: (question, hint) => {
+        asked.push({ question, ...(hint ? { hint } : {}) });
+        return Promise.resolve(answers.shift() ?? '');
+      },
+    },
+    signal(),
+    (request) => {
+      requests.push(request);
+      return Promise.resolve({
+        text:
+          requests.length <= 3
+            ? `Question ${requests.length}?\n\nSuggested answers:\n- Wall-clock time\n- Settled nodes`
+            : '# Research brief\n\n**Question:** Is the heap version faster?',
+      });
+    },
+    'topic',
+  );
+  // Three questions, then the brief without a fourth question.
+  assert.equal(requests.length, 4);
+  assert.match(requests[0]?.prompt ?? '', /Ask at most three questions/);
+  assert.match(requests[3]?.prompt ?? '', /Write the research brief now/);
+  assert.match(result, /Is the heap version faster/);
+  // A number picks a suggested answer. The agent gets the answer, not the number.
+  assert.match(requests[1]?.prompt ?? '', /Settled nodes/);
+  assert.match(requests[2]?.prompt ?? '', /My own answer/);
+  assert.match(
+    asked[0]?.question ?? '',
+    /1\. Wall-clock time\n {2}2\. Settled nodes/,
+  );
+  const hint = asked[0]?.hint;
+  assert.equal(hint?.kind === 'text' && hint.label, 'Question 1 of up to 3');
+  assert.deepEqual(hint?.kind === 'text' && hint.suggestions, [
+    'Wall-clock time',
+    'Settled nodes',
+  ]);
+  assert.deepEqual(
+    hint?.kind === 'text' ? hint.actions?.map((action) => action.label) : [],
+    ['Skip the other questions', 'Cancel setup'],
+  );
 });
