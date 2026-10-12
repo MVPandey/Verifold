@@ -279,6 +279,47 @@ await test('risk tags come from the command text', () => {
   assert.deepEqual(riskTags('Bash', 'ls ...', '/p'), []);
 });
 
+await test('risk tags read paths from the folder of the session', () => {
+  const folder = '/p/.verifold/workspaces/task-1';
+  assert.deepEqual(riskTags('Write', `${folder}/experiments/a.py`, folder), []);
+  assert.deepEqual(riskTags('Read', `${folder}/results/a.txt`, folder), []);
+  assert.deepEqual(riskTags('Bash', `cd ${folder} && ls`, folder), []);
+  assert.deepEqual(
+    riskTags('Write', `${folder}/.claude/settings.json`, folder),
+    ['Settings files'],
+  );
+  assert.deepEqual(
+    riskTags('Read', '/p/.verifold/workspaces/task-10/a.txt', folder),
+    ['Settings files'],
+  );
+  assert.deepEqual(riskTags('Write', '/p/notes.md', folder), [
+    'Outside folder',
+  ]);
+  // A cd into a subfolder lets one `../` come back, also in a script that the command runs.
+  assert.deepEqual(
+    riskTags('Bash', 'cd experiments\npython3 a.py > ../results/a.txt', folder),
+    [],
+  );
+  assert.deepEqual(
+    riskTags(
+      'Bash',
+      "cd experiments && python3 - <<'EOF'\nopen('../results/a.txt', 'w')\nEOF",
+      folder,
+    ),
+    [],
+  );
+  assert.deepEqual(riskTags('Bash', 'cd a && cat ../../x', folder), [
+    'Outside folder',
+  ]);
+  assert.deepEqual(riskTags('Bash', 'cd a && cd .. && cat ../x', folder), [
+    'Outside folder',
+  ]);
+  assert.deepEqual(riskTags('Bash', 'cd /tmp && cat ../x', folder), [
+    'Outside folder',
+  ]);
+  assert.deepEqual(riskTags('Bash', 'cd ..', folder), ['Outside folder']);
+});
+
 await test('decision labels do not claim more than the harness reported', () => {
   assert.equal(
     decisionLabel(command({ asked: 'allowed' }), 'claude'),
