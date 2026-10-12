@@ -552,6 +552,16 @@ const taskMarks: Record<TaskRecord['state'], string> = {
   cancelled: 'idle',
 };
 
+/** The face of a task in the rail when no live worker holds it. */
+const taskFaces: Record<TaskRecord['state'], string> = {
+  open: 'idle',
+  claimed: 'working',
+  running: 'working',
+  review: 'idle',
+  done: 'ended',
+  cancelled: 'ended',
+};
+
 const turnLabels: Record<TaskVersion['turn'], string> = {
   completed: 'the turn ended',
   interrupted: 'you stopped the turn',
@@ -1994,8 +2004,10 @@ function renderRail(
       ),
     );
   }
-  for (const worker of workers) {
+  const listed = new Set<string>();
+  const add = (worker: SessionView): void => {
     const { record } = worker;
+    listed.add(record.id);
     const requests = record.requests.length;
     const review = record.commands.filter(needsReview).length;
     const [label] = worker.live
@@ -2019,7 +2031,30 @@ function renderRail(
         `data-worker="${e(record.id)}" aria-pressed="${record.id === shown}"`,
       ),
     );
+  };
+  // Each task keeps its place in the team. Its worker's slot can go to another task, so a task without a live worker shows its own state.
+  for (const task of tasks) {
+    if (task.state === 'cancelled') continue;
+    const session = task.attempts.at(-1)?.session;
+    const worker = workers.find(
+      (entry) => entry.live && entry.record.id === session,
+    );
+    if (worker) add(worker);
+    else
+      team.push(
+        member(
+          'task',
+          taskFaces[task.state],
+          task.assignment.title,
+          e(taskStates[task.state][0]),
+          `data-task-select="${e(task.id)}" aria-pressed="${frame.panel === 'task' && live.tasks?.selected?.id === task.id}"`,
+        ),
+      );
   }
+  // Sessions that the person started, and any live worker that no listed task holds.
+  for (const worker of workers)
+    if (!listed.has(worker.record.id) && (worker.live || !worker.record.task))
+      add(worker);
   const items = [
     live.tasks
       ? '<button type="button" data-panel="new-task">New task<small>Write a task. An agent runs it in its own copy of the project.</small></button>'
