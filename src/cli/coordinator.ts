@@ -106,10 +106,16 @@ export function coordinatorContext(workspace: Workspace): string {
   const idea = workspace.candidates.find(
     (candidate) => candidate.id === workspace.selectedId,
   );
+  const addOns = workspace.candidates.filter(
+    (candidate) => candidate.kind === 'extra' && candidate.id !== idea?.id,
+  );
   return [
     workspace.context ? `Research brief:\n${workspace.context}` : '',
     idea
       ? `Chosen direction: ${idea.title}\n${idea.recommendation}\nProposed checks:\n${idea.gates.map((check) => `- ${check}`).join('\n')}`
+      : '',
+    addOns.length
+      ? `Add-ons from research. Draft each one as an extra task (extra: true). The person ticks the extras that they want before the work starts, and Verifold cancels the others:\n${addOns.map((addOn) => `- ${addOn.title}: ${addOn.recommendation}`).join('\n')}`
       : '',
   ]
     .filter(Boolean)
@@ -270,7 +276,7 @@ ${objective}
 ${input.context ? `\n${input.context}\n` : ''}
 Default harness for workers: ${host === 'claude' ? 'Claude Code' : 'Codex'}${model ? `, model ${model}` : ''}. Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
-${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
+${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan for the person: what the tasks do, about how long the work takes, and why each task runs on its harness. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
           tools: this.tools(),
         });
       } catch (error) {
@@ -300,8 +306,12 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
   }
 
-  /** The person approves the coordinator's task plan. Its tasks can start, and it wakes. */
-  approvePlan(): Promise<void> {
+  /**
+   * The person approves the coordinator's task plan. Its tasks can start, and
+   * it wakes. The extra tasks that are not in `extras` are cancelled first.
+   */
+  approvePlan(extras: readonly unknown[] = []): Promise<void> {
+    const left: string[] = [];
     return this.serial(async () => {
       const state = this.current();
       if (state.stoppedAt || state.planApproved)
@@ -311,11 +321,20 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
         fail(
           'The coordinator is still making its plan. Approve it when its turn ends.',
         );
+      for (const task of await this.tasks.list())
+        if (
+          task.assignment.extra &&
+          task.state === 'open' &&
+          !extras.includes(task.id)
+        ) {
+          await this.tasks.cancel(task.id);
+          left.push(task.assignment.title);
+        }
       await this.save({ ...state, planApproved: true });
     }).then(() =>
       this.notify({
         kind: 'person',
-        text: 'The person approved your task plan. Start the tasks that can run.',
+        text: `The person approved your task plan.${left.length ? ` They left out these extras, which Verifold cancelled: ${left.join('; ')}.` : ''} Start the tasks that can run.`,
       }),
     );
   }
@@ -545,6 +564,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             minutes: args.minutes,
             dependencies: args.dependencies,
             network: args.network,
+            extra: args.extra,
           },
           'coordinator',
           `Created by the coordinator: ${why()}`,
@@ -575,6 +595,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             minutes: args.minutes ?? current.minutes,
             dependencies: args.dependencies ?? current.dependencies,
             network: args.network ?? current.network,
+            extra: args.extra ?? current.extra,
             reason: `The coordinator: ${why()}`,
           },
           'coordinator',
@@ -1089,6 +1110,11 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         host: { type: 'string', enum: ['claude', 'codex'] },
         minutes: { type: 'integer', minimum: 1, maximum: 240 },
         network,
+        extra: {
+          type: 'boolean',
+          description:
+            'True for an add-on: work that the person can include in the plan or leave out before the work starts.',
+        },
         reason,
       },
       required: ['title', 'objective', 'writable', 'output', 'reason'],
@@ -1112,6 +1138,11 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         host: { type: 'string', enum: ['claude', 'codex'] },
         minutes: { type: 'integer', minimum: 1, maximum: 240 },
         network,
+        extra: {
+          type: 'boolean',
+          description:
+            'True for an add-on: work that the person can include in the plan or leave out before the work starts.',
+        },
         reason,
       },
       required: ['task', 'reason'],
