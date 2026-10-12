@@ -11,4 +11,4 @@ Return a JSON object with this shape:
 
 The current plan parser requires 2 to 5 personas with unique names. Keep scope within 12000 characters, each name within 100, and each task within 4000. These are interface limits, not a requirement to fill the available space.
 
-Plan the research now. Do not perform the research until the plan is approved. Proposed budgets, thresholds, and verification gates are not approvals to execute experiments.
+Plan the research now. Do not perform the research until the plan is approved. Proposed budgets, thresholds, and checks are not approvals to execute experiments.
