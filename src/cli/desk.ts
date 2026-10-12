@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { readFile, realpath } from 'node:fs/promises';
+import { copyFile, readFile, realpath } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -195,8 +195,10 @@ async function computeAction(
 }
 
 /**
- * Draft the plan for another direction. The work has not started, so the
- * coordinator stops, and the tasks of its draft are cancelled before the new draft.
+ * Draft the plan for another direction. The coordinator stops, and the open
+ * tasks of its plan are cancelled. After the work started (`started`), the
+ * running turns also stop: their work becomes versions for review. Done work
+ * stays in the project, and the results of the earlier direction stay saved.
  */
 async function redraft(
   root: string,
@@ -204,6 +206,7 @@ async function redraft(
   coordinator: Coordinator | undefined,
   tasks: TaskManager | undefined,
   idea: unknown,
+  started = false,
 ): Promise<void> {
   const workspace = await loadWorkspace(root);
   if (
@@ -214,14 +217,26 @@ async function redraft(
   if (idea === workspace.selectedId)
     throw new SessionActionError('The plan already uses this direction.');
   const state = coordinator?.view()?.state;
-  if (state && !state.stoppedAt && state.planApproved)
+  if (!started && state && !state.stoppedAt && state.planApproved)
     throw new SessionActionError(
-      'The work on the chosen direction already started.',
+      'The work on the chosen direction already started. Change the direction instead.',
     );
   if (state && !state.stoppedAt) await coordinator?.stop();
   for (const task of (await tasks?.list()) ?? [])
-    if (task.assignment.by === 'coordinator' && task.state === 'open')
+    if (started && task.state === 'running') await tasks?.stop(task.id);
+    else if (task.assignment.by === 'coordinator' && task.state === 'open')
       await tasks?.cancel(task.id);
+  // One results file holds the chosen direction. A copy keeps the earlier direction's results.
+  if (started && workspace.selectedId)
+    await copyFile(
+      join(root, '.verifold', 'results.json'),
+      join(root, '.verifold', `results-${workspace.selectedId}.json`),
+    ).catch((error: unknown) => {
+      if (
+        !(error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      )
+        throw error;
+    });
   await research.select(idea, true);
 }
 
@@ -250,12 +265,20 @@ async function act(
     (body.action === 'research' ||
       body.action === 'cancel-research' ||
       body.action === 'select' ||
-      body.action === 'redraft')
+      body.action === 'redraft' ||
+      body.action === 'change-direction')
   ) {
     if (body.action === 'cancel-research') research.cancel();
     else if (body.action === 'select') await research.select(body.idea);
-    else if (body.action === 'redraft')
-      await redraft(root, research, coordinator, tasks, body.idea);
+    else if (body.action === 'redraft' || body.action === 'change-direction')
+      await redraft(
+        root,
+        research,
+        coordinator,
+        tasks,
+        body.idea,
+        body.action === 'change-direction',
+      );
     else
       await research.start({
         ...(body.approve === true ? { approve: true } : {}),
