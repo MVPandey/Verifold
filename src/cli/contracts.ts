@@ -41,17 +41,15 @@ export function parseCandidates(value: unknown): readonly Candidate[] {
       throw new Error(
         'Idea IDs must contain lowercase letters, digits, or hyphens.',
       );
-    if (
-      !Array.isArray(data.gates) ||
-      !data.gates.length ||
-      data.gates.length > 20
-    )
-      throw new Error('Each idea needs 1–20 proposed verification gates.');
+    // Older hosts and saved projects name the checks `gates`. The record keeps that field.
+    const checks: unknown = data.checks ?? data.gates;
+    if (!Array.isArray(checks) || !checks.length || checks.length > 20)
+      throw new Error('Each idea needs 1 to 20 proposed checks.');
     return {
       id,
       title: string(data.title, 'title'),
       recommendation: string(data.recommendation, 'recommendation'),
-      gates: data.gates.map((gate: unknown) => string(gate, 'gate')),
+      gates: checks.map((check: unknown) => string(check, 'check')),
       ...(data.sources === undefined
         ? {}
         : { sources: parseSources(data.sources) }),

@@ -101,7 +101,7 @@ export function directionObjective(workspace: Workspace): string | null {
   return idea ? `${idea.title}\n\n${idea.recommendation}` : null;
 }
 
-/** The research brief and the chosen direction with its gates, for the coordinator's first turn. */
+/** The research brief and the chosen direction with its checks, for the coordinator's first turn. */
 export function coordinatorContext(workspace: Workspace): string {
   const idea = workspace.candidates.find(
     (candidate) => candidate.id === workspace.selectedId,
@@ -109,7 +109,7 @@ export function coordinatorContext(workspace: Workspace): string {
   return [
     workspace.context ? `Research brief:\n${workspace.context}` : '',
     idea
-      ? `Chosen direction: ${idea.title}\n${idea.recommendation}\nProposed verification gates:\n${idea.gates.map((gate) => `- ${gate}`).join('\n')}`
+      ? `Chosen direction: ${idea.title}\n${idea.recommendation}\nProposed checks:\n${idea.gates.map((check) => `- ${check}`).join('\n')}`
       : '',
   ]
     .filter(Boolean)
