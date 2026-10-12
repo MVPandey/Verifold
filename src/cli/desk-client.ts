@@ -19,6 +19,8 @@ const connectionMessage = requiredElement(
 );
 const observationLabel = requiredElement(document, '#observation', HTMLElement);
 const actionLabel = requiredElement(document, '#action-status', HTMLElement);
+/** Clears the status line after each action, so it never shows an old result. */
+let actionTimer: ReturnType<typeof setTimeout> | undefined;
 const projectTitle = requiredElement(document, '#project-title', HTMLElement);
 const stageLabel = requiredElement(document, '#stage', HTMLElement);
 const menuButton = requiredElement(document, '#menu', HTMLElement);
@@ -836,7 +838,12 @@ async function act(button: HTMLElement): Promise<void> {
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
     .join('');
+  // A confirmed button shows its confirm text. Its own label is kept in `armed`.
+  const name = (button.dataset.armed ?? button.textContent ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (button instanceof HTMLButtonElement) button.disabled = true;
+  clearTimeout(actionTimer);
   actionLabel.textContent = 'Sending…';
   try {
     const response = await fetch('/api/action', {
@@ -862,7 +869,7 @@ async function act(button: HTMLElement): Promise<void> {
           ? reply.error
           : 'The action failed. Refresh and try again.',
       );
-    actionLabel.textContent = 'Done';
+    actionLabel.textContent = name ? `Done: ${name}` : 'Done';
     failure = undefined;
     // A new or resumed session opens in the panel, and so does a new task.
     if (action === 'start' || action === 'resume' || action === 'restart') {
@@ -918,6 +925,10 @@ async function act(button: HTMLElement): Promise<void> {
       key.value = '';
     showFailure();
     if (button instanceof HTMLButtonElement) button.disabled = false;
+    // An error also stays next to its control until the next action.
+    actionTimer = setTimeout(() => {
+      actionLabel.textContent = '';
+    }, 6000);
     void refresh();
   }
 }
