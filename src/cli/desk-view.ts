@@ -1875,10 +1875,27 @@ function renderPlanCard(workspace: Workspace, live: DeskSession): string {
   const others = workspace.candidates.filter(
     (candidate) => candidate.id !== idea.id,
   );
+  const extras = drafted.filter((task) => task.assignment.extra);
+  // The coordinator ends its draft turn with a summary for the person.
+  const summary = drafting
+    ? undefined
+    : view.session?.record.events.findLast((event) => event.kind === 'agent')
+        ?.text;
+  const line = (task: TaskRecord): string =>
+    `<strong>${e(task.assignment.title)}</strong> <span class="fine">${e(hostName(task.assignment.host))}${task.assignment.dependencies.length ? `, after ${e(task.assignment.dependencies.map((id) => sender(id, all)).join(', '))}` : ''}</span>`;
   return `<section class="card plan${drafting ? '' : ' needs'}" aria-labelledby="plan-card-title"><div class="section-title"><h2 id="plan-card-title" tabindex="-1">The plan</h2><span class="status ${drafting ? 'active' : 'muted'}">${drafting ? 'The coordinator drafts it' : 'Waits for you'}</span></div>
   <h3>Direction</h3><p><strong>${e(idea.title)}</strong></p>${more(`plan-case-${idea.id}`, idea.recommendation, 280)}
   <h3>Checks</h3><ol class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ol>
-  <h3>The work</h3>${drafted.length ? `<ol class="plan-tasks">${drafted.map((task) => `<li><strong>${e(task.assignment.title)}</strong> <span class="fine">${e(hostName(task.assignment.host))}${task.assignment.dependencies.length ? `, after ${e(task.assignment.dependencies.map((id) => sender(id, all)).join(', '))}` : ''}</span></li>`).join('')}</ol>` : `<p class="empty-note">${drafting ? 'The coordinator drafts the tasks.' : 'No tasks yet. Ask the coordinator for a change.'}</p>`}
+  <h3>The work</h3>${
+    drafted.length > extras.length
+      ? `<ol class="plan-tasks">${drafted
+          .filter((task) => !task.assignment.extra)
+          .map((task) => `<li>${line(task)}</li>`)
+          .join('')}</ol>`
+      : `<p class="empty-note">${drafting ? 'The coordinator drafts the tasks.' : 'No tasks yet. Ask the coordinator for a change.'}</p>`
+  }
+  ${summary ? `<div class="note"><p class="msg-meta"><strong>The coordinator's summary</strong><span class="tag reading">Its reading</span></p>${more('plan-summary', summary, 400)}</div>` : ''}
+  ${extras.length ? `<h3>Extras</h3><p class="fine">Add-ons that you can include. Tick the ones that you want. Verifold cancels the others when you start the work.</p><ul class="plan-extras">${extras.map((task) => `<li><label><input type="checkbox" data-extra="${e(task.id)}"> ${line(task)}</label></li>`).join('')}</ul>` : ''}
   <div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${drafting || !drafted.length ? ' disabled' : ''}>Start the work</button></div>
   <label class="field" for="coordinator-message">Ask for a change</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: also test sparse graphs."></textarea><div class="actions"><button type="button" data-action="coordinator-message">Send to the coordinator</button></div>
   <p class="fine">No task starts before you start the work. The coordinator revises the draft when you ask for a change.</p>

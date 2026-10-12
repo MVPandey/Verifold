@@ -1459,6 +1459,13 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
           list: [
             task('task-1', 'Implement', []),
             task('task-2', 'Benchmark', ['task-1']),
+            {
+              ...task('task-3', 'Sparse graphs', ['task-1']),
+              assignment: {
+                ...task('task-3', 'Sparse graphs', ['task-1']).assignment,
+                extra: true,
+              },
+            },
           ],
           selected: null,
           idle: [],
@@ -1483,7 +1490,17 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
           session: {
             live: true,
             saveFailed: false,
-            record: { id: 'C1', status },
+            record: {
+              id: 'C1',
+              status,
+              events: [
+                {
+                  at,
+                  kind: 'agent',
+                  text: 'Two tasks, about 30 minutes. Codex writes the code, so Claude Code tests code from another model.',
+                },
+              ],
+            },
           },
           waiting: 0,
           limitedUntil: null,
@@ -1505,6 +1522,19 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
     /<h2 id="plan-card-title" tabindex="-1">The plan<\/h2><span class="status muted">Waits for you[\s\S]*<strong>Heap Dijkstra<\/strong>[\s\S]*<li>Same paths on small graphs\.<\/li><li>Faster on large graphs\.<\/li>[\s\S]*<strong>Implement<\/strong> <span class="fine">Codex<\/span>[\s\S]*<strong>Benchmark<\/strong> <span class="fine">Claude Code, after Implement<\/span>/,
   );
   assert.match(plan, /data-action="coordinator-approve">Start the work/);
+  // Extras are add-ons with a checkbox, not ticked. The coordinator's summary is its reading.
+  assert.match(
+    plan,
+    /<h3>Extras<\/h3>[\s\S]*<input type="checkbox" data-extra="task-3"> <strong>Sparse graphs<\/strong>/,
+  );
+  assert.doesNotMatch(
+    plan,
+    /<ol class="plan-tasks">((?!<\/ol>)[\s\S])*Sparse graphs/,
+  );
+  assert.match(
+    plan,
+    /The coordinator's summary<\/strong><span class="tag reading">Its reading<\/span>[\s\S]*about 30 minutes/,
+  );
   // Another direction replaces the draft before the work starts.
   assert.match(
     plan,

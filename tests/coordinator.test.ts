@@ -743,6 +743,13 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
         recommendation: 'Compare Dijkstra and Thorup on road networks.',
         gates: ['Both run on the same graphs.'],
       },
+      {
+        id: 'memory',
+        title: 'Profile memory use',
+        recommendation: 'Measure the peak memory of both.',
+        gates: ['Peak memory is recorded.'],
+        kind: 'extra',
+      },
     ],
     selectedId: 'sparse',
     research: { autonomy: 'autonomous' },
@@ -761,11 +768,61 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
   assert.deepEqual([created?.host, created?.model], ['codex', null]);
   assert.match(
     (await inputs())[0] ?? '',
-    /Research brief:\nShortest paths on sparse graphs\.\n\nChosen direction: Compare sparse-graph baselines[\s\S]*- Both run on the same graphs\.[\s\S]*the person approves your first task plan before any task starts/,
+    /Research brief:\nShortest paths on sparse graphs\.\n\nChosen direction: Compare sparse-graph baselines[\s\S]*- Both run on the same graphs\.[\s\S]*Add-ons from research\. Draft each one as an extra task[\s\S]*- Profile memory use: Measure the peak memory of both\.[\s\S]*the person approves your first task plan before any task starts[\s\S]*about how long the work takes/,
   );
   // A running coordinator is not started again.
   await coordinator.startForDirection(workspace);
   assert.equal(coordinator.view()?.state.startedAt, state?.startedAt);
+});
+
+await test('extras: the person ticks the add-ons, and Verifold cancels the others', async (t) => {
+  const { coordinator, script, tasks, turns, inputs } = await team(t);
+  await script([
+    [
+      { name: 'verifold_create_task', arguments: prior },
+      {
+        name: 'verifold_create_task',
+        arguments: { ...review, title: 'Sparse graphs', extra: true },
+      },
+      {
+        name: 'verifold_create_task',
+        arguments: { ...review, title: 'Dense graphs', extra: true },
+      },
+    ],
+  ]);
+  await coordinator.start({
+    objective: 'Compare baselines.',
+    host: 'claude',
+    guided: true,
+  });
+  await turns(1);
+  const created = await tasks.list();
+  assert.deepEqual(
+    created.map((task) => [
+      task.assignment.title,
+      task.assignment.extra === true,
+    ]),
+    [
+      ['Prior art', false],
+      ['Sparse graphs', true],
+      ['Dense graphs', true],
+    ],
+  );
+  const id = (title: string): string =>
+    created.find((task) => task.assignment.title === title)?.id ?? '';
+  await coordinator.approvePlan([id('Sparse graphs')]);
+  const state = async (title: string): Promise<string | undefined> =>
+    (await tasks.get(id(title)))?.state;
+  assert.equal(await state('Dense graphs'), 'cancelled');
+  assert.notEqual(await state('Sparse graphs'), 'cancelled');
+  assert.notEqual(await state('Prior art'), 'cancelled');
+  assert.equal(coordinator.view()?.state.planApproved, true);
+  // The coordinator learns which extras the person left out.
+  await turns(2);
+  assert.match(
+    (await inputs()).at(-1) ?? '',
+    /They left out these extras, which Verifold cancelled: Dense graphs\./,
+  );
 });
 
 await test('use this instead: before the work starts, another direction gets its own draft plan', async (t) => {
