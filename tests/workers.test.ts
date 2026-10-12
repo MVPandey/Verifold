@@ -667,6 +667,7 @@ await test(
       'desk-terminal.js',
       'desk-terminals.js',
       'desk-lease.js',
+      'desk-map.js',
       'manrope.ttf',
       'symbol.webp',
     ])

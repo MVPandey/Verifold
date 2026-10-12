@@ -427,6 +427,7 @@ await test('the desk stores a key and limits through actions, and no reply holds
     'desk-terminal.js',
     'desk-terminals.js',
     'desk-lease.js',
+    'desk-map.js',
     'manrope.ttf',
     'symbol.webp',
   ])
