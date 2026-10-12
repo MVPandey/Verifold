@@ -389,14 +389,16 @@ await test('the coordinator creates and starts tasks through checked tools, and 
     { session: null, controllable: true, coordinator: coordinator.view() },
     { view: 'home', panel: 'coordinator' },
   ).html;
-  assert.match(html, /Coordinator[\s\S]*Waiting for events/);
+  assert.match(html, /Coordinator[\s\S]*Watching the work/);
+  // Each action reads as a sentence. Without the task list, a task shows by its ID.
   assert.match(
     html,
-    /<span class="tool">accept<\/span> [^<][\s\S]*Its reason[\s\S]*It lists the two baselines/,
+    /<p>Accepted a version of task-1\.<\/p>[\s\S]*Its reason[\s\S]*It lists the two baselines/,
   );
+  // The tool name and Verifold's reply show under Details.
   assert.match(
     html,
-    /<span class="tool">launch_missiles<\/span> <strong>Verifold refused this\.<\/strong>/,
+    /<p>Tried to use a tool\. Verifold refused it\.<\/p><p class="fine detail-only">Tool: <code>verifold_launch_missiles<\/code>\./,
   );
 });
 
@@ -667,7 +669,7 @@ await test('in Guided research no task starts before the person approves the pla
   ).html;
   assert.match(
     html,
-    /The task plan waits for you[\s\S]*task-1<\/strong> Prior art[\s\S]*task-2<\/strong> Method review: Review the methods in the prior work\. \(waits for task-1\)[\s\S]*data-action="coordinator-approve">Approve the plan/,
+    /The task plan waits for you[\s\S]*<strong>Prior art<\/strong>[\s\S]*<strong>Method review<\/strong>: Review the methods in the prior work\. \(waits for Prior art\)[\s\S]*data-action="coordinator-approve">Approve the plan/,
   );
   await coordinator.approvePlan();
   await turns(2);
