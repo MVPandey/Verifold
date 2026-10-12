@@ -3,6 +3,7 @@ import { requiredElement } from '../ui/dom.ts';
 import { mountTranscripts, refreshTranscripts } from './desk-transcript.ts';
 import { mountTerminals, placeTerminals } from './desk-terminals.ts';
 import { viewLease } from './desk-lease.ts';
+import { drawMap } from './desk-map.ts';
 
 const content = requiredElement(document, '#content', HTMLElement);
 const connectionLabel = requiredElement(document, '#connection', HTMLElement);
@@ -357,46 +358,8 @@ function showNotify(): void {
  * The boxes say the same in words, so the arrows are decoration.
  */
 function drawMaps(): void {
-  for (const map of content.querySelectorAll<HTMLElement>('[data-map]')) {
-    const svg = map.querySelector('svg.map-links');
-    const layer = svg?.querySelector('g');
-    if (!svg || !layer) continue;
-    const origin = map.getBoundingClientRect();
-    const left = origin.left - map.scrollLeft;
-    const top = origin.top - map.scrollTop;
-    const paths: SVGPathElement[] = [];
-    for (const node of map.querySelectorAll<HTMLElement>('[data-from]')) {
-      const to = node.getBoundingClientRect();
-      for (const id of (node.dataset.from ?? '').split(' ')) {
-        const source = map.querySelector<HTMLElement>(
-          `[data-node="${CSS.escape(id)}"]`,
-        );
-        if (!source) continue;
-        const from = source.getBoundingClientRect();
-        const x1 = from.right - left;
-        const y1 = from.top + Math.min(28, from.height / 2) - top;
-        const x2 = to.left - left - 2;
-        const y2 = to.top + Math.min(28, to.height / 2) - top;
-        const bend = Math.max(16, (x2 - x1) / 2);
-        const path = document.createElementNS(
-          'http://www.w3.org/2000/svg',
-          'path',
-        );
-        path.setAttribute(
-          'd',
-          `M${x1} ${y1}C${x1 + bend} ${y1} ${x2 - bend} ${y2} ${x2} ${y2}`,
-        );
-        path.setAttribute('marker-end', 'url(#map-arrow)');
-        // A finished source or the objective gives a solid line. A dashed line still waits.
-        if (id === 'objective' || source.dataset.state === 'done')
-          path.setAttribute('class', 'done');
-        paths.push(path);
-      }
-    }
-    svg.setAttribute('width', String(map.scrollWidth));
-    svg.setAttribute('height', String(map.scrollHeight));
-    layer.replaceChildren(...paths);
-  }
+  for (const map of content.querySelectorAll<HTMLElement>('[data-map]'))
+    drawMap(map);
 }
 
 /** After the person opens a view or a panel, focus moves there, so keyboard and screen reader users follow. */

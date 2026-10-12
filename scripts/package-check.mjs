@@ -518,6 +518,7 @@ onLine((line) => {
       '/desk-terminal.js',
       '/desk-terminals.js',
       '/desk-lease.js',
+      '/desk-map.js',
       '/vendor/xterm.js',
       '/vendor/xterm.css',
       '/vendor/addon-fit.js',

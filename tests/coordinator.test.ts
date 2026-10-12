@@ -776,6 +776,7 @@ await test('a question from a task panel names its task for the coordinator', as
     'desk-terminal.js',
     'desk-terminals.js',
     'desk-lease.js',
+    'desk-map.js',
     'manrope.ttf',
     'symbol.webp',
   ])

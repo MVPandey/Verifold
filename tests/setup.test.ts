@@ -92,6 +92,7 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     'desk-terminal.js',
     'desk-terminals.js',
     'desk-lease.js',
+    'desk-map.js',
     'manrope.ttf',
     'symbol.webp',
   ])

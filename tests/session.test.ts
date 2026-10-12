@@ -647,6 +647,7 @@ await test('desk actions need the token and a JSON body, and report state errors
       'desk-terminal.js',
       'desk-terminals.js',
       'desk-lease.js',
+      'desk-map.js',
       'manrope.ttf',
       'symbol.webp',
     ])
