@@ -89,7 +89,11 @@ class Workers implements TaskSessions {
   continueTask(session: string): void {
     this.waiting.delete(session);
   }
-  cancel(): void {}
+  /** Turns that a stop cancelled. */
+  cancelled = 0;
+  cancel(): void {
+    this.cancelled++;
+  }
   endTask(session: string): void {
     this.waiting.delete(session);
   }
@@ -826,7 +830,7 @@ await test('extras: the person ticks the add-ons, and Verifold cancels the other
 });
 
 await test('use this instead: before the work starts, another direction gets its own draft plan', async (t) => {
-  const { root, tasks, coordinator, script, turns } = await team(t);
+  const { root, tasks, workers, coordinator, script, turns } = await team(t);
   await script([
     [
       {
@@ -838,6 +842,13 @@ await test('use this instead: before the work starts, another direction gets its
       {
         name: 'verifold_create_task',
         arguments: { ...prior, title: 'Pick landmarks' },
+      },
+    ],
+    [],
+    [
+      {
+        name: 'verifold_create_task',
+        arguments: { ...prior, title: 'Heap again' },
       },
     ],
   ]);
@@ -932,9 +943,21 @@ await test('use this instead: before the work starts, another direction gets its
     /^ALT with landmarks/,
   );
   assert.equal(coordinator.view()?.state.planApproved, false);
-  // After the person starts the work, the direction does not change here.
-  await coordinator.approvePlan();
+  // After the person starts the work, Use this instead is refused. Changing the direction is the way.
+  await coordinator.approvePlan([]);
+  await turns(3);
   assert.equal(await post({ action: 'redraft', idea: 'heap' }), 409);
+  const landmarks =
+    all.find((task) => task.assignment.title === 'Pick landmarks')?.id ?? '';
+  await tasks.start(landmarks);
+  assert.equal((await tasks.get(landmarks))?.state, 'running');
+  assert.equal(await post({ action: 'change-direction', idea: 'heap' }), 200);
+  await turns(4);
+  // The running turn stopped, and the coordinator drafted the plan for the new direction.
+  assert.equal(workers.cancelled, 1);
+  assert.equal((await loadWorkspace(root)).selectedId, 'heap');
+  assert.match(coordinator.view()?.state.objective ?? '', /^Heap Dijkstra/);
+  assert.equal(coordinator.view()?.state.planApproved, false);
 });
 
 await test('a question from a task panel names its task for the coordinator', async (t) => {
