@@ -396,7 +396,6 @@ export class TaskManager {
         claim: null,
         attempts: [],
       });
-      this.options.progress?.(`Task ${id} created: ${assignment.title}.`);
       this.told(by, id, `The person created ${id}: ${assignment.title}.`);
       return id;
     });
@@ -586,7 +585,7 @@ export class TaskManager {
       await this.write(this.attempt(current, () => ({ session })));
       this.limit(task.id, session, task.assignment.minutes);
       this.options.progress?.(
-        `Task ${task.id} started with ${hostName(task.assignment.host)}. Follow it in the desk.`,
+        `Task started: ${task.assignment.title} (${hostName(task.assignment.host)}).`,
       );
       this.told(by, task.id, `The person started ${task.id}.`);
     });
@@ -795,7 +794,7 @@ export class TaskManager {
         'done',
       );
       this.options.progress?.(
-        `Task ${task.id}: ${by === 'person' ? 'you' : 'the coordinator'} accepted ${result.applied.length} ${result.applied.length === 1 ? 'file' : 'files'}.`,
+        `${by === 'person' ? 'You' : 'The coordinator'} accepted ${task.assignment.title}: ${result.applied.length} ${result.applied.length === 1 ? 'file' : 'files'}.`,
       );
       this.told(
         by,
@@ -1416,7 +1415,7 @@ export class TaskManager {
         })),
       );
       this.options.progress?.(
-        `Task ${task.id}: version ${number} is ready for review in the desk.`,
+        `Ready for review: ${task.assignment.title}, version ${number}.`,
       );
       this.options.onEvent?.({
         kind: 'version',
