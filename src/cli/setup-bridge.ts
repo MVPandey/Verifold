@@ -179,8 +179,9 @@ export class SetupBridge {
             ? prompt.hint.yes
             : prompt.hint.no
           : ((prompt.hint?.kind === 'text'
-              ? prompt.hint.actions?.find((action) => action.value === value)
-                  ?.label
+              ? (prompt.hint.actions?.find((action) => action.value === value)
+                  ?.label ??
+                prompt.hint.suggestions?.find((answer) => answer === value))
               : undefined) ??
               (value.trim() || 'No answer')),
       );
