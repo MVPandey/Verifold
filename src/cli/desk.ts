@@ -194,6 +194,37 @@ async function computeAction(
   }
 }
 
+/**
+ * Draft the plan for another direction. The work has not started, so the
+ * coordinator stops, and the tasks of its draft are cancelled before the new draft.
+ */
+async function redraft(
+  root: string,
+  research: ResearchRunner,
+  coordinator: Coordinator | undefined,
+  tasks: TaskManager | undefined,
+  idea: unknown,
+): Promise<void> {
+  const workspace = await loadWorkspace(root);
+  if (
+    typeof idea !== 'string' ||
+    !workspace.candidates.some((candidate) => candidate.id === idea)
+  )
+    throw new SessionActionError('Choose a direction from the list.');
+  if (idea === workspace.selectedId)
+    throw new SessionActionError('The plan already uses this direction.');
+  const state = coordinator?.view()?.state;
+  if (state && !state.stoppedAt && state.planApproved)
+    throw new SessionActionError(
+      'The work on the chosen direction already started.',
+    );
+  if (state && !state.stoppedAt) await coordinator?.stop();
+  for (const task of (await tasks?.list()) ?? [])
+    if (task.assignment.by === 'coordinator' && task.state === 'open')
+      await tasks?.cancel(task.id);
+  await research.select(idea, true);
+}
+
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionPool | undefined,
@@ -218,10 +249,13 @@ async function act(
     research &&
     (body.action === 'research' ||
       body.action === 'cancel-research' ||
-      body.action === 'select')
+      body.action === 'select' ||
+      body.action === 'redraft')
   ) {
     if (body.action === 'cancel-research') research.cancel();
     else if (body.action === 'select') await research.select(body.idea);
+    else if (body.action === 'redraft')
+      await redraft(root, research, coordinator, tasks, body.idea);
     else
       await research.start({
         ...(body.approve === true ? { approve: true } : {}),
@@ -263,7 +297,7 @@ async function act(
           host: body.host,
           model: body.model,
           context: coordinatorContext(workspace),
-          guided: workspace.research?.autonomy !== 'autonomous',
+          guided: true,
         });
         return 200;
       }

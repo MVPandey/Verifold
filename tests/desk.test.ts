@@ -549,7 +549,7 @@ await test('desk points to the coordinator after a direction and shows its notes
       { view: 'home', panel },
     ).html;
   const waiting = html(false);
-  assert.match(waiting, /The task plan waits for you/);
+  assert.match(waiting, /The plan waits for you/);
   assert.match(waiting, /Plan: waits for you/);
   assert.doesNotMatch(waiting, /verifold handoff/);
   // Home shows the latest note as the coordinator's reading. Its panel lists every note.
@@ -563,7 +563,7 @@ await test('desk points to the coordinator after a direction and shows its notes
   );
   // Before the coordinator creates a task, nothing waits for the person.
   const empty = html(false, []);
-  assert.match(empty, /No task plan yet/);
+  assert.match(empty, /The coordinator drafts the plan/);
   assert.doesNotMatch(empty, /waits for you/);
   assert.match(
     html(true),
@@ -1394,6 +1394,132 @@ await test('desk maps the tasks with what each agent does now and why', async (t
   );
 });
 
+await test('desk shows one plan: the direction, its checks, and the drafted tasks, with one approval', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Road graphs',
+      autonomy: 'autonomous',
+      phase: 'directions',
+      plan: {
+        scope: 'Scope',
+        personas: [
+          { name: 'Historian', task: 'Find prior art.' },
+          { name: 'Skeptic', task: 'Find counterexamples.' },
+        ],
+      },
+    },
+    candidates: [
+      {
+        id: 'heap',
+        title: 'Heap Dijkstra',
+        recommendation: 'Compare a binary heap with a scan.',
+        gates: ['Same paths on small graphs.', 'Faster on large graphs.'],
+        kind: 'main',
+      },
+      {
+        id: 'alt',
+        title: 'ALT with landmarks',
+        recommendation: 'Precompute landmarks.',
+        gates: ['Distances match.'],
+        kind: 'alternative',
+      },
+    ],
+    selectedId: 'heap',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const task = (id: string, title: string, dependencies: string[]) => ({
+    id,
+    state: 'open',
+    revision: 1,
+    createdAt: at,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title,
+      objective: 'Run.',
+      host: id === 'task-1' ? 'codex' : 'claude',
+      dependencies,
+    },
+  });
+  const desk = (status: string, view: 'home' | 'research'): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        research: { running: false, step: null, events: [], startedAt: null },
+        tasks: {
+          list: [
+            task('task-1', 'Implement', []),
+            task('task-2', 'Benchmark', ['task-1']),
+          ],
+          selected: null,
+          idle: [],
+          messages: [],
+        },
+        coordinator: {
+          state: {
+            schemaVersion: 1,
+            objective: 'Heap Dijkstra',
+            host: 'claude',
+            model: null,
+            startedAt: at,
+            stoppedAt: null,
+            session: 'C1',
+            created: 2,
+            planApproved: false,
+            cursor: 0,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          session: {
+            live: true,
+            saveFailed: false,
+            record: { id: 'C1', status },
+          },
+          waiting: 0,
+          limitedUntil: null,
+        },
+      } as never,
+      { view, panel: null },
+    ).html;
+  // Home opens the plan where it can be read. It does not approve it.
+  const home = desk('idle', 'home');
+  assert.match(
+    home,
+    /The plan waits for you[\s\S]*data-view="research" data-focus="plan-card-title">Read the plan/,
+  );
+  assert.doesNotMatch(home, /Choose a direction/);
+  // The plan: the direction, its checks, the drafted tasks with their harness, and one approval.
+  const plan = desk('idle', 'research');
+  assert.match(
+    plan,
+    /<h2 id="plan-card-title" tabindex="-1">The plan<\/h2><span class="status muted">Waits for you[\s\S]*<strong>Heap Dijkstra<\/strong>[\s\S]*<li>Same paths on small graphs\.<\/li><li>Faster on large graphs\.<\/li>[\s\S]*<strong>Implement<\/strong> <span class="fine">Codex<\/span>[\s\S]*<strong>Benchmark<\/strong> <span class="fine">Claude Code, after Implement<\/span>/,
+  );
+  assert.match(plan, /data-action="coordinator-approve">Start the work/);
+  // Another direction replaces the draft before the work starts.
+  assert.match(
+    plan,
+    /ALT with landmarks<\/strong> <span class="tag">Alternative<\/span>[\s\S]*data-action="redraft" data-idea="alt"/,
+  );
+  assert.match(plan, /<span class="selected-label">In the plan<\/span>/);
+  // While the coordinator drafts, the plan cannot start.
+  const drafting = desk('running', 'research');
+  assert.match(drafting, /The coordinator drafts it/);
+  assert.match(
+    drafting,
+    /data-action="coordinator-approve" disabled>Start the work/,
+  );
+});
+
 await test('desk compares the directions in a table and lists sources as they arrive', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1468,7 +1594,7 @@ await test('desk compares the directions in a table and lists sources as they ar
   // One row for each direction, with its lead, its checks, and its sources.
   assert.match(
     view,
-    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><\/th><td data-label="Its case">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
+    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><span class="selected-label">Proposed<\/span><\/th><td data-label="Its case">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
   );
   assert.match(
     view,
@@ -1487,7 +1613,7 @@ await test('desk compares the directions in a table and lists sources as they ar
   );
   assert.match(
     panel,
-    /data-action="select" data-idea="bidir" data-confirm="Click again to lock this direction">Choose this direction/,
+    /data-action="select" data-idea="bidir">Choose this direction<\/button><\/div><p class="fine">The coordinator then drafts the plan for it\./,
   );
   // While a step runs, a direction cannot be chosen.
   assert.doesNotMatch(desk(true, 'direction'), /data-action="select"/);

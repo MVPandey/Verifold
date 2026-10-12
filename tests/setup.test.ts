@@ -185,11 +185,16 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     assert.equal(response.status, 200, await response.text());
   };
   // One question at a time: the question with its settings, at most three quick questions, then the brief.
+  // The settings turn on the stop before the source search, so research waits at its plan and starts no coordinator.
   const answers: [RegExp, unknown][] = [
     [
       /What do you want to find out\?[\s\S]*Claude Code, with its default model\. Folder: /,
-      'Fast graph search on CPUs',
+      '/settings',
     ],
+    [/Which harness runs the research/, 'claude'],
+    [/Which model should it use/, ''],
+    [/Ask you before the source search/, 'y'],
+    [/Asks you before the source search\./, 'Fast graph search on CPUs'],
     [
       /class="setup-said"[\s\S]*Which baseline do you trust\?[\s\S]*Question 1 of up to 3/,
       'The speedrun baseline',

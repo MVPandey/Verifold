@@ -73,6 +73,7 @@ await test('init asks the question first, with the harness, model, and folder in
     'codex',
     '',
     '',
+    'yes',
     'Tiny graph search',
     'no',
     '',
@@ -93,8 +94,12 @@ await test('init asks the question first, with the harness, model, and folder in
   assert.match(ui.questions[1] ?? '', /Which harness runs the research/);
   assert.match(ui.questions[2] ?? '', /Model \[harness default\]/);
   assert.match(ui.questions[3] ?? '', /Project folder/);
-  assert.match(ui.questions[4] ?? '', /Codex, with its default model\./);
-  assert.match(ui.questions[5] ?? '', /investigate this project/);
+  assert.match(ui.questions[4] ?? '', /Ask you before the source search/);
+  assert.match(
+    ui.questions[5] ?? '',
+    /Codex, with its default model\. Folder: .*\. Asks you before the source search\./,
+  );
+  assert.match(ui.questions[6] ?? '', /investigate this project/);
   // Setup asks for no profile and no research mode.
   assert.doesNotMatch(
     ui.questions.join('\n'),
@@ -175,9 +180,10 @@ await test('reviewed context and model are reused in another project and reach i
   assert.equal(initialized.workspace.context, context);
   assert.equal(initialized.workspace.model, 'sonnet');
   const requests: HarnessRequest[] = [];
+  // A guided run stops at its plan, so this request is the only one.
   await runResearch(
     second,
-    initialized.research ?? {},
+    { ...initialized.research, autonomy: 'guided' },
     prompts(['n']).io,
     signal(),
     (request) => {
@@ -202,6 +208,7 @@ await test('reviewed folder evidence reaches the interview before an optional re
     'codex',
     '',
     'project',
+    '',
     '',
     'yes',
     'yes',
@@ -252,6 +259,7 @@ for (const consent of ['yes', 'no', 'missing']) {
       'codex',
       '',
       'project',
+      '',
       '/file brief.txt',
       consent === 'missing' ? 'yes' : consent,
       '',
@@ -288,7 +296,7 @@ await test('declining folder investigation keeps its contents and working direct
   const root = join(base, 'project');
   await mkdir(root);
   await writeFile(join(root, 'README.md'), 'PRIVATE_PROJECT_EVIDENCE');
-  const ui = prompts(['/settings', 'codex', '', 'project', '', 'no', '']);
+  const ui = prompts(['/settings', 'codex', '', 'project', '', '', 'no', '']);
   let calls = 0;
   await initializeProject(
     base,
@@ -481,6 +489,7 @@ await test('adaptive onboarding creates a selected nested project and preserves 
     'codex',
     'chosen-model',
     'research projects/graph',
+    '',
     'Graph search',
     'no',
     'Understand heuristic failures',
@@ -609,9 +618,9 @@ await test('the CLI researches in the interactively selected directory using the
     'codex',
     '',
     'chosen project',
+    '',
     'Tiny graph search',
     '',
-    'y',
   ]);
   const requests: HarnessRequest[] = [];
   await runCli(
