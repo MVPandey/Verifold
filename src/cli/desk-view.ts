@@ -4,6 +4,7 @@ import type { Candidate, Workspace } from './contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
 import type { ResearchReport } from './research.ts';
 import type { ResearchSource, ResearchView } from './research-runner.ts';
+import { object } from './research-contracts.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import {
   forPerson,
@@ -26,6 +27,7 @@ import {
 import {
   coordinatorLimits,
   directionObjective,
+  type CoordinatorAction,
   type CoordinatorView,
 } from './coordinator.ts';
 import { workerLimit } from './workers.ts';
@@ -302,12 +304,11 @@ function renderResearch(
   attempt: string | undefined,
 ): string {
   if (!view?.step) return '';
-  const observed = view.events.filter((event) => event.kind === 'tool').length;
-  const last = view.events.at(-1);
+  const now = researchNow(view.events);
   return `<section class="card research-live" aria-labelledby="research-live-title"><div class="section-title"><h2 id="research-live-title">Research agent</h2><span class="status ${view.running ? 'active' : 'muted'}">${view.running ? 'Running' : 'Not running'}</span></div>
   <p class="research-step">${e(view.step)}${view.running && view.startedAt ? `, for ${e(elapsed(view.startedAt))}` : ''}</p>
   ${detailSwitch}
-  <p class="research-summary summary-only">${observed} harness ${observed === 1 ? 'event' : 'events'} observed.${last ? ` Latest: ${e(last.text)}` : ''}</p>
+  ${now ? `<p class="research-summary summary-only">Now: ${e(now)}.</p>` : ''}
   ${attempt ? `${transcriptSlot(`attempt:${attempt}`, 'Research transcript')}${transcriptNote}` : ''}
   ${view.running ? '<p class="fine">If you cancel, the saved checkpoint and the attempt files stay.</p><div class="actions"><button type="button" data-action="cancel-research">Cancel research</button></div>' : ''}</section>`;
 }
@@ -337,7 +338,7 @@ function renderDecision(
     `<label class="field" for="research-feedback">Changes</label><textarea id="research-feedback" rows="3" maxlength="4000" placeholder="${e(label)}"></textarea><div class="actions"><button type="button" data-action="research" data-research="feedback">Ask for changes</button></div>`;
   switch (phase) {
     case 'awaiting-plan-review':
-      return `<section class="card needs"><h2>Review the plan</h2><p>Read the research scope below. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
+      return `<section class="card needs"><h2>Review the plan</h2><p>Read the plan below. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
     case 'directions':
       return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The choice locks it for this project. You can ask for changes first.</p>${feedback('What should change in the directions?')}</section>`;
     default:
@@ -764,7 +765,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         title: 'Review the plan',
         why: 'Guided research stops at its plan for your approval.',
         since,
-        body: '<div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button><button type="button" data-view="research">Read the scope</button></div>',
+        body: '<div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button><button type="button" data-view="research">Read the plan</button></div>',
       });
     else if (phase === 'directions')
       items.push({
@@ -987,13 +988,68 @@ function renderTeamNext(
     return '';
   if (!state.planApproved)
     return '<section class="card"><h2>No task plan yet</h2><p>The coordinator writes the task plan. No task starts before you approve it.</p></section>';
-  return `<section class="card"><h2>The coordinator runs the team</h2><p>${needs ? `${needs} ${needs === 1 ? 'item needs' : 'items need'} you above.` : 'Nothing needs you. Follow the work in the team feed and under Tasks.'}</p></section>`;
+  return `<section class="card"><h2>The coordinator runs the team</h2><p>${needs ? `${needs} ${needs === 1 ? 'item needs' : 'items need'} you above.` : 'Nothing needs you. Follow the work under Tasks.'}</p></section>`;
+}
+
+/** Each coordinator tool in plain words: what it did, and what it tried when Verifold refused. */
+const actionWords: Record<string, readonly [string, string]> = {
+  create_task: ['Created a task', 'create a task'],
+  revise_task: ['Changed', 'change'],
+  start_task: ['Started', 'start'],
+  stop_task: ['Stopped', 'stop'],
+  cancel_task: ['Cancelled', 'cancel'],
+  accept: ['Accepted a version of', 'accept a version of'],
+  request_changes: ['Asked for changes to', 'ask for changes to'],
+  reject: ['Rejected a version of', 'reject a version of'],
+  decide: ['Settled an objection on', 'settle an objection on'],
+  post: ['Wrote a note', 'write a note'],
+  report_check: ['Reported a check', 'report a check'],
+  propose_answer: ['Proposed the answer', 'propose the answer'],
+  state: ['Read the state of the work', 'read the state of the work'],
+  read: ['Read a file of', 'read a file of'],
+  compute: ['Read the GPU settings', 'read the GPU settings'],
+  request_pod: ['Asked for a GPU pod for', 'ask for a GPU pod for'],
+  start_pod: ['Started a GPU pod', 'start a GPU pod'],
+  stop_pod: ['Stopped a GPU pod', 'stop a GPU pod'],
+  end_lease: ['Ended a GPU pod', 'end a GPU pod'],
+};
+
+/** A coordinator action as a sentence for the person, with the title of its task. */
+function actionSentence(
+  action: CoordinatorAction,
+  tasks: readonly TaskRecord[],
+): string {
+  const [done, tried] = actionWords[action.tool.replace(/^verifold_/, '')] ?? [
+    'Used a tool',
+    'use a tool',
+  ];
+  let input: Record<string, unknown> = {};
+  try {
+    input = object(JSON.parse(action.input));
+  } catch {
+    // An input that is not an object leaves the sentence without its task.
+  }
+  const id = typeof input.task === 'string' ? input.task : undefined;
+  const title =
+    tasks.find((task) => task.id === id)?.assignment.title ??
+    (typeof input.title === 'string' ? input.title : id);
+  const what =
+    action.tool === 'verifold_report_check' &&
+    typeof input.check === 'number' &&
+    typeof input.result === 'string'
+      ? ` ${input.check}: ${input.result}`
+      : title
+        ? `${action.tool === 'verifold_create_task' ? ':' : ''} ${title}`
+        : '';
+  return action.ok
+    ? `${done}${what}.`
+    : `Tried to ${tried}${what}. Verifold refused it.`;
 }
 
 const coordinatorStates: Record<string, string> = {
   starting: 'Starting',
   running: 'Working',
-  idle: 'Waiting for events',
+  idle: 'Watching the work',
   paused: 'Paused',
   interrupted: 'Interrupted',
   ended: 'Ended',
@@ -1037,18 +1093,18 @@ function coordinatorPanel(
   const waits = planWaits(view, tasks);
   const plan = state.planApproved
     ? ''
-    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.id)}</strong> ${e(task.assignment.title)}: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
+    : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The task plan waits for you' : planned.length ? 'The coordinator makes its task plan' : 'No task plan yet'}</h3><p>No task starts until you approve the plan. To change it, write to the coordinator on Home, or edit a task under Tasks.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.assignment.title)}</strong>: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.map((id) => sender(id, tasks)).join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Approve the plan</button>${planning ? '<p class="fine">The coordinator is still making its plan.</p>' : ''}</div></div>`;
   return {
     kind: 'Agent',
     title: 'Coordinator',
     sub: `<span class="status ${paused || session?.status === 'failed' ? 'muted' : 'active'}">${e(status)}</span>`,
-    body: `<p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span>${state.created} of ${coordinatorLimits.tasks} tasks created</span><span>${wakeups} of ${coordinatorLimits.wakeupsPerHour} wakeups this hour</span><span>${view.waiting} ${view.waiting === 1 ? 'event waits' : 'events wait'}</span></p>
-  ${view.limitedUntil ? `<p class="notice">The coordinator used its wakeups for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
+    body: `<p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span>${state.created} of ${coordinatorLimits.tasks} tasks created</span><span>${wakeups} of ${coordinatorLimits.wakeupsPerHour} turns this hour</span><span>${view.waiting} ${view.waiting === 1 ? 'event waits' : 'events wait'}</span></p>
+  ${view.limitedUntil ? `<p class="notice">The coordinator used its turns for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
   ${paused ? '<p class="notice">The coordinator paused when Verifold stopped. Resume it to continue with the same conversation.</p>' : ''}
   ${plan}
   ${notesToPerson(messages)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
-  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p><span class="tool">${e(action.tool.replace(/^verifold_/, ''))}</span> ${action.ok ? '' : '<strong>Verifold refused this.</strong> '}${e(action.result)}</p>${action.reason ? `<div class="why"><span class="tag reading">Its reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}</div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Results come from Verifold. Reasons are the coordinator's reading, a model claim.</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks))}</p>${action.reason ? `<div class="why"><span class="tag reading">Its reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Results come from Verifold. Reasons are the coordinator's reading, a model claim.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
   <div class="actions">${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
   <p class="fine">If you stop it, running workers finish their turns, and their versions wait for your review.</p>`,
@@ -1100,7 +1156,7 @@ function renderCoordinatorHome(
   ${earlier.length ? `<details id="conversation"><summary>Earlier messages (${earlier.length})</summary><ol class="convo">${earlier.map(bubble).join('')}</ol></details>` : ''}
   <label class="field" for="coordinator-message">Message the coordinator</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: why is the data synthetic?"></textarea>
   <div class="actions"><button type="button" data-action="coordinator-message">Send</button><button type="button" class="quiet" data-panel="coordinator">Its actions and controls</button></div>
-  <p class="fine">It reads your message at its next wakeup and answers in a note here.</p></section>`;
+  <p class="fine">It reads your message on its next turn and answers in a note here.</p></section>`;
 }
 
 /** The team feed: what the agents and the coordinator write to each other, newest first. Nobody posts in it. */
@@ -1317,6 +1373,97 @@ function taskWhy(task: TaskRecord): string {
   );
 }
 
+/** A shell command in plain words: the program that it runs, and the file that the program gets. */
+function commandStep(command: string): string {
+  const step = command
+    .split(/\n|&&|\|\||;/)
+    .map((part) => part.trim())
+    .find((part) => part && !/^(cd|export|set|source)\b/.test(part));
+  const [program = '', next = ''] = (step ?? '').split(/\s+/);
+  const name = program.split('/').at(-1) ?? '';
+  if (!/^[\w.+-]+$/.test(name) || /^(for|while|if|do|then|case)$/.test(name))
+    return 'Running a command';
+  const file = /^[\w./-]+\.\w+$/.test(next) ? ` ${next.split('/').at(-1)}` : '';
+  return `Running ${name}${file}`;
+}
+
+/** A tool call in plain words, for a Now line. The tool name and the full input stay in the transcript. */
+function toolStep(tool: string, action = ''): string {
+  const path = action.split(', ')[0]?.split(/[\\/]/).filter(Boolean).at(-1);
+  switch (tool.replace(/^mcp__\w+?__/, '')) {
+    case 'Bash':
+    case 'Command':
+      return commandStep(action);
+    case 'Read':
+      return path ? `Reading ${path}` : 'Reading a file';
+    case 'Write':
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+    case 'File change':
+      return path ? `Writing ${path}` : 'Writing a file';
+    case 'Grep':
+    case 'Glob':
+      return 'Searching the files';
+    case 'WebSearch':
+    case 'Web search':
+      return 'Searching the web';
+    case 'WebFetch':
+      return 'Reading a web page';
+    case 'Task':
+    case 'Agent':
+      return 'Starting a helper agent';
+    case 'verifold_post':
+      return 'Writing a note';
+    case 'verifold_block':
+      return 'Asking for help';
+    case 'verifold_object':
+      return 'Raising an objection';
+    case 'verifold_pod_run':
+    case 'verifold_pod_job':
+    case 'verifold_pod_copy':
+      return 'Working on the GPU pod';
+    default:
+      return 'Working';
+  }
+}
+
+/** The latest step of research in plain words, from the harness events that Verifold observed. */
+function researchNow(events: ResearchView['events']): string | null {
+  const codex: Record<string, string> = {
+    'a command': 'Running a command',
+    'web search': 'Searching the web',
+    'an MCP tool': 'Using a tool',
+    'native agent coordination': 'Working with helper agents',
+    'a file change': 'Writing a file',
+  };
+  for (const event of events.toReversed()) {
+    if (event.kind !== 'tool') continue;
+    const asked = /requested (\S+?)( in a native subagent)?\.$/.exec(
+      event.text,
+    );
+    if (asked)
+      return `${toolStep(asked[1] ?? '')}${asked[2] ? ' (a helper agent)' : ''}`;
+    const started = /^Codex started (.+)\.$/.exec(event.text)?.[1];
+    if (started && Object.hasOwn(codex, started)) return codex[started] ?? null;
+  }
+  return null;
+}
+
+/** A session event as a Now line: the agent's own words, or its tool call in plain words. */
+function nowText(event: {
+  readonly kind: string;
+  readonly text: string;
+}): string {
+  if (event.kind === 'agent') return plain(event.text);
+  if (event.kind !== 'tool') return event.text;
+  // Tool events read "Tool: input".
+  const split = event.text.indexOf(': ');
+  return split < 0
+    ? toolStep(event.text)
+    : toolStep(event.text.slice(0, split), event.text.slice(split + 2));
+}
+
 /** What a task's agent does now: its latest step, or how long it has been quiet. */
 function taskNow(
   task: TaskRecord,
@@ -1329,9 +1476,7 @@ function taskNow(
   if (!last)
     return task.state === 'claimed' ? 'Preparing the task folder' : null;
   const quiet = Math.floor((Date.now() - Date.parse(last.at)) / 60_000);
-  return quiet >= 5
-    ? `No update in ${quiet} min`
-    : lead(last.kind === 'agent' ? plain(last.text) : last.text, 110);
+  return quiet >= 5 ? `No update in ${quiet} min` : lead(nowText(last), 110);
 }
 
 /** Whose turn it is in a task, and whether the turn is the person's. */
@@ -1722,7 +1867,7 @@ function renderResearchView(
   ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Its case</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button>${workspace.selectedId === idea.id ? '<span class="selected-label">Chosen</span>' : ''}</th><td data-label="Its case">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
   ${renderResearch(live.research, research?.latestAttempt)}
   ${renderSources(live.research?.sources ?? [], live.research?.running === true)}
-  ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research scope</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
+  ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research plan</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
   <section class="card findings" aria-labelledby="findings-title"><div class="section-title"><h2 id="findings-title">Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
   ${report ? findingsBody(report, chosen?.id ?? '') : `<div class="empty-note"><p>${chosen ? 'No readable source report is available for this attempt.' : 'Your source record starts here.'}</p><p>${chosen ? 'Planning, failed, and interrupted attempts may have no report. Their evidence remains in the project.' : 'Sources and findings show here when research saves a report.'}</p></div>`}</section>
   <section class="card brief-section"><details id="research-brief"${research ? '' : ' open'}><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet.</p>'}</details></section></div>`;
@@ -1748,7 +1893,7 @@ function attemptPanel(
     chosen.activity === 'unknown'
       ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>'
       : chosen.activity === 'recent'
-        ? `<p class="fine">${live.research ? 'The research owner recently reported activity. Follow it in Research.' : 'The research owner recently reported activity. The adapter provides lifecycle and final output, not live tool output.'}</p>`
+        ? `<p class="fine">${live.research ? 'Research is running now. Follow it in Research.' : 'Research is running in another Verifold process. This desk shows its result when it ends.'}</p>`
         : record?.status === 'interrupted'
           ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>'
           : record?.status === 'failed' || record?.status === 'cancelled'
@@ -1960,7 +2105,6 @@ function renderRail(
   needs: readonly Need[],
 ): string {
   const workers = live.workers ?? (live.session ? [live.session] : []);
-  const running = workers.filter((worker) => worker.live).length;
   const shown = frame.panel === 'worker' ? live.session?.record.id : undefined;
   // Each view shows how many items for the person it holds.
   const count = (view: RailView): string => {
@@ -1993,7 +2137,7 @@ function renderRail(
             ? ['failed', 'Failed']
             : status === 'running' || status === 'starting'
               ? ['working', 'Working']
-              : ['idle', coordinatorStates[status] ?? 'Waiting for events'];
+              : ['idle', coordinatorStates[status] ?? 'Watching the work'];
     team.push(
       member(
         'coordinator',
@@ -2074,7 +2218,7 @@ function renderRail(
         `<li><button type="button" data-view="${view}"${view === frame.view ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
     )
     .join('')}</ul>
-  <div class="rail-team"><div class="rail-title"><h2>Team</h2>${live.controllable ? `<span class="count">${running} of ${workerLimit} workers run</span>` : ''}</div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
+  <div class="rail-team"><div class="rail-title"><h2>Team</h2></div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
   <div class="rail-foot">${items ? `<details id="new-menu" class="new-menu"><summary><span aria-hidden="true">+</span> New</summary><div class="menu">${items}</div></details>` : ''}<p class="fine">Research stays in this project.</p></div></nav>`;
 }
 
@@ -2281,15 +2425,10 @@ export function renderDesk(
                     needs,
                     frame.since,
                   );
-  // The top bar names the research owner only when exactly one reported recently.
-  const observation =
-    active.length === 1 && active[0]?.record?.observedAt
-      ? `Research owner last observed ${time(active[0].record.observedAt)}`
-      : '';
   const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
   return {
     html,
-    observation,
+    observation: '',
     title: snapshot.project,
     stage: stageText(at),
     needs: needs.map(({ key, title }) => ({ key, title })),
