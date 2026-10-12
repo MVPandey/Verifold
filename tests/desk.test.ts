@@ -454,19 +454,21 @@ await test('desk shows one research decision for each phase', async (t) => {
   // Research shows the step, its events, and its transcript.
   const events = await html(
     {
-      step: 'Planning research roles and scope',
+      step: 'Planning the research',
       events: [
         {
           at: new Date().toISOString(),
           kind: 'tool',
-          text: 'Claude Code requested <WebSearch>.',
+          text: 'Claude Code requested WebSearch.',
         },
       ],
     },
     false,
     'research',
   );
-  assert.match(events, /Claude Code requested &lt;WebSearch&gt;\./);
+  // The step shows in plain words. The harness event stays in the transcript.
+  assert.match(events, /Now: Searching the web\./);
+  assert.doesNotMatch(events, /requested WebSearch/);
   assert.match(events, /data-detail="details"/);
 });
 
@@ -1319,9 +1321,7 @@ await test('desk maps the tasks with what each agent does now and why', async (t
       task: { id: 'task-2', claim: 'c' },
       requests: [],
       commands: [],
-      events: [
-        { at, kind: 'tool', text: 'Claude Code ran Bash: python bench.py' },
-      ],
+      events: [{ at, kind: 'tool', text: 'Bash: python bench.py --size 4' }],
     },
   });
   const list = [
@@ -1378,7 +1378,7 @@ await test('desk maps the tasks with what each agent does now and why', async (t
   // A running task says whose turn it is, what its agent does now, and why the task exists.
   assert.match(
     map,
-    /Agent&#39;s turn<\/span><span class="map-now"><span class="map-label">Now<\/span> Claude Code ran Bash: python bench\.py<\/span><span class="map-why"><span class="map-label">Why<\/span> The checks need timings\./,
+    /Agent&#39;s turn<\/span><span class="map-now"><span class="map-label">Now<\/span> Running python bench\.py<\/span><span class="map-why"><span class="map-label">Why<\/span> The checks need timings\./,
   );
   // A task that the person wrote has the start of its objective as its reason.
   assert.match(
@@ -1390,7 +1390,7 @@ await test('desk maps the tasks with what each agent does now and why', async (t
   // Home shows each running task in Team now.
   assert.match(
     desk(recent, 'home'),
-    /Team now[\s\S]*Title task-2[\s\S]*Now<\/span> Claude Code ran Bash: python bench\.py/,
+    /Team now[\s\S]*Title task-2[\s\S]*Now<\/span> Running python bench\.py/,
   );
 });
 
