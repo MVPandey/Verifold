@@ -16,6 +16,7 @@ import { parseCandidates } from './contracts.ts';
 import type { Candidate, Workspace } from './contracts.ts';
 import { activityProgress, runHarness, type HarnessResult } from './harness.ts';
 import { TranscriptWriter } from './transcript.ts';
+import { hostName } from './session.ts';
 import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
 import { processStart, stopRecordedProcess } from './owner.ts';
 import {
@@ -241,7 +242,7 @@ export async function runResearch(
         try {
           result = await withActivity(
             io,
-            `${initial.host} · ${state.phase === 'needs-plan' || state.phase === 'awaiting-plan-review' ? 'Planning research roles and scope' : 'Searching sources and comparing research directions'}`,
+            `${hostName(initial.host === 'claude' ? 'claude' : 'codex')}: ${state.phase === 'needs-plan' || state.phase === 'awaiting-plan-review' ? 'planning the research' : 'searching sources and comparing directions'}`,
             () =>
               host({
                 host: initial.host === 'claude' ? 'claude' : 'codex',

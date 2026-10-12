@@ -273,7 +273,10 @@ await test('a task runs in its own workspace, versions each turn, and accepts se
       ['src/bench.py', false],
     ],
   );
-  assert.ok(lines.some((line) => line.includes('version 1 is ready')));
+  assert.ok(
+    lines.includes('Ready for review: Reproduce the baseline, version 1.'),
+  );
+  assert.ok(lines.every((line) => !line.includes(id)));
   await assert.rejects(
     tasks.accept(id, 1, ['src/bench.py']),
     /inside the writable paths/,

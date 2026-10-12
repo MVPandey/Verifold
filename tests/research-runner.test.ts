@@ -139,13 +139,21 @@ await test('research runs in the owner, records observed activity, and waits for
   await runner.settled();
   const planned = runner.view();
   assert.equal(planned.running, false);
-  assert.equal(planned.step, 'Planning research roles and scope');
+  assert.equal(planned.step, 'Planning the research');
   assert.deepEqual(
     planned.events.map((event) => event.kind),
     ['status', 'tool', 'status'],
   );
   assert.match(planned.events.at(-1)?.text ?? '', /plan is ready/);
-  assert.ok(lines.some((line) => line.includes('/approve')));
+  // The terminal says what waits, with no commands to type, and one line for the step.
+  assert.ok(
+    lines.includes('The plan is ready. Approve it, or ask for changes.'),
+  );
+  assert.ok(!lines.some((line) => line.includes('/approve')));
+  assert.equal(
+    lines.filter((line) => /planning the research/i.test(line)).length,
+    1,
+  );
   // The terminal gets status lines. Harness events stay in the desk.
   assert.ok(!lines.some((line) => line.includes('requested WebSearch')));
   // The step's search is a source in the desk, from its transcript. The terminal never gets it.

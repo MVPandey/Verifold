@@ -288,9 +288,9 @@ await test('the terminal shows the plan only for a decision there, and no source
   await runResearch(desk, { topic: 'Math' }, shown, signal(), host);
   await runResearch(desk, { approve: true }, shown, signal(), host);
   assert.deepEqual(lines, [
-    'claude · Planning research roles and scope',
+    'Claude Code: planning the research',
     'Plan saved.',
-    'claude · Searching sources and comparing research directions',
+    'Claude Code: searching sources and comparing directions',
     'Research found 1 direction.',
   ]);
   // A decision in this terminal shows the plan once, before the question.
