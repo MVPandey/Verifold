@@ -1540,18 +1540,23 @@ await test('desk maps the tasks with what each agent does now and why', async (t
     map,
     /data-node="task-1" data-state="done" data-host="claude" data-from="objective"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-2" data-state="running" data-host="claude" data-from="task-1"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-3" data-state="open" data-host="claude" data-from="task-2"/,
   );
-  // A running task says whose turn it is, what its agent does now, and why the task exists.
+  // A compact box says whose turn it is and for how long its agent runs. The Now strip says what the agent does.
   assert.match(
     map,
-    /Agent&#39;s turn<\/span><span class="map-now"><span class="map-label">Now<\/span> Running python bench\.py<\/span><span class="map-why"><span class="map-label">Why<\/span> The checks need timings\./,
+    /Agent&#39;s turn<\/span><span class="map-meta">For (under a minute|\d+ min)<\/span><\/button>/,
   );
-  // A task that the person wrote has the start of its objective as its reason.
+  assert.match(map, /Waits for Title task-2<\/span><\/button>/);
+  assert.doesNotMatch(map, /map-why|map-now|Each box is a task/);
   assert.match(
     map,
-    /Waits for Title task-2<\/span><span class="map-why"><span class="map-label">Why<\/span> Work on it\./,
+    /<h2 id="now-title">Now<\/h2><span class="count">1 agent works<\/span>[\s\S]*data-task-select="task-2">Title task-2<\/button><span class="now-meta">Claude Code, (under a minute|\d+ min)<\/span>[\s\S]*Running python bench\.py<\/p><\/div><button type="button" data-message-to="task-2">Message<\/button>/,
   );
-  // A quiet agent shows how long it has been quiet.
-  assert.match(desk(quiet, 'tasks'), /Now<\/span> No update in 20 min/);
+  // A quiet agent keeps its latest step, with the time since it.
+  assert.match(
+    desk(quiet, 'tasks'),
+    /Running python bench\.py <span class="now-quiet">Last update 20 min ago<\/span>/,
+  );
+  assert.doesNotMatch(desk(quiet, 'tasks'), /No update in/);
   // Home says in its Now line which task runs, and on which harness.
   assert.match(desk(recent, 'home'), /Now<\/span> Title task-2 runs on /);
 });
@@ -2458,7 +2463,7 @@ await test('a draft task waits for the person in the message box, on the map, in
   );
   assert.match(
     work,
-    /class="map-box"[^>]*data-state="open" data-draft[\s\S]*?Draft, waits for you to start it/,
+    /class="map-box"[^>]*data-state="open" data-draft[\s\S]*?Draft, waits for you/,
   );
   assert.match(work, /◆ Draft, waits for you/);
   // Write the task yourself opens the task with its form.
@@ -2476,4 +2481,127 @@ await test('a draft task waits for the person in the message box, on the map, in
       render('home', lead),
       /<option value="new-coordinator" data-hint="Write the objective for a new coordinator">A new coordinator, leads now<\/option>/,
     );
+});
+
+await test('Work starts with who works now, folds a long strip, and ends with the finished work', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:00:00.000Z';
+  const task = (id: string, state: string, extra: object = {}) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    claim: null,
+    artifacts: [],
+    attempts: [
+      {
+        number: 1,
+        revision: 1,
+        startedAt: at,
+        session: `S-${id}`,
+        versions:
+          state === 'review'
+            ? [{ number: 1, at, decision: null, files: [] }]
+            : [],
+      },
+    ],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title: `Title ${id}`,
+      objective: 'Run.',
+      host: 'codex',
+      dependencies: [],
+      inputs: [],
+      writable: ['results'],
+      output: 'results/x.md',
+      minutes: 20,
+    },
+    ...extra,
+  });
+  const list = [
+    task('task-1', 'review'),
+    ...['task-2', 'task-3', 'task-4', 'task-5'].map((id) =>
+      task(id, 'running'),
+    ),
+    task('task-6', 'done', {
+      artifacts: [
+        {
+          version: 2,
+          revision: 1,
+          at: '2026-10-12T14:12:00.000Z',
+          files: [{ path: 'results/bench.csv' }],
+        },
+      ],
+    }),
+    task('task-7', 'done', {
+      artifacts: [
+        {
+          version: 1,
+          revision: 1,
+          at: '2026-10-12T14:40:00.000Z',
+          files: [{ path: 'src/heap.py' }],
+        },
+      ],
+    }),
+  ];
+  const work = (coordinator: unknown): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list, selected: null, idle: [], messages: [] },
+        coordinator,
+      } as never,
+      { view: 'tasks', panel: null },
+    ).html;
+  const alone = work(null);
+  // Running agents come first. Four rows show, and the rest fold.
+  assert.match(
+    alone,
+    /<span class="count">4 agents work, 1 version waits for review<\/span>/,
+  );
+  const strip =
+    /<section class="card now-strip"[\s\S]*?<\/section>/.exec(alone)?.[0] ?? '';
+  assert.equal(strip.split('class="now-row"').length - 1, 5);
+  assert.match(
+    strip,
+    /<details id="now-more"><summary>1 more<\/summary>[\s\S]*Title task-1/,
+  );
+  assert.match(strip, /Codex, \d+ h( \d+ min)?<\/span>/);
+  // Without a coordinator, the review is the person's.
+  assert.match(
+    strip,
+    /now-step yours">Version 1 waits for your review<\/p><\/div><button type="button" class="primary" data-task-select="task-1">Review<\/button>/,
+  );
+  // With a coordinator, the coordinator reviews.
+  assert.match(
+    work({
+      state: {
+        objective: 'Heap',
+        host: 'claude',
+        stoppedAt: null,
+        planApproved: true,
+        wakeups: [],
+        events: [],
+        actions: [],
+      },
+      session: null,
+      waiting: 0,
+      limitedUntil: null,
+    }),
+    /now-step">The coordinator reviews version 1<\/p><\/div><button type="button" data-task-select="task-1">Review<\/button>/,
+  );
+  // The finished work follows the map, newest first.
+  assert.match(
+    alone,
+    /<h2 id="map-title">The map<\/h2><span class="count">7 tasks, 2 done<\/span>[\s\S]*<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-7[\s\S]*Version 1 accepted at [\s\S]*src\/heap\.py[\s\S]*Title task-6[\s\S]*results\/bench\.csv/,
+  );
+  assert.doesNotMatch(alone, /A task runs your harness in its own copy/);
 });
