@@ -11,6 +11,9 @@ for (const [source, target] of [
   // The desk page imports DOMPurify from this path. See src/cli/vendor/purify.d.ts.
   ['node_modules/dompurify/dist/purify.es.mjs', 'vendor/purify.js'],
   ['node_modules/dompurify/LICENSE', 'vendor/purify.LICENSE.txt'],
+  // The desk page updates in place with idiomorph. See src/cli/vendor/idiomorph.d.ts.
+  ['node_modules/idiomorph/dist/idiomorph.esm.js', 'vendor/idiomorph.js'],
+  ['node_modules/idiomorph/LICENSE', 'vendor/idiomorph.LICENSE.txt'],
   // The terminal page imports xterm.js from this path. See src/cli/vendor/xterm.d.ts.
   ['node_modules/@xterm/xterm/lib/xterm.mjs', 'vendor/xterm.js'],
   ['node_modules/@xterm/xterm/css/xterm.css', 'vendor/xterm.css'],

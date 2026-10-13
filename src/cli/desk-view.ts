@@ -1372,6 +1372,28 @@ function taskPanel(
   };
 }
 
+const fileKinds: readonly (readonly [string, RegExp])[] = [
+  [
+    'code',
+    /\.(py|ipynb|[cm]?js|jsx|tsx?|c|h|cc|cpp|hpp|rs|go|java|kt|scala|rb|php|sh|jl|r|swift|cs|lua|sql)$/i,
+  ],
+  [
+    'results',
+    /\.(json|jsonl|csv|tsv|parquet|npy|npz|h5|hdf5|pkl|log|png|jpe?g|svg)$/i,
+  ],
+  ['notes', /\.(md|txt|rst|tex|pdf|html?)$/i],
+];
+
+/** What a done task hands to the tasks that wait for it, from the files of its last accepted version. */
+function handoffWords(task: TaskRecord): string {
+  const files = task.artifacts?.at(-1)?.files ?? [];
+  const kinds = fileKinds
+    .filter(([, pattern]) => files.some((file) => pattern.test(file.path)))
+    .map(([kind]) => kind);
+  if (kinds.length === 1 || kinds.length === 2) return kinds.join(' and ');
+  return files.length ? 'files' : '';
+}
+
 /** Why a task exists: the coordinator's reason when it created the task, or the start of its objective. */
 function taskWhy(task: TaskRecord): string {
   const reason = task.assignment.reason.replace(
@@ -1569,9 +1591,19 @@ function renderMap(
     const from = task.assignment.dependencies.length
       ? task.assignment.dependencies.join(' ')
       : 'objective';
-    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta">${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
+    // The page moves a dot with these words along the arrows of a task that just ended.
+    const gives = task.state === 'done' ? handoffWords(task) : '';
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta">${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
   };
-  return `<div class="map" data-map><div class="map-col"><div class="map-root" data-node="objective"><span class="map-label">Objective</span><span class="map-title">${e(lead(objective, 140))}</span></div></div>${Array.from(
+  // A running box pulses in the color of its harness. The legend names the colors when the team mixes harnesses.
+  const hosts = [...new Set(tasks.map((task) => task.assignment.host))].sort(
+    (a, b) => Number(b === state?.host) - Number(a === state?.host),
+  );
+  const legend =
+    hosts.length > 1
+      ? `<p class="map-legend" aria-hidden="true">${hosts.map((host) => `<span class="map-key" data-host="${e(host)}">${e(hostName(host))}</span>`).join('')}</p>`
+      : '';
+  return `${legend}<div class="map" data-map><div class="map-col"><div class="map-root" data-node="objective"><span class="map-label">Objective</span><span class="map-title">${e(lead(objective, 140))}</span></div></div>${Array.from(
     { length: columns },
     (_, index) =>
       `<div class="map-col">${tasks
@@ -1598,7 +1630,7 @@ function renderTasksView(
   return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Work</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   ${
     view.list.length
-      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The plan</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for, and a task waits for every task that leads to it. A box opens the task.</p></section>`
+      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The tasks</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for, and a task waits for every task that leads to it. A box opens the task.</p></section>`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write a task yourself with New task.</p></section>'
   }
   <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
@@ -2014,6 +2046,8 @@ interface Progress {
   readonly waits: boolean;
   /** An agent works on the current stage. */
   readonly working: boolean;
+  /** After the plan is approved: the planned tasks, and how many of them are done or cancelled. */
+  readonly work?: { readonly done: number; readonly total: number };
 }
 
 /** Where the project is, from the records that the desk reads. Nothing here is stored. */
@@ -2056,19 +2090,20 @@ function progress(workspace: Workspace, live: DeskSession): Progress {
     (task) => task.state === 'done' || task.state === 'cancelled',
   ).length;
   notes[2] = `${settled} of ${planned.length} done`;
+  const work = { done: settled, total: planned.length };
   // A proposed answer waits for the person's sign-off. A request for more work returns to the work.
   const answer = resultsOf(workspace, live)?.answer;
   if (answer && answer.decision?.kind !== 'more') {
     notes[3] = answer.decision ? 'Accepted' : 'Waits for you';
-    return { current: 3, notes, waits: !answer.decision, working: false };
+    return { current: 3, notes, waits: !answer.decision, working: false, work };
   }
   if (planned.length && settled === planned.length) {
     notes[3] = 'Tasks done';
-    return { current: 3, notes, waits: false, working: false };
+    return { current: 3, notes, waits: false, working: false, work };
   }
   const working =
     coordinating || (live.workers ?? []).some((worker) => worker.live);
-  return { current: 2, notes, waits: false, working };
+  return { current: 2, notes, waits: false, working, work };
 }
 
 /** The current stage in words: the top bar shows it, and the arc says it to screen readers. */
@@ -2515,6 +2550,8 @@ export function renderDesk(
   stage: string;
   /** What waits for the person. The page counts it in the tab title and notifies about new keys. */
   needs: { key: string; title: string }[];
+  /** The tab icon shows the part of the planned tasks that is done. */
+  work: { done: number; total: number } | null;
 } {
   const { workspace, attempts } = snapshot;
   const active = attempts.filter((attempt) => attempt.activity === 'recent');
@@ -2587,6 +2624,7 @@ export function renderDesk(
     title: snapshot.project,
     stage: stageText(at),
     needs: needs.map(({ key, title }) => ({ key, title })),
+    work: at.work ?? null,
   };
 }
 

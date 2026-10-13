@@ -472,6 +472,7 @@ export async function startDesk(
     ['/desk-terminal.js', 'desk-terminal.js', 'text/javascript; charset=utf-8'],
     ['/desk-lease.js', 'desk-lease.js', 'text/javascript; charset=utf-8'],
     ['/desk-map.js', 'desk-map.js', 'text/javascript; charset=utf-8'],
+    ['/desk-motion.js', 'desk-motion.js', 'text/javascript; charset=utf-8'],
     [
       '/desk-terminals.js',
       'desk-terminals.js',
@@ -493,6 +494,11 @@ export async function startDesk(
     ['/symbol.webp', 'symbol.webp', 'image/webp'],
     ['/ui/dom.js', '../ui/dom.js', 'text/javascript; charset=utf-8'],
     ['/vendor/purify.js', 'vendor/purify.js', 'text/javascript; charset=utf-8'],
+    [
+      '/vendor/idiomorph.js',
+      'vendor/idiomorph.js',
+      'text/javascript; charset=utf-8',
+    ],
   ] as const) {
     assets.set(path, { type, body: await readFile(new URL(file, assetsRoot)) });
   }
@@ -556,9 +562,10 @@ export async function startDesk(
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
+    // blob: images: the page draws its tab icon. Only a script of the page can make a blob URL.
     response.setHeader(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     );
     if (
       request.headers.host !== origin.slice(7) ||
