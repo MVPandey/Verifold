@@ -842,6 +842,11 @@ export class SessionManager {
       : null;
   }
 
+  /** Forget an ended session, after Start over or a restore moved its record. */
+  forget(): void {
+    if (!this.active) this.current = null;
+  }
+
   /** Read paused sessions from earlier owners. Call this once before clients attach. */
   async load(): Promise<void> {
     this.pausedList = await loadPaused(this.root);

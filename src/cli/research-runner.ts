@@ -197,6 +197,15 @@ export class ResearchRunner {
     this.controller.abort();
   }
 
+  /** Forget the events and the sources of the last step, after Start over or a restore. */
+  clear(): void {
+    if (this.running || this.starting) fail('Research is running.');
+    this.step = null;
+    this.startedAt = null;
+    this.events = [];
+    this.sources = [];
+  }
+
   /**
    * A message from the person. It waits for the next research step. When no
    * step runs, it starts one: a plan or directions that wait for the person

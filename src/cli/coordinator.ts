@@ -211,6 +211,20 @@ export class Coordinator {
       this.saved = await readRecord(this.root, this.state.session);
   }
 
+  /** Read the records again, after Start over or a restore changed them. The coordinator must be stopped. */
+  async reload(): Promise<void> {
+    await this.serial(async () => {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+      this.state = null;
+      this.saved = null;
+      this.limitedUntil = null;
+      this.answering = false;
+      this.sessions.forget();
+      await this.load();
+    });
+  }
+
   view(): CoordinatorView | null {
     const state = this.state;
     if (!state) return null;
