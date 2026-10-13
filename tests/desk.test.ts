@@ -1806,7 +1806,7 @@ await test('desk compares the directions in a table and lists sources as they ar
   assert.doesNotMatch(desk(true, 'direction'), /data-action="select"/);
 });
 
-await test('desk leads Results with the checks, then the answer and its sign-off', async (t) => {
+await test('desk leads Answer with the answer and its sign-off, then the checks', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   await changeWorkspace(root, (state) => ({
