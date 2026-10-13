@@ -314,7 +314,8 @@ for (const consent of ['yes', 'no', 'missing']) {
       ui.io,
       signal(),
       (request) => {
-        assert.equal(request.cwd, base);
+        // A written file is not an approved folder, so the interview gets an empty one.
+        assert.notEqual(request.cwd, base);
         assert.equal(
           request.prompt.includes('Compare CPU graph search baselines.'),
           consent === 'yes',
@@ -340,18 +341,22 @@ await test('declining folder investigation keeps its contents and working direct
   await mkdir(root);
   await writeFile(join(root, 'README.md'), 'PRIVATE_PROJECT_EVIDENCE');
   const ui = prompts(['/settings', 'codex', '', 'project', '', '', 'no', '']);
-  let calls = 0;
+  const folders: string[] = [];
   await initializeProject(
     base,
     base,
     { agencyDir: join(base, 'agency') },
     ui.io,
     signal(),
-    (request) => {
-      calls++;
-      assert.equal(request.cwd, base);
+    async (request) => {
+      // Not the folder where verifold started, and not the declined project: an empty private folder.
+      folders.push(request.cwd);
+      assert.notEqual(request.cwd, base);
+      assert.notEqual(request.cwd, root);
+      assert.deepEqual(await readdir(request.cwd), []);
       assert.doesNotMatch(request.prompt, /PRIVATE_PROJECT_EVIDENCE/);
       assert.match(request.prompt, /Use native web search/);
+      assert.match(request.prompt, /Your current folder is empty on purpose/);
       assert.match(
         request.prompt,
         /Do not scan the current working directory automatically/,
@@ -359,8 +364,10 @@ await test('declining folder investigation keeps its contents and working direct
       return readyHost();
     },
   );
-  assert.equal(calls, 1);
+  assert.equal(folders.length, 1);
   assert.deepEqual(ui.remaining, []);
+  // Verifold removes the private folder after the interview.
+  await assert.rejects(readdir(folders[0] ?? ''), { code: 'ENOENT' });
 });
 
 // Research setup starts with the question. Setup without research offers the reusable profile.
