@@ -833,6 +833,118 @@ await test('Codex Auto records the reviewer decision and its reason', async () =
   });
 });
 
+await test('a new agent starts from the message box, and the box writes to its session', async () => {
+  await project(async (root, _executables, _create, pool) => {
+    const assets = join(root, 'assets');
+    await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+    await mkdir(join(assets, 'ui'));
+    for (const name of [
+      'purify.js',
+      'idiomorph.js',
+      'xterm.js',
+      'xterm.css',
+      'addon-fit.js',
+    ])
+      await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+    for (const name of [
+      'desk.css',
+      'desk-client.js',
+      'desk-transcript.js',
+      'desk-terminal.js',
+      'desk-terminals.js',
+      'desk-lease.js',
+      'desk-map.js',
+      'desk-motion.js',
+      'manrope.ttf',
+      'symbol.webp',
+    ])
+      await writeFile(join(assets, 'cli', name), 'fixture asset');
+    await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    const sessions = pool();
+    const owner = new AbortController();
+    const server = await startDesk(
+      root,
+      owner.signal,
+      pathToFileURL(`${assets}/cli/`),
+      sessions,
+    );
+    try {
+      const url = new URL(server.url);
+      const headers = {
+        Authorization: `Bearer ${url.hash.slice(1)}`,
+        'Content-Type': 'application/json',
+      };
+      const post = async (body: unknown): Promise<number> =>
+        (
+          await fetch(`${url.origin}/api/action`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+          })
+        ).status;
+      assert.equal(
+        await post({
+          action: 'message',
+          to: 'new-agent',
+          host: 'claude',
+          mode: 'auto',
+          text: 'First request',
+        }),
+        200,
+      );
+      let record = await until(
+        sessions,
+        (current) => current.status === 'idle',
+      );
+      // The new session is in To, by its harness and the start of its first request.
+      const html = (
+        (await (await fetch(`${url.origin}/api/view`, { headers })).json()) as {
+          html: string;
+        }
+      ).html;
+      assert.match(
+        html,
+        new RegExp(
+          `<option value="session:${record.id}" data-hint="Write to Claude Code: First request">Claude Code: First request</option>`,
+        ),
+      );
+      // A waiting session gets the message as its next turn.
+      assert.equal(
+        await post({
+          action: 'message',
+          to: `session:${record.id}`,
+          text: 'Second request',
+        }),
+        200,
+      );
+      record = await until(
+        sessions,
+        (current) =>
+          current.status === 'idle' &&
+          current.events.filter((event) => event.kind === 'you').length === 2,
+      );
+      assert.deepEqual(
+        record.events
+          .filter((event) => event.kind === 'you')
+          .map((event) => event.text),
+        ['First request', 'Second request'],
+      );
+      // A session that does not run takes no message.
+      assert.equal(
+        await post({
+          action: 'message',
+          to: 'session:20261002T120000000Z-00000000',
+          text: 'Hi',
+        }),
+        409,
+      );
+    } finally {
+      owner.abort();
+      await server.closed;
+    }
+  });
+});
+
 await test('desk actions need the token and a JSON body, and report state errors', async () => {
   await project(async (root, _executables, _create, pool) => {
     const assets = join(root, 'assets');
@@ -955,12 +1067,12 @@ await test('desk actions need the token and a JSON body, and report state errors
         200,
       );
       await until(sessions, (current) => current.status === 'idle');
-      // Home holds open requests. The worker's panel holds its events and its follow-up.
+      // Home holds open requests. The worker's panel holds its events, and the message box writes to it.
       const after = (await (
         await fetch(`${url.origin}/api/view?panel=worker`, { headers })
       ).json()) as { html: string };
       assert.match(after.html, /You allowed/);
-      assert.match(after.html, /Send follow-up/);
+      assert.match(after.html, /Write to it/);
       assert.equal(
         (
           await post({ action: 'end', session: sessions.views()[0]?.record.id })
