@@ -416,7 +416,7 @@ export async function initializeProject(
       topic,
       context ?? (options.profile ? JSON.stringify(profile) : undefined),
       agency,
-      projectReviewed ? root : cwd,
+      projectReviewed ? root : undefined,
       io,
       signal,
       harness,
