@@ -33,6 +33,12 @@ import type { SessionPool } from './workers.ts';
 import { TranscriptFile, type TranscriptLog } from './transcript.ts';
 import { markdownHtml } from './markdown.ts';
 import type { ResearchRunner } from './research-runner.ts';
+import {
+  archiveRun,
+  listArchives,
+  restoreRun,
+  validArchiveId,
+} from './archive.ts';
 import type { SetupBridge } from './setup-bridge.ts';
 import {
   validTaskId,
@@ -287,6 +293,50 @@ async function startCoordinator(
   });
 }
 
+/**
+ * Start over, or bring back an archived run. Nothing may run: no research
+ * step, no task turn, and no session of the person. The coordinator stops,
+ * and the tasks that wait (open or in review) are cancelled, so their
+ * sessions end and their task folders go. Then the run moves to the archive,
+ * the parts of the owner read their records again, and a new run starts its
+ * research from the same question.
+ */
+async function changeRun(
+  root: string,
+  sessions: SessionPool,
+  research: ResearchRunner | undefined,
+  tasks: TaskManager,
+  coordinator: Coordinator | undefined,
+  restore?: unknown,
+): Promise<void> {
+  if (restore !== undefined && !validArchiveId(restore))
+    throw new SessionActionError('Choose an archive from Records.');
+  if (research?.running)
+    throw new SessionActionError(
+      'Research is running. Wait for its step to end, or cancel it first.',
+    );
+  const list = await tasks.list();
+  if (list.some((task) => task.state === 'claimed' || task.state === 'running'))
+    throw new SessionActionError(
+      'A task turn is running. Stop it first, or wait for its version.',
+    );
+  if (sessions.views().some((view) => view.live && !view.record.task))
+    throw new SessionActionError('Your session is running. End it first.');
+  const state = coordinator?.view()?.state;
+  if (state && !state.stoppedAt) await coordinator?.stop();
+  for (const task of list)
+    if (task.state === 'open' || task.state === 'review')
+      await tasks.cancel(task.id);
+  if (restore === undefined) await archiveRun(root);
+  else await restoreRun(root, restore);
+  await coordinator?.reload();
+  research?.clear();
+  await sessions.forget();
+  // A new run starts its research from the question. A restored run continues where it was.
+  if (restore === undefined && research && (await loadWorkspace(root)).research)
+    await research.start({});
+}
+
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionPool | undefined,
@@ -337,6 +387,18 @@ async function act(
           ? { autonomy: body.autonomy }
           : {}),
       });
+    return 200;
+  }
+  if (body.action === 'start-over' || body.action === 'restore') {
+    if (!tasks) return 400;
+    await changeRun(
+      root,
+      sessions,
+      research,
+      tasks,
+      coordinator,
+      body.action === 'restore' ? body.archive : undefined,
+    );
     return 200;
   }
   // The message box: to research, the coordinator, a task agent, or a session that the person started.
@@ -917,6 +979,7 @@ export async function startDesk(
       url.searchParams.get('panel'),
       url.searchParams.get('since'),
       url.searchParams.get('direction'),
+      url.searchParams.get('finished'),
     );
     const keys = [
       'attempt',
@@ -926,6 +989,7 @@ export async function startDesk(
       'panel',
       'since',
       'direction',
+      'finished',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
@@ -1006,6 +1070,7 @@ export async function startDesk(
             ...(research ? { research: research.view() } : {}),
             ...(coordinator ? { coordinator: coordinator.view() } : {}),
             ...(compute ? { compute: compute.view() } : {}),
+            ...(tasks ? { archives: await listArchives(root) } : {}),
             ...(tasks
               ? {
                   tasks: {

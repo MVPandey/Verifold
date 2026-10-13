@@ -1805,6 +1805,26 @@ body[data-detail='details'] .summary-only {
   color: var(--muted);
   font-size: 11.5px;
 }
+/* ---------- Records: this run and the archived runs ---------- */
+.run-now > * + * {
+  margin-top: 6px;
+}
+.archives {
+  display: grid;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.archives li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
 /* ---------- A task page: the decision first, the rest folded ---------- */
 .back {
   padding-left: 0;
