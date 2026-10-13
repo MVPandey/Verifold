@@ -693,7 +693,7 @@ await test('desk frame shows one view, the team, and one panel', async (t) => {
   } as never;
   const home = renderDesk(snapshot, undefined, null, live);
   assert.equal(home.title, basename(root));
-  assert.equal(home.stage, 'Question: not asked yet');
+  assert.equal(home.stage, 'Ask: no question yet');
   assert.match(home.html, /data-view="home" aria-current="page"/);
   // Without a task owner the rail has no Tasks view.
   assert.doesNotMatch(home.html, /data-view="tasks"/);
@@ -701,7 +701,7 @@ await test('desk frame shows one view, the team, and one panel', async (t) => {
   assert.match(home.html, /<h1 id="view-title" tabindex="-1">Home<\/h1>/);
   assert.match(
     home.html,
-    /role="img" aria-label="Project stage\. Question: not asked yet\."/,
+    /role="img" aria-label="Project stage\. Ask: no question yet\."/,
   );
   assert.match(home.html, /Claude Code session asks to use Bash/);
   assert.match(
@@ -791,8 +791,9 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     plan.html,
     /Needs you[\s\S]*Guided research stops at its plan[\s\S]*data-research="approve">Approve the plan/,
   );
-  // The rail counts the item on the view that holds it.
-  assert.match(plan.html, /<span>Research<\/span><span class="n">/);
+  // The rail counts the item on the view that holds it. The top bar names the stage.
+  assert.match(plan.html, /<span>Plan<\/span><span class="n">/);
+  assert.equal(plan.stage, 'Plan: waits for you');
   assert.equal(
     (await research('directions')).needs[0]?.title,
     'Choose a direction',
@@ -982,7 +983,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     alone.html,
     /No coordinator runs, so only you can accept or reject it\./,
   );
-  assert.match(alone.html, /<span>Tasks<\/span><span class="n">/);
+  assert.match(alone.html, /<span>Work<\/span><span class="n">/);
   // Needs you lists the same items, and says when nothing waits.
   assert.match(
     desk({ tasks, coordinator: coordinator('idle', at) }, 'needs').html,
@@ -1903,7 +1904,11 @@ await test('desk leads Results with the checks, then the answer and its sign-off
       { view, panel: null },
     );
   const view = desk('results');
-  // The checks come first, each with its result. A check without a report says so.
+  // The answer leads. The checks follow, each with its result. A check without a report says so.
+  assert.match(
+    view.html,
+    /<h1 id="view-title" tabindex="-1">Answer<\/h1>[\s\S]*id="answer-title"[\s\S]*id="checks-title"/,
+  );
   assert.match(view.html, /2 of 3 reported/);
   assert.match(
     view.html,
@@ -1917,18 +1922,18 @@ await test('desk leads Results with the checks, then the answer and its sign-off
     view.html,
     /data-result="none"[\s\S]*The gain survives a control\.[\s\S]*Not reported yet/,
   );
-  // Then the answer. It cannot be accepted while a judgement is open.
+  // The answer cannot be accepted while a judgement is open.
   assert.match(
     view.html,
     /The answer<\/h2><span class="tag reading">The coordinator's reading<\/span>/,
   );
   assert.match(view.html, /<a href="https:\/\/arxiv\.org\/abs\/1504\.05140"/);
-  assert.match(view.html, /Settle the 1 open judgement above first\./);
+  assert.match(view.html, /Settle the 1 open judgement below first\./);
   assert.match(
     view.html,
     /data-action="coordinator-answer" data-decision="accepted" disabled>Accept the answer/,
   );
-  // Needs you lists the judgement and the sign-off. The rail counts them on Results. The arc waits at the answer.
+  // Needs you lists the judgement and the sign-off. The rail counts them on Answer. The arc waits at the answer.
   assert.deepEqual(
     view.needs.map((item) => item.title),
     [
@@ -1938,7 +1943,7 @@ await test('desk leads Results with the checks, then the answer and its sign-off
   );
   assert.match(
     view.html,
-    /<span>Results<\/span><span class="n"><span aria-hidden="true">◆ <\/span>2/,
+    /<span>Answer<\/span><span class="n"><span aria-hidden="true">◆ <\/span>2/,
   );
   assert.equal(view.stage, 'Answer: waits for you');
   // After the sign-off the answer stays, marked with its time.
