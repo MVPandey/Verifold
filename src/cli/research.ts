@@ -78,13 +78,19 @@ export function parseReport(value: unknown): ResearchReport {
   };
 }
 
-/** Run a saved research phase. The host owns tools, delegation, and its session. */
+/**
+ * Run a saved research phase. The host owns tools, delegation, and its session.
+ * `inbox` returns the person's messages that wait for research, once each.
+ * Before a decision on the plan or the directions, they revise it as feedback
+ * does. Messages that arrive later go with the next step of this run.
+ */
 export async function runResearch(
   root: string,
   options: ResearchOptions,
   io: CliIO,
   signal: AbortSignal,
   host: typeof runHarness = runHarness,
+  inbox?: () => Promise<readonly string[]>,
 ): Promise<Workspace> {
   signal.throwIfAborted();
   const initial = await loadWorkspace(root);
@@ -114,14 +120,14 @@ export async function runResearch(
       throw new Error(
         'Use --feedback to refine the existing topic. Start a separate project for a new topic.',
       );
-    const feedback =
-      options.feedback === undefined
-        ? undefined
-        : text(options.feedback, 'research feedback', 4000);
-    if (options.approve && feedback)
+    if (options.approve && options.feedback !== undefined)
       throw new Error(
         'Review the revised plan before approval. Use --feedback and --approve separately.',
       );
+    const asked =
+      options.feedback === undefined
+        ? undefined
+        : text(options.feedback, 'research feedback', 4000);
     let state: ResearchState = previous ?? {
       topic,
       autonomy: options.autonomy ?? 'autonomous',
@@ -132,6 +138,12 @@ export async function runResearch(
         'Research autonomy is fixed for this project. Use explicit approval at guided checkpoints.',
       );
     }
+    // An approval keeps the waiting messages for the search step.
+    const feedback =
+      [
+        ...(asked ? [asked] : []),
+        ...(options.approve ? [] : ((await inbox?.()) ?? [])),
+      ].join('\n\n') || undefined;
 
     async function save(
       next: ResearchState,
@@ -214,7 +226,8 @@ export async function runResearch(
       let accepted: T;
       let observationFailed = false;
       try {
-        const prompt = `${await loadPrompt('research-rules')}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\nResearch context (background only, not authorization): ${JSON.stringify(workspace.context ?? 'No personal context provided.')}\n${brief}`;
+        const messages = (await inbox?.()) ?? [];
+        const prompt = `${await loadPrompt('research-rules')}\nTopic: ${state.topic}\nResearch interests: ${workspace.profile.interests.join(', ')}\nResearch context (background only, not authorization): ${JSON.stringify(workspace.context ?? 'No personal context provided.')}\n${brief}${messages.length ? `\nMessages from the person, sent while research ran. Use them in this step:\n${messages.map((message) => `- ${JSON.stringify(message)}`).join('\n')}` : ''}`;
         await save({ ...state, latestAttempt: attempt });
         await writeFile(join(directory, 'brief.md'), prompt, {
           flag: 'wx',

@@ -11,11 +11,12 @@ import {
 import { join } from 'node:path';
 
 /**
- * Messages between the person, the coordinator, and task workers. Each one is
- * a file under `.verifold/messages/`. After the first write, only its delivery
- * and status change. A message is information for its recipient. It cannot
- * change a task's scope, permissions, or limits. The task manager makes every
- * change in its own queue, so this store has no lock of its own.
+ * Messages between the person, the coordinator, research, and task workers.
+ * Each one is a file under `.verifold/messages/`. After the first write, only
+ * its delivery, status, and answer change. A message is information for its
+ * recipient. It cannot change a task's scope, permissions, or limits. The task
+ * manager makes every change in its own queue, so this store has no lock of
+ * its own.
  */
 
 export type MessageKind =
@@ -29,7 +30,10 @@ export type MessageKind =
  * How far a message got. A task worker gets its messages with its next turn:
  * `sent` with the turn, then `delivered` when that turn ends normally, or
  * `uncertain` when it fails or the process stops first. Verifold never resends
- * an uncertain message by itself. `board`: the desk shows it to the person.
+ * an uncertain message by itself. A message from the person to a running
+ * worker goes into its turn: `sent`, then `delivered` when the harness takes
+ * it in. Research gets its messages with its next step. `board`: the desk shows
+ * it to the person.
  */
 export type Delivery = 'queued' | 'sent' | 'delivered' | 'uncertain' | 'board';
 
@@ -45,7 +49,7 @@ export interface Message {
     readonly attempt: number;
     readonly revision: number;
   };
-  /** `person`, `coordinator`, or a task ID. */
+  /** `person`, `coordinator`, `research`, or a task ID. Only the person writes to research. */
   readonly to: string;
   /** The recipient task's revision when the message was sent. */
   readonly revision?: number;
@@ -60,6 +64,13 @@ export interface Message {
   readonly status?: 'open' | 'withdrawn' | 'upheld' | 'overruled' | 'resolved';
   readonly delivery: Delivery;
   readonly deliveredAt?: string;
+  /**
+   * `turn`: Verifold added the message to the agent's running turn.
+   * `coordinator`: research ended first, so Verifold passed it to the coordinator.
+   */
+  readonly via?: 'turn' | 'coordinator';
+  /** The recipient's next text after the message, a model claim. Messages from the person only. */
+  readonly answer?: { readonly at: string; readonly text: string };
   /** The harness call that made it, so a repeated call adds nothing. */
   readonly key?: string;
 }
@@ -97,18 +108,29 @@ function object(value: unknown): Record<string, unknown> | null {
 
 function parseMessage(value: unknown): Message | null {
   const entry = object(value);
-  return entry &&
-    entry.schemaVersion === 1 &&
-    typeof entry.id === 'string' &&
-    /^m-[1-9]\d{0,5}$/.test(entry.id) &&
-    typeof entry.at === 'string' &&
-    typeof entry.from === 'string' &&
-    typeof entry.to === 'string' &&
-    typeof entry.text === 'string' &&
-    kinds.includes(entry.kind as MessageKind) &&
-    deliveries.includes(entry.delivery as Delivery)
-    ? (entry as unknown as Message)
-    : null;
+  if (
+    !entry ||
+    entry.schemaVersion !== 1 ||
+    typeof entry.id !== 'string' ||
+    !/^m-[1-9]\d{0,5}$/.test(entry.id) ||
+    typeof entry.at !== 'string' ||
+    typeof entry.from !== 'string' ||
+    typeof entry.to !== 'string' ||
+    typeof entry.text !== 'string' ||
+    !kinds.includes(entry.kind as MessageKind) ||
+    !deliveries.includes(entry.delivery as Delivery)
+  )
+    return null;
+  // A harness that can write in the project can write here, so the fields that the desk shows are checked.
+  const { via, answer, ...rest } = entry;
+  const reply = object(answer);
+  return {
+    ...(rest as unknown as Message),
+    ...(via === 'turn' || via === 'coordinator' ? { via } : {}),
+    ...(reply && typeof reply.at === 'string' && typeof reply.text === 'string'
+      ? { answer: { at: reply.at, text: reply.text } }
+      : {}),
+  };
 }
 
 export class Messages {
@@ -171,10 +193,12 @@ export class Messages {
     return message;
   }
 
-  /** Change the delivery or the status of a message. */
+  /** Change the delivery, the status, or the answer of a message. */
   async update(
     message: Message,
-    change: Partial<Pick<Message, 'delivery' | 'deliveredAt' | 'status'>>,
+    change: Partial<
+      Pick<Message, 'delivery' | 'deliveredAt' | 'status' | 'via' | 'answer'>
+    >,
   ): Promise<Message> {
     const next = { ...message, ...change };
     await this.write(next);

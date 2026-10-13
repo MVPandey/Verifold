@@ -105,8 +105,10 @@ function setup(
   options: {
     readonly harness?: typeof harness;
     readonly onSelect?: () => Promise<void>;
+    readonly inbox?: string[];
   } = {},
 ): { runner: ResearchRunner; lines: string[] } {
+  const inbox = options.inbox;
   const lines: string[] = [];
   const runner = new ResearchRunner(root, {
     signal: new AbortController().signal,
@@ -118,9 +120,110 @@ function setup(
     },
     harness: options.harness ?? harness,
     ...(options.onSelect ? { onSelect: options.onSelect } : {}),
+    ...(inbox
+      ? {
+          inbox: {
+            post: (text: unknown) => Promise.resolve(inbox.push(String(text))),
+            take: () => Promise.resolve(inbox.splice(0)),
+          },
+        }
+      : {}),
   });
   return { runner, lines };
 }
+
+/** The fixture harness, held until the test releases each call. */
+function gated(): {
+  readonly harness: typeof harness;
+  readonly prompts: string[];
+  readonly release: () => void;
+} {
+  const prompts: string[] = [];
+  const held: (() => void)[] = [];
+  return {
+    prompts,
+    release: () => {
+      for (const go of held.splice(0)) go();
+    },
+    harness: async (request) => {
+      prompts.push(request.prompt);
+      await new Promise<void>((go) => held.push(go));
+      return harness(request);
+    },
+  };
+}
+
+async function calls(prompts: readonly string[], count: number): Promise<void> {
+  for (let tries = 0; tries < 200 && prompts.length < count; tries++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(prompts.length, count);
+}
+
+await test("the person's messages to research go with its next step, or start one when the plan waits", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inbox: string[] = [];
+  const gate = gated();
+  const { runner } = setup(root, { harness: gate.harness, inbox });
+  await runner.start({ topic: 'Proof search', autonomy: 'guided' });
+  await calls(gate.prompts, 1);
+  // A message during a step waits for the next step. It starts no step of its own.
+  await runner.message('Also look at contraction hierarchies.');
+  assert.deepEqual(inbox, ['Also look at contraction hierarchies.']);
+  gate.release();
+  await runner.settled();
+  assert.equal(
+    (await loadWorkspace(root)).research?.phase,
+    'awaiting-plan-review',
+  );
+  // The plan waits for the person, so the next message revises it, with the earlier one.
+  await runner.message('Compare against the textbook heap.');
+  await calls(gate.prompts, 2);
+  assert.match(
+    gate.prompts[1] ?? '',
+    /User feedback: Also look at contraction hierarchies\.\n\nCompare against the textbook heap\./,
+  );
+  assert.deepEqual(inbox, []);
+  await runner.message('Use road graphs only.');
+  gate.release();
+  await runner.settled();
+  // An approval keeps the waiting message for the search step.
+  await runner.start({ approve: true });
+  await calls(gate.prompts, 3);
+  assert.match(
+    gate.prompts[2] ?? '',
+    /Approved plan:[\s\S]*User feedback: None\.\nMessages from the person, sent while research ran\. Use them in this step:\n- "Use road graphs only\."/,
+  );
+  gate.release();
+  await runner.settled();
+  assert.equal((await loadWorkspace(root)).research?.phase, 'directions');
+});
+
+await test('autonomous research gives a message from its plan step to its search step', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inbox: string[] = [];
+  const gate = gated();
+  const { runner } = setup(root, { harness: gate.harness, inbox });
+  await runner.start({ topic: 'Proof search', autonomy: 'autonomous' });
+  await calls(gate.prompts, 1);
+  await runner.message('Use road graphs only.');
+  gate.release();
+  await calls(gate.prompts, 2);
+  assert.match(
+    gate.prompts[1] ?? '',
+    /Messages from the person, sent while research ran\. Use them in this step:\n- "Use road graphs only\."/,
+  );
+  assert.doesNotMatch(gate.prompts[0] ?? '', /road graphs/);
+  gate.release();
+  await runner.settled();
+  // Research chose its main direction, so it takes no more messages.
+  assert.equal((await loadWorkspace(root)).selectedId, 'proof');
+  await assert.rejects(
+    runner.message('Too late.'),
+    /Research ended when the direction was chosen/,
+  );
+});
 
 await test('research runs in the owner, records observed activity, and waits for decisions', async (t) => {
   const root = await project();
