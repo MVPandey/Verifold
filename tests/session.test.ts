@@ -691,6 +691,7 @@ await test('desk actions need the token and a JSON body, and report state errors
     await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
     await mkdir(join(assets, 'ui'));
     await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+    await writeFile(join(assets, 'cli', 'vendor', 'idiomorph.js'), 'fixture');
     for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
       await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
     for (const name of [
@@ -701,6 +702,7 @@ await test('desk actions need the token and a JSON body, and report state errors
       'desk-terminals.js',
       'desk-lease.js',
       'desk-map.js',
+      'desk-motion.js',
       'manrope.ttf',
       'symbol.webp',
     ])
