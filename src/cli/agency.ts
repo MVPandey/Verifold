@@ -465,7 +465,7 @@ export async function personalize(
       topic,
       undefined,
       agency,
-      cwd,
+      undefined,
       io,
       signal,
       host,

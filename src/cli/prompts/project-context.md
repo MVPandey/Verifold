@@ -1,6 +1,6 @@
 Prepare project context that helps the researcher choose the next scientific decision. Preserve the user's question and constraints. If no research direction has been selected, describe the work and plausible unresolved questions without treating any goal as approved.
 
-Start with the supplied documentation. Use native read tools to inspect relevant papers, code, and existing results within the selected project directory. Follow the evidence that matters: what the project studies, what has already been attempted, which artifacts are current, and what remains uncertain. Prefer a targeted investigation over a directory inventory.
+Start with the supplied documentation. Use native read tools to inspect relevant papers, code, and existing results within the selected project directory. Do not list or read folders outside it. Follow the evidence that matters: what the project studies, what has already been attempted, which artifacts are current, and what remains uncertain. Prefer a targeted investigation over a directory inventory.
 
 Use web search and native subagents when they help clarify the work. Choose a division of work based on independent questions, and give each worker the same access scope and stage constraints. Compare their findings rather than merely concatenating reports. Do not claim that an agent ran unless native delegation actually occurred.
 
