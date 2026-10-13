@@ -1,5 +1,8 @@
-import { loadPrompt } from './prompts.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
+import { loadPrompt } from './prompts.ts';
 import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
 import { withActivity, choose } from './choices.ts';
@@ -71,16 +74,59 @@ export function suggestedAnswers(body: string): {
   };
 }
 
-/** Interview through the existing host; only a reviewed brief leaves this function. */
+/**
+ * Interview through the existing host; only a reviewed brief leaves this function.
+ * `cwd` is a folder that the person approved for reading. Without one, the
+ * harness works in an empty private folder, never in the folder where
+ * verifold started, and Verifold removes that folder afterwards.
+ */
 export async function researchInterview(
+  topic: string,
+  background: string | undefined,
+  agency: Agency,
+  cwd: string | undefined,
+  io: CliIO,
+  signal: AbortSignal,
+  harness: typeof runHarness = runHarness,
+  scope: 'profile' | 'project' | 'topic' = 'profile',
+): Promise<string> {
+  if (cwd !== undefined)
+    return interview(
+      topic,
+      background,
+      agency,
+      cwd,
+      io,
+      signal,
+      harness,
+      scope,
+    );
+  const empty = await mkdtemp(join(tmpdir(), 'verifold-interview-'));
+  try {
+    return await interview(
+      topic,
+      background,
+      agency,
+      empty,
+      io,
+      signal,
+      harness,
+      scope,
+    );
+  } finally {
+    await rm(empty, { recursive: true, force: true });
+  }
+}
+
+async function interview(
   topic: string,
   background: string | undefined,
   agency: Agency,
   cwd: string,
   io: CliIO,
   signal: AbortSignal,
-  harness: typeof runHarness = runHarness,
-  scope: 'profile' | 'project' | 'topic' = 'profile',
+  harness: typeof runHarness,
+  scope: 'profile' | 'project' | 'topic',
 ): Promise<string> {
   const answers = [{ question: 'What do you want to work on?', answer: topic }];
   let sessionId: string | undefined;
