@@ -1832,6 +1832,7 @@ body[data-detail='details'] .summary-only {
   color: rgb(255 255 255 / 85%);
 }
 .map-box {
+  position: relative;
   width: 100%;
   min-height: 0;
   display: flex;
@@ -1854,8 +1855,13 @@ body[data-detail='details'] .summary-only {
 }
 .map-box[data-state='running'],
 .map-box[data-state='claimed'] {
-  border-color: var(--tint-line);
-  box-shadow: 0 0 0 3px var(--lavender);
+  border-color: color-mix(
+    in srgb,
+    var(--harness, var(--violet)) 50%,
+    var(--border)
+  );
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--harness, var(--violet)) 14%, transparent);
 }
 .map-box[data-state='done'],
 .map-box[data-state='cancelled'] {
@@ -1925,6 +1931,93 @@ body[data-detail='details'] .summary-only {
 .map-links marker path {
   fill: var(--control);
   stroke: none;
+}
+/* Each harness has a color: violet for Claude Code, gray for Codex. A running box pulses in it. */
+[data-host='claude'] {
+  --harness: var(--violet);
+}
+[data-host='codex'] {
+  --harness: var(--muted);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .map-box[data-state='running']::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    animation: map-pulse 1.9s ease-out infinite;
+  }
+}
+@keyframes map-pulse {
+  0% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--harness, var(--violet)) 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.map-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.map-key::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--harness);
+}
+/* A task that ended hands its work along the arrow: a dot with what it carries. */
+.handoff {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+  will-change: transform;
+}
+.handoff i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--harness, var(--violet));
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.handoff b {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+/* Another view cross-fades in, shorter than the browser default. */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 180ms;
+  }
 }
 /* Home: what happens now, the checks, and the answer under the question. */
 .now-line {

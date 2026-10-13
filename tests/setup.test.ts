@@ -93,11 +93,13 @@ await test('bare verifold sets up a new project in the desk and opens the projec
     'desk-terminals.js',
     'desk-lease.js',
     'desk-map.js',
+    'desk-motion.js',
     'manrope.ttf',
     'symbol.webp',
   ])
     await writeFile(join(assets, 'cli', name), 'fixture asset');
   await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+  await writeFile(join(assets, 'cli', 'vendor', 'idiomorph.js'), 'fixture');
   for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');

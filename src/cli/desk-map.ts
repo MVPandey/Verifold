@@ -315,14 +315,25 @@ export function drawMap(map: HTMLElement): void {
         all.push({ from, to: target.dataset.node });
   const edges = essential(all);
   const { routes, depth } = plan(columns, nodes, edges);
+  // An arrow keeps its element from one drawing to the next, so an arrow that lights up stays lit.
+  const drawn = new Map(
+    Array.from(
+      layer.querySelectorAll<SVGPathElement>('path[data-source]'),
+      (line) => [`${line.dataset.source} ${line.dataset.target}`, line],
+    ),
+  );
   const paths = routes.flatMap((points, index) => {
     const edge = edges[index];
     if (!edge || points.length < 2) return [];
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const line =
+      drawn.get(`${edge.from} ${edge.to}`) ??
+      document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line.dataset.source = edge.from;
+    line.dataset.target = edge.to;
     line.setAttribute('d', path(points));
     line.setAttribute('marker-end', 'url(#map-arrow)');
     // A finished source or the objective gives a solid line. A dashed line still waits.
-    if (finished.has(edge.from)) line.setAttribute('class', 'done');
+    line.classList.toggle('done', finished.has(edge.from));
     return [line];
   });
   // Lanes under the lowest box need room in the map.
@@ -333,5 +344,7 @@ export function drawMap(map: HTMLElement): void {
   map.style.paddingBottom = `${Math.max(12, depth - lowest + 10)}px`;
   svg.setAttribute('width', String(map.scrollWidth));
   svg.setAttribute('height', String(map.scrollHeight));
-  layer.replaceChildren(...paths);
+  const kept = new Set(paths);
+  for (const line of drawn.values()) if (!kept.has(line)) line.remove();
+  layer.append(...paths.filter((line) => !line.isConnected));
 }

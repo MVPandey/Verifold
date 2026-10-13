@@ -428,11 +428,18 @@ await test('the desk stores a key and limits through actions, and no reply holds
     'desk-terminals.js',
     'desk-lease.js',
     'desk-map.js',
+    'desk-motion.js',
     'manrope.ttf',
     'symbol.webp',
   ])
     await writeFile(join(assets, 'cli', name), 'fixture asset');
-  for (const name of ['purify.js', 'xterm.js', 'xterm.css', 'addon-fit.js'])
+  for (const name of [
+    'purify.js',
+    'idiomorph.js',
+    'xterm.js',
+    'xterm.css',
+    'addon-fit.js',
+  ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
   const compute = new Compute(root, { store, url: api.url });
