@@ -166,6 +166,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
   await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
   await mkdir(join(assets, 'ui'));
   await writeFile(join(assets, 'cli', 'vendor', 'purify.js'), 'fixture');
+  await writeFile(join(assets, 'cli', 'vendor', 'idiomorph.js'), 'fixture');
   for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   for (const name of [
@@ -176,6 +177,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
     'desk-terminals.js',
     'desk-lease.js',
     'desk-map.js',
+    'desk-motion.js',
     'manrope.ttf',
     'symbol.webp',
   ])
@@ -201,6 +203,11 @@ await test('desk restricts private reads, serves escaped records, and stops with
   assert.match(
     shell.headers.get('content-security-policy') ?? '',
     /frame-ancestors 'none'/,
+  );
+  // The page draws its tab icon as a blob image. Other images come from the desk.
+  assert.match(
+    shell.headers.get('content-security-policy') ?? '',
+    /img-src 'self' blob:;/,
   );
   assert.doesNotMatch(await shell.text(), /alert|Researcher/);
   assert.equal((await fetch(api)).status, 401);
@@ -288,6 +295,8 @@ await test('desk restricts private reads, serves escaped records, and stops with
     '/symbol.webp',
     '/ui/dom.js',
     '/vendor/purify.js',
+    '/desk-motion.js',
+    '/vendor/idiomorph.js',
   ])
     assert.equal((await fetch(url.origin + path)).status, 200);
   assert.equal(
@@ -1375,7 +1384,7 @@ await test('desk maps the tasks with what each agent does now and why', async (t
   );
   assert.match(
     map,
-    /data-node="task-1" data-state="done" data-from="objective"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-2" data-state="running" data-from="task-1"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-3" data-state="open" data-from="task-2"/,
+    /data-node="task-1" data-state="done" data-host="claude" data-from="objective"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-2" data-state="running" data-host="claude" data-from="task-1"[\s\S]*<\/div><div class="map-col">[\s\S]*data-node="task-3" data-state="open" data-host="claude" data-from="task-2"/,
   );
   // A running task says whose turn it is, what its agent does now, and why the task exists.
   assert.match(
@@ -1705,6 +1714,123 @@ await test('Home shows the work live, the checks, and the answer under the quest
     /Yes, above 100,000 nodes\.[\s\S]*You accepted the answer/,
   );
   assert.doesNotMatch(accepted, /Read the answer/);
+});
+
+await test('the map names the harness of each task and what a done task hands over', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'heap',
+        title: 'Heap Dijkstra',
+        recommendation: 'Compare a heap with a scan.',
+        gates: ['Same paths on small graphs.'],
+        kind: 'main',
+      },
+    ],
+    selectedId: 'heap',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const files = (...paths: string[]) => [
+    {
+      version: 1,
+      revision: 1,
+      at,
+      files: paths.map((path) => ({ path, bytes: 1, sha256: 'a'.repeat(64) })),
+    },
+  ];
+  const task = (
+    id: string,
+    host: string,
+    state: string,
+    dependencies: string[],
+    artifacts: object[] = [],
+  ) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    attempts: [],
+    artifacts,
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title: `Title of ${id}`,
+      objective: 'Run.',
+      host,
+      dependencies,
+    },
+  });
+  const desk = (list: object[], planApproved = true) =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list, selected: null, idle: [], messages: [] },
+        coordinator: {
+          state: {
+            schemaVersion: 1,
+            objective: 'Heap Dijkstra',
+            host: 'claude',
+            model: null,
+            helper: 'codex',
+            startedAt: at,
+            stoppedAt: null,
+            session: null,
+            created: list.length,
+            planApproved,
+            cursor: 0,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          results: null,
+          session: null,
+          waiting: 0,
+          limitedUntil: null,
+        },
+      } as never,
+      { view: 'tasks', panel: null },
+    );
+  const mixed = desk([
+    task(
+      'task-1',
+      'codex',
+      'done',
+      [],
+      files('src/heap.py', 'results/bench.json'),
+    ),
+    task('task-2', 'claude', 'running', ['task-1']),
+    task('task-3', 'claude', 'done', [], files('notes/plan.md')),
+    task('task-4', 'claude', 'open', ['task-2', 'task-3']),
+  ]);
+  // Each box names its harness, for the color of its pulse. A done box names what it hands over.
+  assert.match(
+    mixed.html,
+    /data-node="task-1" data-state="done" data-host="codex" data-gives="code and results" data-from="objective"/,
+  );
+  assert.match(
+    mixed.html,
+    /data-node="task-2" data-state="running" data-host="claude" data-from="task-1"/,
+  );
+  assert.match(mixed.html, /data-node="task-3"[^>]*data-gives="notes"/);
+  // A legend names the colors, the lead harness first.
+  assert.match(
+    mixed.html,
+    /<p class="map-legend" aria-hidden="true"><span class="map-key" data-host="claude">Claude Code<\/span><span class="map-key" data-host="codex">Codex<\/span><\/p><div class="map" data-map>/,
+  );
+  // The tab icon gets the part of the planned tasks that is done.
+  assert.deepEqual(mixed.work, { done: 2, total: 4 });
+  // One harness needs no legend. Before the plan is approved, the tab icon has no work to show.
+  const single = desk([task('task-1', 'claude', 'open', [])], false);
+  assert.doesNotMatch(single.html, /map-legend/);
+  assert.equal(single.work, null);
 });
 
 await test('desk compares the directions in a table and lists sources as they arrive', async (t) => {

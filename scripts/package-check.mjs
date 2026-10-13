@@ -54,6 +54,8 @@ try {
           'dist-cli/cli/symbol.webp',
           'dist-cli/cli/vendor/purify.js',
           'dist-cli/cli/vendor/purify.LICENSE.txt',
+          'dist-cli/cli/vendor/idiomorph.js',
+          'dist-cli/cli/vendor/idiomorph.LICENSE.txt',
           'dist-cli/cli/vendor/xterm.js',
           'dist-cli/cli/vendor/xterm.css',
           'dist-cli/cli/vendor/xterm.LICENSE.txt',
@@ -121,7 +123,7 @@ try {
   assert.equal(metadata.license, 'MIT');
   assert.equal(metadata.private, undefined);
   assert.equal(metadata.publishConfig.registry, 'https://registry.npmjs.org/');
-  // The desk renders harness Markdown with marked. DOMPurify and xterm.js ship as vendored files.
+  // The desk renders harness Markdown with marked. DOMPurify, idiomorph, and xterm.js ship as vendored files.
   assert.deepEqual(Object.keys(metadata.dependencies ?? {}), ['marked']);
   // Terminal panes need the prebuilt PTY library. No install script builds it.
   assert.deepEqual(Object.keys(metadata.optionalDependencies ?? {}), [
@@ -519,6 +521,7 @@ onLine((line) => {
       '/desk-terminals.js',
       '/desk-lease.js',
       '/desk-map.js',
+      '/desk-motion.js',
       '/vendor/xterm.js',
       '/vendor/xterm.css',
       '/vendor/addon-fit.js',
@@ -527,6 +530,7 @@ onLine((line) => {
       '/manrope.ttf',
       '/symbol.webp',
       '/vendor/purify.js',
+      '/vendor/idiomorph.js',
     ]) {
       const asset = await fetch(url.origin + path);
       assert.equal(asset.status, 200, path);

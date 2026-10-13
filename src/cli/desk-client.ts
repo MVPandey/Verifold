@@ -1,9 +1,11 @@
 import DOMPurify from './vendor/purify.js';
+import { Idiomorph } from './vendor/idiomorph.js';
 import { requiredElement } from '../ui/dom.ts';
 import { mountTranscripts, refreshTranscripts } from './desk-transcript.ts';
 import { mountTerminals, placeTerminals } from './desk-terminals.ts';
 import { viewLease } from './desk-lease.ts';
 import { drawMap } from './desk-map.ts';
+import { cardPlaces, showChanges, showTabIcon } from './desk-motion.ts';
 
 const content = requiredElement(document, '#content', HTMLElement);
 const connectionLabel = requiredElement(document, '#connection', HTMLElement);
@@ -182,10 +184,29 @@ function showConnection(problem: string | undefined): void {
 }
 
 /**
- * Replace the rail, the view, and the panel. Typed text, open sections, checked
+ * The page changes in place, so an element can move from one state to the next.
+ * The page owns some parts: the arrows of a map, a handoff in motion, and the
+ * transcripts in their slots.
+ */
+const morphing = {
+  morphStyle: 'innerHTML',
+  ignoreActiveValue: true,
+  callbacks: {
+    beforeNodeMorphed: (node: Node) =>
+      !(node instanceof Element && node.matches('svg.map-links')),
+    beforeNodeRemoved: (node: Node) =>
+      !(
+        node.parentElement?.classList.contains('transcript-slot') ||
+        (node instanceof Element && node.classList.contains('handoff'))
+      ),
+  },
+} as const;
+
+/**
+ * Update the rail, the view, and the panel. Typed text, open sections, checked
  * files, focus, and the scroll position of the view and the panel stay.
  */
-function render(html: string): void {
+async function render(html: string): Promise<void> {
   // Transcript panels keep their own open calls. Only page sections are restored here.
   const known = new Set(
     Array.from(
@@ -231,8 +252,11 @@ function render(html: string): void {
       : undefined;
   const scrolls = Array.from(
     content.querySelectorAll<HTMLElement>('#rail, #view, #panel-body'),
-    (element) => [element.id, element.scrollTop] as const,
+    (element) => [element, element.scrollTop] as const,
   );
+  const places = cardPlaces(content);
+  const opened = view !== rendered.view;
+  const same = !opened && panelKey() === rendered.panel;
   // The local renderer escapes research text. Harness Markdown is sanitized
   // again in an inert template, before it reaches the live page.
   const template = document.createElement('template');
@@ -241,56 +265,68 @@ function render(html: string): void {
     fragment.innerHTML = DOMPurify.sanitize(fragment.innerHTML, {
       ADD_ATTR: ['target'],
     });
-  content.replaceChildren(template.content);
-  showFailure();
-  showDetail();
-  for (const [id, value] of typed) {
-    const field = document.getElementById(id);
+  const apply = (): void => {
+    // The morph returns a promise only when it waits for a new head. A morph of #content does not.
+    void Idiomorph.morph(content, template.content, morphing);
+    showFailure();
+    showDetail();
+    for (const [id, value] of typed) {
+      const field = document.getElementById(id);
+      if (
+        field instanceof HTMLInputElement ||
+        field instanceof HTMLTextAreaElement ||
+        field instanceof HTMLSelectElement
+      )
+        field.value = value;
+    }
+    // A section that is new to the page keeps the state that the server gave it.
+    for (const detail of content.querySelectorAll<HTMLDetailsElement>(
+      'details[id]',
+    ))
+      if (known.has(detail.id)) detail.open = open.has(detail.id);
+    for (const [id, value] of checked) {
+      const box = document.getElementById(id);
+      if (box instanceof HTMLInputElement && !box.disabled) box.checked = value;
+    }
+    // A view or a panel item that the person just opened starts at its top. A kept area keeps its place.
+    for (const [before, top] of scrolls) {
+      const element = document.getElementById(before.id);
+      if (!element) continue;
+      if (
+        before.id !== 'rail' &&
+        (before.id === 'view' ? opened : panelKey() !== rendered.panel)
+      )
+        element.scrollTop = 0;
+      else if (element !== before) element.scrollTop = top;
+    }
+    rendered = { view, panel: panelKey() };
+    showReview();
+    drawMaps();
+    mountTranscripts(content, () => token);
+    mountTerminals(content);
+    inPanel?.focus({ preventScroll: true });
+    const target = focusTarget
+      ? content.querySelector<HTMLElement>(focusTarget)
+      : null;
+    target?.focus({ preventScroll: true });
     if (
-      field instanceof HTMLInputElement ||
-      field instanceof HTMLTextAreaElement ||
-      field instanceof HTMLSelectElement
+      caret &&
+      (target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLInputElement)
     )
-      field.value = value;
-  }
-  // A section that is new to the page keeps the state that the server gave it.
-  for (const detail of content.querySelectorAll<HTMLDetailsElement>(
-    'details[id]',
-  ))
-    if (known.has(detail.id)) detail.open = open.has(detail.id);
-  for (const [id, value] of checked) {
-    const box = document.getElementById(id);
-    if (box instanceof HTMLInputElement && !box.disabled) box.checked = value;
-  }
-  // A view or a panel item that the person just opened starts at its top.
-  for (const [id, top] of scrolls) {
-    const element = document.getElementById(id);
-    if (
-      element &&
-      (id === 'rail' ||
-        (id === 'view'
-          ? view === rendered.view
-          : panelKey() === rendered.panel))
-    )
-      element.scrollTop = top;
-  }
-  rendered = { view, panel: panelKey() };
-  showReview();
-  drawMaps();
-  mountTranscripts(content, () => token);
-  mountTerminals(content);
-  inPanel?.focus({ preventScroll: true });
-  const target = focusTarget
-    ? content.querySelector<HTMLElement>(focusTarget)
-    : null;
-  target?.focus({ preventScroll: true });
+      target.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
+    lastHtml = html;
+    showChanges(content, places, same);
+  };
+  // Another view cross-fades in. The first view and live updates do not.
   if (
-    caret &&
-    (target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLInputElement)
+    opened &&
+    rendered.view &&
+    'startViewTransition' in document &&
+    !matchMedia('(prefers-reduced-motion: reduce)').matches
   )
-    target.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
-  lastHtml = html;
+    await document.startViewTransition(apply).updateCallbackDone;
+  else apply();
 }
 
 /** The items in Needs you from a view reply, or nothing for setup. */
@@ -308,6 +344,16 @@ function needsFrom(
       ? [{ key: item.key, title: item.title }]
       : [],
   );
+}
+
+/** The planned tasks and how many are done, or nothing before the plan is approved. */
+function workFrom(reply: object): { done: number; total: number } | null {
+  if (!('work' in reply) || !reply.work || typeof reply.work !== 'object')
+    return null;
+  const { done, total } = reply.work as Record<string, unknown>;
+  return typeof done === 'number' && typeof total === 'number'
+    ? { done, total }
+    : null;
 }
 
 /**
@@ -420,7 +466,7 @@ async function refresh(): Promise<void> {
     )
       throw new Error('The desk returned an unreadable view.');
     if (wanted !== viewQuery() || stopped) return;
-    if (reply.html !== lastHtml) render(reply.html);
+    if (reply.html !== lastHtml) await render(reply.html);
     focusPending();
     const title =
       'title' in reply && typeof reply.title === 'string' ? reply.title : '';
@@ -438,6 +484,7 @@ async function refresh(): Promise<void> {
     if (view === 'needs') needsButton.setAttribute('aria-current', 'page');
     else needsButton.removeAttribute('aria-current');
     if (needs) notifyNeeds(needs);
+    showTabIcon(workFrom(reply), needs?.length ?? 0);
     showNotify();
     observationLabel.textContent = reply.observation;
     showConnection(undefined);
