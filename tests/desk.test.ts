@@ -521,6 +521,7 @@ await test('desk points to the coordinator after a direction and shows its notes
     attempts: [],
     assignment: {
       by: 'coordinator',
+      reason: 'Created by the coordinator: a first pass.',
       title: 'Bounded pilot',
       objective: 'Run the pilot.',
       dependencies: [],
@@ -565,10 +566,12 @@ await test('desk points to the coordinator after a direction and shows its notes
   const empty = html(false, []);
   assert.match(empty, /The coordinator drafts the plan/);
   assert.doesNotMatch(empty, /waits for you/);
+  // After the person starts the work, the Now line says what happens, and nothing waits.
   assert.match(
     html(true),
-    /The coordinator runs the team[\s\S]*Nothing needs you/,
+    /Now<\/span> The coordinator watches the work\.[\s\S]*0 of 1 tasks done\./,
   );
+  assert.doesNotMatch(html(true), /Needs you<\/h2>/);
 });
 
 await test('the rail lists each task, also after its worker slot goes to another task', async (t) => {
@@ -950,10 +953,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     team.html,
     /The coordinator overruled two objections from this task, so this one goes to you/,
   );
-  assert.match(
-    team.html,
-    /The coordinator runs the team[\s\S]*1 item needs you above/,
-  );
+  assert.match(team.html, /<section class="card now-card" aria-label="Now">/);
   // The blocker stays with the coordinator. Its task panel still lets the person settle it first.
   const panel = desk(
     { tasks, coordinator: coordinator('idle') },
@@ -1044,6 +1044,7 @@ await test('desk Home lists what changed since the person left, the team feed, a
     ],
     assignment: {
       by: 'coordinator',
+      reason: 'Created by the coordinator: a first pass.',
       title: 'Bounded pilot',
       objective: 'Run.',
       inputs: [],
@@ -1387,11 +1388,8 @@ await test('desk maps the tasks with what each agent does now and why', async (t
   );
   // A quiet agent shows how long it has been quiet.
   assert.match(desk(quiet, 'tasks'), /Now<\/span> No update in 20 min/);
-  // Home shows each running task in Team now.
-  assert.match(
-    desk(recent, 'home'),
-    /Team now[\s\S]*Title task-2[\s\S]*Now<\/span> Running python bench\.py/,
-  );
+  // Home says in its Now line which task runs, and on which harness.
+  assert.match(desk(recent, 'home'), /Now<\/span> Title task-2 runs on /);
 });
 
 await test('desk shows one plan: the direction, its checks, and the drafted tasks, with one approval', async (t) => {
@@ -1562,6 +1560,150 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
     drafting,
     /data-action="coordinator-approve" disabled>Start the work/,
   );
+});
+
+await test('Home shows the work live, the checks, and the answer under the question', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Is the heap version faster?',
+      autonomy: 'autonomous',
+      phase: 'directions',
+      plan: {
+        scope: 'Scope',
+        personas: [
+          { name: 'Historian', task: 'Find prior art.' },
+          { name: 'Skeptic', task: 'Find counterexamples.' },
+        ],
+      },
+    },
+    candidates: [
+      {
+        id: 'heap',
+        title: 'Heap Dijkstra',
+        recommendation: 'Compare a heap with a scan.',
+        gates: ['Same paths on small graphs.', 'Faster on large graphs.'],
+        kind: 'main',
+      },
+    ],
+    selectedId: 'heap',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const task = (id: string, title: string, host: string, state: string) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title,
+      objective: 'Run.',
+      host,
+      dependencies: [],
+    },
+  });
+  const home = (answer: object | null): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        research: { running: false, step: null, events: [], startedAt: null },
+        tasks: {
+          list: [
+            task('task-1', 'Implement', 'codex', 'done'),
+            task('task-2', 'Benchmark', 'claude', 'running'),
+          ],
+          selected: null,
+          idle: [],
+          messages: [],
+        },
+        coordinator: {
+          state: {
+            schemaVersion: 1,
+            objective: 'Heap Dijkstra',
+            host: 'claude',
+            model: null,
+            helper: 'codex',
+            startedAt: at,
+            stoppedAt: null,
+            session: null,
+            created: 2,
+            planApproved: true,
+            cursor: 0,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          results: {
+            schemaVersion: 1,
+            direction: 'heap',
+            checks: [
+              {
+                check: 1,
+                result: 'passed',
+                value: '0 differences',
+                reason: 'Both agree.',
+                evidence: ['results/a.txt'],
+                at,
+              },
+            ],
+            answer,
+          },
+          session: null,
+          waiting: 0,
+          limitedUntil: null,
+        },
+      } as never,
+      { view: 'home', panel: null },
+    ).html;
+  const working = home(null);
+  // The Now line names the running task and its harness, and how far the work is.
+  assert.match(
+    working,
+    /Now<\/span> Benchmark runs on Claude Code\.<\/p><p class="fine">1 of 2 tasks done\./,
+  );
+  // The map is on Home, with the mark of the helper harness.
+  assert.match(
+    working,
+    /The work<\/h2>[\s\S]*Implement<span class="host-chip">Codex<\/span>/,
+  );
+  // The checks, each with its result.
+  assert.match(
+    working,
+    /<li data-result="passed"><span class="check-result">Passed<\/span> Same paths on small graphs\.<\/li><li data-result="none"><span class="check-result">Not yet<\/span> Faster on large graphs\.<\/li>/,
+  );
+  assert.doesNotMatch(working, /home-answer-title/);
+  // The proposed answer shows under the question. Reading it in full comes before the decision.
+  const proposed = home({
+    statement: 'Yes, above 100,000 nodes.',
+    claims: [],
+    at,
+  });
+  assert.match(
+    proposed,
+    /The answer<\/h2>[\s\S]*Yes, above 100,000 nodes\.[\s\S]*data-view="results" data-focus="answer-title">Read the answer/,
+  );
+  assert.match(proposed, /Now<\/span> The answer waits for you\./);
+  // After the person accepts it, the answer stays on Home.
+  const accepted = home({
+    statement: 'Yes, above 100,000 nodes.',
+    claims: [],
+    at,
+    decision: { kind: 'accepted', at },
+  });
+  assert.match(
+    accepted,
+    /Yes, above 100,000 nodes\.[\s\S]*You accepted the answer/,
+  );
+  assert.doesNotMatch(accepted, /Read the answer/);
 });
 
 await test('desk compares the directions in a table and lists sources as they arrive', async (t) => {
