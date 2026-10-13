@@ -121,6 +121,10 @@ async function team(
   t: test.TestContext,
   debounceMs = 30,
   compute?: (root: string) => Promise<Compute>,
+  memory?: {
+    note(who: string, text: unknown): Promise<string>;
+    digest(): Promise<string>;
+  },
 ): Promise<{
   root: string;
   tasks: TaskManager;
@@ -170,6 +174,7 @@ async function team(
     tasks,
     debounceMs,
     ...(compute ? { compute: await compute(root) } : {}),
+    ...(memory ? { memory } : {}),
     sessions: new SessionManager(root, {
       clientVersion: 'test',
       ownerId: 'owner-1',
@@ -1700,4 +1705,47 @@ await test('Start over archives the run through the desk, and Restore brings it 
   assert.ok(coordinator.view()?.state.stoppedAt);
   assert.equal((await loadWorkspace(root)).selectedId, 'heap');
   assert.equal((await post({ action: 'restore', archive: '../x' }))[0], 409);
+});
+
+await test('the coordinator starts with the project memory and keeps notes in it', async (t) => {
+  const notes: string[] = [];
+  const memory = {
+    note: (who: string, text: unknown): Promise<string> => {
+      notes.push(`${who}: ${String(text)}`);
+      return Promise.resolve('Kept the note in memory/notes.md.');
+    },
+    digest: (): Promise<string> =>
+      Promise.resolve(
+        '# Project memory\n\nAn earlier run found that the scan is slower above 10,000 nodes.',
+      ),
+  };
+  const { coordinator, script, results, inputs, turns } = await team(
+    t,
+    30,
+    undefined,
+    memory,
+  );
+  await script([
+    [
+      {
+        name: 'verifold_note',
+        arguments: { text: 'The USA graph takes hours.' },
+      },
+    ],
+  ]);
+  await coordinator.start({
+    objective: 'Heap.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  assert.match(
+    (await inputs())[0] ?? '',
+    /Project memory, from memory\/README\.md\.[\s\S]*An earlier run found that the scan is slower above 10,000 nodes\./,
+  );
+  assert.deepEqual(notes, ['Coordinator: The USA graph takes hours.']);
+  assert.equal(
+    (await results())[0]?.result.content[0]?.text,
+    'Kept the note in memory/notes.md.',
+  );
 });
