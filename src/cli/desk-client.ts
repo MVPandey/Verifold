@@ -49,8 +49,10 @@ let shownDiff:
     }
   | undefined;
 let detail = 'summary';
-/** The view of the selected worker: summary, details, or terminal. */
+/** The view of the selected worker: summary, details, terminal, or commands. */
 let pane = 'summary';
+/** The commands that the audit shows: all, or tagged only. The choice lasts for this browser. */
+let records = 'all';
 let token = location.hash.slice(1);
 const launch = token.startsWith('launch-') ? token.slice(7) : '';
 try {
@@ -68,6 +70,7 @@ try {
     sessionStorage.getItem('verifold-desk-direction') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
+  records = localStorage.getItem('verifold-desk-records') ?? 'all';
 } catch {
   /* The original fragment still supports reload when storage is unavailable. */
 }
@@ -101,10 +104,11 @@ let failure:
   | { readonly selector: string; readonly message: string }
   | undefined;
 
-/** Details shows the harness transcripts. The choice lasts for this browser. */
+/** The switches of the page: Summary or Details, the pane of a worker, and the commands of the audit. Each choice lasts for this browser. */
 function showDetail(): void {
   document.body.dataset.detail = detail;
   document.body.dataset.pane = pane;
+  document.body.dataset.records = records;
   for (const button of content.querySelectorAll<HTMLElement>('[data-detail]'))
     button.setAttribute(
       'aria-pressed',
@@ -112,6 +116,11 @@ function showDetail(): void {
     );
   for (const button of content.querySelectorAll<HTMLElement>('[data-pane]'))
     button.setAttribute('aria-pressed', String(button.dataset.pane === pane));
+  for (const button of content.querySelectorAll<HTMLElement>('[data-records]'))
+    button.setAttribute(
+      'aria-pressed',
+      String(button.dataset.records === records),
+    );
 }
 
 function showFailure(): void {
@@ -1064,7 +1073,7 @@ document.addEventListener('click', (event) => {
   }
   if (target.dataset.diff) void loadDiff(target);
   if (target.dataset.pane) {
-    pane = ['details', 'terminal'].includes(target.dataset.pane)
+    pane = ['details', 'terminal', 'commands'].includes(target.dataset.pane)
       ? target.dataset.pane
       : 'summary';
     showDetail();
@@ -1081,6 +1090,15 @@ document.addEventListener('click', (event) => {
     window.open(
       `/terminal?session=${encodeURIComponent(target.dataset.terminalTab)}`,
     );
+  if (target.dataset.records) {
+    records = target.dataset.records === 'tagged' ? 'tagged' : 'all';
+    showDetail();
+    try {
+      localStorage.setItem('verifold-desk-records', records);
+    } catch {
+      /* The choice lasts until reload when browser storage is unavailable. */
+    }
+  }
   if (target.dataset.detail) {
     detail = target.dataset.detail === 'details' ? 'details' : 'summary';
     showDetail();

@@ -387,7 +387,7 @@ const sessionStatus: Record<string, [string, string]> = {
 };
 
 const paneSwitch =
-  '<div class="seg pane-switch" role="group" aria-label="Worker view"><button type="button" data-pane="summary">Summary</button><button type="button" data-pane="details">Details</button><button type="button" data-pane="terminal">Terminal</button></div>';
+  '<div class="seg pane-switch" role="group" aria-label="Worker view"><button type="button" data-pane="summary">Summary</button><button type="button" data-pane="details">Details</button><button type="button" data-pane="terminal">Terminal</button><button type="button" data-pane="commands">Commands</button></div>';
 
 /**
  * The worker's own terminal. While the person holds it, a framed terminal page
@@ -492,6 +492,7 @@ function workerPanel(
     .join('')}</ol>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
   <div class="pane-terminal">${renderTerminal(view, live)}</div>
+  <div class="pane-commands">${record.commands.length ? auditTable([view], tasks, false) : '<p class="empty-note">This agent has run no commands yet.</p>'}</div>
   ${
     record.task
       ? `<p class="fine">It works in the folder of its task, in Strict mode.</p><div class="actions"><button type="button" data-task-select="${e(record.task.id)}">Open the task</button></div>`
@@ -1637,16 +1638,53 @@ function renderTasksView(
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
 }
 
-/** The tool calls of one worker, with who let each one run. */
-function commandTable(view: SessionView, name: string): string {
-  const { record } = view;
-  const open = record.commands.filter(needsReview);
-  const shown = record.commands.slice(-100);
-  return `<div class="section-title"><h3>${e(name)}</h3><span class="count">${record.commands.length > shown.length ? `Latest ${shown.length} of ${record.commands.length}` : `${record.commands.length} recorded`}</span></div><p class="fine">${open.length ? `${open.length} risky ${open.length === 1 ? 'command ran' : 'commands ran'} without a person's approval and ${open.length === 1 ? 'waits' : 'wait'} for review.` : 'No tagged command waits for review.'} Tags come from the command text. The record shows the command that the agent asked for, not the processes that it started.</p><div class="table"><table><thead><tr><th scope="col">Time</th><th scope="col">Tool</th><th scope="col">Command or target</th><th scope="col">Approved by</th><th scope="col">Risk</th><th scope="col">Result</th><th scope="col">Review</th></tr></thead><tbody>${shown
-    .map(
-      (command) =>
-        `<tr><td>${e(clock(command.at))}</td><td>${e(command.tool)}</td><td><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`,
+/** One tool call in the audit, with the agent that asked for it. */
+interface AuditRow {
+  readonly command: CommandEntry;
+  readonly view: SessionView;
+}
+
+/** The latest 200 commands and every tagged command, newest first. A tagged command never drops out of the audit. */
+function auditRows(views: readonly SessionView[]): AuditRow[] {
+  const all = views
+    .flatMap((view) =>
+      view.record.commands.map((command) => ({ command, view })),
     )
+    .sort((a, b) => b.command.at.localeCompare(a.command.at));
+  const latest = new Set(all.slice(0, 200));
+  return all
+    .filter((row) => latest.has(row) || row.command.risk.length > 0)
+    .slice(0, 700);
+}
+
+const auditFilter =
+  '<div class="seg" role="group" aria-label="Commands to show"><button type="button" data-records="all">All commands</button><button type="button" data-records="tagged">Tagged only</button></div>';
+
+/**
+ * The tool calls of the agents, with who let each one run. A tag comes from the
+ * command text and asks for no decision, so the audit stays off Home and the rail.
+ */
+function auditTable(
+  views: readonly SessionView[],
+  tasks: readonly TaskRecord[],
+  withAgent: boolean,
+): string {
+  const rows = auditRows(views);
+  const total = views.reduce(
+    (sum, view) => sum + view.record.commands.length,
+    0,
+  );
+  const tagged = views.reduce(
+    (sum, view) =>
+      sum +
+      view.record.commands.filter((command) => command.risk.length).length,
+    0,
+  );
+  return `<div class="section-title">${auditFilter}<span class="count">${total} recorded, ${tagged} tagged</span></div><p class="fine">A tag marks a command to look at, from the command text alone. It is not a finding. ${rows.length < total ? 'The table shows the latest 200 commands and every tagged command. ' : ''}The record shows the command that the agent asked for, not the processes that it started.</p>${tagged ? '' : '<p class="fine tagged-none">No command has a tag.</p>'}<div class="table"><table class="audit"><thead><tr><th scope="col">Time</th>${withAgent ? '<th scope="col">Agent</th>' : ''}<th scope="col">Command</th><th scope="col">Approved by</th><th scope="col">Tags</th><th scope="col">Result</th><th scope="col">Review</th></tr></thead><tbody>${rows
+    .map(({ command, view }) => {
+      const { record } = view;
+      return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td>${e(workerName(record, tasks))}${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(command.tool)}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
+    })
     .join('')}</tbody></table></div>`;
 }
 
@@ -1809,7 +1847,7 @@ function renderRecords(
   const { attempts } = snapshot;
   const logged = workers.filter((worker) => worker.record.commands.length);
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>What the agents ran, and every research attempt</p></div>
-  <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? logged.map((worker) => commandTable(worker, workerName(worker.record, tasks))).join('') : '<p class="empty-note">No commands are recorded yet. Each tool call that a worker reports shows here.</p>'}</section>
+  <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? auditTable(logged, tasks, true) : '<p class="empty-note">No commands are recorded yet. Each tool call that a worker reports shows here.</p>'}</section>
   <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research request shows here with its own identity.</p>'}</section></div>`;
 }
 
@@ -2265,7 +2303,6 @@ function renderRail(
     const { record } = worker;
     listed.add(record.id);
     const requests = record.requests.length;
-    const review = record.commands.filter(needsReview).length;
     const [label] = worker.live
       ? workerStatus(record)
       : [record.status === 'failed' ? 'Stopped with an error' : 'Ended'];
@@ -2283,7 +2320,9 @@ function renderRail(
         record.task ? 'task' : 'session',
         state,
         workerName(record, tasks),
-        `${requests ? `◆ ${requests} ${requests === 1 ? 'request waits' : 'requests wait'} for you` : e(label)}${review ? `<span class="flag">${review} ${review === 1 ? 'command needs' : 'commands need'} review</span>` : ''}`,
+        requests
+          ? `◆ ${requests} ${requests === 1 ? 'request waits' : 'requests wait'} for you`
+          : e(label),
         `data-worker="${e(record.id)}" aria-pressed="${record.id === shown}"`,
       ),
     );

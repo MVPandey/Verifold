@@ -488,10 +488,6 @@ button:disabled {
   font-weight: 500;
   overflow-wrap: anywhere;
 }
-.who .flag {
-  display: block;
-  color: var(--caution);
-}
 .rail-foot {
   margin-top: auto;
   display: flex;
@@ -2231,6 +2227,17 @@ td button {
   padding: 0 8px;
   font-size: 12px;
 }
+/* The audit: Tagged only hides the commands without a tag. */
+body[data-records='tagged'] .audit tbody tr:not(.tagged),
+body:not([data-records='tagged']) .tagged-none {
+  display: none;
+}
+.audit-tool {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
 .risk {
   display: inline-block;
   padding: 0 6px;
@@ -2408,8 +2415,10 @@ body[data-pane='terminal'] .panel:has(.pane-terminal) {
 }
 body[data-pane='details'] .pane-summary,
 body[data-pane='terminal'] .pane-summary,
+body[data-pane='commands'] .pane-summary,
 body:not([data-pane='details']) .pane-details,
-body:not([data-pane='terminal']) .pane-terminal {
+body:not([data-pane='terminal']) .pane-terminal,
+body:not([data-pane='commands']) .pane-commands {
   display: none;
 }
 .terminal-slot {

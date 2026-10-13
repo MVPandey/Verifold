@@ -1271,6 +1271,146 @@ await test('desk shows long text as its lead with Show all, and short text in fu
   assert.doesNotMatch(html, /id="event-20261004T120000000Z-abcdef12-0"/);
 });
 
+await test('Records lists the commands of all agents as an audit, and the rail counts none', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const minute = (offset: number): string =>
+    new Date(Date.UTC(2026, 9, 12, 12, 0) + offset * 60_000).toISOString();
+  const command = (
+    id: string,
+    at: string,
+    action: string,
+    risk: string[] = [],
+    reviewedAt?: string,
+  ) => ({
+    id,
+    at,
+    tool: 'Bash',
+    action,
+    risk,
+    auto: true,
+    outcome: 'ok',
+    ...(reviewedAt ? { reviewedAt } : {}),
+  });
+  const worker = (
+    id: string,
+    host: string,
+    commands: object[],
+    task?: string,
+  ) => ({
+    live: true,
+    saveFailed: false,
+    record: {
+      id,
+      host,
+      ...(task ? { task: { id: task, revision: 1 } } : {}),
+      status: 'idle',
+      mode: 'auto',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: minute(-300),
+      requests: [],
+      commands,
+      events: [],
+    },
+  });
+  // An old tagged command, then 205 newer ones without a tag.
+  const claude = worker('20261012T090000000Z-aaaaaaaa', 'claude', [
+    command('c-old', minute(-240), 'rm -rf build', ['Deletes files']),
+    ...Array.from({ length: 205 }, (_, index) =>
+      command(`c-${index}`, minute(-200 + index), `ls ${index}`),
+    ),
+  ]);
+  const codex = worker(
+    '20261012T090000000Z-bbbbbbbb',
+    'codex',
+    [
+      command(
+        'x-1',
+        minute(10),
+        'curl https://example.com',
+        ['Network'],
+        minute(11),
+      ),
+    ],
+    'task-1',
+  );
+  const desk = (panel: string | null) =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: claude,
+        workers: [claude, codex],
+        controllable: true,
+        tasks: {
+          list: [
+            {
+              id: 'task-1',
+              state: 'running',
+              revision: 1,
+              createdAt: minute(-300),
+              attempts: [],
+              assignment: {
+                by: 'coordinator',
+                reason: 'Part of the plan.',
+                title: 'Fetch the road graphs',
+                objective: 'Fetch.',
+                host: 'codex',
+                dependencies: [],
+              },
+            },
+          ],
+          selected: null,
+          idle: [],
+          messages: [],
+        },
+      } as never,
+      { view: 'records', panel } as never,
+    ).html;
+  const html = desk(null);
+  // The rail shows no command counts. Amber stays for Needs you.
+  assert.doesNotMatch(html, /need review|needs review/);
+  // One table for all agents, newest first, with the agent and its harness.
+  assert.equal(html.match(/<table class="audit">/g)?.length, 1);
+  assert.match(
+    html,
+    /<div class="seg" role="group" aria-label="Commands to show"><button type="button" data-records="all">All commands<\/button><button type="button" data-records="tagged">Tagged only<\/button><\/div><span class="count">207 recorded, 2 tagged<\/span>/,
+  );
+  assert.match(
+    html,
+    /The table shows the latest 200 commands and every tagged command\./,
+  );
+  const rows = /<tbody>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? '';
+  assert.equal(rows.match(/<tr/g)?.length, 201);
+  assert.match(
+    rows,
+    /^<tr class="tagged"><td>[^<]*<\/td><td>Fetch the road graphs<span class="fine">Codex<\/span><\/td><td><span class="audit-tool">Bash<\/span><code>curl https:\/\/example\.com<\/code><\/td>[\s\S]*?<span class="risk">Network<\/span>[\s\S]*?<td>Reviewed<\/td><\/tr>/,
+  );
+  // A plain session already names its harness.
+  assert.match(rows, /<td>Claude Code session<\/td>/);
+  // The old tagged command stays in the audit, last, with Mark reviewed.
+  assert.match(
+    rows,
+    /<tr class="tagged">(?:(?!<tr)[\s\S])*rm -rf build(?:(?!<tr)[\s\S])*data-action="review" data-command="c-old">Mark reviewed<\/button><\/td><\/tr>$/,
+  );
+  assert.doesNotMatch(rows, /ls 0</);
+  // The panel of an agent shows its own commands in a Commands tab, without the agent column.
+  const panel = desk('worker');
+  assert.match(
+    panel,
+    /<button type="button" data-pane="commands">Commands<\/button>/,
+  );
+  const pane =
+    /<div class="pane-commands">([\s\S]*?)<\/table>/.exec(panel)?.[1] ?? '';
+  assert.match(pane, /206 recorded, 1 tagged/);
+  assert.doesNotMatch(pane, /<th scope="col">Agent/);
+});
+
 await test('desk maps the tasks with what each agent does now and why', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
