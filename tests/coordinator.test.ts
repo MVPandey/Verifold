@@ -888,9 +888,9 @@ await test('a task whose start failed runs on the other harness of the team', as
   });
   const url = new URL(desk.url);
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
-  // The task panel offers the other harness of the team.
+  // The task page offers the other harness of the team.
   const panel = (await (
-    await fetch(`${url.origin}/api/view?view=tasks&panel=task&task=${id}`, {
+    await fetch(`${url.origin}/api/view?view=task&task=${id}`, {
       headers,
     })
   ).json()) as { html: string };

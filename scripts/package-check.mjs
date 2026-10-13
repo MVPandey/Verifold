@@ -567,7 +567,7 @@ onLine((line) => {
     let html = '';
     for (let tries = 0; tries < 100 && !html.includes('Version 1'); tries++) {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      html = await view('?view=tasks&panel=task');
+      html = await view('?view=task');
     }
     assert.match(html, /Version 1/);
     await action({

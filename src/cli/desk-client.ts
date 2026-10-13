@@ -133,13 +133,18 @@ function showFailure(): void {
   (control.closest('.actions') ?? control).after(note);
 }
 
-/** The query of /api/view. Only the open panel sends its item. */
+/** The open view, with its task when it is a task page. A new one starts at its top. */
+function viewKey(): string {
+  return view === 'task' ? `task:${selectedTask ?? ''}` : view;
+}
+
+/** The query of /api/view. Only the open panel or task page sends its item. */
 function viewQuery(): string {
   const query = new URLSearchParams();
   if (view !== 'home') query.set('view', view);
   if (panel) query.set('panel', panel);
   if (panel === 'attempt' && selected) query.set('attempt', selected);
-  if (panel === 'task' && selectedTask) query.set('task', selectedTask);
+  if (view === 'task' && selectedTask) query.set('task', selectedTask);
   // A worker that left its slot is not an error. The server shows another one.
   if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
   if (panel === 'direction' && selectedDirection)
@@ -151,15 +156,13 @@ function viewQuery(): string {
 /** The item in the open panel. A change of item starts the panel at its top. */
 function panelKey(): string {
   const item =
-    panel === 'task'
-      ? selectedTask
-      : panel === 'worker'
-        ? selectedWorker
-        : panel === 'attempt'
-          ? selected
-          : panel === 'direction'
-            ? selectedDirection
-            : '';
+    panel === 'worker'
+      ? selectedWorker
+      : panel === 'attempt'
+        ? selected
+        : panel === 'direction'
+          ? selectedDirection
+          : '';
   return `${panel}:${item ?? ''}`;
 }
 
@@ -264,7 +267,7 @@ async function render(html: string): Promise<void> {
     (element) => [element, element.scrollTop] as const,
   );
   const places = cardPlaces(content);
-  const opened = view !== rendered.view;
+  const opened = viewKey() !== rendered.view;
   const same = !opened && panelKey() === rendered.panel;
   // The local renderer escapes research text. Harness Markdown is sanitized
   // again in an inert template, before it reaches the live page.
@@ -275,11 +278,14 @@ async function render(html: string): Promise<void> {
       ADD_ATTR: ['target'],
     });
   const apply = (): void => {
+    // A new view replaces the page: nothing on it carries over, and a morph can move a kept heading into it.
     // The morph returns a promise only when it waits for a new head. A morph of #content does not.
-    void Idiomorph.morph(content, template.content, morphing);
+    if (opened) content.replaceChildren(template.content);
+    else void Idiomorph.morph(content, template.content, morphing);
     showFailure();
     showDetail();
     for (const [id, value] of typed) {
+      if (opened && id === 'message-to') continue;
       const field = document.getElementById(id);
       // A choice that left the list, such as an agent that ended, falls back to the server's choice.
       if (
@@ -315,7 +321,7 @@ async function render(html: string): Promise<void> {
         element.scrollTop = 0;
       else if (element !== before) element.scrollTop = top;
     }
-    rendered = { view, panel: panelKey() };
+    rendered = { view: viewKey(), panel: panelKey() };
     showReview();
     drawMaps();
     mountTranscripts(content, () => token);
@@ -550,14 +556,19 @@ function navigate(
   void refresh();
 }
 
-/** Open one item in the panel. Closing the panel returns focus to the control that opened it. */
+/** Open one item: a task as its page, the others in the panel. Closing the panel returns focus to the control that opened it. */
 function openItem(
   kind: 'task' | 'worker' | 'attempt' | 'direction',
   id: string,
   from: HTMLElement,
 ): void {
-  if (kind === 'task') selectedTask = id;
-  else if (kind === 'worker') selectedWorker = id;
+  if (kind === 'task') {
+    selectedTask = id;
+    remember('task', id);
+    navigate({ view: 'task', panel: '' }, '#view-title', 'start');
+    return;
+  }
+  if (kind === 'worker') selectedWorker = id;
   else if (kind === 'direction') selectedDirection = id;
   else selected = id;
   remember(kind, id);
@@ -741,8 +752,6 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         reason: field('task-edit-reason'),
         ...taskBody('task-edit'),
       };
-    case 'task-changes':
-      return { action, task, note: field('task-note') };
     case 'task-accept':
       return {
         action,
@@ -980,7 +989,7 @@ async function act(button: HTMLElement): Promise<void> {
       selectedTask = undefined;
       remember('task', undefined);
       opener = undefined;
-      navigate({ view: 'tasks', panel: 'task' }, '#panel-title');
+      navigate({ view: 'task', panel: '' }, '#view-title', 'start');
     }
     for (const id of [
       'session-prompt',
@@ -988,7 +997,6 @@ async function act(button: HTMLElement): Promise<void> {
       'message-text',
       'setup-answer',
       'setup-feedback',
-      'task-note',
       'task-edit-reason',
       'answer-note',
       ...(body.action === 'coordinator-rule'

@@ -492,15 +492,17 @@ await test('an accepted version reaches the tasks that wait for it, and a replac
           idle: [],
         },
       },
-      { view: 'tasks', panel: 'task' },
+      { view: 'task', panel: null },
     ).html;
   const stale = await desk(review);
+  // The page names tasks by title.
   assert.match(
     stale,
-    /This version used task-1 version 1, but task-1 now has version 2\. It cannot be accepted/,
+    /This version used Prior art version 1, but Prior art now has version 2\. It cannot be accepted/,
   );
   assert.match(stale, /data-action="task-accept"[^>]*disabled>Accept 0 files/);
-  assert.match(stale, /<dt>Received<\/dt><dd>task-1 version 1<\/dd>/);
+  assert.match(stale, /<dt>Received<\/dt><dd>Prior art version 1<\/dd>/);
+  assert.doesNotMatch(stale, /task-1 version/);
   assert.match(
     await desk(prior),
     /Version 2 was accepted: results\/prior\/notes\.md[\s\S]*Revise the task/,
@@ -656,35 +658,42 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   assert.equal(messages[1]?.sender?.claim, claim);
   assert.equal(messages[0]?.revision, 1);
 
-  // Home holds the open objections. The task panel holds the task's messages.
-  const html = renderDesk(
-    await readDeskSnapshot(root),
-    undefined,
-    null,
-    {
-      session: null,
-      controllable: true,
-      tasks: {
-        list: await tasks.list(),
-        selected: await tasks.get(review),
-        idle: [],
-        messages,
+  // Home holds the open objections. The task page holds the task's messages.
+  const view = async (shown: 'home' | 'task'): Promise<string> =>
+    renderDesk(
+      await readDeskSnapshot(root),
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: {
+          list: await tasks.list(),
+          selected: await tasks.get(review),
+          idle: [],
+          messages,
+        },
       },
-    },
-    { view: 'home', panel: 'task' },
-  ).html;
+      { view: shown, panel: null },
+    ).html;
   assert.match(
-    html,
+    await view('home'),
     /Needs you[\s\S]*m-2[\s\S]*data-message="m-2" data-decision="upheld">Uphold[\s\S]*data-message="m-2" data-decision="overruled">Overrule[\s\S]*data-message="m-3" data-decision="resolved">Resolve/,
   );
-  assert.match(html, /<li>https:\/\/example\.org\/benchmark<\/li>/);
-  assert.match(html, /Messages \(3\)/);
+  assert.match(
+    await view('home'),
+    /<li>https:\/\/example\.org\/benchmark<\/li>/,
+  );
+  const html = await view('task');
+  assert.match(html, /<h2>Messages<\/h2><span>3<\/span>/);
   assert.match(html, /Waits for the coordinator/);
-  // The message box writes to a running task's agent.
-  assert.match(html, /data-message-to="task-2">Write to its agent/);
+  // Messages name their tasks by title.
+  assert.match(html, /Method review to Prior art/);
+  // The page of a running task offers Message, and the box writes to its agent by default.
+  assert.match(html, /class="primary" data-message-to="task-2">Message/);
   assert.match(
     html,
-    /<option value="task-2" data-hint="Write to Method review">/,
+    /<option value="task-2" data-hint="Write to Method review" selected>/,
   );
 
   // The person decides the objection. The decision goes to the objector with its next turn.
@@ -1206,17 +1215,14 @@ await test('the desk creates, reviews, and accepts a task through the same opera
   assert.equal(badStatus, 409);
   assert.match(String(bad.error), /inside the project/);
   assert.equal((await post({ action: 'task-create', ...fields }))[0], 200);
-  // Without a task ID, the panel opens the newest task: the one just created.
-  let html = await view('?view=tasks&panel=task');
+  // Without a task ID, the task page opens the newest task: the one just created.
+  let html = await view('?view=task');
   assert.match(html, /data-task-select="task-1" aria-pressed="true"/);
   assert.match(html, /data-action="task-start" data-task="task-1"/);
   assert.equal((await post({ action: 'task-start', task: 'task-1' }))[0], 200);
-  assert.match(
-    await view('?view=tasks&panel=task'),
-    /The harness works in the task folder/,
-  );
+  assert.match(await view('?view=task'), /<h2>The agent works<\/h2>/);
   await turn(tasks, fake, { 'results/baseline.md': '# Baseline\n\n1.82 ms\n' });
-  html = await view('?view=tasks&panel=task&task=task-1');
+  html = await view('?view=task&task=task-1');
   assert.match(html, /Version 1: the turn ended/);
   assert.match(
     html,
@@ -1276,7 +1282,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     200,
   );
   assert.match(
-    await view('?view=tasks&panel=task&task=task-1'),
-    /Done\. Version 1 was accepted: results\/baseline\.md/,
+    await view('?view=task&task=task-1'),
+    /<h2>Done<\/h2><p>Version 1 was accepted: results\/baseline\.md/,
   );
 });
