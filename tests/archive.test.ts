@@ -103,6 +103,7 @@ await test('Start over archives the run, keeps the question and the brief, and R
   const [listed] = await listArchives(root);
   assert.equal(listed?.id, id);
   assert.equal(listed?.tasks, 2);
+  assert.equal(listed?.direction, 'Heap');
   assert.ok((listed?.bytes ?? 0) > 0);
   // Restore moves the current run to the archive first, then brings the old run back where it was.
   await write(root, '.verifold/tasks/task-1/task.json', '{"next": true}');

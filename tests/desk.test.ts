@@ -2487,8 +2487,13 @@ await test('a draft task waits for the person in the message box, on the map, in
     needs,
     /Draft task[\s\S]*Time the scan on 3 more graphs[\s\S]*You asked the coordinator for new work/,
   );
-  // The Needs view has the message box, so Change it works there.
+  // The Needs view has the message box, so Change it works there. The draft shows once: Needs you lists it.
   assert.match(needs, /id="message-text"/);
+  assert.equal(needs.split('The coordinator drafted').length, 1);
+  assert.equal(
+    needs.split('data-action="task-start" data-task="task-4"').length,
+    2,
+  );
   // Without a running coordinator, the box offers a new one.
   for (const lead of [null, coordinator(at)])
     assert.match(
@@ -2728,6 +2733,7 @@ await test('a task opens as its own page: the decision first, the rest folded, a
     /Claude Code made version 1 at [^.]+\. It received files from Implement the heap version\.[\s\S]*Version 1: the turn ended[\s\S]*The agent says[\s\S]*<p class="pre">The heap version is faster on every graph above 100,000 nodes\.<\/p>[\s\S]*data-action="task-accept" data-task="task-2" data-version="1">Accept 1 file[\s\S]*data-message-to="task-2">Ask for changes[\s\S]*data-action="task-reject"[\s\S]*<details id="task-files"><summary><h2>1 file changed<\/h2>[\s\S]*<details id="task-details">[\s\S]*<dt>Received<\/dt><dd>Implement the heap version version 1<\/dd>[\s\S]*<details id="task-activity">[\s\S]*data-source="session:S2"/,
   );
   assert.doesNotMatch(text(review), /task-\d/);
+  assert.doesNotMatch(review, /The coordinator reviews this version/);
   // The box writes to the agent of the page.
   assert.match(
     review,
@@ -2898,4 +2904,162 @@ await test('Clear finished takes done and cancelled tasks off the map and the ra
     /<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-1/,
   );
   assert.equal(parseFrame('tasks', null, null, null, 'all'), null);
+});
+
+await test('the review pass: the page says who reviews, the Plan says the direction is chosen, and a step names its script', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'heap',
+        title: 'Heap',
+        recommendation: 'Compare.',
+        gates: ['Same paths.'],
+        kind: 'main',
+      },
+    ],
+    selectedId: 'heap',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:00:00.000Z';
+  const task = {
+    id: 'task-1',
+    state: 'review',
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    claim: null,
+    artifacts: [],
+    attempts: [
+      {
+        number: 1,
+        revision: 1,
+        startedAt: at,
+        session: 'S1',
+        restrictions: [],
+        consumed: [],
+        versions: [
+          {
+            number: 1,
+            commit: 'c',
+            at,
+            turn: 'completed',
+            decision: null,
+            skipped: [],
+            files: [],
+          },
+        ],
+      },
+    ],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Plan.',
+      title: 'Benchmark',
+      objective: 'Run.',
+      host: 'claude',
+      model: null,
+      dependencies: [],
+      inputs: [],
+      writable: ['results'],
+      output: 'x',
+      minutes: 20,
+    },
+  };
+  const coordinator = {
+    state: {
+      objective: 'Heap',
+      host: 'claude',
+      stoppedAt: null,
+      planApproved: true,
+      wakeups: [],
+      events: [],
+      actions: [],
+    },
+    session: null,
+    waiting: 0,
+    limitedUntil: null,
+  };
+  const render = (view: DeskView, extra: object = {}): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        coordinator,
+        tasks: { list: [task], selected: task, idle: ['S1'], messages: [] },
+        ...extra,
+      } as never,
+      { view, panel: null },
+    ).html;
+  assert.match(
+    render('task'),
+    /The coordinator reviews this version\. You can decide first\./,
+  );
+  assert.match(
+    render('research'),
+    /<h1 id="view-title" tabindex="-1">Plan<\/h1><p>Direction chosen<\/p>/,
+  );
+  // A running agent's step names the script, also after options.
+  const running = {
+    ...task,
+    state: 'running',
+    attempts: [{ ...task.attempts[0], versions: [] }],
+  };
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: 'S1',
+      host: 'claude',
+      status: 'running',
+      mode: 'strict',
+      task: { id: 'task-1', claim: 'c' },
+      requests: [],
+      commands: [],
+      startedAt: at,
+      events: [
+        {
+          at: new Date().toISOString(),
+          kind: 'tool',
+          text: 'Bash: python -m cProfile -o out.prof bench.py --graph california',
+        },
+      ],
+    },
+  };
+  assert.match(
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: worker,
+        workers: [worker],
+        controllable: true,
+        coordinator,
+        tasks: { list: [running], selected: null, idle: [], messages: [] },
+      } as never,
+      { view: 'tasks', panel: null },
+    ).html,
+    /now-step">Running python bench\.py</,
+  );
+  // Records leads with what ran. Its runs come last, with what moves and stays folded.
+  const records = render('records', {
+    archives: [
+      {
+        id: '20261012T101500000Z-a1b2c3',
+        at,
+        bytes: 2048,
+        tasks: 3,
+        direction: 'Heap against a scan',
+      },
+    ],
+  });
+  assert.match(
+    records,
+    /<h2 id="commands-title">Commands[\s\S]*Research attempts[\s\S]*<h2 id="runs-title">Runs<\/h2>[\s\S]*<details id="run-parts"><summary>What moves and what stays<\/summary>[\s\S]*Heap against a scan <span class="fine">3 tasks, 2 KB<\/span>[\s\S]*<h2 id="memory-title">Project memory<\/h2>/,
+  );
 });
