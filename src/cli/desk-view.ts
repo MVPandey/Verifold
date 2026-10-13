@@ -235,6 +235,17 @@ function elapsed(since: string): string {
   return minutes ? `${minutes} min ${seconds % 60} s` : `${seconds} s`;
 }
 
+/** The time since a moment, in whole minutes or hours and minutes. */
+function duration(since: string): string {
+  const minutes = Math.max(
+    0,
+    Math.floor((Date.now() - Date.parse(since)) / 60_000),
+  );
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+}
+
 /** The first sentence of a text, or its start, as a lead of at most `max` characters. */
 function lead(text: string, max = 160): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -1517,18 +1528,6 @@ function handoffWords(task: TaskRecord): string {
   return files.length ? 'files' : '';
 }
 
-/** Why a task exists: the coordinator's reason when it created the task, or the start of its objective. */
-function taskWhy(task: TaskRecord): string {
-  const reason = task.assignment.reason.replace(
-    /^Created by the coordinator:\s*/,
-    '',
-  );
-  return lead(
-    reason && reason !== 'Created' ? reason : task.assignment.objective,
-    140,
-  );
-}
-
 /** A shell command in plain words: the program that it runs, and the file that the program gets. */
 function commandStep(command: string): string {
   const step = command
@@ -1620,19 +1619,21 @@ function nowText(event: {
     : toolStep(event.text.slice(0, split), event.text.slice(split + 2));
 }
 
-/** What a task's agent does now: its latest step, or how long it has been quiet. */
-function taskNow(
+/** A task agent's latest step and when it came, or null before its first step. */
+function lastStep(
   task: TaskRecord,
   workers: readonly SessionView[],
-): string | null {
+): { readonly text: string; readonly at: string } | null {
   if (task.state !== 'running' && task.state !== 'claimed') return null;
-  const session = task.attempts.at(-1)?.session;
-  const record = workers.find((worker) => worker.record.id === session)?.record;
+  const attempt = task.attempts.at(-1);
+  const record = workers.find(
+    (worker) => worker.record.id === attempt?.session,
+  )?.record;
   const last = record?.events.filter((event) => event.kind !== 'status').at(-1);
-  if (!last)
-    return task.state === 'claimed' ? 'Preparing the task folder' : null;
-  const quiet = Math.floor((Date.now() - Date.parse(last.at)) / 60_000);
-  return quiet >= 5 ? `No update in ${quiet} min` : lead(nowText(last), 110);
+  if (last) return { text: lead(nowText(last), 110), at: last.at };
+  return task.state === 'claimed' && attempt
+    ? { text: 'Preparing the task folder', at: attempt.startedAt }
+    : null;
 }
 
 /** Whose turn it is in a task, and whether the turn is the person's. */
@@ -1646,7 +1647,7 @@ function taskTurn(
   );
   switch (task.state) {
     case 'open':
-      if (isDraft(task)) return ['Draft, waits for you to start it', true];
+      if (isDraft(task)) return ['Draft, waits for you', true];
       return waiting.length
         ? [
             `Waits for ${waiting.map((id) => all.find((entry) => entry.id === id)?.assignment.title ?? id).join(', ')}`,
@@ -1684,7 +1685,6 @@ function renderMap(
   needs: readonly Need[],
 ): string {
   const tasks = view.list;
-  const workers = live.workers ?? (live.session ? [live.session] : []);
   const state = live.coordinator?.state;
   const coordinated = !!state && !state.stoppedAt;
   const depth = new Map<string, number>();
@@ -1709,15 +1709,21 @@ function renderMap(
   const columns = Math.max(1, ...depth.values());
   const box = (task: TaskRecord): string => {
     const [turn, yours] = taskTurn(task, tasks, coordinated);
-    const now = taskNow(task, workers);
-    const version = task.attempts.at(-1)?.versions.at(-1);
+    const attempt = task.attempts.at(-1);
+    const version = attempt?.versions.at(-1);
+    const time =
+      task.state === 'running' && attempt
+        ? `For ${duration(attempt.startedAt)}`
+        : version
+          ? `Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}`
+          : '';
     const raised = needs.filter((item) => item.task === task.id).length;
     const from = task.assignment.dependencies.length
       ? task.assignment.dependencies.join(' ')
       : 'objective';
     // The page moves a dot with these words along the arrows of a task that just ended.
     const gives = task.state === 'done' ? handoffWords(task) : '';
-    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}"${isDraft(task) ? ' data-draft' : ''} data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta">${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}"${isDraft(task) ? ' data-draft' : ''} data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${time ? `<span class="map-meta">${e(time)}</span>` : ''}</button>`;
   };
   // A running box pulses in the color of its harness. The legend names the colors when the team mixes harnesses.
   const hosts = [...new Set(tasks.map((task) => task.assignment.host))].sort(
@@ -1739,7 +1745,83 @@ function renderMap(
   )}<svg class="map-links" aria-hidden="true"><defs><marker id="map-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L8 4L0 8z"/></marker></defs><g></g></svg></div>`;
 }
 
-/** The tasks of this project as a live map. The panel shows one task in full. */
+/**
+ * Who works now: each task agent that runs or waits for review, with its
+ * harness, its time, its latest step, and one action. At most four rows show;
+ * the rest fold.
+ */
+function renderNowStrip(view: TaskView, live: DeskSession): string {
+  const workers = live.workers ?? (live.session ? [live.session] : []);
+  const state = live.coordinator?.state;
+  const coordinated = !!state && !state.stoppedAt;
+  const order = { running: 0, claimed: 0, review: 1 } as const;
+  const rows = view.list
+    .filter(
+      (task): task is TaskRecord & { state: keyof typeof order } =>
+        task.state in order,
+    )
+    .sort((a, b) => order[a.state] - order[b.state]);
+  const working = rows.filter((task) => task.state !== 'review').length;
+  const reviewing = rows.length - working;
+  const row = (task: TaskRecord): string => {
+    const attempt = task.attempts.at(-1);
+    const version = attempt?.versions.at(-1);
+    const step = lastStep(task, workers);
+    const [turn, yours] = taskTurn(task, view.list, coordinated);
+    const busy = task.state !== 'review';
+    // A quiet agent keeps its latest step, with the time since it.
+    const quiet =
+      step && Date.now() - Date.parse(step.at) >= 5 * 60_000
+        ? `Last update ${duration(step.at)} ago`
+        : '';
+    const line = busy
+      ? (step?.text ?? 'Working')
+      : version && !version.decision
+        ? yours
+          ? `Version ${version.number} waits for your review`
+          : `The coordinator reviews version ${version.number}`
+        : turn;
+    const action = busy
+      ? attempt?.session
+        ? `<button type="button" data-message-to="${e(task.id)}">Message</button>`
+        : ''
+      : `<button type="button"${yours ? ' class="primary"' : ''} data-task-select="${e(task.id)}">Review</button>`;
+    return `<li class="now-row" data-state="${task.state}" data-host="${e(task.assignment.host)}"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span><div class="now-main"><p class="now-head"><button type="button" class="row-button" data-task-select="${e(task.id)}">${e(task.assignment.title)}</button><span class="now-meta">${e(hostName(task.assignment.host))}${busy && attempt ? `, ${e(duration(attempt.startedAt))}` : ''}</span></p><p class="now-step${!busy && yours ? ' yours' : ''}">${e(line)}${quiet ? ` <span class="now-quiet">${e(quiet)}</span>` : ''}</p></div>${action}</li>`;
+  };
+  const count = [
+    working
+      ? `${working} ${working === 1 ? 'agent works' : 'agents work'}`
+      : '',
+    reviewing
+      ? `${reviewing} ${reviewing === 1 ? 'version waits' : 'versions wait'} for review`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+  return `<section class="card now-strip" aria-labelledby="now-title"><div class="section-title"><h2 id="now-title">Now</h2>${count ? `<span class="count">${e(count)}</span>` : ''}</div>${
+    rows.length
+      ? `<ul class="now-list">${rows.slice(0, 4).map(row).join('')}</ul>${rows.length > 4 ? `<details id="now-more"><summary>${rows.length - 4} more</summary><ul class="now-list">${rows.slice(4).map(row).join('')}</ul></details>` : ''}`
+      : '<p class="empty-note">No agent works now.</p>'
+  }</section>`;
+}
+
+/** The done tasks, newest first, with the version and the files that the project got. */
+function renderFinished(tasks: readonly TaskRecord[]): string {
+  const done = tasks
+    .filter((task) => task.state === 'done')
+    .map((task) => ({ task, artifact: task.artifacts?.at(-1) }))
+    .sort((a, b) =>
+      (b.artifact?.at ?? b.task.updatedAt).localeCompare(
+        a.artifact?.at ?? a.task.updatedAt,
+      ),
+    );
+  if (!done.length) return '';
+  const row = ({ task, artifact }: (typeof done)[number]): string =>
+    `<li><span class="mark done" aria-hidden="true"></span><div><button type="button" class="row-button" data-task-select="${e(task.id)}">${e(task.assignment.title)}</button><p class="fine">${artifact ? `Version ${artifact.version} accepted at ${e(clock(artifact.at))}: ${e(lead(artifact.files.map((file) => file.path).join(', ') || 'no files', 160))}` : 'Done'}</p></div></li>`;
+  return `<section class="card" aria-labelledby="finished-title"><div class="section-title"><h2 id="finished-title">Finished</h2><span class="count">${done.length} ${done.length === 1 ? 'task' : 'tasks'}</span></div><ul class="finished">${done.slice(0, 6).map(row).join('')}</ul>${done.length > 6 ? `<details id="finished-more"><summary>${done.length - 6} more</summary><ul class="finished">${done.slice(6).map(row).join('')}</ul></details>` : ''}</section>`;
+}
+
+/** Work: who works now, the map of the tasks, and the finished work. A box opens the task. */
 function renderTasksView(
   view: TaskView,
   live: DeskSession,
@@ -1748,16 +1830,13 @@ function renderTasksView(
   offerCoordinator: boolean,
   needs: readonly Need[],
 ): string {
-  const running = view.list.filter(
-    (task) => task.state === 'running' || task.state === 'claimed',
-  ).length;
+  const done = view.list.filter((task) => task.state === 'done').length;
   return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Work</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   ${
     view.list.length
-      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The tasks</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${running} running</span></div>${renderMap(view, live, objective, shown, needs)}<p class="fine">Each box is a task. An arrow comes from what it waits for, and a task waits for every task that leads to it. A box opens the task.</p></section>`
-      : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write a task yourself with New task.</p></section>'
+      ? `${renderNowStrip(view, live)}<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span></div>${renderMap(view, live, objective, shown, needs)}</section>${renderFinished(view.list)}`
+      : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write to the coordinator in the message box.</p></section>'
   }
-  <p class="fine">A task runs your harness in its own copy of the project. The harness can write only to the paths that you allow. You review each version before any file reaches your project. Up to ${workerLimit} tasks and sessions run at the same time.</p>
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
 }
 
