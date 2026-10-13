@@ -268,6 +268,25 @@ async function redraft(
   await research.select(idea, true);
 }
 
+/** Start a coordinator with an objective, on the project's harness unless the person chose one. Its first plan waits for the person. */
+async function startCoordinator(
+  root: string,
+  coordinator: Coordinator,
+  objective: unknown,
+  host?: unknown,
+  model?: unknown,
+): Promise<void> {
+  const workspace = await loadWorkspace(root);
+  await coordinator.start({
+    objective,
+    host: host ?? workspace.host,
+    model: model ?? workspace.model,
+    ...(workspace.helper ? { helper: workspace.helper } : {}),
+    context: coordinatorContext(workspace),
+    guided: true,
+  });
+}
+
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
 async function act(
   sessions: SessionPool | undefined,
@@ -320,9 +339,13 @@ async function act(
       });
     return 200;
   }
-  // The message box: to research, the coordinator, or a task agent.
+  // The message box: to research, the coordinator, or a task agent. Without a coordinator, the words start one.
   if (body.action === 'message') {
-    if (body.to === 'research') {
+    if (body.to === 'new-coordinator') {
+      if (!coordinator)
+        throw new SessionActionError('This desk runs no coordinator.');
+      await startCoordinator(root, coordinator, body.text);
+    } else if (body.to === 'research') {
       if (!research)
         throw new SessionActionError('Research takes no messages here.');
       await research.message(body.text);
@@ -351,18 +374,15 @@ async function act(
     body.action.startsWith('coordinator-')
   ) {
     switch (body.action) {
-      case 'coordinator-start': {
-        const workspace = await loadWorkspace(root);
-        await coordinator.start({
-          objective: body.objective,
-          host: body.host,
-          model: body.model,
-          ...(workspace.helper ? { helper: workspace.helper } : {}),
-          context: coordinatorContext(workspace),
-          guided: true,
-        });
+      case 'coordinator-start':
+        await startCoordinator(
+          root,
+          coordinator,
+          body.objective,
+          body.host,
+          body.model,
+        );
         return 200;
-      }
       case 'coordinator-approve':
         await coordinator.approvePlan(
           Array.isArray(body.extras) ? body.extras : [],

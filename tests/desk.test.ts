@@ -2385,3 +2385,95 @@ await test('the message box writes to the agent that leads, or to a task agent, 
   // Without an agent to write to, there is no box.
   assert.doesNotMatch(render('home', {}, []), /id="message-text"/);
 });
+
+await test('a draft task waits for the person in the message box, on the map, in the rail, and in Needs you', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:25:00.000Z';
+  const draft = {
+    id: 'task-4',
+    state: 'open',
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    claim: null,
+    artifacts: [],
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      draft: true,
+      reason: 'Created by the coordinator: the person asked for it.',
+      title: 'Time the scan on 3 more graphs',
+      objective: 'Time the scan on Colorado, Florida, and the Northwest.',
+      host: 'codex',
+      hostReason: 'The scan came from Codex',
+      dependencies: [],
+      inputs: [],
+      writable: ['results/scan-extra.csv'],
+      output: 'results/scan-extra.csv',
+      minutes: 20,
+    },
+  };
+  const coordinator = (stoppedAt: string | null) => ({
+    state: {
+      objective: 'Heap',
+      host: 'claude',
+      stoppedAt,
+      planApproved: true,
+      wakeups: [],
+      events: [],
+      actions: [],
+    },
+    session: {
+      live: true,
+      saveFailed: false,
+      record: { id: 'C1', status: 'idle', host: 'claude', events: [] },
+    },
+    waiting: 0,
+    limitedUntil: null,
+  });
+  const render = (
+    view: DeskView,
+    lead: unknown,
+    panel: DeskPanel | null = null,
+  ): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [draft], selected: draft, idle: [], messages: [] },
+        coordinator: lead,
+      } as never,
+      { view, panel },
+    ).html;
+  const work = render('tasks', coordinator(null), 'task');
+  const dock = /<section class="dock"[\s\S]*<\/section>/.exec(work)?.[0] ?? '';
+  assert.match(
+    dock,
+    /data-thread="coordinator">[\s\S]*The coordinator drafted a task[\s\S]*Time the scan on 3 more graphs[\s\S]*Codex: The scan came from Codex\. Writes results\/scan-extra\.csv\. Up to 20 min for each turn\.[\s\S]*data-action="task-start" data-task="task-4">Start it[\s\S]*data-message-to="coordinator" data-about="Time the scan on 3 more graphs">Change it[\s\S]*data-task-select="task-4">Write the task yourself/,
+  );
+  assert.match(
+    work,
+    /class="map-box"[^>]*data-state="open" data-draft[\s\S]*?Draft, waits for you to start it/,
+  );
+  assert.match(work, /◆ Draft, waits for you/);
+  // Write the task yourself opens the task with its form.
+  assert.match(work, /<details id="task-edit" open>/);
+  const needs = render('needs', coordinator(null));
+  assert.match(
+    needs,
+    /Draft task[\s\S]*Time the scan on 3 more graphs[\s\S]*You asked the coordinator for new work/,
+  );
+  // The Needs view has the message box, so Change it works there.
+  assert.match(needs, /id="message-text"/);
+  // Without a running coordinator, the box offers a new one.
+  for (const lead of [null, coordinator(at)])
+    assert.match(
+      render('home', lead),
+      /<option value="new-coordinator" data-hint="Write the objective for a new coordinator">A new coordinator, leads now<\/option>/,
+    );
+});

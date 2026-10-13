@@ -8,6 +8,7 @@ import { object } from './research-contracts.ts';
 import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import {
   forPerson,
+  isDraft,
   replaced,
   type TaskRecord,
   type TaskVersion,
@@ -699,17 +700,23 @@ interface Recipient {
 /**
  * The agents that take messages: the one that leads now, then each task agent
  * that runs or waits for review. The coordinator leads while it runs. Before
- * a direction is chosen, research leads.
+ * a direction is chosen, research leads. After that, without a coordinator,
+ * the person can start one.
  */
 function recipients(workspace: Workspace, live: DeskSession): Recipient[] {
   const state = live.coordinator?.state;
   const coordinator = !!state && !state.stoppedAt;
+  const research = !!live.research && !workspace.selectedId;
   return [
     ...(coordinator
       ? [{ to: 'coordinator', name: 'Coordinator', lead: true }]
       : []),
-    ...(live.research && !workspace.selectedId
+    ...(research
       ? [{ to: 'research', name: 'Research', lead: !coordinator }]
+      : []),
+    // Without a coordinator, the person's words can start one, as its objective.
+    ...(!coordinator && !research && live.coordinator !== undefined
+      ? [{ to: 'new-coordinator', name: 'A new coordinator', lead: true }]
       : []),
     ...(live.tasks?.list ?? [])
       .filter(
@@ -770,6 +777,11 @@ function thread(
   live: DeskSession,
   shown: boolean,
 ): string {
+  // The coordinator's drafts wait for the person under its thread.
+  const drafts =
+    recipient.to === 'coordinator'
+      ? (live.tasks?.list ?? []).filter(isDraft)
+      : [];
   const asked = messages.filter(
     (message) => message.from === 'person' && message.to === recipient.to,
   );
@@ -800,7 +812,16 @@ function thread(
         : '';
     return `<li class="dock-msg"><p class="msg-meta"><strong>You</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="state ${tone}">${e(state)}</span></p>${said(`dock-${message.id}`, message.text)}${answer}</li>`;
   };
-  return `<ol class="dock-thread" data-thread="${e(recipient.to)}"${shown ? '' : ' hidden'}>${items.map(row).join('')}</ol>`;
+  const card = drafts.length
+    ? `<li class="dock-drafts"><p class="msg-meta"><strong>The coordinator drafted ${drafts.length === 1 ? 'a task' : `${drafts.length} tasks`}</strong><span class="state waiting">Waits for you</span></p><ul class="drafts">${drafts.map(draftCard).join('')}</ul></li>`
+    : '';
+  return `<ol class="dock-thread" data-thread="${e(recipient.to)}"${shown ? '' : ' hidden'}>${items.map(row).join('')}${card}</ol>`;
+}
+
+/** What a draft task does, where it works, and the person's three choices. */
+function draftCard(task: TaskRecord): string {
+  const { assignment } = task;
+  return `<li class="draft"><p><strong>${e(assignment.title)}</strong></p><p class="fine">${e(lead(assignment.objective, 220))}</p><p class="fine">${e(hostName(assignment.host))}${assignment.hostReason ? `: ${e(assignment.hostReason)}` : ''}. Writes ${e(assignment.writable.join(', '))}. Up to ${assignment.minutes} min for each turn.</p><div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}">Start it</button><button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button><button type="button" class="quiet" data-task-select="${e(task.id)}">Write the task yourself</button></div></li>`;
 }
 
 /**
@@ -816,7 +837,9 @@ function renderDock(workspace: Workspace, live: DeskSession): string {
   const hint = (recipient: Recipient): string =>
     recipient.to === 'coordinator'
       ? 'Write to the coordinator'
-      : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
+      : recipient.to === 'new-coordinator'
+        ? 'Write the objective for a new coordinator'
+        : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
   return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}">${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div></section>`;
 }
 
@@ -950,6 +973,17 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       body: workspace.selectedId
         ? '<div class="actions"><button type="button" class="primary" data-view="research" data-focus="plan-card-title">Read the plan</button></div>'
         : '<div class="actions"><button type="button" class="primary" data-panel="coordinator" data-focus="plan-title">Read the plan</button></div>',
+    });
+  for (const task of tasks.filter(isDraft))
+    items.push({
+      key: `draft:${task.id}:${task.revision}`,
+      view: 'tasks',
+      task: task.id,
+      kind: 'Draft task',
+      title: task.assignment.title,
+      why: 'You asked the coordinator for new work. It starts when you start it.',
+      since: task.updatedAt,
+      body: `<ul class="drafts">${draftCard(task)}</ul>`,
     });
   const workers = live.workers ?? (live.session ? [live.session] : []);
   for (const worker of workers)
@@ -1371,7 +1405,8 @@ function taskPanel(
   const used = stale
     ? `This version used ${stale.task} version ${stale.used}, but ${stale.task} now has version ${stale.current}.`
     : undefined;
-  const editForm = `<details id="task-edit"><summary>${task.state === 'done' ? 'Revise the task' : 'Edit the task'}</summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'An edit makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', task.assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
+  // A draft opens with its form, so the person can write the task themselves.
+  const editForm = `<details id="task-edit"${isDraft(task) ? ' open' : ''}><summary>${task.state === 'done' ? 'Revise the task' : 'Edit the task'}</summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'An edit makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', task.assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
   const artifact = task.artifacts?.at(-1);
   const blocked = waiting.length
     ? `This task waits for ${waiting.join(', ')}.`
@@ -1611,6 +1646,7 @@ function taskTurn(
   );
   switch (task.state) {
     case 'open':
+      if (isDraft(task)) return ['Draft, waits for you to start it', true];
       return waiting.length
         ? [
             `Waits for ${waiting.map((id) => all.find((entry) => entry.id === id)?.assignment.title ?? id).join(', ')}`,
@@ -1681,7 +1717,7 @@ function renderMap(
       : 'objective';
     // The page moves a dot with these words along the arrows of a task that just ended.
     const gives = task.state === 'done' ? handoffWords(task) : '';
-    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}" data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta">${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}"${isDraft(task) ? ' data-draft' : ''} data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${now ? `<span class="map-now"><span class="map-label">Now</span> ${e(now)}</span>` : ''}<span class="map-why"><span class="map-label">Why</span> ${e(taskWhy(task))}</span><span class="map-meta">${version ? `<span>Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}</span>` : ''}</span></button>`;
   };
   // A running box pulses in the color of its harness. The legend names the colors when the team mixes harnesses.
   const hosts = [...new Set(tasks.map((task) => task.assignment.host))].sort(
@@ -2425,9 +2461,11 @@ function renderRail(
       team.push(
         member(
           'task',
-          taskFaces[task.state],
+          isDraft(task) ? 'you' : taskFaces[task.state],
           task.assignment.title,
-          e(taskStates[task.state][0]),
+          isDraft(task)
+            ? '◆ Draft, waits for you'
+            : e(taskStates[task.state][0]),
           `data-task-select="${e(task.id)}" aria-pressed="${frame.panel === 'task' && live.tasks?.selected?.id === task.id}"`,
         ),
       );
@@ -2737,7 +2775,10 @@ export function renderDesk(
                     frame.since,
                   );
   const dock =
-    view === 'home' || view === 'research' || view === 'tasks'
+    view === 'home' ||
+    view === 'research' ||
+    view === 'tasks' ||
+    view === 'needs'
       ? renderDock(workspace, live)
       : '';
   const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
