@@ -986,6 +986,8 @@ await test('use this instead: before the work starts, another direction gets its
       },
     ],
     [],
+    // The person's start of a task wakes the coordinator at once.
+    [],
     [
       {
         name: 'verifold_create_task',
@@ -1099,8 +1101,9 @@ await test('use this instead: before the work starts, another direction gets its
     all.find((task) => task.assignment.title === 'Pick landmarks')?.id ?? '';
   await tasks.start(landmarks);
   assert.equal((await tasks.get(landmarks))?.state, 'running');
-  assert.equal(await post({ action: 'change-direction', idea: 'heap' }), 200);
   await turns(4);
+  assert.equal(await post({ action: 'change-direction', idea: 'heap' }), 200);
+  await turns(5);
   // The running turn stopped, and the coordinator drafted the plan for the new direction.
   assert.equal(workers.cancelled, 1);
   assert.equal((await loadWorkspace(root)).selectedId, 'heap');

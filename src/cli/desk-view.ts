@@ -97,7 +97,6 @@ export const deskPanels = [
   'direction',
   'coordinator',
   'new-task',
-  'new-session',
 ] as const;
 export type DeskPanel = (typeof deskPanels)[number];
 
@@ -514,9 +513,7 @@ function workerPanel(
     record.task
       ? `<p class="fine">It works in the folder of its task, in Strict mode.</p><div class="actions"><button type="button" data-task-select="${e(record.task.id)}">Open the task</button></div>`
       : running && record.status !== 'terminal'
-        ? record.status === 'idle'
-          ? `<label class="field" for="follow-up">Follow-up</label><textarea id="follow-up" rows="3" maxlength="100000" placeholder="Ask the agent to continue or change course."></textarea><div class="actions"><button type="button" class="primary" data-action="send" data-session="${e(record.id)}">Send follow-up</button><button type="button" data-action="end" data-session="${e(record.id)}">End session</button></div>`
-          : `<div class="actions"><button type="button" data-action="cancel" data-session="${e(record.id)}">Cancel this turn</button><button type="button" data-action="end" data-session="${e(record.id)}">End session</button></div>`
+        ? `<div class="actions"><button type="button" class="primary" data-message-to="session:${e(record.id)}">Write to it</button>${record.status === 'idle' ? '' : `<button type="button" data-action="cancel" data-session="${e(record.id)}">Cancel this turn</button>`}<button type="button" data-action="end" data-session="${e(record.id)}">End session</button></div><p class="fine">Your message reaches it during its turn, or starts its next turn.</p>`
         : ''
   }
   ${!running && record.nativeSessionId ? `<p class="fine">Native session: ${e(record.nativeSessionId)}. The record is in .verifold/sessions/${e(record.id)}.json.</p>` : ''}`;
@@ -539,17 +536,6 @@ function renderPaused(live: DeskSession): string {
         `<li><span class="paused-meta"><span>${e(hostName(entry.host))}</span><span>${e(time(entry.startedAt))}</span><span>${entry.status === 'interrupted' ? 'Interrupted, outcome unknown' : 'Paused'}</span></span><span class="paused-request">${e(entry.request.length > 160 ? `${entry.request.slice(0, 160)}…` : entry.request)}</span><span class="actions"><button type="button" data-action="${entry.restart ? 'restart' : 'resume'}" data-session="${e(entry.id)}">${entry.restart ? 'Start again' : 'Resume'}</button></span></li>`,
     )
     .join('')}</ul></section>`;
-}
-
-/** The form for a new plain session, or why no session can start. */
-function startForm(live: DeskSession, defaultHost: string): string {
-  if (!live.controllable)
-    return '<p class="empty-note">This desk only reads saved work. Run verifold in the project directory to start sessions here.</p>';
-  if (live.full)
-    return `<p class="notice">${workerLimit} workers run. End a session, or accept, reject, or cancel a task version first.</p>`;
-  const running = (live.workers ?? []).filter((worker) => worker.live).length;
-  const host = defaultHost === 'codex' ? 'codex' : 'claude';
-  return `<p class="fine">${running ? `${running} of ${workerLimit} workers run. You can start ${workerLimit - running} more. ` : ''}The harness runs in this project folder with its own sign-in and settings. In Ask me, each permission request comes here and to your terminal. Verifold records each tool call that the harness reports.</p><div class="fields"><label class="field" for="session-host">Harness<select id="session-host"><option value="claude"${host === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="session-mode">Commands<select id="session-mode"><option value="ask">Ask me</option><option value="auto">Auto</option></select></label><label class="field" for="session-model">Model<input id="session-model" type="text" maxlength="200" placeholder="Harness default"></label></div><label class="field" for="session-prompt">Request</label><textarea id="session-prompt" rows="5" maxlength="100000" placeholder="What should the harness do?"></textarea><div class="actions"><button type="button" class="primary" data-action="start">Start session</button></div>`;
 }
 
 const taskStates: Record<TaskRecord['state'], [string, string]> = {
@@ -756,7 +742,29 @@ function recipients(workspace: Workspace, live: DeskSession): Recipient[] {
         name: task.assignment.title,
         lead: false,
       })),
+    ...plainSessions(live).map((view) => ({
+      to: `session:${view.record.id}`,
+      name: sessionName(view.record),
+      lead: false,
+    })),
+    ...(live.controllable
+      ? [{ to: 'new-agent', name: 'A new agent', lead: false }]
+      : []),
   ];
+}
+
+/** The live sessions that the person started: not a task worker, not the coordinator. */
+function plainSessions(live: DeskSession): SessionView[] {
+  return (live.workers ?? []).filter(
+    (view) =>
+      view.live && !view.record.task && view.record.mode !== 'coordinator',
+  );
+}
+
+/** A session by its harness and the start of its first request, so two sessions differ. */
+function sessionName(record: SessionRecord): string {
+  const first = record.events.find((event) => event.kind === 'you')?.text;
+  return `${hostName(record.host)}${first ? `: ${lead(first, 40)}` : ' session'}`;
 }
 
 /** How far a message from the person got, in words, and its tone. */
@@ -836,6 +844,20 @@ function thread(
         : '';
     return `<li class="dock-msg"><p class="msg-meta"><strong>You</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="state ${tone}">${e(state)}</span></p>${inFull(`dock-${message.id}`, message.text)}${answer}</li>`;
   };
+  if (recipient.to.startsWith('session:')) {
+    const record = plainSessions(live).find(
+      (view) => `session:${view.record.id}` === recipient.to,
+    )?.record;
+    const said = (record?.events ?? [])
+      .filter((event) => event.kind === 'you' || event.kind === 'agent')
+      .slice(-5);
+    return `<ol class="dock-thread" data-thread="${e(recipient.to)}"${shown ? '' : ' hidden'}>${said
+      .map(
+        (event, index) =>
+          `<li class="${event.kind === 'you' ? 'dock-msg' : 'dock-note'}"><p class="msg-meta"><strong>${event.kind === 'you' ? 'You' : e(record ? hostName(record.host) : 'Agent')}</strong><time datetime="${e(event.at)}">${e(clock(event.at))}</time>${event.kind === 'agent' ? '<span class="tag reading">Its reading</span>' : ''}</p>${inFull(`dock-${recipient.to}-${index}`, event.text)}</li>`,
+      )
+      .join('')}</ol>`;
+  }
   const card = drafts.length
     ? `<li class="dock-drafts"><p class="msg-meta"><strong>The coordinator drafted ${drafts.length === 1 ? 'a task' : `${drafts.length} tasks`}</strong><span class="state waiting">Waits for you</span></p><ul class="drafts">${drafts.map(draftCard).join('')}</ul></li>`
     : '';
@@ -867,8 +889,14 @@ function renderDock(
       ? 'Write to the coordinator'
       : recipient.to === 'new-coordinator'
         ? 'Write the objective for a new coordinator'
-        : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
-  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div></section>`;
+        : recipient.to === 'new-agent'
+          ? 'Write the first request for a new agent'
+          : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
+  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
+    live.controllable
+      ? `<div class="dock-new" data-for="new-agent"${first.to === 'new-agent' ? '' : ' hidden'}><label for="agent-host">Harness <select id="agent-host"><option value="claude"${workspace.host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${workspace.host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label for="agent-mode">Commands <select id="agent-mode"><option value="ask">Ask me first</option><option value="auto">Auto</option></select></label><span>In this project folder</span></div>`
+      : ''
+  }</section>`;
 }
 
 /** The plan waits for the person: the coordinator drafted tasks and ended its turn. */
@@ -1804,8 +1832,9 @@ function renderNowStrip(view: TaskView, live: DeskSession): string {
         task.state in order,
     )
     .sort((a, b) => order[a.state] - order[b.state]);
-  const working = rows.filter((task) => task.state !== 'review').length;
-  const reviewing = rows.length - working;
+  const sessions = plainSessions(live);
+  const reviewing = rows.filter((task) => task.state === 'review').length;
+  const working = rows.length - reviewing + sessions.length;
   const row = (task: TaskRecord): string => {
     const attempt = task.attempts.at(-1);
     const version = attempt?.versions.at(-1);
@@ -1831,6 +1860,14 @@ function renderNowStrip(view: TaskView, live: DeskSession): string {
       : `<button type="button"${yours ? ' class="primary"' : ''} data-task-select="${e(task.id)}">Review</button>`;
     return `<li class="now-row" data-state="${task.state}" data-host="${e(task.assignment.host)}"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span><div class="now-main"><p class="now-head"><button type="button" class="row-button" data-task-select="${e(task.id)}">${e(task.assignment.title)}</button><span class="now-meta">${e(hostName(task.assignment.host))}${busy && attempt ? `, ${e(duration(attempt.startedAt))}` : ''}</span></p><p class="now-step${!busy && yours ? ' yours' : ''}">${e(line)}${quiet ? ` <span class="now-quiet">${e(quiet)}</span>` : ''}</p></div>${action}</li>`;
   };
+  const session = (view: SessionView): string => {
+    const { record } = view;
+    const last = record.events
+      .filter((event) => event.kind !== 'status')
+      .at(-1);
+    return `<li class="now-row" data-state="${record.status === 'idle' ? 'idle' : 'running'}" data-host="${e(record.host)}"><span class="mark ${record.status === 'idle' ? 'open' : 'working'}" aria-hidden="true"></span><div class="now-main"><p class="now-head"><button type="button" class="row-button" data-worker="${e(record.id)}">${e(sessionName(record))}</button><span class="now-meta">${e(modeLabel(record))}, ${e(duration(record.startedAt))}</span></p><p class="now-step">${e(record.status === 'idle' ? 'Waits for your next message' : last ? lead(nowText(last), 110) : 'Working')}</p></div><button type="button" data-message-to="session:${e(record.id)}">Message</button></li>`;
+  };
+  const list = [...rows.map(row), ...sessions.map(session)];
   const count = [
     working
       ? `${working} ${working === 1 ? 'agent works' : 'agents work'}`
@@ -1842,8 +1879,8 @@ function renderNowStrip(view: TaskView, live: DeskSession): string {
     .filter(Boolean)
     .join(', ');
   return `<section class="card now-strip" aria-labelledby="now-title"><div class="section-title"><h2 id="now-title">Now</h2>${count ? `<span class="count">${e(count)}</span>` : ''}</div>${
-    rows.length
-      ? `<ul class="now-list">${rows.slice(0, 4).map(row).join('')}</ul>${rows.length > 4 ? `<details id="now-more"><summary>${rows.length - 4} more</summary><ul class="now-list">${rows.slice(4).map(row).join('')}</ul></details>` : ''}`
+    list.length
+      ? `<ul class="now-list">${list.slice(0, 4).join('')}</ul>${list.length > 4 ? `<details id="now-more"><summary>${list.length - 4} more</summary><ul class="now-list">${list.slice(4).join('')}</ul></details>` : ''}`
       : '<p class="empty-note">No agent works now.</p>'
   }</section>`;
 }
@@ -1873,10 +1910,14 @@ function renderTasksView(
   needs: readonly Need[],
 ): string {
   const done = view.list.filter((task) => task.state === 'done').length;
-  return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Work</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
+  return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Work</h1><button type="button" class="quiet" data-panel="new-task">Write a task yourself</button></div>
   ${
+    view.list.length || plainSessions(live).length
+      ? renderNowStrip(view, live)
+      : ''
+  }${
     view.list.length
-      ? `${renderNowStrip(view, live)}<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span></div>${renderMap(view, live, objective, needs)}</section>${renderFinished(view.list)}`
+      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span></div>${renderMap(view, live, objective, needs)}</section>${renderFinished(view.list)}`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write to the coordinator in the message box.</p></section>'
   }
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
@@ -2490,7 +2531,7 @@ function member(
   return `<li><button type="button" ${target}>${avatar(kind, state)}<span class="who"><span class="name" title="${e(name)}">${e(name)}</span><span class="line">${line}</span></span></button></li>`;
 }
 
-/** The rail: the views, the team, and New. At phone width it becomes a menu. */
+/** The rail: the views and the team. At phone width it becomes a menu. */
 function renderRail(
   frame: DeskFrame,
   live: DeskSession,
@@ -2595,14 +2636,6 @@ function renderRail(
   for (const worker of workers)
     if (!listed.has(worker.record.id) && (worker.live || !worker.record.task))
       add(worker);
-  const items = [
-    live.tasks
-      ? '<button type="button" data-panel="new-task">New task<small>Write a task. An agent runs it in its own copy of the project.</small></button>'
-      : '',
-    live.controllable
-      ? '<button type="button" data-panel="new-session">New session<small>Start a Claude Code or Codex session that you control.</small></button>'
-      : '',
-  ].join('');
   return `<nav class="rail" id="rail" aria-label="Views and team"><ul class="views">${railViews
     .filter(
       (view) =>
@@ -2615,7 +2648,7 @@ function renderRail(
     )
     .join('')}</ul>
   <div class="rail-team"><div class="rail-title"><h2>Team</h2></div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
-  <div class="rail-foot">${items ? `<details id="new-menu" class="new-menu"><summary><span aria-hidden="true">+</span> New</summary><div class="menu">${items}</div></details>` : ''}<p class="fine">Research stays in this project.</p></div></nav>`;
+  <div class="rail-foot"><p class="fine">Research stays in this project.</p></div></nav>`;
 }
 
 /**
@@ -2721,7 +2754,7 @@ function renderHome(
       '<section class="card lead"><h2>Research is running</h2><p>Research runs in your terminal. The results show here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>';
   else {
     const next = nextResearchAction(workspace);
-    lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose New, then New session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
+    lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose A new agent in the message box.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
   }
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
   <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
@@ -2751,7 +2784,7 @@ function renderPanel(
       : gone(
           'Agent',
           'No session',
-          'No agent session is open. To start one, choose New, then New session.',
+          'No agent session is open. To start one, choose A new agent in the message box.',
         );
   else if (panel === 'direction') {
     const idea =
@@ -2780,21 +2813,14 @@ function renderPanel(
           'No attempts yet',
           'Each research request shows here with its own identity.',
         );
-  else if (panel === 'new-task')
+  else
     shown = {
       kind: '',
-      title: 'New task',
+      title: 'Write a task yourself',
       sub: '',
       body: live.tasks
         ? `<div id="task-new">${taskForm('task-new', null, live.tasks.list, workspace.host)}<div class="actions"><button type="button" class="primary" data-action="task-create">Create task</button></div></div>`
         : '<p class="empty-note">This desk only reads saved work. Run verifold in the project directory to create tasks.</p>',
-    };
-  else
-    shown = {
-      kind: '',
-      title: 'New session',
-      sub: '',
-      body: startForm(live, workspace.host),
     };
   return `<aside class="panel" id="panel" aria-labelledby="panel-title"><div class="panel-head"><div class="titles">${shown.kind ? `<p class="kind">${e(shown.kind)}</p>` : ''}<h2 id="panel-title" tabindex="-1">${e(shown.title)}</h2>${shown.sub ? `<p class="panel-sub">${shown.sub}</p>` : ''}</div><button type="button" class="icon-button" data-close-panel aria-label="Close the panel">✕</button></div><div class="panel-body" id="panel-body">${shown.body}</div></aside>`;
 }
