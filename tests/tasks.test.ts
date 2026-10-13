@@ -1286,3 +1286,42 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     /<h2>Done<\/h2><p>Version 1 was accepted: results\/baseline\.md/,
   );
 });
+
+await test('a worker starts with the project memory and keeps notes in it', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const notes: string[] = [];
+  const tasks = new TaskManager(root, {
+    ownerId: 'owner-1',
+    sessions,
+    memory: {
+      note: (who, text) => {
+        notes.push(`${who}: ${String(text)}`);
+        return Promise.resolve('Kept the note in memory/notes.md.');
+      },
+      digest: () => Promise.resolve('# Project memory\n\nThe heap is done.'),
+    },
+  });
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  const started = sessions.started.at(-1);
+  assert.match(
+    started?.prompt ?? '',
+    /Project memory, from memory\/README\.md\.[\s\S]*The heap is done\./,
+  );
+  assert.ok(
+    started?.tools?.specs.some((spec) => spec.name === 'verifold_note'),
+  );
+  const reply = await started?.tools?.call(
+    'verifold_note',
+    { text: 'Florida has no road data.' },
+    'n1',
+  );
+  assert.deepEqual(reply, {
+    ok: true,
+    text: 'Kept the note in memory/notes.md.',
+  });
+  assert.deepEqual(notes, [
+    'Reproduce the baseline: Florida has no road data.',
+  ]);
+});

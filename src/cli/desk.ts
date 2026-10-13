@@ -33,6 +33,7 @@ import type { SessionPool } from './workers.ts';
 import { TranscriptFile, type TranscriptLog } from './transcript.ts';
 import { markdownHtml } from './markdown.ts';
 import type { ResearchRunner } from './research-runner.ts';
+import type { ProjectMemory } from './memory.ts';
 import {
   archiveRun,
   listArchives,
@@ -62,6 +63,7 @@ export interface DeskServer {
     tasks: TaskManager,
     coordinator: Coordinator,
     compute: Compute,
+    memory: ProjectMemory,
   ): Promise<void>;
   readonly closed: Promise<void>;
 }
@@ -307,6 +309,7 @@ async function changeRun(
   research: ResearchRunner | undefined,
   tasks: TaskManager,
   coordinator: Coordinator | undefined,
+  memory: ProjectMemory | undefined,
   restore?: unknown,
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
@@ -327,8 +330,13 @@ async function changeRun(
   for (const task of list)
     if (task.state === 'open' || task.state === 'review')
       await tasks.cancel(task.id);
+  // The memory keeps what this run did, decided, and found, as an earlier run.
+  await memory?.freeze(
+    `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+  );
   if (restore === undefined) await archiveRun(root);
   else await restoreRun(root, restore);
+  memory?.schedule();
   await coordinator?.reload();
   research?.clear();
   await sessions.forget();
@@ -347,6 +355,7 @@ async function act(
   compute: Compute | undefined,
   root: string,
   body: Record<string, unknown>,
+  memory?: ProjectMemory,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -397,6 +406,7 @@ async function act(
       research,
       tasks,
       coordinator,
+      memory,
       body.action === 'restore' ? body.archive : undefined,
     );
     return 200;
@@ -554,6 +564,7 @@ export async function startDesk(
   tasks?: TaskManager,
   coordinator?: Coordinator,
   compute?: Compute,
+  memory?: ProjectMemory,
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
@@ -740,6 +751,7 @@ export async function startDesk(
             compute,
             project ?? '',
             body,
+            memory,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
@@ -1124,7 +1136,7 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner, taskManager, lead, pods) => {
+    attach: async (next, owner, runner, taskManager, lead, pods, notes) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
@@ -1132,6 +1144,7 @@ export async function startDesk(
       tasks = taskManager;
       coordinator = lead;
       compute = pods;
+      memory = notes;
       project = resolved;
     },
     closed,
