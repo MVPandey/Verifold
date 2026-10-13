@@ -151,6 +151,11 @@ export class SessionPool {
     this.live(id).continueTask(text);
   }
 
+  /** Add a message to the running turn of a worker. False when that worker runs no turn. */
+  steer(id: string, text: string, done: (taken: boolean) => void): boolean {
+    return this.slot(id)?.steer(text, done) ?? false;
+  }
+
   endTask(id: string, reason: string): void {
     this.live(id).endTask(reason);
   }

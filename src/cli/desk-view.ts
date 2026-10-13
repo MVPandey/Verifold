@@ -334,13 +334,11 @@ function renderDecision(
   if (phase === undefined)
     return `<section class="card lead"><h2>Start research</h2><p>Write the question that research should explore. The harness plans the research first.</p><label class="field" for="research-topic">Question</label><textarea id="research-topic" rows="3" maxlength="4000"></textarea><label class="check" for="research-guided"><input type="checkbox" id="research-guided" checked> Stop at the plan for my approval</label><div class="actions"><button type="button" class="primary" data-action="research" data-research="start">Start research</button></div></section>`;
   if (home) return '';
-  const feedback = (label: string): string =>
-    `<label class="field" for="research-feedback">Changes</label><textarea id="research-feedback" rows="3" maxlength="4000" placeholder="${e(label)}"></textarea><div class="actions"><button type="button" data-action="research" data-research="feedback">Ask for changes</button></div>`;
   switch (phase) {
     case 'awaiting-plan-review':
-      return `<section class="card needs"><h2>Review the plan</h2><p>Read the plan below. Approve it to start the source search, or ask for changes.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div>${feedback('What should change in the plan?')}</section>`;
+      return `<section class="card needs"><h2>Review the plan</h2><p>Read the plan below. Approve it to start the source search. To change it, write to research in the message box.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button></div></section>`;
     case 'directions':
-      return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The coordinator then drafts the plan for it. You can ask for changes first.</p>${feedback('What should change in the directions?')}</section>`;
+      return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The coordinator then drafts the plan for it. To change the directions first, write to research in the message box.</p></section>`;
     default:
       return `<section class="card needs"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
   }
@@ -689,6 +687,137 @@ function notesToPerson(messages: readonly Message[]): string {
   return notes.length
     ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map(messageItem).join('')}</ul></details>`
     : '';
+}
+
+/** One agent that the message box can write to. */
+interface Recipient {
+  readonly to: string;
+  readonly name: string;
+  readonly lead: boolean;
+}
+
+/**
+ * The agents that take messages: the one that leads now, then each task agent
+ * that runs or waits for review. The coordinator leads while it runs. Before
+ * a direction is chosen, research leads.
+ */
+function recipients(workspace: Workspace, live: DeskSession): Recipient[] {
+  const state = live.coordinator?.state;
+  const coordinator = !!state && !state.stoppedAt;
+  return [
+    ...(coordinator
+      ? [{ to: 'coordinator', name: 'Coordinator', lead: true }]
+      : []),
+    ...(live.research && !workspace.selectedId
+      ? [{ to: 'research', name: 'Research', lead: !coordinator }]
+      : []),
+    ...(live.tasks?.list ?? [])
+      .filter(
+        (task) =>
+          ['claimed', 'running', 'review'].includes(task.state) &&
+          task.attempts.at(-1)?.session,
+      )
+      .map((task) => ({
+        to: task.id,
+        name: task.assignment.title,
+        lead: false,
+      })),
+  ];
+}
+
+/** How far a message from the person got, in words, and its tone. */
+function messageState(
+  message: Message,
+  live: DeskSession,
+): readonly [string, 'waiting' | 'delivered' | 'answered' | 'uncertain'] {
+  if (message.answer) return ['Answered', 'answered'];
+  if (message.delivery === 'uncertain')
+    return ['Delivery not certain: the turn stopped', 'uncertain'];
+  if (message.to === 'research')
+    return message.delivery === 'queued'
+      ? ['Waits for the next research step', 'waiting']
+      : message.via === 'coordinator'
+        ? ['Passed to the coordinator', 'delivered']
+        : ['Delivered with a research step', 'delivered'];
+  if (message.via === 'turn')
+    return message.delivery === 'delivered'
+      ? ['Delivered during its turn', 'delivered']
+      : ['Sent, it arrives at its next step', 'waiting'];
+  if (message.delivery !== 'queued')
+    return ['Delivered with its next turn', 'delivered'];
+  if (message.to !== 'coordinator')
+    return ['Waits for its next turn', 'waiting'];
+  const view = live.coordinator;
+  const status = view?.session?.record.status;
+  return [
+    view?.state.stoppedAt
+      ? 'Waits: the coordinator is stopped'
+      : status === 'paused' || status === 'interrupted'
+        ? 'Waits: the coordinator is paused'
+        : view?.limitedUntil
+          ? `Waits until ${clock(view.limitedUntil)}`
+          : status === 'running' || status === 'starting'
+            ? 'Waits for its current turn to end'
+            : 'Waits for the coordinator',
+    'waiting',
+  ];
+}
+
+/** The person's messages to one agent, with their states and answers, and the coordinator's other notes. */
+function thread(
+  recipient: Recipient,
+  messages: readonly Message[],
+  live: DeskSession,
+  shown: boolean,
+): string {
+  const asked = messages.filter(
+    (message) => message.from === 'person' && message.to === recipient.to,
+  );
+  const answers = new Set(asked.map((message) => message.answer?.text));
+  const items = messages
+    .filter(
+      (message) =>
+        asked.includes(message) ||
+        (recipient.to === 'coordinator' &&
+          message.from === 'coordinator' &&
+          message.to === 'person' &&
+          message.kind === 'note' &&
+          !answers.has(message.text.slice(0, 4000))),
+    )
+    .slice(-5);
+  // A message shows in full up to a few lines. At rest, the box shows one line of it.
+  const said = (id: string, text: string): string =>
+    text.length <= 600 ? `<p class="pre">${e(text)}</p>` : more(id, text, 200);
+  const row = (message: Message): string => {
+    if (message.from !== 'person')
+      return `<li class="dock-note"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="tag reading">Its reading</span></p>${said(`dock-${message.id}`, message.text)}</li>`;
+    const [state, tone] = messageState(message, live);
+    // The same reply can answer several messages. It shows under the last one.
+    const next = items[items.indexOf(message) + 1];
+    const answer =
+      message.answer && next?.answer?.at !== message.answer.at
+        ? `<div class="dock-answer"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.answer.at)}">${e(clock(message.answer.at))}</time><span class="tag reading">Its reading</span></p>${said(`dock-answer-${message.id}`, message.answer.text)}</div>`
+        : '';
+    return `<li class="dock-msg"><p class="msg-meta"><strong>You</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="state ${tone}">${e(state)}</span></p>${said(`dock-${message.id}`, message.text)}${answer}</li>`;
+  };
+  return `<ol class="dock-thread" data-thread="${e(recipient.to)}"${shown ? '' : ' hidden'}>${items.map(row).join('')}</ol>`;
+}
+
+/**
+ * The message box at the bottom of Home, Plan, and Work. It writes to the
+ * agent that leads now, or to the agent that To names. The page shows the
+ * thread of the chosen agent.
+ */
+function renderDock(workspace: Workspace, live: DeskSession): string {
+  const list = recipients(workspace, live);
+  const first = list[0];
+  if (!first) return '';
+  const messages = live.tasks?.messages ?? [];
+  const hint = (recipient: Recipient): string =>
+    recipient.to === 'coordinator'
+      ? 'Write to the coordinator'
+      : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
+  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}">${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div></section>`;
 }
 
 /** The plan waits for the person: the coordinator drafted tasks and ended its turn. */
@@ -1122,47 +1251,6 @@ function sender(id: string, tasks: readonly TaskRecord[]): string {
   return tasks.find((task) => task.id === id)?.assignment.title ?? id;
 }
 
-/** One message between the person and the coordinator. */
-function bubble(message: Message): string {
-  const mine = message.from === 'person';
-  const state = !mine
-    ? '<span class="tag reading">Its reading</span>'
-    : message.delivery === 'delivered'
-      ? `<span>Read by the coordinator${message.deliveredAt ? ` at ${e(clock(message.deliveredAt))}` : ''}</span>`
-      : '<span>Waits for the coordinator</span>';
-  return `<li class="msg${mine ? ' mine' : ''}"><p class="msg-meta"><strong>${mine ? 'You' : 'Coordinator'}</strong><time datetime="${e(message.at)}">${e(since(message.at))}</time>${state}</p>${more(`talk-${message.id}`, message.text, 200)}</li>`;
-}
-
-/** The coordinator on Home: its latest note, the person's messages, and the one box to write to it. */
-function renderCoordinatorHome(
-  view: CoordinatorView,
-  messages: readonly Message[],
-): string {
-  const status = view.session?.record.status;
-  const talk = messages.filter(
-    (message) =>
-      (message.from === 'person' && message.to === 'coordinator') ||
-      (message.from === 'coordinator' &&
-        message.to === 'person' &&
-        message.kind === 'note'),
-  );
-  const note = talk.findLast((message) => message.from === 'coordinator');
-  // Messages after the latest note wait for their answer, so they show next to it.
-  const waiting = talk.filter(
-    (message) => message.from === 'person' && (!note || message.at > note.at),
-  );
-  const earlier = talk
-    .filter((message) => message !== note && !waiting.includes(message))
-    .slice(-20);
-  return `<section class="card coordinator-home" aria-labelledby="coordinator-title"><div class="section-title"><h2 id="coordinator-title" tabindex="-1">The coordinator</h2><span class="status ${status === 'running' || status === 'starting' ? 'active' : 'muted'}">${e(coordinatorStates[status ?? 'starting'] ?? 'Starting')}</span></div>
-  ${note ? `<div class="note"><p class="msg-meta"><strong>Its latest note</strong><time datetime="${e(note.at)}">${e(since(note.at))}</time><span class="tag reading">Its reading</span></p>${more(`note-${note.id}`, note.text, 280)}</div>` : '<p class="empty-note">No note yet. The coordinator writes a note at milestones and when you ask.</p>'}
-  ${waiting.length ? `<ol class="convo">${waiting.map(bubble).join('')}</ol>` : ''}
-  ${earlier.length ? `<details id="conversation"><summary>Earlier messages (${earlier.length})</summary><ol class="convo">${earlier.map(bubble).join('')}</ol></details>` : ''}
-  <label class="field" for="coordinator-message">Message the coordinator</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: why is the data synthetic?"></textarea>
-  <div class="actions"><button type="button" data-action="coordinator-message">Send</button><button type="button" class="quiet" data-panel="coordinator">Its actions and controls</button></div>
-  <p class="fine">It reads your message on its next turn and answers in a note here.</p></section>`;
-}
-
 /** The team feed: what the agents and the coordinator write to each other, newest first. Nobody posts in it. */
 function renderFeed(
   messages: readonly Message[],
@@ -1313,7 +1401,7 @@ function taskPanel(
       next = '<p>Verifold prepares the task folder.</p>';
       break;
     case 'running':
-      next = `<p>The harness works in the task folder. Follow its agent to see each step. Details there shows the transcript.</p><div class="actions">${agent}<button type="button" data-action="task-stop" data-task="${e(task.id)}">Stop the turn</button></div><p class="fine">If you stop the turn, its work becomes a version for review.</p>`;
+      next = `<p>The harness works in the task folder. Follow its agent to see each step. Details there shows the transcript.</p><div class="actions">${agent}<button type="button" data-message-to="${e(task.id)}">Write to its agent</button><button type="button" data-action="task-stop" data-task="${e(task.id)}">Stop the turn</button></div><p class="fine">Your message reaches the agent during its turn. If you stop the turn, its work becomes a version for review.</p>`;
       break;
     case 'review':
       next =
@@ -1360,8 +1448,7 @@ function taskPanel(
     ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
     ${next}
     ${task.state !== 'running' && agent ? `<div class="actions">${agent}</div>` : ''}
-    ${live.coordinator?.state && !live.coordinator.state.stoppedAt ? `<label class="field" for="task-coordinator-message">Ask the coordinator about this task</label><textarea id="task-coordinator-message" rows="2" maxlength="3950"></textarea><div class="actions"><button type="button" data-action="coordinator-message" data-about="${e(task.id)}">Ask the coordinator</button></div><p class="fine">The coordinator gets your message with this task named. It answers in its note on Home.</p>` : ''}
-    <details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}<label class="field" for="task-message">Message to this task's worker</label><textarea id="task-message" rows="2" maxlength="4000"></textarea><p class="fine">The worker receives it with its next turn. A message cannot change the task's paths, permissions, or limits.</p><div class="actions"><button type="button" data-action="task-message" data-task="${e(task.id)}" data-to="${e(task.id)}">Send</button></div></details>
+    <details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details>
     ${taskPod(task.id, live.compute)}
     ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
     ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}`;
@@ -1967,14 +2054,13 @@ function renderPlanCard(workspace: Workspace, live: DeskSession): string {
           .filter((task) => !task.assignment.extra)
           .map((task) => `<li>${line(task)}</li>`)
           .join('')}</ol>`
-      : `<p class="empty-note">${drafting ? 'The coordinator drafts the tasks.' : 'No tasks yet. Ask the coordinator for a change.'}</p>`
+      : `<p class="empty-note">${drafting ? 'The coordinator drafts the tasks.' : 'No tasks yet. Write to the coordinator in the message box.'}</p>`
   }
   ${summary ? `<div class="note"><p class="msg-meta"><strong>The coordinator's summary</strong><span class="tag reading">Its reading</span></p>${more('plan-summary', summary, 400)}</div>` : ''}
   ${extras.length ? `<h3>Extras</h3><p class="fine">Add-ons that you can include. Tick the ones that you want. Verifold cancels the others when you start the work.</p><ul class="plan-extras">${extras.map((task) => `<li><label><input type="checkbox" data-extra="${e(task.id)}"> ${line(task)}</label></li>`).join('')}</ul>` : ''}
   <div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${drafting || !drafted.length ? ' disabled' : ''}>Start the work</button></div>
-  <label class="field" for="coordinator-message">Ask for a change</label><textarea id="coordinator-message" rows="2" maxlength="4000" placeholder="For example: also test sparse graphs."></textarea><div class="actions"><button type="button" data-action="coordinator-message">Send to the coordinator</button></div>
-  <p class="fine">No task starts before you start the work. The coordinator revises the draft when you ask for a change.</p>
-  ${others.length ? `<h3>Other directions</h3><ul class="plan-others">${others.map((other) => `<li><div><strong>${e(other.title)}</strong> <span class="tag">${e(directionRole(other, workspace, live))}</span><p class="fine">${e(lead(plain(other.recommendation), 160))}${other.kind === 'extra' ? ' To add it, ask for a change.' : ''}</p></div>${redraftable(workspace, live) && other.kind !== 'extra' ? `<button type="button" data-action="redraft" data-idea="${e(other.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button>` : ''}</li>`).join('')}</ul>` : ''}</section>`;
+  <p class="fine">No task starts before you start the work. To change the draft, write to the coordinator in the message box.</p>
+  ${others.length ? `<h3>Other directions</h3><ul class="plan-others">${others.map((other) => `<li><div><strong>${e(other.title)}</strong> <span class="tag">${e(directionRole(other, workspace, live))}</span><p class="fine">${e(lead(plain(other.recommendation), 160))}${other.kind === 'extra' ? ' To add it, write to the coordinator.' : ''}</p></div>${redraftable(workspace, live) && other.kind !== 'extra' ? `<button type="button" data-action="redraft" data-idea="${e(other.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button>` : ''}</li>`).join('')}</ul>` : ''}</section>`;
 }
 
 /** Research can still take a choice of direction: no direction yet, and no step runs. */
@@ -2478,14 +2564,8 @@ function renderHome(
     const next = nextResearchAction(workspace);
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose New, then New session.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
   }
-  const coordinator = live.coordinator;
-  const facts = `${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}`;
-  const talk =
-    coordinator?.state && !coordinator.state.stoppedAt
-      ? renderCoordinatorHome(coordinator, messages)
-      : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs)}${renderPodsLine(live.compute)}${facts && talk ? `<div class="home-grid"><div class="col">${facts}</div><div class="col">${talk}</div></div>` : `${talk}${facts}`}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -2656,7 +2736,11 @@ export function renderDesk(
                     needs,
                     frame.since,
                   );
-  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
+  const dock =
+    view === 'home' || view === 'research' || view === 'tasks'
+      ? renderDock(workspace, live)
+      : '';
+  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
   return {
     html,
     observation: '',

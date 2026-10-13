@@ -1214,30 +1214,9 @@ textarea {
   font-size: 12.5px;
 }
 
-/* Home: what changed and the team feed beside the coordinator, in two columns when the view is wide. */
-.view {
-  container-type: inline-size;
-}
-.home-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-.home-grid > .col {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-@container (min-width: 760px) {
-  .home-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-}
+/* Home: what changed, and the team feed. */
 .since,
-.feed,
-.convo {
+.feed {
   list-style: none;
   padding: 0;
 }
@@ -1292,23 +1271,6 @@ textarea {
   border-left: 3px solid var(--tint-line);
   border-radius: 0 10px 10px 0;
   background: var(--sunken);
-}
-.convo {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.msg {
-  max-width: 92%;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-}
-.msg.mine {
-  align-self: flex-end;
-  border-color: var(--tint-line);
-  background: var(--lavender);
 }
 
 /* Long text shows its lead. Show all opens the rest in place. */
@@ -2803,6 +2765,113 @@ body.terminal-page {
   padding: 6px;
 }
 
+/* ---------- The message box ---------- */
+/* It stays at the bottom of the view. At rest it shows the latest message to the chosen agent; in use, the thread. */
+.dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  max-width: 880px;
+  margin: 18px auto 0;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 -10px 30px -22px rgb(16 16 20 / 55%);
+}
+/* On Work, the box is as wide as the map. */
+.view.wide ~ .dock {
+  max-width: 1180px;
+}
+.dock-button {
+  display: none;
+}
+.dock-threads {
+  max-height: min(40vh, 360px);
+  overflow-y: auto;
+}
+.dock-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 4px 8px;
+  padding: 0;
+  list-style: none;
+}
+.dock-thread:empty {
+  display: none;
+}
+.dock:not(:focus-within) .dock-thread > li:not(:last-child) {
+  display: none;
+}
+.dock:not(:focus-within) .dock-thread :is(.lead, .pre) {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+.dock:not(:focus-within) .dock-thread .more-hint {
+  display: none;
+}
+.dock-answer {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--tint-line);
+}
+.state {
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.state.waiting {
+  border-style: dashed;
+  color: var(--muted);
+}
+.state.answered {
+  border-color: var(--tint-line);
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+.state.uncertain {
+  border-color: var(--caution-line);
+  background: var(--caution-bg);
+  color: var(--caution);
+}
+.dock-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.dock-to {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.dock-to select {
+  width: auto;
+  max-width: 220px;
+  text-overflow: ellipsis;
+}
+.dock textarea {
+  min-height: 36px;
+  max-height: 30vh;
+  resize: none;
+  field-sizing: content;
+}
+.dock textarea:focus {
+  min-height: 64px;
+}
+.dock-row button {
+  min-height: 36px;
+}
+
 /* ---------- Narrow screens ---------- */
 /* Below this width the panel opens over the view. */
 @media (max-width: 1100px) {
@@ -2962,6 +3031,55 @@ body.terminal-page {
   summary > span {
     float: none;
     display: block;
+  }
+  /* The message box opens from a button and covers the bottom of the screen. */
+  #view {
+    padding-bottom: 76px;
+  }
+  .dock-button {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 13;
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 18px;
+    border-color: var(--violet);
+    border-radius: 999px;
+    background: var(--violet);
+    color: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .dock {
+    position: fixed;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    z-index: 13;
+    display: none;
+    margin: 0;
+    box-shadow: var(--shadow);
+  }
+  body.dock-open .dock {
+    display: block;
+  }
+  body.dock-open .dock-button {
+    display: none;
+  }
+  .dock-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .dock-to {
+    grid-column: 1 / -1;
+  }
+  .dock-to select {
+    max-width: none;
+    flex: 1;
+  }
+  /* At 16px, a phone does not zoom into the field. */
+  .dock textarea {
+    font-size: 16px;
   }
 }
 @media (max-width: 600px) {
