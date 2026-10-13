@@ -339,9 +339,32 @@ async function act(
       });
     return 200;
   }
-  // The message box: to research, the coordinator, or a task agent. Without a coordinator, the words start one.
+  // The message box: to research, the coordinator, a task agent, or a session that the person started.
+  // The words can also start a new coordinator or a new agent.
   if (body.action === 'message') {
-    if (body.to === 'new-coordinator') {
+    if (body.to === 'new-agent')
+      await sessions.start({
+        host: body.host,
+        mode: body.mode,
+        prompt: body.text,
+      });
+    else if (typeof body.to === 'string' && body.to.startsWith('session:')) {
+      const id = body.to.slice('session:'.length);
+      if (sessions.view(id)?.record.task)
+        throw new SessionActionError('Write to a task agent by its task.');
+      const text = typeof body.text === 'string' ? body.text : '';
+      // A running turn takes the message. A waiting session, or a turn that ended first, gets it as its next turn.
+      if (
+        !sessions.steer(id, text, (taken) => {
+          try {
+            if (!taken && sessions.idle(id)) sessions.send(id, text);
+          } catch {
+            /* The session ended. Its record shows the message that it did not take. */
+          }
+        })
+      )
+        sessions.send(id, text);
+    } else if (body.to === 'new-coordinator') {
       if (!coordinator)
         throw new SessionActionError('This desk runs no coordinator.');
       await startCoordinator(root, coordinator, body.text);

@@ -585,11 +585,37 @@ function field(id: string): string {
     : '';
 }
 
+/** The sessions in To, by their values. */
+function sessionOptions(): string[] {
+  const to = document.getElementById('message-to');
+  return to instanceof HTMLSelectElement
+    ? Array.from(to.options, (option) => option.value).filter((value) =>
+        value.startsWith('session:'),
+      )
+    : [];
+}
+
+/** The sessions in To before the person started a new agent, until the new one shows. */
+let knownSessions: Set<string> | undefined;
+
 /** The message box shows the thread of the agent in To, and says whom the message goes to. */
 function showThread(): void {
   const to = document.getElementById('message-to');
   const text = document.getElementById('message-text');
   if (!(to instanceof HTMLSelectElement)) return;
+  // After a new agent starts, the box writes to it.
+  const started = knownSessions
+    ? sessionOptions().find((value) => !knownSessions?.has(value))
+    : undefined;
+  if (started) {
+    to.value = started;
+    knownSessions = undefined;
+  }
+  for (const row of content.querySelectorAll<HTMLElement>('[data-for]'))
+    row.hidden = row.dataset.for !== to.value;
+  // The first message to a new agent starts it.
+  const send = content.querySelector('[data-action="message"]');
+  if (send) send.textContent = to.value === 'new-agent' ? 'Start' : 'Send';
   for (const list of content.querySelectorAll<HTMLElement>('[data-thread]'))
     list.hidden = list.dataset.thread !== to.value;
   const hint = to.selectedOptions[0]?.dataset.hint;
@@ -880,52 +906,47 @@ function researchBody(kind: string | undefined): Record<string, unknown> {
 async function act(button: HTMLElement): Promise<void> {
   const action = button.dataset.action;
   const body =
-    action === 'start'
-      ? {
-          action,
-          host: field('session-host'),
-          mode: field('session-mode'),
-          model: field('session-model').trim(),
-          prompt: field('session-prompt'),
-        }
-      : action === 'send'
-        ? { action, session: button.dataset.session, text: field('follow-up') }
-        : action === 'cancel' ||
-            action === 'end' ||
-            action === 'terminal-return'
-          ? { action, session: button.dataset.session }
-          : action === 'terminal-open'
-            ? { action, session: button.dataset.session, lease: viewLease() }
-            : action === 'answer'
-              ? {
-                  action,
-                  request: button.dataset.request,
-                  decision: button.dataset.decision,
-                }
-              : action === 'review'
-                ? { action, command: button.dataset.command }
-                : action === 'resume' || action === 'restart'
-                  ? { action, session: button.dataset.session }
-                  : action === 'select' ||
-                      action === 'redraft' ||
-                      action === 'change-direction'
-                    ? { action, idea: button.dataset.idea }
-                    : action === 'research'
-                      ? researchBody(button.dataset.research)
-                      : action === 'message'
-                        ? {
-                            action,
-                            to: field('message-to'),
-                            text: field('message-text'),
-                          }
-                        : action === 'setup'
-                          ? setupBody(button)
-                          : action?.startsWith('task-') ||
-                              action?.startsWith('coordinator-')
-                            ? taskRequest(button)
-                            : action?.startsWith('compute-')
-                              ? computeRequest(button)
-                              : { action };
+    action === 'cancel' || action === 'end' || action === 'terminal-return'
+      ? { action, session: button.dataset.session }
+      : action === 'terminal-open'
+        ? { action, session: button.dataset.session, lease: viewLease() }
+        : action === 'answer'
+          ? {
+              action,
+              request: button.dataset.request,
+              decision: button.dataset.decision,
+            }
+          : action === 'review'
+            ? { action, command: button.dataset.command }
+            : action === 'resume' || action === 'restart'
+              ? { action, session: button.dataset.session }
+              : action === 'select' ||
+                  action === 'redraft' ||
+                  action === 'change-direction'
+                ? { action, idea: button.dataset.idea }
+                : action === 'research'
+                  ? researchBody(button.dataset.research)
+                  : action === 'message'
+                    ? {
+                        action,
+                        to: field('message-to'),
+                        text: field('message-text'),
+                        // A new agent starts with the defaults under the box.
+                        ...(field('message-to') === 'new-agent'
+                          ? {
+                              host: field('agent-host'),
+                              mode: field('agent-mode'),
+                            }
+                          : {}),
+                      }
+                    : action === 'setup'
+                      ? setupBody(button)
+                      : action?.startsWith('task-') ||
+                          action?.startsWith('coordinator-')
+                        ? taskRequest(button)
+                        : action?.startsWith('compute-')
+                          ? computeRequest(button)
+                          : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -979,8 +1000,11 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = name ? `Done: ${name}` : 'Done';
     failure = undefined;
-    // A new or resumed session opens in the panel, and so does a new task.
-    if (action === 'start' || action === 'resume' || action === 'restart') {
+    // A new agent from the message box becomes the agent that the box writes to.
+    if (body.action === 'message' && body.to === 'new-agent')
+      knownSessions = new Set(sessionOptions());
+    // A resumed session opens in the panel, and a new task opens as its page.
+    if (action === 'resume' || action === 'restart') {
       selectedWorker = undefined;
       remember('worker', undefined);
       opener = undefined;
@@ -992,8 +1016,6 @@ async function act(button: HTMLElement): Promise<void> {
       navigate({ view: 'task', panel: '' }, '#view-title', 'start');
     }
     for (const id of [
-      'session-prompt',
-      'follow-up',
       'message-text',
       'setup-answer',
       'setup-feedback',
@@ -1197,6 +1219,26 @@ document.addEventListener('click', (event) => {
         target.textContent = 'Select command to copy';
       });
   }
+});
+// `/` puts the cursor in the message box, outside a text field.
+document.addEventListener('keydown', (event) => {
+  const text = document.getElementById('message-text');
+  if (
+    event.key !== '/' ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    !(text instanceof HTMLTextAreaElement) ||
+    (event.target instanceof Element &&
+      event.target.closest(
+        'input, textarea, select, [contenteditable], .terminal-screen',
+      ))
+  )
+    return;
+  event.preventDefault();
+  if (matchMedia('(max-width: 860px)').matches)
+    document.body.classList.add('dock-open');
+  text.focus();
 });
 // Escape closes the phone menu, then the panel. In a text field it does nothing, so a draft stays.
 document.addEventListener('keydown', (event) => {
