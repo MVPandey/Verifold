@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
+  isDraft,
   TaskManager,
   type TaskRecord,
   type TaskSessions,
@@ -836,6 +837,31 @@ await test("the person's message reaches a running agent in its turn, or starts 
     ['delivered', null, 'Florida had no road data.'],
     ['delivered', null, 'Florida had no road data.'],
   ]);
+});
+
+await test('only the coordinator writes a draft, and an edit by the person makes the task theirs', async (t) => {
+  const root = await project(t);
+  const tasks = new TaskManager(root, {
+    ownerId: 'owner-1',
+    sessions: new FakeSessions(),
+  });
+  const mine = await tasks.create({ ...fields, draft: true });
+  assert.equal((await tasks.get(mine))?.assignment.draft, undefined);
+  const id = await tasks.create(
+    { ...fields, title: 'Drafted', writable: 'drafted', draft: true },
+    'coordinator',
+    'Created by the coordinator: asked.',
+  );
+  await assert.rejects(tasks.start(id, 'coordinator'), /draft for the person/);
+  await tasks.edit(id, {
+    ...fields,
+    title: 'Drafted',
+    writable: 'drafted',
+    reason: 'I wrote it myself.',
+  });
+  const edited = await tasks.get(id);
+  assert.equal(edited?.assignment.draft, undefined);
+  assert.equal(edited && isDraft(edited), false);
 });
 
 await test('research takes messages with its next step, and the coordinator gets the ones that research left', async (t) => {

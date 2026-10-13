@@ -585,19 +585,23 @@ function showThread(): void {
   if (text instanceof HTMLTextAreaElement && hint) text.placeholder = hint;
 }
 
-/** Point the message box at one agent and put the cursor in it. */
-function writeTo(agent: string): void {
+/** Point the message box at one agent and put the cursor in it. `about` names a task at the start of an empty message. */
+function writeTo(agent: string, about?: string): void {
   const to = document.getElementById('message-to');
+  const text = document.getElementById('message-text');
   if (
     !(to instanceof HTMLSelectElement) ||
+    !(text instanceof HTMLTextAreaElement) ||
     !Array.from(to.options).some((option) => option.value === agent)
   )
     return;
   to.value = agent;
   showThread();
+  if (about && !text.value.trim()) text.value = `About "${about}": `;
   if (matchMedia('(max-width: 860px)').matches)
     document.body.classList.add('dock-open');
-  document.getElementById('message-text')?.focus();
+  text.focus();
+  text.setSelectionRange(text.value.length, text.value.length);
 }
 
 /** The Accept button counts the selected files. The diff pane shows the chosen file. */
@@ -1038,15 +1042,14 @@ document.addEventListener('click', (event) => {
     closeRail();
     return;
   }
-  // On a phone the message box covers the bottom of the view. A tap beside it closes it.
+  // A click beside the message box folds its thread. On a phone, where the box covers the view, it also closes the box.
   if (
-    document.body.classList.contains('dock-open') &&
     !(
       event.target instanceof Element &&
       event.target.closest('.dock, [data-dock], [data-message-to]')
     )
   )
-    document.body.classList.remove('dock-open');
+    document.body.classList.remove('dock-open', 'dock-expanded');
   if (!(target instanceof HTMLElement)) return;
   if (target.matches('a.skip')) {
     event.preventDefault();
@@ -1105,7 +1108,7 @@ document.addEventListener('click', (event) => {
   }
   if (target.dataset.diff) void loadDiff(target);
   if (target.dataset.messageTo) {
-    writeTo(target.dataset.messageTo);
+    writeTo(target.dataset.messageTo, target.dataset.about);
     return;
   }
   // On a phone the message box opens from a button.
@@ -1195,8 +1198,11 @@ document.addEventListener('keydown', (event) => {
     menuButton.focus();
     return;
   }
-  if (document.body.classList.contains('dock-open')) {
-    document.body.classList.remove('dock-open');
+  if (
+    document.body.classList.contains('dock-open') ||
+    document.body.classList.contains('dock-expanded')
+  ) {
+    document.body.classList.remove('dock-open', 'dock-expanded');
     return;
   }
   if (
@@ -1217,6 +1223,14 @@ content.addEventListener('change', (event) => {
     event.target.id === 'message-to'
   )
     showThread();
+});
+// Writing opens the thread of the message box. A click on a button in the box does not, so the button stays in place.
+content.addEventListener('focusin', (event) => {
+  if (
+    event.target instanceof HTMLElement &&
+    (event.target.id === 'message-text' || event.target.id === 'message-to')
+  )
+    document.body.classList.add('dock-expanded');
 });
 // Enter sends a message. Shift+Enter starts a new line.
 content.addEventListener('keydown', (event) => {
