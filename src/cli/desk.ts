@@ -164,9 +164,6 @@ async function taskAction(
     case 'task-cancel':
       await tasks.cancel(body.task);
       return;
-    case 'task-message':
-      await tasks.post(body.to, body.text);
-      return;
     case 'task-decide':
       await tasks.decideMessage(body.message, body.decision, body.reason);
       return;
@@ -323,6 +320,16 @@ async function act(
       });
     return 200;
   }
+  // The message box: to research, the coordinator, or a task agent.
+  if (body.action === 'message') {
+    if (body.to === 'research') {
+      if (!research)
+        throw new SessionActionError('Research takes no messages here.');
+      await research.message(body.text);
+    } else if (tasks) await tasks.post(body.to, body.text);
+    else return 400;
+    return 200;
+  }
   if (
     tasks &&
     typeof body.action === 'string' &&
@@ -372,17 +379,6 @@ async function act(
         return 200;
       case 'coordinator-answer':
         await coordinator.decideAnswer(body.decision, body.note);
-        return 200;
-      case 'coordinator-message':
-        // A question from a task's panel names the task, so the coordinator knows what it is about.
-        if (body.about !== undefined && !validTaskId(body.about))
-          throw new SessionActionError('The desk sent an invalid task ID.');
-        await tasks.post(
-          'coordinator',
-          body.about !== undefined && typeof body.text === 'string'
-            ? `About ${body.about}: ${body.text}`
-            : body.text,
-        );
         return 200;
       default:
         return 400;

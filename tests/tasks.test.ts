@@ -117,6 +117,20 @@ class FakeSessions implements TaskSessions {
     this.sent.push(text);
     this.waiting.delete(session);
   }
+  /** Messages added to running turns, with the callback that says whether the harness took each one. */
+  steered: { session: string; text: string; done: (taken: boolean) => void }[] =
+    [];
+  /** Sessions whose turn runs, so they take a message. */
+  running = new Set<string>();
+  steer(
+    session: string,
+    text: string,
+    done: (taken: boolean) => void,
+  ): boolean {
+    if (!this.running.has(session)) return false;
+    this.steered.push({ session, text, done });
+    return true;
+  }
   cancel(): void {
     this.cancelled++;
   }
@@ -665,9 +679,11 @@ await test('workers talk through Verifold tools, and messages reach a task with 
   assert.match(html, /<li>https:\/\/example\.org\/benchmark<\/li>/);
   assert.match(html, /Messages \(3\)/);
   assert.match(html, /Waits for the coordinator/);
+  // The message box writes to a running task's agent.
+  assert.match(html, /data-message-to="task-2">Write to its agent/);
   assert.match(
     html,
-    /data-action="task-message" data-task="task-2" data-to="task-2"/,
+    /<option value="task-2" data-hint="Write to Method review">/,
   );
 
   // The person decides the objection. The decision goes to the objector with its next turn.
@@ -738,8 +754,9 @@ await test('one turn carries at most 20 messages, each one short, so a change re
   const id = await tasks.create(fields);
   await tasks.start(id);
   await turn(tasks, sessions, { 'results/baseline.md': 'v1\n' });
+  // The coordinator's notes wait for the next turn. A note from the person would start that turn at once.
   for (let index = 0; index < 25; index++)
-    await tasks.post(id, `${index} ${'x'.repeat(3990)}`);
+    await tasks.post(id, `${index} ${'x'.repeat(3990)}`, 'coordinator');
   await tasks.askForChanges(id, 'y'.repeat(4000));
   const sent = sessions.sent.at(-1) ?? '';
   assert.ok(sent.length < 100_000, `${sent.length} characters`);
@@ -753,6 +770,125 @@ await test('one turn carries at most 20 messages, each one short, so a change re
       deliveries.filter((delivery) => delivery === 'queued').length,
     ],
     [20, 5],
+  );
+});
+
+await test("the person's message reaches a running agent in its turn, or starts the next turn of a version in review", async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  sessions.running.add('S1');
+  const delivery = async (): Promise<unknown[]> =>
+    (await tasks.messageList()).map((message) => [
+      message.delivery,
+      message.via ?? null,
+      message.answer?.text ?? null,
+    ]);
+  // A running turn gets the message at once, framed as the person's words.
+  await tasks.post(id, 'Use 5 runs, not 3.');
+  assert.match(
+    sessions.steered[0]?.text ?? '',
+    /^The person sent you this message while you work:\n\nUse 5 runs, not 3\.\n\n.*writable paths/,
+  );
+  assert.deepEqual(await delivery(), [['sent', 'turn', null]]);
+  // Text before the harness takes it in is no answer.
+  await tasks.answered(id, 'Still timing.', true);
+  sessions.steered[0]?.done(true);
+  await tasks.answered(id, 'Understood. I use 5 runs.', true);
+  assert.deepEqual(await delivery(), [
+    ['delivered', 'turn', 'Understood. I use 5 runs.'],
+  ]);
+  // A message that the harness refuses waits for the next turn, which carries it.
+  await tasks.post(id, 'Skip the USA graph.');
+  sessions.steered[1]?.done(false);
+  await tasks.answered(id, 'More text.', true);
+  assert.deepEqual((await delivery())[1], ['queued', null, null]);
+  await turn(tasks, sessions, { 'results/baseline.md': 'v1\n' });
+  assert.equal((await tasks.get(id))?.state, 'review');
+  // A version in review starts its next turn with the message. The next version follows.
+  sessions.running.delete('S1');
+  await tasks.post(id, 'Why is Florida missing?');
+  assert.equal((await tasks.get(id))?.state, 'running');
+  const sent = sessions.sent.at(-1) ?? '';
+  assert.match(sent, /^The person wrote to you about your version\./);
+  assert.match(
+    sent,
+    /Messages for this task[\s\S]*from person: "Skip the USA graph\."[\s\S]*from person: "Why is Florida missing\?"/,
+  );
+  const version = (await tasks.get(id))?.attempts.at(-1)?.versions.at(-1);
+  assert.deepEqual(
+    [version?.decision?.kind, version?.decision?.note],
+    ['changes', 'Why is Florida missing?'],
+  );
+  // The reply at the end of the turn answers each message that the turn carried.
+  const started = sessions.started.at(-1);
+  assert.ok(started);
+  sessions.waiting.add('S1');
+  await tasks.turnEnded(
+    started.task,
+    'completed',
+    undefined,
+    'Florida had no road data.',
+  );
+  assert.deepEqual((await delivery()).slice(1), [
+    ['delivered', null, 'Florida had no road data.'],
+    ['delivered', null, 'Florida had no road data.'],
+  ]);
+});
+
+await test('research takes messages with its next step, and the coordinator gets the ones that research left', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const events: string[] = [];
+  const tasks = new TaskManager(root, {
+    ownerId: 'owner-1',
+    sessions,
+    onEvent: (event) => events.push(`${event.kind}: ${event.text}`),
+  });
+  await assert.rejects(
+    tasks.post('research', 'x', 'coordinator'),
+    /to a task or to the person/,
+  );
+  await tasks.post('research', 'Also look at contraction hierarchies.');
+  await tasks.post('research', 'Compare against the textbook heap.');
+  assert.deepEqual(await tasks.takeResearch(), [
+    'Also look at contraction hierarchies.',
+    'Compare against the textbook heap.',
+  ]);
+  assert.deepEqual(await tasks.takeResearch(), []);
+  await tasks.post('research', 'Use road graphs only.');
+  await tasks.passToCoordinator();
+  const messages = await tasks.messageList();
+  assert.deepEqual(
+    messages.map((message) => [
+      message.to,
+      message.delivery,
+      message.via ?? null,
+    ]),
+    [
+      ['research', 'delivered', null],
+      ['research', 'delivered', null],
+      ['research', 'delivered', 'coordinator'],
+      ['coordinator', 'queued', null],
+    ],
+  );
+  assert.equal(
+    messages[3]?.text,
+    'I wrote this to research while it ran: Use road graphs only.',
+  );
+  // A message from the person wakes the coordinator as the person's event.
+  assert.deepEqual(events, [
+    'person: m-4 from person: "I wrote this to research while it ran: Use road graphs only."',
+  ]);
+  // A note from the coordinator to the person answers the person's messages that its digest carried.
+  await tasks.post('person', 'Too early.', 'coordinator');
+  await tasks.sentToCoordinator(['m-4']);
+  await tasks.post('person', 'Road graphs only, noted.', 'coordinator');
+  assert.equal(
+    (await tasks.messageList())[3]?.answer?.text,
+    'Road graphs only, noted.',
   );
 });
 
