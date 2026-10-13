@@ -2737,10 +2737,22 @@ export function renderSetup(view: SetupView | null): {
       ? `<span class="event-text">${e(entry.text)}</span>`
       : `<div class="event-text md">${markdownHtml(entry.text)}</div>`;
   // One question at a time: what Verifold and the harness said since the last answer, then the question.
+  // The review shows the brief itself, so the harness text above it would repeat the brief.
   const answered = view.lines.findLastIndex((entry) => entry.source === 'you');
   const said = view.prompt
-    ? view.lines.slice(answered + 1).filter((entry) => entry.source !== 'tool')
+    ? view.lines
+        .slice(answered + 1)
+        .filter(
+          (entry) =>
+            entry.source !== 'tool' &&
+            !(view.prompt?.kind === 'review' && entry.source === 'agent'),
+        )
     : [];
+  // The log keeps the latest 60 lines, newest first, in a scroll area. A long line folds behind Show all.
+  const logged = view.lines
+    .map((entry, index) => ({ entry, index }))
+    .slice(-60)
+    .reverse();
   const html =
     page(`<div class="setup"><h1 id="view-title" tabindex="-1">New project</h1>
   <ol class="setup-steps" aria-label="Setup steps">${setupSteps
@@ -2754,11 +2766,10 @@ export function renderSetup(view: SetupView | null): {
   ${view.prompt ? renderSetupPrompt(view.prompt) : ''}
   ${
     view.lines.length
-      ? `<details class="setup-log" id="setup-log"><summary>Setup log (${view.lines.length})</summary>${detailSwitch}<ol class="setup-lines">${view.lines
-          .slice(-60)
+      ? `<details class="setup-log" id="setup-log"><summary>Setup log (${view.lines.length})</summary>${detailSwitch}<ol class="setup-lines" reversed>${logged
           .map(
-            (entry) =>
-              `<li class="event setup-${entry.source}"><span class="event-kind">${setupLabels[entry.source]}</span>${line(entry)}<time datetime="${e(entry.at)}">${e(clock(entry.at))}</time></li>`,
+            ({ entry, index }) =>
+              `<li class="event setup-${entry.source}"><span class="event-kind">${setupLabels[entry.source]}</span><div class="event-text">${entry.source === 'tool' || entry.source === 'you' ? more(`setup-line-${index}`, entry.text) : moreMd(`setup-line-${index}`, entry.text)}</div><time datetime="${e(entry.at)}">${e(clock(entry.at))}</time></li>`,
           )
           .join(
             '',

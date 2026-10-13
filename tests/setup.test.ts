@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SetupBridge } from '../src/cli/setup-bridge.ts';
+import { SetupBridge, type SetupView } from '../src/cli/setup-bridge.ts';
+import { renderSetup } from '../src/cli/desk-view.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { loadWorkspace } from '../src/cli/storage.ts';
 import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
@@ -75,6 +76,42 @@ await test('the setup bridge turns each question into one desk prompt', async ()
   controller.abort();
   await assert.rejects(waiting, { name: 'AbortError' });
   assert.equal(bridge.view().prompt, null);
+});
+
+await test('the setup log keeps the latest lines in a scroll area, newest first, and folds long ones', () => {
+  const at = new Date().toISOString();
+  const brief = `# Research brief\n\n${'The question narrows to road graphs. '.repeat(20)}`;
+  const view: SetupView = {
+    step: 'Brief',
+    lines: [
+      ...Array.from({ length: 70 }, (_, index) => ({
+        at,
+        source: 'verifold' as const,
+        text: `Step ${index}`,
+      })),
+      { at, source: 'you', text: 'Fast graph search on CPUs' },
+      { at, source: 'agent', text: brief },
+    ],
+    prompt: { id: 3, kind: 'review', brief, final: false },
+    busy: null,
+    outcome: 'running',
+    error: null,
+  };
+  const { html } = renderSetup(view);
+  const log =
+    /<ol class="setup-lines" reversed>([\s\S]*?)<\/ol>/.exec(html)?.[1] ?? '';
+  // The latest 60 of 72 lines, newest first.
+  assert.equal(log.match(/<li /g)?.length, 60);
+  assert.ok(log.indexOf('Research brief') < log.indexOf('Step 69'));
+  assert.doesNotMatch(log, /Step 11</);
+  // A long line shows its lead and folds the rest.
+  assert.match(log, /<details class="more" id="setup-line-71">/);
+  // The review shows the brief once: not again as harness text above it.
+  assert.doesNotMatch(html, /class="setup-said"/);
+  assert.match(
+    html,
+    /Review the brief[\s\S]*The question narrows to road graphs\./,
+  );
 });
 
 await test('bare verifold sets up a new project in the desk and opens the project there', async (t) => {
