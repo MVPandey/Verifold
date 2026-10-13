@@ -43,6 +43,11 @@ export interface ResearchRunnerOptions {
   readonly harness?: typeof runHarness;
   /** A direction was chosen. The owner starts the coordinator. */
   readonly onSelect?: () => Promise<void>;
+  /** The person's messages to research: `post` keeps one until a step takes it, and `take` gives the waiting ones to a step. */
+  readonly inbox?: {
+    readonly post: (text: unknown) => Promise<unknown>;
+    readonly take: () => Promise<readonly string[]>;
+  };
 }
 
 function fail(message: string): never {
@@ -152,6 +157,7 @@ export class ResearchRunner {
             request.onTranscript?.(update);
           },
         }),
+      this.options.inbox?.take,
     )
       .then(async (workspace) => {
         const next = workspace.research?.phase;
@@ -189,6 +195,24 @@ export class ResearchRunner {
   cancel(): void {
     if (!this.controller) fail('No research step is running.');
     this.controller.abort();
+  }
+
+  /**
+   * A message from the person. It waits for the next research step. When no
+   * step runs, it starts one: a plan or directions that wait for the person
+   * are revised with it.
+   */
+  async message(text: unknown): Promise<void> {
+    const workspace = await loadWorkspace(this.root);
+    if (workspace.selectedId)
+      fail(
+        'Research ended when the direction was chosen. Write to the coordinator.',
+      );
+    const inbox =
+      this.options.inbox ?? fail('Research takes no messages here.');
+    await inbox.post(text);
+    if (!this.running && !this.starting && workspace.research?.phase)
+      await this.start({});
   }
 
   /**

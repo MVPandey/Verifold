@@ -562,10 +562,10 @@ await test('desk points to the coordinator after a direction and shows its notes
   assert.match(waiting, /The plan waits for you/);
   assert.match(waiting, /Plan: waits for you/);
   assert.doesNotMatch(waiting, /verifold handoff/);
-  // Home shows the latest note as the coordinator's reading. Its panel lists every note.
+  // The message box shows the coordinator's latest note as its reading. Its panel lists every note.
   assert.match(
     waiting,
-    /Its latest note[\s\S]*Its reading[\s\S]*The benchmark needs a dataset host\./,
+    /data-thread="coordinator"><li class="dock-note">[\s\S]*Its reading[\s\S]*The benchmark needs a dataset host\./,
   );
   assert.match(
     html(false, [pilot], 'coordinator'),
@@ -1091,7 +1091,14 @@ await test('desk Home lists what changed since the person left, the team feed, a
       'coordinator',
       'Why is the data synthetic?',
       before,
-      { delivery: 'delivered', deliveredAt: before },
+      {
+        delivery: 'delivered',
+        deliveredAt: before,
+        answer: {
+          at: later(1),
+          text: 'The brief allows a synthetic graph for a first pass.',
+        },
+      },
     ),
     message(
       'm-2',
@@ -1175,16 +1182,23 @@ await test('desk Home lists what changed since the person left, the team feed, a
     '';
   assert.match(feed, /Bounded pilot[\s\S]*The pilot is done\./);
   assert.doesNotMatch(feed, /synthetic/);
-  // The latest note, the message that waits for its answer, and the earlier talk.
+  // The message box writes to the coordinator. Its thread shows each message with its state, and
+  // the answer under it. The note that answered a message does not show a second time.
+  const dock = /<section class="dock"[\s\S]*<\/section>/.exec(away)?.[0] ?? '';
   assert.match(
-    away,
-    /Its latest note[\s\S]*Its reading[\s\S]*The brief allows a synthetic graph for a first pass\.[\s\S]*Waits for the coordinator[\s\S]*Can we add a real graph next\?/,
+    dock,
+    /<strong>You<\/strong>[\s\S]*Answered[\s\S]*Why is the data synthetic\?[\s\S]*dock-answer[\s\S]*Its reading[\s\S]*The brief allows a synthetic graph for a first pass\.[\s\S]*Waits for the coordinator[\s\S]*Can we add a real graph next\?/,
+  );
+  assert.equal(dock.split('The brief allows').length, 2);
+  assert.match(
+    dock,
+    /<option value="coordinator" data-hint="Write to the coordinator">Coordinator, leads now<\/option>/,
   );
   assert.match(
-    away,
-    /Earlier messages \(1\)[\s\S]*Read by the coordinator at[\s\S]*Why is the data synthetic\?/,
+    dock,
+    /id="message-text"[^>]*placeholder="Write to the coordinator"/,
   );
-  assert.match(away, /id="coordinator-message"/);
+  assert.doesNotMatch(away, /id="coordinator-message"/);
   // The coordinator's actions and controls are in its panel, which the rail opens.
   assert.match(away, /data-panel="coordinator" aria-pressed="false"/);
   assert.doesNotMatch(away, /What it did/);
@@ -2216,4 +2230,158 @@ await test('desk leads Answer with the answer and its sign-off, then the checks'
   const accepted = desk('results', { kind: 'accepted', at });
   assert.match(accepted.html, /You accepted the answer at/);
   assert.equal(accepted.stage, 'Answer: accepted');
+});
+
+await test('the message box writes to the agent that leads, or to a task agent, and says how far each message got', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:00:00.000Z';
+  const message = (
+    id: string,
+    to: string,
+    text: string,
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    schemaVersion: 1,
+    id,
+    at,
+    from: 'person',
+    to,
+    kind: 'note',
+    text,
+    delivery: 'queued',
+    ...extra,
+  });
+  const task = (id: string, state: string, session: string | null) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    claim: null,
+    artifacts: [],
+    attempts: session
+      ? [{ number: 1, revision: 1, startedAt: at, session, versions: [] }]
+      : [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title: id === 'task-1' ? 'Profile the heap' : 'Write up',
+      objective: 'Run.',
+      host: 'claude',
+      dependencies: [],
+      inputs: [],
+      writable: ['results'],
+      output: 'results/x.md',
+      minutes: 20,
+    },
+  });
+  const render = (
+    view: DeskView,
+    live: Record<string, unknown>,
+    messages: readonly Record<string, unknown>[],
+  ): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [], selected: null, idle: [], messages },
+        ...live,
+      } as never,
+      { view, panel: null },
+    ).html;
+  const dock = (html: string): string =>
+    /<section class="dock"[\s\S]*<\/section>/.exec(html)?.[0] ?? '';
+  // Before a direction, research leads. Its messages wait for its next step.
+  const research = {
+    research: { running: true, step: 'Searching', events: [], startedAt: at },
+  };
+  const early = dock(
+    render('research', research, [
+      message('m-1', 'research', 'Compare against the textbook heap.', {
+        delivery: 'delivered',
+        deliveredAt: at,
+      }),
+      message('m-2', 'research', 'Also look at contraction hierarchies.'),
+    ]),
+  );
+  assert.match(
+    early,
+    /<option value="research" data-hint="Write to research">Research, leads now<\/option>/,
+  );
+  assert.match(
+    early,
+    /Delivered with a research step[\s\S]*Waits for the next research step/,
+  );
+  // The coordinator leads after it starts. Running and reviewed task agents are in To; open tasks are not.
+  const coordinator = {
+    coordinator: {
+      state: {
+        objective: 'Heap',
+        host: 'claude',
+        stoppedAt: null,
+        planApproved: true,
+        wakeups: [],
+        events: [],
+        actions: [],
+      },
+      session: {
+        live: true,
+        saveFailed: false,
+        record: { id: 'C1', status: 'running', host: 'claude', events: [] },
+      },
+      waiting: 1,
+      limitedUntil: null,
+    },
+  };
+  const tasks = (messages: readonly Record<string, unknown>[]) => ({
+    tasks: {
+      list: [task('task-1', 'running', 'S1'), task('task-2', 'open', null)],
+      selected: null,
+      idle: [],
+      messages,
+    },
+  });
+  const work = dock(
+    render(
+      'tasks',
+      {
+        ...coordinator,
+        ...tasks([
+          message('m-3', 'coordinator', 'Use 5 runs.'),
+          message('m-4', 'task-1', 'Skip the USA graph.', {
+            delivery: 'sent',
+            via: 'turn',
+          }),
+          message('m-5', 'task-1', 'Profile Florida too.', {
+            delivery: 'delivered',
+            via: 'turn',
+            answer: { at, text: 'Understood. I add Florida.' },
+          }),
+        ]),
+      },
+      [],
+    ),
+  );
+  assert.match(
+    work,
+    /<option value="coordinator"[^>]*>Coordinator, leads now<\/option><option value="task-1" data-hint="Write to Profile the heap">Profile the heap<\/option><\/select>/,
+  );
+  assert.match(
+    work,
+    /data-thread="coordinator">[\s\S]*Waits for its current turn to end/,
+  );
+  assert.match(
+    work,
+    /data-thread="task-1" hidden>[\s\S]*Sent, it arrives at its next step[\s\S]*Answered[\s\S]*Profile Florida too\.[\s\S]*dock-answer[\s\S]*Understood\. I add Florida\./,
+  );
+  // The box is on Home, Plan, and Work only.
+  assert.match(render('home', coordinator, []), /id="message-text"/);
+  assert.doesNotMatch(render('records', coordinator, []), /id="message-text"/);
+  // Without an agent to write to, there is no box.
+  assert.doesNotMatch(render('home', {}, []), /id="message-text"/);
 });

@@ -281,6 +281,12 @@ async function render(html: string): Promise<void> {
     showDetail();
     for (const [id, value] of typed) {
       const field = document.getElementById(id);
+      // A choice that left the list, such as an agent that ended, falls back to the server's choice.
+      if (
+        field instanceof HTMLSelectElement &&
+        !Array.from(field.options).some((option) => option.value === value)
+      )
+        continue;
       if (
         field instanceof HTMLInputElement ||
         field instanceof HTMLTextAreaElement ||
@@ -288,6 +294,7 @@ async function render(html: string): Promise<void> {
       )
         field.value = value;
     }
+    showThread();
     // A section that is new to the page keeps the state that the server gave it.
     for (const detail of content.querySelectorAll<HTMLDetailsElement>(
       'details[id]',
@@ -567,6 +574,32 @@ function field(id: string): string {
     : '';
 }
 
+/** The message box shows the thread of the agent in To, and says whom the message goes to. */
+function showThread(): void {
+  const to = document.getElementById('message-to');
+  const text = document.getElementById('message-text');
+  if (!(to instanceof HTMLSelectElement)) return;
+  for (const list of content.querySelectorAll<HTMLElement>('[data-thread]'))
+    list.hidden = list.dataset.thread !== to.value;
+  const hint = to.selectedOptions[0]?.dataset.hint;
+  if (text instanceof HTMLTextAreaElement && hint) text.placeholder = hint;
+}
+
+/** Point the message box at one agent and put the cursor in it. */
+function writeTo(agent: string): void {
+  const to = document.getElementById('message-to');
+  if (
+    !(to instanceof HTMLSelectElement) ||
+    !Array.from(to.options).some((option) => option.value === agent)
+  )
+    return;
+  to.value = agent;
+  showThread();
+  if (matchMedia('(max-width: 860px)').matches)
+    document.body.classList.add('dock-open');
+  document.getElementById('message-text')?.focus();
+}
+
 /** The Accept button counts the selected files. The diff pane shows the chosen file. */
 function showReview(): void {
   const accept = content.querySelector<HTMLButtonElement>(
@@ -720,8 +753,6 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
       };
     case 'task-reject':
       return { action, task, version };
-    case 'task-message':
-      return { action, to: button.dataset.to, text: field('task-message') };
     case 'coordinator-start':
       return {
         action,
@@ -742,15 +773,6 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         decision: button.dataset.decision,
         note: field('answer-note'),
       };
-    case 'coordinator-message':
-      // A question from a task's panel names its task.
-      return button.dataset.about
-        ? {
-            action,
-            about: button.dataset.about,
-            text: field('task-coordinator-message'),
-          }
-        : { action, text: field('coordinator-message') };
     case 'task-decide':
       return {
         action,
@@ -829,8 +851,6 @@ function setupBody(button: HTMLElement): Record<string, unknown> {
 /** The research request for one decision button. */
 function researchBody(kind: string | undefined): Record<string, unknown> {
   if (kind === 'approve') return { action: 'research', approve: true };
-  if (kind === 'feedback')
-    return { action: 'research', feedback: field('research-feedback') };
   if (kind !== 'start') return { action: 'research' };
   const guided = document.getElementById('research-guided');
   return {
@@ -879,14 +899,20 @@ async function act(button: HTMLElement): Promise<void> {
                     ? { action, idea: button.dataset.idea }
                     : action === 'research'
                       ? researchBody(button.dataset.research)
-                      : action === 'setup'
-                        ? setupBody(button)
-                        : action?.startsWith('task-') ||
-                            action?.startsWith('coordinator-')
-                          ? taskRequest(button)
-                          : action?.startsWith('compute-')
-                            ? computeRequest(button)
-                            : { action };
+                      : action === 'message'
+                        ? {
+                            action,
+                            to: field('message-to'),
+                            text: field('message-text'),
+                          }
+                        : action === 'setup'
+                          ? setupBody(button)
+                          : action?.startsWith('task-') ||
+                              action?.startsWith('coordinator-')
+                            ? taskRequest(button)
+                            : action?.startsWith('compute-')
+                              ? computeRequest(button)
+                              : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -955,14 +981,11 @@ async function act(button: HTMLElement): Promise<void> {
     for (const id of [
       'session-prompt',
       'follow-up',
-      'research-feedback',
+      'message-text',
       'setup-answer',
       'setup-feedback',
       'task-note',
       'task-edit-reason',
-      'task-message',
-      'coordinator-message',
-      'task-coordinator-message',
       'answer-note',
       ...(body.action === 'coordinator-rule'
         ? [`rule-${String(body.check)}`]
@@ -1015,6 +1038,15 @@ document.addEventListener('click', (event) => {
     closeRail();
     return;
   }
+  // On a phone the message box covers the bottom of the view. A tap beside it closes it.
+  if (
+    document.body.classList.contains('dock-open') &&
+    !(
+      event.target instanceof Element &&
+      event.target.closest('.dock, [data-dock], [data-message-to]')
+    )
+  )
+    document.body.classList.remove('dock-open');
   if (!(target instanceof HTMLElement)) return;
   if (target.matches('a.skip')) {
     event.preventDefault();
@@ -1072,6 +1104,16 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (target.dataset.diff) void loadDiff(target);
+  if (target.dataset.messageTo) {
+    writeTo(target.dataset.messageTo);
+    return;
+  }
+  // On a phone the message box opens from a button.
+  if (target.hasAttribute('data-dock')) {
+    if (document.body.classList.toggle('dock-open'))
+      document.getElementById('message-text')?.focus();
+    return;
+  }
   if (target.dataset.pane) {
     pane = ['details', 'terminal', 'commands'].includes(target.dataset.pane)
       ? target.dataset.pane
@@ -1153,6 +1195,10 @@ document.addEventListener('keydown', (event) => {
     menuButton.focus();
     return;
   }
+  if (document.body.classList.contains('dock-open')) {
+    document.body.classList.remove('dock-open');
+    return;
+  }
   if (
     !panel ||
     document.body.classList.contains('t-locked') ||
@@ -1166,6 +1212,26 @@ document.addEventListener('keydown', (event) => {
 content.addEventListener('change', (event) => {
   if (event.target instanceof HTMLInputElement && event.target.dataset.file)
     showReview();
+  if (
+    event.target instanceof HTMLSelectElement &&
+    event.target.id === 'message-to'
+  )
+    showThread();
+});
+// Enter sends a message. Shift+Enter starts a new line.
+content.addEventListener('keydown', (event) => {
+  if (
+    event.key !== 'Enter' ||
+    event.shiftKey ||
+    event.isComposing ||
+    !(event.target instanceof HTMLTextAreaElement) ||
+    event.target.id !== 'message-text'
+  )
+    return;
+  event.preventDefault();
+  const send = content.querySelector<HTMLElement>('[data-action="message"]');
+  if (send && !(send instanceof HTMLButtonElement && send.disabled))
+    void act(send);
 });
 // A person who comes back after 5 minutes or more sees on Home what changed while they were away.
 document.addEventListener('visibilitychange', () => {

@@ -179,6 +179,8 @@ export type HostEvent =
       readonly costUsd?: number;
     }
   | { readonly type: 'notice'; readonly text: string }
+  /** The harness took a message that `steer` added to the running turn, or refused it. */
+  | { readonly type: 'steered'; readonly id: string; readonly taken: boolean }
   /** One transcript update: full messages, tool inputs, and tool results. Private session data. */
   | { readonly type: 'transcript'; readonly update: TranscriptUpdate }
   | { readonly type: 'exit'; readonly code: number | null };
@@ -235,6 +237,11 @@ export interface HostSession {
   readonly overrides?: readonly string[];
   /** Start a new turn. The caller sends a follow-up only after the previous turn ends. */
   send(text: string): void;
+  /**
+   * Add a message to the running turn. A `steered` event with this ID reports
+   * the outcome. False when the harness cannot take a message now.
+   */
+  steer(text: string, id: string): boolean;
   /** Deny the listed open requests and stop the current turn. */
   interrupt(pending: readonly string[]): void;
   answer(id: string, allow: boolean): void;
@@ -407,6 +414,8 @@ function claude(options: HostOptions): HostSession {
       '--output-format',
       'stream-json',
       '--verbose',
+      // Claude Code echoes each message when it takes it in, so Verifold knows when a steered message arrived.
+      '--replay-user-messages',
       '--permission-prompt-tool',
       'stdio',
       // Workers load no MCP server from the user's configuration, plugins, or claude.ai connectors.
@@ -447,12 +456,21 @@ function claude(options: HostOptions): HostSession {
   const tools = options.tools;
   const inputs = new Map<string, unknown>();
   let interrupting = false;
-  const user = (text: string): void =>
+  /** Messages that `steer` wrote and Claude Code has not echoed yet. */
+  const steers = new Set<string>();
+  const user = (text: string, uuid?: string): void =>
     write(child, {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
       session_id: '',
+      ...(uuid ? { uuid } : {}),
+    });
+  const stopTurn = (): void =>
+    write(child, {
+      type: 'control_request',
+      request_id: `verifold-${randomUUID()}`,
+      request: { subtype: 'interrupt' },
     });
   const answer = (id: string, allow: boolean, interrupt = false): void => {
     if (!inputs.has(id)) return;
@@ -478,6 +496,15 @@ function claude(options: HostOptions): HostSession {
     child.stdout,
     (event) => {
       if (!record(event)) return;
+      // An echo repeats a message that Verifold sent. It marks the moment Claude Code took it in.
+      if (event.isReplay === true) {
+        const id = str(event.uuid);
+        if (!id || !steers.delete(id)) return;
+        emit({ type: 'steered', id, taken: true });
+        // A stop that came before this message also stops the turn that the message started.
+        if (interrupting) stopTurn();
+        return;
+      }
       for (const update of claudeUpdates(event))
         emit({ type: 'transcript', update });
       if (event.type === 'system') {
@@ -570,6 +597,8 @@ function claude(options: HostOptions): HostSession {
         const id = str(event.request_id);
         if (id && inputs.delete(id)) emit({ type: 'request-end', id });
       } else if (event.type === 'result') {
+        // A steered message that came after the last tool call starts one more turn by itself. Probed on Claude Code 2.1.296.
+        if (steers.size) return;
         const cost = event.total_cost_usd;
         emit({
           type: 'turn-end',
@@ -657,15 +686,15 @@ function claude(options: HostOptions): HostSession {
   return {
     pid: child.pid,
     send: user,
+    steer(text, id) {
+      steers.add(id);
+      user(text, id);
+      return true;
+    },
     interrupt(pending) {
       interrupting = true;
       if (pending.length) for (const id of pending) answer(id, false, true);
-      else
-        write(child, {
-          type: 'control_request',
-          request_id: `verifold-${randomUUID()}`,
-          request: { subtype: 'interrupt' },
-        });
+      else stopTurn();
     },
     answer: (id, allow) => answer(id, allow),
     close() {
@@ -750,6 +779,7 @@ function codex(options: HostOptions): HostSession {
     {
       readonly method: string;
       readonly onResult?: (result: Record<string, unknown>) => void;
+      readonly onError?: () => void;
     }
   >();
   const requests = new Map<string, number | string>();
@@ -763,9 +793,14 @@ function codex(options: HostOptions): HostSession {
     method: string,
     params: Record<string, unknown>,
     onResult?: (result: Record<string, unknown>) => void,
+    onError?: () => void,
   ): void => {
     const id = nextId++;
-    results.set(id, { method, ...(onResult ? { onResult } : {}) });
+    results.set(id, {
+      method,
+      ...(onResult ? { onResult } : {}),
+      ...(onError ? { onError } : {}),
+    });
     send({ method, id, params });
   };
   const interruptTurn = (): void => {
@@ -971,6 +1006,8 @@ function codex(options: HostOptions): HostSession {
       const pending = results.get(message.id);
       results.delete(message.id);
       if (record(message.error)) {
+        // A steer that comes after the turn ended is refused. The caller sends it another way.
+        if (pending?.onError) return pending.onError();
         emit({
           type: 'notice',
           text: `Codex rejected ${pending?.method ?? 'a request'}: ${str(message.error.message) ?? 'unknown error'}.`,
@@ -1182,6 +1219,20 @@ function codex(options: HostOptions): HostSession {
     send(text) {
       cancelled = false;
       startTurn(text);
+    },
+    steer(text, id) {
+      if (!thread || !turn) return false;
+      call(
+        'turn/steer',
+        {
+          threadId: thread,
+          expectedTurnId: turn,
+          input: [{ type: 'text', text }],
+        },
+        () => emit({ type: 'steered', id, taken: true }),
+        () => emit({ type: 'steered', id, taken: false }),
+      );
+      return true;
     },
     interrupt(pending) {
       for (const id of pending) answer(id, false);

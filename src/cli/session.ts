@@ -333,9 +333,8 @@ export function needsReview(command: CommandEntry): boolean {
   );
 }
 
-/** Plain words for the harness mode. */
 /** The last agent text since the latest request: what the agent said at the end of its turn. */
-function lastReply(record: SessionRecord): string | undefined {
+export function lastReply(record: SessionRecord): string | undefined {
   for (let index = record.events.length - 1; index >= 0; index--) {
     const event = record.events[index];
     if (event?.kind === 'you') return undefined;
@@ -344,6 +343,7 @@ function lastReply(record: SessionRecord): string | undefined {
   return undefined;
 }
 
+/** Plain words for the harness mode. */
 export function modeLabel(record: SessionRecord): string {
   if (record.mode === 'strict') return 'Strict (task)';
   if (record.mode === 'coordinator') return 'Coordinator (Verifold tools only)';
@@ -819,6 +819,11 @@ export class SessionManager {
     readonly writer: TranscriptWriter;
     readonly apply: (update: TranscriptUpdate) => void;
   } | null = null;
+  /** Messages in the running turn that the harness has not taken yet, with their text and the caller's callback. */
+  private steers = new Map<
+    string,
+    { readonly text: string; readonly done: (taken: boolean) => void }
+  >();
 
   constructor(root: string, options: SessionManagerOptions) {
     this.root = root;
@@ -1146,6 +1151,34 @@ export class SessionManager {
     this.event('you', text);
   }
 
+  /**
+   * Add a message to the running turn. Claude Code takes it at its next tool
+   * result, or runs one more turn with it; Codex adds it to the turn. Returns
+   * false when no turn runs, so the caller can send it another way. `done`
+   * reports whether the harness took it.
+   */
+  steer(value: unknown, done: (taken: boolean) => void): boolean {
+    const text = this.text(value);
+    const id = randomUUID();
+    if (
+      this.native ||
+      !this.host ||
+      this.current?.status !== 'running' ||
+      !this.host.steer(text, id)
+    )
+      return false;
+    this.steers.set(id, { text, done });
+    this.event('you', text);
+    return true;
+  }
+
+  /** The harness can no longer take the waiting messages. */
+  private dropSteers(): void {
+    const dropped = [...this.steers.values()];
+    this.steers.clear();
+    for (const steer of dropped) steer.done(false);
+  }
+
   cancel(): void {
     if (this.native) fail(inTerminal);
     const record = this.current;
@@ -1172,6 +1205,7 @@ export class SessionManager {
     if (!this.host) fail('No session is running.');
     this.host.close();
     this.host = null;
+    this.dropSteers();
     this.patch((record) => ({
       ...unanswered(record),
       status: 'ended',
@@ -1234,6 +1268,7 @@ export class SessionManager {
     native?.close();
     this.host?.close();
     this.host = null;
+    this.dropSteers();
     // A task session ends with the owner. Its task keeps the work as a version.
     const resumable = record.nativeSessionId !== null && !record.task;
     this.patch((current) => ({
@@ -1428,6 +1463,7 @@ export class SessionManager {
     if (event.type === 'exit') {
       if (!this.host) return;
       this.host = null;
+      this.dropSteers();
       this.patch((current) => ({
         ...unanswered(current),
         status: event.code === 0 ? 'ended' : 'failed',
@@ -1632,6 +1668,19 @@ export class SessionManager {
       case 'notice':
         this.event('notice', event.text);
         break;
+      case 'steered': {
+        const steer = this.steers.get(event.id);
+        if (!steer) break;
+        this.steers.delete(event.id);
+        if (event.taken) this.transcript?.apply(requestUpdate(steer.text));
+        else
+          this.event(
+            'status',
+            `${name} took no message: its turn had ended. The message waits for the next turn.`,
+          );
+        steer.done(event.taken);
+        break;
+      }
       case 'transcript':
         this.transcript?.apply(event.update);
         break;

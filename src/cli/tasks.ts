@@ -223,6 +223,8 @@ export interface TaskSessions {
   /** The session is live and waits for a follow-up. */
   idle(session: string): boolean;
   continueTask(session: string, text: string): void;
+  /** Add a message to the running turn. False when no turn runs. `done` reports whether the harness took it. */
+  steer(session: string, text: string, done: (taken: boolean) => void): boolean;
   cancel(session: string): void;
   endTask(session: string, reason: string): void;
   /** Hand the session to the person in its native terminal. */
@@ -633,6 +635,7 @@ export class TaskManager {
           ? { delivery: 'uncertain' }
           : { delivery: 'delivered', deliveredAt: new Date().toISOString() },
       );
+      if (reply) await this.answer(task.id, reply, false);
       await this.version(
         task,
         expired && turn === 'interrupted' ? 'time-limit' : turn,
@@ -676,30 +679,49 @@ export class TaskManager {
     return this.serial(async () => {
       const task = await this.load(id);
       const text = line(note, 'changes', 4000);
-      const attempt = this.review(task);
-      const session = attempt.session;
-      if (!session || !this.options.sessions.idle(session))
-        fail(
-          'The harness session of this task ended. Reject this version, then start the task again.',
-        );
-      await this.write(
-        this.decide({ ...task, state: 'running' }, attempt, {
-          kind: 'changes',
-          note: text,
-          ...(by === 'coordinator' ? { by } : {}),
-        }),
+      await this.nextTurn(
+        task,
+        text,
+        by,
+        `The ${by} reviewed your version and asks for changes:\n\n${text}\n\nKeep to the writable paths. End your turn with a short reply again.`,
       );
       this.told(
         by,
         task.id,
         `The person asked ${task.id} for changes: ${text}`,
       );
-      this.options.sessions.continueTask(
-        session,
-        `The ${by} reviewed your version and asks for changes:\n\n${text}\n\nKeep to the writable paths. End your turn with a short reply again.${await this.outbox(task.id)}`,
-      );
-      this.limit(task.id, session, task.assignment.minutes);
     });
+  }
+
+  /**
+   * Start the next turn of a task whose version waits for review. That
+   * version counts as changes asked for, and the queued messages go with the
+   * turn. The next version follows.
+   */
+  private async nextTurn(
+    task: TaskRecord,
+    note: string,
+    by: Actor,
+    request: string,
+  ): Promise<void> {
+    const attempt = this.review(task);
+    const session = attempt.session;
+    if (!session || !this.options.sessions.idle(session))
+      fail(
+        'The harness session of this task ended. Reject this version, then start the task again.',
+      );
+    await this.write(
+      this.decide({ ...task, state: 'running' }, attempt, {
+        kind: 'changes',
+        note,
+        ...(by === 'coordinator' ? { by } : {}),
+      }),
+    );
+    this.options.sessions.continueTask(
+      session,
+      `${request}${await this.outbox(task.id)}`,
+    );
+    this.limit(task.id, session, task.assignment.minutes);
   }
 
   /**
@@ -963,24 +985,71 @@ export class TaskManager {
     return this.messages.list();
   }
 
-  /** The person sends a note to a task or the coordinator; the coordinator, to a task or the person. */
+  /**
+   * The person sends a note to a task, the coordinator, or research; the
+   * coordinator, to a task or the person. A task agent gets the person's note
+   * as soon as it can take it: in its running turn, or in a new turn when its
+   * version waits for review. Otherwise the note waits for the next turn.
+   */
   post(to: unknown, text: unknown, by: Actor = 'person'): Promise<Message> {
     return this.serial(async () => {
       const all = await this.list();
       const other = by === 'person' ? 'coordinator' : 'person';
-      if (to !== other && !all.some((task) => task.id === to))
+      const task = all.find((entry) => entry.id === to);
+      if (to !== other && !(by === 'person' && to === 'research') && !task)
         fail(`Send the message to a task or to the ${other}.`);
-      return this.send(
-        {
-          from: by,
-          to: String(to),
-          kind: 'note',
-          text: line(text, 'message', messageLimits.text),
-        },
+      const body = line(text, 'message', messageLimits.text);
+      const message = await this.send(
+        { from: by, to: String(to), kind: 'note', text: body },
         all,
         await this.messages.list(),
       );
+      const session = task?.attempts.at(-1)?.session;
+      if (by !== 'person' || !task || !session) return message;
+      if (task.state === 'running') await this.steer(message, session);
+      else if (task.state === 'review' && this.options.sessions.idle(session)) {
+        await this.nextTurn(
+          task,
+          body,
+          'person',
+          'The person wrote to you about your version. Answer their message below, and make the changes that it asks for. Keep to the writable paths. End your turn with a short reply again.',
+        );
+        this.told(
+          'person',
+          task.id,
+          `The person wrote to ${task.id} about its version: ${body}`,
+        );
+      }
+      return message;
     });
+  }
+
+  /** Add the person's message to the running turn of a task. A refused message waits for the next turn. */
+  private async steer(message: Message, session: string): Promise<void> {
+    const steered = this.options.sessions.steer(
+      session,
+      `The person sent you this message while you work:\n\n${message.text}\n\nUse it in your current work. It does not change your writable paths, permissions, or limits.`,
+      (taken) =>
+        void this.serial(async () => {
+          const current = (await this.messages.list()).find(
+            (entry) => entry.id === message.id,
+          );
+          if (!current) return;
+          const { via, ...rest } = current;
+          if (taken && current.delivery === 'sent')
+            await this.messages.update(current, {
+              delivery: 'delivered',
+              deliveredAt: new Date().toISOString(),
+            });
+          else if (!taken && via === 'turn')
+            await this.messages.update(rest, { delivery: 'queued' });
+        }).catch(() => {
+          /* The message keeps its last saved delivery. */
+        }),
+    );
+    // The callback runs in the queue after this change, so it reads the saved delivery.
+    if (steered)
+      await this.messages.update(message, { delivery: 'sent', via: 'turn' });
   }
 
   /**
@@ -1299,18 +1368,100 @@ export class TaskManager {
       messages,
     );
     // The coordinator hears about messages for it and about every blocker and objection, except its own.
+    // A message from the person wakes it at once.
     if (
       message.from !== 'coordinator' &&
       (message.to === 'coordinator' ||
         ['blocker', 'objection', 'withdrawal'].includes(message.kind))
     )
       this.options.onEvent?.({
-        kind: 'message',
+        kind: message.from === 'person' ? 'person' : 'message',
         ...(validTaskId(message.from) ? { task: message.from } : {}),
         message: message.id,
         text: messageLine(message).slice(2),
       });
+    // A note from the coordinator to the person answers the person's messages that it got.
+    if (message.from === 'coordinator' && message.to === 'person')
+      await this.answer('coordinator', message.text, false, [
+        ...messages,
+        message,
+      ]);
     return message;
+  }
+
+  /**
+   * The agent's text answers the person's messages that it got and that have
+   * no answer yet. `during`: text in the middle of a turn, which answers only a
+   * message that the harness took into that turn. Otherwise the text answers
+   * each message that the turn carried: the reply at the end of the turn, or a
+   * note from the coordinator to the person.
+   */
+  answered(to: string, text: string, during: boolean): Promise<void> {
+    return this.serial(() => this.answer(to, text, during));
+  }
+
+  private async answer(
+    to: string,
+    text: string,
+    during: boolean,
+    known?: readonly Message[],
+  ): Promise<void> {
+    const at = new Date().toISOString();
+    for (const message of known ?? (await this.messages.list()))
+      if (
+        message.from === 'person' &&
+        message.to === to &&
+        !message.answer &&
+        (during
+          ? message.delivery === 'delivered' && message.via === 'turn'
+          : message.delivery === 'delivered' ||
+            (message.delivery === 'sent' && message.via !== 'turn'))
+      )
+        await this.messages.update(message, {
+          answer: { at, text: text.slice(0, messageLimits.text) },
+        });
+  }
+
+  /** The queued messages for research, marked as delivered: research takes them with its next step. */
+  takeResearch(): Promise<string[]> {
+    return this.serial(async () => {
+      const at = new Date().toISOString();
+      const queued = (await this.messages.list()).filter(
+        (message) => message.to === 'research' && message.delivery === 'queued',
+      );
+      for (const message of queued)
+        await this.messages.update(message, {
+          delivery: 'delivered',
+          deliveredAt: at,
+        });
+      return queued.map((message) => message.text);
+    });
+  }
+
+  /** Research ended with a chosen direction, so the coordinator gets the messages that still wait for research. */
+  passToCoordinator(): Promise<void> {
+    return this.serial(async () => {
+      const all = await this.list();
+      for (const message of (await this.messages.list()).filter(
+        (entry) => entry.to === 'research' && entry.delivery === 'queued',
+      )) {
+        await this.send(
+          {
+            from: 'person',
+            to: 'coordinator',
+            kind: 'note',
+            text: `I wrote this to research while it ran: ${message.text}`,
+          },
+          all,
+          await this.messages.list(),
+        );
+        await this.messages.update(message, {
+          delivery: 'delivered',
+          deliveredAt: new Date().toISOString(),
+          via: 'coordinator',
+        });
+      }
+    });
   }
 
   /** Tell the coordinator about the person's action. Its own actions need no wakeup. */
@@ -1351,17 +1502,18 @@ export class TaskManager {
     });
   }
 
-  /** The coordinator's turn ended (true), or its process stopped first (false). */
-  coordinatorTurnEnded(ended: boolean): Promise<void> {
-    return this.serial(() =>
-      this.mark(
+  /** The coordinator's turn ended (true), or its process stopped first (false). Its last text answers the person. */
+  coordinatorTurnEnded(ended: boolean, reply?: string): Promise<void> {
+    return this.serial(async () => {
+      await this.mark(
         'coordinator',
         'sent',
         ended
           ? { delivery: 'delivered', deliveredAt: new Date().toISOString() }
           : { delivery: 'uncertain' },
-      ),
-    );
+      );
+      if (ended && reply) await this.answer('coordinator', reply, false);
+    });
   }
 
   /** Change the delivery of each message to a task that has the given delivery. */

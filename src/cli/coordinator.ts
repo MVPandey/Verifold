@@ -7,6 +7,7 @@ import { messageLimits } from './messages.ts';
 import { loadPrompt } from './prompts.ts';
 import {
   hostName,
+  lastReply,
   readRecord,
   SessionActionError,
   type SessionManager,
@@ -386,7 +387,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
   }
 
-  /** A task event. It waits for the next wakeup. */
+  /** A task event. It waits for the next wakeup. An event from the person wakes an idle coordinator at once. */
   notify(event: TaskEvent): void {
     this.serial(async () => {
       const state = this.state;
@@ -406,7 +407,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           },
         ].slice(-coordinatorLimits.events),
       });
-      this.schedule();
+      this.schedule(event.kind === 'person' ? 0 : this.debounceMs);
       await saving;
     }).catch(() => {
       /* The next save writes the event. */
@@ -419,7 +420,9 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
    */
   turnEnded(record?: SessionRecord): void {
     if (record)
-      this.tasks.coordinatorTurnEnded(record.status === 'idle').catch(() => {});
+      this.tasks
+        .coordinatorTurnEnded(record.status === 'idle', lastReply(record))
+        .catch(() => {});
     const state = this.state;
     if (
       record?.status === 'idle' &&
@@ -440,9 +443,12 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     return this.sessions.close();
   }
 
+  /** Wake after `delay`. A shorter delay replaces a longer one that waits. */
   private schedule(delay = this.debounceMs): void {
     const state = this.state;
-    if (this.timer || !state || state.stoppedAt) return;
+    if (!state || state.stoppedAt || (this.timer && delay >= this.debounceMs))
+      return;
+    clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.serial(() => this.wake()).catch(() => {

@@ -442,6 +442,10 @@ async function serveDesk(
               ),
             ),
         onEvent: (event, view) => {
+          // A worker's text in the middle of a turn answers a message that it took into the turn.
+          const task = view?.record.task;
+          if (event.kind === 'agent' && task)
+            owned.tasks?.answered(task.id, event.text, true).catch(() => {});
           // The events of task workers stay in the desk. A session that the person controls prints its events here.
           const line =
             io.interactive && !view?.record.task
@@ -460,14 +464,6 @@ async function serveDesk(
               'The turn ended, so the noninteractive session ended.',
             );
         },
-      });
-      const runner = new ResearchRunner(root, {
-        signal,
-        io,
-        harness,
-        // A chosen direction starts the coordinator.
-        onSelect: async () =>
-          owned.coordinator?.startForDirection(await loadWorkspace(root)),
       });
       // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
       // Before a pod stops, its tasks' results come back into their folders.
@@ -489,6 +485,20 @@ async function serveDesk(
         pods: compute.podTools(),
       });
       owned.tasks = tasks;
+      const runner = new ResearchRunner(root, {
+        signal,
+        io,
+        harness,
+        // A chosen direction starts the coordinator, which gets the messages that still wait for research.
+        onSelect: async () => {
+          await owned.coordinator?.startForDirection(await loadWorkspace(root));
+          await tasks.passToCoordinator();
+        },
+        inbox: {
+          post: (text) => tasks.post('research', text),
+          take: () => tasks.takeResearch(),
+        },
+      });
       // The coordinator has its own session, outside the worker slots.
       const coordinator = new Coordinator(root, {
         tasks,

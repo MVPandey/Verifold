@@ -150,6 +150,52 @@ onLine((line) => {
     }
   } else if (message.id === 7) finish(message.result.decision === 'accept' ? 'completed' : 'declined', message.result.decision === 'accept' ? 0 : null);
   else if (message.method === 'turn/interrupt') out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'interrupted' } } });
+  else if (message.method === 'turn/steer') {
+    if (scenario === 'refuse-steer') return out({ id: message.id, error: { code: -32600, message: 'No active turn' } });
+    out({ id: message.id, result: { turnId: message.params.expectedTurnId } });
+  }
+});`;
+
+/**
+ * A fake Claude Code for messages in a running turn. It echoes each message
+ * when it takes it in, as --replay-user-messages does. A message that arrives
+ * during a turn is taken at the next tool result, or starts the next turn when
+ * the turn has no tool call left.
+ */
+const steerHost = `const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+const args = process.argv.slice(2);
+const id = args[args.indexOf('--session-id') + 1];
+let busy = false;
+let started = false;
+const queued = [];
+const echo = (message) => out({ type: 'user', message: message.message, uuid: message.uuid, isReplay: true, session_id: id });
+const finish = (text) => {
+  out({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  out({ type: 'result', subtype: 'success' });
+  busy = false;
+  const next = queued.shift();
+  if (next) run(next);
+};
+const run = (message) => {
+  busy = true;
+  if (!started) out({ type: 'system', subtype: 'init', session_id: id, permissionMode: 'default' });
+  started = true;
+  echo(message);
+  if (message.message.content !== 'tools') return setTimeout(() => finish('Done.'), 300);
+  out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'sleep 1' } }] } });
+  setTimeout(() => {
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1' }] } });
+    for (const message of queued.splice(0)) echo(message);
+    finish('Understood. I use 5 runs.');
+  }, 300);
+};
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request' && message.request.subtype === 'initialize')
+    return out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } });
+  if (message.type !== 'user') return;
+  if (busy) queued.push(message);
+  else run(message);
 });`;
 
 async function project(
@@ -454,6 +500,7 @@ await test('Claude Code requests reach the person, and the answer returns to the
       '--output-format',
       'stream-json',
       '--verbose',
+      '--replay-user-messages',
       '--permission-prompt-tool',
       'stdio',
       '--strict-mcp-config',
@@ -502,6 +549,107 @@ await test('Claude Code requests reach the person, and the answer returns to the
       ],
     );
     assert.match(entries[3]?.input ?? '', /"description": "x"/);
+  });
+});
+
+await test('a message reaches a running Claude Code turn at its next tool result, or in one more turn', async () => {
+  await project(async (root, _executables, create) => {
+    const claude = join(root, 'steer-claude');
+    await writeFile(claude, `#!${process.execPath}\n${steerHost}`, {
+      mode: 0o700,
+    });
+    let ended = 0;
+    const sessions = create({
+      executables: { claude },
+      onTurnEnd: () => {
+        ended++;
+      },
+    });
+    const taken: boolean[] = [];
+    // Idle: no turn runs, so the caller sends the message another way.
+    assert.equal(
+      sessions.steer('Too early.', () => {}),
+      false,
+    );
+    await sessions.start({ host: 'claude', mode: 'ask', prompt: 'tools' });
+    await until(sessions, (record) => record.status === 'running');
+    assert.equal(
+      sessions.steer('Use 5 runs.', (ok) => taken.push(ok)),
+      true,
+    );
+    let record = await until(sessions, (current) => current.status === 'idle');
+    assert.deepEqual(taken, [true]);
+    assert.equal(ended, 1);
+    assert.ok(
+      record.events.some(
+        (event) => event.kind === 'you' && event.text === 'Use 5 runs.',
+      ),
+    );
+    // The turn ends before the harness takes the message. Claude Code runs one more turn with it, and Verifold waits for that turn.
+    sessions.send('text');
+    await until(sessions, (current) => current.status === 'running');
+    assert.equal(
+      sessions.steer('Also check Florida.', (ok) => taken.push(ok)),
+      true,
+    );
+    record = await until(
+      sessions,
+      (current) =>
+        current.status === 'idle' &&
+        current.events.filter((event) => event.text === 'Done.').length === 2,
+    );
+    assert.deepEqual(taken, [true, true]);
+    assert.equal(ended, 2);
+    await sessions.close();
+    // The transcript shows each message where the harness took it in, once.
+    const transcript = await readFile(
+      join(root, '.verifold', 'sessions', `${record.id}.transcript.jsonl`),
+      'utf8',
+    );
+    assert.equal(transcript.split('Use 5 runs.').length, 2);
+    assert.equal(transcript.split('Also check Florida.').length, 2);
+  });
+});
+
+await test('Codex takes a message into its running turn, and a refused one is reported', async () => {
+  await project(async (root, _executables, create) => {
+    for (const model of ['fake-codex', 'refuse-steer']) {
+      const sessions = create();
+      await sessions.start({
+        host: 'codex',
+        mode: 'ask',
+        model,
+        prompt: 'Write outside',
+      });
+      // The turn waits for the person's answer, so it runs.
+      await until(sessions, (current) => current.requests.length === 1);
+      const taken = await new Promise<boolean>((resolve) => {
+        assert.equal(sessions.steer('Use 5 runs.', resolve), true);
+      });
+      assert.equal(taken, model === 'fake-codex');
+      const record = sessions.view()?.record;
+      assert.equal(
+        record?.events.some((event) =>
+          event.text.includes('took no message: its turn had ended'),
+        ),
+        model === 'refuse-steer',
+      );
+      // A refused steer is no harness error for the person.
+      assert.ok(
+        !record?.events.some((event) => event.text.includes('rejected')),
+      );
+      await sessions.close();
+    }
+    const steers = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((message) => message.method === 'turn/steer');
+    assert.deepEqual(steers[0]?.params, {
+      threadId: 'thread-1',
+      expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: 'Use 5 runs.' }],
+    });
   });
 });
 
