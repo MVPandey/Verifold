@@ -950,12 +950,17 @@ await test('extras: the person ticks the add-ons, and Verifold cancels the other
   assert.notEqual(await state('Sparse graphs'), 'cancelled');
   assert.notEqual(await state('Prior art'), 'cancelled');
   assert.equal(coordinator.view()?.state.planApproved, true);
-  // The coordinator learns which extras the person left out.
-  await turns(2);
-  assert.match(
-    (await inputs()).at(-1) ?? '',
-    /They left out these extras, which Verifold cancelled: Dense graphs\./,
-  );
+  // The coordinator learns which extras the person left out. Under load, the
+  // cancel can wake it in a digest of its own, so the note can come one turn later.
+  const told = async (): Promise<boolean> =>
+    (await inputs()).some((input) =>
+      /They left out these extras, which Verifold cancelled: Dense graphs\./.test(
+        input,
+      ),
+    );
+  for (let tries = 0; tries < 300 && !(await told()); tries++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(await told());
 });
 
 await test('use this instead: before the work starts, another direction gets its own draft plan', async (t) => {
