@@ -1857,6 +1857,36 @@ body[data-detail='details'] .summary-only {
   color: var(--muted);
   font-size: 11.5px;
 }
+/* ---------- A task page: the decision first, the rest folded ---------- */
+.back {
+  padding-left: 0;
+}
+.task-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+}
+.task-lead {
+  color: var(--muted);
+}
+.decision > h2,
+.decision .section-title {
+  margin-bottom: 8px;
+}
+.decision > * + * {
+  margin-top: 10px;
+}
+.agent-says {
+  padding: 10px 12px;
+  border-left: 3px solid var(--tint-line);
+  border-radius: 0 10px 10px 0;
+  background: var(--sunken);
+}
+.task-page .card > details > summary h2 {
+  font-size: 15px;
+}
+
 /* ---------- Work: who works now, and the finished work ---------- */
 .now-list,
 .finished {

@@ -82,6 +82,7 @@ export const deskViews = [
   'home',
   'research',
   'tasks',
+  'task',
   'results',
   'compute',
   'records',
@@ -91,7 +92,6 @@ export type DeskView = (typeof deskViews)[number];
 
 /** What the side panel shows: one item, or the form for a new one. */
 export const deskPanels = [
-  'task',
   'worker',
   'attempt',
   'direction',
@@ -280,6 +280,13 @@ function fold(id: string, text: string, full: string, max: number): string {
 /** Plain text, folded when it is long. */
 function more(id: string, text: string, max = 160): string {
   return fold(id, text, `<p class="pre">${e(text)}</p>`, max);
+}
+
+/** Text in full up to a few lines, so a short message or reply reads at once. Longer text folds. */
+function inFull(id: string, text: string): string {
+  return text.length <= 600
+    ? `<p class="pre">${e(text)}</p>`
+    : more(id, text, 200);
 }
 
 /** Markdown, folded when it is long. The lead is plain text. */
@@ -617,7 +624,8 @@ function taskForm(
 }
 
 /** The latest version of a task in review: file list, one diff, and the decision. */
-function renderReview(
+/** The decision on a version in review: what the agent says, then Accept, Ask for changes, and Reject. */
+function reviewDecision(
   task: TaskRecord,
   version: TaskVersion,
   canChange: boolean,
@@ -626,29 +634,34 @@ function renderReview(
   const selectable = stale
     ? []
     : version.files.filter((file) => file.inScope && file.regular);
-  const marks = { added: '+', modified: 'M', deleted: '−' } as const;
-  return `<div class="review" aria-labelledby="review-title"><h3 id="review-title">Version ${version.number}: ${e(turnLabels[version.turn])}</h3>
+  return `<section class="card decision" aria-labelledby="review-title"><div class="section-title"><h2 id="review-title" tabindex="-1">Version ${version.number}: ${e(turnLabels[version.turn])}</h2><span class="count">${e(since(version.at))}</span></div>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
-  ${version.reply ? `<div class="worker-reply"><p class="fine">The worker said (a model claim):</p>${more(`reply-${task.id}-${version.number}`, version.reply, 200)}</div>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
-  ${
-    version.files.length
-      ? `<div class="review-grid"><ul class="review-files">${version.files
-          .map((file, index) => {
-            const allowed = file.inScope && file.regular && !stale;
-            return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${allowed ? ' checked' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed || stale ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
-          })
-          .join(
-            '',
-          )}</ul><div class="diff-pane" data-task="${e(task.id)}" data-version="${version.number}" aria-live="polite"><p class="fine">Choose a file to see its changes.</p></div></div>`
-      : '<p class="empty-note">This version changed no files.</p>'
-  }
-  <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button></div>
-  <label class="field" for="task-note">Changes</label><textarea id="task-note" rows="3" maxlength="4000" placeholder="What should change in the next version?"${canChange ? '' : ' disabled aria-describedby="task-note-off"'}></textarea>
-  ${canChange ? '' : '<p class="fine" id="task-note-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}
-  <div class="actions"><button type="button" data-action="task-changes" data-task="${e(task.id)}"${canChange ? '' : ' disabled'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject version</button></div></div>`;
+  ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong><span class="tag reading">Its reading</span></p>${inFull(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
+  ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
+  <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
+  ${canChange ? '<p class="fine">Ask for changes points the message box at the agent. Your message starts its next turn, and the next version follows.</p>' : '<p class="fine" id="task-changes-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}</section>`;
+}
+
+/** The changed files of a version, to select for Accept, each with its diff. */
+function reviewFiles(
+  task: TaskRecord,
+  version: TaskVersion,
+  stale: string | undefined,
+): string {
+  if (!version.files.length) return '';
+  const marks = { added: '+', modified: 'M', deleted: '−' } as const;
+  const names = version.files.map((file) => file.path.split('/').at(-1));
+  return `<section class="card"><details id="task-files"><summary><h2>${version.files.length} ${version.files.length === 1 ? 'file' : 'files'} changed</h2><span>${e(lead(names.join(', '), 90))}</span></summary><div class="review-grid"><ul class="review-files">${version.files
+    .map((file, index) => {
+      const allowed = file.inScope && file.regular && !stale;
+      return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${allowed ? ' checked' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed || stale ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
+    })
+    .join(
+      '',
+    )}</ul><div class="diff-pane" data-task="${e(task.id)}" data-version="${version.number}" aria-live="polite"><p class="fine">Choose a file to see its changes.</p></div></div><p class="fine">Accept copies the ticked files into your project.</p></details></section>`;
 }
 
 const deliveryLabels: Record<Message['delivery'], string> = {
@@ -668,12 +681,12 @@ const kindLabels: Record<Message['kind'], string> = {
 };
 
 /** One message: who sent it to whom, what it is, and how far it got. */
-function messageItem(message: Message): string {
+function messageItem(message: Message, tasks: readonly TaskRecord[]): string {
   const delivery =
     message.to === 'coordinator' && message.delivery === 'queued'
       ? 'Waits for the coordinator'
       : deliveryLabels[message.delivery];
-  return `<li class="message"><p class="message-meta"><span>${e(message.id)}</span><span>${e(message.from)} to ${e(message.to)}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(message.about.task)} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, message.text, 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
+  return `<li class="message"><p class="message-meta"><span>${e(sender(message.from, tasks))} to ${e(sender(message.to, tasks))}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(sender(message.about.task, tasks))} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, message.text, 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 /** The answer to an open blocker or objection. A decision changes no file. Its reason goes to the task that raised it. */
@@ -686,7 +699,10 @@ function decideForm(message: Message): string {
 }
 
 /** Notes that the coordinator wrote to the person, newest first. */
-function notesToPerson(messages: readonly Message[]): string {
+function notesToPerson(
+  messages: readonly Message[],
+  tasks: readonly TaskRecord[],
+): string {
   const notes = messages
     .filter(
       (message) =>
@@ -697,7 +713,7 @@ function notesToPerson(messages: readonly Message[]): string {
     .slice(-10)
     .reverse();
   return notes.length
-    ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map(messageItem).join('')}</ul></details>`
+    ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map((message) => messageItem(message, tasks)).join('')}</ul></details>`
     : '';
 }
 
@@ -808,20 +824,17 @@ function thread(
           !answers.has(message.text.slice(0, 4000))),
     )
     .slice(-5);
-  // A message shows in full up to a few lines. At rest, the box shows one line of it.
-  const said = (id: string, text: string): string =>
-    text.length <= 600 ? `<p class="pre">${e(text)}</p>` : more(id, text, 200);
   const row = (message: Message): string => {
     if (message.from !== 'person')
-      return `<li class="dock-note"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="tag reading">Its reading</span></p>${said(`dock-${message.id}`, message.text)}</li>`;
+      return `<li class="dock-note"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="tag reading">Its reading</span></p>${inFull(`dock-${message.id}`, message.text)}</li>`;
     const [state, tone] = messageState(message, live);
     // The same reply can answer several messages. It shows under the last one.
     const next = items[items.indexOf(message) + 1];
     const answer =
       message.answer && next?.answer?.at !== message.answer.at
-        ? `<div class="dock-answer"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.answer.at)}">${e(clock(message.answer.at))}</time><span class="tag reading">Its reading</span></p>${said(`dock-answer-${message.id}`, message.answer.text)}</div>`
+        ? `<div class="dock-answer"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.answer.at)}">${e(clock(message.answer.at))}</time><span class="tag reading">Its reading</span></p>${inFull(`dock-answer-${message.id}`, message.answer.text)}</div>`
         : '';
-    return `<li class="dock-msg"><p class="msg-meta"><strong>You</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="state ${tone}">${e(state)}</span></p>${said(`dock-${message.id}`, message.text)}${answer}</li>`;
+    return `<li class="dock-msg"><p class="msg-meta"><strong>You</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="state ${tone}">${e(state)}</span></p>${inFull(`dock-${message.id}`, message.text)}${answer}</li>`;
   };
   const card = drafts.length
     ? `<li class="dock-drafts"><p class="msg-meta"><strong>The coordinator drafted ${drafts.length === 1 ? 'a task' : `${drafts.length} tasks`}</strong><span class="state waiting">Waits for you</span></p><ul class="drafts">${drafts.map(draftCard).join('')}</ul></li>`
@@ -836,13 +849,17 @@ function draftCard(task: TaskRecord): string {
 }
 
 /**
- * The message box at the bottom of Home, Plan, and Work. It writes to the
- * agent that leads now, or to the agent that To names. The page shows the
- * thread of the chosen agent.
+ * The message box at the bottom of Home, Plan, Work, a task, and Needs you.
+ * It writes to the agent that leads now, to the agent of the open task, or to
+ * the agent that To names. The page shows the thread of the chosen agent.
  */
-function renderDock(workspace: Workspace, live: DeskSession): string {
+function renderDock(
+  workspace: Workspace,
+  live: DeskSession,
+  prefer?: string,
+): string {
   const list = recipients(workspace, live);
-  const first = list[0];
+  const first = list.find((recipient) => recipient.to === prefer) ?? list[0];
   if (!first) return '';
   const messages = live.tasks?.messages ?? [];
   const hint = (recipient: Recipient): string =>
@@ -851,7 +868,7 @@ function renderDock(workspace: Workspace, live: DeskSession): string {
       : recipient.to === 'new-coordinator'
         ? 'Write the objective for a new coordinator'
         : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
-  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}">${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div></section>`;
+  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div></section>`;
 }
 
 /** The plan waits for the person: the coordinator drafted tasks and ended its turn. */
@@ -1280,7 +1297,7 @@ function coordinatorPanel(
   ${view.limitedUntil ? `<p class="notice">The coordinator used its turns for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
   ${paused ? '<p class="notice">The coordinator paused when Verifold stopped. Resume it to continue with the same conversation.</p>' : ''}
   ${plan}
-  ${notesToPerson(messages)}
+  ${notesToPerson(messages, tasks)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
   <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks))}</p>${action.reason ? `<div class="why"><span class="tag reading">Its reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Results come from Verifold. Reasons are the coordinator's reading, a model claim.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
@@ -1386,7 +1403,6 @@ function renderSince(
   ${totals.length ? `<p class="fine">${totals.map(e).join(' ')}</p>` : ''}</section>`;
 }
 
-/** One task in full: its assignment, its next step, the review of its latest version, and its messages. */
 /** The pod of a task: its lease, GPU, state, and end, and what the pod allows. */
 function taskPod(task: string, compute: ComputeView | undefined): string {
   const lease = compute?.leases.findLast(
@@ -1398,35 +1414,48 @@ function taskPod(task: string, compute: ComputeView | undefined): string {
   return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.id)}, ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. Verifold runs SSH; the worker uses Verifold's pod tools.</p>`;
 }
 
-function taskPanel(
-  task: TaskRecord,
+/**
+ * One task as a page: what the person decides first, then the files, the
+ * details, what the agent did, the messages, and the history. Tasks show by
+ * title, never by ID.
+ */
+function renderTaskPage(
+  task: TaskRecord | null,
   view: TaskView,
   live: DeskSession,
   host: string,
   needKeys: ReadonlySet<string>,
-): Panel {
+): string {
+  const back =
+    '<div class="view-head"><button type="button" class="quiet back" data-view="tasks">← Back to the map</button></div>';
+  if (!task)
+    return `<div class="view">${back}<h1 id="view-title" tabindex="-1">No task</h1><p class="empty-note">This task is not in the list.</p></div>`;
+  const all = view.list;
+  const name = (id: string): string => sender(id, all);
   const [label, tone] = taskStates[task.state];
-  const others = view.list.filter((entry) => entry.id !== task.id);
+  const others = all.filter((entry) => entry.id !== task.id);
   const attempt = task.attempts.at(-1);
   const version = attempt?.versions.at(-1);
-  const waiting = task.assignment.dependencies.filter(
-    (id) => view.list.find((entry) => entry.id === id)?.state !== 'done',
+  const assignment = task.assignment;
+  const waiting = assignment.dependencies.filter(
+    (id) => all.find((entry) => entry.id === id)?.state !== 'done',
   );
-  const [stale] = replaced(attempt, view.list);
+  const [stale] = replaced(attempt, all);
   const used = stale
-    ? `This version used ${stale.task} version ${stale.used}, but ${stale.task} now has version ${stale.current}.`
+    ? `This version used ${name(stale.task)} version ${stale.used}, but ${name(stale.task)} now has version ${stale.current}.`
     : undefined;
   // A draft opens with its form, so the person can write the task themselves.
-  const editForm = `<details id="task-edit"${isDraft(task) ? ' open' : ''}><summary>${task.state === 'done' ? 'Revise the task' : 'Edit the task'}</summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'An edit makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', task.assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
+  const editForm = `<section class="card"><details id="task-edit"${isDraft(task) ? ' open' : ''}><summary><h2>${task.state === 'done' ? 'Revise the task' : 'Edit the task'}</h2><span>Revision ${task.revision}</span></summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'An edit makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details></section>`;
   const artifact = task.artifacts?.at(-1);
   const blocked = waiting.length
-    ? `This task waits for ${waiting.join(', ')}.`
+    ? `This task waits for ${waiting.map(name).join(', ')}.`
     : live.full
       ? `${workerLimit} workers run. End a session, or accept, reject, or cancel a task version first.`
       : undefined;
+  const workers = live.workers ?? (live.session ? [live.session] : []);
   const agent =
     attempt?.session &&
-    (live.workers ?? []).some((worker) => worker.record.id === attempt.session)
+    workers.some((worker) => worker.record.id === attempt.session)
       ? `<button type="button" data-worker="${e(attempt.session)}">Follow its agent</button>`
       : '';
   // A failed start can move to the other harness of the team.
@@ -1434,38 +1463,46 @@ function taskPanel(
   const moveTo =
     attempt?.outcome === 'start-failed' && team
       ? [team.host, ...(team.helper ? [team.helper] : [])].find(
-          (name) => name !== task.assignment.host,
+          (other) => other !== assignment.host,
         )
       : undefined;
-  let next = '';
+  const cancel = `<button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel this task">Cancel task</button>`;
+  let first = '';
   switch (task.state) {
     case 'open':
-      next = `${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}">Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(task.assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>
-        ${editForm}`;
+      first = `<section class="card decision"><h2>${isDraft(task) ? 'The coordinator drafted this task for you' : waiting.length ? 'The task waits' : 'Ready to start'}</h2>${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}">Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button>${isDraft(task) ? `<button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button>` : ''}${cancel}</div></section>`;
       break;
     case 'claimed':
-      next = '<p>Verifold prepares the task folder.</p>';
+      first =
+        '<section class="card decision"><h2>Starting</h2><p>Verifold prepares the task folder.</p></section>';
       break;
-    case 'running':
-      next = `<p>The harness works in the task folder. Follow its agent to see each step. Details there shows the transcript.</p><div class="actions">${agent}<button type="button" data-message-to="${e(task.id)}">Write to its agent</button><button type="button" data-action="task-stop" data-task="${e(task.id)}">Stop the turn</button></div><p class="fine">Your message reaches the agent during its turn. If you stop the turn, its work becomes a version for review.</p>`;
+    case 'running': {
+      const step = lastStep(task, workers);
+      const quiet =
+        step && Date.now() - Date.parse(step.at) >= 5 * 60_000
+          ? ` <span class="now-quiet">Last update ${e(duration(step.at))} ago</span>`
+          : '';
+      first = `<section class="card decision"><div class="section-title"><h2>The agent works</h2>${attempt ? `<span class="count">For ${e(duration(attempt.startedAt))}</span>` : ''}</div><p class="now-step">${e(step?.text ?? 'Working')}${quiet}</p><div class="actions"><button type="button" class="primary" data-message-to="${e(task.id)}">Message</button><button type="button" data-action="task-stop" data-task="${e(task.id)}">Stop the turn</button>${agent}</div><p class="fine">Your message reaches the agent during its turn. If you stop the turn, its work becomes a version for review.</p></section>`;
       break;
+    }
     case 'review':
-      next =
+      first =
         version && !version.decision
-          ? renderReview(
+          ? `${reviewDecision(
               task,
               version,
               !!attempt?.session && view.idle.includes(attempt.session),
               used &&
                 `${used} It cannot be accepted. Reject it and start the task again, so it uses the new files.`,
-            )
-          : `<p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions"><button type="button" data-action="task-cancel" data-task="${e(task.id)}" data-confirm="Click again to cancel ${e(task.id)}">Cancel task</button></div>`;
+            )}${reviewFiles(task, version, used)}`
+          : `<section class="card decision"><p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions">${cancel}</div></section>`;
       break;
     case 'done':
-      next = `<p>Done. ${artifact ? `Version ${artifact.version} was accepted: ${e(artifact.files.map((file) => file.path).join(', ') || 'no files')}.` : 'A version was accepted.'} Tasks that wait for this one receive these files.</p>${used ? `<p class="notice">${e(used)} Revise this task, so it runs again with the new files.</p>` : ''}${editForm}`;
+      first = `<section class="card decision"><h2>Done</h2><p>${artifact ? `Version ${artifact.version} was accepted: ${e(artifact.files.map((file) => file.path).join(', ') || 'no files')}.` : 'A version was accepted.'} Tasks that wait for this one receive these files.</p>${used ? `<p class="notice">${e(used)} Revise this task, so it runs again with the new files.</p>` : ''}</section>`;
       break;
     case 'cancelled':
-      next = '<p>Cancelled. Its records stay in the project.</p>';
+      first =
+        '<section class="card decision"><h2>Cancelled</h2><p>Its records stay in the project.</p></section>';
       break;
   }
   const history = task.attempts.flatMap((entry) =>
@@ -1489,21 +1526,28 @@ function taskPanel(
   const thread = (view.messages ?? [])
     .filter((message) => message.to === task.id || message.from === task.id)
     .slice(-50);
-  const body = `<p class="session-meta"><span>${e(hostName(task.assignment.host))}</span><span>Model: ${e(task.assignment.model ?? 'harness default')}</span><span>${task.assignment.minutes} min for each turn</span></p>${task.assignment.hostReason ? `<p class="host-why"><span class="map-label">Why this harness</span> ${e(task.assignment.hostReason)}</p>` : ''}
-    <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, task.assignment.objective, 220)}</dd><dt>Input files</dt><dd>${task.assignment.inputs.length ? task.assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${task.assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${task.assignment.network ? `${e(task.assignment.network.domains.join(', '))}: ${e(task.assignment.network.reason)}${task.assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, task.assignment.output, 160)}</dd>${task.assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(task.assignment.dependencies.join(', '))}</dd>` : ''}${attempt?.consumed?.length ? `<dt>Received</dt><dd>${e(attempt.consumed.map((used) => `${used.task} version ${used.version}`).join(', '))}</dd>` : ''}</dl>
-    ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
-    ${next}
-    ${task.state !== 'running' && agent ? `<div class="actions">${agent}</div>` : ''}
-    <details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary>Messages (${thread.length})</summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details>
-    ${taskPod(task.id, live.compute)}
-    ${attempt?.restrictions.length ? `<details id="task-limits"><summary>What the harness enforces</summary><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p></details>` : ''}
-    ${history.length || notes.length ? `<details id="task-history"><summary>History</summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}`;
-  return {
-    kind: 'Task',
-    title: task.assignment.title,
-    sub: `<span class="status ${tone}">${e(label)}</span><span>${e(task.id)}, revision ${task.revision}</span>`,
-    body,
-  };
+  const received = attempt?.consumed ?? [];
+  const story =
+    task.state === 'review' && version
+      ? `${hostName(assignment.host)} made version ${version.number} at ${since(version.at)}.${received.length ? ` It received files from ${[...new Set(received.map((used) => name(used.task)))].join(', ')}.` : ''}`
+      : '';
+  const details = `<section class="card"><details id="task-details"><summary><h2>Task details</h2><span>Objective, files, and limits</span></summary>
+    ${assignment.hostReason ? `<p class="host-why"><span class="map-label">Why this harness</span> ${e(assignment.hostReason)}</p>` : ''}
+    <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, assignment.objective, 220)}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, assignment.output, 160)}</dd><dt>Input files</dt><dd>${assignment.inputs.length ? assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${assignment.network ? `${e(assignment.network.domains.join(', '))}: ${e(assignment.network.reason)}${assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd>${assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(assignment.dependencies.map(name).join(', '))}</dd>` : ''}${received.length ? `<dt>Received</dt><dd>${e(received.map((used) => `${name(used.task)} version ${used.version}`).join(', '))}</dd>` : ''}<dt>Harness</dt><dd>${e(hostName(assignment.host))}, model ${e(assignment.model ?? 'harness default')}, ${assignment.minutes} min for each turn</dd></dl>
+    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p>` : ''}</details></section>`;
+  const activity = attempt?.session
+    ? `<section class="card"><details id="task-activity"><summary><h2>What the agent did</h2><span>Its transcript</span></summary>${transcriptSlot(`session:${attempt.session}`, `${hostName(assignment.host)} transcript`, '')}${agent ? `<div class="actions">${agent}</div>` : ''}</details></section>`
+    : '';
+  const messages = `<section class="card"><details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary><h2>Messages</h2><span>${thread.length}</span></summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message, all)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details></section>`;
+  return `<div class="view task-page">${back}
+  <div class="task-title"><h1 id="view-title" tabindex="-1">${e(assignment.title)}</h1><span class="status ${tone}">${e(label)}</span></div>
+  ${story ? `<p class="task-lead">${e(story)}</p>` : ''}
+  ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
+  ${first}
+  ${taskPod(task.id, live.compute)}
+  ${details}${activity}${messages}
+  ${task.state === 'open' || task.state === 'done' ? editForm : ''}
+  ${history.length || notes.length ? `<section class="card"><details id="task-history"><summary><h2>History</h2><span>${history.length + notes.length}</span></summary><ul>${[...history, ...notes].join('')}</ul></details></section>` : ''}</div>`;
 }
 
 const fileKinds: readonly (readonly [string, RegExp])[] = [
@@ -1681,7 +1725,6 @@ function renderMap(
   view: TaskView,
   live: DeskSession,
   objective: string,
-  shown: string | undefined,
   needs: readonly Need[],
 ): string {
   const tasks = view.list;
@@ -1723,7 +1766,7 @@ function renderMap(
       : 'objective';
     // The page moves a dot with these words along the arrows of a task that just ended.
     const gives = task.state === 'done' ? handoffWords(task) : '';
-    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" aria-pressed="${task.id === shown}" data-node="${e(task.id)}" data-state="${task.state}"${isDraft(task) ? ' data-draft' : ''} data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${time ? `<span class="map-meta">${e(time)}</span>` : ''}</button>`;
+    return `<button type="button" class="map-box" data-task-select="${e(task.id)}" data-node="${e(task.id)}" data-state="${task.state}"${isDraft(task) ? ' data-draft' : ''} data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${time ? `<span class="map-meta">${e(time)}</span>` : ''}</button>`;
   };
   // A running box pulses in the color of its harness. The legend names the colors when the team mixes harnesses.
   const hosts = [...new Set(tasks.map((task) => task.assignment.host))].sort(
@@ -1826,7 +1869,6 @@ function renderTasksView(
   view: TaskView,
   live: DeskSession,
   objective: string,
-  shown: string | undefined,
   offerCoordinator: boolean,
   needs: readonly Need[],
 ): string {
@@ -1834,7 +1876,7 @@ function renderTasksView(
   return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Work</h1><button type="button" class="primary" data-panel="new-task">New task</button></div>
   ${
     view.list.length
-      ? `${renderNowStrip(view, live)}<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span></div>${renderMap(view, live, objective, shown, needs)}</section>${renderFinished(view.list)}`
+      ? `${renderNowStrip(view, live)}<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span></div>${renderMap(view, live, objective, needs)}</section>${renderFinished(view.list)}`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write to the coordinator in the message box.</p></section>'
   }
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
@@ -2545,7 +2587,7 @@ function renderRail(
           isDraft(task)
             ? '◆ Draft, waits for you'
             : e(taskStates[task.state][0]),
-          `data-task-select="${e(task.id)}" aria-pressed="${frame.panel === 'task' && live.tasks?.selected?.id === task.id}"`,
+          `data-task-select="${e(task.id)}" aria-pressed="${frame.view === 'task' && live.tasks?.selected?.id === task.id}"`,
         ),
       );
   }
@@ -2569,7 +2611,7 @@ function renderRail(
     )
     .map(
       (view) =>
-        `<li><button type="button" data-view="${view}"${view === frame.view ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
+        `<li><button type="button" data-view="${view}"${view === frame.view || (view === 'tasks' && frame.view === 'task') ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
     )
     .join('')}</ul>
   <div class="rail-team"><div class="rail-title"><h2>Team</h2></div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
@@ -2651,7 +2693,7 @@ function renderHomeWork(
         })
         .join('')}</ol></section>`
     : '';
-  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2><button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, undefined, needs)}</section>${checks}`;
+  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2><button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, needs)}</section>${checks}`;
 }
 
 function renderHome(
@@ -2692,7 +2734,6 @@ function renderPanel(
   live: DeskSession,
   chosen: DeskAttempt | undefined,
   report: ResearchReport | null,
-  needKeys: ReadonlySet<string>,
   messages: readonly Message[],
   direction: string | undefined,
 ): string {
@@ -2704,18 +2745,7 @@ function renderPanel(
     body: `<p class="empty-note">${text}</p>`,
   });
   let shown: Panel;
-  if (panel === 'task')
-    shown =
-      live.tasks?.selected && live.tasks
-        ? taskPanel(
-            live.tasks.selected,
-            live.tasks,
-            live,
-            workspace.host,
-            needKeys,
-          )
-        : gone('Task', 'No task', 'This task is not in the list.');
-  else if (panel === 'worker')
+  if (panel === 'worker')
     shown = live.session
       ? workerPanel(live.session, live, tasks)
       : gone(
@@ -2802,7 +2832,7 @@ export function renderDesk(
   const at = progress(workspace, live);
   // Without a project owner there are no tasks and no compute, so these views are not in the rail.
   const view =
-    (frame.view === 'tasks' && !live.tasks) ||
+    ((frame.view === 'tasks' || frame.view === 'task') && !live.tasks) ||
     (frame.view === 'compute' && !live.compute)
       ? 'home'
       : frame.view;
@@ -2822,45 +2852,57 @@ export function renderDesk(
                 chosen,
                 frame.panel === 'direction' ? frame.direction : undefined,
               )
-            : view === 'tasks' && live.tasks
-              ? renderTasksView(
+            : view === 'task' && live.tasks
+              ? renderTaskPage(
+                  live.tasks.selected,
                   live.tasks,
                   live,
-                  workspace.candidates.find(
-                    (idea) => idea.id === workspace.selectedId,
-                  )?.title ??
-                    live.coordinator?.state?.objective ??
-                    'Your tasks',
-                  frame.panel === 'task' ? live.tasks.selected?.id : undefined,
-                  // Before a direction and a coordinator, Tasks offers to start one with your own objective.
-                  live.coordinator !== undefined &&
-                    !workspace.selectedId &&
-                    !live.coordinator?.state,
-                  needs,
+                  workspace.host,
+                  new Set(needs.map((item) => item.key)),
                 )
-              : view === 'records'
-                ? renderRecords(
-                    snapshot,
-                    workers,
-                    tasks,
-                    frame.panel === 'attempt' ? chosen?.id : undefined,
-                  )
-                : renderHome(
-                    snapshot,
+              : view === 'tasks' && live.tasks
+                ? renderTasksView(
+                    live.tasks,
                     live,
-                    at,
-                    active.length > 0,
+                    workspace.candidates.find(
+                      (idea) => idea.id === workspace.selectedId,
+                    )?.title ??
+                      live.coordinator?.state?.objective ??
+                      'Your tasks',
+                    // Before a direction and a coordinator, Tasks offers to start one with your own objective.
+                    live.coordinator !== undefined &&
+                      !workspace.selectedId &&
+                      !live.coordinator?.state,
                     needs,
-                    frame.since,
-                  );
+                  )
+                : view === 'records'
+                  ? renderRecords(
+                      snapshot,
+                      workers,
+                      tasks,
+                      frame.panel === 'attempt' ? chosen?.id : undefined,
+                    )
+                  : renderHome(
+                      snapshot,
+                      live,
+                      at,
+                      active.length > 0,
+                      needs,
+                      frame.since,
+                    );
   const dock =
     view === 'home' ||
     view === 'research' ||
     view === 'tasks' ||
+    view === 'task' ||
     view === 'needs'
-      ? renderDock(workspace, live)
+      ? renderDock(
+          workspace,
+          live,
+          view === 'task' ? live.tasks?.selected?.id : undefined,
+        )
       : '';
-  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, new Set(needs.map((item) => item.key)), messages, frame.direction) : ''}`;
+  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
   return {
     html,
     observation: '',
