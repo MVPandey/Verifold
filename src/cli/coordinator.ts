@@ -15,7 +15,12 @@ import {
   type SessionView,
 } from './session.ts';
 import type { AgentTool, AgentTools } from './session-hosts.ts';
-import { replaced, type TaskEvent, type TaskManager } from './tasks.ts';
+import {
+  isDraft,
+  replaced,
+  type TaskEvent,
+  type TaskManager,
+} from './tasks.ts';
 import { ResultsStore, type Results } from './results.ts';
 import type { Compute } from './compute.ts';
 import { spent, usd } from './leases.ts';
@@ -152,6 +157,8 @@ export class Coordinator {
   private readonly compute: Compute | undefined;
   /** A status line for the terminal. */
   private readonly progress: ((line: string) => void) | undefined;
+  /** The current turn carries a message from the person. New tasks of this turn wait for the person. */
+  private answering = false;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -419,6 +426,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
    * its digest carried are delivered or uncertain, and new events wake it.
    */
   turnEnded(record?: SessionRecord): void {
+    this.answering = false;
     if (record)
       this.tasks
         .coordinatorTurnEnded(record.status === 'idle', lastReply(record))
@@ -476,6 +484,9 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     }
     this.limitedUntil = null;
     const sent = waiting.slice(0, coordinatorLimits.digest);
+    this.answering = sent.some(
+      (event) => event.kind === 'person' && event.message !== undefined,
+    );
     // The cursor is saved first, so a restart never repeats a digest.
     await this.save({
       ...state,
@@ -594,13 +605,17 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             dependencies: args.dependencies,
             network: args.network,
             extra: args.extra,
+            // New work that the person asked for after the work started waits for them.
+            draft: state.planApproved && this.answering,
             hostReason: args.hostReason,
           },
           'coordinator',
           `Created by the coordinator: ${why()}`,
         );
         await this.save({ ...this.current(), created: state.created + 1 });
-        return `Created ${id}.`;
+        return state.planApproved && this.answering
+          ? `Created ${id} as a draft. The person starts it in the desk. Do not start it.`
+          : `Created ${id}.`;
       }
       case 'verifold_revise_task': {
         const task =
@@ -627,6 +642,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             dependencies: args.dependencies ?? current.dependencies,
             network: args.network ?? current.network,
             extra: args.extra ?? current.extra,
+            draft: current.draft,
             hostReason: args.hostReason ?? current.hostReason,
             reason: `The coordinator: ${why()}`,
           },
@@ -891,6 +907,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           writable: task.assignment.writable,
           output: task.assignment.output.slice(0, 500),
           dependencies: task.assignment.dependencies,
+          ...(isDraft(task) ? { draftForThePerson: true } : {}),
           acceptedVersions: (task.artifacts ?? []).map(
             (artifact) => artifact.version,
           ),

@@ -17,6 +17,7 @@ import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { SessionManager } from '../src/cli/session.ts';
 import type { AgentTools } from '../src/cli/session-hosts.ts';
 import {
+  isDraft,
   TaskManager,
   type TaskRecord,
   type TaskSessions,
@@ -1107,6 +1108,67 @@ await test('use this instead: before the work starts, another direction gets its
   assert.equal(coordinator.view()?.state.planApproved, false);
 });
 
+await test('new work that the person asks for after the work started waits for the person as a draft', async (t) => {
+  const { tasks, coordinator, script, results, turns } = await team(t);
+  const scan = {
+    title: 'Time the scan',
+    objective: 'Time the scan on 3 more graphs.',
+    writable: ['results/scan'],
+    output: 'results/scan/times.csv',
+    reason: 'The person asked for it.',
+  };
+  await script([
+    [],
+    [
+      { name: 'verifold_create_task', arguments: scan },
+      { name: 'verifold_start_task', arguments: { task: 'task-1' } },
+    ],
+    [
+      {
+        name: 'verifold_revise_task',
+        arguments: { task: 'task-1', minutes: 15, reason: 'Shorter.' },
+      },
+      {
+        name: 'verifold_create_task',
+        arguments: { ...scan, title: 'Follow-up', writable: ['results/next'] },
+      },
+    ],
+  ]);
+  await coordinator.start({
+    objective: 'Heap.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  // The person asks for new work. The task of this turn is a draft, and the coordinator cannot start it.
+  await tasks.post(
+    'coordinator',
+    'Add a task: time the scan on 3 more graphs.',
+  );
+  await turns(2);
+  const [created, started] = (await results()).slice(-2);
+  assert.match(
+    created?.result.content[0]?.text ?? '',
+    /Created task-1 as a draft\. The person starts it/,
+  );
+  assert.equal(started?.result.isError, true);
+  assert.match(started?.result.content[0]?.text ?? '', /draft for the person/);
+  const draft = await tasks.get('task-1');
+  assert.equal(draft?.assignment.draft, true);
+  assert.equal(draft && isDraft(draft), true);
+  // A revision keeps the draft. A task from a turn without a message from the person is no draft.
+  coordinator.notify({ kind: 'version', text: 'A version is ready.' });
+  await turns(3);
+  assert.equal((await tasks.get('task-1'))?.assignment.draft, true);
+  assert.equal((await tasks.get('task-1'))?.assignment.minutes, 15);
+  assert.equal((await tasks.get('task-2'))?.assignment.draft, undefined);
+  // The person starts it.
+  await tasks.start('task-1');
+  const running = await tasks.get('task-1');
+  assert.equal(running?.state, 'running');
+  assert.equal(running && isDraft(running), false);
+});
+
 await test('the message box writes to the coordinator, a task agent, or research', async (t) => {
   const { root, tasks, coordinator } = await team(t);
   const assets = join(root, 'assets');
@@ -1188,6 +1250,20 @@ await test('the message box writes to the coordinator, a task agent, or research
     await post({ action: 'message', to: 'research', text: 'Hi' }),
     409,
   );
+  // Without a coordinator, the words start one as its objective.
+  assert.equal(
+    await post({
+      action: 'message',
+      to: 'new-coordinator',
+      text: 'Time the scan on 3 graphs.',
+    }),
+    200,
+  );
+  assert.equal(
+    coordinator.view()?.state.objective,
+    'Time the scan on 3 graphs.',
+  );
+  assert.equal(coordinator.view()?.state.planApproved, false);
   assert.deepEqual(
     (await tasks.messageList())
       .filter((message) => message.from === 'person')

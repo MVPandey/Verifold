@@ -2766,7 +2766,7 @@ body.terminal-page {
 }
 
 /* ---------- The message box ---------- */
-/* It stays at the bottom of the view. At rest it shows the latest message to the chosen agent; in use, the thread. */
+/* It stays at the bottom of the view. At rest it shows the latest item for the chosen agent; while the person writes, the thread. */
 .dock {
   position: sticky;
   bottom: 0;
@@ -2801,17 +2801,40 @@ body.terminal-page {
 .dock-thread:empty {
   display: none;
 }
-.dock:not(:focus-within) .dock-thread > li:not(:last-child) {
+body:not(.dock-expanded) .dock .dock-thread > li:not(:last-child) {
   display: none;
 }
-.dock:not(:focus-within) .dock-thread :is(.lead, .pre) {
+body:not(.dock-expanded) .dock .dock-thread :is(.lead, .pre) {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
 }
-.dock:not(:focus-within) .dock-thread .more-hint {
+body:not(.dock-expanded) .dock .dock-thread .more-hint {
   display: none;
+}
+/* A draft task: the coordinator wrote it, and it waits for the person to start it. */
+.drafts {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 0;
+  list-style: none;
+}
+.draft {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px dashed var(--needs-line);
+  border-radius: 10px;
+  background: var(--needs-bg);
+}
+.draft .actions {
+  margin-top: 6px;
+}
+.map-box[data-draft] {
+  border-style: dashed;
+  border-color: var(--needs-line);
 }
 .dock-answer {
   margin-top: 6px;
