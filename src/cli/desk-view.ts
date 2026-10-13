@@ -16,6 +16,7 @@ import {
 import type { Message } from './messages.ts';
 import type { CheckResult, Results } from './results.ts';
 import type { ComputeView } from './compute.ts';
+import type { ArchivedRun } from './archive.ts';
 import { placeNames } from './credentials.ts';
 import {
   isOpen,
@@ -65,6 +66,8 @@ export interface DeskSession {
   readonly coordinator?: CoordinatorView | null;
   /** RunPod key, limits, and GPUs. Only a project owner has them. */
   readonly compute?: ComputeView;
+  /** The runs that Start over moved to the archive, newest first. Only a project owner has them. */
+  readonly archives?: readonly ArchivedRun[];
 }
 
 export interface TaskView {
@@ -108,6 +111,8 @@ export interface DeskFrame {
   readonly since?: string;
   /** The direction that the direction panel shows. */
   readonly direction?: string;
+  /** The person cleared finished tasks: done and cancelled tasks leave the map and the rail. */
+  readonly hideFinished?: boolean;
 }
 
 /** The frame from the query of /api/view, or null when a value is unknown. No view means Home. */
@@ -116,6 +121,7 @@ export function parseFrame(
   panel: string | null,
   since: string | null = null,
   direction: string | null = null,
+  finished: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -126,12 +132,17 @@ export function parseFrame(
   // Direction IDs are lowercase slugs, as the research report contract says.
   const idea =
     direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
-  return shown && (panel === null || opened) && (since === null || time) && idea
+  return shown &&
+    (panel === null || opened) &&
+    (since === null || time) &&
+    idea &&
+    (finished === null || finished === 'hidden')
     ? {
         view: shown,
         panel: opened,
         ...(since ? { since } : {}),
         ...(direction ? { direction } : {}),
+        ...(finished ? { hideFinished: true } : {}),
       }
     : null;
 }
@@ -1744,6 +1755,11 @@ function taskTurn(
   }
 }
 
+/** A task that the person can clear from the map: done or cancelled. */
+function finished(task: TaskRecord): boolean {
+  return task.state === 'done' || task.state === 'cancelled';
+}
+
 /**
  * The plan as a map: the objective, then each task in the column of its
  * depth, with arrows from what it waits for. The page draws the arrows. Each
@@ -1754,8 +1770,11 @@ function renderMap(
   live: DeskSession,
   objective: string,
   needs: readonly Need[],
+  hideFinished = false,
 ): string {
-  const tasks = view.list;
+  const tasks = hideFinished
+    ? view.list.filter((task) => !finished(task))
+    : view.list;
   const state = live.coordinator?.state;
   const coordinated = !!state && !state.stoppedAt;
   const depth = new Map<string, number>();
@@ -1789,9 +1808,11 @@ function renderMap(
           ? `Version ${version.number}${version.decision ? `, ${version.decision.kind === 'accepted' ? 'accepted' : version.decision.kind === 'changes' ? 'changes asked' : 'rejected'}` : ', in review'}`
           : '';
     const raised = needs.filter((item) => item.task === task.id).length;
-    const from = task.assignment.dependencies.length
-      ? task.assignment.dependencies.join(' ')
-      : 'objective';
+    // An arrow comes from each task that the map shows. A cleared one leaves no arrow.
+    const shownFrom = task.assignment.dependencies.filter((id) =>
+      tasks.some((other) => other.id === id),
+    );
+    const from = shownFrom.length ? shownFrom.join(' ') : 'objective';
     // The page moves a dot with these words along the arrows of a task that just ended.
     const gives = task.state === 'done' ? handoffWords(task) : '';
     return `<button type="button" class="map-box" data-task-select="${e(task.id)}" data-node="${e(task.id)}" data-state="${task.state}"${isDraft(task) ? ' data-draft' : ''} data-host="${e(task.assignment.host)}"${gives ? ` data-gives="${e(gives)}"` : ''} data-from="${e(from)}"><span class="map-title"><span class="mark ${taskMarks[task.state]}" aria-hidden="true"></span>${e(task.assignment.title)}${state && task.assignment.host !== state.host ? `<span class="host-chip">${e(hostName(task.assignment.host))}</span>` : ''}</span><span class="map-turn${yours || raised ? ' yours' : ''}">${e(raised && !yours ? `${raised} ${raised === 1 ? 'item needs' : 'items need'} you` : turn)}</span>${time ? `<span class="map-meta">${e(time)}</span>` : ''}</button>`;
@@ -1908,7 +1929,12 @@ function renderTasksView(
   objective: string,
   offerCoordinator: boolean,
   needs: readonly Need[],
+  hideFinished: boolean,
 ): string {
+  const cleared = view.list.filter(finished).length;
+  const clear = cleared
+    ? `<button type="button" class="quiet" data-finished="${hideFinished ? 'shown' : 'hidden'}">${hideFinished ? `Show finished (${cleared})` : 'Clear finished'}</button>`
+    : '';
   const done = view.list.filter((task) => task.state === 'done').length;
   return `<div class="view wide"><div class="view-head"><h1 id="view-title" tabindex="-1">Work</h1><button type="button" class="quiet" data-panel="new-task">Write a task yourself</button></div>
   ${
@@ -1917,7 +1943,7 @@ function renderTasksView(
       : ''
   }${
     view.list.length
-      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span></div>${renderMap(view, live, objective, needs)}</section>${renderFinished(view.list)}`
+      ? `<section class="card map-card" aria-labelledby="map-title"><div class="section-title"><h2 id="map-title">The map</h2><span class="count">${view.list.length} ${view.list.length === 1 ? 'task' : 'tasks'}, ${done} done</span>${clear}</div>${renderMap(view, live, objective, needs, hideFinished)}${hideFinished && cleared ? `<p class="fine">${cleared} finished ${cleared === 1 ? 'task is' : 'tasks are'} not on the map. Finished lists the done ones.</p>` : ''}</section>${renderFinished(view.list)}`
       : '<section class="card empty-state"><h2>No tasks yet</h2><p class="fine">After you choose a direction, the coordinator plans tasks for it. You can also write to the coordinator in the message box.</p></section>'
   }
   ${offerCoordinator ? '<section class="card"><h2>Coordinator</h2><p class="fine">After you choose a direction, the coordinator plans the tasks for it. You can also start it now with your own objective.</p><div class="actions"><button type="button" data-panel="coordinator">Open the coordinator</button></div></section>' : ''}</div>`;
@@ -2123,15 +2149,34 @@ function renderComputeView(compute: ComputeView): string {
 }
 
 /** The record of this owner: every worker's commands, then every research attempt. */
+/** A size in bytes, in the largest unit that keeps a whole number in front. */
+function bytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** This run and the archived ones: Start over moves the run to the archive, and Restore brings one back. */
+function renderRuns(
+  archives: readonly ArchivedRun[],
+  tasks: readonly TaskRecord[],
+): string {
+  return `<section class="card" aria-labelledby="runs-title"><div class="section-title"><h2 id="runs-title">Runs</h2><span class="count">${archives.length} archived</span></div>
+  <div class="run-now"><p><strong>This run</strong> <span class="fine">${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}</span></p><p class="fine">Start over moves this run to the archive: the tasks and their versions, the messages, the coordinator and its log, the results, the research attempts, and the session records. The question, the brief, your settings, and the files that you accepted into the project stay. The next run starts its research from the same question.</p><div class="actions"><button type="button" data-action="start-over" data-confirm="Click again to archive this run and start over">Start over</button></div></div>
+  ${archives.length ? `<ul class="archives">${archives.map((run) => `<li><span><strong>${e(time(run.at))}</strong> <span class="fine">${run.tasks} ${run.tasks === 1 ? 'task' : 'tasks'}, ${e(bytes(run.bytes))}</span></span><button type="button" data-action="restore" data-archive="${e(run.id)}" data-confirm="Click again to restore this run">Restore</button></li>`).join('')}</ul><p class="fine">Restore brings an archived run back. The current run moves to the archive first, so nothing is lost.</p>` : ''}</section>`;
+}
+
 function renderRecords(
   snapshot: DeskSnapshot,
   workers: readonly SessionView[],
   tasks: readonly TaskRecord[],
   shown: string | undefined,
+  archives: readonly ArchivedRun[] | undefined,
 ): string {
   const { attempts } = snapshot;
   const logged = workers.filter((worker) => worker.record.commands.length);
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>What the agents ran, and every research attempt</p></div>
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>What the agents ran, every research attempt, and the runs</p></div>
+  ${archives ? renderRuns(archives, tasks) : ''}
   <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? auditTable(logged, tasks, true) : '<p class="empty-note">No commands are recorded yet. Each tool call that a worker reports shows here.</p>'}</section>
   <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research request shows here with its own identity.</p>'}</section></div>`;
 }
@@ -2613,7 +2658,8 @@ function renderRail(
   };
   // Each task keeps its place in the team. Its worker's slot can go to another task, so a task without a live worker shows its own state.
   for (const task of tasks) {
-    if (task.state === 'cancelled') continue;
+    if (task.state === 'cancelled' || (frame.hideFinished && finished(task)))
+      continue;
     const session = task.attempts.at(-1)?.session;
     const worker = workers.find(
       (entry) => entry.live && entry.record.id === session,
@@ -2707,6 +2753,7 @@ function renderHomeWork(
   workspace: Workspace,
   live: DeskSession,
   needs: readonly Need[],
+  hideFinished: boolean,
 ): string {
   const view = live.tasks;
   const state = live.coordinator?.state;
@@ -2726,7 +2773,7 @@ function renderHomeWork(
         })
         .join('')}</ol></section>`
     : '';
-  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2><button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, needs)}</section>${checks}`;
+  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2><button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, needs, hideFinished)}</section>${checks}`;
 }
 
 function renderHome(
@@ -2736,6 +2783,7 @@ function renderHome(
   researching: boolean,
   needs: readonly Need[],
   left: string | undefined,
+  hideFinished: boolean,
 ): string {
   const { workspace } = snapshot;
   const tasks = live.tasks?.list ?? [];
@@ -2757,7 +2805,7 @@ function renderHome(
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose A new agent in the message box.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
   }
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -2900,6 +2948,7 @@ export function renderDesk(
                       !workspace.selectedId &&
                       !live.coordinator?.state,
                     needs,
+                    frame.hideFinished === true,
                   )
                 : view === 'records'
                   ? renderRecords(
@@ -2907,6 +2956,7 @@ export function renderDesk(
                       workers,
                       tasks,
                       frame.panel === 'attempt' ? chosen?.id : undefined,
+                      live.archives,
                     )
                   : renderHome(
                       snapshot,
@@ -2915,6 +2965,7 @@ export function renderDesk(
                       active.length > 0,
                       needs,
                       frame.since,
+                      frame.hideFinished === true,
                     );
   const dock =
     view === 'home' ||
@@ -2928,7 +2979,7 @@ export function renderDesk(
           view === 'task' ? live.tasks?.selected?.id : undefined,
         )
       : '';
-  const html = `${renderRail({ view, panel: frame.panel }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
+  const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
   return {
     html,
     observation: '',

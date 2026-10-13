@@ -1563,3 +1563,141 @@ await test('the coordinator reads the compute limits and asks the person for a p
     'The training run needs a GPU.',
   );
 });
+
+await test('Start over archives the run through the desk, and Restore brings it back', async (t) => {
+  const { root, tasks, workers, coordinator, script, turns } = await team(t);
+  await script([[{ name: 'verifold_create_task', arguments: prior }]]);
+  await changeWorkspace(root, (current) => ({
+    ...current!,
+    context: 'The brief.',
+    research: {
+      topic: 'Is the heap version faster?',
+      autonomy: 'guided',
+      phase: 'directions',
+      plan: {
+        scope: 'Scope.',
+        personas: [
+          { name: 'Historian', task: 'Prior art.' },
+          { name: 'Skeptic', task: 'Counterexamples.' },
+        ],
+      },
+    },
+    candidates: [
+      {
+        id: 'heap',
+        title: 'Heap Dijkstra',
+        recommendation: 'Compare a heap with a scan.',
+        gates: ['Same paths.'],
+        kind: 'main',
+      },
+    ],
+    selectedId: 'heap',
+  }));
+  const owner = new AbortController();
+  // The next run's research fails at once: this test starts no harness.
+  let researched = 0;
+  const research = new ResearchRunner(root, {
+    signal: owner.signal,
+    io: {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    },
+    harness: () => {
+      researched++;
+      return Promise.reject(new Error('No harness in this test.'));
+    },
+  });
+  await coordinator.startForDirection(await loadWorkspace(root));
+  await turns(1);
+  const assets = join(root, 'assets');
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
+    'desk-map.js',
+    'desk-motion.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  for (const name of [
+    'purify.js',
+    'idiomorph.js',
+    'xterm.js',
+    'xterm.css',
+    'addon-fit.js',
+  ])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    pathToFileURL(`${assets}/cli/`),
+    new SessionPool(root, { clientVersion: 'test', ownerId: 'owner-1' }),
+    research,
+    undefined,
+    tasks,
+    coordinator,
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const post = async (body: unknown): Promise<[number, string]> => {
+    const response = await fetch(`${url.origin}/api/action`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return [
+      response.status,
+      JSON.stringify(await response.json().catch(() => null)),
+    ];
+  };
+  const view = async (query: string): Promise<string> =>
+    (
+      (await (
+        await fetch(`${url.origin}/api/view${query}`, { headers })
+      ).json()) as { html: string }
+    ).html;
+  // A task turn runs, so Start over waits.
+  await coordinator.approvePlan([]);
+  await tasks.start('task-1');
+  const [refused, reason] = await post({ action: 'start-over' });
+  assert.equal(refused, 409);
+  assert.match(reason, /A task turn is running/);
+  // Its version waits for review. Start over cancels it, stops the coordinator, and archives the run.
+  await work(root, tasks, workers, 'task-1', {
+    'literature/prior/notes.md': 'Dijkstra.\n',
+  });
+  assert.equal((await post({ action: 'start-over' }))[0], 200);
+  assert.deepEqual(await tasks.list(), []);
+  assert.equal(coordinator.view(), null);
+  assert.equal((await loadWorkspace(root)).selectedId, null);
+  assert.equal((await loadWorkspace(root)).research?.phase, 'needs-plan');
+  await research.settled();
+  assert.equal(researched, 1);
+  const records = await view('?view=records');
+  const id = /data-action="restore" data-archive="([^"]+)"/.exec(records)?.[1];
+  assert.ok(id);
+  assert.match(
+    records,
+    /<strong>This run<\/strong> <span class="fine">0 tasks<\/span>/,
+  );
+  assert.match(records, /1 task, \d+ (B|KB|MB)/);
+  // Restore brings the run back where it was: its task, its coordinator, and its direction.
+  assert.equal((await post({ action: 'restore', archive: id }))[0], 200);
+  assert.equal((await tasks.get('task-1'))?.state, 'cancelled');
+  assert.match(coordinator.view()?.state.objective ?? '', /^Heap Dijkstra/);
+  assert.ok(coordinator.view()?.state.stoppedAt);
+  assert.equal((await loadWorkspace(root)).selectedId, 'heap');
+  assert.equal((await post({ action: 'restore', archive: '../x' }))[0], 409);
+});

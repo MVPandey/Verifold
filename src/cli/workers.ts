@@ -73,6 +73,12 @@ export class SessionPool {
     this.pausedList = await loadPaused(this.root);
   }
 
+  /** Forget the ended sessions and read the paused ones again, after Start over or a restore. */
+  async forget(): Promise<void> {
+    for (const slot of this.slots) slot.forget();
+    await this.load();
+  }
+
   paused(): readonly PausedSession[] {
     return this.pausedList;
   }
