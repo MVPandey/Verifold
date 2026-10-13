@@ -964,12 +964,8 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     /The coordinator overruled two objections from this task, so this one goes to you/,
   );
   assert.match(team.html, /<section class="card now-card" aria-label="Now">/);
-  // The blocker stays with the coordinator. Its task panel still lets the person settle it first.
-  const panel = desk(
-    { tasks, coordinator: coordinator('idle') },
-    'tasks',
-    'task',
-  ).html;
+  // The blocker stays with the coordinator. Its task page still lets the person settle it first.
+  const panel = desk({ tasks, coordinator: coordinator('idle') }, 'task').html;
   assert.match(
     panel,
     /The coordinator settles this one\. You can settle it first\.[\s\S]*data-message="m-6" data-decision="resolved"/,
@@ -2455,7 +2451,8 @@ await test('a draft task waits for the person in the message box, on the map, in
       } as never,
       { view, panel },
     ).html;
-  const work = render('tasks', coordinator(null), 'task');
+  const work = render('tasks', coordinator(null));
+  const page = render('task', coordinator(null));
   const dock = /<section class="dock"[\s\S]*<\/section>/.exec(work)?.[0] ?? '';
   assert.match(
     dock,
@@ -2466,8 +2463,12 @@ await test('a draft task waits for the person in the message box, on the map, in
     /class="map-box"[^>]*data-state="open" data-draft[\s\S]*?Draft, waits for you/,
   );
   assert.match(work, /◆ Draft, waits for you/);
-  // Write the task yourself opens the task with its form.
-  assert.match(work, /<details id="task-edit" open>/);
+  // Write the task yourself opens the task with its form, and the page offers Change it too.
+  assert.match(page, /<details id="task-edit" open>/);
+  assert.match(
+    page,
+    /The coordinator drafted this task for you[\s\S]*data-action="task-start" data-task="task-4">Start task[\s\S]*data-message-to="coordinator" data-about="Time the scan on 3 more graphs">Change it/,
+  );
   const needs = render('needs', coordinator(null));
   assert.match(
     needs,
@@ -2604,4 +2605,145 @@ await test('Work starts with who works now, folds a long strip, and ends with th
     /<h2 id="map-title">The map<\/h2><span class="count">7 tasks, 2 done<\/span>[\s\S]*<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-7[\s\S]*Version 1 accepted at [\s\S]*src\/heap\.py[\s\S]*Title task-6[\s\S]*results\/bench\.csv/,
   );
   assert.doesNotMatch(alone, /A task runs your harness in its own copy/);
+});
+
+await test('a task opens as its own page: the decision first, the rest folded, and titles instead of IDs', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:00:00.000Z';
+  const task = (id: string, state: string, extra: object = {}) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    claim: null,
+    artifacts: [],
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title:
+        id === 'task-1'
+          ? 'Implement the heap version'
+          : 'Benchmark both versions',
+      objective: 'Time both versions on 9 road graphs.',
+      host: 'claude',
+      model: null,
+      dependencies: id === 'task-1' ? [] : ['task-1'],
+      inputs: [],
+      writable: ['results'],
+      output: 'results/bench.csv',
+      minutes: 20,
+    },
+    ...extra,
+  });
+  const attempt = (versions: object[]) => ({
+    number: 1,
+    revision: 1,
+    startedAt: at,
+    session: 'S2',
+    restrictions: [],
+    outcome: null,
+    note: null,
+    consumed: [{ task: 'task-1', version: 1 }],
+    versions,
+  });
+  const version = {
+    number: 1,
+    commit: 'c',
+    at,
+    turn: 'completed',
+    decision: null,
+    skipped: [],
+    reply: 'The heap version is faster on every graph above 100,000 nodes.',
+    files: [
+      {
+        path: 'results/bench.csv',
+        change: 'added',
+        inScope: true,
+        regular: true,
+      },
+    ],
+  };
+  const page = (shown: object, first = task('task-1', 'open')): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: {
+          list: [first, shown],
+          selected: shown,
+          idle: ['S2'],
+          messages: [],
+        },
+      } as never,
+      { view: 'task', panel: null },
+    ).html;
+  const text = (html: string): string =>
+    (/<main id="view"[\s\S]*<\/main>/.exec(html)?.[0] ?? '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ');
+  // Open and waiting: the dependency by title, and Start task off.
+  const open = page(task('task-2', 'open'));
+  assert.match(
+    open,
+    /<button type="button" class="quiet back" data-view="tasks">← Back to the map<\/button>/,
+  );
+  assert.match(
+    open,
+    /<h1 id="view-title" tabindex="-1">Benchmark both versions<\/h1>/,
+  );
+  assert.match(
+    open,
+    /This task waits for Implement the heap version\.[\s\S]*data-action="task-start" data-task="task-2" disabled/,
+  );
+  assert.match(open, /<details id="task-edit">/);
+  // Work is the current view in the rail.
+  assert.match(open, /data-view="tasks" aria-current="page"/);
+  // In review: the version and what the agent says come before the files and the details.
+  const review = page(
+    task('task-2', 'review', { attempts: [attempt([version])] }),
+    task('task-1', 'done'),
+  );
+  assert.match(
+    review,
+    /Claude Code made version 1 at [^.]+\. It received files from Implement the heap version\.[\s\S]*Version 1: the turn ended[\s\S]*The agent says[\s\S]*<p class="pre">The heap version is faster on every graph above 100,000 nodes\.<\/p>[\s\S]*data-action="task-accept" data-task="task-2" data-version="1">Accept 1 file[\s\S]*data-message-to="task-2">Ask for changes[\s\S]*data-action="task-reject"[\s\S]*<details id="task-files"><summary><h2>1 file changed<\/h2>[\s\S]*<details id="task-details">[\s\S]*<dt>Received<\/dt><dd>Implement the heap version version 1<\/dd>[\s\S]*<details id="task-activity">[\s\S]*data-source="session:S2"/,
+  );
+  assert.doesNotMatch(text(review), /task-\d/);
+  // The box writes to the agent of the page.
+  assert.match(
+    review,
+    /<option value="task-2" data-hint="Write to Benchmark both versions" selected>/,
+  );
+  // Running: its latest step, Message, and Stop the turn.
+  const running = page(
+    task('task-2', 'running', { attempts: [attempt([])] }),
+    task('task-1', 'done'),
+  );
+  assert.match(
+    running,
+    /<h2>The agent works<\/h2>[\s\S]*class="primary" data-message-to="task-2">Message[\s\S]*data-action="task-stop" data-task="task-2">Stop the turn/,
+  );
+  // Done and cancelled.
+  assert.match(
+    page(
+      task('task-2', 'done', {
+        artifacts: [
+          {
+            version: 1,
+            revision: 1,
+            at,
+            files: [{ path: 'results/bench.csv' }],
+          },
+        ],
+      }),
+    ),
+    /<h2>Done<\/h2><p>Version 1 was accepted: results\/bench\.csv\.[\s\S]*Revise the task/,
+  );
+  assert.match(page(task('task-2', 'cancelled')), /<h2>Cancelled<\/h2>/);
 });
