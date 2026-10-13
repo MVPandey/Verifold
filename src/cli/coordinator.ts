@@ -17,6 +17,8 @@ import {
 import type { AgentTool, AgentTools } from './session-hosts.ts';
 import {
   isDraft,
+  memoryText,
+  noteToolSpec,
   replaced,
   type TaskEvent,
   type TaskManager,
@@ -157,6 +159,15 @@ export class Coordinator {
   private readonly compute: Compute | undefined;
   /** A status line for the terminal. */
   private readonly progress: ((line: string) => void) | undefined;
+  /** The project memory: its index goes into the first prompt, and `verifold_note` adds to it. */
+  private readonly memory:
+    | {
+        note(who: string, text: unknown): Promise<string>;
+        digest(): Promise<string>;
+      }
+    | undefined;
+  /** The coordinator's record changed. The project memory follows. */
+  private readonly onChange: (() => void) | undefined;
   /** The current turn carries a message from the person. New tasks of this turn wait for the person. */
   private answering = false;
 
@@ -169,8 +180,15 @@ export class Coordinator {
       readonly debounceMs?: number;
       readonly compute?: Compute;
       readonly progress?: (line: string) => void;
+      readonly memory?: {
+        note(who: string, text: unknown): Promise<string>;
+        digest(): Promise<string>;
+      };
+      readonly onChange?: () => void;
     },
   ) {
+    this.memory = options.memory;
+    this.onChange = options.onChange;
     this.root = root;
     this.tasks = options.tasks;
     this.sessions = options.sessions;
@@ -306,7 +324,7 @@ export class Coordinator {
 
 Objective:
 ${objective}
-${input.context ? `\n${input.context}\n` : ''}
+${input.context ? `\n${input.context}\n` : ''}${memoryText(await this.memory?.digest())}
 ${helper ? `The team: ${hostName(host)} leads: it runs research and you. ${hostName(helper)} helps. Give each task the harness that fits it, and say why in hostReason. When a check compares two results, run the second one on the other harness, so that a mistake of one model family cannot pass both. Tasks run on ${hostName(host)} when you name no harness${model ? `, with the model ${model}` : ''}.` : `Workers run on ${hostName(host)}${model ? `, with the model ${model}` : ''}.`} Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
 ${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan for the person: what the tasks do, about how long the work takes, and why each task runs on its harness. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
@@ -527,7 +545,9 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
 
   private tools(): AgentTools {
     return {
-      specs: coordinatorToolSpecs,
+      specs: this.memory
+        ? [...coordinatorToolSpecs, noteToolSpec]
+        : coordinatorToolSpecs,
       call: (name, input, callId) =>
         this.serial(() => this.call(name, input, callId)),
     };
@@ -741,6 +761,10 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       }
       case 'verifold_compute':
         return this.describeCompute();
+      case 'verifold_note':
+        return this.memory
+          ? this.memory.note('Coordinator', args.text)
+          : fail('This project keeps no memory.');
       case 'verifold_request_pod': {
         const lease = await this.pods().leases.request({
           by: 'coordinator',
@@ -1028,6 +1052,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     } finally {
       await rm(temporary, { force: true });
     }
+    this.onChange?.();
   }
 }
 

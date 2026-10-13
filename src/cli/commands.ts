@@ -20,6 +20,7 @@ import {
   type ResearchOptions,
 } from './research.ts';
 import { ResearchRunner } from './research-runner.ts';
+import { ProjectMemory } from './memory.ts';
 import { object, text } from './research-contracts.ts';
 import type { Choice } from './choices.ts';
 import { installedHarnesses, runHarness } from './harness.ts';
@@ -477,12 +478,20 @@ async function serveDesk(
         },
         (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
       );
+      // The project memory follows every change of the records, and every agent reads its index.
+      const memory = new ProjectMemory(
+        root,
+        () => owned.tasks?.list() ?? Promise.resolve([]),
+      );
+      const remember = (): void => memory.schedule();
       const tasks = new TaskManager(root, {
         ownerId: owner.ownerId,
         sessions,
         ...(io.progress ? { progress: io.progress } : {}),
         onEvent: (event) => owned.coordinator?.notify(event),
         pods: compute.podTools(),
+        memory,
+        onChange: remember,
       });
       owned.tasks = tasks;
       const runner = new ResearchRunner(root, {
@@ -498,11 +507,14 @@ async function serveDesk(
           post: (text) => tasks.post('research', text),
           take: () => tasks.takeResearch(),
         },
+        onChange: remember,
       });
       // The coordinator has its own session, outside the worker slots.
       const coordinator = new Coordinator(root, {
         tasks,
         compute,
+        memory,
+        onChange: remember,
         ...(io.progress ? { progress: io.progress } : {}),
         sessions: new SessionManager(root, {
           clientVersion: version,
@@ -515,6 +527,7 @@ async function serveDesk(
         await sessions.load();
         await coordinator.load();
         await compute.load();
+        remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
         await compute.leases.recover();
         compute.watch();
@@ -533,6 +546,7 @@ async function serveDesk(
             tasks,
             coordinator,
             compute,
+            memory,
           );
         else {
           desk = await startDesk(
@@ -545,6 +559,7 @@ async function serveDesk(
             tasks,
             coordinator,
             compute,
+            memory,
           );
           await announce(
             desk,
@@ -615,6 +630,9 @@ async function serveDesk(
         for (const line of await compute.close()) io.progress?.(line);
         // A task turn that Ctrl+C stopped becomes a version for review, with the results from its pod.
         await tasks.settle();
+        await memory.write().catch(() => {
+          /* The memory follows at the next start. */
+        });
       }
     } finally {
       await owner.release();

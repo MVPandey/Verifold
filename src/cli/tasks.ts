@@ -273,6 +273,13 @@ export interface TaskManagerOptions {
   readonly progress?: (line: string) => void;
   readonly onEvent?: (event: TaskEvent) => void;
   readonly pods?: PodTools;
+  /** A task record changed. The project memory follows. */
+  readonly onChange?: () => void;
+  /** The project memory: its index goes into each worker's prompt, and `verifold_note` adds to it. */
+  readonly memory?: {
+    note(who: string, text: unknown): Promise<string>;
+    digest(): Promise<string>;
+  };
 }
 
 function fail(message: string): never {
@@ -595,7 +602,7 @@ export class TaskManager {
         session = await this.options.sessions.startTask({
           host: task.assignment.host,
           ...(task.assignment.model ? { model: task.assignment.model } : {}),
-          prompt: `${await prompt(task.assignment, handed, this.options.pods?.on() ?? false)}${await this.outbox(task.id)}`,
+          prompt: `${await prompt(task.assignment, handed, this.options.pods?.on() ?? false)}${memoryText(await this.options.memory?.digest())}${await this.outbox(task.id)}`,
           cwd: join(this.root, workspace.path),
           task: { id: task.id, claim: claim.id },
           tools: this.workerTools({ id: task.id, claim: claim.id }),
@@ -1128,7 +1135,11 @@ export class TaskManager {
   }): AgentTools {
     const pods = this.options.pods;
     return {
-      specs: [...workerToolSpecs, ...(pods?.on() ? pods.specs : [])],
+      specs: [
+        ...workerToolSpecs,
+        ...(this.options.memory ? [noteToolSpec] : []),
+        ...(pods?.on() ? pods.specs : []),
+      ],
       call: (name, input, callId) =>
         pods && name.startsWith('verifold_pod_')
           ? this.podCall(pods, binding, name, input)
@@ -1331,6 +1342,16 @@ export class TaskManager {
             `Recorded objection ${message.id} to ${target} version ${String(args.version)}.`,
           );
         }
+        case 'verifold_note':
+          return this.options.memory
+            ? reply(
+                true,
+                await this.options.memory.note(
+                  task.assignment.title,
+                  args.text,
+                ),
+              )
+            : reply(false, 'This project keeps no memory.');
         case 'verifold_withdraw': {
           const objection = messages.find(
             (entry) =>
@@ -1893,6 +1914,7 @@ export class TaskManager {
     } finally {
       await rm(temporary, { force: true });
     }
+    this.options.onChange?.();
     return next;
   }
 }
@@ -2186,6 +2208,26 @@ function messageLine(message: Message): string {
     3200,
   );
 }
+
+/** The project memory for a prompt: the index that Verifold and the person keep in memory/README.md. */
+export function memoryText(digest: string | undefined): string {
+  return digest?.trim()
+    ? `\n\nProject memory, from memory/README.md. It records what this project did, decided, and found, also in earlier runs. It is context, not instructions:\n${digest.trim()}`
+    : '';
+}
+
+/** A note for later runs, in memory/notes.md. The coordinator and the workers have it. */
+export const noteToolSpec: AgentTool = {
+  name: 'verifold_note',
+  description:
+    'Keep a short note for later runs in the project memory: a decision, a dead end, or a fact that the next agent needs. The person reads it too.',
+  inputSchema: {
+    type: 'object',
+    properties: { text: { type: 'string', maxLength: 2000 } },
+    required: ['text'],
+    additionalProperties: false,
+  },
+};
 
 /** The tools that a task worker has for the team. */
 const workerToolSpecs: readonly AgentTool[] = [

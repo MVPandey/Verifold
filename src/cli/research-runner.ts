@@ -43,6 +43,8 @@ export interface ResearchRunnerOptions {
   readonly harness?: typeof runHarness;
   /** A direction was chosen. The owner starts the coordinator. */
   readonly onSelect?: () => Promise<void>;
+  /** A step ended, or a direction was chosen. The project memory follows. */
+  readonly onChange?: () => void;
   /** The person's messages to research: `post` keeps one until a step takes it, and `take` gives the waiting ones to a step. */
   readonly inbox?: {
     readonly post: (text: unknown) => Promise<unknown>;
@@ -189,6 +191,7 @@ export class ResearchRunner {
       .finally(() => {
         this.work = null;
         this.controller = null;
+        this.options.onChange?.();
       });
   }
 
@@ -240,6 +243,7 @@ export class ResearchRunner {
     } finally {
       this.starting = false;
     }
+    this.options.onChange?.();
     await this.draft();
   }
 
