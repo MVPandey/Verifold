@@ -329,7 +329,7 @@ await test('desk renders harness Markdown without active content and explains a 
   const live = { session: null, controllable: true };
   const html = renderDesk(snapshot, undefined, null, live, {
     view: 'research',
-    panel: 'new-session',
+    panel: null,
   }).html;
   assert.match(html, /<h3>Research brief<\/h3>/);
   assert.match(html, /<strong>Status:<\/strong> draft with <code>code<\/code>/);
@@ -339,7 +339,16 @@ await test('desk renders harness Markdown without active content and explains a 
     html,
     /<a href="https:\/\/example\.org\/p" target="_blank" rel="noopener noreferrer">paper<\/a>/,
   );
-  assert.match(html, /data-action="start">Start session/);
+  // A desk that controls sessions offers a new agent in the message box. As the only choice, it shows its defaults.
+  assert.match(
+    html,
+    /<option value="new-agent" data-hint="Write the first request for a new agent">A new agent<\/option>/,
+  );
+  assert.match(
+    html,
+    /<div class="dock-new" data-for="new-agent"><label for="agent-host">Harness <select id="agent-host">[\s\S]*<select id="agent-mode"><option value="ask">Ask me first<\/option><option value="auto">Auto<\/option><\/select><\/label><span>In this project folder<\/span><\/div>/,
+  );
+  assert.doesNotMatch(html, /new-menu|new-session/);
   assert.match(
     renderDesk(snapshot, undefined, null, live).html,
     /copy-command/,
@@ -746,17 +755,16 @@ await test('desk frame shows one view, the team, and one panel', async (t) => {
     opened,
     /data-action="cancel" data-session="20261002T120000000Z-abcdef12"/,
   );
-  // New offers a session form. Every slot is in use, so the panel says why no session starts.
-  assert.match(opened, /data-panel="new-session"/);
-  const full = renderDesk(
-    snapshot,
-    undefined,
-    null,
-    { ...(live as object), full: true } as never,
-    { view: 'home', panel: 'new-session' },
-  ).html;
-  assert.match(full, /2 workers run\. End a session/);
-  assert.doesNotMatch(full, /data-action="start"/);
+  // The panel of a running session points the message box at it.
+  assert.match(
+    opened,
+    /class="primary" data-message-to="session:20261002T120000000Z-abcdef12">Write to it/,
+  );
+  // The running session is in To on Home, by its harness and the start of its request.
+  assert.match(
+    home.html,
+    /<option value="session:20261002T120000000Z-abcdef12" data-hint="Write to Claude Code[^"]*">Claude Code[^<]*<\/option><option value="new-agent"/,
+  );
 });
 
 await test('desk lists in Needs you only the decisions that are the person’s', async (t) => {
@@ -2370,7 +2378,7 @@ await test('the message box writes to the agent that leads, or to a task agent, 
   );
   assert.match(
     work,
-    /<option value="coordinator"[^>]*>Coordinator, leads now<\/option><option value="task-1" data-hint="Write to Profile the heap">Profile the heap<\/option><\/select>/,
+    /<option value="coordinator"[^>]*>Coordinator, leads now<\/option><option value="task-1" data-hint="Write to Profile the heap">Profile the heap<\/option><option value="new-agent"[^>]*>A new agent<\/option><\/select>/,
   );
   assert.match(
     work,
@@ -2383,8 +2391,12 @@ await test('the message box writes to the agent that leads, or to a task agent, 
   // The box is on Home, Plan, and Work only.
   assert.match(render('home', coordinator, []), /id="message-text"/);
   assert.doesNotMatch(render('records', coordinator, []), /id="message-text"/);
-  // Without an agent to write to, there is no box.
-  assert.doesNotMatch(render('home', {}, []), /id="message-text"/);
+  // A desk that controls sessions can always start a new agent. A desk that only reads has no box.
+  assert.match(render('home', {}, []), /id="message-text"/);
+  assert.doesNotMatch(
+    render('home', { controllable: false }, []),
+    /id="message-text"/,
+  );
 });
 
 await test('a draft task waits for the person in the message box, on the map, in the rail, and in Needs you', async (t) => {
@@ -2746,4 +2758,75 @@ await test('a task opens as its own page: the decision first, the rest folded, a
     /<h2>Done<\/h2><p>Version 1 was accepted: results\/bench\.csv\.[\s\S]*Revise the task/,
   );
   assert.match(page(task('task-2', 'cancelled')), /<h2>Cancelled<\/h2>/);
+});
+
+await test('a session that the person started shows in the Now strip and in To', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:00:00.000Z';
+  const session = (status: string) => ({
+    live: true,
+    saveFailed: false,
+    record: {
+      schemaVersion: 2,
+      id: '20261012T140000000Z-abcdef12',
+      host: 'codex',
+      model: null,
+      mode: 'auto',
+      reportedMode: 'auto_review',
+      nativeSessionId: 'thread-1',
+      status,
+      startedAt: at,
+      endedAt: null,
+      costUsd: null,
+      commands: [],
+      requests: [],
+      launches: [],
+      events: [
+        {
+          at,
+          kind: 'you',
+          text: 'Read src/heap.py and suggest a faster decrease-key.',
+        },
+        { at, kind: 'tool', text: 'Command: cat src/heap.py' },
+      ],
+    },
+  });
+  const work = (status: string): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        workers: [session(status)],
+        controllable: true,
+        tasks: { list: [], selected: null, idle: [], messages: [] },
+      } as never,
+      { view: 'tasks', panel: null },
+    ).html;
+  // Work has no task yet, so the strip shows only with tasks. Home's box lists the session.
+  const busy = renderDesk(snapshot, undefined, null, {
+    session: null,
+    workers: [session('running')],
+    controllable: true,
+    tasks: { list: [], selected: null, idle: [], messages: [] },
+  } as never).html;
+  assert.match(
+    busy,
+    /<option value="session:20261012T140000000Z-abcdef12" data-hint="Write to Codex: Read src\/heap\.py and suggest a faster[^"]*">Codex: Read src\/heap\.py[^<]*<\/option><option value="new-agent"/,
+  );
+  // The session's thread is its exchange.
+  assert.match(
+    busy,
+    /data-thread="session:20261012T140000000Z-abcdef12"><li class="dock-msg">[\s\S]*Read src\/heap\.py and suggest a faster decrease-key\./,
+  );
+  // Work lists it in the Now strip, with Message, also before any task exists.
+  assert.match(
+    work('running'),
+    /<span class="count">1 agent works<\/span>[\s\S]*data-worker="20261012T140000000Z-abcdef12">Codex: Read src\/heap\.py[^<]*<\/button><span class="now-meta">Auto \(Codex reviewer\), \d+ (min|h)[^<]*<\/span>[\s\S]*Running cat[\s\S]*data-message-to="session:20261012T140000000Z-abcdef12">Message/,
+  );
+  assert.match(work('idle'), /Waits for your next message/);
+  assert.match(work('idle'), /No tasks yet/);
 });
