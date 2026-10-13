@@ -84,6 +84,8 @@ export interface Assignment {
   readonly by?: 'coordinator';
   /** An add-on in the coordinator's draft plan. The person can leave it out before the work starts. */
   readonly extra?: true;
+  /** New work that the coordinator wrote for the person after the work started. The person starts it. */
+  readonly draft?: true;
   /** Why the coordinator gave the task its harness. */
   readonly hostReason?: string;
 }
@@ -200,6 +202,8 @@ export interface TaskInputFields {
   readonly network?: unknown;
   /** True for an add-on of the coordinator's draft plan. */
   readonly extra?: unknown;
+  /** True for new work that waits for the person to start it. */
+  readonly draft?: unknown;
   /** The coordinator's reason for the harness. */
   readonly hostReason?: unknown;
 }
@@ -310,6 +314,15 @@ function paths(value: unknown, name: string, max: number): string[] {
   }
   if (found.size > max) fail(`List at most ${max} ${name}.`);
   return [...found];
+}
+
+/** New work that the coordinator drafted and the person has not started yet. */
+export function isDraft(task: TaskRecord): boolean {
+  return (
+    task.assignment.draft === true &&
+    task.state === 'open' &&
+    !task.attempts.length
+  );
 }
 
 export function validTaskId(id: unknown): id is string {
@@ -461,6 +474,10 @@ export class TaskManager {
     return this.serial(async () => {
       const task = await this.load(id);
       if (task.state !== 'open') fail('Only an open task can start.');
+      if (by === 'coordinator' && isDraft(task))
+        fail(
+          'This task is a draft for the person. It starts when the person starts it.',
+        );
       const all = await this.list();
       for (const dependency of task.assignment.dependencies) {
         const other = all.find((entry) => entry.id === dependency);
@@ -1770,6 +1787,9 @@ export class TaskManager {
       ...(by === 'coordinator' && fields.extra === true
         ? { extra: true as const }
         : {}),
+      ...(by === 'coordinator' && fields.draft === true
+        ? { draft: true as const }
+        : {}),
       ...(by === 'coordinator' &&
       typeof fields.hostReason === 'string' &&
       fields.hostReason.trim()
@@ -1924,6 +1944,7 @@ function parseAssignment(value: unknown): Assignment | null {
     !Array.isArray(entry.inputs) ||
     !entry.inputs.every(savedFile) ||
     !(entry.extra === undefined || entry.extra === true) ||
+    !(entry.draft === undefined || entry.draft === true) ||
     !(entry.hostReason === undefined || text(entry.hostReason)) ||
     !(
       entry.network === undefined ||
