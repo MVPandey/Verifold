@@ -101,6 +101,7 @@ export class ResultsStore {
 
   /** Read the saved results, if any. An unreadable record reads as none. */
   async load(): Promise<void> {
+    this.results = null;
     try {
       const stats = await lstat(this.file);
       if (!stats.isFile() || stats.size > 2_000_000) return;

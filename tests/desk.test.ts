@@ -17,6 +17,7 @@ import { startDesk, openDeskBrowser } from '../src/cli/desk.ts';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { readDeskSnapshot, readDeskReport } from '../src/cli/desk-records.ts';
 import {
+  parseFrame,
   renderDesk,
   type DeskPanel,
   type DeskView,
@@ -2829,4 +2830,72 @@ await test('a session that the person started shows in the Now strip and in To',
   );
   assert.match(work('idle'), /Waits for your next message/);
   assert.match(work('idle'), /No tasks yet/);
+});
+
+await test('Clear finished takes done and cancelled tasks off the map and the rail', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-12T14:00:00.000Z';
+  const task = (id: string, state: string, dependencies: string[] = []) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    claim: null,
+    artifacts: [],
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title: `Title ${id}`,
+      objective: 'Run.',
+      host: 'claude',
+      dependencies,
+      inputs: [],
+      writable: ['results'],
+      output: 'results/x.md',
+      minutes: 20,
+    },
+  });
+  const list = [
+    task('task-1', 'done'),
+    task('task-2', 'cancelled'),
+    task('task-3', 'open', ['task-1']),
+  ];
+  const work = (hidden: boolean): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list, selected: null, idle: [], messages: [] },
+      } as never,
+      parseFrame('tasks', null, null, null, hidden ? 'hidden' : null) ?? {
+        view: 'tasks',
+        panel: null,
+      },
+    ).html;
+  const shown = work(false);
+  assert.match(shown, /data-finished="hidden">Clear finished/);
+  assert.match(shown, /data-node="task-1"/);
+  assert.match(shown, /data-node="task-3"[^>]*data-from="task-1"/);
+  const cleared = work(true);
+  assert.match(cleared, /data-finished="shown">Show finished \(2\)/);
+  assert.doesNotMatch(cleared, /data-node="task-1"|data-node="task-2"/);
+  // The arrow of a cleared task goes; the open task hangs from the objective.
+  assert.match(cleared, /data-node="task-3"[^>]*data-from="objective"/);
+  assert.match(cleared, /2 finished tasks are not on the map/);
+  // The rail leaves them out too. Finished still lists the done task.
+  const rail = /<nav class="rail"[\s\S]*?<\/nav>/.exec(cleared)?.[0] ?? '';
+  assert.doesNotMatch(rail, /Title task-1/);
+  assert.match(rail, /Title task-3/);
+  assert.match(
+    cleared,
+    /<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-1/,
+  );
+  assert.equal(parseFrame('tasks', null, null, null, 'all'), null);
 });

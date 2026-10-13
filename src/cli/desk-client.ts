@@ -53,6 +53,8 @@ let detail = 'summary';
 let pane = 'summary';
 /** The commands that the audit shows: all, or tagged only. The choice lasts for this browser. */
 let records = 'all';
+/** Finished tasks on the map and in the rail: shown, or hidden after Clear finished. The choice lasts for this browser. */
+let finished = 'shown';
 let token = location.hash.slice(1);
 const launch = token.startsWith('launch-') ? token.slice(7) : '';
 try {
@@ -71,6 +73,7 @@ try {
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
   records = localStorage.getItem('verifold-desk-records') ?? 'all';
+  finished = localStorage.getItem('verifold-desk-finished') ?? 'shown';
 } catch {
   /* The original fragment still supports reload when storage is unavailable. */
 }
@@ -150,6 +153,7 @@ function viewQuery(): string {
   if (panel === 'direction' && selectedDirection)
     query.set('direction', selectedDirection);
   if (since) query.set('since', since);
+  if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
 }
 
@@ -918,35 +922,37 @@ async function act(button: HTMLElement): Promise<void> {
             }
           : action === 'review'
             ? { action, command: button.dataset.command }
-            : action === 'resume' || action === 'restart'
-              ? { action, session: button.dataset.session }
-              : action === 'select' ||
-                  action === 'redraft' ||
-                  action === 'change-direction'
-                ? { action, idea: button.dataset.idea }
-                : action === 'research'
-                  ? researchBody(button.dataset.research)
-                  : action === 'message'
-                    ? {
-                        action,
-                        to: field('message-to'),
-                        text: field('message-text'),
-                        // A new agent starts with the defaults under the box.
-                        ...(field('message-to') === 'new-agent'
-                          ? {
-                              host: field('agent-host'),
-                              mode: field('agent-mode'),
-                            }
-                          : {}),
-                      }
-                    : action === 'setup'
-                      ? setupBody(button)
-                      : action?.startsWith('task-') ||
-                          action?.startsWith('coordinator-')
-                        ? taskRequest(button)
-                        : action?.startsWith('compute-')
-                          ? computeRequest(button)
-                          : { action };
+            : action === 'restore'
+              ? { action, archive: button.dataset.archive }
+              : action === 'resume' || action === 'restart'
+                ? { action, session: button.dataset.session }
+                : action === 'select' ||
+                    action === 'redraft' ||
+                    action === 'change-direction'
+                  ? { action, idea: button.dataset.idea }
+                  : action === 'research'
+                    ? researchBody(button.dataset.research)
+                    : action === 'message'
+                      ? {
+                          action,
+                          to: field('message-to'),
+                          text: field('message-text'),
+                          // A new agent starts with the defaults under the box.
+                          ...(field('message-to') === 'new-agent'
+                            ? {
+                                host: field('agent-host'),
+                                mode: field('agent-mode'),
+                              }
+                            : {}),
+                        }
+                      : action === 'setup'
+                        ? setupBody(button)
+                        : action?.startsWith('task-') ||
+                            action?.startsWith('coordinator-')
+                          ? taskRequest(button)
+                          : action?.startsWith('compute-')
+                            ? computeRequest(button)
+                            : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -963,6 +969,7 @@ async function act(button: HTMLElement): Promise<void> {
     ['check', button.dataset.check],
     ['result', button.dataset.result],
     ['lease', button.dataset.lease],
+    ['archive', button.dataset.archive],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -1165,6 +1172,16 @@ document.addEventListener('click', (event) => {
     window.open(
       `/terminal?session=${encodeURIComponent(target.dataset.terminalTab)}`,
     );
+  if (target.dataset.finished) {
+    finished = target.dataset.finished === 'hidden' ? 'hidden' : 'shown';
+    try {
+      localStorage.setItem('verifold-desk-finished', finished);
+    } catch {
+      /* The choice lasts until reload when browser storage is unavailable. */
+    }
+    void refresh();
+    return;
+  }
   if (target.dataset.records) {
     records = target.dataset.records === 'tagged' ? 'tagged' : 'all';
     showDetail();
