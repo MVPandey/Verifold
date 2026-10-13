@@ -34,6 +34,8 @@ export interface ArchivedRun {
   readonly at: string;
   readonly bytes: number;
   readonly tasks: number;
+  /** The direction that the run had, if it chose one. */
+  readonly direction: string | null;
 }
 
 function folder(root: string): string {
@@ -121,7 +123,13 @@ export async function listArchives(root: string): Promise<ArchivedRun[]> {
     try {
       const path = join(folder(root), id);
       const tasks = await readdir(join(path, 'tasks')).catch(() => []);
+      const saved = parseWorkspace(
+        JSON.parse(await readFile(join(path, 'workspace.json'), 'utf8')),
+      );
       runs.push({
+        direction:
+          saved.candidates.find((idea) => idea.id === saved.selectedId)
+            ?.title ?? null,
         id,
         at: (await lstat(path)).mtime.toISOString(),
         bytes: await size(path),

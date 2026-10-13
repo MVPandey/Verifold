@@ -627,6 +627,7 @@ function reviewDecision(
   version: TaskVersion,
   canChange: boolean,
   stale: string | undefined,
+  reviewer: boolean,
 ): string {
   const selectable = stale
     ? []
@@ -636,6 +637,7 @@ function reviewDecision(
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
+  ${reviewer ? '<p class="fine">The coordinator reviews this version. You can decide first.</p>' : ''}
   ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong><span class="tag reading">Its reading</span></p>${inFull(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
   ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
   <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
@@ -822,10 +824,11 @@ function thread(
   messages: readonly Message[],
   live: DeskSession,
   shown: boolean,
+  needsShown: boolean,
 ): string {
-  // The coordinator's drafts wait for the person under its thread.
+  // The coordinator's drafts wait for the person under its thread, unless Needs you on the page lists them.
   const drafts =
-    recipient.to === 'coordinator'
+    recipient.to === 'coordinator' && !needsShown
       ? (live.tasks?.list ?? []).filter(isDraft)
       : [];
   const asked = messages.filter(
@@ -890,6 +893,7 @@ function renderDock(
   workspace: Workspace,
   live: DeskSession,
   prefer?: string,
+  needsShown = false,
 ): string {
   const list = recipients(workspace, live);
   const first = list.find((recipient) => recipient.to === prefer) ?? list[0];
@@ -903,7 +907,7 @@ function renderDock(
         : recipient.to === 'new-agent'
           ? 'Write the first request for a new agent'
           : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
-  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
+  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first, needsShown)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
     live.controllable
       ? `<div class="dock-new" data-for="new-agent"${first.to === 'new-agent' ? '' : ' hidden'}><label for="agent-host">Harness <select id="agent-host"><option value="claude"${workspace.host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${workspace.host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label for="agent-mode">Commands <select id="agent-mode"><option value="ask">Ask me first</option><option value="auto">Auto</option></select></label><span>In this project folder</span></div>`
       : ''
@@ -1533,6 +1537,7 @@ function renderTaskPage(
               !!attempt?.session && view.idle.includes(attempt.session),
               used &&
                 `${used} It cannot be accepted. Reject it and start the task again, so it uses the new files.`,
+              !!team && !team.stoppedAt,
             )}${reviewFiles(task, version, used)}`
           : `<section class="card decision"><p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions">${cancel}</div></section>`;
       break;
@@ -1617,12 +1622,16 @@ function commandStep(command: string): string {
     .split(/\n|&&|\|\||;/)
     .map((part) => part.trim())
     .find((part) => part && !/^(cd|export|set|source)\b/.test(part));
-  const [program = '', next = ''] = (step ?? '').split(/\s+/);
+  const [program = '', ...rest] = (step ?? '').split(/\s+/);
   const name = program.split('/').at(-1) ?? '';
   if (!/^[\w.+-]+$/.test(name) || /^(for|while|if|do|then|case)$/.test(name))
     return 'Running a command';
-  const file = /^[\w./-]+\.\w+$/.test(next) ? ` ${next.split('/').at(-1)}` : '';
-  return `Running ${name}${file}`;
+  // A script comes first, then any other file: `python -m cProfile -o out.prof bench.py` runs bench.py.
+  const files = rest.filter((word) => /^[\w./-]+\.\w+$/.test(word));
+  const script =
+    files.find((word) => /\.(py|js|mjs|cjs|ts|sh|r|jl|rb|pl)$/i.test(word)) ??
+    files[0];
+  return `Running ${name}${script ? ` ${script.split('/').at(-1)}` : ''}`;
 }
 
 /** A tool call in plain words, for a Now line. The tool name and the full input stay in the transcript. */
@@ -2162,8 +2171,8 @@ function renderRuns(
   tasks: readonly TaskRecord[],
 ): string {
   return `<section class="card" aria-labelledby="runs-title"><div class="section-title"><h2 id="runs-title">Runs</h2><span class="count">${archives.length} archived</span></div>
-  <div class="run-now"><p><strong>This run</strong> <span class="fine">${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}</span></p><p class="fine">Start over moves this run to the archive: the tasks and their versions, the messages, the coordinator and its log, the results, the research attempts, and the session records. The question, the brief, your settings, and the files that you accepted into the project stay. The next run starts its research from the same question.</p><div class="actions"><button type="button" data-action="start-over" data-confirm="Click again to archive this run and start over">Start over</button></div></div>
-  ${archives.length ? `<ul class="archives">${archives.map((run) => `<li><span><strong>${e(time(run.at))}</strong> <span class="fine">${run.tasks} ${run.tasks === 1 ? 'task' : 'tasks'}, ${e(bytes(run.bytes))}</span></span><button type="button" data-action="restore" data-archive="${e(run.id)}" data-confirm="Click again to restore this run">Restore</button></li>`).join('')}</ul><p class="fine">Restore brings an archived run back. The current run moves to the archive first, so nothing is lost.</p>` : ''}</section>`;
+  <div class="run-now"><p><strong>This run</strong> <span class="fine">${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}</span></p><p class="fine">Start over archives this run and starts research again from the same question. Nothing is deleted.</p><details id="run-parts"><summary>What moves and what stays</summary><p class="fine">The tasks and their versions, the messages, the coordinator and its log, the results, the research attempts, and the session records move to the archive. The question, the brief, your settings, the memory, and the files that you accepted into the project stay.</p></details><div class="actions"><button type="button" data-action="start-over" data-confirm="Click again to archive this run and start over">Start over</button></div></div>
+  ${archives.length ? `<ul class="archives">${archives.map((run) => `<li><span><strong>${e(time(run.at))}</strong>${run.direction ? ` ${e(run.direction)}` : ''} <span class="fine">${run.tasks} ${run.tasks === 1 ? 'task' : 'tasks'}, ${e(bytes(run.bytes))}</span></span><button type="button" data-action="restore" data-archive="${e(run.id)}" data-confirm="Click again to restore this run">Restore</button></li>`).join('')}</ul><p class="fine">Restore brings an archived run back. The current run moves to the archive first, so nothing is lost.</p>` : ''}</section>`;
 }
 
 function renderRecords(
@@ -2176,9 +2185,9 @@ function renderRecords(
   const { attempts } = snapshot;
   const logged = workers.filter((worker) => worker.record.commands.length);
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>What the agents ran, every research attempt, and the runs</p></div>
-  ${archives ? `${renderRuns(archives, tasks)}<section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Project memory</h2><p>Verifold keeps <code>memory/</code> in your project folder: <code>README.md</code> (read first), <code>progress.md</code>, <code>decisions.md</code>, <code>findings.md</code>, <code>notes.md</code>, and one file for each task under <code>tasks/</code>.</p><p class="fine">Every agent starts from <code>README.md</code>, also after Start over. Verifold rewrites only the part between its markers. Your own text outside them stays.</p></section>` : ''}
+
   <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? auditTable(logged, tasks, true) : '<p class="empty-note">No commands are recorded yet. Each tool call that a worker reports shows here.</p>'}</section>
-  <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research request shows here with its own identity.</p>'}</section></div>`;
+  <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research request shows here with its own identity.</p>'}</section>${archives ? `${renderRuns(archives, tasks)}<section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Project memory</h2><p>Verifold keeps <code>memory/</code> in your project folder: <code>README.md</code> (read first), <code>progress.md</code>, <code>decisions.md</code>, <code>findings.md</code>, <code>notes.md</code>, and one file for each task under <code>tasks/</code>.</p><p class="fine">Every agent starts from <code>README.md</code>, also after Start over. Verifold rewrites only the part between its markers. Your own text outside them stays.</p></section>` : ''}</div>`;
 }
 
 /** The summary and the sources of one research report. Source links are validated before rendering. */
@@ -2344,7 +2353,7 @@ function renderResearchView(
   shown: string | undefined,
 ): string {
   const research = workspace.research;
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Plan</h1><p>${e(phaseLabel(research?.phase))}</p></div>
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Plan</h1><p>${e(workspace.selectedId ? 'Direction chosen' : phaseLabel(research?.phase))}</p></div>
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
   ${renderPlanCard(workspace, live)}
@@ -2977,6 +2986,8 @@ export function renderDesk(
           workspace,
           live,
           view === 'task' ? live.tasks?.selected?.id : undefined,
+          // Home and Needs you list what waits for the person.
+          view === 'needs' || (view === 'home' && needs.length > 0),
         )
       : '';
   const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
