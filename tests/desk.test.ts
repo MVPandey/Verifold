@@ -267,10 +267,10 @@ await test('desk restricts private reads, serves escaped records, and stops with
     unknown
   >;
   for (const [status, label] of [
-    ['succeeded', 'Response accepted'],
+    ['succeeded', 'Done'],
     ['failed', 'Failed'],
     ['cancelled', 'Cancelled'],
-    ['started', 'Outcome unknown'],
+    ['started', 'Result unknown'],
   ] as const) {
     await writeFile(
       recordPath,
@@ -575,7 +575,7 @@ await test('desk points to the coordinator after a direction and shows its notes
   // The message box shows the coordinator's latest note as its reading. Its panel lists every note.
   assert.match(
     waiting,
-    /data-thread="coordinator"><li class="dock-note">[\s\S]*Its reading[\s\S]*The benchmark needs a dataset host\./,
+    /data-thread="coordinator"><li class="dock-note">[\s\S]*The benchmark needs a dataset host\./,
   );
   assert.match(
     html(false, [pilot], 'coordinator'),
@@ -807,7 +807,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
   ]);
   assert.match(
     plan.html,
-    /Needs you[\s\S]*Guided research stops at its plan[\s\S]*data-research="approve">Approve the plan/,
+    /Needs you[\s\S]*You asked research to stop at its plan\.[\s\S]*data-research="approve">Approve the plan/,
   );
   // The rail counts the item on the view that holds it. The top bar names the stage.
   assert.match(plan.html, /<span>Plan<\/span><span class="n">/);
@@ -970,7 +970,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
   );
   assert.match(
     team.html,
-    /The coordinator overruled two objections from this task, so this one goes to you/,
+    /The coordinator already overruled two objections from this task, so this one is yours/,
   );
   assert.match(team.html, /<section class="card now-card" aria-label="Now">/);
   // The blocker stays with the coordinator. Its task page still lets the person settle it first.
@@ -993,10 +993,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     alone.needs.map((item) => item.key),
     ['message:m-5', 'message:m-6', 'review:task-2:1:1'],
   );
-  assert.match(
-    alone.html,
-    /No coordinator runs, so only you can accept or reject it\./,
-  );
+  assert.match(alone.html, /No coordinator runs, so you review it\./);
   assert.match(alone.html, /<span>Work<\/span><span class="n">/);
   // Needs you lists the same items, and says when nothing waits.
   assert.match(
@@ -1177,7 +1174,7 @@ await test('desk Home lists what changed since the person left and the talk with
   );
   assert.match(
     away,
-    /The coordinator acted 1 time\. Its reasons are in its panel\./,
+    /The coordinator acted 1 time\. Its panel gives the reasons\./,
   );
   assert.match(away, /1 message between agents, in Records\./);
   assert.doesNotMatch(home(), /Since you left/);
@@ -1206,7 +1203,7 @@ await test('desk Home lists what changed since the person left and the talk with
   const dock = /<section class="dock"[\s\S]*<\/section>/.exec(away)?.[0] ?? '';
   assert.match(
     dock,
-    /<strong>You<\/strong>[\s\S]*Answered[\s\S]*Why is the data synthetic\?[\s\S]*dock-answer[\s\S]*Its reading[\s\S]*The brief allows a synthetic graph for a first pass\.[\s\S]*Waits for the coordinator[\s\S]*Can we add a real graph next\?/,
+    /<strong>You<\/strong>[\s\S]*Answered[\s\S]*Why is the data synthetic\?[\s\S]*dock-answer[\s\S]*The brief allows a synthetic graph for a first pass\.[\s\S]*Waits for the coordinator[\s\S]*Can we add a real graph next\?/,
   );
   assert.equal(dock.split('The brief allows').length, 2);
   assert.match(
@@ -1565,7 +1562,7 @@ await test('desk maps the tasks with what each agent does now and why', async (t
   // A compact box says whose turn it is and for how long its agent runs. The Now strip says what the agent does.
   assert.match(
     map,
-    /Agent&#39;s turn<\/span><span class="map-meta">For (under a minute|\d+ min)<\/span><\/button>/,
+    /Working<\/span><span class="map-meta">For (under a minute|\d+ min)<\/span><\/button>/,
   );
   assert.match(map, /Waits for Title task-2<\/span><\/button>/);
   assert.doesNotMatch(map, /map-why|map-now|Each box is a task/);
@@ -1728,7 +1725,7 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
   );
   assert.match(
     plan,
-    /The coordinator's summary<\/strong><span class="tag reading">Its reading<\/span>[\s\S]*about 30 minutes/,
+    /The coordinator's summary<\/strong><\/p>[\s\S]*about 30 minutes/,
   );
   // Another direction replaces the draft before the work starts.
   assert.match(
@@ -2089,7 +2086,7 @@ await test('desk compares the directions in a table and lists sources as they ar
   // One row for each direction, with its lead, its checks, and its sources.
   assert.match(
     view,
-    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><span class="selected-label">Proposed<\/span><\/th><td data-label="Its case">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
+    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><span class="selected-label">Proposed<\/span><\/th><td data-label="Why">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
   );
   assert.match(
     view,
@@ -2104,7 +2101,7 @@ await test('desk compares the directions in a table and lists sources as they ar
   );
   assert.match(
     panel,
-    /Its checks<\/h3><ul class="checks-list"><li>Distances match\.<\/li>/,
+    /Checks<\/h3><ul class="checks-list"><li>Distances match\.<\/li>/,
   );
   assert.match(
     panel,
@@ -2233,7 +2230,7 @@ await test('desk leads Answer with the answer and its sign-off, then the checks'
   // The answer cannot be accepted while a judgement is open.
   assert.match(
     view.html,
-    /The answer<\/h2><span class="tag reading">The coordinator's reading<\/span>/,
+    /The answer<\/h2><span class="tag reading">Proposed by the coordinator<\/span>/,
   );
   assert.match(view.html, /<a href="https:\/\/arxiv\.org\/abs\/1504\.05140"/);
   assert.match(view.html, /Settle the 1 open judgement below first\./);
@@ -2405,7 +2402,7 @@ await test('the message box writes to the agent that leads, or to a task agent, 
   );
   assert.match(
     work,
-    /data-thread="task-1" hidden>[\s\S]*Sent, it arrives at its next step[\s\S]*Answered[\s\S]*Profile Florida too\.[\s\S]*dock-answer[\s\S]*Understood\. I add Florida\./,
+    /data-thread="task-1" hidden>[\s\S]*Sent\. It arrives with the next step[\s\S]*Answered[\s\S]*Profile Florida too\.[\s\S]*dock-answer[\s\S]*Understood\. I add Florida\./,
   );
   // The box is on Home, Plan, and Work only.
   assert.match(render('home', coordinator, []), /id="message-text"/);
@@ -2756,7 +2753,7 @@ await test('a task opens as its own page: the decision first, the rest folded, a
   );
   assert.match(
     review,
-    /Claude Code made version 1 at [^.]+\. It received files from Implement the heap version\.[\s\S]*Version 1: the turn ended[\s\S]*The agent says[\s\S]*<p class="pre">The heap version is faster on every graph above 100,000 nodes\.<\/p>[\s\S]*data-action="task-accept" data-task="task-2" data-version="1">Accept 1 file[\s\S]*data-message-to="task-2">Ask for changes[\s\S]*data-action="task-reject"[\s\S]*<details id="task-files"><summary><h2>1 file changed<\/h2>[\s\S]*<details id="task-details">[\s\S]*<dt>Received<\/dt><dd>Implement the heap version version 1<\/dd>[\s\S]*<details id="task-activity">[\s\S]*data-source="session:S2"/,
+    /Claude Code made version 1 at [^.]+\. It received files from Implement the heap version\.[\s\S]*Version 1: the turn ended[\s\S]*The agent says[\s\S]*<div class="md"><p>The heap version is faster on every graph above 100,000 nodes\.<\/p>[\s\S]*data-action="task-accept" data-task="task-2" data-version="1">Accept 1 file[\s\S]*data-message-to="task-2">Ask for changes[\s\S]*data-action="task-reject"[\s\S]*<details id="task-files"><summary><h2>1 file changed<\/h2>[\s\S]*<details id="task-details">[\s\S]*<dt>Received<\/dt><dd>Implement the heap version version 1<\/dd>[\s\S]*<details id="task-activity">[\s\S]*data-source="session:S2"/,
   );
   assert.doesNotMatch(text(review), /task-\d/);
   assert.doesNotMatch(review, /The coordinator reviews this version/);
@@ -3115,4 +3112,25 @@ await test('Plan shows the first sources, and the rest fold (D92)', async (t) =>
     /<ol class="sources"><li><a id="source-[^"]*-0"[\s\S]*Paper 5<\/a>[^]*?<\/ol><details id="sources-[^"]*"><summary>All 8 sources<\/summary><ol class="sources" start="6"><li><a id="source-[^"]*-5"[^>]*>Paper 6<\/a>/,
   );
   assert.match(html, /<summary>How research split the work<\/summary>/);
+});
+
+await test('the desk text has none of the phrases that read as robotic (docs/words.md)', async () => {
+  for (const file of ['desk-view.ts', 'desk-client.ts']) {
+    const source = await readFile(
+      new URL(`../src/cli/${file}`, import.meta.url),
+      'utf8',
+    );
+    for (const phrase of [
+      'Its reading',
+      'Its case',
+      'Its transcript',
+      'leads now',
+      'turn to start it',
+      'turn to review',
+      'Research stays in this project',
+      'traceability',
+      'Ready for review',
+    ])
+      assert.ok(!source.includes(phrase), `${file} says "${phrase}"`);
+  }
 });
