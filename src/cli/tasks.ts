@@ -1012,9 +1012,9 @@ export class TaskManager {
 
   /**
    * The person sends a note to a task, the coordinator, or research; the
-   * coordinator, to a task or the person. A task agent gets the person's note
-   * as soon as it can take it: in its running turn, or in a new turn when its
-   * version waits for review. Otherwise the note waits for the next turn.
+   * coordinator, to a task or the person. A running task agent gets the note in
+   * its turn. A task whose version waits for review gets the person's note in a
+   * new turn. Otherwise the note waits for the next turn.
    */
   post(to: unknown, text: unknown, by: Actor = 'person'): Promise<Message> {
     return this.serial(async () => {
@@ -1030,9 +1030,13 @@ export class TaskManager {
         await this.messages.list(),
       );
       const session = task?.attempts.at(-1)?.session;
-      if (by !== 'person' || !task || !session) return message;
+      if (!task || !session) return message;
       if (task.state === 'running') await this.steer(message, session);
-      else if (task.state === 'review' && this.options.sessions.idle(session)) {
+      else if (
+        by === 'person' &&
+        task.state === 'review' &&
+        this.options.sessions.idle(session)
+      ) {
         await this.nextTurn(
           task,
           body,
@@ -1049,11 +1053,11 @@ export class TaskManager {
     });
   }
 
-  /** Add the person's message to the running turn of a task. A refused message waits for the next turn. */
+  /** Add a message from the person or the coordinator to the running turn of a task. A refused message waits for the next turn. */
   private async steer(message: Message, session: string): Promise<void> {
     const steered = this.options.sessions.steer(
       session,
-      `The person sent you this message while you work:\n\n${message.text}\n\nUse it in your current work. It does not change your writable paths, permissions, or limits.`,
+      `The ${message.from === 'person' ? 'person' : 'coordinator'} sent you this message while you work:\n\n${message.text}\n\nUse it in your current work. It does not change your writable paths, permissions, or limits.`,
       (taken) =>
         void this.serial(async () => {
           const current = (await this.messages.list()).find(
@@ -2263,11 +2267,9 @@ const decisionLabels = {
   resolved: 'resolved blocker',
 } as const;
 
-/** One delivered message in a worker's turn input. */
 /**
- * One message as a line of a turn or a digest. Its text is quoted, so a line
- * break or a fake prefix in it cannot pose as another line. At most about 3000
- * characters, so 20 messages fit in one turn.
+ * One message as a line of a turn or a digest, with its whole text. The text
+ * is quoted, so a line break or a fake prefix in it cannot pose as another line.
  */
 function messageLine(message: Message): string {
   const kind = message.kind === 'note' ? '' : ` (${message.kind})`;
@@ -2277,10 +2279,7 @@ function messageLine(message: Message): string {
   const evidence = message.evidence?.length
     ? ` Evidence: ${message.evidence.map((item) => JSON.stringify(item.slice(0, 200))).join(', ')}`
     : '';
-  return `- ${message.id} from ${message.from}${kind}${about}: ${JSON.stringify(message.text.slice(0, 2000))}${evidence}`.slice(
-    0,
-    3200,
-  );
+  return `- ${message.id} from ${message.from}${kind}${about}: ${JSON.stringify(message.text)}${evidence}`;
 }
 
 /** The project memory for a prompt: the index that Verifold and the person keep in memory/README.md. */

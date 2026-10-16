@@ -31,6 +31,12 @@ const files = {
     about:
       'Read this first. It says what this project asks, what was done, decided, and found, also in earlier runs. The other files hold the details.',
   },
+  direction: {
+    path: 'direction.md',
+    title: 'Direction',
+    about:
+      'The direction that this project follows, and the checks that decide its answer. A task that needs this specification gets this file as an input.',
+  },
   progress: {
     path: 'progress.md',
     title: 'Progress',
@@ -247,6 +253,22 @@ function taskFile(task: TaskRecord): string {
     .join('\n');
 }
 
+function direction({ workspace }: State): string {
+  const idea = workspace.candidates.find(
+    (candidate) => candidate.id === workspace.selectedId,
+  );
+  return idea
+    ? [
+        `Direction: ${idea.title}`,
+        '',
+        idea.recommendation.trim(),
+        '',
+        'Checks:',
+        ...idea.gates.map((gate, index) => `${index + 1}. ${gate}`),
+      ].join('\n')
+    : 'No direction is chosen yet.';
+}
+
 function readme(state: State, notes: readonly string[]): string {
   const { workspace, tasks, archived } = state;
   const idea = workspace.candidates.find(
@@ -258,6 +280,7 @@ function readme(state: State, notes: readonly string[]): string {
     idea ? `Direction: ${idea.title}` : 'Direction: not chosen yet',
     `This run: ${tasks.length} tasks, ${done} done.${archived ? ` ${archived} earlier ${archived === 1 ? 'run is' : 'runs are'} archived; their progress, decisions, and findings are in the files below.` : ''}`,
     '',
+    '- direction.md: the chosen direction and its checks.',
     '- progress.md: what is done, what runs, and what comes next.',
     '- decisions.md: who decided what, and when.',
     '- findings.md: the check results with their evidence, and the answer.',
@@ -347,6 +370,7 @@ export class ProjectMemory {
         .filter((entry) => entry.startsWith('- '));
       const bodies: Record<Exclude<Part, 'notes'>, string> = {
         readme: readme(state, notes),
+        direction: direction(state),
         progress: progress(state),
         decisions: decisions(state),
         findings: findings(state),
