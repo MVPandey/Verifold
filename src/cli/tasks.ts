@@ -1078,8 +1078,38 @@ export class TaskManager {
   }
 
   /**
+   * The coordinator asks the person for something that only the person can
+   * give: a key, a spend limit, a choice. The question waits in Needs you
+   * until the person answers it.
+   */
+  ask(text: unknown): Promise<Message> {
+    return this.serial(async () => {
+      const messages = await this.messages.list();
+      if (
+        messages.filter((entry) => isQuestion(entry) && entry.status === 'open')
+          .length >= 5
+      )
+        fail(
+          'Five of your questions wait for the person. Wait for an answer before you ask again.',
+        );
+      return this.send(
+        {
+          from: 'coordinator',
+          to: 'person',
+          kind: 'blocker',
+          status: 'open',
+          text: line(text, 'question', messageLimits.text),
+        },
+        await this.list(),
+        messages,
+      );
+    });
+  }
+
+  /**
    * The person decides an open blocker or objection. The decision goes to the
-   * task that raised it, with that task's next turn.
+   * task that raised it, with that task's next turn. The person answers a
+   * question from the coordinator the same way.
    */
   decideMessage(
     id: unknown,
@@ -1096,6 +1126,11 @@ export class TaskManager {
         message.kind === 'objection' ? ['upheld', 'overruled'] : ['resolved'];
       if (typeof decision !== 'string' || !allowed.includes(decision))
         fail('Choose a decision for this message.');
+      const question = isQuestion(message);
+      if (question && by !== 'person')
+        fail(
+          `Only the person answers ${message.id}. If you no longer need it, tell them with verifold_post.`,
+        );
       if (
         by === 'coordinator' &&
         decision === 'overruled' &&
@@ -1105,11 +1140,13 @@ export class TaskManager {
         fail(
           `You overruled two objections from ${message.from} to ${message.about.task}. This one goes to the person. Leave it open.`,
         );
-      const text = line(reason, 'reason', 2000);
+      const text = line(reason, question ? 'answer' : 'reason', 2000);
       await this.messages.update(message, {
         status: decision as 'upheld' | 'overruled' | 'resolved',
       });
-      const label = `The ${by} ${decisionLabels[decision as keyof typeof decisionLabels]} ${message.id}: ${text}`;
+      const label = question
+        ? `The person answered your question ${message.id}: ${text}`
+        : `The ${by} ${decisionLabels[decision as keyof typeof decisionLabels]} ${message.id}: ${text}`;
       await this.send(
         {
           from: by,
@@ -1121,7 +1158,8 @@ export class TaskManager {
         await this.list(),
         messages,
       );
-      this.told(by, undefined, label);
+      // An answer to the coordinator woke it already.
+      if (!question) this.told(by, undefined, label);
     });
   }
 
@@ -2053,6 +2091,15 @@ function handoffs(
     handed.push({ from, artifact });
   }
   return handed;
+}
+
+/** A question from the coordinator to the person. It waits in Needs you while it is open. */
+export function isQuestion(message: Message): boolean {
+  return (
+    message.from === 'coordinator' &&
+    message.to === 'person' &&
+    message.kind === 'blocker'
+  );
 }
 
 /**

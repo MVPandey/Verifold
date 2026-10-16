@@ -821,7 +821,9 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
         action,
         message: button.dataset.message,
         decision: button.dataset.decision,
-        reason: field(`decide-${button.dataset.message ?? ''}`),
+        reason:
+          button.dataset.reason ??
+          field(`decide-${button.dataset.message ?? ''}`),
       };
     default:
       return { action, task };

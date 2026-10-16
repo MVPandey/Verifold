@@ -407,7 +407,7 @@ await test('the coordinator creates and starts tasks through checked tools, and 
     { session: null, controllable: true, coordinator: coordinator.view() },
     { view: 'home', panel: 'coordinator' },
   ).html;
-  assert.match(html, /Coordinator[\s\S]*Watching the work/);
+  assert.match(html, /Coordinator[\s\S]*Waiting/);
   // Each action reads as a sentence. Without the task list, a task shows by its ID.
   assert.match(
     html,
