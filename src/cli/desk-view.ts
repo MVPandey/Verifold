@@ -185,11 +185,11 @@ export function nextResearchAction(workspace: Workspace): {
 function phaseLabel(phase: string | undefined): string {
   switch (phase) {
     case 'needs-plan':
-      return 'Research planning';
+      return 'Planning research';
     case 'awaiting-plan-review':
-      return 'Plan awaiting review';
+      return 'Plan waits for you';
     case 'needs-research':
-      return 'Source exploration';
+      return 'Searching sources';
     case 'directions':
       return 'Directions ready';
     default:
@@ -201,15 +201,15 @@ function outcome(attempt: DeskAttempt): string {
   if (attempt.activity === 'recent') return 'Recently active';
   switch (attempt.record?.status) {
     case 'succeeded':
-      return 'Response accepted';
+      return 'Done';
     case 'failed':
       return 'Failed';
     case 'cancelled':
       return 'Cancelled';
     case 'interrupted':
-      return 'Interrupted, outcome unknown';
+      return 'Stopped, result unknown';
     default:
-      return 'Outcome unknown';
+      return 'Result unknown';
   }
 }
 
@@ -300,6 +300,13 @@ function inFull(id: string, text: string): string {
     : more(id, text, 200);
 }
 
+/** Markdown in full up to a few lines, like inFull. Longer Markdown folds. */
+function inFullMd(id: string, markdown: string): string {
+  return markdown.length <= 600
+    ? `<div class="md">${markdownHtml(markdown)}</div>`
+    : moreMd(id, markdown, 200);
+}
+
 /** Markdown, folded when it is long. The lead is plain text. */
 function moreMd(id: string, markdown: string, max = 220): string {
   return fold(
@@ -326,7 +333,7 @@ function transcriptSlot(
 }
 
 const transcriptNote =
-  '<p class="fine detail-only">The transcript shows what the harness reported: messages, tool calls with their input and output, and subagent steps under the call that started them. It stays private in this project.</p>';
+  '<p class="fine detail-only">Everything the agent reported: its messages, its tool calls with their input and output, and the steps of its helpers. It stays in this project.</p>';
 
 /** The research step of this owner. Summary is the default level of detail. */
 function renderResearch(
@@ -340,7 +347,7 @@ function renderResearch(
   ${detailSwitch}
   ${now ? `<p class="research-summary summary-only">Now: ${e(now)}.</p>` : ''}
   ${attempt ? `${transcriptSlot(`attempt:${attempt}`, 'Research transcript')}${transcriptNote}` : ''}
-  ${view.running ? '<p class="fine">If you cancel, the saved checkpoint and the attempt files stay.</p><div class="actions"><button type="button" data-action="cancel-research">Cancel research</button></div>' : ''}</section>`;
+  ${view.running ? '<p class="fine">If you cancel, Verifold keeps what this step saved.</p><div class="actions"><button type="button" data-action="cancel-research">Cancel research</button></div>' : ''}</section>`;
 }
 
 /**
@@ -358,7 +365,7 @@ function renderDecision(
   const home = place === 'home';
   if (research.running)
     return home
-      ? `<section class="card lead"><h2>Research is running</h2><p>${e(research.step ? `${research.step}.` : 'A research step runs.')} Follow it in Plan.</p><p class="fine">If you cancel, the saved checkpoint and the attempt files stay.</p><div class="actions"><button type="button" class="primary" data-view="research">Follow the research</button><button type="button" data-action="cancel-research">Cancel research</button></div></section>`
+      ? `<section class="card lead"><h2>Research is running</h2><p>${e(research.step ? `${research.step}.` : 'A research step runs.')} Follow it in Plan.</p><p class="fine">If you cancel, Verifold keeps what this step saved.</p><div class="actions"><button type="button" class="primary" data-view="research">Follow the research</button><button type="button" data-action="cancel-research">Cancel research</button></div></section>`
       : '';
   const phase = workspace.research?.phase;
   if (phase === undefined)
@@ -370,7 +377,7 @@ function renderDecision(
     case 'directions':
       return `<section class="card needs"><h2>Choose a direction</h2><p>Choose one of the directions below. The coordinator then drafts the plan for it. To change the directions first, write to research in the message box.</p></section>`;
     default:
-      return `<section class="card needs"><h2>Continue research</h2><p>Research stopped before this step ended. Continue from the saved checkpoint.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
+      return `<section class="card needs"><h2>Continue research</h2><p>Research stopped before this step ended. Continue it from the saved point.</p><div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div></section>`;
   }
 }
 
@@ -409,13 +416,13 @@ const sessionStatus: Record<string, [string, string]> = {
   starting: ['Starting', 'active'],
   terminal: ['You hold the terminal', 'active'],
   running: ['Working', 'active'],
-  idle: ['Waiting for a follow-up', 'muted'],
+  idle: ['Waits for your next message', 'muted'],
   ended: ['Ended', 'muted'],
   failed: ['Stopped with an error', 'failed'],
 };
 
 const paneSwitch =
-  '<div class="seg pane-switch" role="group" aria-label="Worker view"><button type="button" data-pane="summary">Summary</button><button type="button" data-pane="details">Details</button><button type="button" data-pane="terminal">Terminal</button><button type="button" data-pane="commands">Commands</button></div>';
+  '<div class="seg pane-switch" role="group" aria-label="Agent view"><button type="button" data-pane="summary">Summary</button><button type="button" data-pane="details">Details</button><button type="button" data-pane="terminal">Terminal</button><button type="button" data-pane="commands">Commands</button></div>';
 
 /**
  * The worker's own terminal. While the person holds it, a framed terminal page
@@ -434,13 +441,12 @@ function renderTerminal(view: SessionView, live: DeskSession): string {
     record.status === 'idle'
       ? ''
       : 'Open the terminal between turns. Wait for the turn to end, or cancel it.';
-  return `<p class="fine">${record.host === 'claude' ? `Verifold stops its Claude Code process and opens Claude Code in a terminal on this conversation${record.mode === 'strict' ? ', with the task limits' : ''}. While you work there, Verifold records no tool calls.` : `Codex opens in a terminal on this session${record.mode === 'strict' ? ', with the task limits' : ''}. Codex keeps reporting its events while you type.`}${record.task ? ' When you return, Verifold saves the task folder as a version.' : ' Return to Verifold to continue here.'}</p>${off ? `<p class="notice" id="terminal-off">${off}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="terminal-open" data-session="${e(record.id)}"${off ? ' disabled aria-describedby="terminal-off"' : ''}>Open the terminal</button></div>`;
+  return `<p class="fine">${record.host === 'claude' ? `Verifold stops its Claude Code process and opens Claude Code in a terminal on this conversation${record.mode === 'strict' ? ', with the task limits' : ''}. While you work there, Verifold records no tool calls.` : `Codex opens in a terminal for this session${record.mode === 'strict' ? ', with the task limits' : ''}. Codex keeps reporting its events while you type.`}${record.task ? ' When you return, Verifold saves the task folder as a version.' : ' Return to Verifold to continue here.'}</p>${off ? `<p class="notice" id="terminal-off">${off}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="terminal-open" data-session="${e(record.id)}"${off ? ' disabled aria-describedby="terminal-off"' : ''}>Open the terminal</button></div>`;
 }
 
 /** The status of a live worker. A task worker that waits has a version to review. */
 function workerStatus(record: SessionView['record']): [string, string] {
-  if (record.task && record.status === 'idle')
-    return ['Ready for review', 'active'];
+  if (record.task && record.status === 'idle') return ['In review', 'active'];
   return sessionStatus[record.status] ?? ['Unknown', 'muted'];
 }
 
@@ -541,20 +547,20 @@ function workerPanel(
 function renderPaused(live: DeskSession): string {
   const paused = live.paused ?? [];
   if (!live.controllable || live.full || !paused.length) return '';
-  return `<section class="card" aria-labelledby="paused-title"><h2 id="paused-title">${paused.some((entry) => entry.status === 'interrupted') ? 'Paused and interrupted sessions' : 'Paused sessions'}</h2><p class="fine">Verifold stopped while these sessions were open. Resume one to continue its conversation in a new harness process. If no conversation was recorded, start its first request again.</p><ul class="paused-list">${paused
+  return `<section class="card" aria-labelledby="paused-title"><h2 id="paused-title">${paused.some((entry) => entry.status === 'interrupted') ? 'Paused and interrupted sessions' : 'Paused sessions'}</h2><p class="fine">These sessions were open when Verifold stopped. Resume one to continue its conversation.</p><ul class="paused-list">${paused
     .slice(0, 10)
     .map(
       (entry) =>
-        `<li><span class="paused-meta"><span>${e(hostName(entry.host))}</span><span>${e(time(entry.startedAt))}</span><span>${entry.status === 'interrupted' ? 'Interrupted, outcome unknown' : 'Paused'}</span></span><span class="paused-request">${e(entry.request.length > 160 ? `${entry.request.slice(0, 160)}…` : entry.request)}</span><span class="actions"><button type="button" data-action="${entry.restart ? 'restart' : 'resume'}" data-session="${e(entry.id)}">${entry.restart ? 'Start again' : 'Resume'}</button></span></li>`,
+        `<li><span class="paused-meta"><span>${e(hostName(entry.host))}</span><span>${e(time(entry.startedAt))}</span><span>${entry.status === 'interrupted' ? 'Stopped, result unknown' : 'Paused'}</span></span><span class="paused-request">${e(entry.request.length > 160 ? `${entry.request.slice(0, 160)}…` : entry.request)}</span><span class="actions"><button type="button" data-action="${entry.restart ? 'restart' : 'resume'}" data-session="${e(entry.id)}">${entry.restart ? 'Start again' : 'Resume'}</button></span></li>`,
     )
     .join('')}</ul></section>`;
 }
 
 const taskStates: Record<TaskRecord['state'], [string, string]> = {
-  open: ['Open', 'muted'],
-  claimed: ['Preparing', 'active'],
-  running: ['Running', 'active'],
-  review: ['Ready for review', 'active'],
+  open: ['Not started', 'muted'],
+  claimed: ['Starting', 'active'],
+  running: ['Working', 'active'],
+  review: ['In review', 'active'],
   done: ['Done', 'muted'],
   cancelled: ['Cancelled', 'muted'],
 };
@@ -606,8 +612,8 @@ function taskForm(
   ${field('output', 'What it should produce', area('output', 2, 2000, values?.output))}
   ${field('writable', 'Where it may write, one path per line', area('writable', 2, 4000, values?.writable.join('\n')))}
   <details id="${prefix}-more" class="more-fields"><summary>Input files, network, harness, and what it waits for</summary>
-  ${field('inputs', 'Input files, one path per line (Verifold copies them now)', area('inputs', 2, 4000, values?.inputs.map((input) => input.path).join('\n')))}
-  ${field('network', 'Domains that its shell commands may reach, one per line (empty: no network)', area('network', 2, 2000, values?.network?.domains.join('\n')))}
+  ${field('inputs', 'Files that it gets, one path per line. Verifold copies them when you save.', area('inputs', 2, 4000, values?.inputs.map((input) => input.path).join('\n')))}
+  ${field('network', 'Websites its commands may reach, one per line. Leave this empty for no network.', area('network', 2, 2000, values?.network?.domains.join('\n')))}
   ${field('network-reason', 'Why it needs them', `<input id="${prefix}-network-reason" type="text" maxlength="500" value="${e(values?.network?.reason ?? '')}">`)}
   <div class="fields"><label class="field" for="${prefix}-host">Harness<select id="${prefix}-host"><option value="claude"${chosen === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${chosen === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="${prefix}-model">Model<input id="${prefix}-model" type="text" maxlength="200" placeholder="Harness default" value="${e(values?.model ?? '')}"></label><label class="field" for="${prefix}-minutes">Time limit for each turn, in minutes<input id="${prefix}-minutes" type="number" min="1" max="240" value="${values?.minutes ?? 30}"></label></div>
   ${
@@ -640,7 +646,7 @@ function reviewDecision(
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
   ${reviewer ? '<p class="fine">The coordinator reviews this version. You can decide first.</p>' : ''}
-  ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong><span class="tag reading">Its reading</span></p>${inFull(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
+  ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong></p>${inFullMd(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
   ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
   <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
   ${canChange ? '<p class="fine">Ask for changes points the message box at the agent. Your message starts its next turn, and the next version follows.</p>' : '<p class="fine" id="task-changes-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}</section>`;
@@ -692,7 +698,7 @@ function messageItem(message: Message, tasks: readonly TaskRecord[]): string {
 
 /** The answer to an open blocker or objection. A decision changes no file. Its reason goes to the task that raised it. */
 function decideForm(message: Message): string {
-  return `<label class="field" for="decide-${e(message.id)}">Reason for your decision on ${e(message.id)}</label><input id="decide-${e(message.id)}" type="text" maxlength="2000"><div class="actions">${
+  return `<label class="field" for="decide-${e(message.id)}">Your reason</label><input id="decide-${e(message.id)}" type="text" maxlength="2000"><div class="actions">${
     message.kind === 'objection'
       ? `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="upheld">Uphold</button><button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="overruled">Overrule</button>`
       : `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved">Resolve</button>`
@@ -731,7 +737,7 @@ interface Recipient {
 }
 
 /**
- * The agents that take messages: the one that leads now, then each task agent
+ * The agents that take messages: the one that leads, then each task agent
  * that runs or waits for review. The coordinator leads while it runs. Before
  * a direction is chosen, research leads. After that, without a coordinator,
  * the person can start one.
@@ -804,7 +810,7 @@ function messageState(
   if (message.via === 'turn')
     return message.delivery === 'delivered'
       ? ['Delivered during its turn', 'delivered']
-      : ['Sent, it arrives at its next step', 'waiting'];
+      : ['Sent. It arrives with the next step', 'waiting'];
   if (message.delivery !== 'queued')
     return ['Delivered with its next turn', 'delivered'];
   if (message.to !== 'coordinator')
@@ -855,13 +861,13 @@ function thread(
     .slice(-5);
   const row = (message: Message): string => {
     if (message.from !== 'person')
-      return `<li class="dock-note"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="tag reading">Its reading</span></p>${inFull(`dock-${message.id}`, message.text)}</li>`;
+      return `<li class="dock-note"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${inFull(`dock-${message.id}`, message.text)}</li>`;
     const [state, tone] = messageState(message, live);
     // The same reply can answer several messages. It shows under the last one.
     const next = items[items.indexOf(message) + 1];
     const answer =
       message.answer && next?.answer?.at !== message.answer.at
-        ? `<div class="dock-answer"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.answer.at)}">${e(clock(message.answer.at))}</time><span class="tag reading">Its reading</span></p>${inFull(`dock-answer-${message.id}`, message.answer.text)}</div>`
+        ? `<div class="dock-answer"><p class="msg-meta"><strong>${e(recipient.name)}</strong><time datetime="${e(message.answer.at)}">${e(clock(message.answer.at))}</time></p>${inFull(`dock-answer-${message.id}`, message.answer.text)}</div>`
         : '';
     return `<li class="dock-msg"><p class="msg-meta"><strong>You</strong><time datetime="${e(message.at)}">${e(clock(message.at))}</time><span class="state ${tone}">${e(state)}</span></p>${inFull(`dock-${message.id}`, message.text)}${answer}</li>`;
   };
@@ -875,7 +881,7 @@ function thread(
     return `<ol class="dock-thread" data-thread="${e(recipient.to)}"${shown ? '' : ' hidden'}>${said
       .map(
         (event, index) =>
-          `<li class="${event.kind === 'you' ? 'dock-msg' : 'dock-note'}"><p class="msg-meta"><strong>${event.kind === 'you' ? 'You' : e(record ? hostName(record.host) : 'Agent')}</strong><time datetime="${e(event.at)}">${e(clock(event.at))}</time>${event.kind === 'agent' ? '<span class="tag reading">Its reading</span>' : ''}</p>${inFull(`dock-${recipient.to}-${index}`, event.text)}</li>`,
+          `<li class="${event.kind === 'you' ? 'dock-msg' : 'dock-note'}"><p class="msg-meta"><strong>${event.kind === 'you' ? 'You' : e(record ? hostName(record.host) : 'Agent')}</strong><time datetime="${e(event.at)}">${e(clock(event.at))}</time></p>${inFull(`dock-${recipient.to}-${index}`, event.text)}</li>`,
       )
       .join('')}</ol>`;
   }
@@ -893,7 +899,7 @@ function draftCard(task: TaskRecord): string {
 
 /**
  * The message box at the bottom of Home, Plan, Work, a task, and Needs you.
- * It writes to the agent that leads now, to the agent of the open task, or to
+ * It writes to the agent that leads, to the agent of the open task, or to
  * the agent that To names. The page shows the thread of the chosen agent.
  */
 function renderDock(
@@ -955,7 +961,7 @@ const outcomeLabels = {
 function judgementForm(entry: CheckResult): string {
   const button = (result: string, label: string): string =>
     `<button type="button" data-action="coordinator-rule" data-check="${entry.check}" data-result="${result}">${label}</button>`;
-  return `<label class="field" for="rule-${entry.check}">Your ruling and its reason</label><input id="rule-${entry.check}" type="text" maxlength="2000"><div class="actions">${button('passed', 'It passed')}${button('partial', 'It partly passed')}${button('failed', 'It failed')}</div><p class="fine">Your ruling is final. The coordinator gets it with its next wakeup.</p>`;
+  return `<label class="field" for="rule-${entry.check}">Your ruling and its reason</label><input id="rule-${entry.check}" type="text" maxlength="2000"><div class="actions">${button('passed', 'It passed')}${button('partial', 'It partly passed')}${button('failed', 'It failed')}</div><p class="fine">Your ruling is final. The coordinator gets it when it next wakes up.</p>`;
 }
 
 /** A decision that only the person can make. Its key stays the same while it waits, so the page notifies once. */
@@ -994,7 +1000,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         view: 'research',
         kind: 'Research plan',
         title: 'Review the plan',
-        why: 'Guided research stops at its plan for your approval.',
+        why: 'You asked research to stop at its plan.',
         since,
         body: '<div class="actions"><button type="button" class="primary" data-action="research" data-research="approve">Approve the plan</button><button type="button" data-view="research">Read the plan</button></div>',
       });
@@ -1004,7 +1010,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         view: 'research',
         kind: 'Direction',
         title: 'Choose a direction',
-        why: 'Only you choose the direction. The coordinator then drafts its plan.',
+        why: 'The coordinator plans the work after you choose.',
         since,
         body: '<div class="actions"><button type="button" class="primary" data-view="research">Compare the directions</button></div>',
       });
@@ -1014,7 +1020,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         view: 'research',
         kind: 'Stopped work',
         title: 'Research stopped before its step ended',
-        why: 'Only you can continue it. It continues from the saved checkpoint.',
+        why: 'Continue it to pick up from the saved point.',
         since,
         body: '<div class="actions"><button type="button" class="primary" data-action="research" data-research="continue">Continue research</button></div>',
       });
@@ -1030,7 +1036,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       view: 'home',
       kind: 'Stopped work',
       title: 'The coordinator is paused',
-      why: 'It paused when Verifold stopped. Only you can resume it.',
+      why: 'It paused when Verifold stopped. Resume it to continue.',
       since: null,
       body: '<div class="actions"><button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button></div>',
     });
@@ -1040,7 +1046,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       view: workspace.selectedId ? 'research' : 'home',
       kind: 'Plan',
       title: 'The plan waits for you',
-      why: 'Only you choose the direction and start the work. No task starts before you do.',
+      why: 'No task starts until you start the work.',
       since:
         tasks
           .filter((task) => task.assignment.by === 'coordinator')
@@ -1111,7 +1117,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       task: message.from,
       kind: kindLabels[message.kind],
       title: lead(message.text, 160),
-      why: `From ${from}. ${coordinated ? 'The coordinator overruled two objections from this task, so this one goes to you.' : 'No coordinator runs, so only you can settle it.'}`,
+      why: `From ${from}. ${coordinated ? 'The coordinator already overruled two objections from this task, so this one is yours.' : 'No coordinator runs, so this one is yours.'}`,
       since: message.at,
       body: `${lead(message.text, 160) === message.text.replace(/\s+/g, ' ').trim() ? '' : `<details class="more" id="need-${e(message.id)}"><summary>Read the whole message</summary><p class="pre">${e(message.text)}</p></details>`}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
     });
@@ -1127,9 +1133,9 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         view: 'results',
         kind: 'Judgement',
         title: `Check ${entry.check}: ${entry.question ?? 'needs your judgement'}`,
-        why: 'The evidence does not settle it, so only you can decide it.',
+        why: 'The evidence does not decide it. You do.',
         since: entry.at,
-        body: `<p class="fine">${e(idea?.gates[entry.check - 1] ?? '')}</p><p><span class="tag reading">Its reading</span> ${e(entry.value)}</p>${judgementForm(entry)}`,
+        body: `<p class="fine">${e(idea?.gates[entry.check - 1] ?? '')}</p><p><span class="tag reading">The coordinator says</span> ${e(entry.value)}</p>${judgementForm(entry)}`,
       });
   if (results?.answer && !results.answer.decision)
     items.push({
@@ -1137,7 +1143,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       view: 'results',
       kind: 'Sign-off',
       title: 'The answer waits for your sign-off',
-      why: 'Only you accept the answer or ask for more work.',
+      why: 'Accept the answer, or ask for more work.',
       since: results.answer.at,
       body: '<div class="actions"><button type="button" class="primary" data-view="results">Read the answer</button></div>',
     });
@@ -1153,7 +1159,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           task: task.id,
           kind: 'Review',
           title: `Version ${version.number} of ${task.assignment.title} waits for your review`,
-          why: 'No coordinator runs, so only you can accept or reject it.',
+          why: 'No coordinator runs, so you review it.',
           since: version.at,
           body: open,
         });
@@ -1183,8 +1189,8 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           kind: 'GPU pod',
           title: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod`,
           why: compute.settings.askBeforePod
-            ? 'You approve each pod. Nothing is billed before you do.'
-            : 'It does not fit your limits now, for example the number of pods at the same time. Nothing is billed before you approve it.',
+            ? 'You approve each pod. Nothing is billed until you do.'
+            : 'It does not fit your limits right now, for example because a pod already runs. Nothing is billed until you approve it.',
           since: lease.requestedAt,
           body: leaseRequest(lease, compute),
         });
@@ -1194,7 +1200,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           view: 'compute',
           kind: 'GPU pod',
           title: lease.notice,
-          why: 'Verifold acted on a pod. Dismiss this when you have read it.',
+          why: 'Verifold changed a pod. Dismiss this when you have read it.',
           since: lease.history.at(-1)?.at ?? null,
           body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,
         });
@@ -1207,7 +1213,7 @@ function leaseRequest(lease: Lease, compute: ComputeView): string {
   const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
   const left = compute.budget.left;
   return `<dl class="facts"><div><dt>For</dt><dd>${lease.tasks.map((task) => e(task)).join(', ')}</dd></div><div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
-  <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'Its reason' : 'Your reason'}</span> ${e(lease.reason)}</div>
+  <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'The coordinator says' : 'Your reason'}</span> ${e(lease.reason)}</div>
   <p class="fine">The pod runs any command as root, with internet access. Files that a task copies to it leave this computer. RunPod erases the disk of the pod when the pod stops. Verifold stops the pod after ${compute.settings.idleMinutes} idle minutes and when Verifold stops, and deletes it at the end of the lease or at your spend limit.</p>
   <div class="actions"><button type="button" class="primary" data-action="compute-lease-approve" data-lease="${e(lease.id)}">Approve, up to ${usd(cost)}</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny</button></div>`;
 }
@@ -1226,7 +1232,7 @@ function renderNeedList(items: readonly Need[]): string {
 function renderNeedsView(items: readonly Need[]): string {
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Needs you</h1><p>${items.length ? `${items.length} ${items.length === 1 ? 'item waits' : 'items wait'} for you` : 'Nothing waits for you'}</p></div>
   <p class="notify"><span id="notify-state"></span><button type="button" id="notify" hidden>Turn on desktop notifications</button></p>
-  ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p><strong>Nothing needs you.</strong></p><p class="fine">An item shows here when only you can settle it: a plan to approve, a direction to choose, a permission request, an objection that comes to you, or work that stopped. It leaves when you settle it.</p></section>'}</div>`;
+  ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p><strong>Nothing needs you.</strong></p><p class="fine">Questions, approvals, and stopped work show here when they need you.</p></section>'}</div>`;
 }
 
 /** One line on Home while pods run, with the cost against the limit. */
@@ -1338,7 +1344,7 @@ function coordinatorPanel(
       kind: 'Agent',
       title: 'Coordinator',
       sub: `<span class="status muted">${state ? 'Stopped' : 'Not started'}</span>`,
-      body: `<p class="fine">The coordinator turns an objective into tasks for the workers. It starts them, reviews each version, and settles objections. It acts only through Verifold's task tools, so every action has the same checks as yours, and it gives a reason for each one. It cannot run commands or edit files.</p>
+      body: `<p class="fine">The coordinator turns an objective into tasks, starts them, and reviews each version. It can only use Verifold's task tools, with the same checks as yours, and it gives a reason for each action. It cannot run commands or edit files.</p>
     <label class="field" for="coordinator-objective">Objective</label><textarea id="coordinator-objective" rows="5" maxlength="8000">${e(objective)}</textarea>
     ${objective ? '' : '<p class="fine">Choose a research direction first, or write the objective yourself.</p>'}
     <div class="fields"><label class="field" for="coordinator-host">Harness<select id="coordinator-host"><option value="claude"${host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="coordinator-model">Model<input id="coordinator-model" type="text" maxlength="200" placeholder="Harness default"></label></div>
@@ -1371,10 +1377,10 @@ function coordinatorPanel(
   ${plan}
   ${notesToPerson(messages, tasks)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
-  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks))}</p>${action.reason ? `<div class="why"><span class="tag reading">Its reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Results come from Verifold. Reasons are the coordinator's reading, a model claim.</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks))}</p>${action.reason ? `<div class="why"><span class="tag reading">The coordinator's reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Verifold records each result. The reasons come from the coordinator.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
   <div class="actions">${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
-  <p class="fine">If you stop it, running workers finish their turns, and their versions wait for your review.</p>`,
+  <p class="fine">If you stop it, the agents finish their turns, and their versions wait for your review.</p>`,
   };
 }
 
@@ -1461,7 +1467,7 @@ function renderSince(
       ? `${needs} ${needs === 1 ? 'item needs' : 'items need'} you above.`
       : '',
     acted
-      ? `The coordinator acted ${acted} ${acted === 1 ? 'time' : 'times'}. Its reasons are in its panel.`
+      ? `The coordinator acted ${acted} ${acted === 1 ? 'time' : 'times'}. Its panel gives the reasons.`
       : '',
     posted
       ? `${posted} ${posted === 1 ? 'message' : 'messages'} between agents, in Records.`
@@ -1480,7 +1486,7 @@ function taskPod(task: string, compute: ComputeView | undefined): string {
       (isOpen(entry) || entry.state === 'requested'),
   );
   if (!lease) return '';
-  return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.id)}, ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. Verifold runs SSH; the worker uses Verifold's pod tools.</p>`;
+  return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.id)}, ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. The agent reaches the pod only through Verifold's pod tools.</p>`;
 }
 
 /**
@@ -1518,7 +1524,7 @@ function renderTaskPage(
   const blocked = waiting.length
     ? `This task waits for ${waiting.map(name).join(', ')}.`
     : live.full
-      ? `${workerLimit} workers run. End a session, or accept, reject, or cancel a task version first.`
+      ? `${workerLimit} agents already work. Wait for one to finish, or end a session.`
       : undefined;
   const workers = live.workers ?? (live.session ? [live.session] : []);
   const agent =
@@ -1603,7 +1609,7 @@ function renderTaskPage(
   const details = `<details id="task-details"><summary><h2>What the task asks</h2></summary>
     ${assignment.hostReason ? `<p class="host-why"><span class="map-label">Why this harness</span> ${e(assignment.hostReason)}</p>` : ''}
     <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, assignment.objective, 220)}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, assignment.output, 160)}</dd><dt>Input files</dt><dd>${assignment.inputs.length ? assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${assignment.network ? `${e(assignment.network.domains.join(', '))}: ${e(assignment.network.reason)}${assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd>${assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(assignment.dependencies.map(name).join(', '))}</dd>` : ''}${received.length ? `<dt>Received</dt><dd>${e(received.map((used) => `${name(used.task)} version ${used.version}`).join(', '))}</dd>` : ''}<dt>Harness</dt><dd>${e(hostName(assignment.host))}, model ${e(assignment.model ?? 'harness default')}, ${assignment.minutes} min for each turn</dd></dl>
-    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p>` : ''}</details>`;
+    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Claude Code or Codex enforces these limits. They are more than words in the prompt.</p>` : ''}</details>`;
   const activity = attempt?.session
     ? `<details id="task-activity"><summary><h2>What the agent did</h2></summary>${transcriptSlot(`session:${attempt.session}`, `${hostName(assignment.host)} transcript`, '')}${agent ? `<div class="actions">${agent}</div>` : ''}</details>`
     : '';
@@ -1774,11 +1780,11 @@ function taskTurn(
     case 'claimed':
       return ['Starting', false];
     case 'running':
-      return ["Agent's turn", false];
+      return ['Working', false];
     case 'review':
       return coordinated
-        ? ["Coordinator's turn to review", false]
-        : ['Your turn to review', true];
+        ? ['The coordinator reviews it', false]
+        : ['Waits for your review', true];
     case 'done':
       return ['Done', false];
     case 'cancelled':
@@ -2073,7 +2079,7 @@ function renderResultsView(workspace: Workspace, live: DeskSession): string {
         /^([^:\n]{1,60}):\s*([\s\S]*)$/.exec(gate) ?? [];
       return `<li class="check-row" data-result="${outcome ?? 'none'}"><span class="check-num">${index + 1}</span><div class="check-body">${name ? `<p class="check-name">${e(name)}</p>` : ''}<div class="check-text">${more(`check-text-${index + 1}`, rule, 200)}</div>${
         entry
-          ? `<p class="check-value"><span class="tag reading">Its reading</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p><div class="why"><span class="tag reading">Its reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
+          ? `<p class="check-value"><span class="tag reading">The coordinator says</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p><div class="why"><span class="tag reading">The coordinator's reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
           : ''
       }</div><span class="check-result">${outcome ? e(outcomeLabels[outcome]) : 'Not reported yet'}</span></li>`;
     })
@@ -2089,10 +2095,10 @@ function renderResultsView(workspace: Workspace, live: DeskSession): string {
   return `<div class="view">${head}
   ${
     answer
-      ? `<section class="card answer" aria-labelledby="answer-title"><div class="section-title"><h2 id="answer-title">The answer</h2><span class="tag reading">The coordinator's reading</span></div><p class="statement">${e(answer.statement)}</p><ol class="claims">${answer.claims.map((claim) => `<li><p>${e(claim.text)}</p>${claim.evidence.length ? `<p class="fine">Evidence: ${claim.evidence.map((item) => (/^https?:\/\//.test(item) ? link(item) : `<code>${e(item)}</code>`)).join(' ')}</p>` : ''}</li>`).join('')}</ol>${signOff}</section>`
+      ? `<section class="card answer" aria-labelledby="answer-title"><div class="section-title"><h2 id="answer-title">The answer</h2><span class="tag reading">Proposed by the coordinator</span></div><p class="statement">${e(answer.statement)}</p><ol class="claims">${answer.claims.map((claim) => `<li><p>${e(claim.text)}</p>${claim.evidence.length ? `<p class="fine">Evidence: ${claim.evidence.map((item) => (/^https?:\/\//.test(item) ? link(item) : `<code>${e(item)}</code>`)).join(' ')}</p>` : ''}</li>`).join('')}</ol>${signOff}</section>`
       : '<section class="card"><h2>The answer</h2><p class="fine">The coordinator proposes the answer when the checks have results. You sign it off here.</p></section>'
   }
-  <section class="card" aria-labelledby="checks-title"><div class="section-title"><h2 id="checks-title">The checks</h2><span class="count">${results?.checks.length ?? 0} of ${idea.gates.length} reported</span></div><ol class="checks">${checks}</ol><p class="fine">The coordinator reports each result with the accepted files that show it. Verifold checks that the files were accepted. The values and reasons are its reading.</p></section></div>`;
+  <section class="card" aria-labelledby="checks-title"><div class="section-title"><h2 id="checks-title">The checks</h2><span class="count">${results?.checks.length ?? 0} of ${idea.gates.length} reported</span></div><ol class="checks">${checks}</ol><p class="fine">Each result points to accepted files. The values and reasons come from the coordinator, so compare them with the files.</p></section></div>`;
 }
 
 const leaseStates: Record<Lease['state'], string> = {
@@ -2129,12 +2135,12 @@ function renderPods(compute: ComputeView): string {
   );
   const earlier = compute.leases.filter((lease) => !current.includes(lease));
   const head =
-    '<thead><tr><th scope="col">Lease</th><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
+    '<thead><tr><th scope="col">Pod</th><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
   return `<section class="card" aria-labelledby="pods-title"><div class="section-title"><h2 id="pods-title">Pods</h2>${budget.rate ? `<span class="count">${usd(budget.rate)} per hour now</span>` : ''}</div>
-  ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for open leases ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
+  ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for running pods ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
   ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
   ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU. ${compute.settings.askBeforePod ? 'You approve each pod in Needs you.' : 'A pod that fits your limits starts at once. Other requests wait for you in Needs you.'}</p>`}
-  ${earlier.length ? `<details id="earlier-leases"><summary>Earlier leases (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}
+  ${earlier.length ? `<details id="earlier-leases"><summary>Earlier pods (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}
   <p class="fine">Costs count each running minute at the billed rate, with the disk. When RunPod's bill is higher, Verifold uses it.</p></section>`;
 }
 
@@ -2194,8 +2200,8 @@ function renderComputeView(compute: ComputeView): string {
   // The spend limit leads. The other limits fold, and they stay in the page, so each save sends them all.
   const limitsForm = `<div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}</div>
   <details id="compute-more" class="more-fields"><summary>More limits</summary>
-  <div class="fields">${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours of one lease, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
-  <label class="field" for="compute-images">RunPod images that a lease can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
+  <div class="fields">${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours for one pod, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
+  <label class="field" for="compute-images">RunPod images that pods can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
   <label class="check" for="compute-ask"><input type="checkbox" id="compute-ask"${settings.askBeforePod ? ' checked' : ''}> Ask me before each pod starts</label>
   <p class="fine">Without this, a pod that the coordinator asks for starts at once when it fits these limits, also while you are away. You can stop it in Compute.</p></details>
   <div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the limits</button></div>
@@ -2231,7 +2237,7 @@ function renderComputeView(compute: ComputeView): string {
     .join(', ');
   return `<div class="view">${head}
   ${renderPods(compute)}
-  <section class="card" aria-labelledby="limits-title"><h2 id="limits-title">Limits</h2><p>Up to ${usd(settings.limitUsd ?? 0)} for this project, ${usd(settings.maxUsdPerHour)} per hour for one pod, ${settings.maxHoursPerLease} ${settings.maxHoursPerLease === 1 ? 'hour' : 'hours'} for one lease. ${settings.askBeforePod ? 'You approve each pod.' : 'A pod inside these limits starts without asking.'}</p><details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>
+  <section class="card" aria-labelledby="limits-title"><h2 id="limits-title">Limits</h2><p>Up to ${usd(settings.limitUsd ?? 0)} for this project, ${usd(settings.maxUsdPerHour)} per hour for one pod, ${settings.maxHoursPerLease} ${settings.maxHoursPerLease === 1 ? 'hour' : 'hours'} for one pod. ${settings.askBeforePod ? 'You approve each pod.' : 'A pod inside these limits starts without asking.'}</p><details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>
   <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2><p>Pods can use ${allowed}.</p><details id="compute-gpus-edit"${gpus ? ' open' : ''}><summary>Change the GPUs</summary>${gpuCard}</details></section>
   ${keyLine}</div>`;
 }
@@ -2266,8 +2272,8 @@ function renderRecords(
   const logged = workers.filter((worker) => worker.record.commands.length);
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>Messages, commands, research, and earlier runs</p></div>
   ${renderFeed(messages, tasks)}
-  <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? auditTable(logged, tasks, true) : '<p class="empty-note">No commands are recorded yet. Each tool call that a worker reports shows here.</p>'}</section>
-  <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research request shows here with its own identity.</p>'}</section>${archives ? `${renderRuns(archives, tasks)}<section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Project memory</h2><p>Verifold keeps <code>memory/</code> in your project folder: <code>README.md</code> (read first), <code>progress.md</code>, <code>decisions.md</code>, <code>findings.md</code>, <code>notes.md</code>, and one file for each task under <code>tasks/</code>.</p><p class="fine">Every agent starts from <code>README.md</code>, also after Start over. Verifold rewrites only the part between its markers. Your own text outside them stays.</p></section>` : ''}</div>`;
+  <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? auditTable(logged, tasks, true) : '<p class="empty-note">No commands yet.</p>'}</section>
+  <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">This list shows the latest 200 research steps. The project files keep all of them.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research step shows here.</p>'}</section>${archives ? `${renderRuns(archives, tasks)}<section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Project memory</h2><p>Verifold keeps <code>memory/</code> in your project folder: <code>README.md</code> (read first), <code>progress.md</code>, <code>decisions.md</code>, <code>findings.md</code>, <code>notes.md</code>, and one file for each task under <code>tasks/</code>.</p><p class="fine">Every agent starts from <code>README.md</code>, also after Start over. Verifold rewrites only the part between its markers. Your own text outside them stays.</p></section>` : ''}</div>`;
 }
 
 /** The summary and the sources of one research report. Source links are validated before rendering. */
@@ -2391,7 +2397,7 @@ function renderPlanCard(workspace: Workspace, live: DeskSession): string {
           .join('')}</ol>`
       : `<p class="empty-note">${drafting ? 'The coordinator drafts the tasks.' : 'No tasks yet. Write to the coordinator in the message box.'}</p>`
   }
-  ${summary ? `<div class="note"><p class="msg-meta"><strong>The coordinator's summary</strong><span class="tag reading">Its reading</span></p>${more('plan-summary', summary, 400)}</div>` : ''}
+  ${summary ? `<div class="note"><p class="msg-meta"><strong>The coordinator's summary</strong></p>${more('plan-summary', summary, 400)}</div>` : ''}
   ${extras.length ? `<h3>Extras</h3><p class="fine">Add-ons that you can include. Tick the ones that you want. Verifold cancels the others when you start the work.</p><ul class="plan-extras">${extras.map((task) => `<li><label><input type="checkbox" data-extra="${e(task.id)}"> ${line(task)}</label></li>`).join('')}</ul>` : ''}
   <div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${drafting || !drafted.length ? ' disabled' : ''}>Start the work</button></div>
   <p class="fine">No task starts before you start the work. To change the draft, write to the coordinator in the message box.</p>
@@ -2420,10 +2426,10 @@ function directionPanel(
     title: idea.title,
     sub: `<span class="status ${chosen ? 'active' : 'muted'}">${e(directionRole(idea, workspace, live))}</span>`,
     body: `<div class="md">${markdownHtml(idea.recommendation)}</div>
-    <h3>Its checks</h3><ul class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul>
-    <p class="fine">The coordinator gets these checks with the direction, and plans tasks that give evidence for them.</p>
-    ${idea.sources?.length ? `<h3>Its sources</h3><ol class="sources">${idea.sources.map((source) => `<li>${link(source)}</li>`).join('')}</ol>` : ''}
-    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}">Choose this direction</button></div><p class="fine">The coordinator then drafts the plan for it. No task starts before you start the work.</p>` : !chosen && redraftable(workspace, live) ? `<div class="actions"><button type="button" data-action="redraft" data-idea="${e(idea.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button></div><p class="fine">The coordinator stops its draft and drafts the plan for this direction. No task has started.</p>` : !chosen && changeable(workspace, live) ? `<div class="actions"><button type="button" data-action="change-direction" data-idea="${e(idea.id)}" data-confirm="Click again to stop the work and change the direction">Change to this direction</button></div><p class="fine">The coordinator stops, and so do the running turns. Their work waits for your review, and done work stays in the project. The coordinator then drafts the plan for this direction, and the plan waits for you.</p>` : ''}`,
+    <h3>Checks</h3><ul class="checks-list">${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul>
+    <p class="fine">The coordinator plans tasks that test these checks.</p>
+    ${idea.sources?.length ? `<h3>Sources</h3><ol class="sources">${idea.sources.map((source) => `<li>${link(source)}</li>`).join('')}</ol>` : ''}
+    ${choosable(workspace, live) ? `<div class="actions"><button type="button" class="primary" data-action="select" data-idea="${e(idea.id)}">Choose this direction</button></div><p class="fine">The coordinator then drafts the plan for it. No task starts before you start the work.</p>` : !chosen && redraftable(workspace, live) ? `<div class="actions"><button type="button" data-action="redraft" data-idea="${e(idea.id)}" data-confirm="Click again to draft the plan for this direction">Use this instead</button></div><p class="fine">The coordinator stops its draft and drafts the plan for this direction. No task has started.</p>` : !chosen && changeable(workspace, live) ? `<div class="actions"><button type="button" data-action="change-direction" data-idea="${e(idea.id)}" data-confirm="Click again to stop the work and change the direction">Change to this direction</button></div><p class="fine">The coordinator and the running agents stop. Their work waits for your review, and finished work stays. Then the coordinator plans this direction for you to approve.</p>` : ''}`,
   };
 }
 
@@ -2440,12 +2446,12 @@ function renderResearchView(
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
   ${renderPlanCard(workspace, live)}
-  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Its case</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button><span class="selected-label">${e(directionRole(idea, workspace, live))}</span></th><td data-label="Its case">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
+  ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Why</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button><span class="selected-label">${e(directionRole(idea, workspace, live))}</span></th><td data-label="Why">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
   ${renderResearch(live.research, research?.latestAttempt)}
   ${renderSources(live.research?.sources ?? [], live.research?.running === true)}
-  ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research plan</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">These are proposed roles, not independently observed workers.</p></details></section>` : ''}
+  ${research?.plan ? `<section class="card"><details id="research-plan"${research.phase === 'awaiting-plan-review' ? ' open' : ''}><summary><h2>Research plan</h2><span>Proposed roles</span></summary><div class="prose md">${markdownHtml(research.plan.scope)}</div><ul class="roles">${research.plan.personas.map((persona) => `<li><strong>${e(persona.name)}</strong><span>${e(persona.task)}</span></li>`).join('')}</ul><p class="fine">Research proposed these roles. Verifold did not see them run.</p></details></section>` : ''}
   <section class="card findings" aria-labelledby="findings-title"><div class="section-title"><h2 id="findings-title">Sources and findings</h2>${chosen ? `<span class="count">Attempt ${e(chosen.id.slice(0, 8))}</span>` : ''}</div>
-  ${report ? findingsBody(report, chosen?.id ?? '') : `<div class="empty-note"><p>${chosen ? 'No readable source report is available for this attempt.' : 'Your source record starts here.'}</p><p>${chosen ? 'Planning, failed, and interrupted attempts may have no report. Their evidence remains in the project.' : 'Sources and findings show here when research saves a report.'}</p></div>`}</section>
+  ${report ? findingsBody(report, chosen?.id ?? '') : `<div class="empty-note"><p>${chosen ? 'This step has no report.' : 'No research yet.'}</p><p>${chosen ? 'Planning steps and stopped steps can have no report. Their files stay in the project.' : 'Sources and findings show here after research.'}</p></div>`}</section>
   <section class="card brief-section"><details id="research-brief"${research ? '' : ' open'}><summary><h2>Research brief</h2><span>Project context</span></summary>${workspace.context ? `<div class="prose md">${markdownHtml(workspace.context)}</div>` : '<p class="empty-note">No research brief is saved yet.</p>'}</details></section></div>`;
 }
 
@@ -2467,15 +2473,15 @@ function attemptPanel(
           : 'muted';
   const state =
     chosen.activity === 'unknown'
-      ? '<p class="notice">The final outcome is unknown. Inspect the attempt files and confirm whether research is still active before retrying or removing a lock.</p>'
+      ? '<p class="notice">Verifold does not know how this step ended. Make sure that research is not still running before you start it again.</p>'
       : chosen.activity === 'recent'
         ? `<p class="fine">${live.research ? 'Research is running now. Follow it in Plan.' : 'Research is running in another Verifold process. This desk shows its result when it ends.'}</p>`
         : record?.status === 'interrupted'
           ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>'
           : record?.status === 'failed' || record?.status === 'cancelled'
-            ? '<p class="notice">Available evidence is preserved. Inspect the attempt files and saved checkpoint before continuing.</p>'
-            : '<p class="fine">The response passed validation and its checkpoint was saved.</p>';
-  const body = `${state}${report ? `<h3>Sources and findings</h3>${findingsBody(report, chosen.id)}` : ''}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'Harness default; resolved model unknown') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Its transcript is in Plan. Choose Details there.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', '')}</details>`}`;
+            ? '<p class="notice">Verifold kept the files of this step. Look at them before you continue.</p>'
+            : '<p class="fine">The result was valid, and Verifold saved it.</p>';
+  const body = `${state}${report ? `<h3>Sources and findings</h3>${findingsBody(report, chosen.id)}` : ''}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'The harness default') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Plan shows the transcript of this step under Details.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', '')}</details>`}`;
   return {
     kind: 'Research attempt',
     title: record ? phaseLabel(record.phase) : 'Unrecorded attempt',
@@ -2790,7 +2796,7 @@ function renderRail(
     )
     .join('')}</ul>
   <div class="rail-team"><div class="rail-title"><h2>Team</h2></div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
-  <div class="rail-foot"><p class="fine">Research stays in this project.</p></div></nav>`;
+</nav>`;
 }
 
 /**
@@ -2857,7 +2863,7 @@ function renderNow(
 function renderHomeAnswer(workspace: Workspace, live: DeskSession): string {
   const answer = resultsOf(workspace, live)?.answer;
   if (!answer || answer.decision?.kind === 'more') return '';
-  return `<section class="card answer-home" aria-labelledby="home-answer-title"><div class="section-title"><h2 id="home-answer-title">The answer</h2><span class="tag reading">The coordinator's reading</span></div><p class="statement">${e(answer.statement)}</p>${answer.decision?.kind === 'accepted' ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>` : '<div class="actions"><button type="button" class="primary" data-view="results" data-focus="answer-title">Read the answer</button></div><p class="fine">Read it with its checks and evidence, then accept it or ask for more work.</p>'}</section>`;
+  return `<section class="card answer-home" aria-labelledby="home-answer-title"><div class="section-title"><h2 id="home-answer-title">The answer</h2><span class="tag reading">Proposed by the coordinator</span></div><p class="statement">${e(answer.statement)}</p>${answer.decision?.kind === 'accepted' ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>` : '<div class="actions"><button type="button" class="primary" data-view="results" data-focus="answer-title">Read the answer</button></div><p class="fine">Read it with its checks and evidence. Then accept it, or ask for more work.</p>'}</section>`;
 }
 
 /** The work on Home after the person started it: the task map, and the results of the checks. */
@@ -2906,7 +2912,7 @@ function renderHome(
       '<section class="card lead"><h2>Research is running</h2><p>Research runs in your terminal. The results show here when this step ends.</p><p class="fine">To stop it, press Ctrl+C in that terminal. This also closes the desk.</p></section>';
   else {
     const next = nextResearchAction(workspace);
-    lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose A new agent in the message box.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
+    lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk starts nothing. To start an agent, pick A new agent in the message box.' : 'This desk shows saved work. It starts nothing.'}</p></section>`;
   }
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
   <div class="view">${renderNow(workspace, live, needs)}${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
@@ -2963,7 +2969,7 @@ function renderPanel(
       : gone(
           'Research attempt',
           'No attempts yet',
-          'Each research request shows here with its own identity.',
+          'Each research step shows here.',
         );
   else
     shown = {
