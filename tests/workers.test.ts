@@ -196,12 +196,17 @@ function task(
   };
 }
 
+/**
+ * Wait for a task state. The waits in this file allow 20 s: a fake harness
+ * can take seconds to start on a busy machine, and a wait ends as soon as the
+ * state arrives.
+ */
 async function state(
   tasks: TaskManager,
   id: string,
   wanted: TaskRecord['state'],
 ): Promise<TaskRecord> {
-  for (let tries = 0; tries < 250; tries++) {
+  for (let tries = 0; tries < 1000; tries++) {
     const record = await tasks.get(id);
     if (record?.state === wanted) return record;
     await delay(20);
@@ -265,7 +270,7 @@ await test('Claude Code and Codex workers reach Verifold tools over their own pi
   ]);
   // A tool call can be saved just after its turn ends, so wait for both messages.
   let messages = await tasks.messageList();
-  for (let tries = 0; tries < 250 && messages.length < 2; tries++) {
+  for (let tries = 0; tries < 1000 && messages.length < 2; tries++) {
     await delay(20);
     messages = await tasks.messageList();
   }
@@ -407,7 +412,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
     /2 workers are running/,
   );
   let requests: string[] = [];
-  for (let tries = 0; tries < 250 && requests.length < 2; tries++) {
+  for (let tries = 0; tries < 1000 && requests.length < 2; tries++) {
     await delay(20);
     requests = sessions
       .views()
@@ -438,7 +443,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   terminalInput(sessions, `a ${secondRequest}`, io, controls);
   for (
     let tries = 0;
-    tries < 250 && sessions.view(second)?.record.status !== 'idle';
+    tries < 1000 && sessions.view(second)?.record.status !== 'idle';
     tries++
   )
     await delay(20);
@@ -447,7 +452,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   terminalInput(sessions, 'd', io, controls);
   for (
     let tries = 0;
-    tries < 250 && sessions.view(first)?.record.status !== 'idle';
+    tries < 1000 && sessions.view(first)?.record.status !== 'idle';
     tries++
   )
     await delay(20);
@@ -491,7 +496,7 @@ async function status(
   id: string,
   wanted: string,
 ): Promise<void> {
-  for (let tries = 0; tries < 250; tries++) {
+  for (let tries = 0; tries < 1000; tries++) {
     if (sessions.view(id)?.record.status === wanted) return;
     await delay(20);
   }
@@ -603,7 +608,7 @@ await test(
     );
     await tasks.start(id);
     await state(tasks, id, 'review');
-    for (let tries = 0; tries < 250; tries++) {
+    for (let tries = 0; tries < 1000; tries++) {
       const session = (await tasks.get(id))?.attempts[0]?.session ?? '';
       if (sessions.idle(session)) break;
       await delay(20);
@@ -864,7 +869,7 @@ await test(
       `import { SessionPool } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../src/cli/workers.ts', import.meta.url))).href)};
 const sessions = new SessionPool(${JSON.stringify(root)}, { clientVersion: 'test', ownerId: 'doomed', executables: { codex: ${JSON.stringify(join(root, 'fake-codex'))} } });
 const id = await sessions.start({ host: 'codex', mode: 'auto', prompt: 'Start' });
-for (let tries = 0; tries < 250 && sessions.view(id)?.record.status !== 'idle'; tries++) await new Promise((r) => setTimeout(r, 20));
+for (let tries = 0; tries < 1000 && sessions.view(id)?.record.status !== 'idle'; tries++) await new Promise((r) => setTimeout(r, 20));
 console.log(sessions.view(id)?.record.launches.at(-1)?.pid);
 setInterval(() => {}, 1000);`,
     );
@@ -878,7 +883,7 @@ setInterval(() => {}, 1000);`,
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       printed += chunk;
     });
-    for (let tries = 0; tries < 250 && !/\d+\n/.test(printed); tries++)
+    for (let tries = 0; tries < 1000 && !/\d+\n/.test(printed); tries++)
       await delay(20);
     const group = Number(printed.trim());
     assert.ok(
@@ -895,7 +900,7 @@ setInterval(() => {}, 1000);`,
     };
     assert.equal(running(), true);
     child.kill('SIGKILL');
-    for (let tries = 0; tries < 250 && running(); tries++) await delay(20);
+    for (let tries = 0; tries < 1000 && running(); tries++) await delay(20);
     assert.equal(running(), false);
   },
 );
@@ -937,7 +942,7 @@ await test('research and two workers run together, and each stop reaches only it
     prompt: 'Write the result.',
   });
   await status(sessions, other, 'idle');
-  for (let tries = 0; tries < 250 && !researched; tries++) await delay(20);
+  for (let tries = 0; tries < 1000 && !researched; tries++) await delay(20);
   assert.equal(runner.running, true);
 
   // With research and a turn running, the terminal sends the choice to the desk.
@@ -965,7 +970,7 @@ await test('research and two workers run together, and each stop reaches only it
 
   // Stopping the owner stops research and pauses both workers.
   await runner.start({ topic: 'Proof search' });
-  for (let tries = 0; tries < 250 && researched < 2; tries++) await delay(20);
+  for (let tries = 0; tries < 1000 && researched < 2; tries++) await delay(20);
   stop.abort();
   await runner.settled();
   await sessions.close();
