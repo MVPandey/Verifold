@@ -126,7 +126,7 @@ export function coordinatorContext(workspace: Workspace): string {
       ? `Chosen direction: ${idea.title}\n${idea.recommendation}\nProposed checks:\n${idea.gates.map((check) => `- ${check}`).join('\n')}`
       : '',
     addOns.length
-      ? `Add-ons from research. Draft each one as an extra task (extra: true). The person ticks the extras that they want before the work starts, and Verifold cancels the others:\n${addOns.map((addOn) => `- ${addOn.title}: ${addOn.recommendation}`).join('\n')}`
+      ? `Add-ons from research. Draft each one as an extra task (extra: true). ${workspace.research?.autonomy === 'autonomous' ? 'Verifold keeps each extra as a draft, and the person starts the extras that they want.' : 'The person ticks the extras that they want before the work starts, and Verifold cancels the others.'}\n${addOns.map((addOn) => `- ${addOn.title}: ${addOn.recommendation}`).join('\n')}`
       : '',
   ]
     .filter(Boolean)
@@ -363,8 +363,8 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       ...(workspace.model ? { model: workspace.model } : {}),
       ...(workspace.helper ? { helper: workspace.helper } : {}),
       context: coordinatorContext(workspace),
-      // The plan always waits for the person: only they choose the direction and start the work.
-      guided: true,
+      // D91: an autonomous project starts the plan at once. A guided one waits for the person.
+      guided: workspace.research?.autonomy !== 'autonomous',
     });
   }
 
@@ -622,6 +622,10 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             `You created ${coordinatorLimits.tasks} tasks, the limit for this objective.`,
           );
         this.inTeam(args.host ?? state.host);
+        // New work that the person asked for after the work started waits for them.
+        // So does an extra once the plan runs: nobody ticked it.
+        const draft =
+          state.planApproved && (this.answering || args.extra === true);
         const id = await this.tasks.create(
           {
             title: args.title,
@@ -639,15 +643,14 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             dependencies: args.dependencies,
             network: args.network,
             extra: args.extra,
-            // New work that the person asked for after the work started waits for them.
-            draft: state.planApproved && this.answering,
+            draft,
             hostReason: args.hostReason,
           },
           'coordinator',
           `Created by the coordinator: ${why()}`,
         );
         await this.save({ ...this.current(), created: state.created + 1 });
-        return state.planApproved && this.answering
+        return draft
           ? `Created ${id} as a draft. The person starts it in the desk. Do not start it.`
           : `Created ${id}.`;
       }
@@ -770,14 +773,27 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           ? this.memory.note('Coordinator', args.text)
           : fail('This project keeps no memory.');
       case 'verifold_request_pod': {
-        const lease = await this.pods().leases.request({
+        const compute = this.pods();
+        const lease = await compute.leases.request({
           by: 'coordinator',
           gpu: args.gpuType,
           hours: args.hours,
           tasks: args.tasks,
           reason: why(),
         });
-        return `Asked the person for ${lease.id}: ${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour. Nothing is created until the person approves it. An event tells you the decision.`;
+        const what = `${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour`;
+        // D90: a request inside the person's limits starts at once, unless the person asks to approve each pod.
+        // A start that a limit refuses, such as the pods at once, waits for the person.
+        if (!compute.view().settings.askBeforePod) {
+          const started = await compute.leases
+            .approve(lease.id, 'verifold')
+            .catch(() => null);
+          if (started?.state === 'starting')
+            return `Started ${lease.id} inside the person's limits: ${what}. An event tells you when the pod is ready.`;
+          if (started?.state === 'failed')
+            return `RunPod did not create the pod of ${lease.id}: ${started.end?.reason ?? 'no reason given'}.`;
+        }
+        return `Asked the person for ${lease.id}: ${what}. Nothing is created until the person approves it. An event tells you the decision.`;
       }
       case 'verifold_stop_pod': {
         const lease = await this.pods().leases.stop(
@@ -839,6 +855,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     const now = Date.now();
     return JSON.stringify({
       podsOn: settings.limitUsd !== null && view.key !== null,
+      personApprovesEachPod: settings.askBeforePod,
       limits: {
         spendLimitUsd: settings.limitUsd,
         maxUsdPerHourPerPod: settings.maxUsdPerHour,
@@ -1113,7 +1130,7 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_request_pod',
     description:
-      'Ask the person for a GPU pod lease for tasks: one GPU of an allowed type, for a number of hours. Nothing is created or billed until the person approves it. Verifold refuses a request that does not fit the limits.',
+      "Ask for a GPU pod lease for tasks: one GPU of an allowed type, for a number of hours. Verifold refuses a request that does not fit the person's limits. A request inside the limits starts at once, unless the person approves each pod. The reply says which.",
     inputSchema: {
       type: 'object',
       properties: {

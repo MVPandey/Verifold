@@ -31,6 +31,8 @@ export interface ComputeSettings {
   readonly images: readonly string[];
   /** The container disk of each pod, in GB. RunPod erases it when the pod stops. */
   readonly diskGb: number;
+  /** The person approves each pod. Otherwise a request inside the limits starts at once. */
+  readonly askBeforePod: boolean;
 }
 
 export const computeDefaults: ComputeSettings = {
@@ -43,6 +45,7 @@ export const computeDefaults: ComputeSettings = {
   gpuTypes: [],
   images: ['runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404'],
   diskGb: 50,
+  askBeforePod: false,
 };
 
 /** What the desk shows about compute. It holds no key. */
@@ -202,6 +205,7 @@ export function parseSettings(
     gpuTypes: [...new Set(gpus as string[])],
     images: [...new Set(images)],
     diskGb: number(input.diskGb, 'the disk size in GB', 10, 500, true),
+    askBeforePod: input.askBeforePod === true,
   };
 }
 
