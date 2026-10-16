@@ -333,8 +333,36 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
     /<input id="runpod-key" type="password" autocomplete="off"/,
   );
   assert.match(html, /instead of the macOS Keychain/);
-  assert.match(html, /Pods stay off until you set a spend limit/);
-  assert.match(html, /Store a RunPod key to see the GPUs/);
+  // Setup asks one thing at a time. Without a key, only the key.
+  assert.match(
+    html,
+    /<p class="step-count">Step 1 of 3<\/p><h2 id="setup-title">Store a RunPod key<\/h2>/,
+  );
+  assert.match(
+    html,
+    /<ol class="later-steps" start="2"><li>Set a spend limit<\/li><li>Choose the GPUs that pods can use<\/li><\/ol>/,
+  );
+  assert.doesNotMatch(html, /id="compute-limit"/);
+  const key = {
+    place: 'keychain' as const,
+    last4: 'WXYZ',
+    savedAt: new Date().toISOString(),
+    checkedAt: new Date().toISOString(),
+  };
+  // With a key, the spend limit is next. The other limits fold.
+  html = renderDesk(
+    snapshot as never,
+    undefined,
+    null,
+    { ...live, compute: { ...live.compute, key } },
+    frame,
+  ).html;
+  assert.match(html, /Step 2 of 3<\/p><h2 id="setup-title">Set a spend limit/);
+  assert.match(html, /Pods stay off until you set one\./);
+  assert.match(
+    html,
+    /id="compute-limit"[\s\S]*<details id="compute-more" class="more-fields"><summary>More limits<\/summary>[\s\S]*id="compute-rate"[\s\S]*id="compute-ask"/,
+  );
   html = renderDesk(
     snapshot as never,
     undefined,
@@ -342,12 +370,7 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
     {
       ...live,
       compute: {
-        key: {
-          place: 'keychain' as const,
-          last4: 'WXYZ',
-          savedAt: new Date().toISOString(),
-          checkedAt: new Date().toISOString(),
-        },
+        key,
         keyring: 'keychain' as const,
         settings: {
           ...computeDefaults,
@@ -388,7 +411,12 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
   // An allowed type that RunPod does not offer now stays, so a save keeps it.
   assert.match(html, /data-gpu="Gone GPU" checked/);
   assert.match(html, /Not offered now/);
-  assert.doesNotMatch(html, /Pods stay off/);
+  assert.doesNotMatch(html, /Pods stay off|step-count/);
+  // After setup, Compute says the limits in one line, with the form folded.
+  assert.match(
+    html,
+    /<p>Up to \$25\.00 for this project, \$1\.50 per hour for one pod, 4 hours for one lease\. A pod inside these limits starts without asking\.<\/p><details id="compute-limits-edit"><summary>Change the limits<\/summary>/,
+  );
   // A desk without compute has no Compute view.
   const plain = renderDesk(
     snapshot as never,
@@ -506,7 +534,7 @@ await test('the desk stores a key and limits through actions, and no reply holds
     await fetch(`${url.origin}/api/view?view=compute`, { headers })
   ).text();
   assert.match(view, /It ends in <code>WXYZ<\/code>/);
-  assert.match(view, /\$10 for this project/);
+  assert.match(view, /Up to \$10\.00 for this project/);
   assert.doesNotMatch(view, /TESTKEY/);
   assert.equal((await post({ action: 'compute-key-remove' })).status, 200);
   assert.equal((await post({ action: 'compute-unknown' })).status, 400);
