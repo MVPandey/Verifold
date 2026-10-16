@@ -68,10 +68,15 @@ function gitEnvironment(): NodeJS.ProcessEnv {
 /**
  * Run Git without a shell, for at most one minute. User hooks, signing, and
  * external diff tools do not run, and Verifold commits under its own name.
+ * `input` goes to its standard input.
  */
-function git(cwd: string, args: readonly string[]): Promise<Buffer> {
+function git(
+  cwd: string,
+  args: readonly string[],
+  input?: string,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       'git',
       [
         '-c',
@@ -94,7 +99,8 @@ function git(cwd: string, args: readonly string[]): Promise<Buffer> {
         env: gitEnvironment(),
       },
       (error, stdout, stderr) => {
-        if (error)
+        // check-ignore exits with 1 when no path matches.
+        if (error && !(args[0] === 'check-ignore' && error.code === 1))
           reject(
             new WorkspaceError(
               `Git failed: ${stderr.toString('utf8').trim().split('\n')[0]?.slice(0, 300) || error.message}`,
@@ -104,7 +110,14 @@ function git(cwd: string, args: readonly string[]): Promise<Buffer> {
         else resolve(stdout);
       },
     );
+    if (input !== undefined) child.stdin?.end(input);
   });
+}
+
+function tooMany(): WorkspaceError {
+  return new WorkspaceError(
+    `The task folder changed more than ${limits.files} files, so Verifold saved no version. Move generated files out of the writable paths, or list them in a .gitignore there.`,
+  );
 }
 
 async function list(cwd: string, args: readonly string[]): Promise<string[]> {
@@ -237,19 +250,98 @@ async function startFiles(
   return changed.map((entry) => entry.slice(3));
 }
 
-/**
- * Commit everything in the workspace. Inside writable paths, ignored files
- * count too, so output in an ignored folder is kept. Files above the size limit
- * stay out of the commit and are listed.
- */
-/** Caches that tools write as a side effect. A version leaves them out, even inside writable paths. */
+/** Environments and caches that tools make as a side effect. A version leaves them out, even inside writable paths. */
+const toolFolders = [
+  '.venv',
+  'node_modules',
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.tox',
+  '.ipynb_checkpoints',
+];
 const caches = [
-  '**/__pycache__/**',
+  ...toolFolders.map((name) => `**/${name}/**`),
   '**/*.py[co]',
-  '**/.ipynb_checkpoints/**',
   '**/.DS_Store',
 ].map((pattern) => `:(exclude,glob)${pattern}`);
 
+/** Whether a version leaves this path out: it is in an environment or a cache that a tool made. */
+export function leftOut(path: string): boolean {
+  const parts = path.split('/');
+  const name = parts.pop() ?? '';
+  return (
+    parts.some((part) => toolFolders.includes(part)) ||
+    name === '.DS_Store' ||
+    /\.py[co]$/.test(name)
+  );
+}
+
+/**
+ * Paths that a version leaves out among the pending entries: Python
+ * environments under any name (they hold `pyvenv.cfg`), and ignored paths
+ * whose rule comes from a `.gitignore` in a folder inside a writable path.
+ * That file belongs to the task, so its rules count. Other rules, such as those
+ * of the project's top `.gitignore`, do not: output in an ignored folder is kept.
+ */
+async function ownExclusions(
+  target: string,
+  writable: readonly string[],
+  entries: readonly string[],
+): Promise<{
+  /** Environments that Git does not ignore. */
+  readonly seen: readonly string[];
+  /** Ignored paths. Only a forced add excludes them: Git refuses to name an ignored path otherwise. */
+  readonly ignored: readonly string[];
+}> {
+  const seen = new Set<string>();
+  const found = new Set<string>();
+  const ignored: string[] = [];
+  for (const entry of entries) {
+    const path = entry.slice(3).replace(/\/$/, '');
+    if (!entry.startsWith('!! ')) {
+      if (path.endsWith('/pyvenv.cfg')) seen.add(dirname(path));
+      continue;
+    }
+    ignored.push(entry.slice(3));
+    if (
+      entry.endsWith('/') &&
+      (await lstat(join(target, path, 'pyvenv.cfg')).catch(() => null))
+    )
+      found.add(path);
+  }
+  if (ignored.length) {
+    // Each match is four fields: the rule's file, its line, the pattern, and the path.
+    const fields = (
+      await git(
+        target,
+        ['check-ignore', '--verbose', '-z', '--stdin'],
+        ignored.join('\0'),
+      )
+    )
+      .toString('utf8')
+      .split('\0');
+    for (let index = 0; index + 3 < fields.length; index += 4) {
+      const source = fields[index] ?? '';
+      const path = fields[index + 3] ?? '';
+      if (
+        source.endsWith('/.gitignore') &&
+        !isAbsolute(source) &&
+        inScope(dirname(source), writable)
+      )
+        found.add(path.replace(/\/$/, ''));
+    }
+  }
+  return { seen: [...seen], ignored: [...found] };
+}
+
+/**
+ * Commit everything in the workspace. Inside writable paths, ignored files
+ * count too, so output in an ignored folder is kept. Environments, caches, and
+ * the files that the task's own `.gitignore` ignores stay out. Files above the
+ * size limit stay out of the commit and are listed.
+ */
 async function commitAll(
   target: string,
   writable: readonly string[],
@@ -260,13 +352,16 @@ async function commitAll(
   for (const path of writable)
     if (path !== '.' && (await lstat(join(target, path)).catch(() => null)))
       forced.push(path);
-  const pending = new Set([
+  const all = [
     ...(await list(target, [
       'status',
       '--porcelain=v1',
       '-z',
       '--no-renames',
       '--untracked-files=all',
+      '--',
+      '.',
+      ...caches,
     ])),
     ...(forced.length
       ? await list(target, [
@@ -278,13 +373,16 @@ async function commitAll(
           '--ignored=matching',
           '--',
           ...forced,
+          ...caches,
         ])
       : []),
-  ]);
-  if (pending.size > limits.files)
-    throw new WorkspaceError(
-      `The workspace changed more than ${limits.files} files, so Verifold did not save a version.`,
-    );
+  ];
+  const own = await ownExclusions(target, writable, all);
+  const folders = [...own.seen, ...own.ignored];
+  const pending = new Set(
+    all.filter((entry) => !inScope(entry.slice(3).replace(/\/$/, ''), folders)),
+  );
+  if (pending.size > limits.files) throw tooMany();
   const skipped: string[] = [];
   for (const entry of pending) {
     const file = entry.slice(3);
@@ -292,12 +390,28 @@ async function commitAll(
     if (stats?.isFile() && stats.size > limits.fileBytes) skipped.push(file);
   }
   const exclude = [
-    ...skipped.map((file) => `:(exclude,literal)${file}`),
+    ...[...skipped, ...own.seen].map((file) => `:(exclude,literal)${file}`),
     ...caches,
   ];
   await git(target, ['add', '--all', '--', '.', ...exclude]);
   if (forced.length)
-    await git(target, ['add', '--all', '--force', '--', ...forced, ...exclude]);
+    await git(target, [
+      'add',
+      '--all',
+      '--force',
+      '--',
+      ...forced,
+      ...exclude,
+      ...own.ignored.map((file) => `:(exclude,literal)${file}`),
+    ]);
+  // An ignored folder is one pending entry, so count again what Git holds now.
+  if (
+    (await list(target, ['diff', '--cached', '--name-only', '-z'])).length >
+    limits.files
+  ) {
+    await git(target, ['reset', '--quiet']);
+    throw tooMany();
+  }
   await git(target, [
     'commit',
     '--quiet',
