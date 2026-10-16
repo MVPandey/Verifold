@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   activityProgress,
+  HarnessTimeoutError,
   runHarness,
   type HarnessName,
 } from '../src/cli/harness.ts';
@@ -188,7 +189,33 @@ await test('a line above the limit stops an active child', async () => {
   );
 });
 
-await test('timeout stops an active child', async () => {
+await test('the ceiling stops a child that keeps sending', async () => {
+  await fixture(
+    "process.stdin.resume(); process.on('SIGTERM', () => {}); setInterval(() => console.log(JSON.stringify({ type: 'system' })), 20);",
+    async (executable, cwd) => {
+      await assert.rejects(
+        runHarness(
+          {
+            host: 'claude',
+            cwd,
+            prompt: '',
+            signal: new AbortController().signal,
+            timeoutMs: 500,
+            idleMs: 5000,
+          },
+          { executable },
+        ),
+        (error: unknown) =>
+          error instanceof HarnessTimeoutError &&
+          /ran for 1 second, the longest that one call can run/.test(
+            error.message,
+          ),
+      );
+    },
+  );
+});
+
+await test('a quiet child stops after the idle limit', async () => {
   await fixture(
     "process.stdin.resume(); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
     async (executable, cwd) => {
@@ -199,12 +226,41 @@ await test('timeout stops an active child', async () => {
             cwd,
             prompt: '',
             signal: new AbortController().signal,
-            timeoutMs: 200,
+            idleMs: 200,
           },
           { executable },
         ),
-        /time limit/,
+        (error: unknown) =>
+          error instanceof HarnessTimeoutError &&
+          /sent nothing for 1 second/.test(error.message),
       );
+    },
+  );
+});
+
+await test('each line of output starts the idle limit again', async () => {
+  await fixture(
+    `process.stdin.resume(); let n = 0;
+     const timer = setInterval(() => {
+       n += 1;
+       if (n < 6) return console.log(JSON.stringify({ type: 'system' }));
+       clearInterval(timer);
+       console.log(JSON.stringify({ result: 'done', is_error: false }));
+       process.exit(0);
+     }, 250);`,
+    async (executable, cwd) => {
+      // Six quiet periods of 250 ms add up to more than the 1 s idle limit.
+      const result = await runHarness(
+        {
+          host: 'claude',
+          cwd,
+          prompt: '',
+          signal: new AbortController().signal,
+          idleMs: 1000,
+        },
+        { executable },
+      );
+      assert.equal(result.text, 'done');
     },
   );
 });
