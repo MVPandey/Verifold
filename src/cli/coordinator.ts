@@ -735,6 +735,10 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
         );
         return `Posted ${message.id}.`;
       }
+      case 'verifold_ask': {
+        const message = await this.tasks.ask(args.text);
+        return `Asked the person in ${message.id}. It waits in Needs you. Verifold wakes you when they answer.`;
+      }
       case 'verifold_decide':
         await this.tasks.decideMessage(
           args.message,
@@ -1331,6 +1335,17 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         text: { type: 'string', maxLength: 4000 },
       },
       required: ['to', 'text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_ask',
+    description:
+      'Ask the person for something that only they can give or decide, such as a key, a spend limit, an account, or a choice. Ask one question, and say what to do and where. It waits in Needs you until they answer, and Verifold wakes you then.',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', maxLength: 4000 } },
+      required: ['text'],
       additionalProperties: false,
     },
   },
