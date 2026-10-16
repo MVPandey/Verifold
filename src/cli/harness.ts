@@ -37,7 +37,10 @@ export interface HarnessRequest {
   readonly cwd: string;
   readonly prompt: string;
   readonly signal: AbortSignal;
+  /** The longest that the call can run, in milliseconds. The default is four hours. */
   readonly timeoutMs?: number;
+  /** How long the harness can send nothing before Verifold stops it, in milliseconds. The default is 15 minutes. */
+  readonly idleMs?: number;
   readonly sessionId?: string;
   /** Host model identifier or alias. Omit to use the host's default. */
   readonly model?: string;
@@ -54,6 +57,20 @@ export interface HarnessRequest {
    * results, with subagent work under its tool call. It is private session data.
    */
   readonly onTranscript?: (update: TranscriptUpdate) => void;
+}
+
+/** A harness call ran into a time limit: it sent nothing for too long, or it ran for too long. */
+export class HarnessTimeoutError extends Error {}
+
+/** A time limit in words, for example "15 minutes" or "4 hours". */
+function duration(ms: number): string {
+  const [size, unit] =
+    ms % 3_600_000 === 0
+      ? [ms / 3_600_000, 'hour']
+      : ms >= 60_000
+        ? [Math.round(ms / 60_000), 'minute']
+        : [Math.ceil(ms / 1000), 'second'];
+  return `${size} ${unit}${size === 1 ? '' : 's'}`;
 }
 
 export interface HarnessResult {
@@ -288,8 +305,9 @@ export function validateModel(
 /**
  * Run one host request with the user's host configuration and permissions.
  * Prompts use stdin and are limited to 2 MiB. Output is read line by line, and
- * one line is limited to 8 MiB. Error output is limited to 2 MiB. The default
- * deadline is ten minutes. Cancellation stops the process group on POSIX.
+ * one line is limited to 8 MiB. Error output is limited to 2 MiB. A call stops
+ * when the host sends nothing for 15 minutes, or after four hours in all.
+ * Cancellation stops the process group on POSIX.
  * Errors exclude raw host output, which can contain private session data.
  */
 export async function runHarness(
@@ -301,16 +319,13 @@ export async function runHarness(
     throw new Error('Harness session ID has an invalid format.');
   }
   validateModel(request.model);
-  const timeoutMs = request.timeoutMs ?? 600_000;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 1 ||
-    timeoutMs > 2_147_483_647
-  ) {
-    throw new Error(
-      'Harness timeout must be a positive integer in milliseconds.',
-    );
-  }
+  const timeoutMs = request.timeoutMs ?? 4 * 3_600_000;
+  const idleMs = request.idleMs ?? 15 * 60_000;
+  for (const limit of [timeoutMs, idleMs])
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2_147_483_647)
+      throw new Error(
+        'Harness timeout must be a positive integer in milliseconds.',
+      );
   if (Buffer.byteLength(request.prompt) > maxBytes) {
     throw new Error('Harness prompt exceeds the 2 MiB limit.');
   }
@@ -414,8 +429,23 @@ export async function runHarness(
     }
 
     const deadline = setTimeout(
-      () => stop(new Error('Harness request exceeded its time limit.')),
+      () =>
+        stop(
+          new HarnessTimeoutError(
+            `The agent ran for ${duration(timeoutMs)}, the longest that one call can run, so Verifold stopped it.`,
+          ),
+        ),
       timeoutMs,
+    );
+    // Each line of output starts the quiet period again.
+    const quiet = setTimeout(
+      () =>
+        stop(
+          new HarnessTimeoutError(
+            `The agent sent nothing for ${duration(idleMs)}, so Verifold stopped it.`,
+          ),
+        ),
+      idleMs,
     );
     request.signal.addEventListener('abort', abort, { once: true });
     if (request.signal.aborted) abort();
@@ -427,6 +457,7 @@ export async function runHarness(
 
     child.stdout.on('data', (chunk: Buffer) => {
       if (failure) return;
+      quiet.refresh();
       pending += decoder.write(chunk);
       const lines = pending.split('\n');
       pending = lines.pop() ?? '';
@@ -451,6 +482,7 @@ export async function runHarness(
     child.on('close', (code) => {
       line(pending + decoder.end());
       clearTimeout(deadline);
+      clearTimeout(quiet);
       clearTimeout(killTimer);
       request.signal.removeEventListener('abort', abort);
       if (failure) {
