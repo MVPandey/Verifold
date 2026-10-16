@@ -1211,7 +1211,7 @@ await test('desk Home lists what changed since the person left and the talk with
   assert.equal(dock.split('The brief allows').length, 2);
   assert.match(
     dock,
-    /<option value="coordinator" data-hint="Write to the coordinator">Coordinator, leads now<\/option>/,
+    /<option value="coordinator" data-hint="Write to the coordinator">Coordinator<\/option>/,
   );
   assert.match(
     dock,
@@ -2339,7 +2339,7 @@ await test('the message box writes to the agent that leads, or to a task agent, 
   );
   assert.match(
     early,
-    /<option value="research" data-hint="Write to research">Research, leads now<\/option>/,
+    /<option value="research" data-hint="Write to research">Research<\/option>/,
   );
   assert.match(
     early,
@@ -2397,7 +2397,7 @@ await test('the message box writes to the agent that leads, or to a task agent, 
   );
   assert.match(
     work,
-    /<option value="coordinator"[^>]*>Coordinator, leads now<\/option><option value="task-1" data-hint="Write to Profile the heap">Profile the heap<\/option><option value="new-agent"[^>]*>A new agent<\/option><\/select>/,
+    /<option value="coordinator"[^>]*>Coordinator<\/option><option value="task-1" data-hint="Write to Profile the heap">Profile the heap<\/option><option value="new-agent"[^>]*>A new agent<\/option><\/select>/,
   );
   assert.match(
     work,
@@ -2516,7 +2516,7 @@ await test('a draft task waits for the person in the message box, on the map, in
   for (const lead of [null, coordinator(at)])
     assert.match(
       render('home', lead),
-      /<option value="new-coordinator" data-hint="Write the objective for a new coordinator">A new coordinator, leads now<\/option>/,
+      /<option value="new-coordinator" data-hint="Write the objective for a new coordinator">A new coordinator<\/option>/,
     );
 });
 
@@ -2738,7 +2738,15 @@ await test('a task opens as its own page: the decision first, the rest folded, a
     open,
     /This task waits for Implement the heap version\.[\s\S]*data-action="task-start" data-task="task-2" disabled/,
   );
-  assert.match(open, /<details id="task-edit">/);
+  // The rest of the page is one card. The form shows four fields and folds the others.
+  assert.match(
+    open,
+    /<section class="card task-more" aria-label="More about this task"><details id="task-details"><summary><h2>What the task asks<\/h2><\/summary>/,
+  );
+  assert.match(
+    open,
+    /<details id="task-edit"><summary><h2>Change the task<\/h2><\/summary>[\s\S]*id="task-edit-objective"[\s\S]*<details id="task-edit-more" class="more-fields"><summary>Input files, network, harness, and what it waits for<\/summary>[\s\S]*id="task-edit-inputs"/,
+  );
   // Work is the current view in the rail.
   assert.match(open, /data-view="tasks" aria-current="page"/);
   // In review: the version and what the agent says come before the files and the details.

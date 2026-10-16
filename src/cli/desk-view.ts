@@ -603,9 +603,10 @@ function taskForm(
   const chosen = values?.host ?? (host === 'codex' ? 'codex' : 'claude');
   return `${field('title', 'Title', `<input id="${prefix}-title" type="text" maxlength="120" value="${e(values?.title ?? '')}">`)}
   ${field('objective', 'What should the agent do?', area('objective', 4, 8000, values?.objective))}
-  ${field('inputs', 'Input files, one path per line (Verifold copies them now)', area('inputs', 2, 4000, values?.inputs.map((input) => input.path).join('\n')))}
-  ${field('writable', 'Where it may write, one path per line', area('writable', 2, 4000, values?.writable.join('\n')))}
   ${field('output', 'What it should produce', area('output', 2, 2000, values?.output))}
+  ${field('writable', 'Where it may write, one path per line', area('writable', 2, 4000, values?.writable.join('\n')))}
+  <details id="${prefix}-more" class="more-fields"><summary>Input files, network, harness, and what it waits for</summary>
+  ${field('inputs', 'Input files, one path per line (Verifold copies them now)', area('inputs', 2, 4000, values?.inputs.map((input) => input.path).join('\n')))}
   ${field('network', 'Domains that its shell commands may reach, one per line (empty: no network)', area('network', 2, 2000, values?.network?.domains.join('\n')))}
   ${field('network-reason', 'Why it needs them', `<input id="${prefix}-network-reason" type="text" maxlength="500" value="${e(values?.network?.reason ?? '')}">`)}
   <div class="fields"><label class="field" for="${prefix}-host">Harness<select id="${prefix}-host"><option value="claude"${chosen === 'claude' ? ' selected' : ''}>Claude Code</option><option value="codex"${chosen === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="${prefix}-model">Model<input id="${prefix}-model" type="text" maxlength="200" placeholder="Harness default" value="${e(values?.model ?? '')}"></label><label class="field" for="${prefix}-minutes">Time limit for each turn, in minutes<input id="${prefix}-minutes" type="number" min="1" max="240" value="${values?.minutes ?? 30}"></label></div>
@@ -618,7 +619,7 @@ function taskForm(
           )
           .join('')}</fieldset>`
       : ''
-  }`;
+  }</details>`;
 }
 
 /** The latest version of a task in review: file list, one diff, and the decision. */
@@ -913,7 +914,7 @@ function renderDock(
         : recipient.to === 'new-agent'
           ? 'Write the first request for a new agent'
           : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
-  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first, needsShown)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span>To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}${recipient.lead ? ', leads now' : ''}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
+  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first, needsShown)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span class="visually-hidden">To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
     live.controllable
       ? `<div class="dock-new" data-for="new-agent"${first.to === 'new-agent' ? '' : ' hidden'}><label for="agent-host">Harness <select id="agent-host"><option value="claude"${workspace.host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${workspace.host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label for="agent-mode">Commands <select id="agent-mode"><option value="ask">Ask me first</option><option value="auto">Auto</option></select></label><span>In this project folder</span></div>`
       : ''
@@ -1500,7 +1501,6 @@ function renderTaskPage(
     return `<div class="view">${back}<h1 id="view-title" tabindex="-1">No task</h1><p class="empty-note">This task is not in the list.</p></div>`;
   const all = view.list;
   const name = (id: string): string => sender(id, all);
-  const [label, tone] = taskStates[task.state];
   const others = all.filter((entry) => entry.id !== task.id);
   const attempt = task.attempts.at(-1);
   const version = attempt?.versions.at(-1);
@@ -1513,7 +1513,7 @@ function renderTaskPage(
     ? `This version used ${name(stale.task)} version ${stale.used}, but ${name(stale.task)} now has version ${stale.current}.`
     : undefined;
   // A draft opens with its form, so the person can write the task themselves.
-  const editForm = `<section class="card"><details id="task-edit"${isDraft(task) ? ' open' : ''}><summary><h2>${task.state === 'done' ? 'Revise the task' : 'Edit the task'}</h2><span>Revision ${task.revision}</span></summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'An edit makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details></section>`;
+  const editForm = `<details id="task-edit"${isDraft(task) ? ' open' : ''}><summary><h2>${task.state === 'done' ? 'Revise the task' : 'Change the task'}</h2></summary><p class="fine">${task.state === 'done' ? 'A revision opens the task again. Its accepted files stay in the record, and tasks that used them show when a newer version replaces them.' : 'A change makes a new revision. Earlier attempts keep the revision that they ran.'}</p>${taskForm('task-edit', assignment, others, host)}<label class="field" for="task-edit-reason">Why it changes</label><input id="task-edit-reason" type="text" maxlength="500"><div class="actions"><button type="button" data-action="task-edit" data-task="${e(task.id)}">Save revision ${task.revision + 1}</button></div></details>`;
   const artifact = task.artifacts?.at(-1);
   const blocked = waiting.length
     ? `This task waits for ${waiting.map(name).join(', ')}.`
@@ -1600,23 +1600,21 @@ function renderTaskPage(
     task.state === 'review' && version
       ? `${hostName(assignment.host)} made version ${version.number} at ${since(version.at)}.${received.length ? ` It received files from ${[...new Set(received.map((used) => name(used.task)))].join(', ')}.` : ''}`
       : '';
-  const details = `<section class="card"><details id="task-details"><summary><h2>Task details</h2><span>Objective, files, and limits</span></summary>
+  const details = `<details id="task-details"><summary><h2>What the task asks</h2></summary>
     ${assignment.hostReason ? `<p class="host-why"><span class="map-label">Why this harness</span> ${e(assignment.hostReason)}</p>` : ''}
     <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, assignment.objective, 220)}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, assignment.output, 160)}</dd><dt>Input files</dt><dd>${assignment.inputs.length ? assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${assignment.network ? `${e(assignment.network.domains.join(', '))}: ${e(assignment.network.reason)}${assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd>${assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(assignment.dependencies.map(name).join(', '))}</dd>` : ''}${received.length ? `<dt>Received</dt><dd>${e(received.map((used) => `${name(used.task)} version ${used.version}`).join(', '))}</dd>` : ''}<dt>Harness</dt><dd>${e(hostName(assignment.host))}, model ${e(assignment.model ?? 'harness default')}, ${assignment.minutes} min for each turn</dd></dl>
-    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p>` : ''}</details></section>`;
+    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Verifold sets these limits in the harness. A prompt alone is not a limit.</p>` : ''}</details>`;
   const activity = attempt?.session
-    ? `<section class="card"><details id="task-activity"><summary><h2>What the agent did</h2><span>Its transcript</span></summary>${transcriptSlot(`session:${attempt.session}`, `${hostName(assignment.host)} transcript`, '')}${agent ? `<div class="actions">${agent}</div>` : ''}</details></section>`
+    ? `<details id="task-activity"><summary><h2>What the agent did</h2></summary>${transcriptSlot(`session:${attempt.session}`, `${hostName(assignment.host)} transcript`, '')}${agent ? `<div class="actions">${agent}</div>` : ''}</details>`
     : '';
-  const messages = `<section class="card"><details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary><h2>Messages</h2><span>${thread.length}</span></summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message, all)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details></section>`;
+  const messages = `<details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary><h2>Messages</h2><span>${thread.length}</span></summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message, all)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details>`;
   return `<div class="view task-page">${back}
-  <div class="task-title"><h1 id="view-title" tabindex="-1">${e(assignment.title)}</h1><span class="status ${tone}">${e(label)}</span></div>
+  <div class="task-title"><h1 id="view-title" tabindex="-1">${e(assignment.title)}</h1></div>
   ${story ? `<p class="task-lead">${e(story)}</p>` : ''}
   ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
   ${first}
   ${taskPod(task.id, live.compute)}
-  ${details}${activity}${messages}
-  ${task.state === 'open' || task.state === 'done' ? editForm : ''}
-  ${history.length || notes.length ? `<section class="card"><details id="task-history"><summary><h2>History</h2><span>${history.length + notes.length}</span></summary><ul>${[...history, ...notes].join('')}</ul></details></section>` : ''}</div>`;
+  <section class="card task-more" aria-label="More about this task">${details}${activity}${messages}${task.state === 'open' || task.state === 'done' ? editForm : ''}${history.length || notes.length ? `<details id="task-history"><summary><h2>History</h2><span>${history.length + notes.length}</span></summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}</section></div>`;
 }
 
 const fileKinds: readonly (readonly [string, RegExp])[] = [
@@ -2193,18 +2191,49 @@ function renderComputeView(compute: ComputeView): string {
           .join(
             '',
           )}</tbody></table></div><p class="fine">List prices for one GPU on Secure Cloud, from RunPod at ${e(since(compute.gpusAt ?? ''))}.</p><div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the GPU choice</button><button type="button" data-action="compute-gpus">Refresh the prices</button></div>`;
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Compute</h1><p>GPU pods on RunPod for your tasks</p></div>
-  ${renderPods(compute)}
-  <section class="card" aria-labelledby="key-title"><h2 id="key-title">RunPod key</h2>${keyCard}</section>
-  <section class="card" aria-labelledby="limits-title"><div class="section-title"><h2 id="limits-title">Limits</h2>${settings.limitUsd !== null ? `<span class="count">$${settings.limitUsd} for this project</span>` : ''}</div>
-  ${settings.limitUsd === null ? '<p class="notice">Pods stay off until you set a spend limit.</p>' : ''}
-  <div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours of one lease, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
+  // The spend limit leads. The other limits fold, and they stay in the page, so each save sends them all.
+  const limitsForm = `<div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}</div>
+  <details id="compute-more" class="more-fields"><summary>More limits</summary>
+  <div class="fields">${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours of one lease, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
   <label class="field" for="compute-images">RunPod images that a lease can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
   <label class="check" for="compute-ask"><input type="checkbox" id="compute-ask"${settings.askBeforePod ? ' checked' : ''}> Ask me before each pod starts</label>
-  <p class="fine">Without this, a pod that the coordinator asks for starts at once when it fits these limits, also while you are away. You can stop it in Compute.</p>
+  <p class="fine">Without this, a pod that the coordinator asks for starts at once when it fits these limits, also while you are away. You can stop it in Compute.</p></details>
   <div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the limits</button></div>
-  <p class="fine">Only you can change these limits. RunPod erases the disk of a pod when the pod stops.</p></section>
-  <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2>${gpuCard}</section></div>`;
+  <p class="fine">Only you can change these limits. RunPod erases the disk of a pod when the pod stops.</p>`;
+  const head = `<div class="view-head"><h1 id="view-title" tabindex="-1">Compute</h1><p>GPU pods on RunPod for your tasks</p></div>`;
+  const keyLine = key
+    ? `<section class="card" aria-labelledby="key-title"><h2 id="key-title">RunPod key</h2>${keyCard}</section>`
+    : '';
+  // Setup asks one thing at a time: the key, then the spend limit, then the GPUs.
+  const step = !key
+    ? 1
+    : settings.limitUsd === null
+      ? 2
+      : settings.gpuTypes.length
+        ? 0
+        : 3;
+  const later = (from: number): string =>
+    `<ol class="later-steps" start="${from}">${[
+      'Set a spend limit',
+      'Choose the GPUs that pods can use',
+    ]
+      .slice(from - 2)
+      .map((text) => `<li>${text}</li>`)
+      .join('')}</ol>`;
+  if (step === 1)
+    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 1 of 3</p><h2 id="setup-title">Store a RunPod key</h2><p>Pods run on your RunPod account. Verifold needs a key to start and stop them.</p>${keyForm(compute.keyring)}${later(2)}</section></div>`;
+  if (step === 2)
+    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 2 of 3</p><h2 id="setup-title">Set a spend limit</h2><p>Pods stay off until you set one. Verifold stops every pod before this project spends more.</p>${limitsForm}${later(3)}</section>${keyLine}</div>`;
+  if (step === 3)
+    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 3 of 3</p><h2 id="setup-title">Choose the GPUs that pods can use</h2>${gpuCard}<details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>${keyLine}</div>`;
+  const allowed = settings.gpuTypes
+    .map((id) => `<code>${e(id)}</code>`)
+    .join(', ');
+  return `<div class="view">${head}
+  ${renderPods(compute)}
+  <section class="card" aria-labelledby="limits-title"><h2 id="limits-title">Limits</h2><p>Up to ${usd(settings.limitUsd ?? 0)} for this project, ${usd(settings.maxUsdPerHour)} per hour for one pod, ${settings.maxHoursPerLease} ${settings.maxHoursPerLease === 1 ? 'hour' : 'hours'} for one lease. ${settings.askBeforePod ? 'You approve each pod.' : 'A pod inside these limits starts without asking.'}</p><details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>
+  <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2><p>Pods can use ${allowed}.</p><details id="compute-gpus-edit"${gpus ? ' open' : ''}><summary>Change the GPUs</summary>${gpuCard}</details></section>
+  ${keyLine}</div>`;
 }
 
 /** The record of this owner: every worker's commands, then every research attempt. */
