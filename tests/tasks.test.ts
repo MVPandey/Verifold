@@ -1365,3 +1365,87 @@ await test('a version without environments, and an old record that listed one', 
   );
   assert.equal((await tasks.list()).length, 1);
 });
+
+await test("the coordinator's question waits in Needs you until the person answers it", async (t) => {
+  const root = await project(t);
+  const events: string[] = [];
+  const tasks = new TaskManager(root, {
+    ownerId: 'owner-1',
+    sessions: new FakeSessions(),
+    onEvent: (event) => events.push(event.kind),
+  });
+  const question = await tasks.ask(
+    'Store a RunPod key in Compute, and set a spend limit. The gate run needs a GPU.',
+  );
+  assert.equal(question.status, 'open');
+  assert.deepEqual(events, []);
+  const coordinator = {
+    state: {
+      schemaVersion: 1 as const,
+      objective: 'Compare baselines.',
+      host: 'claude' as const,
+      model: null,
+      helper: null,
+      startedAt: new Date().toISOString(),
+      stoppedAt: null,
+      session: null,
+      created: 0,
+      planApproved: true,
+      cursor: 0,
+      wakeups: [],
+      events: [],
+      actions: [],
+    },
+    session: null,
+    waiting: 0,
+    limitedUntil: null,
+  };
+  const page = async (view: 'needs' | 'home'): Promise<string> =>
+    renderDesk(
+      await readDeskSnapshot(root),
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        coordinator,
+        tasks: {
+          list: [],
+          selected: null,
+          idle: [],
+          messages: await tasks.messageList(),
+        },
+      },
+      { view, panel: null },
+    ).html;
+  let html = await page('needs');
+  assert.match(
+    html,
+    /Question[\s\S]*Store a RunPod key in Compute[\s\S]*The coordinator waits for your answer\./,
+  );
+  assert.match(
+    html,
+    /data-message="m-1" data-decision="resolved">Send answer<\/button><button type="button" data-action="task-decide" data-message="m-1" data-decision="resolved" data-reason="Done\.">Done/,
+  );
+  assert.match(html, /◆ Waits for your answer/);
+  assert.match(await page('home'), /Nothing runs\. The team waits for you\./);
+  await assert.rejects(
+    tasks.decideMessage('m-1', 'resolved', 'Never mind.', 'coordinator'),
+    /Only the person answers m-1/,
+  );
+  await tasks.decideMessage('m-1', 'resolved', 'The key is stored.');
+  const answer = (await tasks.messageList()).at(-1);
+  assert.equal(answer?.to, 'coordinator');
+  assert.equal(answer?.closes, 'm-1');
+  assert.equal(
+    answer?.text,
+    'The person answered your question m-1: The key is stored.',
+  );
+  // The answer wakes the coordinator once.
+  assert.deepEqual(events, ['person']);
+  html = await page('needs');
+  assert.doesNotMatch(html, /Store a RunPod key/);
+  assert.match(html, /Nothing needs you\./);
+  for (const number of [1, 2, 3, 4, 5]) await tasks.ask(`Question ${number}`);
+  await assert.rejects(tasks.ask('One more'), /Five of your questions wait/);
+});

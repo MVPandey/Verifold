@@ -277,6 +277,8 @@ Every change keeps the coordinator's reason, and the desk lists the actions as p
 
 The coordinator settles objections. It can uphold an objection and revise the task, or overrule it with a reason. After it overrules two objections from one task to the same task, Verifold refuses its next overrule of such an objection, and the objection waits for you under Needs you. You can decide any open blocker or objection yourself, and your decision is final.
 
+When the work waits for something that only you can give, such as a RunPod key, a spend limit, or a choice, the coordinator asks you a question. Needs you shows it until you answer, and the rail shows "Waits for your answer". Write your answer and send it, or click Done when there is nothing to say. The coordinator gets your answer at once. When nothing runs, the Now line on Home says so and quotes the coordinator's latest note to you.
+
 Events wake the coordinator: a version ready for review, a message for it, a blocker or an objection, a failed start, or your action on a task. Its own actions do not wake it. Events within 20 seconds join one digest turn, at most 12 turns an hour. A message from you does not wait for other events. Verifold saves the position of each digest before it sends it, so a restart never repeats one. Write to the coordinator in the message box; it reads your message at its next wakeup.
 
 Stop the coordinator ends its session. Running workers finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the workers. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.

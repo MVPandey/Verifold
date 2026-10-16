@@ -585,10 +585,10 @@ await test('desk points to the coordinator after a direction and shows its notes
   const empty = html(false, []);
   assert.match(empty, /The coordinator drafts the plan/);
   assert.doesNotMatch(empty, /waits for you/);
-  // After the person starts the work, the Now line says what happens, and nothing waits.
+  // After the person starts the work, the Now line says what happens, with the coordinator's latest note.
   assert.match(
     html(true),
-    /Now<\/span> The coordinator watches the work\.[\s\S]*0 of 1 tasks done\./,
+    /Now<\/span> No task runs\. The coordinator works\.<\/p><p class="fine">0 of 1 tasks done\. The coordinator wrote at \d\d:\d\d: &quot;The benchmark needs a dataset host\.&quot;/,
   );
   assert.doesNotMatch(html(true), /Needs you<\/h2>/);
 });
