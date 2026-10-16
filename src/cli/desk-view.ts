@@ -1058,7 +1058,9 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       task: task.id,
       kind: 'Draft task',
       title: task.assignment.title,
-      why: 'You asked the coordinator for new work. It starts when you start it.',
+      why: task.assignment.extra
+        ? 'An add-on from research. It starts when you start it.'
+        : 'You asked the coordinator for new work. It starts when you start it.',
       since: task.updatedAt,
       body: `<ul class="drafts">${draftCard(task)}</ul>`,
     });
@@ -1179,7 +1181,9 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           view: 'compute',
           kind: 'GPU pod',
           title: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod`,
-          why: 'A pod costs money from the moment that RunPod creates it, so only you approve it. Nothing is billed before you do.',
+          why: compute.settings.askBeforePod
+            ? 'You approve each pod. Nothing is billed before you do.'
+            : 'It does not fit your limits now, for example the number of pods at the same time. Nothing is billed before you approve it.',
           since: lease.requestedAt,
           body: leaseRequest(lease, compute),
         });
@@ -2108,7 +2112,7 @@ function renderPods(compute: ComputeView): string {
   return `<section class="card" aria-labelledby="pods-title"><div class="section-title"><h2 id="pods-title">Pods</h2>${budget.rate ? `<span class="count">${usd(budget.rate)} per hour now</span>` : ''}</div>
   ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for open leases ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
   ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
-  ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU, and you approve it in Needs you.</p>`}
+  ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU. ${compute.settings.askBeforePod ? 'You approve each pod in Needs you.' : 'A pod that fits your limits starts at once. Other requests wait for you in Needs you.'}</p>`}
   ${earlier.length ? `<details id="earlier-leases"><summary>Earlier leases (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}
   <p class="fine">Costs count each running minute at the billed rate, with the disk. When RunPod's bill is higher, Verifold uses it.</p></section>`;
 }
@@ -2173,6 +2177,8 @@ function renderComputeView(compute: ComputeView): string {
   ${settings.limitUsd === null ? '<p class="notice">Pods stay off until you set a spend limit.</p>' : ''}
   <div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours of one lease, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
   <label class="field" for="compute-images">RunPod images that a lease can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
+  <label class="check" for="compute-ask"><input type="checkbox" id="compute-ask"${settings.askBeforePod ? ' checked' : ''}> Ask me before each pod starts</label>
+  <p class="fine">Without this, a pod that the coordinator asks for starts at once when it fits these limits, also while you are away. You can stop it in Compute.</p>
   <div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the limits</button></div>
   <p class="fine">Only you can change these limits. RunPod erases the disk of a pod when the pod stops.</p></section>
   <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2>${gpuCard}</section></div>`;
