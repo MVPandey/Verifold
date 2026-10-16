@@ -20,6 +20,7 @@ import {
   diff,
   inScope,
   integrate,
+  leftOut,
   overlaps,
   projectPath,
   release,
@@ -346,5 +347,68 @@ await test('Git variables from the environment cannot redirect a workspace to an
   assert.equal(
     run(root, 'log', '-1', '--format=%an', version.commit).trim(),
     'Verifold',
+  );
+});
+
+await test('a version leaves out environments, caches, and what the task ignores', async (t) => {
+  const root = await folder(t);
+  await write(root, 'exp/a.py', 'a\n');
+  const workspace = await allocate(root, {
+    name: 'task-3-r1-a1',
+    writable: ['exp'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  await write(target, 'exp/a.py', 'a, by the agent\n');
+  // The task's own .gitignore counts. The ignored log and build output stay out.
+  await write(target, 'exp/.gitignore', 'build/\n*.log\n');
+  await write(target, 'exp/build/out.bin', 'x');
+  await write(target, 'exp/run.log', 'log');
+  // Environments stay out, also under a name that no rule lists.
+  await write(target, 'exp/.venv/pyvenv.cfg', 'home = /usr\n');
+  await write(target, 'exp/.venv/lib/site.py', 'x');
+  await write(target, 'exp/tools/pyvenv.cfg', 'home = /usr\n');
+  await write(target, 'exp/tools/bin/python', 'x');
+  await write(target, 'exp/node_modules/m/index.js', 'x');
+  await write(target, 'exp/.pytest_cache/v/cache', 'x');
+  const version = await commitVersion(root, workspace, ['exp'], 'Version 1');
+  assert.deepEqual(
+    (await changes(root, workspace, workspace.start, version.commit)).map(
+      (file) => file.path,
+    ),
+    ['exp/.gitignore', 'exp/a.py'],
+  );
+  assert.equal(leftOut('exp/.venv/lib/site.py'), true);
+  assert.equal(leftOut('exp/__pycache__/a.cpython-312.pyc'), true);
+  assert.equal(leftOut('exp/venv.py'), false);
+});
+
+await test('a rule from outside the writable paths keeps ignored output, up to the file limit', async (t) => {
+  const root = await folder(t);
+  const workspace = await allocate(root, {
+    name: 'task-4-r1-a1',
+    writable: ['exp'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // The top .gitignore is not the task's own, so its ignored output is kept.
+  await write(target, '.gitignore', 'exp/data/\n');
+  await write(target, 'exp/data/0.csv', '0\n');
+  const version = await commitVersion(root, workspace, ['exp'], 'Version 1');
+  assert.deepEqual(
+    (await changes(root, workspace, workspace.start, version.commit)).map(
+      (file) => file.path,
+    ),
+    ['.gitignore', 'exp/data/0.csv'],
+  );
+  // An ignored folder is one entry in Git's status. Its files still count.
+  await Promise.all(
+    Array.from({ length: 5001 }, (_, index) =>
+      writeFile(join(target, `exp/data/${index + 1}.csv`), 'x'),
+    ),
+  );
+  await assert.rejects(
+    commitVersion(root, workspace, ['exp'], 'Version 2'),
+    /more than 5000 files, so Verifold saved no version/,
   );
 });
