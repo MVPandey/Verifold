@@ -147,7 +147,7 @@ Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the
 
 ### Local research desk
 
-Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its browser desk. Keep that terminal open. It runs the project owner, and the desk is a second view of the same owner. Ctrl+C stops the desk and pauses a running session. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect. Type `/open` in the terminal to open the desk again with a new one-time link.
+Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its browser desk. Keep that terminal open. It runs the project owner, and the desk is a second view of the same owner. On a Mac, Verifold keeps the computer from idle sleep while an agent works or a pod runs (`caffeinate -i`). Closing the lid still puts it to sleep. Ctrl+C stops the desk and pauses a running session. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect. Type `/open` in the terminal to open the desk again with a new one-time link.
 
 One Verifold process owns a project at a time. A second `verifold` for the same project names the running process and exits. The owner writes `.verifold/owner.json` with its process ID and start time, and no access token. If that process stopped, the next owner moves the record aside and continues.
 
