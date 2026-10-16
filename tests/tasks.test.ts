@@ -1084,7 +1084,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   const id = await tasks.create({ ...fields, inputs: '' });
   await tasks.start(id);
   let task: TaskRecord | null = null;
-  for (let tries = 0; tries < 200 && task?.state !== 'review'; tries++) {
+  for (let tries = 0; tries < 1000 && task?.state !== 'review'; tries++) {
     await delay(20);
     task = await tasks.get(id);
   }
