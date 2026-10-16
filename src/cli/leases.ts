@@ -468,8 +468,11 @@ export class Leases {
     });
   }
 
-  /** The person approves a request. Verifold creates the pod, and RunPod bills from now on. */
-  approve(id: unknown): Promise<Lease> {
+  /**
+   * The person approves a request, or Verifold starts one that fits the
+   * person's limits. Verifold creates the pod, and RunPod bills from now on.
+   */
+  approve(id: unknown, by: 'person' | 'verifold' = 'person'): Promise<Lease> {
     return this.serial(async () => {
       let lease = this.get(id);
       if (lease.state !== 'requested')
@@ -503,8 +506,10 @@ export class Leases {
       lease = await this.change(
         lease,
         { state: 'starting', decidedAt: this.stamp() },
-        'person',
-        'You approved the lease. Verifold asks RunPod for the pod.',
+        by,
+        by === 'person'
+          ? 'You approved the lease. Verifold asks RunPod for the pod.'
+          : 'The lease fits your limits, so Verifold started it without asking. Verifold asks RunPod for the pod.',
       );
       let pod: Pod | null = null;
       try {

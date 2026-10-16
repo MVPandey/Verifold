@@ -580,6 +580,11 @@ function openItem(
   navigate({ panel: kind }, '#panel-title');
 }
 
+function checked(id: string): boolean {
+  const element = document.getElementById(id);
+  return element instanceof HTMLInputElement && element.checked;
+}
+
 function field(id: string): string {
   const element = document.getElementById(id);
   return element instanceof HTMLInputElement ||
@@ -859,6 +864,7 @@ function computeRequest(button: HTMLElement): Record<string, unknown> {
     maxRunningPods: field('compute-pods'),
     diskGb: field('compute-disk'),
     images: field('compute-images'),
+    askBeforePod: checked('compute-ask'),
     ...(boxes.length
       ? {
           gpuTypes: boxes
