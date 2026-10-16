@@ -411,7 +411,7 @@ await test('the coordinator creates and starts tasks through checked tools, and 
   // Each action reads as a sentence. Without the task list, a task shows by its ID.
   assert.match(
     html,
-    /<p>Accepted a version of task-1\.<\/p>[\s\S]*Its reason[\s\S]*It lists the two baselines/,
+    /<p>Accepted a version of task-1\.<\/p>[\s\S]*The coordinator's reason[\s\S]*It lists the two baselines/,
   );
   // The tool name and Verifold's reply show under Details.
   assert.match(

@@ -419,7 +419,7 @@ function showNotify(): void {
   button.hidden = permission !== 'default';
   state.textContent =
     permission === 'granted'
-      ? 'Desktop notifications are on. Each new item sends one while the desk is in the background.'
+      ? 'Desktop notifications are on. You get one for each new item while the desk is in the background.'
       : permission === 'denied'
         ? 'The browser blocks notifications from this desk. Allow them in its site settings.'
         : permission === 'default'
@@ -488,7 +488,7 @@ async function refresh(): Promise<void> {
         );
       }
       throw new Error(
-        'Project records are unavailable. Inspect the selected workspace, then refresh.',
+        'Verifold could not read the records of this project. Check the project folder, then refresh.',
       );
     }
     const reply: unknown = await response.json();
@@ -500,7 +500,9 @@ async function refresh(): Promise<void> {
       !('observation' in reply) ||
       typeof reply.observation !== 'string'
     )
-      throw new Error('The desk returned an unreadable view.');
+      throw new Error(
+        'The desk sent a page that the browser could not read. Refresh to try again.',
+      );
     if (wanted !== viewQuery() || stopped) return;
     if (reply.html !== lastHtml) await render(reply.html);
     focusPending();
@@ -531,7 +533,7 @@ async function refresh(): Promise<void> {
           error.name !== 'AbortError' &&
           error.name !== 'TypeError'
           ? error.message
-          : 'The desk shows the last saved view and tries again.',
+          : 'The desk keeps the last page it showed and tries again.',
       );
   } finally {
     clearTimeout(deadline);
@@ -708,7 +710,7 @@ function showReview(): void {
   if (shownDiff.cut) {
     const note = document.createElement('p');
     note.className = 'fine';
-    note.textContent = 'The diff is cut at 512 KB.';
+    note.textContent = 'The diff stops at 512 KB.';
     pane.append(note);
   }
 }
@@ -1021,7 +1023,7 @@ async function act(button: HTMLElement): Promise<void> {
         'error' in reply &&
         typeof reply.error === 'string'
           ? reply.error
-          : 'The action failed. Refresh and try again.',
+          : 'That did not work. Refresh, then try again.',
       );
     actionLabel.textContent = name ? `Done: ${name}` : 'Done';
     failure = undefined;

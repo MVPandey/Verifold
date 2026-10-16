@@ -589,7 +589,7 @@ await test('Needs you shows a request with its cost and limits, and Compute and 
   assert.match(page.html, /\$0\.27 per hour/);
   assert.match(
     page.html,
-    /<span class="tag reading">Its reason<\/span> Train the small model on a GPU\./,
+    /<span class="tag reading">The coordinator says<\/span> Train the small model on a GPU\./,
   );
   assert.match(page.html, /runs any command as root, with internet access/);
   assert.match(
@@ -613,7 +613,7 @@ await test('Needs you shows a request with its cost and limits, and Compute and 
   );
   assert.match(
     page.html,
-    /Held for open leases \$0\.55\. Left \$9\.45 of \$10\.00\./,
+    /Held for running pods \$0\.55\. Left \$9\.45 of \$10\.00\./,
   );
   page = render('home');
   assert.match(

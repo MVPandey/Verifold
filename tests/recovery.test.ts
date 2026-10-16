@@ -256,7 +256,7 @@ await test('research attempts of a stopped owner become interrupted and stop blo
     undefined,
     { view: 'records', panel: 'attempt' },
   ).html;
-  assert.match(html, /Interrupted, outcome unknown/);
+  assert.match(html, /Stopped, result unknown/);
   assert.match(html, /Continue research to run the step again/);
 
   // Once no attempt looks live, the stale lock goes, and research runs again.
