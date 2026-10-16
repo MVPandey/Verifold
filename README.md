@@ -16,36 +16,41 @@
 
 # Verifold
 
-Verifold coordinates computational research through the coding harnesses you already use.
+Verifold coordinates computational research through the coding harnesses that you already use.
 
-Run `verifold` to connect your installed Claude Code or Codex, review optional personal background, and choose a project folder. Supply existing work, a written brief, or notes before your harness asks follow-up questions. Verifold saves the reviewed brief and research records, then opens a local browser desk to follow research.
+Run `verifold` to connect the Claude Code or Codex that you have installed. You can review optional personal background and choose a project folder. Before your harness asks follow-up questions, you can give it existing work, a written brief, or notes. Verifold saves the brief that you reviewed and the research records. Then it opens a local desk in your browser, where you follow the research and the team.
 
-We're building toward a research **meta-harness**: a shared workspace that coordinates several harness instances from ideation to a paper, repository, figure, proof, or other deliverable. Each harness keeps its models, credentials, tools, and permissions. Verifold will connect their tasks, discussions, memory, and evidence across sessions.
+We're building toward a research **meta-harness**: one workspace where several harness instances work together, from the first idea to a paper, a repository, a figure, a proof, or another result. Each harness keeps its own models, credentials, tools, and permissions. Verifold connects their tasks, messages, memory, and evidence across sessions. The [development plan](#development-plan) says what is done and what comes next.
 
 [Install](#install-the-cli) · [Usage](#start-a-research-project) · [Current capabilities](#project-status) · [Roadmap](#development-plan) · [Contribute](#help-build-verifold)
 
 ## Install the CLI
 
-Use Node 22, 24, or 26 and an installed, authenticated Claude Code or Codex harness. Use the latest patch release of your chosen major:
+You need Node 22, 24, or 26 (the latest patch release of that major) and a Claude Code or Codex harness that is installed and signed in:
 
 ```sh
 npm install -g verifold
 verifold
 ```
 
-You can also run `npx verifold` or install locally with `npm install verifold`. A local installation runs through `npx verifold`.
+You can also run `npx verifold`, or install Verifold in a project with `npm install verifold`. A local install runs through `npx verifold`.
 
-Verifold starts the selected harness with its existing configuration and permissions. Workers in the desk are the exception: they load none of your MCP servers or connected apps. See [security boundaries](SECURITY.md).
+Verifold starts your harness with its own configuration and permissions. The agents that the desk runs are the exception: they load none of your MCP servers or connected apps. See [security boundaries](SECURITY.md).
 
 ## Start a research project
 
-Run `verifold` from your terminal. An existing Verifold project checks for unfinished global setup, then opens its desk. This setup does not change the project’s saved harness or research. In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project and opens the desk before planning and research. Keep the terminal open. Ctrl+C stops its work and the desk, and pauses a running session.
+Run `verifold` in your terminal.
 
-In a folder without a project, `verifold` opens setup in the browser. The desk shows one question at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal stays open and shows each step as one line. Ctrl+C cancels setup and saves nothing. When setup ends, the same desk shows the new project and planning starts. `verifold init`, `--no-open`, and runs without a terminal set up in the terminal. Both paths run the same setup, with the same consent steps, file limits, and retries.
+- In a folder that is already a Verifold project, Verifold first checks for global setup that is not finished, then opens the project's desk. This does not change the harness or the research that the project saved.
+- In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project and opens the desk before planning and research start.
 
-Use `verifold init` for setup and research entirely in the CLI. Bare launch requires an interactive terminal. `verifold --no-open` prints the desk URL without opening a browser.
+Keep the terminal open. Ctrl+C stops its work and the desk, and pauses a running session.
 
-Run subsequent commands from that project directory, or add `--workspace <path>`:
+In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal stays open and shows each step as one line. Ctrl+C cancels setup and saves nothing. When setup ends, the same desk shows the new project, and planning starts.
+
+`verifold init`, `--no-open`, and runs without a terminal do setup in the terminal instead. Both paths run the same setup, with the same consent steps, file limits, and retries. Use `verifold init` to do setup and research entirely in the CLI. A bare `verifold` needs an interactive terminal. `verifold --no-open` prints the desk URL and does not open a browser.
+
+Run later commands from the project folder, or add `--workspace <path>`:
 
 ```sh
 verifold research --feedback "Focus on methods that run on one GPU."
@@ -54,15 +59,23 @@ verifold status
 verifold select
 ```
 
-The first question is "What do you want to find out?". One line under it names the team, the model of its lead, and the folder. The team is one harness, or a lead and a helper. It is your saved team, or Claude Code with its default model. When both harness commands are on your PATH, Codex helps by default. The folder is the one where you started Verifold. To change them, type `/settings` in the terminal or choose Change the settings in the desk. The settings mark a team whose command is not on your PATH. Verifold does not check the sign-in: a harness that is not signed in fails at its first run, with that reason. Verifold remembers the team and the model in a global private agency directory. Setup does not ask for a profile. A saved profile is used as background. `verifold profile --setup` and `verifold init --setup-only` create one.
+The first question is "What do you want to find out?". One line under it names the team, the model of its lead, and the folder.
 
-The selected harness then asks up to three quick questions, one at a time, using your answers and any saved background. Each question ends with two or three suggested answers. Choose one (in the terminal, type its number), write your own answer, or press Enter to skip the other questions. Its prompt asks only about what changes the research plan, and it records other unknowns as open points. The agent writes Markdown, not a required JSON brief. Each failed turn has one explicit retry. If a reply fails, retry with your answers intact or review a local brief made from those answers.
+- The team is one harness, or a lead and a helper. It is your saved team, or Claude Code with its default model. When both harness commands are on your PATH, Codex helps by default.
+- The folder is the one where you started Verifold.
+- To change them, type `/settings` in the terminal, or choose Change the settings in the desk. The settings mark a team whose command is not on your PATH.
 
-`--workspace path` supplies the folder directly. At the question, enter `/file <path>` to supply a written brief. File import asks permission before reading up to 12000 bytes and sending them to the selected harness. An unreadable file produces a diagnostic, then setup continues with the available context. Press Enter without a question to let your harness help identify a direction from the available context. When the folder has files, Verifold asks before your harness reads them.
+Verifold does not check the sign-in. A harness that is not signed in fails at its first run and says why. Verifold remembers the team and the model in a private global agency folder. Setup does not ask for a profile, but it uses a saved profile as background. `verifold profile --setup` and `verifold init --setup-only` create one.
 
-The brief is about 120 words: the question, why it matters, what counts as an answer, constraints, and open points. Press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. In the desk, you can also edit the brief and accept your version. Research is guided unless you pass `--autonomy autonomous`. Relative paths resolve against the directory where you launched Verifold; the interactive path also accepts `~/`. Missing directories are created. Existing folder contents are preserved; conflicting files, a preexisting `.verifold.md`, and linked scaffold directories are rejected.
+Your harness then asks up to three quick questions, one at a time. It uses your answers and any saved background. Each question ends with two or three suggested answers. Choose one (in the terminal, type its number), write your own answer, or press Enter to skip the other questions. The prompt asks only about what changes the research plan, and it records other unknowns as open points. The agent writes Markdown, not a required JSON brief. A failed turn has one explicit retry. If a reply fails, retry with your answers intact, or review a local brief made from those answers.
 
-Every initialized project receives:
+`--workspace path` gives the folder directly. At the question, enter `/file <path>` to give a written brief. Verifold asks before it reads the file, reads up to 12000 bytes, and sends them to your harness. If it cannot read the file, it says why and continues setup with the context that it has. Press Enter without a question to let your harness help find a direction from that context. When the folder has files, Verifold asks before your harness reads them.
+
+The brief is about 120 words: the question, why it matters, what counts as an answer, constraints, and open points. Press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. In the desk, you can also edit the brief and accept your version.
+
+Research runs without a stop unless you ask for one, in the setup settings or with `--autonomy guided`. Relative paths resolve against the folder where you started Verifold, and the interactive path also accepts `~/`. Verifold creates missing folders and keeps what a folder already holds. It refuses conflicting files, an existing `.verifold.md`, and linked scaffold folders.
+
+Every new project gets:
 
 ```text
 project/
@@ -76,42 +89,56 @@ project/
   agents/       Project agent briefs and review notes
 ```
 
-If the selected directory contains existing work, Verifold offers a harness investigation before the interview. With consent, Verifold supplies a bounded selection of top-level documentation and manifests. Your harness can inspect relevant paper, code, and result files, search the web, and use native agents. The request prohibits edits, experiments, installations, and downloads. You review the resulting context before the interview; declining or a failed investigation preserves your original brief. Accepted context stays in the project’s `.verifold.md` and workspace state, not your personal profile. The following interview can use the same project tool scope. These prompts guide the harness; its own permissions remain the enforcement boundary. Every setup, research, coordinator, and worker prompt tells the agent to look for local files only in its folder (the project folder, or the task folder for a worker) unless you ask for more. Topic-only interviews can also use native web search. They run in an empty private folder, never in the folder where you started `verifold`, and Verifold removes it after setup. If local context would help, the harness asks which files or directories it may inspect. Declined directories remain excluded unless you explicitly authorize them later. Personal-profile interviews remain limited to supplied answers.
+If the folder already holds work, Verifold offers a harness investigation before the interview:
 
-Verifold starts your installed harness in a background CLI session. The terminal shows the step and the time that it takes. The desk shows the harness events and the full transcript of each run. Claude Code also reports its model and session when available. Tools that require interactive permission can be denied in this mode. Verifold reports Claude permission denials and a `claude --resume <session-id>` command when available, so you can review permissions in the native harness. Verifold does not bypass approvals. A requested tool or agent is not proof that it completed successfully.
+- With your consent, Verifold gives your harness a bounded selection of top-level documentation and manifests. Your harness can look at relevant paper, code, and result files, search the web, and use its own agents. The request forbids edits, experiments, installs, and downloads.
+- You review the context before the interview. If you decline it, or the investigation fails, your original brief stays.
+- Accepted context stays in the project's `.verifold.md` and workspace state, not in your personal profile. The interview that follows can use the same tools in the project.
 
-The approved brief feeds planning and research in the selected directory. It stays project-scoped; onboarding does not automatically turn it into a reusable personal profile. Run subsequent commands from that directory or pass `--workspace path`.
+These prompts guide the harness, and its own permissions do the enforcing. Every setup, research, coordinator, and task prompt tells the agent to look for local files only in its folder (the project folder, or the task folder for a task agent), unless you ask for more.
 
-Use arrow keys or number keys in the harness and research-mode menus. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
+Interviews on a topic alone can also use the harness's own web search. They run in an empty private folder, never in the folder where you started `verifold`, and Verifold removes that folder after setup. If local context would help, the harness asks which files or folders it may look at. A folder that you decline stays out unless you allow it later. Interviews for a personal profile use only the answers that you give.
 
-When no approved background or previous setup outcome exists, interactive setup offers an optional profile step after harness selection and before project selection. Verifold remembers skipped, declined, and failed setup, so subsequent launches do not repeat it automatically. Choose “Ask my harness to review my chats” to let your harness inspect a selected local history source and draft research context. The source prompt suggests the harness’s usual local session folder; you can choose a narrower folder or an export instead. This does not provide access to cloud chats or guarantee that earlier conversations are available. You can also import a bounded chat sample or one memory file, write an introduction locally, or skip. `init --setup-only` also offers an agent interview.
+Verifold starts your harness in a background CLI session. The terminal shows the step and how long it takes. The desk shows the harness events and the full transcript of each run. Claude Code also reports its model and session when it can. Tools that need interactive permission can be denied in this mode. Verifold reports Claude permission denials and, when it can, a `claude --resume <session-id>` command, so you can review the permissions in the harness itself. Verifold does not bypass approvals. A tool or agent that the harness asked for is not proof that it finished.
 
-Imports require permission before reading and sending the text to the harness. You review the Markdown before saving it as `~/.verifold/agency/USER.md`; `settings.json` stores harness preferences. `--agency-dir path` selects an empty directory or an existing Verifold agency.
+The approved brief feeds planning and research in the project folder. It belongs to the project: setup does not turn it into a reusable personal profile. Run later commands from that folder, or pass `--workspace path`.
 
-Later onboarding reuses this approved background without repeating profile questions or rereading its source. Edit or delete `USER.md` to change future reuse; existing project briefs and host records remain. Deleting `USER.md` stops future reuse and does not trigger another history import.
+In the harness and research-mode menus, use the arrow keys or the number keys. Press Enter to accept, or Escape to cancel. Simple terminals offer numbered text prompts.
 
-“Import a sample of my chats” inspects at most 200 directory entries and ten files, with a 256 KB per-file limit and 512 KB total. It skips links, hidden subdirectories, oversized files, and unsupported native records. Native JSONL imports retain recognized user-role messages, excluding model responses, tool results, and subagent folders. User-role records can still include harness-injected context; review the profile’s inferences. Ordinary text and JSON exports are supplied as selected. The harness-directed option chooses relevant conversations within the selected source and reports its coverage. Its own permissions enforce access. Both options show the full draft for review before saving `USER.md`. Local storage does not imply offline model processing.
+When you have no approved background and no earlier setup outcome, interactive setup offers an optional profile step after you choose the harness and before you choose the project. Verifold remembers a skipped, declined, or failed setup, so later launches do not repeat it on their own. Choose "Ask my harness to review my chats" to let your harness look at a local history source that you choose and draft research context. The prompt suggests the harness's usual local session folder. You can choose a narrower folder or an export instead. This gives no access to cloud chats, and earlier conversations may not be there. You can also import a bounded chat sample or one memory file, write an introduction locally, or skip. `init --setup-only` also offers an agent interview.
 
-The coordinator proposes a search scope and personas. Research then searches without a stop. If you asked for a stop before the source search (in the setup settings, or `--autonomy guided`), research waits for your approval of that plan. In the desk, approve the plan, or write your changes to research in the message box. In the terminal that runs the desk, type `/approve` or `/feedback` and your changes. Without a running desk, use `research --feedback` to revise that plan, then `research --approve` to continue. The harness researches the approved scope and returns sources and directions. The desk shows the report and its sources. The terminal prints only the number of directions. Initial research does not require PDF downloads.
+Verifold asks before it reads an import and sends the text to the harness. You review the Markdown before Verifold saves it as `~/.verifold/agency/USER.md`. `settings.json` stores the harness preferences. `--agency-dir path` chooses an empty folder or an existing Verifold agency.
 
-After directions are available, use `research --feedback` to refine them through the saved coordinator session. `select` asks for an explicit idea ID. Noninteractive selection requires `select --id <idea-id>`. Selection does not start a pilot or experiment.
+Later setups reuse this approved background. They do not ask the profile questions again or read the source again. Edit or delete `USER.md` to change what later setups reuse. Existing project briefs and host records stay. Deleting `USER.md` stops the reuse and does not start another history import.
 
-Autonomous mode proceeds through planning and research, then stops at directions. It preserves the host's tool permissions.
+"Import a sample of my chats" looks at no more than 200 folder entries and ten files, with at most 256 KB for each file and 512 KB in total. It skips links, hidden subfolders, files that are too large, and native records that it does not support. Native JSONL imports keep the user messages that it recognizes, without model responses, tool results, or subagent folders. User messages can still include context that the harness added, so review what the profile infers. Plain text and JSON exports go in as you chose them. The harness option picks the relevant conversations in the source that you chose and reports what it covered. Its own permissions control what it can read. Both options show the full draft for review before Verifold saves `USER.md`. Local storage does not mean that the model runs offline.
 
-Interactive `init` and `research` show readable results and next steps. Noninteractive runs and `status` return JSON. Interactive mode requires a terminal on stdin and stderr; use `status` when piping saved state to another tool.
+The coordinator proposes a search scope and personas. Research then searches without a stop. If you asked for a stop before the source search (in the setup settings, or with `--autonomy guided`), research waits for you to approve that plan:
 
-Noninteractive initialization requires explicit research inputs. The harness drafts a brief with unknowns from these inputs, then plans and researches without an interview or brief-review prompt:
+- In the desk, approve the plan, or write your changes to research in the message box.
+- In the terminal that runs the desk, type `/approve`, or `/feedback` and your changes.
+- Without a running desk, use `research --feedback` to revise the plan, then `research --approve` to continue.
+
+The harness researches the approved scope and returns sources and directions. The desk shows the report and its sources. The terminal prints only the number of directions. The first research needs no PDF downloads.
+
+After the directions are ready, use `research --feedback` to refine them through the saved coordinator session. `select` asks for an explicit idea ID. Without a terminal, use `select --id <idea-id>`. Selecting a direction does not start a pilot or an experiment.
+
+Autonomous mode runs planning and research without a stop, then stops at the directions. It keeps the host's tool permissions.
+
+Interactive `init` and `research` show readable results and next steps. Runs without a terminal, and `status`, return JSON. Interactive mode needs a terminal on stdin and stderr. Use `status` to pipe saved state to another tool.
+
+Setup without a terminal needs explicit research inputs: `--topic`, `--host`, and `--autonomy autonomous`. The harness drafts a brief, with unknowns, from these inputs. Then it plans and researches without an interview or a review of the brief:
 
 ```sh
 verifold init --host claude --topic "Efficient graph algorithms" --autonomy autonomous
 # Optional: --model <host-model-id> --agency-dir <private-directory>
 ```
 
-Use `--host codex` to select Codex. Paths resolve against the current directory. Add `--workspace <path>` to select another project directory.
+Use `--host codex` for Codex. Paths resolve against the current folder. Add `--workspace <path>` to choose another project folder.
 
 ### Setup and request commands
 
-Use `init --setup-only` to save harness preferences and optionally review context without starting research. Existing `--profile profile.json` imports remain supported as project-scoped legacy profiles:
+Use `init --setup-only` to save harness preferences, and optionally review context, without starting research. Existing `--profile profile.json` imports still work, as legacy profiles for one project:
 
 ```sh
 verifold init --setup-only --profile profile.json --host codex
@@ -123,77 +150,144 @@ verifold handoff
 verifold view
 ```
 
-`recommend` prints a host request. `ideas --from` imports an array with `id`, `title`, `recommendation`, and a nonempty `checks` array. An older `gates` array is also accepted.
+`recommend` prints a request for the host. `ideas --from` imports an array with `id`, `title`, `recommendation`, and a nonempty `checks` array. It also accepts an older `gates` array.
 
-After selection, `literature` prints an optional retention request. `--memory` also requests a Markdown memory file with source-to-file mappings. Both forms only print instructions. They do not invoke the harness or verify downloads. Official citation exports must remain separate from generated summaries.
+After you select a direction, `literature` prints an optional retention request. `--memory` also asks for a Markdown memory file that maps each source to its file. Both forms only print instructions. They do not start the harness or check downloads. Official citation exports must stay separate from generated summaries.
 
-`handoff` prints a pilot-planning request for the host and Automative. The user must approve scope, evaluator, budget, and checks before execution. Verifold does not execute Automative in this version.
+`handoff` prints a request to plan a pilot, for the host and Automative. You must approve the scope, the evaluator, the budget, and the checks before anything runs. This version of Verifold does not run Automative.
 
 ### Manage your global profile
 
-Run `verifold profile` to inspect the full approved Markdown, its path, and its current status. Outside an interactive terminal, the command returns JSON. Inspection reads only Verifold’s global records; it does not create a directory or invoke a harness.
+Run `verifold profile` to see the full approved Markdown, its path, and its status. Outside an interactive terminal, the command returns JSON. It reads only Verifold's global records. It creates no folder and starts no harness.
 
-Run `verifold profile --setup` to create, retry, or revise a profile without initializing a project. Setup requires an interactive terminal for source consent and review. Use `--host claude|codex`, `--model <id>`, or `--agency-dir <path>` when needed. These settings apply globally; existing project settings remain unchanged.
+Run `verifold profile --setup` to create, retry, or revise a profile without setting up a project. Setup needs an interactive terminal, for your consent to the source and for your review. Use `--host claude|codex`, `--model <id>`, or `--agency-dir <path>` when you need them. These settings are global. Existing project settings do not change.
 
-`USER.md` determines which background can be reused. `profile-state.json` records the last completed setup outcome separately. Declining a replacement or a failed synthesis preserves the approved profile. Profile inspection reports a missing approved file if it was deleted. The harness preference is saved when setup starts. Cancelling preserves the previous profile and setup outcome; it does not undo that preference.
+`USER.md` decides which background later setups can reuse. `profile-state.json` records the outcome of the last setup separately. If you decline a replacement, or a draft fails, the approved profile stays. `verifold profile` reports when the approved file was deleted. Verifold saves the harness preference when setup starts. Cancelling keeps the previous profile and setup outcome, but it does not undo that preference.
 
-Profile setup and initialization share a lock for global settings. Only one can update an agency at a time. If its process is killed, the error identifies `profile.lock`; confirm no setup is running before removing it. Drafts still require review before adoption. Profile editing in the browser and selecting several history sources remain planned work.
+Profile setup and initialization share a lock on the global settings, so only one of them can change an agency at a time. If that process is killed, the error names `profile.lock`. Make sure that no setup runs before you remove it. Drafts still need your review before Verifold uses them. Editing the profile in the browser, and choosing several history sources, are planned.
 
 ### Editable harness prompts
 
-Harness instructions live in `src/cli/prompts/*.md`. Each filename is a prompt ID loaded by `src/cli/prompts.ts`. Edit these files to change interview, profile, project-context, research, or handoff instructions. Dynamic user evidence is appended separately by the caller.
+Harness instructions live in `src/cli/prompts/*.md`. Each filename is a prompt ID that `src/cli/prompts.ts` loads. Edit these files to change the instructions for interviews, profiles, project context, research, or handoffs. The caller adds the user's evidence separately.
 
-Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the CLI package. Installed commands load these bundled files independently of the working directory. No template engine or per-user override directory is configured.
+Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the CLI package. Installed commands load these bundled files, whatever the working folder is. There is no template engine and no folder for per-user overrides.
 
 ### Local research desk
 
-Run `verifold` inside an initialized project, or `verifold ui --workspace <path>`, to open its browser desk. Keep that terminal open. It runs the project owner, and the desk is a second view of the same owner. On a Mac, Verifold keeps the computer from idle sleep while an agent works or a pod runs (`caffeinate -i`). Closing the lid still puts it to sleep. Ctrl+C stops the desk and pauses a running session. Use `--no-open` to print the URL without launching a browser. The URL includes a private access token. Keep it private and use the complete URL if the desk asks you to reconnect. Type `/open` in the terminal to open the desk again with a new one-time link.
+Run `verifold` in a project, or `verifold ui --workspace <path>`, to open its desk in the browser. Keep that terminal open: it runs the project owner, and the desk is a second view of the same owner. Ctrl+C stops the desk and pauses a running session. Use `--no-open` to print the URL without opening a browser.
+
+The URL includes a private access token. Keep it private, and use the complete URL if the desk asks you to connect again. Type `/open` in the terminal to open the desk again with a new one-time link.
+
+On a Mac, Verifold keeps the computer from idle sleep while an agent works or a pod runs (`caffeinate -i`). Closing the lid still puts it to sleep.
 
 One Verifold process owns a project at a time. A second `verifold` for the same project names the running process and exits. The owner writes `.verifold/owner.json` with its process ID and start time, and no access token. If that process stopped, the next owner moves the record aside and continues.
 
-The desk shows the question, saved context, research phase, attempt history, and source reports. Its rail names five views: Home, Plan, Work, Answer, and Records. The arc on Home has four stages: Ask, Plan, Work, and Answer. The top bar names the current stage and its state, for example "Plan: waits for you". Home starts with one Now line: what happens now, on which harness, and how many tasks are done. What needs you follows, then the answer under the question when the coordinator proposes it. After you start the work, Home also shows the task map with the harness marks, and how many checks have a result. The checks themselves are in Answer, and the messages between agents are in Records and on each task page. The desk refreshes every two seconds and updates the page in place, so open sections, typed text, and focus stay. A running task pulses in the color of its harness: violet for Claude Code, gray for Codex. A legend names the colors when the tasks use both. When a task is done, a dot carries its work along the arrows to the tasks that wait for it, with a word for what it hands over: code, results, or notes. A check result lands like a stamp, and another view cross-fades in. The tab icon shows a ring with the part of the planned tasks that is done, and it turns amber when Needs you has items. With reduced motion nothing moves: an arrow lights up in place of the dot. Opening or refreshing the desk does not launch a harness. You start a harness session in the desk or with `verifold session`.
+The desk shows the question, the saved context, the research phase, the attempt history, and the source reports. Its rail names the views: Home, Plan, Work, Answer, and Records, and Compute when the desk can manage pods. The arc on Home has four stages: Ask, Plan, Work, and Answer. The top bar names the current stage and its state, for example "Plan: waits for you".
 
-A message box sits at the bottom of Home, Plan, and Work. The small menu at its left names the agent. It starts on the one that leads now (research before you choose a direction, then the coordinator). You can pick a task agent that runs or waits for your review instead. A running task agent gets your message inside its current turn. Claude Code takes it at its next tool result; Verifold runs Claude Code with `--replay-user-messages`, so it sees that moment. If the turn ends first, Claude Code runs one more turn with the message. Codex takes it through `turn/steer`. The coordinator's messages to a running task arrive the same way. A task whose version waits for your review starts its next turn with your message, and the next version follows. The coordinator gets your message at its next wakeup, and a message from you wakes a waiting coordinator at once. Research gets your message with its next step. When the plan or the directions wait for you, your message starts a step that revises them. If research ends with a chosen direction while a message waits, Verifold passes the message to the coordinator. Each message shows its state, for example "Waits for the next research step", "Delivered during its turn", or "Answered". The answer is the agent's next text after delivery, or the coordinator's next note to you, and it is a model claim. Enter sends; Shift+Enter starts a new line, and `/` puts the cursor in the box. On a phone, the box opens from a button.
+Home starts with one Now line: what happens now, on which harness, and how many tasks are done. When nothing runs, the line says so, or says that the team waits for you, and it quotes the coordinator's latest note to you. What needs you comes next, then the answer under the question when the coordinator proposes it. After you start the work, Home also shows the task map with the harness marks, and how many checks have a result. The checks themselves are in Answer. The messages between agents are in Records and on each task page.
 
-Work starts with Now: each task agent that runs or waits for review, with its harness, how long it has run, and its latest step. A quiet agent keeps its latest step, with the time since it, for example "Last update 12 min ago". Message points the message box at a running agent, and Review opens a version that waits. Four rows show, and the rest fold. The map follows, with one compact box for each task: its title, whose turn it is, its harness when it differs from the lead, and its time or version. Finished lists the done tasks, newest first, with the accepted version and its files. Clear finished takes done and cancelled tasks off the map and out of the rail; Finished still lists the done ones, and Show finished brings them back.
+The desk refreshes every two seconds and updates the page in place, so open sections, typed text, and focus stay. A running task pulses in the color of its harness: violet for Claude Code, gray for Codex. A legend names the colors when the tasks use both. When a task is done, a dot carries its work along the arrows to the tasks that wait for it, with a word for what it hands over: code, results, or notes. A check result lands like a stamp, and a new view fades in. The tab icon shows a ring with the share of the planned tasks that is done, and it turns amber when Needs you has items. With reduced motion nothing moves: an arrow lights up instead of the dot.
 
-Records has a Runs card. Start over moves this run to `.verifold/archive/<id>/`: the research attempts, the tasks and their versions, the messages, the coordinator and its log, the results, and the session records, with a copy of the workspace. The question, the brief, your settings, the compute records, and the files that you accepted into the project stay, and nothing is deleted. Start over stops the coordinator and cancels the tasks that wait, so their sessions end and their task folders go. It refuses while research, a task turn, or your own session runs. The next run starts its research from the same question. Records lists each archive with its date, its tasks, and its size. Restore brings one back where it was; the current run moves to the archive first.
+Opening or refreshing the desk does not start a harness. You start a harness session in the desk or with `verifold session`.
 
-Verifold keeps a project memory in plain Markdown in `memory/` in the project folder: `README.md` (the index, read first), `progress.md` (done, running, next), `direction.md` (the chosen direction and its checks), `decisions.md` (who decided what, and when), `findings.md` (check results with their evidence, and the answer), `notes.md` (notes from the agents), and one file for each task under `tasks/`. Verifold rewrites only the part of each file between its markers, shortly after each change, and keeps your own text outside them. The coordinator and each worker get the index in their prompt, because they cannot read the project folder themselves; research reads `memory/README.md` first. A worker sees only its task, so the coordinator gives `memory/direction.md` as an input to a task that needs the direction and its checks. Agents keep notes for later runs with the `verifold_note` tool. Before Start over archives a run, its progress, decisions, and findings stay in the files as an earlier run, so the next run continues from what was learned. The memory is not a vector store or an embedding index; plain search is enough at this size.
+A message box sits at the bottom of Home, Plan, and Work. The small menu at its left names the agent. It starts on the one that leads now: research before you choose a direction, then the coordinator. You can pick a task agent that runs or waits for your review instead. Enter sends, Shift+Enter starts a new line, and `/` puts the cursor in the box. On a phone, the box opens from a button.
 
-A task opens as its own page, with Back to the map. The page starts with what you decide. For a version in review, it shows what the agent says (its reply, a model claim), then Accept, Ask for changes, and Reject. Ask for changes points the message box at the agent, and your message starts its next turn. For a running task, it shows the agent's latest step, with Message and Stop the turn. For an open task, it shows Start task. The changed files with their diffs come next. One card below holds the rest, each part folded: what the task asks, what the agent did (its transcript), the messages, Change the task, and the history. The task form shows the title, what the agent should do, what it should produce, and where it may write. The input files, the network, the harness, and what the task waits for fold under them. The page names tasks by their titles, and the message box on it writes to the task's agent.
+Where your message goes:
 
-To add work after the work started, write it to the coordinator, for example "Add a task: time the scan on 3 more graphs." Each task that the coordinator creates while it answers your message is a draft. The coordinator cannot start a draft. The coordinator's thread shows each draft with what it does, its harness and why, where it writes, and its time limit, and with three actions: Start it, Change it (which names the task in the box), and Write the task yourself (which opens the task with its form). The map shows a draft with a dashed edge, and Needs you lists it. When no coordinator runs, To offers a new coordinator, with your words as its objective.
+- A running task agent gets it inside its current turn. Claude Code takes it at its next tool result. Verifold runs Claude Code with `--replay-user-messages`, so it sees that moment. If the turn ends first, Claude Code runs one more turn with the message. Codex takes it through `turn/steer`. The coordinator's messages to a running task arrive the same way.
+- A task whose version waits for your review starts its next turn with your message, and the next version follows.
+- The coordinator gets it at its next wakeup. A message from you wakes a waiting coordinator at once.
+- Research gets it with its next step. When the plan or the directions wait for you, your message starts a step that revises them. If research ends with a chosen direction while a message waits, Verifold passes the message to the coordinator.
 
-Research runs in the same process as the desk. The research report recommends one direction and marks each other direction as an add-on or an alternative. The recommended direction becomes the draft plan at once, and the coordinator drafts its tasks. One plan then waits for you in Plan: the direction, its checks, the drafted tasks, and the coordinator's summary of them as its reading. The coordinator drafts each add-on as an extra, with a checkbox that is not ticked. Start the work approves the plan and cancels the extras that you left out. In an autonomous project, the plan does not wait: the coordinator starts its tasks at once, and each add-on waits as a draft that you can start. You can still change, stop, or message any task. To change the draft, write to the coordinator in the message box. It revises the draft. Use this instead, on another direction, stops the draft, cancels its tasks, and drafts the plan for that direction. Nothing locks before you start the work. After you start it, Change to this direction, on another direction, stops the coordinator and the running turns. Their work waits for your review, done work stays in the project, and a copy keeps the results of the earlier direction. The coordinator then drafts the plan for the new direction, and the plan waits for you again. The desk also offers the other research decisions: start or continue research, and approve the research plan when you asked for that stop. The terminal that runs the desk accepts the same decisions: `/research`, `/approve`, `/feedback`, and `/select`. While research runs, the Plan view shows the step, the time, and the harness events as they arrive. Summary shows the latest step in plain words, for example "Searching the web". Details shows the [transcript](#harness-transcripts) of the step. You can cancel the step. A cancel keeps the saved checkpoint and the attempt files. A step stops when the harness sends nothing for 15 minutes, or after four hours. A step that stops on such a limit runs again once by itself, from the saved checkpoint. If it stops again, Continue research tries once more. Research and workers run at the same time. Research does not use a worker slot, and a cancel stops only its target. In the terminal, `/cancel` stops research or a turn when only one runs; when both run, choose in the desk. While the desk runs, `verifold research` in another terminal names the running process and stops.
+Each message shows its state, for example "Waits for the next research step", "Delivered during its turn", or "Answered". The answer is the agent's next text after delivery, or the coordinator's next note to you, and it is a model claim.
+
+Work starts with Now: each task agent that runs or waits for review, with its harness, how long it has run, and its latest step. A quiet agent keeps its latest step with the time since it, for example "Last update 12 min ago". Message points the message box at a running agent, and Review opens a version that waits. Four rows show, and the rest fold.
+
+The map follows, with one small box for each task: its title, its state, its harness when that differs from the lead, and its time or version. A task that waits for one other task names it, and a task that waits for more says how many. The columns of the map shrink before it scrolls, and its right edge fades while more of it is out of view. Finished lists the done tasks, newest first, with the accepted version and its number of files. Clear finished takes done and cancelled tasks off the map and out of the rail. Finished still lists the done ones, and Show finished brings them back.
+
+Records has a Runs card. Start over moves this run to `.verifold/archive/<id>/`: the research attempts, the tasks and their versions, the messages, the coordinator and its log, the results, and the session records, with a copy of the workspace. The question, the brief, your settings, the compute records, and the files that you accepted into the project stay. Nothing is deleted.
+
+Start over stops the coordinator and cancels the tasks that wait, so their sessions end and their task folders go. It refuses while research, a task turn, or your own session runs. The next run starts its research from the same question. Records lists each archive with its date, its tasks, and its size. Restore brings one back where it was, and the current run moves to the archive first.
+
+Verifold keeps a project memory in plain Markdown, in `memory/` in the project folder:
+
+- `README.md`: the index, which every agent reads first
+- `progress.md`: what is done, what runs, and what comes next
+- `direction.md`: the chosen direction and its checks
+- `decisions.md`: who decided what, and when
+- `findings.md`: the check results with their evidence, and the answer
+- `notes.md`: notes from the agents
+- `tasks/`: one file for each task
+
+Verifold rewrites only the part of each file between its markers, shortly after each change, and keeps your own text outside them. The coordinator and each task agent get the index in their prompt, because they cannot read the project folder themselves. Research reads `memory/README.md` first. A task agent sees only its task, so the coordinator gives `memory/direction.md` as an input to a task that needs the direction and its checks. Agents keep notes for later runs with the `verifold_note` tool. Before Start over archives a run, its progress, decisions, and findings stay in the files as an earlier run, so the next run continues from what was learned. The memory is not a vector store or an embedding index. Plain search is enough at this size.
+
+A task opens as its own page, with Back to the map. The page starts with its state and what you can do:
+
+- For a version in review: what the agent says (its reply, a model claim, rendered as Markdown), then Accept, Ask for changes, and Reject. Ask for changes points the message box at the agent, and your message starts its next turn.
+- For a running task: the agent's latest step, with Message and Stop the turn.
+- For a task that has not started: Start task. When a coordinator runs, the page says that the coordinator starts the task, and that you can start it yourself.
+
+The changed files with their diffs come next. One card below holds the rest, each part folded: what the task asks, what the agent did (its transcript), the messages, Change the task, and the history. The task form shows the title, what the agent should do, what it should produce, and where it may write. The input files, the network, the harness, and the tasks that it waits for fold under them. The page names tasks by their titles, and the message box on it writes to the task's agent.
+
+To add work after the work started, write it to the coordinator, for example "Add a task: time the scan on 3 more graphs." Each task that the coordinator creates while it answers your message is a draft, and the coordinator cannot start it. The coordinator's thread shows each draft: what it does, its harness and why, where it writes, and its time limit. A draft has three actions: Start it, Change it (which names the task in the box), and Write the task yourself (which opens the task with its form). The map shows a draft with a dashed edge, and Needs you lists it. When no coordinator runs, the menu of the box offers a new coordinator, with your words as its objective.
+
+Research runs in the same process as the desk. The research report recommends one direction and marks each other direction as an add-on or an alternative. The recommended direction becomes the draft plan at once, and the coordinator drafts its tasks. It drafts each add-on as an extra.
+
+In a guided project, the plan then waits for you in Plan: the direction, its checks, the drafted tasks, and the coordinator's summary of them. Each extra has a checkbox that is not ticked. Start the work approves the plan and cancels the extras that you left out. In an autonomous project, the plan does not wait: the coordinator starts its tasks at once, and each add-on waits as a draft that you can start. Either way, you can still change, stop, or message any task.
+
+To change the draft, write to the coordinator in the message box, and it revises the draft. Use this instead, on another direction, stops the draft, cancels its tasks, and drafts the plan for that direction. Nothing locks before you start the work. After you start it, Change to this direction, on another direction, stops the coordinator and the running turns. Their work waits for your review, done work stays in the project, and a copy keeps the results of the earlier direction. The coordinator then drafts the plan for the new direction, and the plan waits for you again.
+
+The desk also offers the other research decisions: start or continue research, and approve the research plan when you asked for that stop. The terminal that runs the desk accepts the same decisions: `/research`, `/approve`, `/feedback`, and `/select`.
+
+While research runs, the Plan view shows the step, the time, and the harness events as they arrive. Summary shows the latest step in plain words, for example "Searching the web". Details shows the [transcript](#harness-transcripts) of the step. You can cancel the step. A cancel keeps the saved checkpoint and the attempt files.
+
+A step stops when the harness sends nothing for 15 minutes, or after four hours. A step that stops on such a limit runs once more by itself, from the saved checkpoint. If it stops again, Continue research tries once more.
+
+Research and task agents run at the same time. Research does not use an agent slot, and a cancel stops only its target. In the terminal, `/cancel` stops research or a turn when only one of them runs. When both run, choose in the desk. While the desk runs, `verifold research` in another terminal names the running process and stops.
 
 The desk renders Markdown from the harness. Raw HTML stays visible as text. Links keep only http, https, and mailto targets, and images show only their text. The page sanitizes the rendered Markdown again with a bundled copy of DOMPurify.
 
-Recent activity in the desk means the research owner wrote an observation within ten seconds. It does not prove that a native worker is alive. Research that runs in the desk's process shows the observed harness tool events in the desk. The terminal shows short Verifold status lines, with no commands to type, and the decisions, requests, and permission denials of the sessions that you control. It shows no harness tool events. The events of task workers stay in the desk, and the terminal prints one line when a task starts, when a version is ready for review, and when a version is accepted. A controlled session shows its events in the desk.
+In the desk, recent activity means that the research owner wrote an observation in the last ten seconds. It does not prove that a native agent is alive. Research that runs in the desk's process shows the harness tool events that Verifold observed.
+
+The terminal shows short Verifold status lines, with no commands to type, and the decisions, requests, and permission denials of the sessions that you control. It shows no harness tool events. The events of task agents stay in the desk. The terminal prints one line when a task starts, when a version is ready for review, and when a version is accepted. A controlled session shows its events in the desk.
 
 ### Harness transcripts
 
-Details shows the transcript of each harness run, close to what you see in the harness CLI. This includes research steps, sessions, and the setup interview. Each tool call shows its name and target. Open a call to see its full input and output. Subagent work shows under the tool call that started it: Claude Code subagents under their Agent call, and Codex agent threads under their agent call. Open all and Close all change every call. Full screen fills the window with the transcript. Press Escape to close it. Selected attempt shows the transcript of an earlier research attempt.
+Details shows the transcript of each harness run, close to what you see in the harness CLI: research steps, sessions, and the setup interview. Each tool call shows its name and target. Open a call to see its full input and output. Helper work shows under the tool call that started it: Claude Code subagents under their Agent call, and Codex agent threads under their agent call. Open all and Close all change every call. Full screen fills the window with the transcript, and Escape closes it. Selected attempt shows the transcript of an earlier research attempt.
 
-Verifold saves transcripts in private project files: `.verifold/runs/<attempt-id>/transcript.jsonl` for research and `.verifold/sessions/<session-id>.transcript.jsonl` for sessions. Setup keeps its transcript in memory only. Each text field keeps at most 64 KB, with a note where Verifold cut it. A transcript stops at 16 MB, with a note. Verifold removes terminal control characters. A transcript shows what the harness reported. It does not show processes that a command started, and agent text remains a model claim. Research attempts from before Verifold saved transcripts have none. Requested models, returned session IDs, and model claims about delegation remain distinct from observed protocol events.
+Verifold saves transcripts in private project files: `.verifold/runs/<attempt-id>/transcript.jsonl` for research and `.verifold/sessions/<session-id>.transcript.jsonl` for sessions. Setup keeps its transcript in memory only. Each text field keeps at most 64 KB, with a note where Verifold cut it. A transcript stops at 16 MB, with a note. Verifold removes terminal control characters.
+
+A transcript shows what the harness reported. It does not show the processes that a command started, and agent text is still a model claim. Research attempts from before Verifold saved transcripts have none. Requested models, returned session IDs, and model claims about delegation stay apart from the protocol events that Verifold observed.
 
 ### Controlled harness session
 
-Start one harness session from the message box in the desk, or from the terminal. In the box, choose A new agent in To. Small defaults show under the box: the harness, Ask me first or Auto, and the folder (this project folder). Your first message starts the session with them. The session then shows in To, in the rail, and in the Now strip of Work, like any other agent. A message to it reaches its running turn, or starts its next turn when it waits. In the terminal:
+Start one harness session from the message box in the desk, or from the terminal. In the box, pick A new agent in the menu. Small defaults show under the box: the harness, Ask me first or Auto, and the folder (this project folder). Your first message starts the session with them. The session then shows in the menu, in the rail, and in the Now strip of Work, like any other agent. A message to it reaches its running turn, or starts its next turn when it waits. In the terminal:
 
 ```sh
 verifold session --prompt "Reproduce the baseline" --host codex --mode ask
 ```
 
-The session runs in the project folder with the harness's own sign-in, settings, and permissions. A worker loads none of your MCP servers, claude.ai connectors, or ChatGPT apps. Claude Code starts with `--strict-mcp-config`, and plugin skills and hooks still load. Codex starts each thread with plugins, apps, and each configured MCP server turned off. If Codex does not report its configuration, the session stops. Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to two workers at the same time: sessions, tasks, or one of each. Research can run at the same time. If a desk action fails, the reason appears next to that control.
+The session runs in the project folder, with the harness's own sign-in, settings, and permissions. An agent that Verifold runs loads none of your MCP servers, claude.ai connectors, or ChatGPT apps:
 
-In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces the answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request. A network call that the sandbox blocks can fail without a request.
+- Claude Code starts with `--strict-mcp-config`. Plugin skills and hooks still load.
+- Codex starts each thread with plugins, apps, and each configured MCP server turned off. If Codex does not report its configuration, the session stops.
 
-In Auto mode, Claude Code uses its `auto` permission mode, and Codex sends approvals to its reviewer agent. The desk shows the mode that the harness reports. It can differ from the requested mode, for example when Claude Code does not allow Auto for a model.
+Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to two agents at the same time: sessions, tasks, or one of each. Research can run at the same time. If a desk action fails, the reason shows next to that control.
 
-While a turn runs, you can cancel it or write to it. When a turn ends, write the next request in the box or end the session. In the terminal, type `/start` and a request to start a session with the project's harness in Ask me mode. Type `a` to allow once or `d` to deny the open request. When several requests are open, add the ID, for example `a R2`. Type a follow-up when the agent waits, or type `/cancel` or `/end`. Type `/help` for all terminal commands. Without an interactive terminal, requests wait for the desk, the session ends after the first turn, and `session` prints a JSON summary with the record path.
+In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces your answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request, so a network call that the sandbox blocks can fail without a request.
 
-Records starts with the messages between agents, newest first, with the older ones folded. It then lists the tool calls of all agents in one Commands table, newest first, with the agent and its harness, the exact command or target, who let it run, risk tags, and the result. The latest 20 calls and every tagged call show, and the older ones fold. Records keeps the latest 200 calls and every tagged call. Tagged only hides the calls without a tag, and the choice lasts for the browser. The panel of an agent has the same table for its own calls under Commands. The rail and Home show no command counts:
+In Auto mode, Claude Code uses its `auto` permission mode, and Codex sends approvals to its reviewer agent. The desk shows the mode that the harness reports. It can differ from the mode that you asked for, for example when Claude Code does not allow Auto for a model.
+
+While a turn runs, you can cancel it or write to it. When a turn ends, write the next request in the box, or end the session. In the terminal:
+
+- Type `/start` and a request to start a session with the project's harness in Ask me mode.
+- Type `a` to allow once, or `d` to deny the open request. When several requests are open, add the ID, for example `a R2`.
+- Type a follow-up when the agent waits, or type `/cancel` or `/end`.
+- Type `/help` for all terminal commands.
+
+Without an interactive terminal, requests wait for the desk, the session ends after the first turn, and `session` prints a JSON summary with the record path.
+
+Records starts with the messages between agents, newest first, with the older ones folded. It then lists the tool calls of all agents in one Commands table, newest first: the agent and its harness, the exact command or target, who let it run, risk tags, and the result. The header counts each tag. The latest 20 calls show. The older tagged calls and the older calls without a tag fold under their counts. Records keeps the latest 200 calls and every tagged call. Tagged only hides the calls without a tag, and the browser remembers that choice. The panel of an agent has the same table for its own calls under Commands. The rail and Home show no command counts:
 
 | Label                                          | Meaning                                                                                                                                                            |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -203,19 +297,19 @@ Records starts with the messages between agents, newest first, with the older on
 | Codex reviewer approved, Codex reviewer denied | The Codex reviewer agent decided. The table shows its reason.                                                                                                      |
 | No prompt, Ran in the sandbox                  | The call ran without a request under the harness's own rules, for example a read-only command. Ran in the sandbox applies to Codex commands and file changes only. |
 
-A permission request shows the tool input, not a description written by the model. For a write or an edit, the desk also shows the content that would change. Risk tags (Network, Install, Deletes files, Settings files, Outside folder) come from the command text. A tag marks a call to look at. It is not a finding, and it asks for no decision. A tagged call that no person approved shows Mark reviewed until you mark it. The record shows the command that the agent asked for. It does not show commands inside a script or processes that a command starts. Agent text is a model claim. Tool calls, requests, and decisions come from the harness protocol.
+A permission request shows the tool input, not a description that the model wrote. For a write or an edit, the desk also shows the content that would change. Risk tags (Network, Install, Deletes files, Settings files, Outside folder) come from the command text. A tag points to a call worth a look. It is not a finding, and it asks for no decision. A tagged call that no person approved shows Mark reviewed until you mark it. The record shows the command that the agent asked for. It does not show commands inside a script, or the processes that a command starts. Agent text is a model claim. Tool calls, requests, and decisions come from the harness protocol.
 
-Verifold saves each session in `.verifold/sessions/<session-id>.json` before it starts the harness. The record keeps the latest 400 events and 1000 tool calls, and one entry for each harness process that ran the session. Verifold gives Claude Code its session ID at launch (`--session-id`) and records the Codex thread ID when Codex reports it.
+Verifold saves each session in `.verifold/sessions/<session-id>.json` before it starts the harness. The record keeps the latest 400 events and 1000 tool calls, and one entry for each harness process that ran the session. Verifold gives Claude Code its session ID at launch (`--session-id`), and it records the Codex thread ID when Codex reports it.
 
-Ctrl+C pauses a running session: Verifold stops the current turn and the harness process, and keeps the native session ID. The outcome of a turn that Ctrl+C stopped is unknown. The next `verifold` in the folder lists paused sessions in the desk. Resume, or `/resume` in the terminal, continues the same conversation in a new harness process with Claude Code `--resume` or Codex `thread/resume`. A session that ended or failed cannot resume.
+Ctrl+C pauses a running session: Verifold stops the current turn and the harness process, and keeps the native session ID. The result of a turn that Ctrl+C stopped is unknown. The next `verifold` in the folder lists the paused sessions in the desk. Resume, or `/resume` in the terminal, continues the same conversation in a new harness process, with Claude Code `--resume` or Codex `thread/resume`. A session that ended or failed cannot resume.
 
-If Verifold stops without saving the end of its work, for example after a forced termination, the next `verifold` in the folder checks each unfinished session and research attempt before it starts anything. A harness process that still runs stops first, but only when its recorded process start time matches, so a reused process ID cannot cause a wrong stop. The work becomes interrupted, with an unknown outcome, and tool calls that were running show as unknown. A session with a recorded conversation can resume. A session without one runs its first request again. Claude Code keeps its session ID for that run, so it cannot create a second conversation. An interrupted research attempt keeps its files. Continue research to run the step again.
+If Verifold stops without saving the end of its work, for example after a forced stop, the next `verifold` in the folder checks each unfinished session and research attempt before it starts anything. A harness process that still runs stops first, but only when its recorded process start time matches, so a reused process ID cannot cause a wrong stop. The work becomes interrupted, with an unknown result, and tool calls that were running show as unknown. A session with a recorded conversation can resume. A session without one runs its first request again. Claude Code keeps its session ID for that run, so it cannot create a second conversation. An interrupted research attempt keeps its files, and Continue research runs the step again.
 
-### Two workers
+### Two agents at once
 
-Verifold runs up to two harness workers at the same time. Each worker has its own session, launch, native session ID, record, and transcript. A task worker also has its own task, claim, and task folder. Workers lists them with their state and anything that waits for you. Choose one to see its activity, transcript, requests, controls, and Commands table. A third start waits until a worker ends. A cancel, a permission request, an output burst, or a failure in one worker does not change the other.
+Verifold runs up to two harness agents at the same time. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A third start waits until one of them ends. A cancel, a permission request, a burst of output, or a failure in one agent does not change the other.
 
-In the terminal, `a` and `d` with a request ID answer the request of the worker that it belongs to. When two workers could receive a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
+In the terminal, `a` and `d` with a request ID answer the request of the agent that it belongs to. When two agents could get a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
 
 What each harness supports in Verifold:
 
@@ -235,113 +329,198 @@ What each harness supports in Verifold:
 
 Tested with Claude Code 2.1.288 and Codex 0.155.1 and 0.160.0. Terminals were tested on macOS with Codex 0.160.0.
 
-### Worker terminals
+### Agent terminals
 
-Each worker has a third view beside Summary and Details: Terminal. Between turns, Open the terminal runs the harness's own TUI on the same conversation, in the desk. Open in new tab gives it a full window. Return to Verifold ends the TUI and continues the session in the desk.
+Each agent has a third view beside Summary and Details: Terminal. Between turns, Open the terminal runs the harness's own TUI on the same conversation, in the desk. Open in new tab gives it a full window. Return to Verifold ends the TUI and continues the session in the desk.
 
 - Claude Code: Verifold stops its stream-json process and starts `claude --resume <session>` in the terminal, with the session's permission mode. While you work there, Verifold records no tool calls. When you return, stream-json resumes on the same conversation, including what you did in the terminal.
-- Codex: every Codex worker runs its app-server on a private Unix socket, and the terminal runs `codex --remote unix://… resume <thread>` on the same server. Codex keeps reporting its events to Verifold while you type. A thread needs one turn before its terminal can open.
-- Task workers keep their Strict limits in the terminal. When you return, Verifold saves the task folder as a version for review.
+- Codex: every Codex agent runs its app-server on a private Unix socket, and the terminal runs `codex --remote unix://… resume <thread>` on the same server. Codex keeps reporting its events to Verifold while you type. A thread needs one turn before its terminal can open.
+- Task agents keep their Strict limits in the terminal. When you return, Verifold saves the task folder as a version for review.
 
-One browser view holds input at a time. A reload of that view keeps input and replays the last 256 KB of output, with no new process. Another view, for example a new tab, starts read-only until you choose Take input here. While you hold a terminal, the worker's follow-up, cancel, and end controls wait until you return. Terminals work on macOS and Linux. They need the optional `@lydell/node-pty` package, which npm installs with Verifold. Startup prompts of a harness TUI, such as an update or folder trust question, are yours to answer in the terminal.
+One browser view holds the input at a time. A reload of that view keeps the input and replays the last 256 KB of output, with no new process. Another view, for example a new tab, starts read-only until you choose Take input here. While you hold a terminal, the agent's follow-up, cancel, and end controls wait until you return. Terminals work on macOS and Linux. They need the optional `@lydell/node-pty` package, which npm installs with Verifold. You answer the startup prompts of a harness TUI, such as an update or a folder trust question, in the terminal.
 
 ### Scoped tasks
 
-A task gives one harness a scoped job in its own copy of the project. Usually the coordinator writes tasks. To write one yourself, choose Write a task yourself in Work, and write what the agent should do, the input files, the paths where it may write, the expected output, the harness, and a time limit for each turn. A task can wait for other tasks to be done. An edit makes a new revision. Earlier attempts keep the revision that they ran. A done task can also be revised, which opens it again.
+A task gives one harness a scoped job in its own copy of the project. Usually the coordinator writes the tasks. To write one yourself, choose Write a task yourself in Work. The form asks for a title, what the agent should do, what it should produce, and where it may write. The input files, the network, the harness, the time limit for each turn, and the tasks that it waits for fold under them. A task can wait for other tasks to be done. An edit makes a new revision, and earlier attempts keep the revision that they ran. You can also revise a done task, which opens it again.
 
 Start task claims the task, prepares a task folder, and then starts the harness:
 
 - In a Git repository, the task folder is a worktree on a new branch `verifold/<task>-r<revision>-a<attempt>-<id>`, under `.verifold/workspaces/`. In other folders, it is a plain folder with its own Git data under `.verifold/tasks/git/`.
 - The task folder starts from your project as it is now for the writable paths, including uncommitted changes, plus copies of the input files. Verifold copied each input when you saved the task, so a later edit in the project does not change it.
-- The harness runs in the task folder in Strict mode. Claude Code runs with `--permission-mode dontAsk`, its sandbox turned on, and permission rules that allow edits only in the folder. Codex runs with a permission profile that extends its `:workspace` profile, and the approval policy `never`. Actions outside these rules are denied without a prompt. Claude Code gives its agent no reason for such a denial, so the worker prompt tells Claude Code workers that a denial stops only that command, and which simpler forms to try. The desk names the reason in plain words. Claude Code stops when its sandbox cannot start, instead of running commands without it. Web search stays allowed. Shell commands cannot reach the network, unless the task names the domains that it needs, with a reason, for example to download a dataset. Claude Code's sandbox then allows exactly those domains. Codex cannot limit its network to domains, so a Codex task with domains can reach any host. The task page shows the domains and the reason. Neither harness lets a task read credential files: SSH keys, Verifold's credentials, the RunPod, GitHub, and AWS logins, Git and netrc passwords, the logins of both harnesses, and the macOS login keychain. Other reads are not limited, and both sandboxes allow writes to temporary folders. Verifold removes `RUNPOD_*` variables from the environment of every harness, terminal, and Git process. Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt. The task page lists these limits under What the harness enforces.
+- The harness runs in the task folder in Strict mode:
+  - Claude Code runs with `--permission-mode dontAsk`, its sandbox turned on, and permission rules that allow edits only in the folder. It stops when its sandbox cannot start, instead of running commands without it.
+  - Codex runs with a permission profile that extends its `:workspace` profile, and the approval policy `never`.
+  - Actions outside these rules are denied without a prompt. Claude Code gives its agent no reason for such a denial, so the task prompt tells Claude Code agents that a denial stops only that command, and which simpler forms to try. The desk names the reason in plain words.
 
-When a turn ends, Verifold saves the task folder as a version: a commit on the task branch or in the task's Git data. A version leaves out environments and caches that tools make, such as `.venv`, any folder with a `pyvenv.cfg`, `node_modules`, and `__pycache__`, and the files that a `.gitignore` in a writable folder ignores. Output that your project's top `.gitignore` ignores is kept. A version holds at most 5000 changed files. The task waits for review. The review lists the changed files with the diff of one file. Files outside the writable paths, and links, cannot be selected. Accept copies the selected files into your project without a commit. If a target file changed in your project since the task started, Verifold copies nothing and names the file. Ask for changes sends your note as the next turn, which makes the next version. Reject keeps the version in the record and opens the task again. Stop the turn makes a version of the work so far. Up to two tasks and sessions run at the same time, and research can run with them. Two active tasks cannot write to the same paths.
+Web search stays allowed. Shell commands cannot reach the network, unless the task names the domains that it needs, with a reason, for example to download a dataset. Claude Code's sandbox then allows exactly those domains. Codex cannot limit its network to domains, so a Codex task with domains can reach any host. The task page shows the domains and the reason.
 
-Accept also keeps a copy of the accepted files as an artifact version under `.verifold/tasks/<task>/artifacts/`. A later acceptance adds a version and does not change earlier ones. When a task that waits for other tasks starts, its task folder gets the latest artifact of each of them, and the task records which versions it received. If one of them is revised and accepted again, a version that used the earlier files cannot be accepted. Reject it and start the task again, so it receives the new files. If one file would come from two sources, such as an input file and an artifact, the start stops and names the file.
+Neither harness lets a task read credential files: SSH keys, Verifold's credentials, the RunPod, GitHub, and AWS logins, Git and netrc passwords, the logins of both harnesses, and the macOS login keychain. Other reads are not limited, and both sandboxes allow writes to temporary folders. Verifold removes `RUNPOD_*` variables from the environment of every harness, terminal, and Git process. Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt. The task page lists these limits under What the harness enforces.
 
-Task workers can talk to the team through four Verifold tools: `verifold_post` sends a note to the coordinator, to you, or to a linked task; `verifold_block` reports that the worker cannot continue; `verifold_object` raises an objection, with evidence, to a file version that the task received; and `verifold_withdraw` withdraws the worker's own objection. Claude Code gets these tools as an SDK MCP server over its control channel, and Codex as dynamic tools on its thread. The harness pipe tells Verifold which task and attempt sent each call, and a call from an attempt that is no longer running changes nothing. A repeated call is recorded once. Messages are files under `.verifold/messages/`, up to 4000 characters each, 50 for each attempt, and 2000 for each project. A worker gets each message whole.
+When a turn ends, Verifold saves the task folder as a version: a commit on the task branch or in the task's Git data. A version leaves out the environments and caches that tools make, such as `.venv`, any folder with a `pyvenv.cfg`, `node_modules`, and `__pycache__`, and the files that a `.gitignore` in a writable folder ignores. It keeps output that your project's top `.gitignore` ignores. A version holds at most 5000 changed files.
 
-A message for a task goes to its worker with the next turn: the start of an attempt or a change request, at most 20 at a time. When that turn ends normally, the message shows Delivered. If the turn fails or Verifold stops first, it shows Delivery uncertain, and Verifold does not send it again by itself. Under Tasks, Needs you lists each open blocker and objection. Uphold or overrule an objection, or resolve a blocker, with a reason. The decision goes to the task that raised it. To change the work, revise the task. A task's Messages lists its messages. To write to a task's agent, use the message box. A message is information for the worker. It cannot change the task's paths, permissions, or limits.
+The task then waits for review. The review lists the changed files, with the diff of one file at a time. You cannot select files outside the writable paths, or links.
+
+- Accept copies the selected files into your project, without a commit. If a target file changed in your project since the task started, Verifold copies nothing and names the file.
+- Ask for changes sends your note as the next turn, which makes the next version.
+- Reject keeps the version in the record and opens the task again.
+- Stop the turn makes a version of the work so far.
+
+Up to two tasks and sessions run at the same time, and research can run with them. Two active tasks cannot write to the same paths.
+
+Accept also keeps a copy of the accepted files as an artifact version under `.verifold/tasks/<task>/artifacts/`. A later acceptance adds a version and does not change earlier ones. When a task that waits for other tasks starts, its task folder gets the latest artifact of each of them, and the task records which versions it got. If one of them is revised and accepted again, a version that used the earlier files cannot be accepted. Reject it and start the task again, so that it gets the new files. If one file would come from two sources, such as an input file and an artifact, the start stops and names the file.
+
+Task agents talk to the team through four Verifold tools:
+
+- `verifold_post` sends a note to the coordinator, to you, or to a linked task.
+- `verifold_block` reports that the agent cannot continue.
+- `verifold_object` raises an objection, with evidence, to a file version that the task got.
+- `verifold_withdraw` withdraws the agent's own objection.
+
+Claude Code gets these tools as an SDK MCP server over its control channel, and Codex gets them as dynamic tools on its thread. The harness pipe tells Verifold which task and attempt sent each call, and a call from an attempt that no longer runs changes nothing. Verifold records a repeated call once. Messages are files under `.verifold/messages/`, up to 4000 characters each, 50 for each attempt, and 2000 for each project. A task agent gets each message whole.
+
+A message that cannot reach a running turn goes to the agent with its next turn: the start of an attempt, or a change request, at most 20 at a time. When that turn ends normally, the message shows Delivered. If the turn fails, or Verifold stops first, it shows Delivery uncertain, and Verifold does not send it again by itself.
+
+When no coordinator runs, Needs you lists each open blocker and objection. With a coordinator, the Messages part of the task page shows them, and you can settle one before the coordinator does. Uphold or overrule an objection, or resolve a blocker, with a reason. The decision goes to the task that raised it. To change the work, revise the task. To write to a task's agent, use the message box. A message is information for the agent. It cannot change the task's paths, permissions, or limits.
 
 After Accept or Reject, Verifold removes the task folder if all its changes are in a version. The branch keeps every version. If Verifold stops while a turn runs, the next `verifold` saves the task folder as a version for review. A task session cannot resume.
 
 ### Coordinator
 
-The coordinator turns an objective into tasks for the workers. When research ends, the coordinator starts for the recommended direction with the project's lead harness and model. In a team with a helper, the coordinator picks the harness for each task from the team and gives a reason. It gives the independent half of a check to the other harness, so that a mistake of one model family cannot pass both. Verifold refuses a harness outside the team. The plan and the task page show the reason, and a task on the helper harness carries a mark on the map. A task whose start failed offers Run it on the other harness of the team. Its first turn gets the direction as the objective, the research brief, and the direction's checks. You can also start it under Coordinator in the desk with an objective that you write.
+The coordinator turns an objective into tasks. When research ends, the coordinator starts for the recommended direction, with the project's lead harness and model. Its first turn gets the direction as the objective, the research brief, and the direction's checks. You can also start it under Coordinator in the desk, with an objective that you write.
 
-No task starts until you start the work in the plan. To change the plan first, ask the coordinator for a change, or edit a task.
+In a team with a helper, the coordinator picks the harness for each task from the team and gives a reason. It gives the independent half of a check to the other harness, so that a mistake of one model family cannot pass both. Verifold refuses a harness outside the team. The plan and the task page show the reason, and a task on the helper harness carries a mark on the map. A task whose start failed offers Run it on the other harness of the team.
 
-The coordinator is one harness session outside the two worker slots. Claude Code runs it with `--tools ""`, so it has no built-in tools. Codex runs it with a permission profile that extends its `:read-only` profile, without the credential files, and the approval policy `never`. Both load none of your MCP servers. It acts only through Verifold tools, and each tool calls the same task operation that you use: create, revise, start, stop, accept, ask for changes, reject, cancel, post a message, and decide an objection or a blocker. It reads versions with a tool, up to 64 KB of text for each file. Verifold checks each action before it changes anything. A refused action changes nothing, and the coordinator reads the reason. It can create up to 12 tasks. It can give a task the domains that its shell commands need, with a reason.
+In a guided project, no task starts until you start the work in the plan. To change the plan first, ask the coordinator for a change, or edit a task. In an autonomous project, the coordinator starts the plan at once.
 
-Every change keeps the coordinator's reason, and the desk lists the actions as plain sentences, for example "Started Implementation A". Details shows the tool name and Verifold's reply for each action. A decision on a version or a message says that the coordinator made it, and a revision says that the coordinator wrote it. A version also keeps the worker's last reply, a model claim. A repeated tool call with the same harness call ID gets the earlier answer and changes nothing.
+The coordinator is one harness session outside the two agent slots. Claude Code runs it with `--tools ""`, so it has no built-in tools. Codex runs it with a permission profile that extends its `:read-only` profile, without the credential files, and the approval policy `never`. Both load none of your MCP servers. It acts only through Verifold tools, and each tool calls the same task operation that you use: create, revise, start, stop, accept, ask for changes, reject, cancel, post a message, and decide an objection or a blocker. It can also ask you a question. It reads versions with a tool, up to 64 KB of text for each file. Verifold checks each action before it changes anything. A refused action changes nothing, and the coordinator reads the reason. It can create up to 12 tasks, and it can give a task the domains that its shell commands need, with a reason.
 
-The coordinator settles objections. It can uphold an objection and revise the task, or overrule it with a reason. After it overrules two objections from one task to the same task, Verifold refuses its next overrule of such an objection, and the objection waits for you under Needs you. You can decide any open blocker or objection yourself, and your decision is final.
+Every change keeps the coordinator's reason, and the desk lists the actions as plain sentences, for example "Started Implementation A". Details shows the tool name and Verifold's reply for each action. A decision on a version or a message says that the coordinator made it, and a revision says that the coordinator wrote it. A version also keeps the agent's last reply, a model claim. A repeated tool call with the same harness call ID gets the earlier answer and changes nothing.
 
-When the work waits for something that only you can give, such as a RunPod key, a spend limit, or a choice, the coordinator asks you a question. Needs you shows it until you answer, and the rail shows "Waits for your answer". Write your answer and send it, or click Done when there is nothing to say. The coordinator gets your answer at once. When nothing runs, the Now line on Home says so and quotes the coordinator's latest note to you.
+The coordinator settles objections. It can uphold an objection and revise the task, or overrule it with a reason. After it overrules two objections from one task to the same task, Verifold refuses its next overrule of such an objection, and the objection waits for you in Needs you. You can decide any open blocker or objection yourself, and your decision is final.
 
-Events wake the coordinator: a version ready for review, a message for it, a blocker or an objection, a failed start, or your action on a task. Its own actions do not wake it. Events within 20 seconds join one digest turn, at most 12 turns an hour. A message from you does not wait for other events. Verifold saves the position of each digest before it sends it, so a restart never repeats one. Write to the coordinator in the message box; it reads your message at its next wakeup.
+When the work waits for something that only you can give, such as a RunPod key, a spend limit, or a choice, the coordinator asks you a question. Needs you shows it until you answer, and the rail shows "Waits for your answer". Write your answer and send it, or click Done when there is nothing to say. The coordinator gets your answer at once.
 
-Stop the coordinator ends its session. Running workers finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the workers. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.
+Events wake the coordinator: a version ready for review, a message for it, a blocker or an objection, a failed start, or your action on a task. Its own actions do not wake it. Events within 20 seconds join one digest turn, with at most 12 turns an hour. A message from you does not wait for other events. Verifold saves the position of each digest before it sends it, so a restart never repeats one.
+
+Stop the coordinator ends its session. Running agents finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the agents. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.
 
 ### GPU pods on RunPod
 
-Compute in the desk holds the settings and the leases for GPU pods on RunPod. A lease is one pod for named tasks: one GPU type on Secure Cloud, one image, a maximum number of hours, and the rate that its cost is counted at. Compute asks for one thing at a time: the key, then a spend limit, then the GPUs that pods can use. The other limits fold under More limits. After that, it shows the pods, the limits in one line, and the allowed GPUs, with each form folded.
+Compute in the desk holds the settings and the leases for GPU pods on RunPod. A lease is one pod for named tasks: one GPU type on Secure Cloud, one image, a maximum number of hours, and the rate that its cost is counted at. The desk calls a lease a pod.
 
-- **The key.** Paste a RunPod API key in Compute, or run `verifold runpod key set`, which reads the key with hidden input or from standard input. No option takes the key as an argument. Verifold checks the key with one read-only call to RunPod (`GET /v2/pods`) before it saves it. On macOS the key goes into the login keychain through `security -i`, with the key on standard input. On Linux it goes into the Secret Service keyring through `secret-tool`. When you choose it, or when the computer has no keyring, the key goes into `~/.verifold/credentials/runpod` (folder `0700`, file `0600`). Verifold refuses that file when other users can read it. `verifold runpod key status`, `check`, and `remove` show where the key is with its last four characters, check it again, and remove it from this computer. RunPod keeps a removed key valid until you revoke it in the RunPod console. Use a separate key for Verifold, so that you can revoke it alone.
-- **What holds the key.** The key goes only into the `Authorization` header of requests to `https://api.runpod.io`, and the client refuses redirects. No project file, desk reply, terminal output, prompt, or transcript holds it.
-- **Limits.** Only you set them, per project, in `.verifold/compute/settings.json`: the spend limit in USD, the highest rate of one pod in USD per hour, the hours of one lease, the idle minutes before a stop, one or two pods at the same time, the disk of each pod, and the RunPod images (`runpod/...`) that a lease can use. Without a spend limit, pods stay off.
-- **GPUs.** Show the GPUs lists the Secure Cloud GPU types with their list price for one GPU and their stock, from `GET /v2/catalog/gpus`. Choose the types that a lease can use. A price for a cloud that a type is not on, and a price of 0, do not count.
-- **Requests.** The coordinator asks for a lease with `verifold_request_pod`: a GPU type, the hours, the tasks, and a reason. Verifold refuses a request that does not fit your limits: a type that you did not allow or that has no stock, a rate above your cap, too many hours, or a maximum cost above what is left of the spend limit. A request inside all your limits starts at once, also while you are away, and Compute shows the pod, where you can stop it. When you tick "Ask me before each pod starts" in Compute, or when a request cannot start now (for example, because the pods at the same time are at your limit), Needs you shows the request with the rate, the hours, the maximum cost, what is left after it, the coordinator's reason, and what the pod allows. Nothing is created or billed before you approve it.
-- **The pod.** After you approve, Verifold creates the pod (`POST /v2/pods`) with a name that belongs to the project and the lease, and reads it every 30 seconds. The lease ends at its hours after the create. Verifold stops the pod after the idle minutes, when Verifold stops, and when RunPod bills above your cap. It deletes the pod at the end of the lease and when the spend so far, plus 5 minutes of the running pods, reaches the spend limit. RunPod erases the disk of a pod when the pod stops. You and the coordinator can stop, start, and end a lease. Only you approve a lease or change a limit.
-- **Cost.** Verifold counts each running interval at the rate that RunPod bills, with the container disk at $0.10 per GB-month, and compares this with RunPod's hourly billing records every 15 minutes. The larger amount counts. An open lease holds the cost of its remaining hours against the limit.
-- **Task access.** A task that a ready lease names uses its pod through three Verifold tools: `verifold_pod_run` runs a command as root in the task's folder on the pod, for at most 10 minutes, or starts a background job; `verifold_pod_job` reads a job's state, exit code, and the last 64 KB of output; and `verifold_pod_copy` copies files to the pod, or back into the task's writable paths, at most 2,000 files and 200 MB at a time. Verifold refuses links and paths outside the writable paths. Verifold runs `ssh` itself: each lease has its own SSH key in `~/.verifold/credentials/ssh/`, the pod gets only the public key (`PUBLIC_KEY`), and the key is deleted when the lease closes. No account SSH key changes. Before the pod is ready, Verifold compares the pod's SSH host key with the fingerprint that the pod prints in its log, and connects only with that key. A pod that prints no fingerprint is trusted on first use. Before a pod stops, Verifold copies each task's writable paths back. The task page shows the pod and what it allows: any command as root on a machine with internet access, with copies of project files.
-- **Watchdog.** When a pod becomes ready, Verifold starts a small loop on it. Each minute the loop checks two things: whether the lease has ended, and whether Verifold's heartbeat, sent every 2 minutes, is 15 minutes old. If either is true, the pod stops itself with its own RunPod key (`runpodctl stop pod`). So a pod stops even when Verifold crashed or the computer sleeps. RunPod erases its disk then.
-- **Recovery.** When Verifold starts, it finds a pod whose create reply was lost by its name, stops a pod that ran while Verifold was not running, and tells you in Needs you what that time cost. `verifold pods` lists the leases. `verifold pods stop <lease|all>` stops pods when Verifold does not run in the project.
+Compute asks for one thing at a time: the key, then a spend limit, then the GPUs that pods can use. The other limits fold under More limits. After that, it shows the pods, the limits in one line, and the allowed GPUs, each with its form folded.
+
+#### The key
+
+Paste a RunPod API key in Compute, or run `verifold runpod key set`, which reads the key with hidden input or from standard input. No option takes the key as an argument. Verifold checks the key with one read-only call to RunPod (`GET /v2/pods`) before it saves it.
+
+- On macOS, the key goes into the login keychain through `security -i`, with the key on standard input.
+- On Linux, it goes into the Secret Service keyring through `secret-tool`.
+- When you choose it, or when the computer has no keyring, the key goes into `~/.verifold/credentials/runpod` (folder `0700`, file `0600`). Verifold refuses that file when other users can read it.
+
+`verifold runpod key status`, `check`, and `remove` show where the key is with its last four characters, check it again, and remove it from this computer. RunPod keeps a removed key valid until you revoke it in the RunPod console. Use a separate key for Verifold, so that you can revoke it alone.
+
+The key goes only into the `Authorization` header of requests to `https://api.runpod.io`, and the client refuses redirects. No project file, desk reply, terminal output, prompt, or transcript holds it.
+
+#### Limits
+
+Only you set them, for each project, in `.verifold/compute/settings.json`: the spend limit in USD, the highest rate of one pod in USD per hour, the hours of one lease, the idle minutes before a stop, one or two pods at the same time, the disk of each pod, the RunPod images (`runpod/...`) that a lease can use, and whether you approve each pod. Without a spend limit, pods stay off.
+
+Show the GPUs lists the Secure Cloud GPU types, with their list price for one GPU and their stock, from `GET /v2/catalog/gpus`. Choose the types that a lease can use. A price for a cloud that the type is not on, and a price of 0, do not count.
+
+#### Requests
+
+The coordinator asks for a lease with `verifold_request_pod`: a GPU type, the hours, the tasks, and a reason. Verifold refuses a request that does not fit your limits: a type that you did not allow or that has no stock, a rate above your cap, too many hours, or a maximum cost above what is left of the spend limit.
+
+A request inside all your limits starts at once, also while you are away. Compute shows the pod, and you can stop it there. Needs you shows the request instead when you tick "Ask me before each pod starts" in Compute, or when the request cannot start now, for example because the pods at the same time are at your limit. It shows the rate, the hours, the maximum cost, what is left after it, the coordinator's reason, and what the pod allows. Nothing is created or billed before you approve it.
+
+#### The pod
+
+After you approve a lease, or at once when it fits your limits, Verifold creates the pod (`POST /v2/pods`) with a name that belongs to the project and the lease, and reads it every 30 seconds. The lease ends its hours after the create.
+
+- Verifold stops the pod after the idle minutes, when Verifold stops, and when RunPod bills above your cap.
+- It deletes the pod at the end of the lease, and when the spend so far, plus 5 minutes of the running pods, reaches the spend limit.
+- RunPod erases the disk of a pod when the pod stops.
+
+You and the coordinator can stop, start, and end a lease. Only you change a limit.
+
+#### Cost
+
+Verifold counts each running interval at the rate that RunPod bills, with the container disk at $0.10 per GB-month. Every 15 minutes, it compares this with RunPod's hourly billing records, and the larger amount counts. An open lease holds the cost of its remaining hours against the limit.
+
+#### Task access
+
+A task that a ready lease names uses its pod through three Verifold tools:
+
+- `verifold_pod_run` runs a command as root in the task's folder on the pod, for at most 10 minutes, or starts a background job.
+- `verifold_pod_job` reads a job's state, its exit code, and the last 64 KB of its output.
+- `verifold_pod_copy` copies files to the pod, or back into the task's writable paths, at most 2,000 files and 200 MB at a time. Verifold refuses links and paths outside the writable paths.
+
+Verifold runs `ssh` itself. Each lease has its own SSH key in `~/.verifold/credentials/ssh/`. The pod gets only the public key (`PUBLIC_KEY`), and Verifold deletes the key when the lease closes. No account SSH key changes. Before the pod is ready, Verifold compares the pod's SSH host key with the fingerprint that the pod prints in its log, and connects only with that key. A pod that prints no fingerprint is trusted on first use. Before a pod stops, Verifold copies each task's writable paths back. The task page shows the pod and what it allows: any command as root on a machine with internet access, with copies of project files.
+
+#### Watchdog
+
+When a pod becomes ready, Verifold starts a small loop on it. Each minute, the loop checks two things: whether the lease has ended, and whether Verifold's heartbeat, which it sends every 2 minutes, is 15 minutes old. If either is true, the pod stops itself with its own RunPod key (`runpodctl stop pod`). So a pod stops even when Verifold crashed or the computer sleeps, and RunPod then erases its disk.
+
+#### Recovery
+
+When Verifold starts, it finds a pod whose create reply was lost, by its name. It stops a pod that ran while Verifold was not running, and tells you in Needs you what that time cost. `verifold pods` lists the leases. `verifold pods stop <lease|all>` stops pods when Verifold does not run in the project.
 
 ## Privacy and website
 
-Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. Task records under `.verifold/tasks/` keep each revision, copies of its input files, each version, and copies of the accepted files. Messages between you, the coordinator, and workers are under `.verifold/messages/`. The coordinator's objective, events, and actions are in `.verifold/coordinator/state.json`, and its conversation is a session record. In a Git repository, the task branches `verifold/*` hold the versions as commits. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research information.
+Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. Task records under `.verifold/tasks/` keep each revision, copies of its input files, each version, and copies of the accepted files. Messages between you, the coordinator, and task agents are under `.verifold/messages/`. The coordinator's objective, events, and actions are in `.verifold/coordinator/state.json`, and its conversation is a session record. In a Git repository, the task branches `verifold/*` hold the versions as commits. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research.
 
-Initialization adds `/.verifold/` and `/.verifold.md` to the workspace's `.gitignore` and creates state with private permissions. This prevents ordinary accidental staging. It does not prevent intentional publication or access by processes under the same account.
+Setup adds `/.verifold/` and `/.verifold.md` to the project's `.gitignore` and creates the state with private permissions. This stops ordinary accidental staging. It does not stop a deliberate publication, or access by processes that run under the same account. The project memory in `memory/` is not in that `.gitignore`, so review it before you commit or publish it.
 
-The selected harness uses its configured model services and research tools. Local state does not imply that those services run offline. Verifold creates no remote profile or publication.
+Your harness uses its own model services and research tools. Local state does not mean that those services run offline. Verifold creates no remote profile and publishes nothing.
 
-`ui` serves only the selected project on loopback, with authenticated project reads and bundled assets. Session actions use authenticated JSON requests to the same local server. It rejects unexpected hosts and origins. It serves the harness transcripts of the selected project only to the authenticated page. It does not serve arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile synchronization remains future work. The nested `verifold-website/` repository remains independent.
+`ui` serves only the selected project, on loopback, with authenticated project reads and bundled assets. Session actions use authenticated JSON requests to the same local server. The server rejects unexpected hosts and origins. It serves the harness transcripts of the project only to the authenticated page. It does not serve arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile sync is future work. The nested `verifold-website/` repository stays independent.
 
 ## Project status
 
-This README describes the current source checkout. The published npm package can lag changes that have not been released.
+This README describes the current source checkout. The published npm package can lag behind changes that are not released yet.
 
-| Available in this checkout | What it does                                                                                        |
-| -------------------------- | --------------------------------------------------------------------------------------------------- |
-| Context-first onboarding   | Reviews optional personal background and project context before your harness interviews you.        |
-| Project initialization     | Creates `.verifold.md` and folders for literature, experiments, results, figures, docs, and agents. |
-| Landscape research         | Saves planning, source links, proposed directions, and feedback; you explicitly select an idea.     |
-| Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.        |
-| Local research records     | Retains attempt files and provides CLI status plus a read-only HTML snapshot.                       |
-| Controlled session         | Runs Claude Code or Codex sessions from the desk or terminal and relays their permission requests.  |
-| Command record             | Records each tool call in a session with who let it run, risk tags, and a review mark.              |
-| Project owner              | One `verifold` process owns a project. Ctrl+C pauses a session, and a later run resumes it.         |
-| Research in the desk       | Runs research in the owner, shows its activity live, and offers each research decision in the desk. |
-| Recovery                   | Marks work interrupted after a crash, stops leftover harness processes safely, and offers resume.   |
-| Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.       |
-| Harness transcripts        | Shows each harness run as in its CLI, with tool input and output and nested subagent steps.         |
-| Scoped tasks               | Runs a task in its own copy of the project with Strict limits. You review each version first.       |
-| Two workers                | Runs up to two Claude Code or Codex workers at once, each with its own task, session, and record.   |
-| Worker terminals           | Opens a worker in its own Claude Code or Codex terminal in the desk. One view at a time types.      |
-| Task handoffs              | Gives a task the accepted files of the tasks that it waits for, and blocks use of replaced files.   |
-| Team messages              | Workers post notes, report blockers, and raise objections with evidence. You decide in the desk.    |
-| Coordinator                | Turns a chosen direction into tasks, starts them, reviews versions, and settles objections.         |
+| Available in this checkout | What it does                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Context-first onboarding   | Reviews optional personal background and project context before your harness interviews you.                    |
+| Project initialization     | Creates `.verifold.md` and folders for literature, experiments, results, figures, docs, and agents.             |
+| Landscape research         | Saves planning, source links, proposed directions, and feedback. You choose the direction.                      |
+| Reviewed background        | Imports one selected text export with consent and review through setup-only personalization.                    |
+| Local research records     | Keeps attempt files, and gives CLI status and a read-only HTML snapshot.                                        |
+| Controlled session         | Runs Claude Code or Codex sessions from the desk or the terminal, and relays their permission requests.         |
+| Command record             | Records each tool call with who let it run, risk tags, and a review mark.                                       |
+| Project owner              | One `verifold` process owns a project. Ctrl+C pauses a session, and a later run resumes it.                     |
+| Research in the desk       | Runs research in the owner, shows its activity live, and offers each research decision in the desk.             |
+| Recovery                   | Marks work interrupted after a crash, stops leftover harness processes safely, and offers resume.               |
+| Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.                   |
+| Harness transcripts        | Shows each harness run as in its CLI, with tool input and output and nested subagent steps.                     |
+| Scoped tasks               | Runs a task in its own copy of the project with Strict limits. You review each version first.                   |
+| Two agents at once         | Runs up to two Claude Code or Codex agents at once, each with its own task, session, and record.                |
+| Agent terminals            | Opens an agent in its own Claude Code or Codex terminal in the desk. One view at a time types.                  |
+| Task handoffs              | Gives a task the accepted files of the tasks that it waits for, and blocks use of replaced files.               |
+| Team messages              | Agents post notes, report blockers, and raise objections with evidence. You decide in the desk.                 |
+| Coordinator                | Turns a chosen direction into tasks, starts them, reviews versions, settles objections, and asks you questions. |
+| Project memory             | Keeps what the project did, decided, and found in `memory/`, for every agent and every run.                     |
+| GPU pods                   | Rents RunPod pods inside your limits for the tasks that need a GPU.                                             |
 
-This is an early implementation. Native delegation is requested and reported by the host, not independently verified by Verifold.
+This is an early implementation. The host requests and reports native delegation. Verifold does not verify it.
 
-Optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Worker supervision and experiment execution follow the development sequence below. Scheduled memory, public collaboration, and cloud synchronization are deferred.
+The optional literature retention and pilot handoff commands produce requests for the host. They do not download PDFs, create a literature memory file, or run experiments. Agent supervision and experiment execution follow the development plan below. Scheduled memory, public collaboration, and cloud sync come later.
 
 ## Development plan
 
-Build a local workspace for independently controlled research agents. Keep one npm distribution and a browser UI initially. CLI and browser will use the same operations, while the selected harness retains its models, credentials, tools, and permissions.
+Build a local workspace for research agents that you control one by one. Keep one npm distribution and a browser UI for now. The CLI and the browser use the same operations, and the selected harness keeps its models, credentials, tools, and permissions.
 
-Stages 1 to 6 are available in this checkout: the [controlled harness session](#controlled-harness-session); persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts); [scoped tasks](#scoped-tasks); [two workers](#two-workers); [worker terminals](#worker-terminals); and the [coordinator](#coordinator) with task handoffs and messages. The later stages are planned work. Each stage builds on the preceding stage's completion criteria.
+Stages 1 to 6 are in this checkout:
+
+1. The [controlled harness session](#controlled-harness-session).
+2. Persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts).
+3. [Scoped tasks](#scoped-tasks).
+4. [Two agents at once](#two-agents-at-once).
+5. [Agent terminals](#agent-terminals).
+6. The [coordinator](#coordinator), with task handoffs and messages.
+
+The later stages are planned. Each stage builds on the completion criteria of the stage before it.
 
 | Order | Deliverable                       | Complete when                                                                                                                                                                                        |
 | ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -354,17 +533,17 @@ Stages 1 to 6 are available in this checkout: the [controlled harness session](#
 | 7     | Reviewed research deliverables    | Parallel investigation, an objection, and revision produce a reviewed memo/report bundle. Accepted artifact versions, producing attempts, failed work, and unresolved objections remain inspectable. |
 | 8     | Owned experiment execution        | An approved local experiment has fixed inputs and evaluator, resource allocation, cancellation, retained results, and recovery. Managed jobs cannot double-book a shared compute slot.               |
 
-The first usable multi-agent workspace ends at stage 6. Stage 7 completes the research-delivery workflow. Stage 8 adds experiment execution; a planning record or report does not establish that an experiment ran.
+The first usable multi-agent workspace ends at stage 6. Stage 7 completes the research delivery. Stage 8 adds experiment execution. A planning record or a report does not show that an experiment ran.
 
-Start by extending the existing attempt record and harness adapter. Extract shared operations where the first browser control needs them. Record native session identity and bounded structured events as they arrive. Keep existing CLI JSON and foreground Ctrl+C behavior; persistent sessions have an explicit attach/detach contract.
+Start by extending the existing attempt record and harness adapter. Extract shared operations where the first browser control needs them. Record the native session identity and bounded structured events as they arrive. Keep the existing CLI JSON and the foreground Ctrl+C behavior. Persistent sessions have an explicit attach and detach contract.
 
-Worktrees reduce checkout collisions but do not establish sandbox isolation. Keep authoritative writes serialized and require review before integrating worker output. Record scoped inputs with each attempt. A generated label or model report cannot override observed execution state or expand permissions.
+Worktrees reduce checkout collisions, but they do not isolate like a sandbox. Keep authoritative writes serialized, and review agent output before you integrate it. Record the scoped inputs with each attempt. A generated label or a model report cannot override the observed execution state or expand permissions.
 
-The first complete demonstration connects a prior-art worker and a method/baseline reviewer. The researcher observes both, intervenes in one, and reconnects without relaunch. An evidence-linked objection leads to revised work and a reviewed literature-gap memo with a reproducible report. Experiment measurements enter this flow only after stage 8.
+The first complete demonstration connects a prior-art agent and a reviewer of methods and baselines. The researcher watches both, intervenes in one, and reconnects without a relaunch. An objection with evidence leads to revised work and a reviewed memo on the literature gap, with a reproducible report. Experiment measurements enter this flow only after stage 8.
 
-After the core workflow is used, reassess desktop distribution from actual installation and interaction needs. A native launcher or optional desktop application can reuse the same manager and UI. Split installation only when native dependencies or an independently shipped application justify it.
+After the core workflow is in use, reassess desktop distribution from real installation and interaction needs. A native launcher or an optional desktop app can reuse the same manager and UI. Split the installation only when native dependencies or a separately shipped app justify it.
 
-Full browser onboarding, automatic memory maintenance, procedure optimization, a public board, cloud synchronization, and broad remote provisioning are outside this sequence. Existing approved background and project context remain available. Harness readiness checks and scoped context belong inside the execution features that need them.
+Full browser onboarding, automatic memory maintenance, procedure optimization, a public board, cloud sync, and broad remote provisioning are outside this sequence. Existing approved background and project context stay available. Harness readiness checks and scoped context belong in the execution features that need them.
 
 See the [implementation roadmap](https://github.com/MVPandey/Verifold/issues/14) for completion criteria and validation requirements.
 
@@ -372,11 +551,11 @@ See the [implementation roadmap](https://github.com/MVPandey/Verifold/issues/14)
 
 See [open issues](https://github.com/MVPandey/Verifold/issues) for current contributions. Each issue defines its prerequisites and acceptance criteria.
 
-The wider goal is a shared home for computational science, including math, CS/ML, and security. Researchers should be able to inspect assumptions, critique an analysis, rerun an experiment, or contribute an adjacent investigation. Failed attempts and unresolved objections belong beside successful results.
+The wider goal is a shared home for computational science, including math, CS/ML, and security. Researchers should be able to inspect assumptions, critique an analysis, rerun an experiment, or add a related investigation. Failed attempts and unresolved objections belong beside successful results.
 
-Work starts private. The planned public board will share only what the owner selects, with enough evidence for others to test and continue the investigation. Publication should preserve an inspectable record of how a conclusion was reached.
+Work starts private. The planned public board will share only what the owner selects, with enough evidence for others to test and continue the investigation. A publication should keep a record of how a conclusion was reached that others can inspect.
 
-[Open an issue](https://github.com/MVPandey/Verifold/issues) with a workflow, a reproducible problem, or a contribution you want to make. Use public examples and keep private research out of the issue. For code changes, read the engineering rules below and run `make validate` before opening a pull request.
+[Open an issue](https://github.com/MVPandey/Verifold/issues) with a workflow, a reproducible problem, or a contribution that you want to make. Use public examples, and keep private research out of the issue. For code changes, read the engineering rules below and run `make validate` before you open a pull request.
 
 ## Build from source
 
@@ -397,21 +576,21 @@ In this checkout, replace `verifold` in the examples above with `node dist-cli/c
 
 Internal agent research, planning notes, and coordination records belong in `.local/agents/`, which Git ignores. Keep public documentation in `docs/`. Do not publish private notes through commits, issue bodies, or pull request descriptions.
 
-Read [AGENTS.md](AGENTS.md) before contributing.
-It defines the required Node.js, technical-English, and ponytail skills, plus review and validation rules.
-The skill editions live in `.agents/skills/` and require no personal skill installation.
+Read [AGENTS.md](AGENTS.md) before you contribute. It names the required Node.js, technical-English, and ponytail skills, and the review and validation rules. The skill editions live in `.agents/skills/`, so you install no personal skill. [docs/words.md](docs/words.md) lists the words that the desk uses.
 
-`src/cli.ts` owns process lifecycle and terminal streams. CLI command handlers coordinate research and profile operations. The harness adapter owns subprocess arguments and response parsing. Research contracts validate returned data, and storage owns atomic state changes.
+`src/cli.ts` owns the process lifecycle and the terminal streams. The CLI command handlers coordinate research and profile operations. The harness adapter owns subprocess arguments and response parsing. Research contracts validate returned data, and storage owns atomic state changes.
 
-Structured results use stdout. Prompts, diagnostics, the violet/lavender folded VF welcome, and activity indicators use stderr. The welcome has a brief fold highlight; selected menu rows update in place and completed choices collapse into a short transcript. Agent Markdown in the terminal shows headings, bold, italics, inline code, and links in color. Text wraps to the terminal width, including long paths and common wide Unicode characters. Short windows show a compact selector. Indicators show time spent waiting for a real harness response; they do not claim individual subagent progress. Set `VERIFOLD_REDUCED_MOTION=1` for static activity messages. `NO_COLOR` disables color and animation; `TERM=dumb` also uses numbered text menus. Noninteractive commands keep their machine-readable output.
+Structured results go to stdout. Prompts, diagnostics, the violet and lavender folded VF welcome, and activity indicators go to stderr. The welcome has a short fold highlight. Selected menu rows update in place, and completed choices collapse into a short transcript. Agent Markdown in the terminal shows headings, bold, italics, inline code, and links in color. Text wraps to the terminal width, including long paths and common wide Unicode characters. Short windows show a compact selector.
 
-Normal research failures preserve the saved checkpoint. Inspect `status` and the attempt files before continuing. A forced termination such as SIGKILL can leave `.verifold/research.lock`. The next owner removes it when no research attempt shows activity in the last ten seconds. Older Verifold versions do not take the owner lock, so confirm that none of them runs research before you remove a lock yourself. Apply the same check to a stale `write.lock` before another state write.
+Indicators show the time spent waiting for a real harness response. They do not claim the progress of single subagents. Set `VERIFOLD_REDUCED_MOTION=1` for static activity messages. `NO_COLOR` turns off color and animation, and `TERM=dumb` also uses numbered text menus. Noninteractive commands keep their machine-readable output.
 
-New research attempts save `attempt.json` beside their evidence. It records the Verifold attempt ID, harness, requested model, starting phase, timestamps, requested session, and returned native session separately. A null model means the harness default was requested. It does not identify the resolved model.
+A normal research failure keeps the saved checkpoint. Look at `status` and the attempt files before you continue. A forced stop such as SIGKILL can leave `.verifold/research.lock`. The next owner removes it when no research attempt shows activity in the last ten seconds. Older Verifold versions do not take the owner lock, so make sure that none of them runs research before you remove a lock yourself. Do the same check for a stale `write.lock` before another state write.
 
-`succeeded` means the response passed Verifold validation and the phase checkpoint was saved, not that its scientific claims were verified. `failed` and `cancelled` preserve available evidence. Inspect the checkpoint before retrying. A record left at `started` has an unknown final outcome and does not prove that a process remains alive. Older attempts have no record. The desk scans at most 200 history entries, includes the latest recorded attempt separately, and marks unreadable records as unknown. Process recovery remains manual.
+New research attempts save `attempt.json` beside their evidence. It records the Verifold attempt ID, the harness, the requested model, the starting phase, the times, the requested session, and the returned native session, each separately. A null model means that Verifold asked for the harness default. It does not name the model that the harness used.
 
-`make validate` runs formatting, type-aware linting, strict types, tests, both builds, and a packed CLI consumer check. Enable the commit and push hooks in each clone:
+`succeeded` means that the response passed Verifold's validation and that Verifold saved the phase checkpoint. It does not mean that the scientific claims are true. `failed` and `cancelled` keep the evidence that exists. Look at the checkpoint before you retry. A record left at `started` has an unknown result, and it does not prove that a process still runs. Older attempts have no record. The desk scans at most 200 history entries, includes the latest recorded attempt separately, and marks unreadable records as unknown. Process recovery remains manual.
+
+`make validate` runs formatting, type-aware linting, strict types, tests, both builds, and a check of the packed CLI. Turn on the commit and push hooks in each clone:
 
 ```sh
 git config --local core.hooksPath .githooks
@@ -419,4 +598,4 @@ git config --local core.hooksPath .githooks
 
 See [validation scope](docs/validation.md). Source-link validation does not verify scientific claims or establish citation provenance.
 
-The harness package is MIT licensed. The website and visual brand assets are outside that grant. See [license scope](LICENSING.md). The bundled Manrope font retains its SIL Open Font License.
+The harness package is MIT licensed. The website and the visual brand assets are outside that grant. See [license scope](LICENSING.md). The bundled Manrope font keeps its SIL Open Font License.
