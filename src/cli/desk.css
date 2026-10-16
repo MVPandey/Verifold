@@ -460,8 +460,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 700;
 }
-.rail-team > .fine,
-.rail-foot > .fine {
+.rail-team > .fine {
   padding: 0 8px;
 }
 .team button {
@@ -487,12 +486,6 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   overflow-wrap: anywhere;
-}
-.rail-foot {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 /* Agents get a face: a glyph for the kind of work, a ring for its state. */
 .avatar {
