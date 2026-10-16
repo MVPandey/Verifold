@@ -1,5 +1,5 @@
 import type { CliIO } from './commands.ts';
-import { runHarness } from './harness.ts';
+import { HarnessTimeoutError, runHarness } from './harness.ts';
 import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
 import { mainDirection } from './contracts.ts';
 import { SessionActionError } from './session.ts';
@@ -134,33 +134,47 @@ export class ResearchRunner {
     const signal = AbortSignal.any([this.options.signal, controller.signal]);
     const harness = this.options.harness ?? runHarness;
     this.note('status', `Research started: ${this.step}.`);
-    this.work = runResearch(
-      this.root,
-      input,
-      {
-        // Research in the owner never asks in the terminal. Decisions come from the desk or a terminal command.
-        interactive: false,
-        ask: () => Promise.reject(new Error('Research does not ask here.')),
-        out: () => {},
-        // The runner prints its own line for the step, so the research step prints none.
-        busy: (_label, work) => work(),
-        ...(this.options.io.progress
-          ? { progress: this.options.io.progress }
-          : {}),
-      },
-      signal,
-      (request) =>
-        harness({
-          ...request,
-          onActivity: (message, kind) =>
-            this.note('tool', message, kind === 'notice'),
-          onTranscript: (update) => {
-            this.observe(update);
-            request.onTranscript?.(update);
-          },
-        }),
-      this.options.inbox?.take,
-    )
+    const step = (options: ResearchOptions) =>
+      runResearch(
+        this.root,
+        options,
+        {
+          // Research in the owner never asks in the terminal. Decisions come from the desk or a terminal command.
+          interactive: false,
+          ask: () => Promise.reject(new Error('Research does not ask here.')),
+          out: () => {},
+          // The runner prints its own line for the step, so the research step prints none.
+          busy: (_label, work) => work(),
+          ...(this.options.io.progress
+            ? { progress: this.options.io.progress }
+            : {}),
+        },
+        signal,
+        (request) =>
+          harness({
+            ...request,
+            onActivity: (message, kind) =>
+              this.note('tool', message, kind === 'notice'),
+            onTranscript: (update) => {
+              this.observe(update);
+              request.onTranscript?.(update);
+            },
+          }),
+        this.options.inbox?.take,
+      );
+    this.work = step(input)
+      // A step that stops on a time limit runs again once, from the saved checkpoint. A plan approval is saved by then, and feedback still waits.
+      .catch((error: unknown) => {
+        if (signal.aborted || !(error instanceof HarnessTimeoutError))
+          throw error;
+        this.note(
+          'status',
+          `${error.message} Research runs the step again from the saved checkpoint.`,
+        );
+        return step(
+          input.feedback === undefined ? {} : { feedback: input.feedback },
+        );
+      })
       .then(async (workspace) => {
         const next = workspace.research?.phase;
         const main = mainDirection(workspace.candidates);
@@ -185,7 +199,7 @@ export class ResearchRunner {
           'status',
           signal.aborted
             ? 'The research step was cancelled. The saved checkpoint and the attempt files remain.'
-            : `The research step failed: ${error instanceof Error ? error.message : 'unknown error'} The saved checkpoint and the attempt files remain.`,
+            : `The research step failed: ${error instanceof Error ? error.message : 'unknown error'} The saved checkpoint and the attempt files remain. Choose Continue research to try again.`,
         );
       })
       .finally(() => {
