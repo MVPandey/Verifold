@@ -432,8 +432,18 @@ function showNotify(): void {
  * The boxes say the same in words, so the arrows are decoration.
  */
 function drawMaps(): void {
-  for (const map of content.querySelectorAll<HTMLElement>('[data-map]'))
+  for (const map of content.querySelectorAll<HTMLElement>('[data-map]')) {
     drawMap(map);
+    markEdge(map);
+  }
+}
+
+/** A map wider than its card fades at the right edge while more of it is out of view. */
+function markEdge(map: HTMLElement): void {
+  map.classList.toggle(
+    'more-right',
+    map.scrollLeft + map.clientWidth < map.scrollWidth - 2,
+  );
 }
 
 /** After the person opens a view or a panel, focus moves there, so keyboard and screen reader users follow. */
@@ -1336,6 +1346,18 @@ document.addEventListener('visibilitychange', () => {
   hiddenAt = undefined;
 });
 window.addEventListener('resize', drawMaps);
+// A scroll does not bubble, so the page listens in the capture phase.
+content.addEventListener(
+  'scroll',
+  (event) => {
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.matches('[data-map]')
+    )
+      markEdge(event.target);
+  },
+  true,
+);
 window.addEventListener('pagehide', () => {
   stopped = true;
   clearTimeout(timer);
