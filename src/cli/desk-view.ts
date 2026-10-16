@@ -9,6 +9,7 @@ import type { SetupPrompt, SetupView } from './setup-bridge.ts';
 import {
   forPerson,
   isDraft,
+  isQuestion,
   replaced,
   type TaskRecord,
   type TaskVersion,
@@ -697,6 +698,11 @@ function decideForm(message: Message): string {
   }</div><p class="fine">${message.kind === 'objection' ? 'Uphold when the objection is right. Overrule when it is wrong. ' : ''}Your decision and its reason go to the task that raised it, with its next turn. To change the work, revise the task.</p>`;
 }
 
+/** The answer to a question from the coordinator. Done answers without words. */
+function answerForm(message: Message): string {
+  return `<label class="field" for="decide-${e(message.id)}">Your answer</label><textarea id="decide-${e(message.id)}" rows="2" maxlength="2000"></textarea><div class="actions"><button type="button" class="primary" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved">Send answer</button><button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved" data-reason="Done.">Done</button></div>`;
+}
+
 /** Notes that the coordinator wrote to the person, newest first. */
 function notesToPerson(
   messages: readonly Message[],
@@ -1070,6 +1076,24 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         body: requestBody(request),
       });
   for (const message of messages) {
+    if (isQuestion(message)) {
+      // The first sentence or line is the title, and the rest follows it.
+      const [, first = message.text, rest = ''] =
+        /^\s*([^\n]*?[.?!:])(?:\s+|$)([\s\S]*)$/.exec(message.text) ??
+        /^\s*([^\n]*)\n?([\s\S]*)$/.exec(message.text) ??
+        [];
+      if (message.status === 'open')
+        items.push({
+          key: `question:${message.id}`,
+          view: 'home',
+          kind: 'Question',
+          title: lead(first, 160),
+          why: 'The coordinator waits for your answer.',
+          since: message.at,
+          body: `${rest.trim() || first.length > 160 ? `<p class="pre">${e(first.length > 160 ? message.text : rest.trim())}</p>` : ''}${answerForm(message)}`,
+        });
+      continue;
+    }
     if (
       message.status !== 'open' ||
       (coordinated && !forPerson(message, messages))
@@ -1287,7 +1311,7 @@ function actionSentence(
 const coordinatorStates: Record<string, string> = {
   starting: 'Starting',
   running: 'Working',
-  idle: 'Watching the work',
+  idle: 'Waiting',
   paused: 'Paused',
   interrupted: 'Interrupted',
   ended: 'Ended',
@@ -1513,7 +1537,7 @@ function renderTaskPage(
   let first = '';
   switch (task.state) {
     case 'open':
-      first = `<section class="card decision"><h2>${isDraft(task) ? 'The coordinator drafted this task for you' : waiting.length ? 'The task waits' : 'Ready to start'}</h2>${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}">Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button>${isDraft(task) ? `<button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button>` : ''}${cancel}</div></section>`;
+      first = `<section class="card decision"><h2>${isDraft(task) ? 'The coordinator drafted this task for you' : waiting.length ? 'The task waits' : team && !team.stoppedAt ? 'Not started' : 'Ready to start'}</h2>${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : !isDraft(task) && team && !team.stoppedAt ? '<p class="fine">The coordinator starts it when it is ready. You can start it now yourself.</p>' : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}">Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button>${isDraft(task) ? `<button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button>` : ''}${cancel}</div></section>`;
       break;
     case 'claimed':
       first =
@@ -1745,10 +1769,7 @@ function taskTurn(
             `Waits for ${waiting.map((id) => all.find((entry) => entry.id === id)?.assignment.title ?? id).join(', ')}`,
             false,
           ]
-        : [
-            coordinated ? "Coordinator's turn to start it" : 'Ready to start',
-            !coordinated,
-          ];
+        : [coordinated ? 'Not started' : 'Ready to start', !coordinated];
     case 'claimed':
       return ['Starting', false];
     case 'running':
@@ -2619,13 +2640,17 @@ function renderRail(
       ? ['ended', 'Stopped']
       : planWaits(coordinator, tasks)
         ? ['you', '◆ The plan waits for you']
-        : status === 'paused' || status === 'interrupted'
-          ? ['paused', 'Paused']
-          : status === 'failed'
-            ? ['failed', 'Failed']
-            : status === 'running' || status === 'starting'
-              ? ['working', 'Working']
-              : ['idle', coordinatorStates[status] ?? 'Watching the work'];
+        : (live.tasks?.messages ?? []).some(
+              (message) => isQuestion(message) && message.status === 'open',
+            )
+          ? ['you', '◆ Waits for your answer']
+          : status === 'paused' || status === 'interrupted'
+            ? ['paused', 'Paused']
+            : status === 'failed'
+              ? ['failed', 'Failed']
+              : status === 'running' || status === 'starting'
+                ? ['working', 'Working']
+                : ['idle', coordinatorStates[status] ?? 'Waiting'];
     team.push(
       member(
         'coordinator',
@@ -2711,7 +2736,11 @@ function renderRail(
  * what changed since the person left, and the one box to the coordinator.
  */
 /** What happens now, in one line: the step, who works on it, and how far the work is. */
-function renderNow(workspace: Workspace, live: DeskSession): string {
+function renderNow(
+  workspace: Workspace,
+  live: DeskSession,
+  needs: readonly Need[],
+): string {
   const tasks = (live.tasks?.list ?? []).filter(
     (task) => task.state !== 'cancelled',
   );
@@ -2738,12 +2767,24 @@ function renderNow(workspace: Workspace, live: DeskSession): string {
   else if (running.length) {
     line = `${running.map((task) => `${task.assignment.title} runs on ${hostName(task.assignment.host)}`).join('. ')}.`;
     sub = `${done} of ${tasks.length} tasks done.`;
+  } else if (needs.length) {
+    line = 'Nothing runs. The team waits for you.';
+    sub = tasks.length ? `${done} of ${tasks.length} tasks done.` : '';
   } else if (tasks.length) {
+    // Without a session record yet, the coordinator is starting, as the rail says.
+    const status = live.coordinator?.session?.record.status ?? 'starting';
+    const working = status === 'running' || status === 'starting';
     line =
-      state && !state.stoppedAt
-        ? 'The coordinator watches the work.'
+      state && !state.stoppedAt && working
+        ? 'No task runs. The coordinator works.'
         : 'No task runs.';
-    sub = `${done} of ${tasks.length} tasks done.`;
+    // The coordinator's latest note says what it waits for.
+    const note = (live.tasks?.messages ?? [])
+      .filter(
+        (message) => message.from === 'coordinator' && message.to === 'person',
+      )
+      .at(-1);
+    sub = `${done} of ${tasks.length} tasks done.${note ? ` The coordinator wrote at ${clock(note.at)}: "${lead(note.text, 140)}"` : ''}`;
   }
   return line
     ? `<section class="card now-card" aria-label="Now"><p class="now-line"><span class="map-label">Now</span> ${e(line)}</p>${sub ? `<p class="fine">${e(sub)}</p>` : ''}</section>`
@@ -2814,7 +2855,7 @@ function renderHome(
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose A new agent in the message box.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
   }
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live)}${lead}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
+  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live, needs)}${lead}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
