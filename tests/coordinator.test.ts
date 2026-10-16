@@ -782,7 +782,7 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
       },
     ],
     selectedId: 'sparse',
-    research: { autonomy: 'autonomous' },
+    research: { autonomy: 'guided' },
   } as unknown as Parameters<Coordinator['startForDirection']>[0];
   await coordinator.startForDirection(workspace);
   await turns(1);
@@ -792,7 +792,7 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
     'Compare sparse-graph baselines\n\nCompare Dijkstra and Thorup on road networks.',
   );
   assert.equal(state?.model, 'sonnet');
-  // Also in a project that searched without a stop, the plan waits for the person.
+  // In a guided project, the plan waits for the person.
   assert.equal(state?.planApproved, false);
   assert.equal(state?.helper, 'codex');
   const created = (await tasks.list())[0]?.assignment;
@@ -811,6 +811,48 @@ await test('a chosen direction starts the coordinator, which drafts the plan for
   // A running coordinator is not started again.
   await coordinator.startForDirection(workspace);
   assert.equal(coordinator.view()?.state.startedAt, state?.startedAt);
+});
+
+await test('in an autonomous project, the coordinator starts its plan at once (D91)', async (t) => {
+  const { coordinator, inputs, script, tasks, turns } = await team(t);
+  await script([
+    [
+      { name: 'verifold_create_task', arguments: prior },
+      { name: 'verifold_start_task', arguments: { task: 'task-1' } },
+      {
+        name: 'verifold_create_task',
+        arguments: { ...review, extra: true },
+      },
+      { name: 'verifold_start_task', arguments: { task: 'task-2' } },
+    ],
+  ]);
+  await coordinator.startForDirection({
+    schemaVersion: 1,
+    visibility: 'private',
+    profile: { name: 'R', interests: [], scholar: '', github: '', session: '' },
+    host: 'claude',
+    candidates: [
+      {
+        id: 'sparse',
+        title: 'Compare sparse-graph baselines',
+        recommendation: 'Compare Dijkstra and Thorup on road networks.',
+        gates: ['Both run on the same graphs.'],
+      },
+    ],
+    selectedId: 'sparse',
+    research: { autonomy: 'autonomous' },
+  } as unknown as Parameters<Coordinator['startForDirection']>[0]);
+  await turns(1);
+  assert.equal(coordinator.view()?.state.planApproved, true);
+  assert.match(
+    (await inputs())[0] ?? '',
+    /create the tasks for the first step, and start the ones that can run/,
+  );
+  assert.equal((await tasks.get('task-1'))?.state, 'running');
+  // Nobody ticked the add-on, so it waits for the person as a draft.
+  const extra = await tasks.get('task-2');
+  assert.equal(extra?.assignment.draft, true);
+  assert.equal(extra?.state, 'open');
 });
 
 await test('a task gets only a harness of the team', async (t) => {
@@ -1430,7 +1472,7 @@ await test('the coordinator reports checks with accepted evidence and proposes t
   );
 });
 
-await test('the coordinator reads the compute limits and asks the person for a pod, and only the person approves', async (t) => {
+await test('the coordinator reads the compute limits and asks for a pod, and only the person approves when they ask to', async (t) => {
   // A fake RunPod with the key check and the GPU catalog. No pod is created in this test.
   const created: string[] = [];
   const api = createServer((request, response) => {
@@ -1494,6 +1536,7 @@ await test('the coordinator reads the compute limits and asks the person for a p
         diskGb: '50',
         images: 'runpod/base:1.0',
         gpuTypes: ['NVIDIA RTX A5000', 'NVIDIA H100 80GB HBM3'],
+        askBeforePod: true,
       });
       return pods;
     },
@@ -1748,4 +1791,111 @@ await test('the coordinator starts with the project memory and keeps notes in it
     (await results())[0]?.result.content[0]?.text,
     'Kept the note in memory/notes.md.',
   );
+});
+
+await test('a pod inside the limits starts at once, and one over a limit waits for the person (D90)', async (t) => {
+  // A fake RunPod that creates one pod.
+  const created: string[] = [];
+  const api = createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk: Buffer) => (body += chunk.toString()));
+    request.on('end', () => {
+      if (request.method === 'POST') created.push(request.url ?? '');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(
+        JSON.stringify(
+          request.url?.startsWith('/v2/catalog/gpus')
+            ? {
+                gpus: [
+                  {
+                    id: 'NVIDIA RTX A5000',
+                    name: 'RTX A5000',
+                    memory: 24,
+                    secure: true,
+                    community: true,
+                    price: { secure: 0.27, community: 0.16 },
+                    availability: 'HIGH',
+                  },
+                ],
+              }
+            : request.method === 'POST'
+              ? {
+                  id: 'pod1',
+                  name: (JSON.parse(body) as { name: string }).name,
+                  status: 'STARTING',
+                }
+              : { pods: [] },
+        ),
+      );
+    });
+  });
+  api.listen(0, '127.0.0.1');
+  await new Promise((resolve) => api.once('listening', resolve));
+  t.after(() => api.close());
+  const address = api.address();
+  const url = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+  let pods: Compute | undefined;
+  const { coordinator, script, results, turns } = await team(
+    t,
+    30,
+    async (root) => {
+      pods = new Compute(root, {
+        url,
+        store: new KeyStore({
+          home: join(root, 'home'),
+          platform: 'linux',
+          secretTool: join(root, 'none'),
+        }),
+      });
+      await pods.load();
+      await pods.setKey('rpa_TESTKEY0123456789abcdefWXYZ', true);
+      await pods.saveSettings({
+        limitUsd: '5',
+        maxUsdPerHour: '0.5',
+        maxHoursPerLease: '4',
+        idleMinutes: '15',
+        maxRunningPods: '1',
+        diskGb: '50',
+        images: 'runpod/base:1.0',
+        gpuTypes: ['NVIDIA RTX A5000'],
+      });
+      return pods;
+    },
+  );
+  const ask = {
+    gpuType: 'NVIDIA RTX A5000',
+    hours: 2,
+    tasks: ['task-1'],
+    reason: 'The training run needs a GPU.',
+  };
+  await script([
+    [
+      { name: 'verifold_request_pod', arguments: ask },
+      { name: 'verifold_request_pod', arguments: ask },
+    ],
+  ]);
+  await coordinator.start({
+    objective: 'Train a small model.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  const answers = (await results()).slice(-2);
+  assert.match(
+    answers[0]?.result.content[0]?.text ?? '',
+    /^Started lease-1 inside the person's limits: NVIDIA RTX A5000 for 2 hours/,
+  );
+  // One pod at a time is the person's limit, so the second request waits for them.
+  assert.match(
+    answers[1]?.result.content[0]?.text ?? '',
+    /^Asked the person for lease-2/,
+  );
+  assert.deepEqual(created, ['/v2/pods']);
+  const started = pods?.leases.get('lease-1');
+  assert.equal(started?.state, 'starting');
+  assert.match(
+    started?.history.find((entry) => entry.by === 'verifold')?.text ?? '',
+    /fits your limits, so Verifold started it without asking/,
+  );
+  assert.equal(pods?.leases.get('lease-2').state, 'requested');
 });
