@@ -241,22 +241,23 @@ await test('a quiet child stops after the idle limit', async () => {
 await test('each line of output starts the idle limit again', async () => {
   await fixture(
     `process.stdin.resume(); let n = 0;
+     console.log(JSON.stringify({ type: 'system' }));
      const timer = setInterval(() => {
        n += 1;
-       if (n < 6) return console.log(JSON.stringify({ type: 'system' }));
+       if (n < 5) return console.log(JSON.stringify({ type: 'system' }));
        clearInterval(timer);
        console.log(JSON.stringify({ result: 'done', is_error: false }));
        process.exit(0);
-     }, 250);`,
+     }, 1000);`,
     async (executable, cwd) => {
-      // Six quiet periods of 250 ms add up to more than the 1 s idle limit.
+      // Five quiet periods of 1 s add up to more than the 4 s idle limit. A slow start of the child under load has 4 s.
       const result = await runHarness(
         {
           host: 'claude',
           cwd,
           prompt: '',
           signal: new AbortController().signal,
-          idleMs: 1000,
+          idleMs: 4000,
         },
         { executable },
       );
