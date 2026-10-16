@@ -501,6 +501,10 @@ async function serveDesk(
         harness,
         // A chosen direction starts the coordinator, which gets the messages that still wait for research.
         onSelect: async () => {
+          // memory/direction.md exists before the coordinator gives it to a task.
+          await memory.write().catch(() => {
+            /* The coordinator still starts. A task input that is missing is refused with its name. */
+          });
           await owned.coordinator?.startForDirection(await loadWorkspace(root));
           await tasks.passToCoordinator();
         },

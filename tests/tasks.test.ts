@@ -1449,3 +1449,34 @@ await test("the coordinator's question waits in Needs you until the person answe
   for (const number of [1, 2, 3, 4, 5]) await tasks.ask(`Question ${number}`);
   await assert.rejects(tasks.ask('One more'), /Five of your questions wait/);
 });
+
+await test("a long message arrives whole, and the coordinator's message reaches a running turn", async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  sessions.running.add('S1');
+  await tasks.post(id, 'Use the frozen checks.', 'coordinator');
+  assert.match(
+    sessions.steered[0]?.text ?? '',
+    /^The coordinator sent you this message while you work:\n\nUse the frozen checks\./,
+  );
+  sessions.steered[0]?.done(true);
+  // The next change runs after the delivery update in the queue.
+  await tasks.answered(id, 'Using them.', true);
+  assert.deepEqual(
+    (await tasks.messageList()).map((message) => [
+      message.delivery,
+      message.via,
+    ]),
+    [['delivered', 'turn']],
+  );
+  // A message that waits goes with the next turn, all 4000 characters of it.
+  sessions.running.delete('S1');
+  const long = `${'Check 5: '.padEnd(3990, 'x')} The end.`;
+  await tasks.post(id, long, 'coordinator');
+  await turn(tasks, sessions, { 'results/baseline.md': 'v1\n' });
+  await tasks.askForChanges(id, 'Add check 5.', 'coordinator');
+  assert.ok((sessions.sent.at(-1) ?? '').includes('The end."'));
+});

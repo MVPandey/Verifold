@@ -144,6 +144,15 @@ await test('the project memory follows the records, keeps the person’s text an
     /^# Project memory\n\nRead this first\.[\s\S]*<!-- verifold:readme -->\nQuestion: Is the heap version of Dijkstra faster on road graphs\?\nDirection: Heap against a scan\nThis run: 2 tasks, 1 done\./,
   );
   assert.match(
+    await read('README.md'),
+    /- direction\.md: the chosen direction/,
+  );
+  // A task that needs the specification gets this file as an input.
+  assert.match(
+    await read('direction.md'),
+    /<!-- verifold:direction -->\nDirection: Heap against a scan\n\nCompare a binary heap with a linear scan\.\n\nChecks:\n1\. Same paths on 200 queries\.\n2\. Faster above 100,000 nodes\.\n<!-- \/verifold:direction -->/,
+  );
+  assert.match(
     await read('progress.md'),
     /## Done\n\n- Implement the heap version \(task-1\), Claude Code\. Accepted 2026-10-12 14:00: src\/heap\.py\. Details: tasks\/2026-10-12-implement-the-heap-version\.md[\s\S]*## Next\n\n- Benchmark both versions \(task-2\), waits for task-1\./,
   );
