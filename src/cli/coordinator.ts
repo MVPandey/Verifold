@@ -439,8 +439,8 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           ...state.events,
           {
             ...event,
-            // One line of at most 2000 characters, so a digest stays small and its lines stay apart.
-            text: event.text.replace(/[\r\n]+/g, ' ').slice(0, 2000),
+            // One line, so the lines of a digest stay apart. It holds a whole message of up to 4000 characters.
+            text: event.text.replace(/[\r\n]+/g, ' ').slice(0, 6000),
             seq,
             at: new Date().toISOString(),
           },
