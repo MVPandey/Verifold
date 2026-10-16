@@ -1012,7 +1012,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
   );
 });
 
-await test('desk Home lists what changed since the person left, the team feed, and the talk with the coordinator', async (t) => {
+await test('desk Home lists what changed since the person left and the talk with the coordinator, and Records keeps the messages between agents', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   await changeWorkspace(root, (state) => ({
@@ -1179,12 +1179,26 @@ await test('desk Home lists what changed since the person left, the team feed, a
     away,
     /The coordinator acted 1 time\. Its reasons are in its panel\./,
   );
-  assert.match(away, /1 message in the team feed\./);
+  assert.match(away, /1 message between agents, in Records\./);
   assert.doesNotMatch(home(), /Since you left/);
-  // The feed holds what the agents write, never the person's messages.
+  // D92: Records keeps what the agents write, never the person's messages. Home does not show it.
+  assert.doesNotMatch(away, /feed-title/);
+  const records = renderDesk(
+    snapshot,
+    undefined,
+    null,
+    {
+      session: null,
+      controllable: true,
+      tasks: { list: [task], selected: null, idle: [], messages },
+      coordinator,
+    } as never,
+    { view: 'records', panel: null },
+  ).html;
   const feed =
-    /<h2 id="feed-title">Team feed<\/h2>[\s\S]*?<\/section>/.exec(away)?.[0] ??
-    '';
+    /<h2 id="feed-title">Messages between agents<\/h2>[\s\S]*?<\/section>/.exec(
+      records,
+    )?.[0] ?? '';
   assert.match(feed, /Bounded pilot[\s\S]*The pilot is done\./);
   assert.doesNotMatch(feed, /synthetic/);
   // The message box writes to the coordinator. Its thread shows each message with its state, and
@@ -1273,9 +1287,9 @@ await test('desk shows long text as its lead with Show all, and short text in fu
       controllable: true,
       tasks: { list: [], selected: null, idle: [], messages },
     } as never,
-    { view: 'home', panel: 'worker' },
+    { view: 'records', panel: 'worker' },
   );
-  // The feed folds the long note at its first sentence. The short objection shows in full.
+  // The messages between agents fold a long note at its first sentence. The short objection shows in full.
   assert.match(
     html,
     /<details class="more" id="feed-m-1"><summary><span class="lead">The benchmark ran on 3 graphs\.<\/span> <span class="more-hint"><span class="closed">Show all<\/span>/,
@@ -1394,30 +1408,33 @@ await test('Records lists the commands of all agents as an audit, and the rail c
   const html = desk(null);
   // The rail shows no command counts. Amber stays for Needs you.
   assert.doesNotMatch(html, /need review|needs review/);
-  // One table for all agents, newest first, with the agent and its harness.
-  assert.equal(html.match(/<table class="audit">/g)?.length, 1);
+  // One audit for all agents, newest first, with the agent and its harness.
+  // The latest 20 show. The older tagged ones and the older plain ones fold, each under its count.
+  assert.equal(html.match(/<table class="audit">/g)?.length, 3);
   assert.match(
     html,
-    /<div class="seg" role="group" aria-label="Commands to show"><button type="button" data-records="all">All commands<\/button><button type="button" data-records="tagged">Tagged only<\/button><\/div><span class="count">207 recorded, 2 tagged<\/span>/,
+    /<div class="seg" role="group" aria-label="Commands to show"><button type="button" data-records="all">All commands<\/button><button type="button" data-records="tagged">Tagged only<\/button><\/div><span class="count">207 recorded, 2 tagged: Deletes files 1, Network 1<\/span>/,
   );
   assert.match(
     html,
-    /The table shows the latest 200 commands and every tagged command\./,
+    /<details id="audit-tagged"><summary>1 older tagged command<\/summary>[\s\S]*rm -rf build[\s\S]*<details id="audit-more"><summary>180 older commands without a tag<\/summary><p class="fine">This list holds the latest 200 commands and every tagged one\.<\/p>/,
   );
   const rows = /<tbody>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? '';
-  assert.equal(rows.match(/<tr/g)?.length, 201);
+  assert.equal(rows.match(/<tr/g)?.length, 20);
   assert.match(
     rows,
-    /^<tr class="tagged"><td>[^<]*<\/td><td>Fetch the road graphs<span class="fine">Codex<\/span><\/td><td><span class="audit-tool">Bash<\/span><code>curl https:\/\/example\.com<\/code><\/td>[\s\S]*?<span class="risk">Network<\/span>[\s\S]*?<td>Reviewed<\/td><\/tr>/,
+    /^<tr class="tagged"><td>[^<]*<\/td><td><span class="agent-name" title="Fetch the road graphs">Fetch the road graphs<\/span><span class="fine">Codex<\/span><\/td><td><span class="audit-tool">Bash<\/span><code>curl https:\/\/example\.com<\/code><\/td>[\s\S]*?<span class="risk">Network<\/span>[\s\S]*?<td>Reviewed<\/td><\/tr>/,
   );
   // A plain session already names its harness.
-  assert.match(rows, /<td>Claude Code session<\/td>/);
-  // The old tagged command stays in the audit, last, with Mark reviewed.
+  assert.match(rows, />Claude Code session<\/span><\/td>/);
+  // The old tagged command stays in the audit, with Mark reviewed.
+  const old =
+    /<details id="audit-tagged">[\s\S]*?<\/details>/.exec(html)?.[0] ?? '';
   assert.match(
-    rows,
-    /<tr class="tagged">(?:(?!<tr)[\s\S])*rm -rf build(?:(?!<tr)[\s\S])*data-action="review" data-command="c-old">Mark reviewed<\/button><\/td><\/tr>$/,
+    old,
+    /<tr class="tagged">(?:(?!<tr)[\s\S])*rm -rf build(?:(?!<tr)[\s\S])*data-action="review" data-command="c-old">Mark reviewed<\/button><\/td><\/tr><\/tbody>/,
   );
-  assert.doesNotMatch(rows, /ls 0</);
+  assert.doesNotMatch(html, /ls 0</);
   // The panel of an agent shows its own commands in a Commands tab, without the agent column.
   const panel = desk('worker');
   assert.match(
@@ -1736,7 +1753,7 @@ await test('desk shows one plan: the direction, its checks, and the drafted task
   );
 });
 
-await test('Home shows the work live, the checks, and the answer under the question', async (t) => {
+await test('Home shows the work live, a count of the checks, and the answer under the question', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   await changeWorkspace(root, (state) => ({
@@ -1849,11 +1866,12 @@ await test('Home shows the work live, the checks, and the answer under the quest
     working,
     /The work<\/h2>[\s\S]*Implement<span class="host-chip">Codex<\/span>/,
   );
-  // The checks, each with its result.
+  // D92: the checks live in Answer. Home counts the results and links there.
   assert.match(
     working,
-    /<li data-result="passed"><span class="check-result">Passed<\/span> Same paths on small graphs\.<\/li><li data-result="none"><span class="check-result">Not yet<\/span> Faster on large graphs\.<\/li>/,
+    /<button type="button" class="quiet" data-view="results">1 of 2 checks have a result<\/button>/,
   );
+  assert.doesNotMatch(working, /Same paths on small graphs/);
   assert.doesNotMatch(working, /home-answer-title/);
   // The proposed answer shows under the question. Reading it in full comes before the decision.
   const proposed = home({
@@ -2620,7 +2638,7 @@ await test('Work starts with who works now, folds a long strip, and ends with th
   // The finished work follows the map, newest first.
   assert.match(
     alone,
-    /<h2 id="map-title">The map<\/h2><span class="count">7 tasks, 2 done<\/span>[\s\S]*<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-7[\s\S]*Version 1 accepted at [\s\S]*src\/heap\.py[\s\S]*Title task-6[\s\S]*results\/bench\.csv/,
+    /<h2 id="map-title">The map<\/h2><span class="count">7 tasks, 2 done<\/span>[\s\S]*<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-7[\s\S]*Version 1 accepted at \d\d:\d\d, 1 file[\s\S]*Title task-6/,
   );
   assert.doesNotMatch(alone, /A task runs your harness in its own copy/);
 });
@@ -2762,7 +2780,7 @@ await test('a task opens as its own page: the decision first, the rest folded, a
         ],
       }),
     ),
-    /<h2>Done<\/h2><p>Version 1 was accepted: results\/bench\.csv\.[\s\S]*Revise the task/,
+    /<h2>Done<\/h2><p>Version 1 was accepted with 1 file\. Tasks that wait for this one get its files\.<\/p><details id="done-files-task-\d+"><summary>Show the files<\/summary><ul class="file-list"><li><code>results\/bench\.csv<\/code><\/li><\/ul><\/details>[\s\S]*Revise the task/,
   );
   assert.match(page(task('task-2', 'cancelled')), /<h2>Cancelled<\/h2>/);
 });
@@ -3062,4 +3080,31 @@ await test('the review pass: the page says who reviews, the Plan says the direct
     records,
     /<h2 id="commands-title">Commands[\s\S]*Research attempts[\s\S]*<h2 id="runs-title">Runs<\/h2>[\s\S]*<details id="run-parts"><summary>What moves and what stays<\/summary>[\s\S]*Heap against a scan <span class="fine">3 tasks, 2 KB<\/span>[\s\S]*<h2 id="memory-title">Project memory<\/h2>/,
   );
+});
+
+await test('Plan shows the first sources, and the rest fold (D92)', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const report = {
+    summary: 'Heap Dijkstra wins above 100,000 nodes.',
+    delegation: 'One agent searched, one compared.',
+    sources: Array.from({ length: 8 }, (_, index) => ({
+      title: `Paper ${index + 1}`,
+      url: `https://example.org/paper-${index + 1}`,
+    })),
+    candidates: [],
+  };
+  const { html } = renderDesk(
+    snapshot,
+    'a1',
+    report,
+    { session: null, controllable: true },
+    { view: 'research', panel: null },
+  );
+  assert.match(
+    html,
+    /<ol class="sources"><li><a id="source-[^"]*-0"[\s\S]*Paper 5<\/a>[^]*?<\/ol><details id="sources-[^"]*"><summary>All 8 sources<\/summary><ol class="sources" start="6"><li><a id="source-[^"]*-5"[^>]*>Paper 6<\/a>/,
+  );
+  assert.match(html, /<summary>How research split the work<\/summary>/);
 });

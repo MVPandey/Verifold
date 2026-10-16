@@ -32,13 +32,11 @@ function boxStates(root: HTMLElement): Map<string, string> {
   );
 }
 
-/** Check results by place: on Home and in the Answer view, the list holds the checks in their order. */
+/** Check results by place: in the Answer view, the list holds the checks in their order. */
 function stampElements(root: HTMLElement): Map<string, HTMLElement> {
   return new Map(
     Array.from(
-      root.querySelectorAll<HTMLElement>(
-        '.home-checks > li[data-result], .check-row[data-result]',
-      ),
+      root.querySelectorAll<HTMLElement>('.check-row[data-result]'),
       (row, index) => [`${row.className} ${index}`, row],
     ),
   );

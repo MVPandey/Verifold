@@ -1384,24 +1384,21 @@ function sender(id: string, tasks: readonly TaskRecord[]): string {
   return tasks.find((task) => task.id === id)?.assignment.title ?? id;
 }
 
-/** The team feed: what the agents and the coordinator write to each other, newest first. Nobody posts in it. */
+/** What the agents and the coordinator write to each other, newest first, for Records. Nobody posts in it. */
 function renderFeed(
   messages: readonly Message[],
   tasks: readonly TaskRecord[],
 ): string {
   const feed = messages
     .filter((message) => message.from !== 'person' && message.to !== 'person')
-    .slice(-12)
     .reverse();
-  if (!feed.length) return '';
-  return `<section class="card" aria-labelledby="feed-title"><div class="section-title"><h2 id="feed-title">Team feed</h2><span class="count">Newest first</span></div><ul class="feed">${feed
-    .map(
-      (message) =>
-        `<li class="feed-row">${avatar(message.from === 'coordinator' ? 'coordinator' : 'task', '')}<div class="feed-body"><p class="feed-head"><strong>${e(sender(message.from, tasks))}</strong><span class="feed-to">to ${e(sender(message.to, tasks))}</span><span class="chip ${message.kind}">${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p>${more(`feed-${message.id}`, message.text, 140)}</div></li>`,
-    )
-    .join(
-      '',
-    )}</ul><p class="fine">The agents and the coordinator write here. The panel of each task has its full messages.</p></section>`;
+  const row = (message: Message): string =>
+    `<li class="feed-row">${avatar(message.from === 'coordinator' ? 'coordinator' : 'task', '')}<div class="feed-body"><p class="feed-head"><strong>${e(sender(message.from, tasks))}</strong><span class="feed-to">to ${e(sender(message.to, tasks))}</span><span class="chip ${message.kind}">${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p>${more(`feed-${message.id}`, message.text, 140)}</div></li>`;
+  return `<section class="card" aria-labelledby="feed-title"><div class="section-title"><h2 id="feed-title">Messages between agents</h2><span class="count">${feed.length}</span></div>${
+    feed.length
+      ? `<ul class="feed">${feed.slice(0, 8).map(row).join('')}</ul>${feed.length > 8 ? `<details id="feed-more"><summary>${feed.length - 8} older messages</summary><ul class="feed">${feed.slice(8).map(row).join('')}</ul></details>` : ''}`
+      : '<p class="empty-note">None yet. Each task page shows its own messages.</p>'
+  }</section>`;
 }
 
 /** What changed after the person left, from Verifold's records. A list of facts, not a model summary. */
@@ -1466,7 +1463,7 @@ function renderSince(
       ? `The coordinator acted ${acted} ${acted === 1 ? 'time' : 'times'}. Its reasons are in its panel.`
       : '',
     posted
-      ? `${posted} ${posted === 1 ? 'message' : 'messages'} in the team feed.`
+      ? `${posted} ${posted === 1 ? 'message' : 'messages'} between agents, in Records.`
       : '',
   ].filter(Boolean);
   return `<section class="card" aria-labelledby="since-title"><div class="section-title"><h2 id="since-title">Since you left at ${e(since(left))}</h2><span class="count">From Verifold's records</span></div>
@@ -1570,7 +1567,7 @@ function renderTaskPage(
           : `<section class="card decision"><p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions">${cancel}</div></section>`;
       break;
     case 'done':
-      first = `<section class="card decision"><h2>Done</h2><p>${artifact ? `Version ${artifact.version} was accepted: ${e(artifact.files.map((file) => file.path).join(', ') || 'no files')}.` : 'A version was accepted.'} Tasks that wait for this one receive these files.</p>${used ? `<p class="notice">${e(used)} Revise this task, so it runs again with the new files.</p>` : ''}</section>`;
+      first = `<section class="card decision"><h2>Done</h2><p>${artifact ? `Version ${artifact.version} was accepted with ${fileCount(artifact.files.length)}.` : 'A version was accepted.'} Tasks that wait for this one get its files.</p>${artifact?.files.length ? `<details id="done-files-${e(task.id)}"><summary>Show the files</summary><ul class="file-list">${artifact.files.map((file) => `<li><code>${e(file.path)}</code></li>`).join('')}</ul></details>` : ''}${used ? `<p class="notice">${e(used)} Revise this task, so it runs again with the new files.</p>` : ''}</section>`;
       break;
     case 'cancelled':
       first =
@@ -1770,7 +1767,9 @@ function taskTurn(
       if (isDraft(task)) return ['Draft, waits for you', true];
       return waiting.length
         ? [
-            `Waits for ${waiting.map((id) => all.find((entry) => entry.id === id)?.assignment.title ?? id).join(', ')}`,
+            waiting.length === 1
+              ? `Waits for ${all.find((entry) => entry.id === waiting[0])?.assignment.title ?? waiting[0]}`
+              : `Waits for ${waiting.length} tasks`,
             false,
           ]
         : [coordinated ? 'Not started' : 'Ready to start', !coordinated];
@@ -1940,6 +1939,10 @@ function renderNowStrip(view: TaskView, live: DeskSession): string {
   }</section>`;
 }
 
+function fileCount(count: number): string {
+  return count === 1 ? '1 file' : `${count} files`;
+}
+
 /** The done tasks, newest first, with the version and the files that the project got. */
 function renderFinished(tasks: readonly TaskRecord[]): string {
   const done = tasks
@@ -1952,7 +1955,7 @@ function renderFinished(tasks: readonly TaskRecord[]): string {
     );
   if (!done.length) return '';
   const row = ({ task, artifact }: (typeof done)[number]): string =>
-    `<li><span class="mark done" aria-hidden="true"></span><div><button type="button" class="row-button" data-task-select="${e(task.id)}">${e(task.assignment.title)}</button><p class="fine">${artifact ? `Version ${artifact.version} accepted at ${e(clock(artifact.at))}: ${e(lead(artifact.files.map((file) => file.path).join(', ') || 'no files', 160))}` : 'Done'}</p></div></li>`;
+    `<li><span class="mark done" aria-hidden="true"></span><div><button type="button" class="row-button" data-task-select="${e(task.id)}">${e(task.assignment.title)}</button><p class="fine">${artifact ? `Version ${artifact.version} accepted at ${e(clock(artifact.at))}, ${fileCount(artifact.files.length)}` : 'Done'}</p></div></li>`;
   return `<section class="card" aria-labelledby="finished-title"><div class="section-title"><h2 id="finished-title">Finished</h2><span class="count">${done.length} ${done.length === 1 ? 'task' : 'tasks'}</span></div><ul class="finished">${done.slice(0, 6).map(row).join('')}</ul>${done.length > 6 ? `<details id="finished-more"><summary>${done.length - 6} more</summary><ul class="finished">${done.slice(6).map(row).join('')}</ul></details>` : ''}</section>`;
 }
 
@@ -2025,12 +2028,29 @@ function auditTable(
       view.record.commands.filter((command) => command.risk.length).length,
     0,
   );
-  return `<div class="section-title">${auditFilter}<span class="count">${total} recorded, ${tagged} tagged</span></div><p class="fine">A tag marks a command to look at, from the command text alone. It is not a finding. ${rows.length < total ? 'The table shows the latest 200 commands and every tagged command. ' : ''}The record shows the command that the agent asked for, not the processes that it started.</p>${tagged ? '' : '<p class="fine tagged-none">No command has a tag.</p>'}<div class="table"><table class="audit"><thead><tr><th scope="col">Time</th>${withAgent ? '<th scope="col">Agent</th>' : ''}<th scope="col">Command</th><th scope="col">Approved by</th><th scope="col">Tags</th><th scope="col">Result</th><th scope="col">Review</th></tr></thead><tbody>${rows
-    .map(({ command, view }) => {
-      const { record } = view;
-      return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td>${e(workerName(record, tasks))}${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(command.tool)}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
-    })
-    .join('')}</tbody></table></div>`;
+  const head = `<thead><tr><th scope="col">Time</th>${withAgent ? '<th scope="col">Agent</th>' : ''}<th scope="col">Command</th><th scope="col">Approved by</th><th scope="col">Tags</th><th scope="col">Result</th><th scope="col">Review</th></tr></thead>`;
+  // The 20 latest stay in view. The other tagged ones and the older ones fold, each under its count.
+  const inView = rows.slice(0, 20);
+  const older = rows.slice(20);
+  const taggedOlder = older.filter((row) => row.command.risk.length > 0);
+  const plainOlder = older.filter((row) => !row.command.risk.length);
+  const counts = new Map<string, number>();
+  for (const view of views)
+    for (const command of view.record.commands)
+      for (const tag of command.risk)
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  const byTag = [...counts]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag, count]) => `${tag} ${count}`)
+    .join(', ');
+  const table = (list: readonly AuditRow[]): string =>
+    `<div class="table"><table class="audit">${head}<tbody>${list.map(auditRow).join('')}</tbody></table></div>`;
+  return `<div class="section-title">${auditFilter}<span class="count">${total} recorded, ${tagged} tagged${byTag ? `: ${e(byTag)}` : ''}</span></div><p class="fine">A tag points to a command worth a look, from its text alone. It is not a finding. Each row is the command that the agent asked for, not the processes that it started.</p>${tagged ? '' : '<p class="fine tagged-none">No command has a tag.</p>'}${table(inView)}${taggedOlder.length ? `<details id="audit-tagged"><summary>${taggedOlder.length} older tagged ${taggedOlder.length === 1 ? 'command' : 'commands'}</summary>${table(taggedOlder)}</details>` : ''}${plainOlder.length ? `<details id="audit-more"><summary>${plainOlder.length} older ${plainOlder.length === 1 ? 'command' : 'commands'} without a tag</summary>${rows.length < total ? '<p class="fine">This list holds the latest 200 commands and every tagged one.</p>' : ''}${table(plainOlder)}</details>` : ''}`;
+
+  function auditRow({ command, view }: AuditRow): string {
+    const { record } = view;
+    return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td><span class="agent-name" title="${e(workerName(record, tasks))}">${e(workerName(record, tasks))}</span>${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(command.tool)}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
+  }
 }
 
 /** Results: the checks of the chosen direction with their results, then the answer and the sign-off. */
@@ -2050,7 +2070,10 @@ function renderResultsView(workspace: Workspace, live: DeskSession): string {
     .map((gate, index) => {
       const entry = results?.checks.find((saved) => saved.check === index + 1);
       const outcome = entry?.ruling?.result ?? entry?.result;
-      return `<li class="check-row" data-result="${outcome ?? 'none'}"><span class="check-num">${index + 1}</span><div class="check-body"><p class="check-text">${e(gate)}</p>${
+      // The name of the check leads. A long rule folds after its first lines.
+      const [, name = '', rule = gate] =
+        /^([^:\n]{1,60}):\s*([\s\S]*)$/.exec(gate) ?? [];
+      return `<li class="check-row" data-result="${outcome ?? 'none'}"><span class="check-num">${index + 1}</span><div class="check-body">${name ? `<p class="check-name">${e(name)}</p>` : ''}<div class="check-text">${more(`check-text-${index + 1}`, rule, 200)}</div>${
         entry
           ? `<p class="check-value"><span class="tag reading">Its reading</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p><div class="why"><span class="tag reading">Its reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
           : ''
@@ -2206,20 +2229,24 @@ function renderRecords(
   snapshot: DeskSnapshot,
   workers: readonly SessionView[],
   tasks: readonly TaskRecord[],
+  messages: readonly Message[],
   shown: string | undefined,
   archives: readonly ArchivedRun[] | undefined,
 ): string {
   const { attempts } = snapshot;
   const logged = workers.filter((worker) => worker.record.commands.length);
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>What the agents ran, every research attempt, and the runs</p></div>
-
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Records</h1><p>Messages, commands, research, and earlier runs</p></div>
+  ${renderFeed(messages, tasks)}
   <section class="card commands" aria-labelledby="commands-title"><h2 id="commands-title">Commands</h2>${logged.length ? auditTable(logged, tasks, true) : '<p class="empty-note">No commands are recorded yet. Each tool call that a worker reports shows here.</p>'}</section>
   <section class="card history" aria-labelledby="history-title"><div class="section-title"><h2 id="history-title">Research attempts</h2><span class="count">${attempts.length}</span></div>${snapshot.historyLimited ? '<p class="notice">History scan is limited to 200 entries, plus the latest recorded attempt. Inspect the project files for the complete record.</p>' : ''}${attempts.length ? `<ol>${attempts.map((attempt) => `<li><button type="button" data-attempt="${e(attempt.id)}" aria-pressed="${attempt.id === shown}"><span class="attempt-title">${e(attempt.record ? phaseLabel(attempt.record.phase) : 'Unrecorded attempt')}</span><span class="attempt-status">${e(outcome(attempt))}</span><span class="attempt-reference">${e(attempt.id.slice(0, 8))}${attempt.record ? ` <time datetime="${e(attempt.record.startedAt)}">${e(time(attempt.record.startedAt))}</time>` : ''}</span></button></li>`).join('')}</ol>` : '<p class="empty-note">Each research request shows here with its own identity.</p>'}</section>${archives ? `${renderRuns(archives, tasks)}<section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Project memory</h2><p>Verifold keeps <code>memory/</code> in your project folder: <code>README.md</code> (read first), <code>progress.md</code>, <code>decisions.md</code>, <code>findings.md</code>, <code>notes.md</code>, and one file for each task under <code>tasks/</code>.</p><p class="fine">Every agent starts from <code>README.md</code>, also after Start over. Verifold rewrites only the part between its markers. Your own text outside them stays.</p></section>` : ''}</div>`;
 }
 
 /** The summary and the sources of one research report. Source links are validated before rendering. */
 function findingsBody(report: ResearchReport, attempt: string): string {
-  return `<div class="prose">${moreMd(`findings-${attempt}`, report.summary, 400)}</div><ol class="sources">${report.sources.map((source, index) => `<li><a id="source-${e(attempt)}-${index}" href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${e(source.title)}</a><span>${e(new URL(source.url).hostname)}</span></li>`).join('')}</ol><details id="delegation"><summary>Delegation reported by the model</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Source links provide traceability. Scientific claims still need review.</p>`;
+  const source = (item: ResearchReport['sources'][number], index: number) =>
+    `<li><a id="source-${e(attempt)}-${index}" href="${e(item.url)}" target="_blank" rel="noopener noreferrer">${e(item.title)}</a><span>${e(new URL(item.url).hostname)}</span></li>`;
+  const rest = report.sources.slice(5);
+  return `<div class="prose">${moreMd(`findings-${attempt}`, report.summary, 400)}</div><ol class="sources">${report.sources.slice(0, 5).map(source).join('')}</ol>${rest.length ? `<details id="sources-${e(attempt)}"><summary>All ${report.sources.length} sources</summary><ol class="sources" start="6">${rest.map((item, index) => source(item, index + 5)).join('')}</ol></details>` : ''}<details id="delegation"><summary>How research split the work</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Each link shows where a claim came from. Read the source before you rely on the claim.</p>`;
 }
 
 /** A web address as a link with its host and path. Text that is not an http(s) address stays text. */
@@ -2817,19 +2844,12 @@ function renderHomeWork(
   const idea = workspace.candidates.find(
     (candidate) => candidate.id === workspace.selectedId,
   );
+  // D92: the checks live in Answer. Home says how many have a result.
   const results = resultsOf(workspace, live);
   const checks = idea?.gates.length
-    ? `<section class="card" aria-labelledby="home-checks-title"><div class="section-title"><h2 id="home-checks-title">The checks</h2><span class="count">${results?.checks.length ?? 0} of ${idea.gates.length} reported</span></div><ol class="home-checks">${idea.gates
-        .map((gate, index) => {
-          const entry = results?.checks.find(
-            (saved) => saved.check === index + 1,
-          );
-          const outcome = entry?.ruling?.result ?? entry?.result;
-          return `<li data-result="${outcome ?? 'none'}"><span class="check-result">${outcome ? e(outcomeLabels[outcome]) : 'Not yet'}</span> ${e(lead(gate, 140))}</li>`;
-        })
-        .join('')}</ol></section>`
+    ? `<button type="button" class="quiet" data-view="results">${results?.checks.length ?? 0} of ${idea.gates.length} checks have a result</button>`
     : '';
-  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2><button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, needs, hideFinished)}</section>${checks}`;
+  return `<section class="card map-card" aria-labelledby="home-map-title"><div class="section-title"><h2 id="home-map-title">The work</h2>${checks}<button type="button" class="quiet" data-view="tasks">Open the tasks</button></div>${renderMap(view, live, idea?.title ?? state.objective, needs, hideFinished)}</section>`;
 }
 
 function renderHome(
@@ -2843,7 +2863,6 @@ function renderHome(
 ): string {
   const { workspace } = snapshot;
   const tasks = live.tasks?.list ?? [];
-  const messages = live.tasks?.messages ?? [];
   let lead: string;
   if (live.research && !workspace.selectedId)
     lead = renderDecision(workspace, live, 'home');
@@ -2861,7 +2880,7 @@ function renderHome(
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk never starts a harness. To start one, choose A new agent in the message box.' : 'The desk only reads saved work. Opening it never starts a harness.'}</p></section>`;
   }
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${renderNow(workspace, live, needs)}${lead}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderFeed(messages, tasks)}${renderPaused(live)}</div>`;
+  <div class="view">${renderNow(workspace, live, needs)}${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -3011,6 +3030,7 @@ export function renderDesk(
                       snapshot,
                       workers,
                       tasks,
+                      live.tasks?.messages ?? [],
                       frame.panel === 'attempt' ? chosen?.id : undefined,
                       live.archives,
                     )
