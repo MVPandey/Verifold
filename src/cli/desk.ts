@@ -276,7 +276,7 @@ async function redraft(
   await research.select(idea, true);
 }
 
-/** Start a coordinator with an objective, on the project's harness unless the person chose one. Its first plan waits for the person. */
+/** Start a coordinator with an objective, on the project's harness unless the person chose one. In a guided project, its first plan waits for the person. */
 async function startCoordinator(
   root: string,
   coordinator: Coordinator,
@@ -291,7 +291,7 @@ async function startCoordinator(
     model: model ?? workspace.model,
     ...(workspace.helper ? { helper: workspace.helper } : {}),
     context: coordinatorContext(workspace),
-    guided: true,
+    guided: workspace.research?.autonomy !== 'autonomous',
   });
 }
 
