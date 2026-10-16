@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
-import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
+import {
+  HarnessTimeoutError,
+  type HarnessRequest,
+  type HarnessResult,
+} from '../src/cli/harness.ts';
 import { SessionPool } from '../src/cli/workers.ts';
 import { terminalInput } from '../src/cli/commands.ts';
 import { startDesk } from '../src/cli/desk.ts';
@@ -301,6 +305,84 @@ await test('research runs in the owner, records observed activity, and waits for
     runner.start({ feedback: 'More sources' }),
     /direction is chosen/,
   );
+});
+
+/** The fixture harness, but the calls in `stops` (1 for the first) end on a time limit. */
+function timeouts(stops: readonly number[]): {
+  readonly harness: typeof harness;
+  readonly prompts: string[];
+} {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    harness: (request) => {
+      prompts.push(request.prompt);
+      return stops.includes(prompts.length)
+        ? Promise.reject(
+            new HarnessTimeoutError(
+              'The agent sent nothing for 15 minutes, so Verifold stopped it.',
+            ),
+          )
+        : harness(request);
+    },
+  };
+}
+
+await test('a step that stops on a time limit runs again once by itself', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fake = timeouts([1, 3]);
+  const { runner, lines } = setup(root, { harness: fake.harness });
+  await runner.start({ topic: 'Proof search', autonomy: 'guided' });
+  await runner.settled();
+  // The plan step stopped, ran again, and the plan waits for the person.
+  assert.equal(fake.prompts.length, 2);
+  assert.equal(
+    (await loadWorkspace(root)).research?.phase,
+    'awaiting-plan-review',
+  );
+  assert.ok(
+    lines.includes(
+      'The agent sent nothing for 15 minutes, so Verifold stopped it. Research runs the step again from the saved checkpoint.',
+    ),
+  );
+  // The approval is saved before the search, so the search runs again without it.
+  await runner.start({ approve: true });
+  await runner.settled();
+  assert.equal(fake.prompts.length, 4);
+  assert.match(fake.prompts[3] ?? '', /Approved plan:/);
+  assert.equal((await loadWorkspace(root)).research?.phase, 'directions');
+  // Both lines of the step show: the stop and what followed.
+  assert.ok(
+    runner
+      .view()
+      .events.some((event) => /runs the step again/.test(event.text)),
+  );
+});
+
+await test('a second time limit, or another error, waits for the person', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fake = timeouts([1, 2, 3]);
+  const { runner } = setup(root, { harness: fake.harness });
+  await runner.start({ topic: 'Proof search', autonomy: 'guided' });
+  await runner.settled();
+  assert.equal(fake.prompts.length, 2);
+  assert.equal((await loadWorkspace(root)).research?.phase, 'needs-plan');
+  assert.match(
+    runner.view().events.at(-1)?.text ?? '',
+    /^The research step failed: The agent sent nothing for 15 minutes, so Verifold stopped it\. The saved checkpoint and the attempt files remain\. Choose Continue research to try again\.$/,
+  );
+  let calls = 0;
+  const other = setup(root, {
+    harness: () => {
+      calls++;
+      return Promise.reject(new Error('claude exited with status 1.'));
+    },
+  });
+  await other.runner.start({});
+  await other.runner.settled();
+  assert.equal(calls, 1);
 });
 
 await test('a research cancel keeps the attempt evidence', async (t) => {
