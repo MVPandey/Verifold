@@ -1325,3 +1325,43 @@ await test('a worker starts with the project memory and keeps notes in it', asyn
     'Reproduce the baseline: Florida has no road data.',
   ]);
 });
+
+await test('a version without environments, and an old record that listed one', async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  await turn(tasks, sessions, {
+    'results/baseline.md': '1.9 ms\n',
+    'results/.venv/pyvenv.cfg': 'home = /usr\n',
+    'results/.venv/lib/site.py': 'x',
+  });
+  let task = (await tasks.get(id)) as TaskRecord;
+  assert.deepEqual(
+    task.attempts[0]?.versions[0]?.files.map((file) => file.path),
+    ['results/baseline.md'],
+  );
+  await assert.rejects(tasks.stop(id), /task-1 is not running now/);
+
+  // A record from before this change lists 40,000 environment files: over 4 MB.
+  const path = join(root, '.verifold/tasks', id, 'task.json');
+  const saved = JSON.parse(await readFile(path, 'utf8')) as TaskRecord;
+  const version = saved.attempts[0]?.versions[0];
+  assert.ok(version);
+  (version.files as unknown[]).push(
+    ...Array.from({ length: 40_000 }, (_, index) => ({
+      path: `results/.venv/lib/python3.12/site-packages/module_${index}.py`,
+      change: 'added',
+      regular: true,
+      inScope: true,
+    })),
+  );
+  await writeFile(path, JSON.stringify(saved));
+  task = (await tasks.get(id)) as TaskRecord;
+  assert.deepEqual(
+    task.attempts[0]?.versions[0]?.files.map((file) => file.path),
+    ['results/baseline.md'],
+  );
+  assert.equal((await tasks.list()).length, 1);
+});

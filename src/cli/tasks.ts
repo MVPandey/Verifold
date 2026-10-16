@@ -27,6 +27,7 @@ import {
   diff,
   inScope,
   integrate,
+  leftOut,
   overlaps,
   projectPath,
   readAt,
@@ -630,7 +631,7 @@ export class TaskManager {
     const task = await this.load(id);
     const session = task.attempts.at(-1)?.session;
     if (task.state !== 'running' || !session)
-      fail('No turn of this task is running.');
+      fail(`${task.id} is not running now, so there is nothing to stop.`);
     this.options.sessions.cancel(session);
     this.told(by, task.id, `The person stopped the turn of ${task.id}.`);
   }
@@ -1888,9 +1889,9 @@ export class TaskManager {
     try {
       const path = join(this.directory, id, 'task.json');
       const stats = await lstat(path);
-      if (!stats.isFile() || stats.size > 4_000_000) return null;
+      if (!stats.isFile() || stats.size > 32_000_000) return null;
       const task = parseTask(JSON.parse(await readFile(path, 'utf8')));
-      return task?.id === id ? task : null;
+      return task?.id === id ? withoutLeftOut(task) : null;
     } catch {
       return null;
     }
@@ -2109,6 +2110,32 @@ function parseWorkspace(value: unknown): Workspace | null | undefined {
     /^[0-9a-f]{40,64}$/.test(entry.start)
     ? (entry as unknown as Workspace)
     : undefined;
+}
+
+/**
+ * A version saved before Verifold left out environments and caches can list
+ * thousands of their files. Reading the task drops them, so nobody accepts them
+ * and the record shrinks with its next save.
+ */
+function withoutLeftOut(task: TaskRecord): TaskRecord {
+  if (
+    !task.attempts.some((attempt) =>
+      attempt.versions.some((version) =>
+        version.files.some((file) => leftOut(file.path)),
+      ),
+    )
+  )
+    return task;
+  return {
+    ...task,
+    attempts: task.attempts.map((attempt) => ({
+      ...attempt,
+      versions: attempt.versions.map((version) => ({
+        ...version,
+        files: version.files.filter((file) => !leftOut(file.path)),
+      })),
+    })),
+  };
 }
 
 function parseTask(value: unknown): TaskRecord | null {
