@@ -1080,7 +1080,7 @@ export async function runCli(
       if (!current) throw new Error('Run init first.');
       if (current.selectedId)
         throw new Error(
-          'A selected idea already exists; refusing to replace its evidence.',
+          'An idea is already selected. Verifold keeps its evidence and selects nothing new.',
         );
       return { ...current, candidates };
     });
@@ -1135,7 +1135,7 @@ export async function runCli(
       JSON.stringify({
         selectedId: result.selectedId,
         status: 'direction-selected',
-        next: 'Run verifold in this project directory. The coordinator plans the tasks for this direction and waits for your approval.',
+        next: 'Run verifold in this project folder. The coordinator then plans the tasks for this direction.',
         visibility: 'private',
       }),
     );

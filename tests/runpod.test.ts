@@ -415,7 +415,7 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
   // After setup, Compute says the limits in one line, with the form folded.
   assert.match(
     html,
-    /<p>Up to \$25\.00 for this project, \$1\.50 per hour for one pod, 4 hours for one lease\. A pod inside these limits starts without asking\.<\/p><details id="compute-limits-edit"><summary>Change the limits<\/summary>/,
+    /<p>Up to \$25\.00 for this project, \$1\.50 per hour for one pod, 4 hours for one pod\. A pod inside these limits starts without asking\.<\/p><details id="compute-limits-edit"><summary>Change the limits<\/summary>/,
   );
   // A desk without compute has no Compute view.
   const plain = renderDesk(
