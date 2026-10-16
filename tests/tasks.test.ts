@@ -505,7 +505,7 @@ await test('an accepted version reaches the tasks that wait for it, and a replac
   assert.doesNotMatch(stale, /task-1 version/);
   assert.match(
     await desk(prior),
-    /Version 2 was accepted: results\/prior\/notes\.md[\s\S]*Revise the task/,
+    /Version 2 was accepted with 1 file\.[\s\S]*<code>results\/prior\/notes\.md<\/code>[\s\S]*Revise the task/,
   );
   await tasks.reject(review, 1);
   await tasks.start(review);
@@ -1283,7 +1283,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
   );
   assert.match(
     await view('?view=task&task=task-1'),
-    /<h2>Done<\/h2><p>Version 1 was accepted: results\/baseline\.md/,
+    /<h2>Done<\/h2><p>Version 1 was accepted with 1 file\.[\s\S]*<code>results\/baseline\.md<\/code>/,
   );
 });
 
