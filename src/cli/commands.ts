@@ -42,6 +42,7 @@ import {
 } from './session.ts';
 import { claimOwner } from './owner.ts';
 import { Compute } from './compute.ts';
+import { KeepAwake } from './awake.ts';
 import { KeyStore, type KeyStoreOptions } from './credentials.ts';
 import { spent, type Lease } from './leases.ts';
 /** How a view can show a question. The terminal shows only the question text. */
@@ -527,6 +528,23 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
+      // While an agent works or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
+      const awake = new KeepAwake();
+      const working = setInterval(() => {
+        awake.set(
+          runner.running ||
+            [...sessions.views(), coordinator.view()?.session].some(
+              (view) => view?.record.status === 'running',
+            ) ||
+            compute
+              .view()
+              .leases.some(
+                (lease) =>
+                  lease.state === 'starting' || lease.state === 'ready',
+              ),
+        );
+      }, 30_000);
+      working.unref();
       try {
         await sessions.load();
         await coordinator.load();
@@ -637,6 +655,8 @@ async function serveDesk(
         await memory.write().catch(() => {
           /* The memory follows at the next start. */
         });
+        clearInterval(working);
+        awake.set(false);
       }
     } finally {
       await owner.release();
