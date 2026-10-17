@@ -250,6 +250,14 @@ for (const background of [false, true])
     const url = new URL((JSON.parse(urls[0] ?? '{}') as { url: string }).url);
     assert.equal(opened.length, 1);
     const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+    // The page server's origin, which the open tab's CSP lets the desk frame.
+    const frames = async (): Promise<string | undefined> =>
+      /frame-src [^;]*/.exec(
+        (await fetch(`${url.origin}/`)).headers.get(
+          'content-security-policy',
+        ) ?? '',
+      )?.[0];
+    const framed = await frames();
     const view = async (): Promise<string> =>
       (
         (await (await fetch(`${url.origin}/api/view`, { headers })).json()) as {
@@ -341,6 +349,8 @@ for (const background of [false, true])
       assert.ok(
         lines.includes('The desk in your browser now shows the project.'),
       );
+      // The page server moved to the same port too, so the tab can still frame pages.
+      assert.equal(await frames(), framed);
       // Ctrl+C detaches the terminal. The owner keeps the project.
       controller.abort();
       await done;
