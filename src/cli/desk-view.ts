@@ -1218,7 +1218,19 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   const compute = live.compute;
   if (compute)
     for (const lease of compute.leases) {
-      if (lease.state === 'requested')
+      const missing = missingSecrets(lease, compute);
+      if (lease.state === 'requested' && missing.length)
+        items.push({
+          key: `lease-secret:${lease.id}`,
+          view: 'compute',
+          kind: 'GPU pod',
+          title: `Add a secret: ${missing.join(', ')}`,
+          why: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod that needs it. The pod waits until you add it in Compute.`,
+          since: lease.requestedAt,
+          body: `<div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'The coordinator says' : 'Your reason'}</span> ${e(lease.reason)}</div>
+  <div class="actions"><button type="button" class="primary" data-view="compute">Add it in Compute</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny the pod</button></div>`,
+        });
+      else if (lease.state === 'requested')
         items.push({
           key: `lease:${lease.id}`,
           view: 'compute',
@@ -1256,6 +1268,13 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
     if (stalled) items.push(stalled);
   }
   return items;
+}
+
+/** The secrets that a lease names and this computer does not store. */
+function missingSecrets(lease: Lease, compute: ComputeView): string[] {
+  return (lease.secrets ?? []).filter(
+    (name) => !compute.secrets.some((secret) => secret.name === name),
+  );
 }
 
 /**
@@ -1328,7 +1347,7 @@ function stalledTeam(
 function leaseRequest(lease: Lease, compute: ComputeView): string {
   const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
   const left = compute.budget.left;
-  return `<dl class="facts"><div><dt>For</dt><dd>${lease.tasks.map((task) => e(task)).join(', ')}</dd></div><div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
+  return `<dl class="facts"><div><dt>For</dt><dd>${lease.tasks.map((task) => e(task)).join(', ')}</dd></div>${lease.secrets?.length ? `<div><dt>Secrets</dt><dd>${lease.secrets.map((name) => `<code>${e(name)}</code>`).join(', ')}, as environment variables on the pod</dd></div>` : ''}<div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
   <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'The coordinator says' : 'Your reason'}</span> ${e(lease.reason)}</div>
   <p class="fine">The pod runs any command as root, with internet access. Files that a task copies to it leave this computer. RunPod erases the disk of the pod when the pod stops. Verifold stops the pod after ${compute.settings.idleMinutes} idle minutes and when Verifold stops, and deletes it at the end of the lease or at your spend limit.</p>
   <div class="actions"><button type="button" class="primary" data-action="compute-lease-approve" data-lease="${e(lease.id)}">Approve, up to ${usd(cost)}</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny</button></div>`;
@@ -2277,6 +2296,28 @@ function keyForm(keyring: ComputeView['keyring']): string {
   <p class="fine">Verifold checks the key with one read-only call to RunPod before it saves it. Use a separate key for Verifold, so that you can revoke it alone in the RunPod console.</p>`;
 }
 
+/** Pod secrets: the stored names, a form for a new one, and the requests that wait for one. */
+function renderSecrets(compute: ComputeView): string {
+  const waiting = compute.leases.filter(
+    (lease) =>
+      lease.state === 'requested' && missingSecrets(lease, compute).length,
+  );
+  const missing = [
+    ...new Set(waiting.flatMap((lease) => missingSecrets(lease, compute))),
+  ];
+  const form = `<div class="fields"><label class="field" for="secret-name">Name<input id="secret-name" type="text" autocomplete="off" spellcheck="false" maxlength="64" pattern="[A-Z][A-Z0-9_]*" value="${e(missing[0] ?? '')}" placeholder="HF_TOKEN"></label><label class="field" for="secret-value">Value<input id="secret-value" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label></div>
+  ${compute.keyring ? `<label class="check" for="secret-file"><input type="checkbox" id="secret-file"> Keep it in a private file instead of ${e(placeNames[compute.keyring])}</label>` : ''}
+  <div class="actions"><button type="button" class="primary" data-action="compute-secret-save"${compute.keyring ? '' : ' data-file="always"'}>Save the secret</button></div>`;
+  const list = compute.secrets.length
+    ? `<ul class="secrets">${compute.secrets.map((secret) => `<li><span><code>${e(secret.name)}</code> <span class="fine">in ${e(placeNames[secret.place])}, saved ${e(since(secret.savedAt))}</span></span><button type="button" data-action="compute-secret-remove" data-secret="${e(secret.name)}" data-confirm="Click again to remove ${e(secret.name)}">Remove</button></li>`).join('')}</ul>`
+    : '';
+  return `<section class="card${missing.length ? ' lead' : ''}" aria-labelledby="secrets-title"><h2 id="secrets-title">Secrets for pods</h2>
+  ${missing.length ? `<p>${waiting.map((lease) => e(lease.id)).join(' and ')} ${waiting.length === 1 ? 'waits' : 'wait'} for ${missing.map((name) => `<code>${e(name)}</code>`).join(' and ')}.</p>` : compute.secrets.length ? '' : '<p class="fine">A pod gets a secret, such as an HF_TOKEN for gated models, only when its request names it.</p>'}
+  ${list}
+  ${missing.length ? form : `<details id="secret-add"><summary>Add a secret</summary>${form}</details>`}
+  <p class="fine">Agents never see the values. Verifold hides them in the output of pod commands. Use a token with the least access that the work needs, such as a read-only token.</p></section>`;
+}
+
 /** Compute: the RunPod key, the limits that only the person sets, and the GPUs that leases can use. */
 function renderComputeView(compute: ComputeView): string {
   const { key, settings, gpus } = compute;
@@ -2354,9 +2395,11 @@ function renderComputeView(compute: ComputeView): string {
     .map((id) => `<code>${e(id)}</code>`)
     .join(', ');
   return `<div class="view">${head}
+  ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? renderSecrets(compute) : ''}
   ${renderPods(compute)}
   <section class="card" aria-labelledby="limits-title"><h2 id="limits-title">Limits</h2><p>Up to ${usd(settings.limitUsd ?? 0)} for this project, ${usd(settings.maxUsdPerHour)} per hour for one pod, ${settings.maxHoursPerLease} ${settings.maxHoursPerLease === 1 ? 'hour' : 'hours'} for one pod. ${settings.askBeforePod ? 'You approve each pod.' : 'A pod inside these limits starts without asking.'}</p><details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>
   <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2><p>Pods can use ${allowed}.</p><details id="compute-gpus-edit"${gpus ? ' open' : ''}><summary>Change the GPUs</summary>${gpuCard}</details></section>
+  ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? '' : renderSecrets(compute)}
   ${keyLine}</div>`;
 }
 
