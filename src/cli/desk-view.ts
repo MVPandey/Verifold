@@ -233,11 +233,19 @@ function since(value: string): string {
     : time(value);
 }
 
+/** A clock time. Another day than today adds its weekday within a week, or its date. */
 function clock(value: string): string {
-  return new Date(value).toLocaleTimeString('en-GB', {
+  const date = new Date(value);
+  const hours = date.toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
   });
+  if (date.toDateString() === new Date().toDateString()) return hours;
+  const day =
+    Math.abs(Date.now() - date.getTime()) < 6 * 86_400_000
+      ? date.toLocaleDateString('en-GB', { weekday: 'short' })
+      : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return `${day} ${hours}`;
 }
 
 function elapsed(since: string): string {
@@ -263,7 +271,11 @@ function duration(since: string): string {
 /** The first sentence of a text, or its start, as a lead of at most `max` characters. */
 function lead(text: string, max = 160): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  const sentence = /^.+?[.!?](?=\s|$)/.exec(flat)?.[0] ?? flat;
+  // A first sentence of up to three words, such as "Bottom line.", is a label. The lead takes the sentence after it too.
+  const sentence =
+    /^(?:[^\s.!?]+(?: [^\s.!?]+){0,2}[.!?] )?.+?[.!?](?=\s|$)/.exec(
+      flat,
+    )?.[0] ?? flat;
   if (sentence.length <= max) return sentence;
   return `${flat.slice(0, max).replace(/\s+\S*$/, '')}…`;
 }
@@ -588,14 +600,15 @@ const taskFaces: Record<TaskRecord['state'], string> = {
   cancelled: 'ended',
 };
 
-const turnLabels: Record<TaskVersion['turn'], string> = {
-  completed: 'the turn ended',
-  interrupted: 'you stopped the turn',
-  failed: 'the turn failed',
-  exited: 'the harness process exited',
-  'time-limit': 'the time limit stopped the turn',
-  stopped: 'Verifold stopped during the turn',
-  terminal: 'you worked in the terminal',
+/** The heading of a version review after "Version N", by how its turn ended. */
+const turnHeadings: Record<TaskVersion['turn'], string> = {
+  completed: 'is ready for review',
+  interrupted: 'came from a turn that you stopped',
+  failed: 'came from a turn that failed',
+  exited: 'came from a turn whose harness process exited',
+  'time-limit': 'came from a turn that reached its time limit',
+  stopped: 'came from a turn that Verifold stopped',
+  terminal: 'came from your work in the terminal',
 };
 
 /** A task form. The new-task form and the edit form share it, with different ID prefixes. */
@@ -645,7 +658,7 @@ function reviewDecision(
     : version.files.filter(
         (file) => file.inScope && file.regular && !scratch(file.path),
       );
-  return `<section class="card decision" aria-labelledby="review-title"><div class="section-title"><h2 id="review-title" tabindex="-1">Version ${version.number}: ${e(turnLabels[version.turn])}</h2><span class="count">${e(since(version.at))}</span></div>
+  return `<section class="card decision" aria-labelledby="review-title"><div class="section-title"><h2 id="review-title" tabindex="-1">Version ${version.number} ${e(turnHeadings[version.turn])}</h2><span class="count">${e(since(version.at))}</span></div>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
@@ -744,6 +757,29 @@ function notesToPerson(
   return notes.length
     ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map((message) => messageItem(message, tasks)).join('')}</ul></details>`
     : '';
+}
+
+/**
+ * The coordinator's latest note to the person, unless it is older than 12
+ * hours or a task that it names changed after it.
+ */
+function currentNote(
+  messages: readonly Message[],
+  tasks: readonly TaskRecord[],
+): Message | undefined {
+  const note = messages
+    .filter(
+      (message) => message.from === 'coordinator' && message.to === 'person',
+    )
+    .at(-1);
+  if (!note || Date.now() - Date.parse(note.at) > 12 * 3_600_000) return;
+  const named = new Set(note.text.match(/\btask-\d+\b/g));
+  return tasks.some(
+    (task) =>
+      named.has(task.id) && Date.parse(task.updatedAt) > Date.parse(note.at),
+  )
+    ? undefined
+    : note;
 }
 
 /** One agent that the message box can write to. */
@@ -857,6 +893,7 @@ function thread(
   live: DeskSession,
   shown: boolean,
   needsShown: boolean,
+  notes: boolean,
 ): string {
   // The coordinator's drafts wait for the person under its thread, unless Needs you on the page lists them.
   const drafts =
@@ -871,7 +908,9 @@ function thread(
     .filter(
       (message) =>
         asked.includes(message) ||
-        (recipient.to === 'coordinator' &&
+        // The coordinator's notes show on Home only, so other pages do not repeat them.
+        (notes &&
+          recipient.to === 'coordinator' &&
           message.from === 'coordinator' &&
           message.to === 'person' &&
           message.kind === 'note' &&
@@ -926,6 +965,7 @@ function renderDock(
   live: DeskSession,
   prefer?: string,
   needsShown = false,
+  notes = false,
 ): string {
   const list = recipients(workspace, live);
   const first = list.find((recipient) => recipient.to === prefer) ?? list[0];
@@ -939,7 +979,7 @@ function renderDock(
         : recipient.to === 'new-agent'
           ? 'Write the first request for a new agent'
           : `Write to ${recipient.to === 'research' ? 'research' : recipient.name}`;
-  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first, needsShown)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span class="visually-hidden">To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
+  return `<button type="button" class="dock-button" data-dock aria-controls="dock">Message the team</button><section class="dock" id="dock" aria-label="Message the team"><div class="dock-threads">${list.map((recipient) => thread(recipient, messages, live, recipient === first, needsShown, notes)).join('')}</div><div class="dock-row"><label class="dock-to" for="message-to"><span class="visually-hidden">To</span><select id="message-to">${list.map((recipient) => `<option value="${e(recipient.to)}" data-hint="${e(hint(recipient))}"${prefer && recipient === first ? ' selected' : ''}>${e(recipient.name)}</option>`).join('')}</select></label><label class="visually-hidden" for="message-text">Message</label><textarea id="message-text" rows="1" maxlength="4000" placeholder="${e(hint(first))}"></textarea><button type="button" class="primary" data-action="message">Send</button></div>${
     live.controllable
       ? `<div class="dock-new" data-for="new-agent"${first.to === 'new-agent' ? '' : ' hidden'}><label for="agent-host">Harness <select id="agent-host"><option value="claude"${workspace.host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${workspace.host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label for="agent-mode">Commands <select id="agent-mode"><option value="ask">Ask me first</option><option value="auto">Auto</option></select></label><span>In this project folder</span></div>`
       : ''
@@ -1346,9 +1386,9 @@ function renderNeedList(items: readonly Need[]): string {
 
 /** Needs you: one list of every decision that only the person can make. */
 function renderNeedsView(items: readonly Need[]): string {
-  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Needs you</h1><p>${items.length ? `${items.length} ${items.length === 1 ? 'item waits' : 'items wait'} for you` : 'Nothing waits for you'}</p></div>
+  return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Needs you</h1><p>${items.length ? `${items.length} ${items.length === 1 ? 'item waits' : 'items wait'} for you` : 'Nothing needs you right now.'}</p></div>
   <p class="notify"><span id="notify-state"></span><button type="button" id="notify" hidden>Turn on desktop notifications</button></p>
-  ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p><strong>Nothing needs you.</strong></p><p class="fine">Questions, approvals, and stopped work show here when they need you.</p></section>'}</div>`;
+  ${items.length ? `<section class="card needs" aria-labelledby="view-title">${renderNeedList(items)}</section>` : '<section class="card"><p class="fine">Questions, approvals, and stopped work show here when they need you.</p></section>'}</div>`;
 }
 
 /** One line on Home while pods run, with the cost against the limit. */
@@ -1390,8 +1430,9 @@ const actionWords: Record<string, readonly [string, string]> = {
   accept: ['Accepted a version of', 'accept a version of'],
   request_changes: ['Asked for changes to', 'ask for changes to'],
   reject: ['Rejected a version of', 'reject a version of'],
-  decide: ['Settled an objection on', 'settle an objection on'],
-  post: ['Wrote a note', 'write a note'],
+  post: ['Wrote to', 'write to'],
+  ask: ['Asked you a question', 'ask you a question'],
+  note: ['Kept a note in memory/notes.md', 'keep a note in memory/notes.md'],
   report_check: ['Reported a check', 'report a check'],
   propose_answer: ['Proposed the answer', 'propose the answer'],
   state: ['Read the state of the work', 'read the state of the work'],
@@ -1403,25 +1444,51 @@ const actionWords: Record<string, readonly [string, string]> = {
   end_lease: ['Ended a GPU pod', 'end a GPU pod'],
 };
 
+/** What the coordinator did with a blocker or an objection, by its decision. */
+const decisionWords: Record<string, string> = {
+  resolved: 'Answered the blocker from',
+  upheld: 'Upheld the objection from',
+  overruled: 'Overruled the objection from',
+};
+
 /** A coordinator action as a sentence for the person, with the title of its task. */
 function actionSentence(
   action: CoordinatorAction,
   tasks: readonly TaskRecord[],
+  messages: readonly Message[] = [],
 ): string {
-  const [done, tried] = actionWords[action.tool.replace(/^verifold_/, '')] ?? [
-    'Used a tool',
-    'use a tool',
-  ];
+  const name = action.tool.replace(/^verifold_/, '');
   let input: Record<string, unknown> = {};
   try {
     input = object(JSON.parse(action.input));
   } catch {
     // An input that is not an object leaves the sentence without its task.
   }
-  const id = typeof input.task === 'string' ? input.task : undefined;
+  if (name === 'decide') {
+    const message = messages.find((entry) => entry.id === input.message);
+    const decided =
+      typeof input.decision === 'string'
+        ? decisionWords[input.decision]
+        : undefined;
+    return action.ok && message && decided
+      ? `${decided} ${sender(message.from, tasks)}.`
+      : `${action.ok ? 'Settled' : 'Tried to settle'} ${typeof input.message === 'string' ? `message ${input.message}` : 'a message'}${action.ok ? '' : '. Verifold refused it'}.`;
+  }
+  const [done, tried] = actionWords[name] ?? [
+    `Used the tool ${action.tool}`,
+    `use the tool ${action.tool}`,
+  ];
+  const id =
+    typeof input.task === 'string'
+      ? input.task
+      : name === 'post' && typeof input.to === 'string'
+        ? input.to
+        : undefined;
   const title =
-    tasks.find((task) => task.id === id)?.assignment.title ??
-    (typeof input.title === 'string' ? input.title : id);
+    id === 'person'
+      ? 'you'
+      : (tasks.find((task) => task.id === id)?.assignment.title ??
+        (typeof input.title === 'string' ? input.title : id));
   const what =
     action.tool === 'verifold_report_check' &&
     typeof input.check === 'number' &&
@@ -1480,6 +1547,15 @@ function coordinatorPanel(
   const planning =
     session?.status === 'running' || session?.status === 'starting';
   const waits = planWaits(view, tasks);
+  // What the coordinator does or waits for comes first. A pause or the hourly limit has its own notice.
+  const now =
+    paused || view.limitedUntil
+      ? ''
+      : planning
+        ? 'It works now.'
+        : view.waiting
+          ? `${view.waiting} ${view.waiting === 1 ? 'change waits' : 'changes wait'} for its next turn.`
+          : 'Idle. Nothing new to review.';
   const plan = state.planApproved
     ? ''
     : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The plan waits for you' : planned.length ? 'The coordinator drafts the plan' : 'No plan yet'}</h3><p>No task starts before you start the work. To change the plan, write to the coordinator, or edit a task in Work.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.assignment.title)}</strong>: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.map((id) => sender(id, tasks)).join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Start the work</button>${planning ? '<p class="fine">The coordinator still drafts the plan.</p>' : ''}</div></div>`;
@@ -1487,13 +1563,13 @@ function coordinatorPanel(
     kind: 'Agent',
     title: 'Coordinator',
     sub: `<span class="status ${paused || session?.status === 'failed' ? 'muted' : 'active'}">${e(status)}</span>`,
-    body: `<p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span>${state.created} of ${coordinatorLimits.tasks} tasks created</span><span>${wakeups} of ${coordinatorLimits.wakeupsPerHour} turns this hour</span><span>${view.waiting} ${view.waiting === 1 ? 'event waits' : 'events wait'}</span></p>
+    body: `${now ? `<p class="coordinator-now">${e(now)}</p>` : ''}<p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span class="detail-only">${state.created} of ${coordinatorLimits.tasks} tasks created</span><span class="detail-only">${wakeups} of ${coordinatorLimits.wakeupsPerHour} turns this hour</span></p>
   ${view.limitedUntil ? `<p class="notice">The coordinator used its turns for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
   ${paused ? '<p class="notice">The coordinator paused when Verifold stopped. Resume it to continue with the same conversation.</p>' : ''}
   ${plan}
   ${notesToPerson(messages, tasks)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
-  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks))}</p>${action.reason ? `<div class="why"><span class="tag reading">The coordinator's reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Verifold records each result. The reasons come from the coordinator.</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks, messages))}</p>${action.reason ? `<div class="why"><span class="tag reading">The coordinator's reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Verifold records each result. The reasons come from the coordinator.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
   <div class="actions">${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
   <p class="fine">If you stop it, the agents finish their turns, and their versions wait for your review.</p>`,
@@ -2964,12 +3040,8 @@ function renderNow(
       state && !state.stoppedAt && working
         ? 'No task runs. The coordinator works.'
         : 'No task runs.';
-    // The coordinator's latest note says what it waits for.
-    const note = (live.tasks?.messages ?? [])
-      .filter(
-        (message) => message.from === 'coordinator' && message.to === 'person',
-      )
-      .at(-1);
+    // The coordinator's latest note says what it waits for, while it is current.
+    const note = currentNote(live.tasks?.messages ?? [], tasks);
     sub = `${done} of ${tasks.length} tasks done.${note ? ` The coordinator wrote at ${clock(note.at)}: "${lead(note.text, 140)}"` : ''}`;
   }
   return line
@@ -3208,6 +3280,7 @@ export function renderDesk(
           view === 'task' ? live.tasks?.selected?.id : undefined,
           // Home and Needs you list what waits for the person.
           view === 'needs' || (view === 'home' && needs.length > 0),
+          view === 'home',
         )
       : '';
   const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;

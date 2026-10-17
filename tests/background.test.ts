@@ -285,6 +285,12 @@ await test('verifold stop says when nothing runs, and points to an older owner i
     },
   });
   const out: string[] = [];
+  // Its help is its own, not the whole command list.
+  await runCli(['stop', '--help'], root, io(out));
+  assert.match(
+    out.pop() ?? '',
+    /^verifold stop \[--workspace path\]\n\nStops the team/,
+  );
   await runCli(['stop'], root, io(out));
   assert.deepEqual(out, ['Verifold does not run in this project.']);
   const owner = await claimOwner(root, 'test');
