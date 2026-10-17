@@ -1834,13 +1834,16 @@ body[data-detail='details'] .summary-only {
 .run-now > * + * {
   margin-top: 6px;
 }
-.archives {
+/* Archived runs, and the pod secrets in Compute. */
+.archives,
+.secrets {
   display: grid;
   margin: 12px 0 0;
   padding: 0;
   list-style: none;
 }
-.archives li {
+.archives li,
+.secrets li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

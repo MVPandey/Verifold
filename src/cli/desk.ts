@@ -189,7 +189,7 @@ async function terminalSupport(): Promise<true | string> {
   return typeof library === 'string' ? library : true;
 }
 
-/** Compute actions. The key comes only in a request body, and no reply or record holds it. */
+/** Compute actions. The key and secret values come only in a request body, and no reply or record holds them. */
 async function computeAction(
   compute: Compute,
   body: Record<string, unknown>,
@@ -203,6 +203,12 @@ async function computeAction(
       return 200;
     case 'compute-key-remove':
       await compute.removeKey();
+      return 200;
+    case 'compute-secret-save':
+      await compute.setSecret(body.name, body.value, body.file);
+      return 200;
+    case 'compute-secret-remove':
+      await compute.removeSecret(body.secret);
       return 200;
     case 'compute-gpus':
       await compute.refreshGpus();

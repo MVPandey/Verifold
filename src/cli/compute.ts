@@ -6,8 +6,10 @@ import {
   validKey,
   type KeyPlace,
   type KeyStatus,
+  type SecretStatus,
+  type SecretStore,
 } from './credentials.ts';
-import { RunPod, type GpuOffer } from './runpod.ts';
+import { RunPod, hideSecrets, type GpuOffer } from './runpod.ts';
 import { Leases, isOpen, type Budget, type Lease } from './leases.ts';
 import { PodShell, podLimits, type PodTarget } from './pod-shell.ts';
 import type { AgentTool } from './session-hosts.ts';
@@ -53,6 +55,8 @@ export interface ComputeView {
   readonly key: KeyStatus | null;
   /** The keyring of this computer, or null when the key can go only into a file. */
   readonly keyring: 'keychain' | 'secret-service' | null;
+  /** The pod secrets of this computer, without their values. */
+  readonly secrets: readonly SecretStatus[];
   readonly settings: ComputeSettings;
   /** Secure Cloud GPU types, after the person or the coordinator asked for them. */
   readonly gpus: readonly GpuOffer[] | null;
@@ -101,7 +105,7 @@ export const podToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_pod_run',
     description:
-      "Run a shell command as root on the task's GPU pod, in the task's folder there. Returns the exit code and the last 64 KB of output. Commands run for at most 10 minutes; with background: true the command starts as a job and the call returns its ID at once.",
+      "Run a shell command as root on the task's GPU pod, in the task's folder there. Returns the exit code and the last 64 KB of output. Commands run for at most 10 minutes; with background: true the command starts as a job and the call returns its ID at once. Secrets that the person allowed for the pod, such as HF_TOKEN, are environment variables there. Use them, but do not print them or write them into files.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -217,10 +221,14 @@ export function parseSettings(
 export class Compute {
   private readonly root: string;
   private readonly store: KeyStore;
+  private readonly secretStore: SecretStore;
+  /** The secret values of each lease whose pod has them, to hide them in the output of pod tools. */
+  private readonly hidden = new Map<string, Readonly<Record<string, string>>>();
   private readonly url: string | undefined;
   private state: Omit<ComputeView, 'leases' | 'budget' | 'problem'> = {
     key: null,
     keyring: null,
+    secrets: [],
     settings: computeDefaults,
     gpus: null,
     gpusAt: null,
@@ -259,6 +267,7 @@ export class Compute {
   ) {
     this.root = root;
     this.store = options.store ?? new KeyStore();
+    this.secretStore = this.store.secrets();
     this.url = options.url;
     this.taskFolder = options.taskFolder;
     this.shell = new PodShell({
@@ -274,6 +283,7 @@ export class Compute {
       ...(options.onChange ? { onChange: options.onChange } : {}),
       ...(options.now ? { now: options.now } : {}),
       sshKey: (lease) => this.shell.newKey(lease.id),
+      secrets: (lease) => this.secretValues(lease),
       prepare: async (lease, pod) => {
         if (!pod.ssh) throw new Error('No SSH yet.');
         const target = {
@@ -315,8 +325,36 @@ export class Compute {
         });
       },
       beforeStop: (lease) => this.copyBack(lease),
-      closed: (lease) => this.shell.forget(lease.id),
+      closed: async (lease) => {
+        this.hidden.delete(lease.id);
+        await this.shell.forget(lease.id);
+      },
     });
+  }
+
+  /** The values of a lease's secrets. A missing one stops the pod's start, and the lease waits for it. */
+  private async secretValues(
+    lease: Lease,
+  ): Promise<Readonly<Record<string, string>>> {
+    const values: Record<string, string> = {};
+    const missing: string[] = [];
+    for (const name of lease.secrets ?? []) {
+      const value = await this.secretStore.read(name);
+      if (value) values[name] = value;
+      else missing.push(name);
+    }
+    if (missing.length)
+      fail(
+        `Add the secret ${missing.join(' and ')} in Compute first. The pod of ${lease.id} needs it.`,
+      );
+    this.hidden.set(lease.id, values);
+    return values;
+  }
+
+  /** The secret names of a lease that this computer does not store. */
+  missingSecrets(lease: Lease): string[] {
+    const stored = new Set(this.state.secrets.map((secret) => secret.name));
+    return (lease.secrets ?? []).filter((name) => !stored.has(name));
   }
 
   /** Pods are on when a key is stored and the person set a spend limit. */
@@ -352,8 +390,27 @@ export class Compute {
     );
   }
 
-  /** One worker pod tool call. Each call counts as activity, so the idle stop waits. */
+  /** One worker pod tool call. Its reply and its errors never hold the value of a pod secret. */
   private async podCall(
+    task: TaskPlace,
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<string> {
+    const lease = this.leases.get(this.target(task.id).lease);
+    let values = this.hidden.get(lease.id);
+    if (!values && lease.secrets?.length)
+      values = await this.secretValues(lease).catch(() => ({}));
+    const hide = (text: string): string => hideSecrets(text, values ?? {});
+    try {
+      return hide(await this.podTool(task, name, input));
+    } catch (error) {
+      if (error instanceof Error) error.message = hide(error.message);
+      throw error;
+    }
+  }
+
+  /** One worker pod tool call. Each call counts as activity, so the idle stop waits. */
+  private async podTool(
     task: TaskPlace,
     name: string,
     input: Record<string, unknown>,
@@ -484,6 +541,7 @@ export class Compute {
       settings,
       key: await this.store.status(),
       keyring: await this.store.osPlace(),
+      secrets: await this.secretStore.list(),
     };
     await this.leases.load();
   }
@@ -497,14 +555,67 @@ export class Compute {
     };
   }
 
-  /** Check the pods every 30 seconds, until close(). */
+  /** Check the pods every 30 seconds, until close(). A secret stored in the terminal shows up here too. */
   watch(): void {
     this.timer ??= setInterval(() => {
       this.leases.poll().catch(() => {
         /* poll() keeps its problem for the view. */
       });
+      void this.serial(() => this.readSecrets()).catch(() => undefined);
     }, 30_000);
     this.timer.unref();
+  }
+
+  /**
+   * Read the stored secret names again. A new one starts the coordinator's
+   * requests that waited for it, when the person does not approve each pod and
+   * the request still fits the limits. Otherwise the request waits in Needs you.
+   */
+  private async readSecrets(): Promise<void> {
+    const before = new Set(this.state.secrets.map((secret) => secret.name));
+    this.state = { ...this.state, secrets: await this.secretStore.list() };
+    const added = this.state.secrets.some((secret) => !before.has(secret.name));
+    if (!added || this.state.settings.askBeforePod) return;
+    for (const lease of this.leases.list())
+      if (
+        lease.state === 'requested' &&
+        lease.requestedBy === 'coordinator' &&
+        lease.secrets?.length &&
+        !this.missingSecrets(lease).length
+      )
+        await this.leases.approve(lease.id, 'verifold').catch(() => null);
+  }
+
+  /** Store a pod secret on this computer. `file` keeps it in a private file instead of the keyring. */
+  setSecret(name: unknown, value: unknown, file: unknown): Promise<void> {
+    return this.serial(async () => {
+      const place: KeyPlace =
+        file === true
+          ? 'file'
+          : (this.state.keyring ??
+            fail(
+              'This computer has no keyring that Verifold can use. Keep the secret in a private file instead.',
+            ));
+      await this.secretStore.save(name, value, place);
+      await this.readSecrets();
+    });
+  }
+
+  /** Remove a pod secret from this computer. A pod that has it keeps it until the lease ends. */
+  removeSecret(name: unknown): Promise<void> {
+    return this.serial(async () => {
+      const using = this.leases
+        .list()
+        .filter(
+          (lease) => isOpen(lease) && lease.secrets?.includes(String(name)),
+        );
+      if (using.length)
+        fail(
+          `End ${using.map((lease) => lease.id).join(' and ')} first. Its pod has this secret, and Verifold hides its value in the pod's output only while it is stored.`,
+        );
+      await this.secretStore.remove(name);
+      await this.readSecrets();
+    });
   }
 
   /** Verifold stops: the pods stop, so billing stops. Returns a line for each pod that did not stop. */

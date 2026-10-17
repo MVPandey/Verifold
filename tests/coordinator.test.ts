@@ -1560,6 +1560,10 @@ await test('the coordinator reads the compute limits and asks for a pod, and onl
         name: 'verifold_end_lease',
         arguments: { lease: 'lease-1', reason: 'Asked too early.' },
       },
+      {
+        name: 'verifold_request_pod',
+        arguments: { ...ask, secrets: ['HF_TOKEN'] },
+      },
     ],
   ]);
   await coordinator.start({
@@ -1568,13 +1572,15 @@ await test('the coordinator reads the compute limits and asks for a pod, and onl
     guided: false,
   });
   await turns(1);
-  const answers = (await results()).slice(-5);
+  const answers = (await results()).slice(-6);
   const state = JSON.parse(answers[0]?.result.content[0]?.text ?? '{}') as {
     podsOn: boolean;
+    storedSecrets: string[];
     budget: { leftUsd: number };
     allowedGpus: { gpuType: string; usdPerHour: number; stock: string }[];
   };
   assert.equal(state.podsOn, true);
+  assert.deepEqual(state.storedSecrets, []);
   assert.equal(state.budget.leftUsd, 5);
   assert.deepEqual(
     state.allowedGpus.map((gpu) => [gpu.gpuType, gpu.usdPerHour, gpu.stock]),
@@ -1585,7 +1591,7 @@ await test('the coordinator reads the compute limits and asks for a pod, and onl
   );
   assert.deepEqual(
     answers.map((answer) => answer.result.isError),
-    [false, true, true, false, false],
+    [false, true, true, false, false, false],
   );
   assert.match(
     answers[1]?.result.content[0]?.text ?? '',
@@ -1603,6 +1609,12 @@ await test('the coordinator reads the compute limits and asks for a pod, and onl
     answers[4]?.result.content[0]?.text,
     'Withdrew the request lease-1.',
   );
+  // A request that names a secret that is not stored asks the person for it.
+  assert.match(
+    answers[5]?.result.content[0]?.text ?? '',
+    /^Asked the person to add the secret HF_TOKEN in Compute for lease-2: .* Then the person approves the pod\./,
+  );
+  assert.deepEqual(pods?.leases.get('lease-2').secrets, ['HF_TOKEN']);
   // The coordinator cannot approve: nothing was created at RunPod.
   assert.deepEqual(created, []);
   assert.equal(pods?.leases.get('lease-1').state, 'denied');
