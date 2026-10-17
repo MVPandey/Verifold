@@ -101,6 +101,8 @@ let knownNeeds: Set<string> | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let loading = false;
 let stopped = false;
+/** The person stopped Verifold from this page. Nothing restarts the updates. */
+let ended = false;
 let request: AbortController | undefined;
 /** The last failed action, shown beside its control until the next action succeeds. */
 let failure:
@@ -124,6 +126,27 @@ function showDetail(): void {
       'aria-pressed',
       String(button.dataset.records === records),
     );
+}
+
+/** Stop ends Verifold and this desk. The page says so and asks the desk nothing more. */
+function showStopped(): void {
+  ended = true;
+  stopped = true;
+  clearTimeout(timer);
+  request?.abort();
+  const card = document.createElement('section');
+  card.className = 'card';
+  const title = document.createElement('h1');
+  title.id = 'view-title';
+  title.tabIndex = -1;
+  title.textContent = 'Verifold is stopping';
+  const text = document.createElement('p');
+  text.textContent =
+    'The agents pause, and the pods stop after their results come back. To start again, run verifold in the project folder.';
+  card.append(title, text);
+  content.replaceChildren(card);
+  showConnection('You stopped Verifold.');
+  title.focus();
 }
 
 function showFailure(): void {
@@ -767,7 +790,7 @@ async function loadDiff(button: HTMLElement): Promise<void> {
     actionLabel.textContent =
       error instanceof Error && error.name !== 'TimeoutError'
         ? error.message
-        : 'The desk did not answer. Check that Verifold still runs in your terminal.';
+        : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
   }
 }
 
@@ -1048,6 +1071,7 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = name ? `Done: ${name}` : 'Done';
     failure = undefined;
+    if (action === 'stop') showStopped();
     // A new agent from the message box becomes the agent that the box writes to.
     if (body.action === 'message' && body.to === 'new-agent')
       knownSessions = new Set(sessionOptions());
@@ -1090,7 +1114,7 @@ async function act(button: HTMLElement): Promise<void> {
     actionLabel.textContent =
       error instanceof Error && error.name !== 'TimeoutError'
         ? error.message
-        : 'The desk did not answer. Check that Verifold still runs in your terminal.';
+        : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
     failure = { selector, message: actionLabel.textContent };
   } finally {
     // The key field is empty after each try, so the key stays on the page no longer than needed.
@@ -1387,7 +1411,7 @@ window.addEventListener('pagehide', () => {
   request?.abort();
 });
 window.addEventListener('pageshow', () => {
-  if (stopped) {
+  if (stopped && !ended) {
     stopped = false;
     void refresh();
   }
