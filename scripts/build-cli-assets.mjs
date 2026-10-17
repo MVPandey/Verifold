@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir } from 'node:fs/promises';
 
 await cp('src/cli/prompts', 'dist-cli/cli/prompts', { recursive: true });
 await mkdir('dist-cli/cli/vendor', { recursive: true });
@@ -23,3 +23,6 @@ for (const [source, target] of [
 ]) {
   await copyFile(source, `dist-cli/cli/${target}`);
 }
+
+// tsc writes the entry point without the executable bit. A checkout linked with `npm link` runs it directly.
+await chmod('dist-cli/cli.js', 0o755);
