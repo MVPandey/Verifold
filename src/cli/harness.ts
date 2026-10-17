@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import {
@@ -272,19 +274,37 @@ const parentSessionVariables = [
   'CLAUDE_PID',
 ];
 
+/** The file of a pod secret in `~/.verifold/credentials`. Its record adds `.json`. */
+export function secretFile(name: string): string {
+  return `secret-${name}`;
+}
+
+/** The names of the pod secrets that the person stored on this computer. */
+export function storedSecretNames(home = homedir()): string[] {
+  try {
+    return readdirSync(join(home, '.verifold', 'credentials')).flatMap(
+      (entry) => /^secret-([A-Z][A-Z0-9_]{0,63})\.json$/.exec(entry)?.[1] ?? [],
+    );
+  } catch {
+    return [];
+  }
+}
+
 /**
  * The environment for a child process (a harness, a terminal, or Git): the
- * person's environment without the variables of a parent harness session, and
- * without RunPod variables. A RunPod key that the person exported for runpodctl
- * would otherwise reach the shell of each worker, and a worker that runs `env`
- * would put it in its transcript. Harnesses keep their own keys, such as
- * ANTHROPIC_API_KEY, because they need them.
+ * person's environment without the variables of a parent harness session,
+ * without RunPod variables, and without variables named like a stored pod
+ * secret. A RunPod key that the person exported for runpodctl, or an HF_TOKEN
+ * that the person also stored for pods, would otherwise reach the shell of
+ * each worker, and a worker that runs `env` would put it in its transcript.
+ * Harnesses keep their own keys, such as ANTHROPIC_API_KEY, because they need them.
  */
 export function childEnvironment(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
   for (const name of parentSessionVariables) delete environment[name];
   for (const name of Object.keys(environment))
     if (name.startsWith('RUNPOD_')) delete environment[name];
+  for (const name of storedSecretNames()) delete environment[name];
   return environment;
 }
 
