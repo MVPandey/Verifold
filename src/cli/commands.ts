@@ -142,6 +142,16 @@ export interface Background {
   /** The input of this process when it is `verifold owner`. */
   readonly input: () => Promise<string>;
 }
+/** Help for one command, for `verifold <command> --help`. Other commands print the full help. */
+const commandHelp: Record<string, string> = {
+  stop: `verifold stop [--workspace path]
+
+Stops the team that works in the background in this project. The agents pause.
+A task turn that runs now stops, and its work waits for your review. Pods stop
+after their results come back. Run verifold in the project to start the team
+again.`,
+};
+
 const help = `Verifold - private research with your existing agent harness
 
 verifold [--no-open]                  Set up a project or open its research desk
@@ -1295,7 +1305,7 @@ export async function runCli(
     },
   });
   if (values.help) {
-    io.out(help);
+    io.out(commandHelp[positionals[0] ?? ''] ?? help);
     return;
   }
   if (values.version) {

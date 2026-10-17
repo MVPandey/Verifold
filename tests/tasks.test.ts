@@ -1387,7 +1387,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
   assert.match(await view('?view=task'), /<h2>The agent works<\/h2>/);
   await turn(tasks, fake, { 'results/baseline.md': '# Baseline\n\n1.82 ms\n' });
   html = await view('?view=task&task=task-1');
-  assert.match(html, /Version 1: the turn ended/);
+  assert.match(html, /Version 1 is ready for review/);
   assert.match(
     html,
     /data-action="task-accept" data-task="task-1" data-version="1"/,
@@ -1641,7 +1641,7 @@ await test("the coordinator's question waits in Needs you until the person answe
   assert.deepEqual(events, ['person']);
   html = await page('needs');
   assert.doesNotMatch(html, /Store a RunPod key/);
-  assert.match(html, /Nothing needs you\./);
+  assert.match(html, /Nothing needs you right now\./);
   // A long first sentence makes a short title, and the question shows in full under it.
   await tasks.ask(
     'Which of the three GPU types should the scaling run use, given that the A100 is cheaper per hour but the H100 finishes sooner? Reply with one name.',

@@ -251,7 +251,7 @@ export function terminalBanner(
           )
           .join('\n')
       : paragraph('verifold', columns);
-  return `\n${logo}\n\n${paragraph('Explore research questions with your AI agents.', columns)}\n${muted(paragraph('Verifold keeps your ideas, sources, and decisions together.', columns), color)}\n\n`;
+  return `\n${logo}\n\n`;
 }
 
 /** Keep the active choice visible even in a short, narrow viewport. */
