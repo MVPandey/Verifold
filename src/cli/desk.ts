@@ -1116,6 +1116,19 @@ export async function startDesk(
         }
       }
       const workers = sessions?.views() ?? [];
+      // A version in review whose agent paused when Verifold stopped can still get changes.
+      const resumable: string[] = [];
+      for (const entry of taskList) {
+        const session = entry.attempts.at(-1)?.session;
+        if (
+          entry.state === 'review' &&
+          session &&
+          sessions &&
+          !sessions.idle(session) &&
+          (await sessions.canResume(session))
+        )
+          resumable.push(session);
+      }
       // A worker that left its slot falls back to the newest live one, then to the first.
       // So a session that the person just started or resumed opens.
       const worker =
@@ -1150,6 +1163,7 @@ export async function startDesk(
                     idle: workers
                       .filter((view) => sessions?.idle(view.record.id))
                       .map((view) => view.record.id),
+                    resumable,
                     messages: (await tasks.messageList()).slice(-300),
                   },
                 }
