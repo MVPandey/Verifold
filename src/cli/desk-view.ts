@@ -1217,6 +1217,16 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,
         });
     }
+  // A notice about a pod is news, not a decision, so the team can still be stopped beside it.
+  if (
+    coordinated &&
+    state.planApproved &&
+    results?.answer?.decision?.kind !== 'accepted' &&
+    items.every((item) => item.key.startsWith('lease-notice:'))
+  ) {
+    const stalled = stalledTeam(live, tasks, messages);
+    if (stalled) items.push(stalled);
+  }
   return items;
 }
 
@@ -1225,6 +1235,72 @@ function missingSecrets(lease: Lease, compute: ComputeView): string[] {
   return (lease.secrets ?? []).filter(
     (name) => !compute.secrets.some((secret) => secret.name === name),
   );
+}
+
+/**
+ * The team stopped, and nothing wakes it: the coordinator waits, no agent
+ * works, and no event, wakeup, or pod is on its way. A coordinator note to the
+ * person is not a question, so this item is the only thing that tells the
+ * person. Null while anything can still move the work on.
+ */
+function stalledTeam(
+  live: DeskSession,
+  tasks: readonly TaskRecord[],
+  messages: readonly Message[],
+): Need | null {
+  const coordinator = live.coordinator;
+  const record = coordinator?.session?.record;
+  const busy = (status: string): boolean =>
+    status === 'starting' || status === 'running' || status === 'terminal';
+  const workers = live.workers ?? (live.session ? [live.session] : []);
+  if (
+    !coordinator ||
+    !record ||
+    busy(record.status) ||
+    record.status === 'paused' ||
+    record.status === 'interrupted' ||
+    coordinator.waiting > 0 ||
+    coordinator.limitedUntil ||
+    tasks.some(
+      (task) => task.state === 'running' || task.state === 'claimed',
+    ) ||
+    workers.some((worker) => busy(worker.record.status)) ||
+    live.compute?.leases.some(isRunning)
+  )
+    return null;
+  const note = messages
+    .filter(
+      (message) => message.from === 'coordinator' && message.to === 'person',
+    )
+    .at(-1);
+  // The time of the last change, so the item keeps its key, and notifies once, while nothing moves.
+  const at =
+    [record.events.at(-1)?.at, note?.at, ...tasks.map((task) => task.updatedAt)]
+      .filter((value): value is string => !!value)
+      .sort()
+      .at(-1) ?? null;
+  const open = tasks.filter(
+    (task) => task.state !== 'done' && task.state !== 'cancelled',
+  ).length;
+  // The coordinator looked at GPU pods, and Verifold has no RunPod key to start one.
+  const noKey =
+    !!live.compute &&
+    !live.compute.key &&
+    coordinator.state.actions.some(
+      (action) =>
+        action.tool === 'verifold_compute' ||
+        action.tool === 'verifold_request_pod',
+    );
+  const text = note ? note.text.replace(/\s+/g, ' ').trim() : '';
+  return {
+    key: `stalled:${at ?? ''}`,
+    view: 'home',
+    kind: 'Stopped work',
+    title: 'The team stopped',
+    why: 'No agent works, and the coordinator waits until you write to it.',
+    since: at,
+    body: `${note ? `<p><span class="tag reading">The coordinator wrote at ${e(since(note.at))}</span> ${e(lead(text, 300))}</p>${lead(text, 300) === text ? '' : `<details class="more"><summary>Read the whole note</summary><p class="pre">${e(note.text)}</p></details>`}` : ''}<p class="fine">${open ? `${open === 1 ? '1 task is' : `${open} tasks are`} not done.` : 'Every task is done. The coordinator has not proposed the answer.'}${noKey ? ' No RunPod key is saved, so no task can use a GPU pod.' : ''}</p><div class="actions"><button type="button" class="primary" data-message-to="coordinator">Write to the coordinator</button>${noKey ? '<button type="button" data-view="compute">Open Compute</button>' : ''}</div>`,
+  };
 }
 
 /** What the person approves for a lease: its cost, what is left after it, what the pod allows, and the coordinator's reason. */
