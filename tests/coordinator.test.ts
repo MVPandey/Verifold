@@ -375,6 +375,7 @@ await test('the coordinator creates and starts tasks through checked tools, and 
   // A version wakes the coordinator with a digest. It reviews, accepts, and starts the next task.
   await work(root, tasks, workers, 'task-1', {
     'literature/prior/notes.md': 'Dijkstra; Thorup.\n',
+    'literature/prior/tmp/search.log': 'scratch\n',
   });
   await turns(2);
   answers = await results();
@@ -385,10 +386,15 @@ await test('the coordinator creates and starts tasks through checked tools, and 
   );
   assert.match(
     (await inputs())[1] ?? '',
-    /Events since your last turn\. Each line comes from Verifold; quoted text in it comes from agents or the person:\n- \[version\] task-1 version 1 is ready for review \(completed\)\. Files: literature\/prior\/notes\.md\. The worker said: "task-1 is done\."/,
+    /Events since your last turn\. Each line comes from Verifold; quoted text in it comes from agents or the person:\n- \[version\] task-1 version 1 is ready for review \(completed\)\. Files: literature\/prior\/notes\.md, literature\/prior\/tmp\/search\.log\. The worker said: "task-1 is done\."/,
   );
   const first = (await tasks.get('task-1')) as TaskRecord;
   assert.equal(first.state, 'done');
+  // Without a file list, the coordinator accepts the files but not the scratch output.
+  assert.deepEqual(
+    first.artifacts?.at(-1)?.files.map((file) => file.path),
+    ['literature/prior/notes.md'],
+  );
   assert.deepEqual(first.attempts[0]?.versions[0]?.decision?.by, 'coordinator');
   assert.match(
     first.attempts[0]?.versions[0]?.decision?.note ?? '',

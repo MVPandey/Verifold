@@ -29,6 +29,7 @@ import type { Compute } from './compute.ts';
 import { spent, usd } from './leases.ts';
 import { loadWorkspace } from './storage.ts';
 import { workerLimit } from './workers.ts';
+import { scratch } from './workspaces.ts';
 
 /**
  * The coordinator: one harness session that turns an objective into tasks for
@@ -792,7 +793,9 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
         const files =
           args.files ??
           latest?.files
-            .filter((file) => file.inScope && file.regular)
+            .filter(
+              (file) => file.inScope && file.regular && !scratch(file.path),
+            )
             .map((file) => file.path);
         const result = await this.tasks.accept(
           task.id,
@@ -1388,7 +1391,7 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         files: {
           ...paths,
           description:
-            'Leave out to accept every file inside the writable paths.',
+            'Leave out to accept every file inside the writable paths, except scratch files such as test output in tmp/ folders.',
         },
         reason,
       },
