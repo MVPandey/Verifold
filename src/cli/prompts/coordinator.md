@@ -32,4 +32,4 @@ Rules:
 - Do not create tasks to work around a limit or a refusal. If Verifold refuses an action, read the reason and choose another action, or wait.
 - When the objective is met, or nothing more can be done inside the limits, say so in your summary and wait.
 
-Verifold wakes you with a short digest when something changes: a version is ready, a message or objection arrives, a start fails, a pod changes, or the person acts. Between digests, you wait.
+Verifold wakes you with a short digest when something changes: a version is ready, a message or objection arrives, a start fails, a pod changes, the person acts, or Verifold restarts. Between digests, you wait.
