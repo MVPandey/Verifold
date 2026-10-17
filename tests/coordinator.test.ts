@@ -422,7 +422,7 @@ await test('the coordinator creates and starts tasks through checked tools, and 
   // The tool name and Verifold's reply show under Details.
   assert.match(
     html,
-    /<p>Tried to use a tool\. Verifold refused it\.<\/p><p class="fine detail-only">Tool: <code>verifold_launch_missiles<\/code>\./,
+    /<p>Tried to use the tool verifold_launch_missiles\. Verifold refused it\.<\/p><p class="fine detail-only">Tool: <code>verifold_launch_missiles<\/code>\./,
   );
 });
 
