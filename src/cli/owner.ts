@@ -81,6 +81,16 @@ function since(value: string): string {
     : `, started ${date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+/** The live owner of a project, or null when no process owns it. */
+export async function liveOwner(
+  root: string,
+): Promise<{ ownerId: string; pid: number; startedAt: string } | null> {
+  const record = await readOwner(join(root, '.verifold', 'owner.json'));
+  return record && (await alive(record))
+    ? { ownerId: record.ownerId, pid: record.pid, startedAt: record.startedAt }
+    : null;
+}
+
 /**
  * Make this process the only owner of the project. A record from a stopped
  * process, or from a reused PID, is moved aside and kept as evidence.
@@ -123,7 +133,7 @@ export async function claimOwner(
     const current = await readOwner(path);
     if (current && (await alive(current)))
       throw new OwnerConflict(
-        `Verifold already runs in this project (process ${current.pid}${since(current.startedAt)}). Use that terminal, or type /open there to open the desk.`,
+        `Verifold already runs in this project (process ${current.pid}${since(current.startedAt)}). Run verifold to see it, or verifold stop to stop it.`,
       );
     try {
       await rename(

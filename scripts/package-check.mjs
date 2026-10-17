@@ -13,6 +13,8 @@ import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
+import { createConnection } from 'node:net';
+import { randomBytes } from 'node:crypto';
 const directory = await mkdtemp(join(tmpdir(), 'verifold-package-'));
 // Every process in this check finds the fake harnesses first, never a real one.
 const environment = {
@@ -593,8 +595,92 @@ onLine((line) => {
     clearTimeout(force);
     assert.equal(code, 0, diagnostics);
   }
+  // The background owner: its key arrives on stdin only, a hangup does not stop it, and verifold stop does.
+  const home = join(directory, 'home');
+  const socketFolder = await mkdtemp(join(tmpdir(), 'vf-'));
+  const control = {
+    socket: join(socketFolder, 'owner.sock'),
+    token: randomBytes(32).toString('hex'),
+  };
+  const ownerEnvironment = { ...environment, HOME: home };
+  const owner = spawn(
+    process.execPath,
+    [
+      join(directory, 'node_modules', 'verifold', 'dist-cli', 'cli.js'),
+      'owner',
+      '--workspace',
+      'research-project',
+    ],
+    {
+      cwd: directory,
+      env: ownerEnvironment,
+      detached: true,
+      stdio: ['pipe', 'ignore', 'pipe'],
+    },
+  );
+  const ownerClosed = once(owner, 'close');
+  let ownerErrors = '';
+  owner.stderr.setEncoding('utf8').on('data', (chunk) => {
+    ownerErrors += chunk;
+  });
+  owner.stdin.end(`${JSON.stringify(control)}\n`);
+  try {
+    let socket;
+    for (let tries = 0; tries < 100 && !socket; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      socket = await new Promise((resolve) => {
+        const attempt = createConnection(control.socket);
+        attempt.once('connect', () => resolve(attempt));
+        attempt.once('error', () => resolve(undefined));
+      });
+    }
+    assert.ok(socket, `The owner did not listen: ${ownerErrors}`);
+    socket.write(`${JSON.stringify({ token: control.token })}\n`);
+    const messages = createInterface({ input: socket });
+    const [first] = await once(messages, 'line', {
+      signal: AbortSignal.timeout(10000),
+    });
+    assert.match(
+      JSON.parse(first).url,
+      /^http:\/\/127\.0\.0\.1:\d+\/#[0-9a-f]{64}$/,
+    );
+    const command = run('ps', ['-o', 'command=', '-p', String(owner.pid)]);
+    assert.ok(!command.stdout.includes(control.token));
+    owner.kill('SIGHUP');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(owner.exitCode, null, ownerErrors);
+    socket.end();
+    const stopped = spawnSync(
+      process.execPath,
+      [
+        join(directory, 'node_modules', 'verifold', 'dist-cli', 'cli.js'),
+        'stop',
+        '--workspace',
+        'research-project',
+      ],
+      {
+        cwd: directory,
+        encoding: 'utf8',
+        env: ownerEnvironment,
+        timeout: 30000,
+      },
+    );
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(stopped.stdout.trim(), 'Verifold stopped.');
+    const [code] = await ownerClosed;
+    assert.equal(code, 0, ownerErrors);
+    const log = await readFile(
+      join(directory, 'research-project', '.verifold', 'owner.log'),
+      'utf8',
+    ).catch(() => '');
+    assert.ok(!log.includes(control.token));
+    await assert.rejects(stat(control.socket));
+  } finally {
+    owner.kill('SIGKILL');
+    await rm(socketFolder, { recursive: true, force: true });
+  }
   console.log(
-    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, a scoped task, selection, memory request, and local desk passed.`,
+    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, a scoped task, selection, memory request, local desk, and background owner passed.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

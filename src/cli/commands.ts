@@ -1,7 +1,14 @@
 import { loadPrompt } from './prompts.ts';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { resolve, join } from 'node:path';
-import { writeFile, rename, rm, lstat } from 'node:fs/promises';
+import {
+  appendFile,
+  writeFile,
+  rename,
+  rm,
+  lstat,
+  stat,
+} from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { escapeHtml as e } from '../ui/dom.ts';
@@ -40,7 +47,18 @@ import {
   SessionManager,
   type SessionEvent,
 } from './session.ts';
-import { claimOwner } from './owner.ts';
+import { claimOwner, liveOwner, OwnerConflict } from './owner.ts';
+import {
+  connectControl,
+  newControl,
+  parseControl,
+  readControl,
+  removeSocket,
+  saveControl,
+  serveControl,
+  type Control,
+  type ControlClient,
+} from './control.ts';
 import { Compute } from './compute.ts';
 import { KeepAwake } from './awake.ts';
 import { KeyStore, type KeyStoreOptions } from './credentials.ts';
@@ -112,6 +130,17 @@ export interface CliIO {
     onLine: (line: string) => void,
     signal: AbortSignal,
   ) => void;
+  /** Background owners. Only the executable provides it. Without it, the desk runs in this process. */
+  readonly background?: Background;
+}
+
+export interface Background {
+  /** `~/.verifold/credentials/owners`, where each background owner keeps its control. */
+  readonly keys: string;
+  /** Start `verifold owner` for a project in a detached process. `input` is its only input. */
+  readonly start: (root: string, input: string) => Promise<void>;
+  /** The input of this process when it is `verifold owner`. */
+  readonly input: () => Promise<string>;
 }
 const help = `Verifold - private research with your existing agent harness
 
@@ -126,6 +155,7 @@ verifold literature [--memory]        Print an optional paper/context request
 verifold handoff                      Print a planning request for your harness (older flow)
 verifold view                         Generate a private local HTML workspace
 verifold ui [--no-open]               Open the live research desk and control a harness session there
+verifold stop                         Stop the team that works in the background, with its pods
 verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model name] [--no-open]
                                       Run one harness session; answer its requests here or on the desk
 verifold status                       Print workspace JSON
@@ -148,11 +178,15 @@ research needs --host, --topic, and --autonomy autonomous.
 Research searches the web and proposes directions. It runs no experiments. Keeping
 PDFs is optional and comes after you choose a direction. Verifold keeps its records
 in .verifold/, and Claude Code or Codex keeps its own permissions and sessions.
-While the desk runs, type /help in its terminal. Ctrl+C stops Verifold and pauses a
-running session. Session records are in .verifold/sessions/.
+With a terminal, the team works in a background process, so closing the terminal
+or Ctrl+C does not stop it. Type /help in the terminal for its commands, and run
+verifold stop to stop the team. Session records are in .verifold/sessions/.
 `;
 
-const terminalHelp = `Commands in this terminal:
+/** The commands of the terminal. A terminal on a background owner only detaches with Ctrl+C. */
+const terminalHelp = (
+  background: boolean,
+): string => `Commands in this terminal:
 - \`/open\`: open the desk in your browser.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
@@ -165,7 +199,7 @@ const terminalHelp = `Commands in this terminal:
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
-When the agent waits for you, other text goes to it as a follow-up. Ctrl+C pauses the session and stops Verifold.`;
+When the agent waits for you, other text goes to it as a follow-up. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in Records.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
 
 const requestHint =
   'Type a to allow once or d to deny. The desk shows the full request.';
@@ -205,6 +239,8 @@ export interface TerminalControls {
   readonly open: () => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
+  /** The terminal is attached to a background owner. */
+  readonly background?: boolean;
   readonly research?: ResearchRunner;
 }
 
@@ -260,7 +296,8 @@ export function terminalInput(
               : 'No request is open. Type /help for the terminal commands.',
         );
     } else if (value === '/open') controls.open();
-    else if (value === '/help') io.progress?.(terminalHelp);
+    else if (value === '/help')
+      io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
       const turns = live.filter((view) => view.record.status !== 'idle');
       // Research and a turn can run together. Then the desk chooses which one stops.
@@ -349,23 +386,61 @@ function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
   );
 }
 
+/** The port and access token of a desk, so a desk in another process can keep its open tab. */
+interface DeskPlace {
+  readonly port: number;
+  readonly token: string;
+}
+
+/** How serveDesk runs. */
+interface DeskRun {
+  readonly noOpen?: boolean;
+  readonly research?: ResearchOptions | undefined;
+  /** Start this session, and return when it ends. */
+  readonly session?: Parameters<SessionPool['start']>[0];
+  readonly harness?: typeof runHarness;
+  /** Set up a new project in the desk first. */
+  readonly setup?: {
+    readonly cwd: string;
+    readonly options: InitializationOptions;
+  };
+  /** After setup, close the desk and return the project, so a background owner takes over. */
+  readonly handoff?: boolean;
+  /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
+  readonly owner?: {
+    readonly control: Control;
+    readonly keys: string;
+    readonly desk?: DeskPlace | undefined;
+  };
+}
+
+/** What setup leaves for the background owner. */
+interface Handoff {
+  readonly root: string;
+  readonly research: ResearchOptions | undefined;
+  readonly desk: DeskPlace;
+}
+
 /**
  * Serve the desk with a session owner. With `session`, start that session and
- * return when it ends. Otherwise serve until the CLI is cancelled.
+ * return when it ends. Otherwise serve until the CLI is cancelled, or until
+ * the person stops Verifold in the desk.
  */
 async function serveDesk(
   root: string,
-  noOpen: boolean,
   io: CliIO,
   signal: AbortSignal,
-  research?: ResearchOptions,
-  session?: Parameters<SessionPool['start']>[0],
-  harness: typeof runHarness = runHarness,
-  setup?: { readonly cwd: string; readonly options: InitializationOptions },
-): Promise<void> {
+  run: DeskRun = {},
+): Promise<Handoff | undefined> {
+  const { session, setup } = run;
+  const harness = run.harness ?? runHarness;
+  let research = run.research;
   const version = await packageVersion();
+  // Stop in the desk stops Verifold, as Ctrl+C does.
+  const quit = new AbortController();
+  const running = AbortSignal.any([signal, quit.signal]);
   const stop = new AbortController();
-  const deskSignal = AbortSignal.any([signal, stop.signal]);
+  const deskSignal = AbortSignal.any([running, stop.signal]);
   let desk: DeskServer | undefined;
   const open = async (): Promise<boolean> =>
     desk ? (io.browse ?? openDeskBrowser)(desk.launchUrl(), deskSignal) : false;
@@ -377,7 +452,9 @@ async function serveDesk(
         readOnly: false,
       }),
     );
-    if (noOpen)
+    // The terminal that attaches to a background owner opens the desk.
+    if (run.owner) return;
+    if (run.noOpen)
       io.progress?.(
         'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
       );
@@ -390,7 +467,7 @@ async function serveDesk(
   try {
     if (setup) {
       // The same desk shows setup first, then the project that setup creates.
-      const bridge = new SetupBridge(io, signal);
+      const bridge = new SetupBridge(io, running);
       desk = await startDesk(
         null,
         deskSignal,
@@ -398,6 +475,11 @@ async function serveDesk(
         undefined,
         undefined,
         bridge,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { stop: () => quit.abort() },
       );
       await announce(
         desk,
@@ -409,19 +491,38 @@ async function serveDesk(
           setup.cwd,
           setup.options,
           setupIo,
-          signal,
+          running,
           withTranscript(harness, bridge.transcript),
         ),
       );
       root = initialized.root;
       research = initialized.research ?? undefined;
       io.progress?.(`Setup is complete. The project is in ${root}.`);
+      if (run.handoff) {
+        // The background owner opens the desk on the same port with the same token, so this tab keeps working.
+        const place = new URL(desk.url);
+        stop.abort();
+        await desk.closed;
+        return {
+          root,
+          research,
+          desk: { port: Number(place.port), token: place.hash.slice(1) },
+        };
+      }
     }
     const host =
       (await loadWorkspace(root)).host === 'codex' ? 'codex' : 'claude';
     // Only one process owns the project. A second one stops here.
     const owner = await claimOwner(root, version);
+    let forget: (() => Promise<void>) | undefined;
     try {
+      // Terminals find the background owner by its ID.
+      if (run.owner)
+        forget = await saveControl(
+          run.owner.keys,
+          owner.ownerId,
+          run.owner.control,
+        );
       await recover(root, owner.ownerId, io);
       let finished = (): void => {};
       const done = new Promise<void>((resolve) => {
@@ -498,7 +599,7 @@ async function serveDesk(
       });
       owned.tasks = tasks;
       const runner = new ResearchRunner(root, {
-        signal,
+        signal: running,
         io,
         harness,
         // A chosen direction starts the coordinator, which gets the messages that still wait for research.
@@ -584,6 +685,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
+            { stop: () => quit.abort(), reuse: run.owner?.desk },
           );
           await announce(
             desk,
@@ -605,6 +707,7 @@ async function serveDesk(
           (line) =>
             terminalInput(sessions, line, io, {
               host,
+              background: run.owner !== undefined,
               research: runner,
               open: () => {
                 void open().then((opened) =>
@@ -619,7 +722,7 @@ async function serveDesk(
           deskSignal,
         );
         if (session) {
-          if (io.interactive) io.progress?.(terminalHelp);
+          if (io.interactive) io.progress?.(terminalHelp(false));
           await Promise.race([done, desk.closed]);
           const record = owned.session
             ? sessions.view(owned.session)?.record
@@ -661,6 +764,7 @@ async function serveDesk(
         awake.set(false);
       }
     } finally {
+      await forget?.();
       await owner.release();
     }
   } finally {
@@ -668,6 +772,330 @@ async function serveDesk(
     await desk?.closed;
   }
 }
+/** Status lines of the background owner in `.verifold/owner.log`, with the time. Over about 1 MB, the log moves to owner.log.1. */
+function ownerLog(root: string): (line: string) => void {
+  const path = join(root, '.verifold', 'owner.log');
+  let queue = Promise.resolve();
+  return (line) => {
+    queue = queue
+      .then(async () => {
+        // ponytail: an error of the process after a move lands in owner.log.1, because its stderr keeps the old file.
+        if (((await stat(path).catch(() => null))?.size ?? 0) > 1_000_000)
+          await rename(path, `${path}.1`);
+        await appendFile(
+          path,
+          `${new Date().toISOString()}  ${line.replace(/\n/g, '\n    ')}\n`,
+          { mode: 0o600 },
+        );
+      })
+      .catch(() => {
+        /* The line still reaches the terminals. */
+      });
+  };
+}
+
+/** The research and the setup desk that a background owner gets in its input. Anything else is left out. */
+function ownerStart(value: unknown): {
+  readonly research: ResearchOptions | undefined;
+  readonly desk: DeskPlace | undefined;
+} {
+  const data = (value ?? {}) as Record<string, unknown>;
+  const research = (data.research ?? null) as Record<string, unknown> | null;
+  const desk = (data.desk ?? null) as Record<string, unknown> | null;
+  return {
+    research:
+      research && typeof research === 'object'
+        ? {
+            ...(typeof research.topic === 'string'
+              ? { topic: research.topic }
+              : {}),
+            ...(research.autonomy === 'guided' ||
+            research.autonomy === 'autonomous'
+              ? { autonomy: research.autonomy }
+              : {}),
+            ...(typeof research.feedback === 'string'
+              ? { feedback: research.feedback }
+              : {}),
+            ...(research.approve === true ? { approve: true } : {}),
+          }
+        : undefined,
+    desk:
+      desk &&
+      typeof desk === 'object' &&
+      Number.isInteger(desk.port) &&
+      (desk.port as number) > 0 &&
+      (desk.port as number) < 65_536 &&
+      typeof desk.token === 'string' &&
+      /^[0-9a-f]{64}$/.test(desk.token)
+        ? { port: desk.port as number, token: desk.token }
+        : undefined,
+  };
+}
+
+/**
+ * `verifold owner`: the background owner of a project. Its only input is one
+ * JSON line with the control, and the research and setup desk to continue.
+ * Terminals attach over the control socket. Stop from a terminal or the desk,
+ * SIGINT, and SIGTERM stop it as Ctrl+C stops a desk in the foreground.
+ */
+async function runOwner(
+  root: string,
+  io: CliIO,
+  signal: AbortSignal,
+  harness: typeof runHarness,
+): Promise<void> {
+  let input: unknown = null;
+  try {
+    input = JSON.parse((await io.background?.input()) ?? '');
+  } catch {
+    /* Refused below. */
+  }
+  const control = parseControl(input);
+  if (!control || !io.background)
+    throw new Error(
+      'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
+    );
+  const { research, desk } = ownerStart(input);
+  const quit = new AbortController();
+  // Lines from before the first terminal attached wait for it.
+  let early: string[] | null = [];
+  let url: string | undefined;
+  let onLine: ((line: string) => void) | undefined;
+  const waiting: string[] = [];
+  const server = await serveControl(control, {
+    attached: (send) => {
+      for (const line of early ?? []) send({ progress: line });
+      early = null;
+      if (url) send({ url });
+    },
+    message: (message) => {
+      if ('stop' in message) quit.abort();
+      else if (onLine) onLine(message.line);
+      else if (waiting.length < 20) waiting.push(message.line);
+    },
+  });
+  const log = ownerLog(root);
+  const progress = (value: string): void => {
+    log(value);
+    if (early && early.length < 50) early.push(value);
+    server.send({ progress: value });
+  };
+  try {
+    await serveDesk(
+      root,
+      {
+        ...io,
+        interactive: true,
+        ask: () => Promise.reject(new Error('Interactive terminal required.')),
+        // The URL holds the access token. It goes to terminals only, never to the log.
+        out: (value) => {
+          try {
+            const shown: unknown = JSON.parse(value);
+            if (
+              shown &&
+              typeof shown === 'object' &&
+              'url' in shown &&
+              typeof shown.url === 'string'
+            ) {
+              url = shown.url;
+              server.send({ url });
+            }
+          } catch {
+            /* Only the desk URL is output. */
+          }
+        },
+        // Harness tool events belong in the desk, as in a terminal.
+        progress: (value, source) => {
+          if (source !== 'tool') progress(value);
+        },
+        listen: (handler, until) => {
+          onLine = handler;
+          for (const line of waiting.splice(0)) handler(line);
+          until.addEventListener(
+            'abort',
+            () => {
+              onLine = undefined;
+            },
+            { once: true },
+          );
+        },
+      },
+      AbortSignal.any([signal, quit.signal]),
+      {
+        noOpen: true,
+        research,
+        harness,
+        owner: { control, keys: io.background.keys, desk },
+      },
+    );
+  } catch (error) {
+    // The terminal that waits for the desk shows why Verifold stopped.
+    progress(
+      error instanceof Error
+        ? stripVTControlCharacters(error.message)
+        : 'Verifold stopped because of an error.',
+    );
+    throw error;
+  } finally {
+    server.send({ stopped: true });
+    await server.close();
+    await removeSocket(control);
+  }
+}
+
+/** Connect to an owner that may still be starting, for up to 15 seconds. */
+async function reach(
+  control: Control,
+  onMessage: Parameters<typeof connectControl>[1],
+  signal: AbortSignal,
+): Promise<ControlClient | null> {
+  for (let tries = 0; tries < 150 && !signal.aborted; tries++) {
+    try {
+      return await connectControl(control, onMessage);
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  return null;
+}
+
+/**
+ * With a terminal, the team of a project works in a background owner. Attach
+ * this terminal to the owner, and start one first when none runs. Ctrl+C or a
+ * closed terminal only detaches.
+ */
+async function attachTeam(
+  root: string,
+  io: CliIO,
+  signal: AbortSignal,
+  background: Background,
+  start: {
+    readonly noOpen: boolean;
+    readonly research?: ResearchOptions | undefined;
+    readonly desk?: DeskPlace;
+  },
+): Promise<void> {
+  const running = await liveOwner(root);
+  let control: Control;
+  if (running) {
+    const saved = await readControl(background.keys, running.ownerId);
+    if (!saved)
+      throw new OwnerConflict(
+        `Verifold already runs in this project in another terminal (process ${running.pid}). Use that terminal, or press Ctrl+C there and run verifold again.`,
+      );
+    control = saved;
+  } else {
+    control = await newControl();
+    try {
+      await background.start(
+        root,
+        JSON.stringify({
+          ...control,
+          ...(start.research ? { research: start.research } : {}),
+          ...(start.desk ? { desk: start.desk } : {}),
+        }),
+      );
+    } catch (error) {
+      await removeSocket(control);
+      throw error;
+    }
+  }
+  let client: ControlClient | null = null;
+  let shown = false;
+  client = await reach(
+    control,
+    (message) => {
+      if ('progress' in message) io.progress?.(message.progress);
+      else if ('url' in message && !shown) {
+        shown = true;
+        io.out(
+          JSON.stringify({
+            url: message.url,
+            visibility: 'private',
+            readOnly: false,
+          }),
+        );
+        // After setup, the open tab moves to the background owner when it got the same port.
+        if (start.desk && new URL(message.url).port === String(start.desk.port))
+          io.progress?.('The desk in your browser now shows the project.');
+        else if (start.noOpen)
+          io.progress?.('Open the printed URL to use the desk.');
+        else client?.send({ line: '/open' });
+      }
+    },
+    signal,
+  );
+  if (!client) {
+    // After Ctrl+C the owner may still start, and a later verifold attaches to it.
+    if (signal.aborted) return;
+    if (!running) await removeSocket(control);
+    throw new Error(
+      'Verifold could not start in the background. Check .verifold/owner.log in the project, then run verifold again.',
+    );
+  }
+  io.progress?.(
+    running
+      ? 'Verifold already works in the background. This terminal shows what it does. Type /help for commands.'
+      : 'Verifold now works in the background, so closing this terminal does not stop it. Type /help for commands.',
+  );
+  const attached = new AbortController();
+  const until = AbortSignal.any([signal, attached.signal]);
+  const connection = client;
+  io.listen?.((line) => connection.send({ line }), until);
+  await Promise.race([
+    connection.closed,
+    new Promise((resolve) =>
+      until.addEventListener('abort', resolve, { once: true }),
+    ),
+  ]);
+  attached.abort();
+  if (signal.aborted) {
+    connection.close();
+    io.progress?.(
+      'Detached. The team keeps working. Run verifold to come back, or verifold stop to stop it.',
+    );
+    return;
+  }
+  // The owner stopped: from the desk, from verifold stop, or after an error.
+  if (!shown)
+    throw new Error(
+      'Verifold stopped before the desk opened. Check .verifold/owner.log in the project.',
+    );
+  io.progress?.('Verifold stopped.');
+}
+
+/** `verifold stop`: stop the background owner of the project, and wait until its agents and pods stopped. */
+async function stopTeam(root: string, io: CliIO): Promise<void> {
+  const running = await liveOwner(root);
+  if (!running) {
+    io.out('Verifold does not run in this project.');
+    return;
+  }
+  const control = io.background
+    ? await readControl(io.background.keys, running.ownerId)
+    : null;
+  if (!control)
+    throw new Error(
+      `Verifold runs in this project in a terminal (process ${running.pid}). Press Ctrl+C in that terminal to stop it.`,
+    );
+  let stopped = false;
+  const client = await connectControl(control, (message) => {
+    if ('stopped' in message) stopped = true;
+    // Lines from the stop, such as a pod that stopped. The desk URL stays out.
+    else if ('progress' in message) io.progress?.(message.progress);
+  });
+  io.progress?.(
+    'Stopping Verifold. Agents pause, and pods stop after their results come back.',
+  );
+  client.send({ stop: true });
+  await client.closed;
+  if (!stopped)
+    throw new Error(
+      'Verifold closed the connection before it stopped. Check .verifold/owner.log in the project.',
+    );
+  io.out('Verifold stopped.');
+}
+
 /**
  * Settle the work of an owner that stopped without a final record, before this
  * owner starts anything. The terminal names what was interrupted.
@@ -914,6 +1342,8 @@ export async function runCli(
     view: [],
     status: [],
     ui: ['no-open'],
+    owner: [],
+    stop: [],
     session: ['host', 'mode', 'model', 'prompt', 'no-open'],
     profile: ['setup', 'agency-dir', 'host', 'model'],
     runpod: ['file'],
@@ -975,7 +1405,18 @@ export async function runCli(
         harness,
       );
     }
-    await serveDesk(root, values['no-open'] ?? false, io, signal);
+    const noOpen = values['no-open'] ?? false;
+    if (io.interactive && io.background)
+      await attachTeam(root, io, signal, io.background, { noOpen });
+    else await serveDesk(root, io, signal, { noOpen });
+    return;
+  }
+  if (command === 'owner') {
+    await runOwner(root, io, signal, harness);
+    return;
+  }
+  if (command === 'stop') {
+    await stopTeam(root, io);
     return;
   }
   if (command === 'session') {
@@ -984,11 +1425,14 @@ export async function runCli(
         'session requires --prompt with a request for the harness.',
       );
     const workspace = await loadWorkspace(root);
-    await serveDesk(root, values['no-open'] ?? false, io, signal, undefined, {
-      host: values.host ?? workspace.host,
-      mode: values.mode ?? 'ask',
-      model: values.model,
-      prompt: values.prompt,
+    await serveDesk(root, io, signal, {
+      noOpen: values['no-open'] ?? false,
+      session: {
+        host: values.host ?? workspace.host,
+        mode: values.mode ?? 'ask',
+        model: values.model,
+        prompt: values.prompt,
+      },
     });
     return;
   }
@@ -1007,11 +1451,20 @@ export async function runCli(
       harnesses: await installedHarnesses(),
     };
     // Bare verifold in a new folder sets up in the desk. init and --no-open stay the terminal path.
+    // With a terminal, setup hands the project to a background owner.
+    const background = io.interactive ? io.background : undefined;
     if (launch && !values['no-open']) {
-      await serveDesk(root, false, io, signal, undefined, undefined, harness, {
-        cwd,
-        options,
+      const handoff = await serveDesk(root, io, signal, {
+        harness,
+        setup: { cwd, options },
+        handoff: background !== undefined,
       });
+      if (handoff && background)
+        await attachTeam(handoff.root, io, signal, background, {
+          noOpen: false,
+          research: handoff.research,
+          desk: handoff.desk,
+        });
       return;
     }
     const initialized = await initializeProject(
@@ -1023,15 +1476,13 @@ export async function runCli(
       harness,
     );
     if (launch) {
-      await serveDesk(
-        initialized.root,
-        values['no-open'] ?? false,
-        io,
-        signal,
-        initialized.research ?? undefined,
-        undefined,
-        harness,
-      );
+      const run = {
+        noOpen: values['no-open'] ?? false,
+        research: initialized.research ?? undefined,
+      };
+      if (background)
+        await attachTeam(initialized.root, io, signal, background, run);
+      else await serveDesk(initialized.root, io, signal, { ...run, harness });
       return;
     }
     const result = initialized.research
