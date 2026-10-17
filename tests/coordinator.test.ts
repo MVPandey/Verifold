@@ -639,6 +639,75 @@ await test('a message from the person wakes the coordinator at once, task events
   }
 });
 
+await test('events come once more after a read failed, and a resumed coordinator wakes with what waits for it', async (t) => {
+  const { root, tasks, workers, coordinator, script, inputs, turns } =
+    await team(t);
+  const missing = {
+    name: 'verifold_read',
+    arguments: { task: 'task-1', version: 9, path: 'notes.md' },
+  };
+  await script([
+    [
+      { name: 'verifold_create_task', arguments: prior },
+      { name: 'verifold_start_task', arguments: { task: 'task-1' } },
+    ],
+    [missing],
+    [missing],
+  ]);
+  await coordinator.start({
+    objective: 'List the prior work.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  await work(root, tasks, workers, 'task-1', {
+    'literature/prior/notes.md': 'Notes.',
+  });
+  await turns(2);
+  assert.match((await inputs())[1] ?? '', /- \[version\] /);
+  // The read in that turn failed, so the version event comes once more, marked.
+  await turns(3);
+  const third = (await inputs())[2] ?? '';
+  assert.match(third, /- \[version, again\] /);
+  assert.match(third, /a Verifold read failed in that turn/);
+  // It failed again, but an event comes again only once.
+  await delay(300);
+  assert.equal((await inputs()).length, 3);
+
+  // A new owner resumes the coordinator. No event waits, but it wakes with the state.
+  await coordinator.close();
+  const owned: { coordinator?: Coordinator } = {};
+  const again = new TaskManager(root, {
+    ownerId: 'owner-2',
+    sessions: new Workers(),
+    onEvent: (event) => owned.coordinator?.notify(event),
+  });
+  const next = new Coordinator(root, {
+    tasks: again,
+    debounceMs: 30,
+    sessions: new SessionManager(root, {
+      clientVersion: 'test',
+      ownerId: 'owner-2',
+      executables: { claude: join(root, 'fake-claude') },
+      onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
+    }),
+  });
+  owned.coordinator = next;
+  try {
+    await next.load();
+    assert.equal(next.view()?.waiting, 0);
+    await next.resume();
+    for (let tries = 0; tries < 200 && (await inputs()).length < 4; tries++)
+      await delay(20);
+    assert.match(
+      (await inputs())[3] ?? '',
+      /- \[restart\] Verifold restarted, and your session continues\. Versions wait for your review: task-1 version 1\. No task can start now\./,
+    );
+  } finally {
+    await next.close();
+  }
+});
+
 await test('in Guided research no task starts before the person approves the plan, and two overrules send the next objection to the person', async (t) => {
   const { root, tasks, workers, coordinator, script, results, turns } =
     await team(t);

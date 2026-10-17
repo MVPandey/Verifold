@@ -17,6 +17,7 @@ import {
 import type { AgentTool, AgentTools } from './session-hosts.ts';
 import {
   isDraft,
+  isQuestion,
   memoryText,
   noteToolSpec,
   replaced,
@@ -54,6 +55,8 @@ export const coordinatorLimits = {
 export interface CoordinatorEvent extends TaskEvent {
   readonly seq: number;
   readonly at: string;
+  /** A Verifold read failed in the turn that first carried the event, so it came once more. */
+  readonly again?: true;
 }
 
 /** One tool call of the coordinator, with its reason and Verifold's answer. */
@@ -171,6 +174,11 @@ export class Coordinator {
   private readonly onChange: (() => void) | undefined;
   /** The current turn carries a message from the person. New tasks of this turn wait for the person. */
   private answering = false;
+  /** The events of the current turn's digest, and whether a read of the state or a file failed in that turn. */
+  private carried: {
+    readonly events: readonly CoordinatorEvent[];
+    readFailed: boolean;
+  } | null = null;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -415,42 +423,101 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
   }
 
-  /** Continue a coordinator that paused when Verifold stopped, with its tools. */
+  /**
+   * Continue a coordinator that paused when Verifold stopped, with its tools.
+   * It wakes at once with the state that waits for it, because the events of
+   * its last turn are used up and nothing else may come.
+   */
   resume(): Promise<void> {
     return this.serial(async () => {
       const state = this.current();
       if (state.stoppedAt || !state.session)
         fail('Only a paused coordinator can resume.');
       await this.sessions.resume(state.session, this.tools());
-      // A digest may have been cut by the stop. The next one says so.
-      this.schedule(0);
-    });
+    }).then(async () =>
+      this.notify({
+        kind: 'restart',
+        text: await this.restartText().catch(
+          () => 'Verifold restarted, and your session continues.',
+        ),
+      }),
+    );
   }
 
-  /** A task event. It waits for the next wakeup. An event from the person wakes an idle coordinator at once. */
+  /** What waits for the coordinator after a restart: versions to review, tasks that can start, and open questions. */
+  private async restartText(): Promise<string> {
+    const all = await this.tasks.list();
+    const questions = (await this.tasks.messageList()).filter(
+      (message) => isQuestion(message) && message.status === 'open',
+    ).length;
+    const reviews = all.flatMap((task) => {
+      const version = task.attempts.at(-1)?.versions.at(-1);
+      return task.state === 'review' && version && !version.decision
+        ? [`${task.id} version ${version.number}`]
+        : [];
+    });
+    const ready = all
+      .filter(
+        (task) =>
+          task.state === 'open' &&
+          !isDraft(task) &&
+          task.assignment.dependencies.every(
+            (id) => all.find((entry) => entry.id === id)?.state === 'done',
+          ),
+      )
+      .map((task) => task.id);
+    return [
+      'Verifold restarted, and your session continues.',
+      reviews.length
+        ? `Versions wait for your review: ${reviews.join(', ')}.`
+        : 'No version waits for your review.',
+      ready.length
+        ? `Tasks that can start: ${ready.join(', ')}.`
+        : 'No task can start now.',
+      questions
+        ? `${questions === 1 ? '1 question' : `${questions} questions`} to the person ${questions === 1 ? 'is' : 'are'} open.`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  /** A task event. It waits for the next wakeup. An event from the person, or a restart, wakes an idle coordinator at once. */
   notify(event: TaskEvent): void {
+    this.append(
+      [event],
+      event.kind === 'person' || event.kind === 'restart' ? 0 : this.debounceMs,
+    );
+  }
+
+  /** Add events for the next wakeup, and wake after `delay`. */
+  private append(
+    events: readonly (TaskEvent & { readonly again?: true })[],
+    delay: number,
+  ): void {
     this.serial(async () => {
       const state = this.state;
       if (!state || state.stoppedAt) return;
-      const seq = (state.events.at(-1)?.seq ?? 0) + 1;
-      // The schedule comes first: the event is in memory even if the save fails.
+      const first = (state.events.at(-1)?.seq ?? 0) + 1;
+      const at = new Date().toISOString();
+      // The schedule comes first: the events are in memory even if the save fails.
       const saving = this.save({
         ...state,
         events: [
           ...state.events,
-          {
+          ...events.map((event, index) => ({
             ...event,
             // One line, so the lines of a digest stay apart. It holds a whole message of up to 4000 characters.
             text: event.text.replace(/[\r\n]+/g, ' ').slice(0, 6000),
-            seq,
-            at: new Date().toISOString(),
-          },
+            seq: first + index,
+            at,
+          })),
         ].slice(-coordinatorLimits.events),
       });
-      this.schedule(event.kind === 'person' ? 0 : this.debounceMs);
+      this.schedule(delay);
       await saving;
     }).catch(() => {
-      /* The next save writes the event. */
+      /* The next save writes the events. */
     });
   }
 
@@ -460,6 +527,23 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
    */
   turnEnded(record?: SessionRecord): void {
     this.answering = false;
+    // A failed read can hide what an event was about, so its events come once more.
+    const carried = this.carried;
+    this.carried = null;
+    if (carried?.readFailed) {
+      const again = carried.events.filter((event) => !event.again);
+      if (again.length)
+        this.append(
+          again.map(({ kind, task, message, text }) => ({
+            kind,
+            ...(task ? { task } : {}),
+            ...(message ? { message } : {}),
+            text,
+            again: true as const,
+          })),
+          this.debounceMs,
+        );
+    }
     if (record)
       this.tasks
         .coordinatorTurnEnded(record.status === 'idle', lastReply(record))
@@ -528,7 +612,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
     try {
       this.sessions.continueTask(
-        `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${sent.map((event) => `- [${event.kind}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
+        `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${sent.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}${sent.some((event) => event.again) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
       );
     } catch {
       // Nothing was sent, so the events wait for the next wakeup.
@@ -539,6 +623,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       });
       return;
     }
+    this.carried = { events: sent, readFailed: false };
     await this.tasks.sentToCoordinator(
       sent.flatMap((event) => (event.message ? [event.message] : [])),
     );
@@ -583,7 +668,9 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
             : 'Verifold could not do this.',
       };
     }
-    if (name !== 'verifold_state' && name !== 'verifold_read') {
+    const read = name === 'verifold_state' || name === 'verifold_read';
+    if (read && !result.ok && this.carried) this.carried.readFailed = true;
+    if (!read) {
       const current = this.current();
       await this.save({
         ...current,
