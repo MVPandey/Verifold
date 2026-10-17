@@ -278,6 +278,26 @@ export function leftOut(path: string): boolean {
   );
 }
 
+/** Folders of temporary output, such as the files of a test run. */
+const scratchFolders = ['tmp', 'temp', '.tmp', '.temp', '.cache'];
+
+/**
+ * Whether a version file is scratch: temporary output that the project does
+ * not need, such as `tests/tmp/run-1/model.pt`. A version keeps it, but Accept
+ * leaves it out unless someone selects it.
+ */
+export function scratch(path: string): boolean {
+  const parts = path.split('/');
+  const name = parts.pop() ?? '';
+  return (
+    parts.some(
+      (part) =>
+        scratchFolders.includes(part.toLowerCase()) ||
+        part.startsWith('pytest-of-'),
+    ) || /(\.tmp|~)$/i.test(name)
+  );
+}
+
 /**
  * Paths that a version leaves out among the pending entries: Python
  * environments under any name (they hold `pyvenv.cfg`), and ignored paths

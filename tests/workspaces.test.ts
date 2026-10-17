@@ -24,6 +24,7 @@ import {
   overlaps,
   projectPath,
   release,
+  scratch,
 } from '../src/cli/workspaces.ts';
 
 function run(cwd: string, ...args: string[]): string {
@@ -381,6 +382,26 @@ await test('a version leaves out environments, caches, and what the task ignores
   assert.equal(leftOut('exp/.venv/lib/site.py'), true);
   assert.equal(leftOut('exp/__pycache__/a.cpython-312.pyc'), true);
   assert.equal(leftOut('exp/venv.py'), false);
+});
+
+await test('scratch files are temporary output that Accept leaves out unless someone selects it', () => {
+  for (const path of [
+    'tests/artifacts/tmp/run-1/model.pt',
+    'tmp/out.json',
+    'exp/Temp/a.csv',
+    'exp/.cache/hub/weights.bin',
+    'exp/pytest-of-me/pytest-3/a.txt',
+    'exp/notes.md~',
+    'exp/upload.TMP',
+  ])
+    assert.equal(scratch(path), true, path);
+  for (const path of [
+    'results/tmp.csv',
+    'experiments/temperature/a.py',
+    'docs/template.md',
+    'results/bench.csv',
+  ])
+    assert.equal(scratch(path), false, path);
 });
 
 await test('a rule from outside the writable paths keeps ignored output, up to the file limit', async (t) => {
