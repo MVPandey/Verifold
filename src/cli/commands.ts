@@ -135,19 +135,21 @@ verifold runpod key status|check|remove
                                       Show where the key is, check it with RunPod, or remove it
 verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when the desk does not run
 
-Options: --workspace path (default: current directory), --help, --version
-Init connects your harness and profile, then asks for a project directory and context.
-Your harness drafts a research brief for review before project creation.
-Creates literature/, experiments/, results/, figures/, docs/, agents/, and .verifold.md.
-Use --model for a host model; --setup-only offers optional reusable research memory.
-Use --agency-dir path to isolate preferences and USER.md (default: ~/.verifold/agency).
-No name or external profile links are required. Noninteractive research requires --host, --topic,
-and --autonomy autonomous. Use --setup-only to initialize without research.
-The harness searches web sources and proposes ideas. PDF retention is optional
-and follows idea selection. No experiments run during initial research.
-Research stays private in .verifold/. The host owns its permissions and sessions.
-While the desk runs, type /help in its terminal for the commands there.
-Ctrl+C pauses a running session. Session records are in .verifold/sessions/.
+Options: --workspace path (default: the current folder), --help, --version
+
+Setup connects your harness, asks for a project folder and your question, and has
+the harness draft a research brief for you to review. Then it creates literature/,
+experiments/, results/, figures/, docs/, agents/, and .verifold.md. Use --model to
+pick the harness model, and --agency-dir to keep your preferences and USER.md in
+another folder (default: ~/.verifold/agency). --setup-only sets up without research
+and offers a research memory that other projects can reuse. Without a terminal,
+research needs --host, --topic, and --autonomy autonomous.
+
+Research searches the web and proposes directions. It runs no experiments. Keeping
+PDFs is optional and comes after you choose a direction. Verifold keeps its records
+in .verifold/, and Claude Code or Codex keeps its own permissions and sessions.
+While the desk runs, type /help in its terminal. Ctrl+C stops Verifold and pauses a
+running session. Session records are in .verifold/sessions/.
 `;
 
 const terminalHelp = `Commands in this terminal:
