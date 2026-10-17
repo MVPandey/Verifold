@@ -139,6 +139,23 @@ class FakeSessions implements TaskSessions {
     this.ended++;
     this.waiting.delete(session);
   }
+  /** Sessions that paused when Verifold stopped, and the turns that resumed them. */
+  paused = new Set<string>();
+  resumed: { session: string; prompt: string; tools?: AgentTools }[] = [];
+  canResume(session: string): Promise<boolean> {
+    return Promise.resolve(this.paused.has(session));
+  }
+  failResume = false;
+  resumeTask(
+    session: string,
+    input: { prompt: string; tools?: AgentTools },
+  ): Promise<void> {
+    if (this.failResume)
+      return Promise.reject(new Error('The harness did not resume.'));
+    this.paused.delete(session);
+    this.resumed.push({ session, ...input });
+    return Promise.resolve();
+  }
   terminals: string[] = [];
   takeTerminal(session: string): Promise<void> {
     this.terminals.push(session);
@@ -848,6 +865,94 @@ await test("the person's message reaches a running agent in its turn, or starts 
   ]);
 });
 
+await test('a version from before a restart gets changes from its paused agent, and a message to an ended agent goes to the coordinator', async (t) => {
+  const root = await project(t);
+  const first = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions: first });
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  await turn(tasks, first, { 'results/baseline.md': 'v1\n' });
+  // The coordinator writes while the version waits, so the message waits for the next turn.
+  await tasks.post(id, 'Use the median of 5 runs.', 'coordinator');
+  const binding = first.started[0]?.task;
+  assert.ok(binding);
+
+  // A later owner: the session paused with Verifold. It is not idle, but its next turn resumes it.
+  const sessions = new FakeSessions();
+  sessions.paused.add('S1');
+  sessions.failResume = true;
+  const later = new TaskManager(root, { ownerId: 'owner-2', sessions });
+  await assert.rejects(
+    later.askForChanges(id, 'Add the 8x8 kernel.'),
+    /did not resume/,
+  );
+  // A failed resume leaves the version in review, and the message waits again.
+  let task = await later.get(id);
+  assert.equal(task?.state, 'review');
+  assert.equal(task?.attempts.at(-1)?.versions.at(-1)?.decision, null);
+  assert.equal((await later.messageList())[0]?.delivery, 'queued');
+  sessions.failResume = false;
+  sessions.full = true;
+  await assert.rejects(
+    later.askForChanges(id, 'Add the 8x8 kernel.'),
+    /Every worker is busy/,
+  );
+  sessions.full = false;
+  await later.askForChanges(id, 'Add the 8x8 kernel.');
+  const resumed = sessions.resumed[0];
+  assert.equal(resumed?.session, 'S1');
+  assert.match(
+    resumed?.prompt ?? '',
+    /asks for changes:\n\nAdd the 8x8 kernel\.[\s\S]*from coordinator: "Use the median of 5 runs\."/,
+  );
+  // The resumed turn has the worker tools again.
+  assert.ok(
+    resumed?.tools?.specs.some((tool) => tool.name === 'verifold_post'),
+  );
+  assert.equal((await later.get(id))?.state, 'running');
+  assert.equal((await later.messageList())[0]?.delivery, 'sent');
+  sessions.waiting.add('S1');
+  await later.turnEnded(
+    binding,
+    'completed',
+    undefined,
+    'Added the 8x8 kernel.',
+  );
+  assert.equal((await later.messageList())[0]?.delivery, 'delivered');
+  task = await later.get(id);
+  assert.equal(task?.attempts.at(-1)?.versions.length, 2);
+
+  // Another owner: this time the agent ended, so no turn can come.
+  const third = new TaskManager(root, {
+    ownerId: 'owner-3',
+    sessions: new FakeSessions(),
+  });
+  await assert.rejects(
+    third.askForChanges(id, 'One more run.'),
+    /This agent has ended/,
+  );
+  await assert.rejects(
+    third.post(id, 'Rerun it.', 'coordinator'),
+    /agent of task-1 has ended, so it gets no messages/,
+  );
+  const mine = await third.post(id, 'Why 8x8?');
+  const messages = await third.messageList();
+  assert.deepEqual(
+    [messages.find((entry) => entry.id === mine.id)?.via, messages.at(-1)?.to],
+    ['coordinator', 'coordinator'],
+  );
+  assert.equal(
+    messages.at(-1)?.text,
+    'I wrote this to task-1, but its agent has ended: Why 8x8?',
+  );
+  // A done task gets no messages either.
+  await third.accept(id, 2, ['results/baseline.md']);
+  await assert.rejects(
+    third.post(id, 'Thanks.', 'coordinator'),
+    /task-1 is done, so it gets no messages/,
+  );
+});
+
 await test('only the coordinator writes a draft, and an edit by the person makes the task theirs', async (t) => {
   const root = await project(t);
   const tasks = new TaskManager(root, {
@@ -1040,7 +1145,7 @@ await test('failed allocation and failed starts keep evidence and release the cl
   );
   await assert.rejects(
     later.askForChanges(id, 'Finish it'),
-    /session of this task ended/,
+    /This agent has ended/,
   );
   await later.cancel(id);
   assert.equal((await later.get(id))?.state, 'cancelled');
@@ -1128,10 +1233,69 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   // The session controls of the desk and the terminal cannot bypass the task.
   assert.throws(() => sessions.send(record?.id, 'More'), /belongs to a task/);
   assert.throws(() => sessions.end(record?.id), /belongs to a task/);
-  // A task session does not join the paused list when the owner stops.
+  // A task session pauses with the owner, but does not join the paused list: its task resumes it.
   await sessions.close();
   await sessions.load();
   assert.deepEqual(sessions.paused(), []);
+  const file = join(root, '.verifold', 'sessions', `${record?.id}.json`);
+  const saved = JSON.parse(await readFile(file, 'utf8')) as {
+    status: string;
+    events: { kind: string; text: string }[];
+  };
+  assert.equal(saved.status, 'paused');
+  assert.equal(
+    saved.events.at(-1)?.text,
+    'Verifold stopped, so the session paused. Its next turn resumes it.',
+  );
+  // Before 0.12 a stop ended task sessions. Such a session resumes too.
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...saved,
+      status: 'ended',
+      events: [
+        ...saved.events,
+        {
+          at: new Date().toISOString(),
+          kind: 'status',
+          text: 'Verifold stopped before the harness reported a session, so the session ended.',
+        },
+      ],
+    }),
+  );
+  const next = new SessionPool(root, {
+    clientVersion: 'test',
+    ownerId: 'owner-2',
+    executables: { claude },
+    onTaskTurn: (task, turn, detail, reply) =>
+      void owner.tasks?.turnEnded(task, turn, detail, reply),
+  });
+  t.after(() => next.close());
+  assert.equal(await next.canResume(record?.id ?? ''), true);
+  owner.tasks = new TaskManager(root, { ownerId: 'owner-2', sessions: next });
+  await owner.tasks.askForChanges(id, 'Add the median.');
+  for (
+    let tries = 0;
+    tries < 1000 && task?.attempts[0]?.versions.length !== 2;
+    tries++
+  ) {
+    await delay(20);
+    task = await owner.tasks.get(id);
+  }
+  assert.equal(task?.state, 'review');
+  // The same conversation, in the same task folder, with the same Strict limits.
+  const again = JSON.parse(await readFile(join(root, 'args.json'), 'utf8')) as {
+    args: string[];
+    cwd: string;
+  };
+  assert.equal(again.args[again.args.indexOf('--resume') + 1], 'native-1');
+  assert.equal(
+    again.args[again.args.indexOf('--permission-mode') + 1],
+    'dontAsk',
+  );
+  assert.ok(again.args.includes('--settings'));
+  assert.equal(await realpath(again.cwd), await realpath(cwd));
+  assert.equal(await next.canResume(record?.id ?? ''), false);
 });
 
 await test('the desk creates, reviews, and accepts a task through the same operations', async (t) => {
@@ -1230,7 +1394,7 @@ await test('the desk creates, reviews, and accepts a task through the same opera
   );
   assert.match(html, /What the harness enforces/);
   // The fake owner has no idle session, so Ask for changes is off, with the reason.
-  assert.match(html, /harness session of this task ended/);
+  assert.match(html, /This agent has ended, so it cannot make a new version/);
   assert.equal(
     (await fetch(`${url.origin}/api/view?task=task-9`, { headers })).status,
     404,

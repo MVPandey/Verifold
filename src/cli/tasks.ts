@@ -228,6 +228,13 @@ export interface TaskSessions {
   }): Promise<string>;
   /** The session is live and waits for a follow-up. */
   idle(session: string): boolean;
+  /** The session paused when Verifold stopped, so its next turn can resume it. */
+  canResume?(session: string): Promise<boolean>;
+  /** Resume a paused task session with its next turn. */
+  resumeTask?(
+    session: string,
+    input: { readonly prompt: string; readonly tools?: AgentTools },
+  ): Promise<void>;
   continueTask(session: string, text: string): void;
   /** Add a message to the running turn. False when no turn runs. `done` reports whether the harness took it. */
   steer(session: string, text: string, done: (taken: boolean) => void): boolean;
@@ -289,6 +296,9 @@ export interface TaskManagerOptions {
     digest(): Promise<string>;
   };
 }
+
+const agentEnded =
+  'This agent has ended, so it cannot make a new version. Accept the files that you want, or reject the version and start the task again.';
 
 function fail(message: string): never {
   throw new SessionActionError(message);
@@ -689,7 +699,9 @@ export class TaskManager {
       const session = attempt.session;
       if (!session || !this.options.sessions.idle(session))
         fail(
-          'The harness session of this task ended. Reject this version, then start the task again.',
+          session && (await this.canResume(session))
+            ? 'This agent paused when Verifold stopped. Ask for changes or send it a message to resume it, then open its terminal.'
+            : agentEnded,
         );
       await this.options.sessions.takeTerminal(session, lease);
       this.clearLimit(task.id);
@@ -738,9 +750,12 @@ export class TaskManager {
   ): Promise<void> {
     const attempt = this.review(task);
     const session = attempt.session;
-    if (!session || !this.options.sessions.idle(session))
+    const live = !!session && this.options.sessions.idle(session);
+    if (!session || (!live && !(await this.canResume(session))))
+      fail(agentEnded);
+    if (!live && this.options.sessions.full)
       fail(
-        'The harness session of this task ended. Reject this version, then start the task again.',
+        'Every worker is busy, so this agent cannot resume now. Wait for a turn to end, or accept or reject another version first.',
       );
     await this.write(
       this.decide({ ...task, state: 'running' }, attempt, {
@@ -749,11 +764,30 @@ export class TaskManager {
         ...(by === 'coordinator' ? { by } : {}),
       }),
     );
-    this.options.sessions.continueTask(
-      session,
-      `${request}${await this.outbox(task.id)}`,
-    );
+    const text = `${request}${await this.outbox(task.id)}`;
+    if (live) this.options.sessions.continueTask(session, text);
+    else
+      try {
+        // The session paused when Verifold stopped. Its conversation continues with this turn.
+        await this.options.sessions.resumeTask?.(session, {
+          prompt: text,
+          tools: this.workerTools({
+            id: task.id,
+            claim: task.claim?.id ?? fail('This task has no claim.'),
+          }),
+        });
+      } catch (error) {
+        // The version waits for review again, and its messages wait for the next turn.
+        await this.write(task);
+        await this.mark(task.id, 'sent', { delivery: 'queued' });
+        throw error;
+      }
     this.limit(task.id, session, task.assignment.minutes);
+  }
+
+  /** The paused session of a task can resume for its next turn. */
+  private async canResume(session: string): Promise<boolean> {
+    return (await this.options.sessions.canResume?.(session)) ?? false;
   }
 
   /**
@@ -1067,19 +1101,36 @@ export class TaskManager {
       if (to !== other && !(by === 'person' && to === 'research') && !task)
         fail(`Send the message to a task or to the ${other}.`);
       const body = line(text, 'message', messageLimits.text);
+      const session = task?.attempts.at(-1)?.session;
+      const turn =
+        task?.state === 'review' && session
+          ? this.options.sessions.idle(session) ||
+            (await this.canResume(session))
+          : null;
+      // No turn can come: the task is done or cancelled, or the agent of its version ended.
+      const ended =
+        task &&
+        (task.state === 'done' || task.state === 'cancelled' || turn === false)
+          ? task
+          : null;
+      if (ended && by === 'coordinator')
+        fail(
+          ended.state === 'review'
+            ? `The agent of ${ended.id} has ended, so it gets no messages. Reject its version and start the task again, or revise the task.`
+            : `${ended.id} is ${ended.state}, so it gets no messages. Create a task for new work.`,
+        );
       const message = await this.send(
         { from: by, to: String(to), kind: 'note', text: body },
         all,
         await this.messages.list(),
       );
-      const session = task?.attempts.at(-1)?.session;
+      if (ended) {
+        await this.passOn(message, ended, all);
+        return message;
+      }
       if (!task || !session) return message;
       if (task.state === 'running') await this.steer(message, session);
-      else if (
-        by === 'person' &&
-        task.state === 'review' &&
-        this.options.sessions.idle(session)
-      ) {
+      else if (by === 'person' && turn) {
         await this.nextTurn(
           task,
           body,
@@ -1093,6 +1144,32 @@ export class TaskManager {
         );
       }
       return message;
+    });
+  }
+
+  /** The person wrote to a task that no agent can read now, so the coordinator gets the message. */
+  private async passOn(
+    message: Message,
+    task: TaskRecord,
+    all: readonly TaskRecord[],
+  ): Promise<void> {
+    await this.send(
+      {
+        from: 'person',
+        to: 'coordinator',
+        kind: 'note',
+        text: `I wrote this to ${task.id}, but its agent has ended: ${message.text}`.slice(
+          0,
+          messageLimits.text,
+        ),
+      },
+      all,
+      await this.messages.list(),
+    );
+    await this.messages.update(message, {
+      delivery: 'delivered',
+      deliveredAt: new Date().toISOString(),
+      via: 'coordinator',
     });
   }
 
