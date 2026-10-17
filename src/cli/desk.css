@@ -1712,6 +1712,18 @@ body[data-detail='details'] .summary-only {
 .map.more-right {
   mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
 }
+.map.more-left {
+  mask-image: linear-gradient(to right, transparent, #000 48px);
+}
+.map.more-left.more-right {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 48px,
+    #000 calc(100% - 48px),
+    transparent
+  );
+}
 .map-col {
   position: relative;
   z-index: 1;
