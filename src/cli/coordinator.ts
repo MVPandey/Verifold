@@ -780,8 +780,12 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           hours: args.hours,
           tasks: args.tasks,
           reason: why(),
+          ...(args.secrets === undefined ? {} : { secrets: args.secrets }),
         });
         const what = `${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour`;
+        const missing = compute.missingSecrets(lease);
+        if (missing.length)
+          return `Asked the person to add the secret ${missing.join(' and ')} in Compute for ${lease.id}: ${what}. ${compute.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
         // D90: a request inside the person's limits starts at once, unless the person asks to approve each pod.
         // A start that a limit refuses, such as the pods at once, waits for the person.
         if (!compute.view().settings.askBeforePod) {
@@ -856,6 +860,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     return JSON.stringify({
       podsOn: settings.limitUsd !== null && view.key !== null,
       personApprovesEachPod: settings.askBeforePod,
+      storedSecrets: view.secrets.map((secret) => secret.name),
       limits: {
         spendLimitUsd: settings.limitUsd,
         maxUsdPerHourPerPod: settings.maxUsdPerHour,
@@ -1140,6 +1145,13 @@ const coordinatorToolSpecs: readonly AgentTool[] = [
         },
         hours: { type: 'integer', minimum: 1, maximum: 24 },
         tasks: { type: 'array', items: task, minItems: 1, maxItems: 4 },
+        secrets: {
+          type: 'array',
+          items: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+          maxItems: 8,
+          description:
+            'Names of the secrets that the pod needs as environment variables, such as HF_TOKEN for gated Hugging Face models. The person stores them in Compute. You and the workers never see the values.',
+        },
         reason,
       },
       required: ['gpuType', 'hours', 'tasks', 'reason'],

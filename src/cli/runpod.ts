@@ -206,7 +206,8 @@ export class RunPod {
   /**
    * Create one pod on Secure Cloud with one GPU and SSH on 22/tcp. RunPod bills
    * it from now on. `publicKey` lets Verifold's own SSH key in, without the
-   * account's keys.
+   * account's keys. `secrets` become environment variables of the pod. An error
+   * message never holds their values.
    */
   async createPod(input: {
     readonly name: string;
@@ -214,18 +215,32 @@ export class RunPod {
     readonly gpu: string;
     readonly diskGb: number;
     readonly publicKey?: string;
+    readonly secrets?: Readonly<Record<string, string>>;
   }): Promise<Pod> {
-    const pod = podOf(
-      await this.#call('POST', '/v2/pods', {
+    const env = {
+      ...input.secrets,
+      ...(input.publicKey ? { PUBLIC_KEY: input.publicKey } : {}),
+    };
+    let reply: unknown;
+    try {
+      reply = await this.#call('POST', '/v2/pods', {
         name: input.name,
         image: input.image,
         cloud: 'SECURE',
         gpu: { id: input.gpu, count: 1 },
         disk: input.diskGb,
         ports: ['22/tcp'],
-        ...(input.publicKey ? { env: { PUBLIC_KEY: input.publicKey } } : {}),
-      }),
-    );
+        ...(Object.keys(env).length ? { env } : {}),
+      });
+    } catch (error) {
+      if (error instanceof RunPodError)
+        throw new RunPodError(
+          hideSecrets(error.message, input.secrets ?? {}),
+          error.status,
+        );
+      throw error;
+    }
+    const pod = podOf(reply);
     if (!pod) throw new RunPodError('RunPod did not return the new pod.', null);
     return pod;
   }
@@ -404,4 +419,15 @@ export class RunPod {
     }
     return offers.sort((a, b) => a.price - b.price || a.id.localeCompare(b.id));
   }
+}
+
+/** Text with each secret value replaced by its name in brackets. */
+export function hideSecrets(
+  text: string,
+  secrets: Readonly<Record<string, string>>,
+): string {
+  let hidden = text;
+  for (const [name, value] of Object.entries(secrets))
+    if (value) hidden = hidden.replaceAll(value, `[${name}]`);
+  return hidden;
 }

@@ -46,18 +46,28 @@ async function fakeRunPod(t: test.TestContext): Promise<{
   url: string;
   pods: Map<string, FakePod>;
   calls: string[];
-  mode: { create: 'ok' | 'capacity' | 'lost'; cost: number; billed: number };
+  mode: {
+    create: 'ok' | 'capacity' | 'lost';
+    cost: number;
+    billed: number;
+    secrets: string[];
+  };
+  envs: Record<string, string>[];
 }> {
   const pods = new Map<string, FakePod>();
   const calls: string[] = [];
+  const envs: Record<string, string>[] = [];
   const mode: {
     create: 'ok' | 'capacity' | 'lost';
     cost: number;
     billed: number;
+    /** The secret names that a create may carry next to the SSH key. */
+    secrets: string[];
   } = {
     create: 'ok',
     cost: 0.27,
     billed: 0,
+    secrets: [],
   };
   let next = 1;
   const view = (pod: FakePod): unknown => ({
@@ -146,12 +156,19 @@ async function fakeRunPod(t: test.TestContext): Promise<{
           'name',
           'ports',
         ]);
-        // The only variable is the lease's own SSH public key.
+        // The variables are the lease's own SSH public key and the secrets that it names.
+        const env = input.env as Record<string, string>;
         assert.match(
-          (input.env as Record<string, string>).PUBLIC_KEY ?? '',
+          env.PUBLIC_KEY ?? '',
           /^ssh-ed25519 \S+ verifold-lease-\d+$/,
         );
-        assert.equal(Object.keys(input.env as object).length, 1);
+        assert.deepEqual(
+          Object.keys(env)
+            .filter((name) => name !== 'PUBLIC_KEY')
+            .sort(),
+          mode.secrets,
+        );
+        envs.push(env);
         assert.equal(input.cloud, 'SECURE');
         assert.deepEqual(input.ports, ['22/tcp']);
         if (mode.create === 'capacity') {
@@ -235,7 +252,13 @@ async function fakeRunPod(t: test.TestContext): Promise<{
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('No port.');
-  return { url: `http://127.0.0.1:${address.port}`, pods, calls, mode };
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    pods,
+    calls,
+    mode,
+    envs,
+  };
 }
 
 /** A project with a stored key, limits, and a clock that the test moves. */
@@ -621,4 +644,111 @@ await test('Needs you shows a request with its cost and limits, and Compute and 
     /1 pod runs at \$0\.28 per hour\. Spent \$0\.00 of \$10\.00\./,
   );
   assert.doesNotMatch(JSON.stringify(page), /TESTKEY|FAKETOKEN/);
+});
+
+await test('a pod gets the secrets that its request names, and a missing secret waits in Needs you', async (t) => {
+  const { root, compute, api, lines } = await setup(t);
+  const value = 'hf_SECRETVALUE0123456789';
+  const render = (view: string): ReturnType<typeof renderDesk> => {
+    const frame = parseFrame(view, null);
+    assert.ok(frame);
+    return renderDesk(
+      {
+        workspace: {
+          schemaVersion: 1 as const,
+          visibility: 'private' as const,
+          profile: {
+            name: 'R',
+            interests: ['x'],
+            scholar: '',
+            github: '',
+            session: '',
+          },
+          host: 'claude',
+          candidates: [],
+          selectedId: null,
+        },
+        attempts: [],
+      } as never,
+      undefined,
+      null,
+      { session: null, controllable: true, compute: compute.view() },
+      frame,
+    );
+  };
+  await assert.rejects(
+    compute.leases.request({ ...ask, secrets: ['hf_token'] }),
+    /Name up to 8 secrets/,
+  );
+  await assert.rejects(
+    compute.leases.request({ ...ask, secrets: ['PUBLIC_KEY'] }),
+    /Name up to 8 secrets/,
+  );
+  const lease = await compute.leases.request({
+    ...ask,
+    secrets: ['HF_TOKEN'],
+  });
+  assert.deepEqual(lease.secrets, ['HF_TOKEN']);
+  assert.deepEqual(compute.missingSecrets(lease), ['HF_TOKEN']);
+  // Without the secret, the pod does not start, and the request waits.
+  await assert.rejects(
+    compute.leases.approve(lease.id, 'verifold'),
+    /Add the secret HF_TOKEN in Compute first\. The pod of lease-1 needs it\./,
+  );
+  assert.equal(compute.leases.get(lease.id).state, 'requested');
+  assert.ok(!api.calls.includes('POST /v2/pods'));
+  let page = render('needs');
+  assert.deepEqual(
+    page.needs.map((need) => need.key),
+    [`lease-secret:${lease.id}`],
+  );
+  assert.match(page.html, /Add a secret: HF_TOKEN/);
+  assert.match(
+    page.html,
+    /<button type="button" class="primary" data-view="compute">Add it in Compute<\/button>/,
+  );
+  page = render('compute');
+  assert.match(page.html, /lease-1 waits for <code>HF_TOKEN<\/code>/);
+  assert.match(page.html, /id="secret-name"[^>]*value="HF_TOKEN"/);
+  assert.match(page.html, /<input id="secret-value" type="password"/);
+
+  // Storing the secret starts the request, which fits the limits, with the secret on the pod.
+  api.mode.secrets = ['HF_TOKEN'];
+  await compute.setSecret('HF_TOKEN', value, true);
+  assert.equal(compute.leases.get(lease.id).state, 'starting');
+  assert.equal(api.envs.at(-1)?.HF_TOKEN, value);
+  assert.deepEqual(
+    compute.view().secrets.map((secret) => [secret.name, secret.place]),
+    [['HF_TOKEN', 'file']],
+  );
+  page = render('compute');
+  assert.match(
+    page.html,
+    /<code>HF_TOKEN<\/code> <span class="fine">in a private file/,
+  );
+  assert.match(
+    page.html,
+    /data-action="compute-secret-remove" data-secret="HF_TOKEN"/,
+  );
+  // A secret that an open pod has stays until the lease ends.
+  await assert.rejects(compute.removeSecret('HF_TOKEN'), /End lease-1 first/);
+  // No record, line, or page holds the value.
+  assert.doesNotMatch(await everything(root), /SECRETVALUE/);
+  assert.doesNotMatch(lines.join('\n'), /SECRETVALUE/);
+  assert.doesNotMatch(JSON.stringify(render('compute')), /SECRETVALUE/);
+  await compute.leases.end(lease.id, 'person', 'done.');
+  await compute.removeSecret('HF_TOKEN');
+  assert.deepEqual(compute.view().secrets, []);
+});
+
+await test('when the person approves each pod, a new secret leaves the request for the person', async (t) => {
+  const { compute, api } = await setup(t, { askBeforePod: true });
+  const lease = await compute.leases.request({
+    ...ask,
+    secrets: ['WANDB_API_KEY'],
+  });
+  await compute.setSecret('WANDB_API_KEY', 'wandb0123456789abcdef', true);
+  assert.equal(compute.leases.get(lease.id).state, 'requested');
+  assert.ok(!api.calls.includes('POST /v2/pods'));
+  assert.deepEqual(compute.missingSecrets(compute.leases.get(lease.id)), []);
 });
