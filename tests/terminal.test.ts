@@ -248,6 +248,11 @@ await test('welcome and paragraphs fit narrow and wide terminal widths', () => {
       assert.ok(visibleWidth(line) < columns, line);
   }
   assert.ok(terminalBanner(true, true, 80).split('\n').length <= 12);
+  // The banner is the mark and its tagline, without slogans under it.
+  assert.doesNotMatch(
+    terminalBanner(true, true, 80),
+    /Explore research questions|keeps your ideas/,
+  );
 });
 
 await test('menus fit short viewports and keep the current choice in place', () => {

@@ -594,6 +594,164 @@ await test('desk points to the coordinator after a direction and shows its notes
   assert.doesNotMatch(html(true), /Needs you<\/h2>/);
 });
 
+await test('the desk dates old notes, drops notes that the work outdates, and names what each action did', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'proof',
+        title: 'Proof search',
+        recommendation: 'Try a bounded pilot.',
+        gates: ['A checker passes.'],
+      },
+    ],
+    selectedId: 'proof',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const now = Date.now();
+  const ago = (hours: number): string =>
+    new Date(now - hours * 3_600_000).toISOString();
+  const pilot = (updatedAt: string): object => ({
+    id: 'task-1',
+    state: 'open',
+    revision: 1,
+    createdAt: ago(60),
+    updatedAt,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Created by the coordinator: a first pass.',
+      title: 'Bounded pilot',
+      objective: 'Run the pilot.',
+      dependencies: [],
+    },
+  });
+  const note = (at: string, text = 'task-1 needs a dataset host.'): object => ({
+    schemaVersion: 1,
+    id: 'm-1',
+    at,
+    from: 'coordinator',
+    to: 'person',
+    kind: 'note',
+    text,
+    delivery: 'board',
+  });
+  const blocker = {
+    schemaVersion: 1,
+    id: 'm-2',
+    at: ago(51),
+    from: 'task-1',
+    to: 'coordinator',
+    kind: 'blocker',
+    status: 'resolved',
+    text: 'The data host is down.',
+    delivery: 'board',
+  };
+  const action = (
+    tool: string,
+    input: object,
+    at: string,
+    ok = true,
+  ): object => ({
+    at,
+    tool,
+    input: JSON.stringify(input),
+    ok,
+    result: 'Done.',
+  });
+  const state = {
+    schemaVersion: 1,
+    objective: 'Proof search',
+    host: 'claude',
+    model: null,
+    startedAt: ago(60),
+    stoppedAt: null,
+    session: null,
+    created: 1,
+    planApproved: true,
+    cursor: 0,
+    wakeups: [],
+    events: [],
+    actions: [
+      action(
+        'verifold_decide',
+        { message: 'm-2', decision: 'resolved', reason: 'Use the mirror.' },
+        ago(50),
+      ),
+      action(
+        'verifold_post',
+        { to: 'person', text: 'A short update.' },
+        ago(1),
+      ),
+      action('verifold_note', { text: 'The mirror is slow.' }, ago(1)),
+      action('verifold_launch', {}, ago(1), false),
+    ],
+  };
+  const page = (
+    messages: readonly object[],
+    updatedAt: string,
+    view: DeskView = 'home',
+    panel: DeskPanel | null = null,
+  ): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [pilot(updatedAt)], selected: null, idle: [], messages },
+        coordinator: { state, session: null, waiting: 0, limitedUntil: null },
+      } as never,
+      { view, panel },
+    ).html;
+  const current = [note(ago(0.1)), blocker];
+  // A current note shows on Home.
+  const home = page(current, ago(2));
+  assert.match(
+    home,
+    /The coordinator wrote at (?:\w+ )?\d\d:\d\d: &quot;task-1 needs a dataset host\.&quot;/,
+  );
+  // A note older than 12 hours, or one about a task that changed after it, leaves Home.
+  assert.doesNotMatch(
+    page([note(ago(13)), blocker], ago(20)),
+    /The coordinator wrote at/,
+  );
+  assert.doesNotMatch(
+    page([note(ago(2)), blocker], ago(1)),
+    /The coordinator wrote at/,
+  );
+  // A lead that starts with a label, such as "Bottom line.", keeps the sentence after it.
+  assert.match(
+    page(
+      [note(ago(0.1), 'Bottom line. The heap version wins.'), blocker],
+      ago(2),
+    ),
+    /&quot;Bottom line\. The heap version wins\.&quot;/,
+  );
+  // The message box repeats the coordinator's notes on Home only.
+  assert.match(home, /data-thread="coordinator"><li class="dock-note">/);
+  assert.doesNotMatch(page(current, ago(2), 'tasks'), /class="dock-note"/);
+  // The coordinator's panel leads with what it waits for, and its counts are details.
+  const panel = page(current, ago(2), 'home', 'coordinator');
+  assert.match(
+    panel,
+    /<p class="coordinator-now">Idle\. Nothing new to review\.<\/p><p class="session-meta">[\s\S]*?<span class="detail-only">0 of \d+ turns this hour<\/span><\/p>/,
+  );
+  assert.doesNotMatch(panel, /events? wait/);
+  // Each action names what it did, and a time on another day names the day.
+  assert.match(
+    panel,
+    /<p>Tried to use the tool verifold_launch\. Verifold refused it\.<\/p>[\s\S]*<p>Kept a note in memory\/notes\.md\.<\/p>[\s\S]*<p>Wrote to you\.<\/p>[\s\S]*<p>Answered the blocker from Bounded pilot\.<\/p>[\s\S]*?<time datetime="[^"]+">[A-Z][a-z]{2} \d\d:\d\d<\/time>/,
+  );
+  assert.doesNotMatch(panel, /Settled an objection|Used a tool|Wrote a note/);
+  // Needs you says that nothing waits in one line.
+  const needs = page(current, ago(2), 'needs');
+  assert.doesNotMatch(needs, /Nothing waits for you|<strong>Nothing needs you/);
+});
+
 await test('a team that stopped and that nothing wakes shows in Needs you', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1161,7 +1319,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
       },
       'needs',
     ).html,
-    /Nothing needs you\./,
+    /<p>Nothing needs you right now\.<\/p><\/div>/,
   );
   // An idle coordinator with nothing queued leaves a version older than 30 minutes to the person.
   const old = desk({ tasks, coordinator: coordinator('idle') });
@@ -1490,7 +1648,7 @@ await test('desk shows long text as its lead with Show all, and short text in fu
   // An agent's Markdown reply folds with a plain lead and renders in full behind Show all.
   assert.match(
     html,
-    /<details class="more" id="event-20261004T120000000Z-abcdef12-1"><summary><span class="lead">Done\.<\/span>[\s\S]*<strong>Done\.<\/strong>/,
+    /<details class="more" id="event-20261004T120000000Z-abcdef12-1"><summary><span class="lead">Done\. The settled nodes fell by 41 percent\.<\/span>[\s\S]*<strong>Done\.<\/strong>/,
   );
   assert.doesNotMatch(html, /id="event-20261004T120000000Z-abcdef12-0"/);
 });
@@ -2280,7 +2438,7 @@ await test('desk compares the directions in a table and lists sources as they ar
   // One row for each direction, with its lead, its checks, and its sources.
   assert.match(
     view,
-    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><span class="selected-label">Proposed<\/span><\/th><td data-label="Why">Replication\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
+    /data-direction="bidir" aria-pressed="false">Bidirectional Dijkstra<\/button><span class="selected-label">Proposed<\/span><\/th><td data-label="Why">Replication\. Feasibility is high\.<\/td><td data-label="Checks">2<\/td><td data-label="Sources">1<\/td>/,
   );
   assert.match(
     view,
@@ -2829,7 +2987,7 @@ await test('Work starts with who works now, folds a long strip, and ends with th
   // The finished work follows the map, newest first.
   assert.match(
     alone,
-    /<h2 id="map-title">The map<\/h2><span class="count">7 tasks, 2 done<\/span>[\s\S]*<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-7[\s\S]*Version 1 accepted at \d\d:\d\d, 1 file[\s\S]*Title task-6/,
+    /<h2 id="map-title">The map<\/h2><span class="count">7 tasks, 2 done<\/span>[\s\S]*<h2 id="finished-title">Finished<\/h2>[\s\S]*Title task-7[\s\S]*Version 1 accepted at [^,]+, 1 file[\s\S]*Title task-6/,
   );
   assert.doesNotMatch(alone, /A task runs your harness in its own copy/);
 });
@@ -2947,7 +3105,7 @@ await test('a task opens as its own page: the decision first, the rest folded, a
   );
   assert.match(
     review,
-    /Claude Code made version 1 at [^.]+\. It received files from Implement the heap version\.[\s\S]*Version 1: the turn ended[\s\S]*The agent says[\s\S]*<div class="md"><p>The heap version is faster on every graph above 100,000 nodes\.<\/p>[\s\S]*data-action="task-accept" data-task="task-2" data-version="1">Accept 1 file[\s\S]*data-message-to="task-2">Ask for changes[\s\S]*data-action="task-reject"[\s\S]*<details id="task-files"><summary><h2>1 file changed<\/h2>[\s\S]*<details id="task-details">[\s\S]*<dt>Received<\/dt><dd>Implement the heap version version 1<\/dd>[\s\S]*<details id="task-activity">[\s\S]*data-source="session:S2"/,
+    /Claude Code made version 1 at [^.]+\. It received files from Implement the heap version\.[\s\S]*Version 1 is ready for review[\s\S]*The agent says[\s\S]*<div class="md"><p>The heap version is faster on every graph above 100,000 nodes\.<\/p>[\s\S]*data-action="task-accept" data-task="task-2" data-version="1">Accept 1 file[\s\S]*data-message-to="task-2">Ask for changes[\s\S]*data-action="task-reject"[\s\S]*<details id="task-files"><summary><h2>1 file changed<\/h2>[\s\S]*<details id="task-details">[\s\S]*<dt>Received<\/dt><dd>Implement the heap version version 1<\/dd>[\s\S]*<details id="task-activity">[\s\S]*data-source="session:S2"/,
   );
   assert.doesNotMatch(text(review), /task-\d/);
   assert.doesNotMatch(review, /The coordinator reviews this version/);
