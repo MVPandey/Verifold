@@ -201,7 +201,7 @@ Where your message goes:
 
 Each message shows its state, for example "Waits for the next research step", "Delivered during its turn", or "Answered". The answer is the agent's next text after delivery, or the coordinator's next note to you, and it is a model claim.
 
-Work starts with Now: each task agent that runs or waits for review, with its harness, how long it has run, and its latest step. A quiet agent keeps its latest step with the time since it, for example "Last update 12 min ago". Message points the message box at a running agent, and Review opens a version that waits. Four rows show, and the rest fold.
+Work starts with Now: each task agent that runs or waits for review, with its harness, how long it has run, and its latest step. A quiet agent keeps its latest step with the time since it, for example "Last update 12 min ago". Message opens the message box to a running agent, and Review opens a version that waits. Four rows show, and the rest fold.
 
 The map follows, with one small box for each task: its title, its state, its harness when that differs from the lead, and its time or version. A task that waits for one other task names it, and a task that waits for more says how many. The columns of the map shrink before it scrolls, and its right edge fades while more of it is out of view. Finished lists the done tasks, newest first, with the accepted version and its number of files. Clear finished takes done and cancelled tasks off the map and out of the rail. Finished still lists the done ones, and Show finished brings them back.
 
@@ -223,7 +223,7 @@ Verifold rewrites only the part of each file between its markers, shortly after 
 
 A task opens as its own page, with Back to the map. The page starts with its state and what you can do:
 
-- For a version in review: what the agent says (its reply, a model claim, rendered as Markdown), then Accept, Ask for changes, and Reject. Ask for changes points the message box at the agent, and your message starts its next turn.
+- For a version in review: what the agent says (its reply, a model claim, rendered as Markdown), then Accept, Ask for changes, and Reject. Ask for changes opens the message box to the agent, and the agent makes a new version from what you write.
 - For a running task: the agent's latest step, with Message and Stop the turn.
 - For a task that has not started: Start task. When a coordinator runs, the page says that the coordinator starts the task, and that you can start it yourself.
 
