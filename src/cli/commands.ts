@@ -386,10 +386,12 @@ function showWorkspace(root: string, workspace: Workspace, io: CliIO): void {
   );
 }
 
-/** The port and access token of a desk, so a desk in another process can keep its open tab. */
+/** The ports and access token of a desk, so a desk in another process can keep its open tab. */
 interface DeskPlace {
   readonly port: number;
   readonly token: string;
+  /** The page server's port. The open tab may frame only that one. */
+  readonly pages?: number | undefined;
 }
 
 /** How serveDesk runs. */
@@ -506,7 +508,11 @@ async function serveDesk(
         return {
           root,
           research,
-          desk: { port: Number(place.port), token: place.hash.slice(1) },
+          desk: {
+            port: Number(place.port),
+            token: place.hash.slice(1),
+            pages: Number(new URL(desk.pages).port),
+          },
         };
       }
     }
@@ -827,7 +833,15 @@ function ownerStart(value: unknown): {
       (desk.port as number) < 65_536 &&
       typeof desk.token === 'string' &&
       /^[0-9a-f]{64}$/.test(desk.token)
-        ? { port: desk.port as number, token: desk.token }
+        ? {
+            port: desk.port as number,
+            token: desk.token,
+            ...(Number.isInteger(desk.pages) &&
+            (desk.pages as number) > 0 &&
+            (desk.pages as number) < 65_536
+              ? { pages: desk.pages as number }
+              : {}),
+          }
         : undefined,
   };
 }

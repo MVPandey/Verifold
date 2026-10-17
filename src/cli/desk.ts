@@ -66,6 +66,8 @@ export interface DeskServer {
     compute: Compute,
     memory: ProjectMemory,
   ): Promise<void>;
+  /** The origin of the page server, the only other origin that the desk frames. */
+  readonly pages: string;
   readonly closed: Promise<void>;
 }
 
@@ -571,7 +573,12 @@ export async function startDesk(
   options: {
     readonly stop?: () => void;
     readonly reuse?:
-      | { readonly port: number; readonly token: string }
+      | {
+          readonly port: number;
+          readonly token: string;
+          /** The page server's port, which the open tab's CSP allows. */
+          readonly pages?: number | undefined;
+        }
       | undefined;
   } = {},
 ): Promise<DeskServer> {
@@ -1174,6 +1181,7 @@ export async function startDesk(
       (task, version, path) =>
         tasks?.readPageFile(task, version, path) ?? Promise.resolve(null),
       signal,
+      options.reuse?.pages,
     );
   } catch (error) {
     server.close();
@@ -1208,6 +1216,7 @@ export async function startDesk(
       memory = notes;
       project = resolved;
     },
+    pages: pages.origin,
     closed,
   };
 }
