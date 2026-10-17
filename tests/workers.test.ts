@@ -727,7 +727,7 @@ await test(
     const page = await fetch(`${url.origin}/`);
     assert.match(
       page.headers.get('content-security-policy') ?? '',
-      /frame-src 'self'; frame-ancestors 'none'/,
+      /frame-src 'self' http:\/\/127\.0\.0\.1:\d+; frame-ancestors 'none'/,
     );
     assert.equal(
       (
