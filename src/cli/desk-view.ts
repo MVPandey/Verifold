@@ -77,6 +77,8 @@ export interface TaskView {
   readonly selected: TaskRecord | null;
   /** Live sessions that wait for a follow-up. */
   readonly idle: readonly string[];
+  /** Task sessions that paused when Verifold stopped. The next turn resumes them. */
+  readonly resumable?: readonly string[];
   /** The latest messages, oldest first. */
   readonly messages?: readonly Message[];
 }
@@ -649,7 +651,7 @@ function reviewDecision(
   ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong></p>${inFullMd(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
   ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
   <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
-  ${canChange ? '<p class="fine">Ask for changes opens the message box to the agent. It makes a new version from what you write.</p>' : '<p class="fine" id="task-changes-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}</section>`;
+  ${canChange ? '<p class="fine">Ask for changes opens the message box to the agent. It makes a new version from what you write.</p>' : '<p class="fine" id="task-changes-off">This agent has ended, so it cannot make a new version. Accept the files that you want, or reject the version and start the task again.</p>'}</section>`;
 }
 
 /** The changed files of a version, to select for Accept, each with its diff. */
@@ -692,7 +694,9 @@ function messageItem(message: Message, tasks: readonly TaskRecord[]): string {
   const delivery =
     message.to === 'coordinator' && message.delivery === 'queued'
       ? 'Waits for the coordinator'
-      : deliveryLabels[message.delivery];
+      : message.via === 'coordinator'
+        ? 'Passed to the coordinator'
+        : deliveryLabels[message.delivery];
   return `<li class="message"><p class="message-meta"><span>${e(sender(message.from, tasks))} to ${e(sender(message.to, tasks))}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(sender(message.about.task, tasks))} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, message.text, 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
@@ -807,6 +811,8 @@ function messageState(
       : message.via === 'coordinator'
         ? ['Passed to the coordinator', 'delivered']
         : ['Delivered with a research step', 'delivered'];
+  if (message.via === 'coordinator')
+    return ['Passed to the coordinator: the agent has ended', 'delivered'];
   if (message.via === 'turn')
     return message.delivery === 'delivered'
       ? ['Delivered during its turn', 'delivered']
@@ -1641,7 +1647,9 @@ function renderTaskPage(
           ? `${reviewDecision(
               task,
               version,
-              !!attempt?.session && view.idle.includes(attempt.session),
+              !!attempt?.session &&
+                (view.idle.includes(attempt.session) ||
+                  !!view.resumable?.includes(attempt.session)),
               used &&
                 `${used} It cannot be accepted. Reject it and start the task again, so it uses the new files.`,
               !!team && !team.stoppedAt,

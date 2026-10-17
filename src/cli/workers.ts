@@ -1,6 +1,8 @@
 import type { Terminal } from './terminals.ts';
+import type { AgentTools } from './session-hosts.ts';
 import {
   loadPaused,
+  resumableTask,
   SessionActionError,
   SessionManager,
   type PausedSession,
@@ -32,6 +34,8 @@ export class SessionPool {
   private readonly root: string;
   private readonly slots: SessionManager[] = [];
   private pausedList: PausedSession[] = [];
+  /** Whether a task session that is not in a slot can resume. A record does not change until a slot resumes it. */
+  private readonly resumable = new Map<string, boolean>();
 
   constructor(root: string, options: SessionPoolOptions) {
     this.root = root;
@@ -99,6 +103,26 @@ export class SessionPool {
   async resume(id: unknown): Promise<void> {
     await this.free().resume(id);
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
+  }
+
+  /** A task session that stopped with an earlier owner can resume for its next turn. */
+  async canResume(id: string): Promise<boolean> {
+    if (this.slot(id)) return false;
+    let known = this.resumable.get(id);
+    if (known === undefined) {
+      known = await resumableTask(this.root, id);
+      this.resumable.set(id, known);
+    }
+    return known;
+  }
+
+  async resumeTask(
+    id: string,
+    input: { readonly prompt: string; readonly tools?: AgentTools },
+  ): Promise<void> {
+    const slot = this.free();
+    this.resumable.delete(id);
+    await slot.resumeTask(id, input);
   }
 
   async restart(id: unknown): Promise<void> {

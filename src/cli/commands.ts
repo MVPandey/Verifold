@@ -1099,7 +1099,7 @@ async function stopTeam(root: string, io: CliIO): Promise<void> {
     else if ('progress' in message) io.progress?.(message.progress);
   });
   io.progress?.(
-    'Stopping Verifold. Agents pause, and pods stop after their results come back.',
+    'Stopping Verifold. The agents pause. A task turn that runs now stops, and its work waits for your review. Pods stop after their results come back.',
   );
   client.send({ stop: true });
   await client.closed;
