@@ -622,6 +622,33 @@ export async function readRecord(
   }
 }
 
+/** Before 0.12, a stop ended task sessions with this status line. */
+const endedByStop =
+  'Verifold stopped before the harness reported a session, so the session ended.';
+
+/**
+ * A session that stopped with its owner: paused, interrupted by a crash, or a
+ * task session that an owner before 0.12 ended when it stopped.
+ */
+function stoppedWithOwner(record: SessionRecord): boolean {
+  return (
+    record.status === 'paused' ||
+    record.status === 'interrupted' ||
+    (record.status === 'ended' &&
+      record.events.findLast((event) => event.kind === 'status')?.text ===
+        endedByStop)
+  );
+}
+
+/** A task session that stopped with an earlier owner and keeps its conversation, so its task can resume it. */
+export async function resumableTask(
+  root: string,
+  id: string,
+): Promise<boolean> {
+  const record = validSessionId(id) ? await readRecord(root, id) : null;
+  return !!record?.task && stoppedWithOwner(record) && conversation(record);
+}
+
 /**
  * Whether the harness holds a conversation for this record. Codex reports a
  * thread. Claude Code takes its ID at launch, so only an observed event proves
@@ -1100,6 +1127,35 @@ export class SessionManager {
   }
 
   /**
+   * Continue a task session that stopped with an earlier owner, with the
+   * task's next turn. It keeps its task folder, Strict limits, and network.
+   */
+  async resumeTask(
+    id: unknown,
+    input: { readonly prompt: string; readonly tools?: AgentTools },
+  ): Promise<void> {
+    const generation = this.generation;
+    this.ready();
+    const text = this.text(input.prompt);
+    const saved =
+      typeof id === 'string' && validSessionId(id)
+        ? await readRecord(this.root, id)
+        : null;
+    if (!saved?.task || !stoppedWithOwner(saved) || !conversation(saved))
+      fail('That task session cannot resume.');
+    // Another start can begin while the record loads.
+    this.ready();
+    this.current = { ...saved, status: 'starting', endedAt: null };
+    this.tools = input.tools;
+    this.event(
+      'status',
+      'Verifold resumes this session in a new process for the next turn. The events above come from the earlier launch.',
+    );
+    await this.launch(text, generation, true);
+    this.event('you', text);
+  }
+
+  /**
    * Run the first request of a paused or interrupted session again when no
    * native conversation is known. Claude Code keeps its session ID, so it
    * refuses the launch if that conversation exists after all.
@@ -1274,8 +1330,8 @@ export class SessionManager {
     this.host?.close();
     this.host = null;
     this.dropSteers();
-    // A task session ends with the owner. Its task keeps the work as a version.
-    const resumable = record.nativeSessionId !== null && !record.task;
+    // A task keeps the stopped turn as a version. Its next turn resumes the session.
+    const resumable = record.nativeSessionId !== null;
     this.patch((current) => ({
       ...unanswered(current),
       status: resumable ? 'paused' : 'ended',
@@ -1284,7 +1340,7 @@ export class SessionManager {
     }));
     this.event(
       'status',
-      `${record.status === 'running' ? 'The current turn stopped with Verifold. Its outcome is unknown. ' : ''}${resumable ? 'Verifold stopped, so the session paused. Run verifold in this folder to resume it.' : 'Verifold stopped before the harness reported a session, so the session ended.'}`,
+      `${record.status === 'running' ? 'The current turn stopped with Verifold. Its outcome is unknown. ' : ''}${!resumable ? endedByStop : record.task ? 'Verifold stopped, so the session paused. Its next turn resumes it.' : 'Verifold stopped, so the session paused. Run verifold in this folder to resume it.'}`,
     );
   }
 
@@ -1294,8 +1350,12 @@ export class SessionManager {
   }
 
   /** Save the launch, then start the harness. A launch that cannot be saved does not start. */
-  private launch(prompt?: string, generation = this.generation): Promise<void> {
-    const run = this.launchNow(prompt, generation);
+  private launch(
+    prompt?: string,
+    generation = this.generation,
+    resume = false,
+  ): Promise<void> {
+    const run = this.launchNow(prompt, generation, resume);
     this.inflight = run.catch(() => {});
     return run;
   }
@@ -1303,6 +1363,7 @@ export class SessionManager {
   private async launchNow(
     prompt: string | undefined,
     generation: number,
+    resume: boolean,
   ): Promise<void> {
     const record = this.current;
     if (!record) return;
@@ -1340,10 +1401,7 @@ export class SessionManager {
       if (generation !== this.generation) {
         this.patch((current) => ({
           ...current,
-          status:
-            current.nativeSessionId !== null && !current.task
-              ? 'paused'
-              : 'ended',
+          status: current.nativeSessionId !== null ? 'paused' : 'ended',
           endedAt: new Date().toISOString(),
           launches: ended(current.launches),
         }));
@@ -1359,7 +1417,7 @@ export class SessionManager {
         clientVersion: this.options.clientVersion,
         ...(record.model ? { model: record.model } : {}),
         ...(prompt === undefined ? {} : { prompt }),
-        ...(native && prompt === undefined
+        ...(native && (prompt === undefined || resume)
           ? { resume: native }
           : native
             ? { sessionId: native }
