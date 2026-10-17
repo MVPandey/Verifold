@@ -649,7 +649,7 @@ function reviewDecision(
   ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong></p>${inFullMd(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
   ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
   <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
-  ${canChange ? '<p class="fine">Ask for changes points the message box at the agent. Your message starts its next turn, and the next version follows.</p>' : '<p class="fine" id="task-changes-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}</section>`;
+  ${canChange ? '<p class="fine">Ask for changes opens the message box to the agent. It makes a new version from what you write.</p>' : '<p class="fine" id="task-changes-off">The harness session of this task ended. Reject this version, then start the task again.</p>'}</section>`;
 }
 
 /** The changed files of a version, to select for Accept, each with its diff. */
@@ -702,7 +702,7 @@ function decideForm(message: Message): string {
     message.kind === 'objection'
       ? `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="upheld">Uphold</button><button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="overruled">Overrule</button>`
       : `<button type="button" data-action="task-decide" data-message="${e(message.id)}" data-decision="resolved">Resolve</button>`
-  }</div><p class="fine">${message.kind === 'objection' ? 'Uphold when the objection is right. Overrule when it is wrong. ' : ''}Your decision and its reason go to the task that raised it, with its next turn. To change the work, revise the task.</p>`;
+  }</div><p class="fine">${message.kind === 'objection' ? 'Uphold it if the agent is right, or overrule it. ' : ''}The agent reads your decision and reason in its next turn.</p>`;
 }
 
 /** The answer to a question from the coordinator. Done answers without words. */
@@ -1096,10 +1096,10 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           key: `question:${message.id}`,
           view: 'home',
           kind: 'Question',
-          title: lead(first, 160),
+          title: lead(first, 90),
           why: 'The coordinator waits for your answer.',
           since: message.at,
-          body: `${rest.trim() || first.length > 160 ? `<p class="pre">${e(first.length > 160 ? message.text : rest.trim())}</p>` : ''}${answerForm(message)}`,
+          body: `${rest.trim() || first.length > 90 ? `<p class="pre">${e(first.length > 90 ? message.text : rest.trim())}</p>` : ''}${answerForm(message)}`,
         });
       continue;
     }
@@ -1344,7 +1344,7 @@ function coordinatorPanel(
       kind: 'Agent',
       title: 'Coordinator',
       sub: `<span class="status muted">${state ? 'Stopped' : 'Not started'}</span>`,
-      body: `<p class="fine">The coordinator turns an objective into tasks, starts them, and reviews each version. It can only use Verifold's task tools, with the same checks as yours, and it gives a reason for each action. It cannot run commands or edit files.</p>
+      body: `<p class="fine">The coordinator splits an objective into tasks, starts them, and reviews each version. It works only through Verifold's task tools and gives a reason for each action. It cannot run commands or edit files.</p>
     <label class="field" for="coordinator-objective">Objective</label><textarea id="coordinator-objective" rows="5" maxlength="8000">${e(objective)}</textarea>
     ${objective ? '' : '<p class="fine">Choose a research direction first, or write the objective yourself.</p>'}
     <div class="fields"><label class="field" for="coordinator-host">Harness<select id="coordinator-host"><option value="claude"${host === 'codex' ? '' : ' selected'}>Claude Code</option><option value="codex"${host === 'codex' ? ' selected' : ''}>Codex</option></select></label><label class="field" for="coordinator-model">Model<input id="coordinator-model" type="text" maxlength="200" placeholder="Harness default"></label></div>
@@ -1609,7 +1609,7 @@ function renderTaskPage(
   const details = `<details id="task-details"><summary><h2>What the task asks</h2></summary>
     ${assignment.hostReason ? `<p class="host-why"><span class="map-label">Why this harness</span> ${e(assignment.hostReason)}</p>` : ''}
     <dl class="task-fields"><dt>Objective</dt><dd>${more(`objective-${task.id}`, assignment.objective, 220)}</dd><dt>Expected output</dt><dd>${more(`output-${task.id}`, assignment.output, 160)}</dd><dt>Input files</dt><dd>${assignment.inputs.length ? assignment.inputs.map((input) => `<code>${e(input.path)}</code>`).join(' ') : 'None'}</dd><dt>May write to</dt><dd>${assignment.writable.map((path) => `<code>${e(path === '.' ? 'the whole project' : path)}</code>`).join(' ')}</dd><dt>Network</dt><dd>${assignment.network ? `${e(assignment.network.domains.join(', '))}: ${e(assignment.network.reason)}${assignment.host === 'codex' ? ' (Codex cannot limit the network to these domains.)' : ''}` : 'None for shell commands'}</dd>${assignment.dependencies.length ? `<dt>Waits for</dt><dd>${e(assignment.dependencies.map(name).join(', '))}</dd>` : ''}${received.length ? `<dt>Received</dt><dd>${e(received.map((used) => `${name(used.task)} version ${used.version}`).join(', '))}</dd>` : ''}<dt>Harness</dt><dd>${e(hostName(assignment.host))}, model ${e(assignment.model ?? 'harness default')}, ${assignment.minutes} min for each turn</dd></dl>
-    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Claude Code or Codex enforces these limits. They are more than words in the prompt.</p>` : ''}</details>`;
+    ${attempt?.restrictions.length ? `<h3>What the harness enforces</h3><ul>${attempt.restrictions.map((entry) => `<li>${e(entry)}</li>`).join('')}</ul><p class="fine">Claude Code or Codex enforces these limits, so the agent cannot ignore them.</p>` : ''}</details>`;
   const activity = attempt?.session
     ? `<details id="task-activity"><summary><h2>What the agent did</h2></summary>${transcriptSlot(`session:${attempt.session}`, `${hostName(assignment.host)} transcript`, '')}${agent ? `<div class="actions">${agent}</div>` : ''}</details>`
     : '';
@@ -2049,7 +2049,7 @@ function auditTable(
     .join(', ');
   const table = (list: readonly AuditRow[]): string =>
     `<div class="table"><table class="audit">${head}<tbody>${list.map(auditRow).join('')}</tbody></table></div>`;
-  return `<div class="section-title">${auditFilter}<span class="count">${total} recorded, ${tagged} tagged${byTag ? `: ${e(byTag)}` : ''}</span></div><p class="fine">A tag points to a command worth a look, from its text alone. It is not a finding. Each row is the command that the agent asked for, not the processes that it started.</p>${tagged ? '' : '<p class="fine tagged-none">No command has a tag.</p>'}${table(inView)}${taggedOlder.length ? `<details id="audit-tagged"><summary>${taggedOlder.length} older tagged ${taggedOlder.length === 1 ? 'command' : 'commands'}</summary>${table(taggedOlder)}</details>` : ''}${plainOlder.length ? `<details id="audit-more"><summary>${plainOlder.length} older ${plainOlder.length === 1 ? 'command' : 'commands'} without a tag</summary>${rows.length < total ? '<p class="fine">This list holds the latest 200 commands and every tagged one.</p>' : ''}${table(plainOlder)}</details>` : ''}`;
+  return `<div class="section-title">${auditFilter}<span class="count">${total} recorded, ${tagged} tagged${byTag ? `: ${e(byTag)}` : ''}</span></div><p class="fine">Tags come from the command text alone. They mark commands worth a look, not findings. Each row is a command that an agent asked for, not every process that it started.</p>${tagged ? '' : '<p class="fine tagged-none">No command has a tag.</p>'}${table(inView)}${taggedOlder.length ? `<details id="audit-tagged"><summary>${taggedOlder.length} older tagged ${taggedOlder.length === 1 ? 'command' : 'commands'}</summary>${table(taggedOlder)}</details>` : ''}${plainOlder.length ? `<details id="audit-more"><summary>${plainOlder.length} older ${plainOlder.length === 1 ? 'command' : 'commands'} without a tag</summary>${rows.length < total ? '<p class="fine">This list holds the latest 200 commands and every tagged one.</p>' : ''}${table(plainOlder)}</details>` : ''}`;
 
   function auditRow({ command, view }: AuditRow): string {
     const { record } = view;
@@ -2141,7 +2141,7 @@ function renderPods(compute: ComputeView): string {
   ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
   ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU. ${compute.settings.askBeforePod ? 'You approve each pod in Needs you.' : 'A pod that fits your limits starts at once. Other requests wait for you in Needs you.'}</p>`}
   ${earlier.length ? `<details id="earlier-leases"><summary>Earlier pods (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}
-  <p class="fine">Costs count each running minute at the billed rate, with the disk. When RunPod's bill is higher, Verifold uses it.</p></section>`;
+  <p class="fine">Cost counts every minute that a pod runs, disk included. If RunPod bills more, Verifold shows RunPod's figure.</p></section>`;
 }
 
 const stockNames = {
@@ -2203,7 +2203,7 @@ function renderComputeView(compute: ComputeView): string {
   <div class="fields">${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours for one pod, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
   <label class="field" for="compute-images">RunPod images that pods can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
   <label class="check" for="compute-ask"><input type="checkbox" id="compute-ask"${settings.askBeforePod ? ' checked' : ''}> Ask me before each pod starts</label>
-  <p class="fine">Without this, a pod that the coordinator asks for starts at once when it fits these limits, also while you are away. You can stop it in Compute.</p></details>
+  <p class="fine">If this is off, a pod that fits these limits starts as soon as the coordinator asks, even while you're away. You can stop it in Compute.</p></details>
   <div class="actions"><button type="button" class="primary" data-action="compute-settings">Save the limits</button></div>
   <p class="fine">Only you can change these limits. RunPod erases the disk of a pod when the pod stops.</p>`;
   const head = `<div class="view-head"><h1 id="view-title" tabindex="-1">Compute</h1><p>GPU pods on RunPod for your tasks</p></div>`;
@@ -2480,7 +2480,7 @@ function attemptPanel(
           ? '<p class="notice">Verifold stopped during this attempt, so its outcome is unknown. Continue research to run the step again from the saved checkpoint.</p>'
           : record?.status === 'failed' || record?.status === 'cancelled'
             ? '<p class="notice">Verifold kept the files of this step. Look at them before you continue.</p>'
-            : '<p class="fine">The result was valid, and Verifold saved it.</p>';
+            : '<p class="fine">Verifold checked the result and saved it.</p>';
   const body = `${state}${report ? `<h3>Sources and findings</h3>${findingsBody(report, chosen.id)}` : ''}<details id="attempt-identity"><summary>Harness and session details</summary><dl><dt>Verifold attempt</dt><dd>${e(chosen.id)}</dd><dt>Harness</dt><dd>${e(record?.host ?? 'Unknown')}</dd><dt>Requested model</dt><dd>${e(record ? (record.model ?? 'The harness default') : 'Unknown')}</dd><dt>Native session</dt><dd>${e(record?.nativeSessionId ?? 'Not reported')}</dd><dt>Requested session</dt><dd>${e(record ? (record.requestedSessionId ?? 'New session requested') : 'Unknown')}</dd>${record ? `<dt>Started</dt><dd>${e(time(record.startedAt))}</dd><dt>Finished</dt><dd>${e(record.finishedAt ? time(record.finishedAt) : 'Not recorded')}</dd>` : ''}</dl></details>${live.research?.step && chosen.id === workspace.research?.latestAttempt ? '<p class="fine">Plan shows the transcript of this step under Details.</p>' : `<details id="attempt-transcript"><summary>Harness transcript</summary>${transcriptSlot(`attempt:${chosen.id}`, 'Attempt transcript', '')}</details>`}`;
   return {
     kind: 'Research attempt',

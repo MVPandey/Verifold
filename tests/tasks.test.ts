@@ -1446,7 +1446,20 @@ await test("the coordinator's question waits in Needs you until the person answe
   html = await page('needs');
   assert.doesNotMatch(html, /Store a RunPod key/);
   assert.match(html, /Nothing needs you\./);
-  for (const number of [1, 2, 3, 4, 5]) await tasks.ask(`Question ${number}`);
+  // A long first sentence makes a short title, and the question shows in full under it.
+  await tasks.ask(
+    'Which of the three GPU types should the scaling run use, given that the A100 is cheaper per hour but the H100 finishes sooner? Reply with one name.',
+  );
+  html = await page('needs');
+  assert.match(
+    html,
+    /<h3>Which of the three GPU types should the scaling run use, given that the A100 is cheaper…<\/h3>/,
+  );
+  assert.match(
+    html,
+    /<p class="pre">Which of the three GPU types [^<]*Reply with one name\.<\/p>/,
+  );
+  for (const number of [1, 2, 3, 4]) await tasks.ask(`Question ${number}`);
   await assert.rejects(tasks.ask('One more'), /Five of your questions wait/);
 });
 

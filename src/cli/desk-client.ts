@@ -434,12 +434,33 @@ function showNotify(): void {
 function drawMaps(): void {
   for (const map of content.querySelectorAll<HTMLElement>('[data-map]')) {
     drawMap(map);
+    if (!shownMaps.has(map)) {
+      shownMaps.add(map);
+      showFrontier(map);
+    }
     markEdge(map);
   }
 }
 
-/** A map wider than its card fades at the right edge while more of it is out of view. */
+/** Maps that the page showed already. A refresh keeps the place that the person scrolled to. */
+const shownMaps = new WeakSet<HTMLElement>();
+
+/** A deep plan opens at its first task that is not done, so the work of now is in view. */
+function showFrontier(map: HTMLElement): void {
+  if (map.scrollWidth <= map.clientWidth) return;
+  const box = map.querySelector<HTMLElement>(
+    '.map-box:not([data-state="done"]):not([data-state="cancelled"])',
+  );
+  const column = box?.closest<HTMLElement>('.map-col');
+  // The column before it stays in view, so the arrows into the task show where it starts.
+  const before = column?.previousElementSibling;
+  if (column && before instanceof HTMLElement)
+    map.scrollLeft = before.offsetLeft;
+}
+
+/** A map wider than its card fades at each edge that has more of it out of view. */
 function markEdge(map: HTMLElement): void {
+  map.classList.toggle('more-left', map.scrollLeft > 2);
   map.classList.toggle(
     'more-right',
     map.scrollLeft + map.clientWidth < map.scrollWidth - 2,
