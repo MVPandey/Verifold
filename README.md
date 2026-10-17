@@ -44,9 +44,9 @@ Run `verifold` in your terminal.
 - In a folder that is already a Verifold project, Verifold first checks for global setup that is not finished, then opens the project's desk. This does not change the harness or the research that the project saved.
 - In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project and opens the desk before planning and research start.
 
-Keep the terminal open. Ctrl+C stops its work and the desk, and pauses a running session.
+The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in Records does the same.
 
-In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal stays open and shows each step as one line. Ctrl+C cancels setup and saves nothing. When setup ends, the same desk shows the new project, and planning starts.
+In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal shows each step as one line. Ctrl+C during setup cancels it and saves nothing. When setup ends, a background process takes over the project, and the same browser tab shows it while planning starts.
 
 `verifold init`, `--no-open`, and runs without a terminal do setup in the terminal instead. Both paths run the same setup, with the same consent steps, file limits, and retries. Use `verifold init` to do setup and research entirely in the CLI. A bare `verifold` needs an interactive terminal. `verifold --no-open` prints the desk URL and does not open a browser.
 
@@ -174,13 +174,17 @@ Run `npm run build:cli` to copy the prompts into `dist-cli/cli/prompts/` for the
 
 ### Local research desk
 
-Run `verifold` in a project, or `verifold ui --workspace <path>`, to open its desk in the browser. Keep that terminal open: it runs the project owner, and the desk is a second view of the same owner. Ctrl+C stops the desk and pauses a running session. Use `--no-open` to print the URL without opening a browser.
+Run `verifold` in a project, or `verifold ui --workspace <path>`, to open its desk in the browser. With a terminal, the project owner runs in a background process, and the terminal attaches to it: it prints the desk URL and status lines, and takes the terminal commands. Ctrl+C or a closed window only detaches. The team keeps working. Run `verifold` again to attach, and `verifold stop` to stop the owner: sessions pause, and pods stop after their results come back. Use `--no-open` to print the URL without opening a browser.
+
+The terminal and the background owner talk over a Unix socket in a private temporary folder. A terminal must give the owner's key first. The key is in `~/.verifold/credentials/owners/<owner ID>.json` (`0600`), which task agents and the coordinator cannot read. It is never in a command line, an environment variable, a project file, or a log. The owner writes its status lines to `.verifold/owner.log`, without the desk URL. Over about 1 MB, the log moves to `owner.log.1`. Nothing starts at login: after a restart, run `verifold` to continue.
+
+Without a terminal, for example in a script, `verifold ui` runs the desk in the foreground as before, and Ctrl+C stops it.
 
 The URL includes a private access token. Keep it private, and use the complete URL if the desk asks you to connect again. Type `/open` in the terminal to open the desk again with a new one-time link.
 
 On a Mac, Verifold keeps the computer from idle sleep while an agent works or a pod runs (`caffeinate -i`). Closing the lid still puts it to sleep.
 
-One Verifold process owns a project at a time. A second `verifold` for the same project names the running process and exits. The owner writes `.verifold/owner.json` with its process ID and start time, and no access token. If that process stopped, the next owner moves the record aside and continues.
+One Verifold process owns a project at a time. A second `verifold` attaches to the background owner. A command such as `verifold research` names the running process and exits. The owner writes `.verifold/owner.json` with its process ID and start time, and no access token. If that process stopped, the next owner moves the record aside and continues.
 
 The desk shows the question, the saved context, the research phase, the attempt history, and the source reports. Its rail names the views: Home, Plan, Work, Answer, and Records, and Compute when the desk can manage pods. The arc on Home has four stages: Ask, Plan, Work, and Answer. The top bar names the current stage and its state, for example "Plan: waits for you".
 
@@ -305,7 +309,7 @@ A permission request shows the tool input, not a description that the model wrot
 
 Verifold saves each session in `.verifold/sessions/<session-id>.json` before it starts the harness. The record keeps the latest 400 events and 1000 tool calls, and one entry for each harness process that ran the session. Verifold gives Claude Code its session ID at launch (`--session-id`), and it records the Codex thread ID when Codex reports it.
 
-Ctrl+C pauses a running session: Verifold stops the current turn and the harness process, and keeps the native session ID. The result of a turn that Ctrl+C stopped is unknown. The next `verifold` in the folder lists the paused sessions in the desk. Resume, or `/resume` in the terminal, continues the same conversation in a new harness process, with Claude Code `--resume` or Codex `thread/resume`. A session that ended or failed cannot resume.
+When Verifold stops (`verifold stop`, Stop the team in the desk, or Ctrl+C in the foreground), a running session pauses: Verifold stops the current turn and the harness process, and keeps the native session ID. The result of a turn that the stop cut off is unknown. The next `verifold` in the folder lists the paused sessions in the desk. Resume, or `/resume` in the terminal, continues the same conversation in a new harness process, with Claude Code `--resume` or Codex `thread/resume`. A session that ended or failed cannot resume.
 
 If Verifold stops without saving the end of its work, for example after a forced stop, the next `verifold` in the folder checks each unfinished session and research attempt before it starts anything. A harness process that still runs stops first, but only when its recorded process start time matches, so a reused process ID cannot cause a wrong stop. The work becomes interrupted, with an unknown result, and tool calls that were running show as unknown. A session with a recorded conversation can resume. A session without one runs its first request again. Claude Code keeps its session ID for that run, so it cannot create a second conversation. An interrupted research attempt keeps its files, and Continue research runs the step again.
 
@@ -493,7 +497,7 @@ This README describes the current source checkout. The published npm package can
 | Local research records     | Keeps attempt files, and gives CLI status and a read-only HTML snapshot.                                        |
 | Controlled session         | Runs Claude Code or Codex sessions from the desk or the terminal, and relays their permission requests.         |
 | Command record             | Records each tool call with who let it run, risk tags, and a review mark.                                       |
-| Project owner              | One `verifold` process owns a project. Ctrl+C pauses a session, and a later run resumes it.                     |
+| Project owner              | A background process owns a project. A stop pauses a session, and a later run resumes it.                       |
 | Research in the desk       | Runs research in the owner, shows its activity live, and offers each research decision in the desk.             |
 | Recovery                   | Marks work interrupted after a crash, stops leftover harness processes safely, and offers resume.               |
 | Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.                   |
