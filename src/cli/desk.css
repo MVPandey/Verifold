@@ -1678,6 +1678,16 @@ body[data-detail='details'] .summary-only {
 .diff-head {
   margin-bottom: 6px;
 }
+/* An agent's page. Pages expect a white sheet, also in dark mode. */
+.page-frame {
+  display: block;
+  width: 100%;
+  height: min(70vh, 640px);
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
 .diff {
   max-height: 480px;
   margin: 0;

@@ -18,6 +18,7 @@ import {
   type AgentTool,
   type AgentTools,
 } from './session-hosts.ts';
+import { pageFileLimit } from './pages.ts';
 import { hostName, SessionActionError } from './session.ts';
 import {
   allocate,
@@ -949,6 +950,42 @@ export class TaskManager {
           : text;
       }
     fail('That version does not exist.');
+  }
+
+  /**
+   * One file of a version's task folder for a page, up to `pageFileLimit`. An
+   * accepted file reads its saved copy. Null when the file is missing or larger.
+   */
+  async readPageFile(
+    id: string,
+    version: number,
+    path: string,
+  ): Promise<Buffer | null> {
+    const task = await this.get(id);
+    for (const attempt of task?.attempts ?? [])
+      for (const entry of attempt.versions) {
+        if (entry.number !== version) continue;
+        const saved = task?.artifacts?.find(
+          (artifact) =>
+            artifact.version === version &&
+            artifact.files.some((copy) => copy.path === path),
+        );
+        let content: Buffer | null = null;
+        if (saved) {
+          const file = join(this.artifactFolder(id, version), path);
+          const stats = await lstat(file).catch(() => null);
+          if (stats?.isFile() && stats.size <= pageFileLimit)
+            content = await readFile(file);
+        } else if (attempt.workspace)
+          content = await readAt(
+            this.root,
+            attempt.workspace,
+            entry.commit,
+            path,
+          ).catch(() => null);
+        return content && content.length <= pageFileLimit ? content : null;
+      }
+    return null;
   }
 
   /** The diff of one file in one version. */
