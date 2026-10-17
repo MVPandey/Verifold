@@ -2916,6 +2916,33 @@ await test('a task opens as its own page: the decision first, the rest folded, a
   );
   assert.doesNotMatch(text(review), /task-\d/);
   assert.doesNotMatch(review, /The coordinator reviews this version/);
+  // Test output folds under the other files, not ticked, and Accept counts only the ticked files.
+  const withScratch = page(
+    task('task-2', 'review', {
+      attempts: [
+        attempt([
+          {
+            ...version,
+            files: [
+              ...version.files,
+              {
+                path: 'results/tmp/run-1/model.pt',
+                change: 'added',
+                inScope: true,
+                regular: true,
+              },
+            ],
+          },
+        ]),
+      ],
+    }),
+    task('task-1', 'done'),
+  );
+  assert.match(withScratch, />Accept 1 file</);
+  assert.match(
+    withScratch,
+    /<summary><h2>2 files changed<\/h2><span>bench\.csv, model\.pt<\/span><\/summary><div class="review-grid"><ul class="review-files"><li><input type="checkbox" id="task-file-1-0" data-file="results\/bench\.csv" checked[\s\S]*<details id="task-scratch" class="scratch-files"><summary>1 scratch file, not ticked<\/summary>[\s\S]*<input type="checkbox" id="task-file-1-1" data-file="results\/tmp\/run-1\/model\.pt" aria-label/,
+  );
   // The box writes to the agent of the page.
   assert.match(
     review,
