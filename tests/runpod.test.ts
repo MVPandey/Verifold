@@ -318,6 +318,7 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
     compute: {
       key: null,
       keyring: 'keychain' as const,
+      secrets: [],
       settings: computeDefaults,
       gpus: null,
       gpusAt: null,
@@ -372,6 +373,7 @@ await test('the Compute view shows the key status, the limits, and the GPUs, and
       compute: {
         key,
         keyring: 'keychain' as const,
+        secrets: [],
         settings: {
           ...computeDefaults,
           limitUsd: 25,
@@ -536,6 +538,25 @@ await test('the desk stores a key and limits through actions, and no reply holds
   assert.match(view, /It ends in <code>WXYZ<\/code>/);
   assert.match(view, /Up to \$10\.00 for this project/);
   assert.doesNotMatch(view, /TESTKEY/);
+  // A pod secret goes in the same way. The reply and the view name it, never with its value.
+  const secret = await post({
+    action: 'compute-secret-save',
+    name: 'HF_TOKEN',
+    value: 'hf_SECRETVALUE0123456789',
+    file: true,
+  });
+  assert.equal(secret.status, 200);
+  assert.doesNotMatch(secret.text, /SECRETVALUE/);
+  const named = await (
+    await fetch(`${url.origin}/api/view?view=compute`, { headers })
+  ).text();
+  assert.match(named, /<code>HF_TOKEN<\/code>/);
+  assert.doesNotMatch(named, /SECRETVALUE/);
+  assert.equal(
+    (await post({ action: 'compute-secret-remove', secret: 'HF_TOKEN' }))
+      .status,
+    200,
+  );
   assert.equal((await post({ action: 'compute-key-remove' })).status, 200);
   assert.equal((await post({ action: 'compute-unknown' })).status, 400);
 });
@@ -593,4 +614,57 @@ await test('verifold runpod key stores, shows, checks, and removes the key witho
     ],
   );
   assert.doesNotMatch(out.join('\n'), /TESTKEY/);
+});
+
+await test('verifold runpod secret stores, lists, and removes a pod secret without printing it', async (t) => {
+  const { root, home } = await project(t);
+  const out: string[] = [];
+  const prompts: string[] = [];
+  const io = {
+    interactive: false,
+    ask: (): Promise<string> => Promise.reject(new Error('Unexpected prompt')),
+    out: (text: string): void => {
+      out.push(text);
+    },
+    readSecret: (prompt: string): Promise<string> => {
+      prompts.push(prompt);
+      return Promise.resolve('hf_SECRETVALUE0123456789\n');
+    },
+    compute: {
+      store: {
+        home,
+        platform: 'linux' as const,
+        secretTool: join(home, 'none'),
+      },
+    },
+  };
+  await assert.rejects(
+    runCli(['runpod', 'secret', 'set'], root, io),
+    /runpod secret set NAME, list, or remove NAME/,
+  );
+  await assert.rejects(
+    runCli(['runpod', 'secret', 'list', 'HF_TOKEN'], root, io),
+    /runpod secret set NAME, list, or remove NAME/,
+  );
+  await assert.rejects(
+    runCli(['runpod', 'secret', 'remove', 'HF_TOKEN', '--file'], root, io),
+    /--file is valid only/,
+  );
+  await assert.rejects(
+    runCli(['runpod', 'secret', 'set', 'HF_TOKEN'], root, io),
+    /no keyring/,
+  );
+  await runCli(['runpod', 'secret', 'set', 'HF_TOKEN', '--file'], root, io);
+  await runCli(['runpod', 'secret', 'list'], root, io);
+  await runCli(['runpod', 'secret', 'remove', 'HF_TOKEN'], root, io);
+  assert.deepEqual(prompts.at(-1), 'HF_TOKEN (input hidden): ');
+  assert.deepEqual(
+    out.map((line) => JSON.parse(line) as unknown),
+    [
+      [{ name: 'HF_TOKEN', place: 'file' }],
+      [{ name: 'HF_TOKEN', place: 'file' }],
+      [],
+    ],
+  );
+  assert.doesNotMatch(out.join('\n'), /SECRETVALUE/);
 });

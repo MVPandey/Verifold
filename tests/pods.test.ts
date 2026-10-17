@@ -434,3 +434,49 @@ await test('a task runs commands and jobs on its pod and copies files both ways,
   ).trim();
   assert.equal(left, '');
 });
+
+await test('a pod gets its secrets as environment variables, and pod output hides their values', async (t) => {
+  const { compute, task, dir, pods } = await setup(t);
+  const value = 'hf_SECRETVALUE0123456789';
+  await compute.setSecret('HF_TOKEN', value, true);
+  const id = (
+    await compute.leases.request({
+      by: 'coordinator',
+      gpu: 'NVIDIA RTX A5000',
+      hours: 1,
+      tasks: ['task-1'],
+      reason: 'Load gated weights.',
+      secrets: ['HF_TOKEN'],
+    })
+  ).id;
+  await compute.leases.approve(id);
+  await compute.leases.poll();
+  const env = [...pods.values()].at(-1)?.env ?? {};
+  assert.equal(env.HF_TOKEN, value);
+  assert.match(env.PUBLIC_KEY ?? '', /^ssh-ed25519 /);
+  const tools = compute.podTools();
+  // A command that prints the value gets its name in brackets instead.
+  const run = await tools.call(place(task), 'verifold_pod_run', {
+    command: `echo token=${value}`,
+  });
+  assert.match(run, /token=\[HF_TOKEN\]/);
+  assert.doesNotMatch(run, /SECRETVALUE/);
+  // So does an error that quotes a path.
+  const copy = await tools
+    .call(place(task), 'verifold_pod_copy', {
+      direction: 'to-pod',
+      paths: [`../${value}`],
+    })
+    .catch((error: unknown) => (error instanceof Error ? error.message : ''));
+  assert.match(copy, /\[HF_TOKEN\]/);
+  assert.doesNotMatch(copy, /SECRETVALUE/);
+  // The lease record names the secret and holds no value.
+  assert.deepEqual(compute.leases.get(id).secrets, ['HF_TOKEN']);
+  assert.doesNotMatch(
+    await readFile(
+      join(dir, 'project', '.verifold', 'compute', 'leases', `${id}.json`),
+      'utf8',
+    ),
+    /SECRETVALUE/,
+  );
+});

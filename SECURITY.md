@@ -18,6 +18,8 @@ Task workers reach Verifold's own tools only through the harness process that Ve
 
 The coordinator acts only through Verifold tools. Claude Code runs it with no built-in tools, and Codex with a read-only sandbox and no approvals. Each tool calls the task operation that the person uses, with the same checks, and none can widen a task's paths beyond the project, change a harness permission, or raise a limit. It can create at most 12 tasks, and its wakeups are limited to 12 an hour. Its reasons and summaries are model text, labeled as its reading.
 
+Pod secrets, such as an `HF_TOKEN`, stay in the keyring or in `~/.verifold/credentials`, which strict workers cannot read. A pod gets the secrets that its lease names as environment variables. No harness gets them, and Verifold replaces their values with their names in the output of pod tools. A command on the pod can still use or copy a value, for example in another encoding, so give a pod a token with the least access that its work needs.
+
 Model providers and research tools can receive project prompts according to the harness configuration. Local project storage does not imply offline execution.
 
 Source links and model reports are untrusted data. Valid JSON and a successful subprocess do not establish scientific correctness or source authenticity.
