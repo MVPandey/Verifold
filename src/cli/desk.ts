@@ -49,6 +49,7 @@ import {
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
 import { loadWorkspace } from './storage.ts';
+import { startPageServer, type PageServer } from './pages.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -623,6 +624,8 @@ export async function startDesk(
     assets.set(path, { type, body: await readFile(new URL(file, assetsRoot)) });
   }
   let origin = '';
+  // Agents' pages run on their own origin. The desk may frame only that one.
+  let pages: PageServer | undefined;
   let pending = 0;
   /** Open long polls of terminal output. */
   let terminalReads = 0;
@@ -685,7 +688,7 @@ export async function startDesk(
     // blob: images: the page draws its tab icon. Only a script of the page can make a blob URL.
     response.setHeader(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-src 'self'${pages ? ` ${pages.origin}` : ''}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
     );
     if (
       request.headers.host !== origin.slice(7) ||
@@ -951,6 +954,34 @@ export async function startDesk(
       }
       return;
     }
+    if (url.pathname === '/api/page') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const id = url.searchParams.get('task');
+      const number = Number(url.searchParams.get('version'));
+      const file = url.searchParams.get('file') ?? '';
+      if (
+        !pages ||
+        !tasks ||
+        !validTaskId(id) ||
+        !Number.isSafeInteger(number) ||
+        number < 1 ||
+        !/\.html?$/i.test(file) ||
+        file.length > 300 ||
+        [...url.searchParams.keys()].some(
+          (key) => !['task', 'version', 'file'].includes(key),
+        )
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      response
+        .writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        .end(JSON.stringify({ url: pages.grant(id, number, file) }));
+      return;
+    }
     if (url.pathname === '/api/task-diff') {
       if (!authorized) {
         response.writeHead(401).end();
@@ -1137,6 +1168,17 @@ export async function startDesk(
     throw new Error('Could not start the local desk.');
   }
   origin = `http://127.0.0.1:${address.port}`;
+  try {
+    pages = await startPageServer(
+      origin,
+      (task, version, path) =>
+        tasks?.readPageFile(task, version, path) ?? Promise.resolve(null),
+      signal,
+    );
+  } catch (error) {
+    server.close();
+    throw error;
+  }
   const stop = (): void => {
     server.closeAllConnections();
     server.close();

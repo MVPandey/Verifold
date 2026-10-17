@@ -1257,6 +1257,38 @@ await test('the desk creates, reviews, and accepts a task through the same opera
     ).status,
     404,
   );
+  // An HTML file of a version gets a URL on the page server, the only origin that the desk may frame.
+  const pageQuery = 'task=task-1&version=1&file=results%2Freport.html';
+  assert.equal(
+    (await fetch(`${url.origin}/api/page?${pageQuery}`)).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(
+        `${url.origin}/api/page?task=task-1&version=1&file=results%2Fbaseline.md`,
+        { headers },
+      )
+    ).status,
+    400,
+  );
+  const granted = (await (
+    await fetch(`${url.origin}/api/page?${pageQuery}`, { headers })
+  ).json()) as { url: string };
+  const pageOrigin = new URL(granted.url).origin;
+  assert.notEqual(pageOrigin, url.origin);
+  assert.match(
+    (await fetch(`${url.origin}/`)).headers.get('content-security-policy') ??
+      '',
+    new RegExp(`frame-src 'self' ${pageOrigin};`),
+  );
+  // The page server reads the files of that version from the task folder.
+  const sibling = await fetch(
+    granted.url.replace('report.html', 'baseline.md'),
+  );
+  assert.equal(sibling.status, 200);
+  assert.equal(await sibling.text(), '# Baseline\n\n1.82 ms\n');
+  assert.equal((await fetch(granted.url)).status, 404);
   await write(root, 'results/baseline.md', 'the person wrote this first\n');
   const [conflictStatus, conflict] = await post({
     action: 'task-accept',

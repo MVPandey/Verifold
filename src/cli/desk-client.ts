@@ -46,6 +46,8 @@ let shownDiff:
       readonly file: string;
       readonly text: string;
       readonly cut: boolean;
+      /** For an HTML file: the URL of its page on the page server. */
+      readonly page?: string;
     }
   | undefined;
 let detail = 'summary';
@@ -231,8 +233,16 @@ const morphing = {
   morphStyle: 'innerHTML',
   ignoreActiveValue: true,
   callbacks: {
-    beforeNodeMorphed: (node: Node) =>
-      !(node instanceof Element && node.matches('svg.map-links')),
+    // A shown page stays as it is, so a refresh does not load it again.
+    beforeNodeMorphed: (node: Node, next: Node) =>
+      !(
+        node instanceof HTMLElement &&
+        (node.matches('svg.map-links') ||
+          (node.matches('.diff-pane[data-page]') &&
+            next instanceof HTMLElement &&
+            next.dataset.task === node.dataset.task &&
+            next.dataset.version === node.dataset.version))
+      ),
     beforeNodeRemoved: (node: Node) =>
       !(
         node.parentElement?.classList.contains('transcript-slot') ||
@@ -729,6 +739,7 @@ function showReview(): void {
       'aria-pressed',
       String(button.dataset.diff === shownDiff.file),
     );
+  if (shownDiff.page && pane.dataset.page === shownDiff.page) return;
   const head = document.createElement('p');
   head.className = 'diff-head';
   const name = document.createElement('code');
@@ -750,13 +761,38 @@ function showReview(): void {
     row.textContent = `${line}\n`;
     pre.append(row);
   }
-  pane.replaceChildren(head, pre);
-  if (shownDiff.cut) {
-    const note = document.createElement('p');
-    note.className = 'fine';
-    note.textContent = 'The diff stops at 512 KB.';
-    pane.append(note);
+  const cut = document.createElement('p');
+  cut.className = 'fine';
+  cut.textContent = 'The diff stops at 512 KB.';
+  const changes = shownDiff.cut ? [pre, cut] : [pre];
+  if (!shownDiff.page) {
+    delete pane.dataset.page;
+    pane.replaceChildren(head, ...changes);
+    return;
   }
+  // An HTML file shows as its page, from the page server, with its changes folded under it.
+  pane.dataset.page = shownDiff.page;
+  const open = document.createElement('a');
+  open.href = shownDiff.page;
+  open.target = '_blank';
+  open.rel = 'noopener noreferrer';
+  open.textContent = 'Open in a new tab';
+  head.append(' ', open);
+  const note = document.createElement('p');
+  note.className = 'fine';
+  note.textContent =
+    "The agent made this page. It shows without scripts and can't reach the internet. A link that you click opens in a new tab.";
+  const frame = document.createElement('iframe');
+  frame.className = 'page-frame';
+  frame.src = shownDiff.page;
+  frame.title = `Page ${shownDiff.file}`;
+  frame.referrerPolicy = 'no-referrer';
+  frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+  const fold = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = 'The changes';
+  fold.append(summary, ...changes);
+  pane.replaceChildren(head, note, frame, fold);
 }
 
 /** Load the diff of one file in a version into the review pane. */
@@ -778,12 +814,35 @@ async function loadDiff(button: HTMLElement): Promise<void> {
       throw new Error(
         typeof reply.error === 'string' ? reply.error : 'No diff.',
       );
+    // A deleted page has nothing to show.
+    const page =
+      /\.html?$/i.test(file) && !button.querySelector('.change-deleted')
+        ? await fetch(
+            `/api/page?${new URLSearchParams({ task, version, file }).toString()}`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              cache: 'no-store',
+              signal: AbortSignal.timeout(5000),
+            },
+          )
+            .then((answer) => (answer.ok ? answer.json() : null))
+            .then((value: unknown) =>
+              typeof value === 'object' &&
+              value !== null &&
+              'url' in value &&
+              typeof value.url === 'string'
+                ? value.url
+                : undefined,
+            )
+            .catch(() => undefined)
+        : undefined;
     shownDiff = {
       task,
       version,
       file,
       text: reply.text,
       cut: reply.cut === true,
+      ...(page ? { page } : {}),
     };
     showReview();
   } catch (error) {
