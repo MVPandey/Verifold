@@ -144,7 +144,7 @@ function showStopped(): void {
   title.textContent = 'Verifold is stopping';
   const text = document.createElement('p');
   text.textContent =
-    'The agents pause, and the pods stop after their results come back. To start again, run verifold in the project folder.';
+    'The agents pause. A task turn that runs now stops, and its work waits for your review. Pods stop after their results come back. To start again, run verifold in the project folder.';
   card.append(title, text);
   content.replaceChildren(card);
   showConnection('You stopped Verifold.');
