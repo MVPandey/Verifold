@@ -173,6 +173,10 @@ verifold profile [--setup]            Inspect or configure your global profile
 verifold runpod key set [--file]      Store a RunPod API key from hidden input or stdin, after a check
 verifold runpod key status|check|remove
                                       Show where the key is, check it with RunPod, or remove it
+verifold runpod secret set NAME [--file]
+                                      Store a secret for pods, such as HF_TOKEN, from hidden input or stdin
+verifold runpod secret list|remove NAME
+                                      List the secret names, or remove one
 verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when the desk does not run
 
 Options: --workspace path (default: the current folder), --help, --version
@@ -1160,6 +1164,44 @@ function computeFor(
   });
 }
 
+/** `verifold runpod secret set NAME|list|remove NAME`. Secrets belong to this computer, and no output holds a value. */
+async function secretCommand(
+  verb: string | undefined,
+  name: string | undefined,
+  file: boolean | undefined,
+  root: string,
+  io: CliIO,
+): Promise<void> {
+  if (
+    !(
+      ((verb === 'set' || verb === 'remove') && name) ||
+      (verb === 'list' && !name)
+    )
+  )
+    throw new Error(
+      'Use verifold runpod secret set NAME, list, or remove NAME.',
+    );
+  if (file !== undefined && verb !== 'set')
+    throw new Error('--file is valid only for verifold runpod secret set.');
+  const compute = computeFor(root, io);
+  await compute.load();
+  if (verb === 'set') {
+    if (!io.readSecret)
+      throw new Error(
+        'Pipe the value into this command, or run it in a terminal.',
+      );
+    const value = (await io.readSecret(`${name} (input hidden): `)).trim();
+    await compute.setSecret(name, value, file === true);
+  } else if (verb === 'remove') await compute.removeSecret(name);
+  io.out(
+    JSON.stringify(
+      compute
+        .view()
+        .secrets.map((secret) => ({ name: secret.name, place: secret.place })),
+    ),
+  );
+}
+
 /** `verifold runpod key set|status|check|remove`. The key belongs to this computer, and no output holds it. */
 async function runpodCommand(
   noun: string | undefined,
@@ -1331,18 +1373,19 @@ export async function runCli(
         throw error;
     }
   }
-  // `runpod key <action>` and `pods stop <lease>` are the only commands with more words.
+  // `runpod key <action>`, `runpod secret <action> [name]`, and `pods stop <lease>` are the only commands with more words.
   if (
     !command ||
     (command === 'runpod'
-      ? positionals.length !== 3
+      ? positionals.length !== 3 &&
+        !(positionals[1] === 'secret' && positionals.length === 4)
       : command === 'pods'
         ? positionals.length !== 1 && positionals.length !== 3
         : positionals.length > 1)
   )
     throw new Error(
       command === 'runpod'
-        ? 'Use verifold runpod key set, status, check, or remove.'
+        ? 'Use verifold runpod key set, status, check, or remove, or verifold runpod secret set NAME, list, or remove NAME.'
         : command === 'pods'
           ? 'Use verifold pods, or verifold pods stop <lease or all>.'
           : 'Provide one command. Use --help.',
@@ -1405,7 +1448,22 @@ export async function runCli(
     return;
   }
   if (command === 'runpod') {
-    await runpodCommand(positionals[1], positionals[2], values.file, root, io);
+    if (positionals[1] === 'secret')
+      await secretCommand(
+        positionals[2],
+        positionals[3],
+        values.file,
+        root,
+        io,
+      );
+    else
+      await runpodCommand(
+        positionals[1],
+        positionals[2],
+        values.file,
+        root,
+        io,
+      );
     return;
   }
   if (command === 'pods') {

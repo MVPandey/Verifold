@@ -430,6 +430,12 @@ Paste a RunPod API key in Compute, or run `verifold runpod key set`, which reads
 
 The key goes only into the `Authorization` header of requests to `https://api.runpod.io`, and the client refuses redirects. No project file, desk reply, terminal output, prompt, or transcript holds it.
 
+#### Secrets for pods
+
+Some work on a pod needs a secret, for example an `HF_TOKEN` for gated Hugging Face weights. Add it in Compute under Secrets for pods, or run `verifold runpod secret set HF_TOKEN`, which reads the value with hidden input or from standard input. Secrets are stored in the same places as the key. `verifold runpod secret list` shows the names, and `verifold runpod secret remove HF_TOKEN` removes one.
+
+The coordinator names the secrets that a pod needs in its request. Verifold gives the pod each of them as an environment variable when it creates the pod. If one is missing, Needs you shows "Add a secret" with the coordinator's reason, and the pod starts when you add it, if the request still fits your limits. Task agents and the coordinator never see a value. Verifold replaces it with its name in the output of pod tools, and removes variables with these names from the environment of every harness. A command on the pod can still use the value, so give a pod a token with the least access that the work needs, such as a read-only token.
+
 #### Limits
 
 Only you set them, for each project, in `.verifold/compute/settings.json`: the spend limit in USD, the highest rate of one pod in USD per hour, the hours of one lease, the idle minutes before a stop, one or two pods at the same time, the disk of each pod, the RunPod images (`runpod/...`) that a lease can use, and whether you approve each pod. Without a spend limit, pods stay off.

@@ -950,7 +950,7 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
-/** A compute action. The RunPod key goes only into this request body. */
+/** A compute action. The RunPod key and secret values go only into this request body. */
 function computeRequest(button: HTMLElement): Record<string, unknown> {
   const action = button.dataset.action ?? '';
   if (action === 'compute-key-save') {
@@ -963,6 +963,19 @@ function computeRequest(button: HTMLElement): Record<string, unknown> {
         (box instanceof HTMLInputElement && box.checked),
     };
   }
+  if (action === 'compute-secret-save') {
+    const box = document.getElementById('secret-file');
+    return {
+      action,
+      name: field('secret-name').trim(),
+      value: field('secret-value').trim(),
+      file:
+        button.dataset.file === 'always' ||
+        (box instanceof HTMLInputElement && box.checked),
+    };
+  }
+  if (action === 'compute-secret-remove')
+    return { action, secret: button.dataset.secret };
   if (action.startsWith('compute-lease-'))
     return { action, lease: button.dataset.lease };
   if (action !== 'compute-settings') return { action };
@@ -1176,9 +1189,14 @@ async function act(button: HTMLElement): Promise<void> {
         : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
     failure = { selector, message: actionLabel.textContent };
   } finally {
-    // The key field is empty after each try, so the key stays on the page no longer than needed.
-    const key = document.getElementById('runpod-key');
-    if (action === 'compute-key-save' && key instanceof HTMLInputElement)
+    // The key and secret fields are empty after each try, so a value stays on the page no longer than needed.
+    const key = document.getElementById(
+      action === 'compute-secret-save' ? 'secret-value' : 'runpod-key',
+    );
+    if (
+      (action === 'compute-key-save' || action === 'compute-secret-save') &&
+      key instanceof HTMLInputElement
+    )
       key.value = '';
     showFailure();
     if (button instanceof HTMLButtonElement) button.disabled = false;

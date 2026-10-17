@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { ComputeSettings } from './compute.ts';
 import { RunPodError, type GpuOffer, type Pod, type RunPod } from './runpod.ts';
 import { SessionActionError } from './session.ts';
+import { validSecretName } from './credentials.ts';
 
 /**
  * A lease is one RunPod pod for named tasks: one GPU type, one image, a
@@ -57,6 +58,8 @@ export interface Lease {
   /** Why the pod is needed. A model claim when the coordinator wrote it. */
   readonly reason: string;
   readonly tasks: readonly string[];
+  /** The names of the pod secrets that the pod gets as environment variables. Never their values. */
+  readonly secrets?: readonly string[];
   /** A RunPod GPU type ID. */
   readonly gpu: string;
   readonly image: string;
@@ -103,6 +106,7 @@ export const leaseLimits = {
   /** Requests that wait for the person at the same time. */
   waiting: 3,
   tasks: 4,
+  secrets: 8,
   reason: 1000,
   history: 200,
   /** A pod that is not ready after this time is a bad machine draw. */
@@ -210,6 +214,10 @@ export interface LeaseHooks {
   readonly now?: () => number;
   /** A new SSH key pair for a lease. The pod gets the public key. */
   readonly sshKey?: (lease: Lease) => Promise<string>;
+  /** The values of the lease's secrets. Throws when one is not stored, so the lease waits. */
+  readonly secrets?: (
+    lease: Lease,
+  ) => Promise<Readonly<Record<string, string>>>;
   /** Make a running pod ready for tasks, by pinning its host key. Throws while SSH does not answer. Returns a line for the history. */
   readonly prepare?: (lease: Lease, pod: Pod) => Promise<string>;
   /** Before a stop or an end: copy the results of the tasks back. Returns a notice when a copy failed. */
@@ -364,6 +372,7 @@ export class Leases {
     readonly tasks: unknown;
     readonly reason: unknown;
     readonly image?: unknown;
+    readonly secrets?: unknown;
   }): Promise<Lease> {
     return this.serial(async () => {
       const settings = this.hooks.settings();
@@ -403,6 +412,15 @@ export class Leases {
         typeof input.reason === 'string' && input.reason.trim()
           ? input.reason.trim().slice(0, leaseLimits.reason)
           : fail('Give a short reason. The person reads it.');
+      const secrets = input.secrets === undefined ? [] : input.secrets;
+      if (
+        !Array.isArray(secrets) ||
+        secrets.length > leaseLimits.secrets ||
+        !secrets.every(validSecretName)
+      )
+        fail(
+          `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
+        );
       if (
         this.leases.filter((lease) => lease.state === 'requested').length >=
         leaseLimits.waiting
@@ -439,6 +457,7 @@ export class Leases {
         requestedBy: input.by,
         reason,
         tasks: [...new Set(tasks as string[])],
+        ...(secrets.length ? { secrets: [...new Set(secrets)] } : {}),
         gpu: input.gpu,
         image,
         diskGb: settings.diskGb,
@@ -501,6 +520,11 @@ export class Leases {
         fail(
           `The lease can cost ${usd(cost)}, but only ${usd(Math.max(0, left))} of your limit is left.`,
         );
+      // A missing secret stops the approval here, so the lease keeps waiting.
+      const secrets = lease.secrets?.length
+        ? await (this.hooks.secrets?.(lease) ??
+            fail('This Verifold cannot read pod secrets.'))
+        : {};
       const client = await this.hooks.client();
       // The record says `starting` before the create, so a crash during it leaves the pod name to recover by.
       lease = await this.change(
@@ -520,6 +544,7 @@ export class Leases {
           gpu: lease.gpu,
           diskGb: lease.diskGb,
           ...(publicKey ? { publicKey } : {}),
+          secrets,
         });
       } catch (error) {
         // A lost reply can still have created the pod, so look for it by name.
