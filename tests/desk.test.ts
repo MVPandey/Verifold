@@ -22,6 +22,7 @@ import {
   type DeskPanel,
   type DeskView,
 } from '../src/cli/desk-view.ts';
+import { computeDefaults } from '../src/cli/compute.ts';
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-desk-'));
@@ -593,6 +594,153 @@ await test('desk points to the coordinator after a direction and shows its notes
   assert.doesNotMatch(html(true), /Needs you<\/h2>/);
 });
 
+await test('a team that stopped and that nothing wakes shows in Needs you', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'gate',
+        title: 'Gate on a GPU',
+        recommendation: 'Run the gate.',
+        gates: ['The gate passes.'],
+      },
+    ],
+    selectedId: 'gate',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = '2026-10-15T23:21:00.000Z';
+  const task = (id: string, state: string) => ({
+    id,
+    state,
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title: `Task ${id}`,
+      objective: 'Work.',
+      dependencies: [],
+    },
+  });
+  const note = {
+    schemaVersion: 1,
+    id: 'm-29',
+    at,
+    from: 'coordinator',
+    to: 'person',
+    kind: 'note',
+    text: 'The gate needs a RunPod key and an HF token before it can run.',
+    delivery: 'board',
+  };
+  const coordinator = (status: string, waiting = 0) => ({
+    state: {
+      schemaVersion: 1,
+      objective: 'Gate on a GPU',
+      host: 'claude',
+      model: null,
+      startedAt: at,
+      stoppedAt: null,
+      session: 's-1',
+      created: 2,
+      planApproved: true,
+      cursor: 0,
+      wakeups: [],
+      events: [],
+      actions: [
+        {
+          key: 'call-1',
+          at,
+          tool: 'verifold_compute',
+          input: '{}',
+          ok: true,
+          result: 'No RunPod key.',
+        },
+      ],
+    },
+    session: {
+      record: {
+        id: 's-1',
+        status,
+        requests: [],
+        events: [{ at, kind: 'agent', text: 'I wait for the key.' }],
+      },
+      live: true,
+      saveFailed: false,
+    },
+    waiting,
+    limitedUntil: null,
+  });
+  const compute = (leases: unknown[] = []) => ({
+    key: null,
+    keyring: 'keychain',
+    settings: computeDefaults,
+    gpus: null,
+    gpusAt: null,
+    leases,
+    budget: { limit: null, spent: 0, reserved: 0, left: null, rate: 0 },
+    problem: null,
+  });
+  const html = (
+    options: {
+      status?: string;
+      waiting?: number;
+      tasks?: unknown[];
+      leases?: unknown[];
+    } = {},
+  ): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: {
+          list: options.tasks ?? [
+            task('task-1', 'done'),
+            task('task-3', 'open'),
+          ],
+          selected: null,
+          idle: [],
+          messages: [note],
+        },
+        coordinator: coordinator(options.status ?? 'idle', options.waiting),
+        compute: compute(options.leases),
+      } as never,
+      { view: 'home', panel: null },
+    ).html;
+  const stalled = html();
+  assert.match(stalled, /Needs you<\/h2>[\s\S]*The team stopped/);
+  assert.match(stalled, /Now<\/span> Nothing runs\. The team waits for you\./);
+  assert.match(
+    stalled,
+    /The coordinator wrote at [^<]*<\/span> The gate needs a RunPod key and an HF token before it can run\./,
+  );
+  assert.match(stalled, /1 task is not done\. No RunPod key is saved/);
+  assert.match(
+    stalled,
+    /data-message-to="coordinator">Write to the coordinator/,
+  );
+  // Anything that can still move the work on means that the team did not stop.
+  for (const moving of [
+    html({ status: 'running' }),
+    html({ waiting: 1 }),
+    html({ tasks: [task('task-1', 'done'), task('task-3', 'running')] }),
+    html({ leases: [{ id: 'lease-1', state: 'ready', tasks: ['task-3'] }] }),
+  ])
+    assert.doesNotMatch(moving, /The team stopped/);
+  // The paused coordinator has its own item. A team whose tasks are all done still needs its answer.
+  assert.doesNotMatch(html({ status: 'paused' }), /The team stopped/);
+  assert.match(
+    html({ tasks: [task('task-1', 'done')] }),
+    /Every task is done\. The coordinator has not proposed the answer\./,
+  );
+});
+
 await test('the rail lists each task, also after its worker slot goes to another task', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -939,7 +1087,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     session: {
       live: true,
       saveFailed: false,
-      record: { id: 'C1', status, host: 'claude' },
+      record: { id: 'C1', status, host: 'claude', events: [] },
     },
     waiting: 0,
     limitedUntil: null,
@@ -1002,10 +1150,21 @@ await test('desk lists in Needs you only the decisions that are the person’s',
   );
   assert.match(
     desk(
-      { tasks: { ...tasks, messages: [] }, coordinator: coordinator('idle') },
+      {
+        tasks: { ...tasks, messages: [] },
+        coordinator: coordinator('running'),
+      },
       'needs',
     ).html,
     /Nothing needs you\./,
+  );
+  // An idle coordinator that nothing wakes, with a version in review, is a team that stopped.
+  assert.deepEqual(
+    desk({
+      tasks: { ...tasks, messages: [] },
+      coordinator: coordinator('idle'),
+    }).needs.map((item) => item.key.replace(/:.*/, '')),
+    ['stalled'],
   );
 });
 
@@ -1147,7 +1306,7 @@ await test('desk Home lists what changed since the person left and the talk with
     session: {
       live: true,
       saveFailed: false,
-      record: { id: 'C1', status: 'idle', host: 'claude' },
+      record: { id: 'C1', status: 'idle', host: 'claude', events: [] },
     },
     waiting: 0,
     limitedUntil: null,
@@ -2199,7 +2358,7 @@ await test('desk leads Answer with the answer and its sign-off, then the checks'
           session: {
             live: true,
             saveFailed: false,
-            record: { id: 'C1', status: 'idle', host: 'claude' },
+            record: { id: 'C1', status: 'idle', host: 'claude', events: [] },
           },
           waiting: 0,
           limitedUntil: null,
