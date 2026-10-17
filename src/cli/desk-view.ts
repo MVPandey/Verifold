@@ -970,6 +970,9 @@ function judgementForm(entry: CheckResult): string {
   return `<label class="field" for="rule-${entry.check}">Your ruling and its reason</label><input id="rule-${entry.check}" type="text" maxlength="2000"><div class="actions">${button('passed', 'It passed')}${button('partial', 'It partly passed')}${button('failed', 'It failed')}</div><p class="fine">Your ruling is final. The coordinator gets it when it next wakes up.</p>`;
 }
 
+/** How long a version waits for an idle coordinator before it is the person's to review. */
+const reviewWaitMs = 30 * 60_000;
+
 /** A decision that only the person can make. Its key stays the same while it waits, so the page notifies once. */
 interface Need {
   readonly key: string;
@@ -1153,38 +1156,52 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       since: results.answer.at,
       body: '<div class="actions"><button type="button" class="primary" data-view="results">Read the answer</button></div>',
     });
-  if (!coordinated)
-    for (const task of tasks) {
-      const attempt = task.attempts.at(-1);
-      const version = attempt?.versions.at(-1);
-      const open = `<div class="actions"><button type="button" class="primary" data-task-select="${e(task.id)}">Open the task</button></div>`;
-      if (task.state === 'review' && version && !version.decision)
-        items.push({
-          key: `review:${task.id}:${attempt?.number ?? 0}:${version.number}`,
-          view: 'tasks',
-          task: task.id,
-          kind: 'Review',
-          title: `Version ${version.number} of ${task.assignment.title} waits for your review`,
-          why: 'No coordinator runs, so you review it.',
-          since: version.at,
-          body: open,
-        });
-      else if (
-        task.state === 'open' &&
-        (attempt?.outcome === 'start-failed' ||
-          attempt?.outcome === 'allocation-failed')
-      )
-        items.push({
-          key: `task-failed:${task.id}:${attempt.number}`,
-          view: 'tasks',
-          task: task.id,
-          kind: 'Stopped work',
-          title: `${task.assignment.title} could not start`,
-          why: `${attempt.note ?? 'Its harness did not start.'} No coordinator runs, so only you can start it again.`,
-          since: attempt.endedAt,
-          body: open,
-        });
-    }
+  // An idle coordinator with nothing queued does not review a version by itself. After a while, the person can.
+  const idle =
+    coordinated &&
+    status === 'idle' &&
+    !coordinator?.waiting &&
+    !coordinator?.limitedUntil;
+  for (const task of tasks) {
+    const attempt = task.attempts.at(-1);
+    const version = attempt?.versions.at(-1);
+    const open = `<div class="actions"><button type="button" class="primary" data-task-select="${e(task.id)}">Open the task</button></div>`;
+    if (
+      task.state === 'review' &&
+      version &&
+      !version.decision &&
+      (!coordinated ||
+        (idle && Date.now() - Date.parse(version.at) >= reviewWaitMs))
+    )
+      items.push({
+        key: `review:${task.id}:${attempt?.number ?? 0}:${version.number}`,
+        view: 'tasks',
+        task: task.id,
+        kind: 'Review',
+        title: `Version ${version.number} of ${task.assignment.title} waits for your review`,
+        why: coordinated
+          ? 'The coordinator has not reviewed it in 30 minutes, and nothing wakes it now. You can decide.'
+          : 'No coordinator runs, so you review it.',
+        since: version.at,
+        body: open,
+      });
+    else if (
+      !coordinated &&
+      task.state === 'open' &&
+      (attempt?.outcome === 'start-failed' ||
+        attempt?.outcome === 'allocation-failed')
+    )
+      items.push({
+        key: `task-failed:${task.id}:${attempt.number}`,
+        view: 'tasks',
+        task: task.id,
+        kind: 'Stopped work',
+        title: `${task.assignment.title} could not start`,
+        why: `${attempt.note ?? 'Its harness did not start.'} No coordinator runs, so only you can start it again.`,
+        since: attempt.endedAt,
+        body: open,
+      });
+  }
   const compute = live.compute;
   if (compute)
     for (const lease of compute.leases) {
@@ -1211,12 +1228,16 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,
         });
     }
-  // A notice about a pod is news, not a decision, so the team can still be stopped beside it.
+  // A notice about a pod is news, not a decision, and a version that the idle coordinator left
+  // is a sign of the stop, so the team can still be stopped beside them.
   if (
     coordinated &&
     state.planApproved &&
     results?.answer?.decision?.kind !== 'accepted' &&
-    items.every((item) => item.key.startsWith('lease-notice:'))
+    items.every(
+      (item) =>
+        item.key.startsWith('lease-notice:') || item.key.startsWith('review:'),
+    )
   ) {
     const stalled = stalledTeam(live, tasks, messages);
     if (stalled) items.push(stalled);
