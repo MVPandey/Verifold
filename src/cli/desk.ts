@@ -66,6 +66,8 @@ export interface DeskServer {
     compute: Compute,
     memory: ProjectMemory,
   ): Promise<void>;
+  /** The origin of the page server, the only other origin that the desk frames. */
+  readonly pages: string;
   readonly closed: Promise<void>;
 }
 
@@ -554,6 +556,8 @@ async function act(
 /**
  * Serve one selected project until its owning CLI is cancelled. With a session
  * owner, authenticated JSON POST requests to /api/action control its session.
+ * `stop` stops Verifold from the desk. `reuse` keeps the port and access token
+ * of a desk that another process closed, so its open tab keeps working.
  */
 export async function startDesk(
   root: string | null,
@@ -566,12 +570,23 @@ export async function startDesk(
   coordinator?: Coordinator,
   compute?: Compute,
   memory?: ProjectMemory,
+  options: {
+    readonly stop?: () => void;
+    readonly reuse?:
+      | {
+          readonly port: number;
+          readonly token: string;
+          /** The page server's port, which the open tab's CSP allows. */
+          readonly pages?: number | undefined;
+        }
+      | undefined;
+  } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
   let project: string | null = root === null ? null : await realpath(root);
   if (project) await readDeskSnapshot(project);
-  const token = randomBytes(32).toString('hex');
+  const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
   // A browser launch command line can be visible to other local users, so it carries a one-time code.
   const launchCodes = new Map<string, number>();
@@ -741,6 +756,13 @@ export async function startDesk(
         return;
       }
       const body = await readJsonBody(request, 512_000);
+      // Stop answers first, because the desk closes with Verifold.
+      if (record(body) && body.action === 'stop' && options.stop) {
+        response
+          .writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+          .end(JSON.stringify({ ok: true }), options.stop);
+        return;
+      }
       let status = 400;
       let message = 'The desk sent an unreadable action.';
       if (record(body))
@@ -1140,9 +1162,13 @@ export async function startDesk(
     }
   }
 
-  const listening = once(server, 'listening');
-  server.listen(0, '127.0.0.1');
-  await listening;
+  const listen = async (port: number): Promise<void> => {
+    const listening = once(server, 'listening');
+    server.listen(port, '127.0.0.1');
+    await listening;
+  };
+  // Another program can take the port of a closed desk first. Then the desk gets a new port.
+  await listen(options.reuse?.port ?? 0).catch(() => listen(0));
   const address = server.address();
   if (!address || typeof address === 'string') {
     server.close();
@@ -1155,6 +1181,7 @@ export async function startDesk(
       (task, version, path) =>
         tasks?.readPageFile(task, version, path) ?? Promise.resolve(null),
       signal,
+      options.reuse?.pages,
     );
   } catch (error) {
     server.close();
@@ -1189,6 +1216,7 @@ export async function startDesk(
       memory = notes;
       project = resolved;
     },
+    pages: pages.origin,
     closed,
   };
 }

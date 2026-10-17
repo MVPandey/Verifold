@@ -122,11 +122,12 @@ function validPath(path: string): boolean {
   );
 }
 
-/** Start the page server. It stops when the signal aborts. */
+/** Start the page server, on `port` when it is free. It stops when the signal aborts. */
 export async function startPageServer(
   desk: string,
   read: PageReader,
   signal: AbortSignal,
+  port = 0,
 ): Promise<PageServer> {
   const grants = new Map<
     string,
@@ -202,9 +203,12 @@ export async function startPageServer(
     response.end(request.method === 'HEAD' ? undefined : body);
   }
 
-  const listening = once(server, 'listening');
-  server.listen(0, '127.0.0.1');
-  await listening;
+  const listen = async (at: number): Promise<void> => {
+    const listening = once(server, 'listening');
+    server.listen(at, '127.0.0.1');
+    await listening;
+  };
+  await listen(port).catch(() => listen(0));
   const address = server.address();
   if (!address || typeof address === 'string') {
     server.close();
