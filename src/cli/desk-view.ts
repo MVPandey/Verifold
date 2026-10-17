@@ -34,6 +34,7 @@ import {
   type CoordinatorView,
 } from './coordinator.ts';
 import { workerLimit } from './workers.ts';
+import { scratch } from './workspaces.ts';
 import {
   decisionLabel,
   hostName,
@@ -641,7 +642,9 @@ function reviewDecision(
 ): string {
   const selectable = stale
     ? []
-    : version.files.filter((file) => file.inScope && file.regular);
+    : version.files.filter(
+        (file) => file.inScope && file.regular && !scratch(file.path),
+      );
   return `<section class="card decision" aria-labelledby="review-title"><div class="section-title"><h2 id="review-title" tabindex="-1">Version ${version.number}: ${e(turnLabels[version.turn])}</h2><span class="count">${e(since(version.at))}</span></div>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
@@ -654,7 +657,7 @@ function reviewDecision(
   ${canChange ? '<p class="fine">Ask for changes opens the message box to the agent. It makes a new version from what you write.</p>' : '<p class="fine" id="task-changes-off">This agent has ended, so it cannot make a new version. Accept the files that you want, or reject the version and start the task again.</p>'}</section>`;
 }
 
-/** The changed files of a version, to select for Accept, each with its diff. */
+/** The changed files of a version, to select for Accept, each with its diff. Scratch files fold under the others, not selected. */
 function reviewFiles(
   task: TaskRecord,
   version: TaskVersion,
@@ -662,15 +665,25 @@ function reviewFiles(
 ): string {
   if (!version.files.length) return '';
   const marks = { added: '+', modified: 'M', deleted: '−' } as const;
-  const names = version.files.map((file) => file.path.split('/').at(-1));
-  return `<section class="card"><details id="task-files"><summary><h2>${version.files.length} ${version.files.length === 1 ? 'file' : 'files'} changed</h2><span>${e(lead(names.join(', '), 90))}</span></summary><div class="review-grid"><ul class="review-files">${version.files
-    .map((file, index) => {
-      const allowed = file.inScope && file.regular && !stale;
-      return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${allowed ? ' checked' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed || stale ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
-    })
-    .join(
-      '',
-    )}</ul><div class="diff-pane" data-task="${e(task.id)}" data-version="${version.number}" aria-live="polite"><p class="fine">Choose a file to see its changes.</p></div></div><p class="fine">Accept copies the ticked files into your project.</p></details></section>`;
+  const item = (file: TaskVersion['files'][number], index: number): string => {
+    const allowed = file.inScope && file.regular && !stale;
+    const ticked = allowed && !scratch(file.path);
+    return `<li><input type="checkbox" id="task-file-${version.number}-${index}" data-file="${e(file.path)}"${ticked ? ' checked' : allowed ? '' : ' disabled'} aria-label="Accept ${e(file.path)}"><button type="button" class="file-name" data-diff="${e(file.path)}" data-task="${e(task.id)}" data-version="${version.number}"><span class="change change-${file.change}" aria-label="${e(file.change)}">${marks[file.change]}</span>${e(file.path)}</button>${allowed || stale ? '' : `<span class="scope">${file.inScope ? 'Not a regular file' : 'Outside the writable paths'}</span>`}</li>`;
+  };
+  // The index keeps each checkbox ID stable while the view refreshes.
+  const indexed = version.files.map((file, index) => ({ file, index }));
+  const kept = indexed.filter(({ file }) => !scratch(file.path));
+  const temporary = indexed.filter(({ file }) => scratch(file.path));
+  const names = [...kept, ...temporary].map(({ file }) =>
+    file.path.split('/').at(-1),
+  );
+  const list = (entries: typeof indexed): string =>
+    `<ul class="review-files">${entries.map(({ file, index }) => item(file, index)).join('')}</ul>`;
+  return `<section class="card"><details id="task-files"><summary><h2>${version.files.length} ${version.files.length === 1 ? 'file' : 'files'} changed</h2><span>${e(lead(names.join(', '), 90))}</span></summary><div class="review-grid">${kept.length ? list(kept) : ''}${
+    temporary.length
+      ? `<details id="task-scratch" class="scratch-files"><summary>${temporary.length} scratch ${temporary.length === 1 ? 'file' : 'files'}, not ticked</summary><p class="fine">Temporary output, such as files from a test run. Tick a file to accept it too.</p>${list(temporary)}</details>`
+      : ''
+  }<div class="diff-pane" data-task="${e(task.id)}" data-version="${version.number}" aria-live="polite"><p class="fine">Choose a file to see its changes.</p></div></div><p class="fine">Accept copies the ticked files into your project.</p></details></section>`;
 }
 
 const deliveryLabels: Record<Message['delivery'], string> = {
