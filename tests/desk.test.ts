@@ -1004,27 +1004,29 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     },
     ...extra,
   });
-  const review = task('task-2', 'review', {
-    attempts: [
-      {
-        number: 1,
-        session: null,
-        outcome: null,
-        note: null,
-        restrictions: [],
-        versions: [
-          {
-            number: 1,
-            at,
-            turn: 'completed',
-            files: [],
-            skipped: [],
-            decision: null,
-          },
-        ],
-      },
-    ],
-  });
+  const reviewed = (when: string): object =>
+    task('task-2', 'review', {
+      attempts: [
+        {
+          number: 1,
+          session: null,
+          outcome: null,
+          note: null,
+          restrictions: [],
+          versions: [
+            {
+              number: 1,
+              at: when,
+              turn: 'completed',
+              files: [],
+              skipped: [],
+              decision: null,
+            },
+          ],
+        },
+      ],
+    });
+  const review = reviewed(at);
   const objection = (id: string, status: string, text: string): object => ({
     schemaVersion: 1,
     id,
@@ -1111,7 +1113,7 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     messages,
   };
   // With a running coordinator: only the objection after two overrules is the person's.
-  const team = desk({ tasks, coordinator: coordinator('idle') });
+  const team = desk({ tasks, coordinator: coordinator('running') });
   assert.deepEqual(
     team.needs.map((item) => item.key),
     ['message:m-5'],
@@ -1122,7 +1124,10 @@ await test('desk lists in Needs you only the decisions that are the person’s',
   );
   assert.match(team.html, /<section class="card now-card" aria-label="Now">/);
   // The blocker stays with the coordinator. Its task page still lets the person settle it first.
-  const panel = desk({ tasks, coordinator: coordinator('idle') }, 'task').html;
+  const panel = desk(
+    { tasks, coordinator: coordinator('running') },
+    'task',
+  ).html;
   assert.match(
     panel,
     /The coordinator settles this one\. You can settle it first\.[\s\S]*data-message="m-6" data-decision="resolved"/,
@@ -1158,13 +1163,43 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     ).html,
     /Nothing needs you\./,
   );
-  // An idle coordinator that nothing wakes, with a version in review, is a team that stopped.
+  // An idle coordinator with nothing queued leaves a version older than 30 minutes to the person.
+  const old = desk({ tasks, coordinator: coordinator('idle') });
+  assert.deepEqual(
+    old.needs.map((item) => item.key),
+    ['message:m-5', 'review:task-2:1:1'],
+  );
+  // Without the objection, the team also shows as stopped beside the version.
   assert.deepEqual(
     desk({
       tasks: { ...tasks, messages: [] },
       coordinator: coordinator('idle'),
     }).needs.map((item) => item.key.replace(/:.*/, '')),
+    ['review', 'stalled'],
+  );
+  assert.match(
+    old.html,
+    /The coordinator has not reviewed it in 30 minutes, and nothing wakes it now\. You can decide\./,
+  );
+  // A newer version stays with the coordinator. With nothing else to wait for, the team stopped.
+  const fresh = {
+    ...tasks,
+    list: [
+      task('task-1', 'done'),
+      reviewed(new Date().toISOString()),
+      task('task-3', 'open'),
+    ],
+    messages: [],
+  };
+  assert.deepEqual(
+    desk({ tasks: fresh, coordinator: coordinator('idle') }).needs.map((item) =>
+      item.key.replace(/:.*/, ''),
+    ),
     ['stalled'],
+  );
+  assert.deepEqual(
+    desk({ tasks: fresh, coordinator: coordinator('running') }).needs,
+    [],
   );
 });
 
