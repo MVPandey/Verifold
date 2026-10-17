@@ -390,7 +390,7 @@ A message that cannot reach a running turn goes to the agent with its next turn:
 
 When no coordinator runs, Needs you lists each open blocker and objection. With a coordinator, the Messages part of the task page shows them, and you can settle one before the coordinator does. Uphold or overrule an objection, or resolve a blocker, with a reason. The decision goes to the task that raised it. To change the work, revise the task. To write to a task's agent, use the message box. A message is information for the agent. It cannot change the task's paths, permissions, or limits.
 
-After Accept or Reject, Verifold removes the task folder if all its changes are in a version. The branch keeps every version. If Verifold stops while a turn runs, the next `verifold` saves the task folder as a version for review. A task session cannot resume.
+After Accept or Reject, Verifold removes the task folder if all its changes are in a version. The branch keeps every version. If Verifold stops while a turn runs, the next `verifold` saves the task folder as a version for review. The agent's session pauses with Verifold. Ask for changes, or your message to the agent, resumes the same conversation for the next turn, with the same task folder and limits. An agent that ended cannot resume. A message to it goes to the coordinator, and the desk says so.
 
 ### Coordinator
 

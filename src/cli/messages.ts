@@ -66,7 +66,7 @@ export interface Message {
   readonly deliveredAt?: string;
   /**
    * `turn`: Verifold added the message to the agent's running turn.
-   * `coordinator`: research ended first, so Verifold passed it to the coordinator.
+   * `coordinator`: research ended first, or the task's agent ended, so Verifold passed it to the coordinator.
    */
   readonly via?: 'turn' | 'coordinator';
   /** The recipient's next text after the message, a model claim. Messages from the person only. */
