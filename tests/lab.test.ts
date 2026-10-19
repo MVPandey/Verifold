@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
-import { Lab } from '../src/cli/lab.ts';
+import { Lab, labLimits } from '../src/cli/lab.ts';
+import { boardLimits } from '../src/cli/board.ts';
 import { Quota } from '../src/cli/quota.ts';
 import { readRecord } from '../src/cli/session.ts';
 import { archiveRun, restoreRun } from '../src/cli/archive.ts';
@@ -286,6 +287,7 @@ async function fixture(
         quota.record(host, signal);
         owned.lab?.limited(host, signal);
       },
+      makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
     });
     const lab = new Lab(root, {
       sessions,
@@ -827,8 +829,12 @@ await test('a post whose turn ran into a used-up usage window comes again after 
     { when: 'check layer 12', calls: [{ name: 'WAIT' }] },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
-  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
-  await until(() => lab.lab.view()?.directions[0]?.status === 'idle');
+  // Two turns without progress: the next one waits, so only the post wakes the agent.
+  await until(
+    () =>
+      lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
+      lab.lab.view()?.directions[0]?.status === 'idle',
+  );
   await lab.lab.post({ text: '@claude-1 check layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length === 3);
   const signal = {
@@ -964,4 +970,261 @@ await test('an agent cannot mention all, and the terminal and cancel leave lab a
     'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
   ]);
   assert.equal(lab.lab.view()?.directions[0]?.status, 'working');
+});
+
+/** The lab's tool calls and its newest-commit rule, which these tests reach past `private`. */
+interface LabInside {
+  call(
+    id: string,
+    generation: string,
+    name: string,
+    input: unknown,
+    callId: string,
+  ): Promise<{ readonly ok: boolean; readonly text: string }>;
+  setHead(
+    direction: unknown,
+    made: { readonly commit: string; readonly order: number },
+  ): Promise<boolean>;
+}
+
+await test('directions take turns when they outnumber the slots, and an agent at its hourly turns gives its slot', async (t) => {
+  const hourly = labLimits.wakeupsPerHour;
+  labLimits.wakeupsPerHour = 1;
+  t.after(() => {
+    labLimits.wakeupsPerHour = hourly;
+  });
+  const lab = await fixture(t, { agents: 1 });
+  // Each turn changes a file, so neither agent waits after turns without progress.
+  const work = (name: string): { calls: Call[] }[] =>
+    [1, 2, 3].map((turn) => ({
+      calls: [
+        {
+          name: 'WRITE',
+          arguments: { path: `${name}-${turn}.txt`, text: `${turn}\n` },
+        },
+      ],
+    }));
+  await lab.script('d-1-alpha', work('alpha'));
+  await lab.script('d-2-beta', work('beta'));
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  // Both directions get their first prompt and one digest, with one slot.
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha')).length >= 2 &&
+      (await lab.inputs('d-2-beta')).length >= 2,
+  );
+  for (const folder of ['d-1-alpha', 'd-2-beta'])
+    assert.ok(
+      ((await lab.lines(folder, 'launches.jsonl')) as string[]).includes(
+        'resume',
+      ),
+      folder,
+    );
+  // One digest an hour: each agent waits for its turns and does not start again.
+  await until(
+    () =>
+      lab.lab.view()?.directions.some((entry) => entry.status === 'turns') ??
+      false,
+  );
+  const counts = async (): Promise<number[]> => [
+    (await lab.inputs('d-1-alpha')).length,
+    (await lab.inputs('d-2-beta')).length,
+  ];
+  const before = await counts();
+  await delay(500);
+  assert.deepEqual(await counts(), before);
+});
+
+await test('a turn whose process stops brings its posts again, and the new conversation reads them', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    { when: 'check layer 12', calls: [{ name: 'EXIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // Two turns without progress: the next one waits, so only the post wakes the agent.
+  await until(
+    () =>
+      lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
+      lab.lab.view()?.directions[0]?.status === 'idle',
+  );
+  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  // The turn with the post stops. The agent starts a new conversation, and its next digest carries the post again.
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 5, 8000);
+  const inputs = await lab.inputs('d-1-alpha');
+  assert.match(inputs[2] ?? '', /check layer 12/);
+  assert.match(inputs[3] ?? '', /The question:/);
+  assert.match(inputs[4] ?? '', /check layer 12/);
+});
+
+await test('a refused read brings no digest again, and a repeated unread read gets its first answer', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    {
+      when: 'check layer 12',
+      calls: [
+        {
+          name: 'verifold_read',
+          arguments: { direction: 'd-1', path: 'missing.txt' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // Two turns without progress: the next one waits, so only the post wakes the agent.
+  await until(
+    () =>
+      lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
+      lab.lab.view()?.directions[0]?.status === 'idle',
+  );
+  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4);
+  const [result] = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  assert.equal(result?.result.isError, true);
+  assert.doesNotMatch((await lab.inputs('d-1-alpha'))[3] ?? '', /layer 12/);
+
+  // A repeated call ID gets the same unread posts, and a new one reads none.
+  await lab.lab.pause();
+  await lab.lab.post({ text: 'First news.' });
+  await lab.lab.post({ text: 'Second news.' });
+  const agent = lab.lab.view()?.directions[0]?.agent;
+  assert.ok(agent);
+  const inside = lab.lab as unknown as LabInside;
+  const read = (key: string): ReturnType<LabInside['call']> =>
+    inside.call(
+      agent.id,
+      agent.generation,
+      'verifold_board',
+      { view: 'unread' },
+      key,
+    );
+  const first = await read('k-1');
+  assert.match(first.text, /First news[\s\S]*Second news/);
+  assert.deepEqual(await read('k-1'), first);
+  assert.equal((await read('k-2')).text, 'No unread posts.');
+});
+
+await test('an older commit never becomes the newest, and a full board does not stop a stop', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('A question.');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  const direction = lab.lab.view()?.directions[0]?.direction;
+  assert.ok(direction);
+  const inside = lab.lab as unknown as LabInside;
+  const newer = 'b'.repeat(40);
+  assert.equal(
+    await inside.setHead(direction, { commit: newer, order: 2 }),
+    true,
+  );
+  assert.equal(
+    await inside.setHead(direction, { commit: 'a'.repeat(40), order: 1 }),
+    false,
+  );
+  assert.equal(lab.lab.view()?.directions[0]?.direction.head, newer);
+
+  const posts = boardLimits.posts;
+  boardLimits.posts = lab.lab.view()?.posts.length ?? 0;
+  t.after(() => {
+    boardLimits.posts = posts;
+  });
+  await lab.lab.stopDirection('d-1');
+  assert.equal(lab.lab.view()?.directions[0]?.direction.state, 'stopped');
+  assert.equal(lab.lab.view()?.directions[0]?.agent.stopReason, 'person');
+});
+
+await test('a direction whose record cannot be saved is not open, and agent handles grow past 99', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('A question.');
+  await lab.lab.pause();
+  // lab.json cannot be written: a folder with a file stands in its place.
+  const file = join(lab.root, '.verifold', 'lab.json');
+  const saved = await readFile(file, 'utf8');
+  await rm(file);
+  await mkdir(join(file, 'blocked'), { recursive: true });
+  await assert.rejects(
+    lab.lab.addDirection({ title: 'Alpha', harness: 'claude' }),
+  );
+  assert.deepEqual(lab.lab.view()?.directions, []);
+  assert.deepEqual(
+    await readdir(join(lab.root, '.verifold', 'lab', 'agents')),
+    [],
+  );
+  await rm(file, { recursive: true });
+
+  // After claude-99 comes claude-100, which reads back and can be mentioned.
+  const state = JSON.parse(saved) as { handles: Record<string, number> };
+  await writeFile(
+    file,
+    JSON.stringify({ ...state, handles: { ...state.handles, claude: 99 } }),
+  );
+  await lab.lab.reload();
+  await lab.lab.addDirection({ title: 'Beta', harness: 'claude' });
+  await lab.lab.reload();
+  assert.equal(lab.lab.view()?.directions[0]?.agent.handle, 'claude-100');
+  const post = await lab.lab.post({ text: '@claude-100 hello.' });
+  assert.deepEqual(post.mentions, [lab.lab.view()?.directions[0]?.agent.id]);
+});
+
+await test('a lab agent resumes only through the lab, and a full pool parks an agent that had its turn for the person', async (t) => {
+  const lab = await fixture(t, { agents: 1 });
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // Two turns without progress: the agent waits a minute before its next one.
+  await until(
+    () =>
+      lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
+      lab.lab.view()?.directions[0]?.status === 'idle',
+  );
+  // The person's session needs the only slot: the agent parks and keeps its conversation.
+  const person = await lab.sessions.start({
+    host: 'claude',
+    mode: 'ask',
+    prompt: 'Hello.',
+  });
+  assert.ok(person);
+  const agent = lab.lab.view()?.directions[0]?.agent;
+  assert.equal(
+    (await readRecord(lab.root, agent?.session ?? ''))?.status,
+    'paused',
+  );
+  lab.sessions.end(person);
+  await until(() => !lab.sessions.full);
+  // The desk cannot resume the agent's session: only the lab gives it its tools.
+  await assert.rejects(lab.sessions.resume(agent?.session), /agent of the lab/);
+});
+
+await test('a suspended lab does not start, and a process for one session runs no agent', async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.close();
+  await lab.sessions.close();
+  const launches = (
+    (await lab.lines('d-1-alpha', 'launches.jsonl')) as string[]
+  ).length;
+  // A process that runs one session of the person shows the lab and resumes no agent.
+  const quiet = new Lab(lab.root, {
+    sessions: lab.sessions,
+    timing,
+    runs: false,
+  });
+  await quiet.load();
+  quiet.resumeAll();
+  await quiet.pause();
+  await quiet.resume();
+  await delay(300);
+  assert.equal(
+    ((await lab.lines('d-1-alpha', 'launches.jsonl')) as string[]).length,
+    launches,
+  );
+  // Suspend pauses the running lab and says so. A suspended lab takes no new start.
+  assert.equal(await quiet.suspend(), true);
+  await assert.rejects(quiet.start('Another question.'), /moving the lab/);
+  await quiet.close();
 });

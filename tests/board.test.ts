@@ -398,3 +398,20 @@ await test('a digest keeps the posts that wake the agent first, and the hidden p
   );
   assert.deepEqual(store.digest(agent, second).lines, []);
 });
+
+await test('a digest of one line still shows one post, and the next read shows the next', async (t) => {
+  const { board: store } = await board(t);
+  const agent = { id: 'a-1', direction: 'd-1' };
+  for (const text of ['One.', 'Two.', 'Three.'])
+    await store.add(
+      post({ author: 'a-2', kind: 'question', text, artifacts: [] }),
+    );
+  const first = store.digest(agent, { readThrough: 0 }, { limit: 1 });
+  assert.match(first.lines[0] ?? '', /^- p-1 .*"One\."$/);
+  assert.equal(
+    first.lines[1],
+    '- 2 more unread posts. Read them with verifold_board.',
+  );
+  const second = store.digest(agent, first, { limit: 1 });
+  assert.match(second.lines[0] ?? '', /^- p-2 .*"Two\."$/);
+});

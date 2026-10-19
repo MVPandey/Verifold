@@ -472,8 +472,11 @@ export class Board {
       ...unread.filter((post) => !this.wakes(post, agent)),
     ];
     const limit = options.limit ?? boardLimits.digest;
+    // When the posts do not fit, the last line says how many more wait. It never takes the only line.
     const shown =
-      ordered.length <= limit ? ordered : ordered.slice(0, limit - 1);
+      ordered.length <= limit
+        ? ordered
+        : ordered.slice(0, Math.max(1, limit - 1));
     const shownIds = new Set(shown.map((post) => post.id));
     const hidden = unread.filter((post) => !shownIds.has(post.id));
     const through = hidden[0]

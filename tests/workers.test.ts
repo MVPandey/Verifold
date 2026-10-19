@@ -19,7 +19,11 @@ import {
   type TaskInputFields,
   type TaskRecord,
 } from '../src/cli/tasks.ts';
-import { defaultAgents, SessionPool } from '../src/cli/workers.ts';
+import {
+  defaultAgents,
+  PoolFullError,
+  SessionPool,
+} from '../src/cli/workers.ts';
 import { ptyLibrary } from '../src/cli/terminals.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
@@ -1043,4 +1047,26 @@ await test('research and two workers run together, and each stop reaches only it
     (await loadPaused(root)).map((entry) => entry.id).sort(),
     [slow, other].sort(),
   );
+});
+
+await test('a start takes its slot at once, so a second start finds the pool full and nothing fails', async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'verifold-pool-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pool = new SessionPool(root, {
+    clientVersion: 'test',
+    ownerId: 'owner-pool',
+    agents: 1,
+  });
+  const tools = {
+    specs: [],
+    call: () => Promise.resolve({ ok: true, text: '' }),
+  };
+  const first = pool.resumeAgent('20261019T120000000Z-abcdef12', tools);
+  assert.equal(pool.full, true);
+  await assert.rejects(
+    pool.resumeAgent('20261019T120000000Z-abcdef13', tools),
+    PoolFullError,
+  );
+  await assert.rejects(first, /cannot resume/);
+  assert.equal(pool.full, false);
 });
