@@ -520,6 +520,8 @@ export class Lab {
   private readonly steered = new Map<string, Set<string>>();
   /** The timer of each agent's next turn. A digest that goes out first cancels it. */
   private readonly next = new Map<string, NodeJS.Timeout>();
+  /** Agents whose turn ended and whose next turn the lab does not know yet. */
+  private readonly settling = new Set<string>();
 
   constructor(root: string, options: LabOptions) {
     this.root = root;
@@ -915,10 +917,12 @@ export class Lab {
           },
         ]);
       const posted = this.posted.delete(agent.id);
-      if (turned)
-        void this.serial(() => this.afterTurn(agent.id, posted)).catch(
-          () => {},
-        );
+      if (turned) {
+        this.settling.add(agent.id);
+        void this.serial(() => this.afterTurn(agent.id, posted))
+          .catch(() => {})
+          .finally(() => this.settling.delete(agent.id));
+      }
       return;
     }
     loop.turnEnded();
@@ -1738,6 +1742,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
           sessions.view(agent.session)?.live &&
           sessions.idle(agent.session) &&
           !this.turning.has(agent.id) &&
+          !this.settling.has(agent.id) &&
           !this.waiting(agent) &&
           // Its next turn is due soon, unless it waits after turns that changed nothing.
           (!this.next.has(agent.id) || agent.idleStreak >= 2),
