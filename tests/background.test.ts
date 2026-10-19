@@ -337,12 +337,16 @@ await test('without a terminal, the desk runs in this process, and Stop in the d
   const url = new URL((JSON.parse(urls[0] ?? '{}') as { url: string }).url);
   assert.ok(existsSync(join(root, '.verifold', 'owner.json')));
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  // The owner's desk offers Stop the team in the top bar, not in Records.
   const records = (await (
     await fetch(`${url.origin}/api/view?view=records`, { headers })
-  ).json()) as { html: string };
+  ).json()) as { html: string; stoppable: boolean };
+  assert.equal(records.stoppable, true);
+  assert.doesNotMatch(records.html, /data-action="stop"/);
+  const shell = await (await fetch(url.origin)).text();
   assert.match(
-    records.html,
-    /data-action="stop" data-confirm="Click again to stop the agents and pods">Stop the team</,
+    shell,
+    /<button id="stop-team" class="stop-button" type="button" data-action="stop" data-confirm="Click again to stop the agents and pods" hidden>Stop the team<\/button>/,
   );
   const response = await fetch(`${url.origin}/api/action`, {
     method: 'POST',

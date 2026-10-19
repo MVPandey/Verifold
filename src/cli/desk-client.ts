@@ -28,6 +28,7 @@ const stageLabel = requiredElement(document, '#stage', HTMLElement);
 const menuButton = requiredElement(document, '#menu', HTMLElement);
 const needsButton = requiredElement(document, '#needs', HTMLElement);
 const needsCount = requiredElement(document, '#needs-count', HTMLElement);
+const stopButton = requiredElement(document, '#stop-team', HTMLElement);
 /** The open view and panel. Like the selections, they last for this tab. */
 let view = 'home';
 let panel = '';
@@ -147,6 +148,7 @@ function showStopped(): void {
     'The agents pause. A task turn that runs now stops, and its work waits for your review. Pods stop after their results come back. To start again, run verifold in the project folder.';
   card.append(title, text);
   content.replaceChildren(card);
+  stopButton.hidden = true;
   showConnection('You stopped Verifold.');
   title.focus();
 }
@@ -574,6 +576,7 @@ async function refresh(): Promise<void> {
     // The tab title counts what waits for the person, so the count shows from another tab.
     document.title = `${needs?.length ? `(${needs.length}) ` : ''}${title ? `${title} – Verifold` : 'Verifold'}`;
     needsButton.hidden = needs === undefined;
+    stopButton.hidden = !('stoppable' in reply && reply.stoppable === true);
     needsCount.textContent = String(needs?.length ?? 0);
     needsButton.classList.toggle('has', !!needs?.length);
     if (view === 'needs') needsButton.setAttribute('aria-current', 'page');
