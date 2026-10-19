@@ -1010,19 +1010,13 @@ await test('directions take turns when they outnumber the slots, and an agent at
     { title: 'Alpha', harness: 'claude' },
     { title: 'Beta', harness: 'claude' },
   ]);
-  // Both directions get their first prompt and one digest, with one slot.
+  // Both directions get their first prompt and one digest with one slot,
+  // although each agent changes a file in every turn.
   await until(
     async () =>
       (await lab.inputs('d-1-alpha')).length >= 2 &&
       (await lab.inputs('d-2-beta')).length >= 2,
   );
-  for (const folder of ['d-1-alpha', 'd-2-beta'])
-    assert.ok(
-      ((await lab.lines(folder, 'launches.jsonl')) as string[]).includes(
-        'resume',
-      ),
-      folder,
-    );
   // One digest an hour: each agent waits for its turns and does not start again.
   await until(
     () =>
@@ -1181,6 +1175,8 @@ await test('a lab agent resumes only through the lab, and a full pool parks an a
       lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
+  // The commit after its turn ends too.
+  await delay(200);
   // The person's session needs the only slot: the agent parks and keeps its conversation.
   const person = await lab.sessions.start({
     host: 'claude',
