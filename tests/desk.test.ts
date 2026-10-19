@@ -687,6 +687,21 @@ await test('the desk dates old notes, drops notes that the work outdates, and na
       ),
       action('verifold_note', { text: 'The mirror is slow.' }, ago(1)),
       action('verifold_launch', {}, ago(1), false),
+      {
+        ...action(
+          'verifold_report_check',
+          { check: 1, result: 'passed' },
+          ago(1),
+        ),
+        reason:
+          'task-1 found the host. It answers blocker m-2, not results/task-1/x.csv.',
+      },
+      action(
+        'verifold_decide',
+        { message: 'm-9', decision: 'upheld' },
+        ago(1),
+        false,
+      ),
     ],
   };
   const page = (
@@ -712,7 +727,7 @@ await test('the desk dates old notes, drops notes that the work outdates, and na
   const home = page(current, ago(2));
   assert.match(
     home,
-    /The coordinator wrote at (?:\w+ )?\d\d:\d\d: &quot;task-1 needs a dataset host\.&quot;/,
+    /The coordinator wrote at (?:\w+ )?\d\d:\d\d: &quot;&quot;Bounded pilot&quot; needs a dataset host\.&quot;/,
   );
   // A note older than 12 hours, or one about a task that changed after it, leaves Home.
   assert.doesNotMatch(
@@ -747,9 +762,144 @@ await test('the desk dates old notes, drops notes that the work outdates, and na
     /<p>Tried to use the tool verifold_launch\. Verifold refused it\.<\/p>[\s\S]*<p>Kept a note in memory\/notes\.md\.<\/p>[\s\S]*<p>Wrote to you\.<\/p>[\s\S]*<p>Answered the blocker from Bounded pilot\.<\/p>[\s\S]*?<time datetime="[^"]+">[A-Z][a-z]{2} \d\d:\d\d<\/time>/,
   );
   assert.doesNotMatch(panel, /Settled an objection|Used a tool|Wrote a note/);
+  // A check has its number, and the reason names tasks and messages by title. An ID in a path stays.
+  assert.match(panel, /<p>Reported check 1: passed\.<\/p>/);
+  assert.match(
+    panel,
+    /&quot;Bounded pilot&quot; found the host\. It answers the blocker from &quot;Bounded pilot&quot;, not results\/task-1\/x\.csv\./,
+  );
+  assert.match(
+    panel,
+    /<p>Tried to settle a message\. Verifold refused it\.<\/p>/,
+  );
+  assert.doesNotMatch(panel, /m-9|Reported a check/);
   // Needs you says that nothing waits in one line.
   const needs = page(current, ago(2), 'needs');
   assert.doesNotMatch(needs, /Nothing waits for you|<strong>Nothing needs you/);
+});
+
+await test('the agent panel says what Verifold sent, names tools in plain words, and shows one row for a repeated call', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const pilot = {
+    id: 'task-1',
+    state: 'running',
+    revision: 1,
+    createdAt: at,
+    updatedAt: at,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Part of the plan.',
+      title: 'Bounded pilot',
+      objective: 'Run the pilot.',
+      dependencies: [],
+    },
+  };
+  const blocker = {
+    schemaVersion: 1,
+    id: 'm-2',
+    at,
+    from: 'task-1',
+    to: 'coordinator',
+    kind: 'blocker',
+    status: 'resolved',
+    text: 'The pod needs a token.',
+    delivery: 'board',
+  };
+  const event = (kind: string, text: string): object => ({ at, kind, text });
+  const job = {
+    at,
+    tool: 'mcp__verifold__verifold_pod_job',
+    action: 'job-3',
+    risk: [],
+    auto: false,
+    outcome: 'ok',
+  };
+  const html = renderDesk(
+    snapshot,
+    undefined,
+    null,
+    {
+      session: {
+        live: true,
+        saveFailed: false,
+        record: {
+          schemaVersion: 2,
+          id: 'S3',
+          host: 'claude',
+          model: null,
+          mode: 'strict',
+          reportedMode: null,
+          nativeSessionId: null,
+          status: 'running',
+          startedAt: at,
+          endedAt: null,
+          costUsd: null,
+          launches: [],
+          requests: [],
+          task: { id: 'task-1', claim: 'c-1' },
+          events: [
+            event('you', 'You are a worker on one scoped task.'),
+            event(
+              'agent',
+              `The pod waits for the secret **HF_TOKEN** in Compute. ${'Then it trains the model. '.repeat(10)}`,
+            ),
+            event('tool', 'mcp__verifold__verifold_pod_job: job-3'),
+            event('tool', 'mcp__verifold__verifold_pod_job: job-3'),
+            event('tool', 'mcp__verifold__verifold_pod_job: job-3'),
+            event(
+              'you',
+              'The coordinator resolved blocker m-2: The person added the token.',
+            ),
+          ],
+          commands: [
+            { ...job, id: 'c1' },
+            { ...job, id: 'c2' },
+            {
+              ...job,
+              id: 'c3',
+              tool: 'mcp__verifold__verifold_pod_copy',
+              action: 'to pod: scripts/train.py',
+            },
+          ],
+        },
+      },
+      controllable: true,
+      tasks: { list: [pilot], selected: null, idle: [], messages: [blocker] },
+    } as never,
+    { view: 'home', panel: 'worker' },
+  ).html;
+  // Verifold writes each turn of a task agent, so the panel does not say "You".
+  assert.match(
+    html,
+    /<span class="event-kind">Verifold sent<\/span><div class="event-text"><p class="pre">You are a worker on one scoped task\.<\/p>/,
+  );
+  assert.doesNotMatch(html, /<span class="event-kind">You<\/span>/);
+  // A folded lead keeps the underscore of a name.
+  assert.match(
+    html,
+    /<span class="lead">The pod waits for the secret HF_TOKEN in Compute\.<\/span>/,
+  );
+  // Three checks of the same pod job are one event, with a plain tool name.
+  assert.equal(html.match(/Pod job check: job-3/g)?.length, 1);
+  assert.match(
+    html,
+    /Pod job check: job-3<\/p><span class="fine">3 times<\/span>/,
+  );
+  assert.match(
+    html,
+    /The coordinator resolved the blocker from &quot;Bounded pilot&quot;: The person added the token\./,
+  );
+  // The Commands table names the tools plainly and shows a repeated call once.
+  assert.match(
+    html,
+    /<span class="audit-tool">Pod job check<\/span><code>job-3<\/code><span class="fine">2 times, the latest at \d\d:\d\d<\/span>/,
+  );
+  assert.match(html, /<span class="audit-tool">Pod copy<\/span>/);
+  assert.doesNotMatch(html, /mcp__|verifold_pod/);
 });
 
 await test('a team that stopped and that nothing wakes shows in Needs you', async (t) => {
@@ -2788,7 +2938,7 @@ await test('a draft task waits for the person in the message box, on the map, in
       title: 'Time the scan on 3 more graphs',
       objective: 'Time the scan on Colorado, Florida, and the Northwest.',
       host: 'codex',
-      hostReason: 'The scan came from Codex',
+      hostReason: 'The scan came from Codex.',
       dependencies: [],
       inputs: [],
       writable: ['results/scan-extra.csv'],
@@ -3132,6 +3282,29 @@ await test('a task opens as its own page: the decision first, the rest folded, a
     task('task-1', 'done'),
   );
   assert.match(withScratch, />Accept 1 file</);
+  assert.match(
+    withScratch,
+    /<p class="fine">Not ticked: 1 scratch file\. The file list shows them\.<\/p>/,
+  );
+  assert.doesNotMatch(review, /Not ticked/);
+  // A failed start leads with what it means. The error of the harness folds.
+  const failed = page(
+    task('task-2', 'open', {
+      attempts: [
+        {
+          ...attempt([]),
+          outcome: 'start-failed',
+          note: 'stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)',
+        },
+      ],
+      assignment: { ...task('task-2', 'open').assignment, dependencies: [] },
+    }),
+    task('task-1', 'done'),
+  );
+  assert.match(
+    failed,
+    /<p class="notice">Claude Code did not start, so the task did not run\. Its messages wait for the next start\. Start it again when you are ready\.<\/p><details class="more"><summary><span class="more-hint"><span class="closed">Show the error<\/span>[\s\S]*?<p class="pre">stream disconnected/,
+  );
   assert.match(
     withScratch,
     /<summary><h2>2 files changed<\/h2><span>bench\.csv, model\.pt<\/span><\/summary><div class="review-grid"><ul class="review-files"><li><input type="checkbox" id="task-file-1-0" data-file="results\/bench\.csv" checked[\s\S]*<details id="task-scratch" class="scratch-files"><summary>1 scratch file, not ticked<\/summary>[\s\S]*<input type="checkbox" id="task-file-1-1" data-file="results\/tmp\/run-1\/model\.pt" aria-label/,

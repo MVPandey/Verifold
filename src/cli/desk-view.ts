@@ -11,6 +11,7 @@ import {
   isDraft,
   isQuestion,
   replaced,
+  type TaskAttempt,
   type TaskRecord,
   type TaskVersion,
 } from './tasks.ts';
@@ -20,6 +21,7 @@ import type { ComputeView } from './compute.ts';
 import type { ArchivedRun } from './archive.ts';
 import { placeNames } from './credentials.ts';
 import {
+  diskRate,
   isOpen,
   isRunning,
   maxCost,
@@ -282,14 +284,17 @@ function lead(text: string, max = 160): string {
 
 /** Markdown as plain text, for a lead. The full text renders as Markdown. */
 function plain(markdown: string): string {
-  return markdown
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
-    .replace(/[*_`~|]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    markdown
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+      // An underscore inside a word, as in HF_TOKEN, is text, not emphasis.
+      .replace(/[*`~|]|(?<!\w)_+|_+(?!\w)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
 }
 
 /**
@@ -406,6 +411,46 @@ const eventLabels: Record<SessionEvent['kind'], string> = {
   notice: 'Notice',
 };
 
+/** Verifold's own tools that a plain name does not explain. */
+const toolNames: Record<string, string> = {
+  verifold_pod_run: 'Pod command',
+  verifold_pod_job: 'Pod job check',
+};
+
+/** A harness tool name for the person: "mcp__verifold__verifold_pod_copy" is "Pod copy". */
+function toolName(tool: string): string {
+  const bare = tool.replace(/^mcp__\w+?__/, '');
+  if (!bare.startsWith('verifold_')) return bare;
+  const words = bare.slice('verifold_'.length).replace(/_/g, ' ');
+  return toolNames[bare] ?? `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/** A tool event, "tool: input", with the tool name for the person. */
+function toolEvent(text: string): string {
+  const split = text.indexOf(': ');
+  return split < 0
+    ? toolName(text)
+    : `${toolName(text.slice(0, split))}${text.slice(split)}`;
+}
+
+/** Events in order, with each run of the same tool call as one entry: the latest, its index, and the count. */
+function repeats(
+  events: readonly SessionEvent[],
+): { item: SessionEvent; index: number; count: number }[] {
+  const out: { item: SessionEvent; index: number; count: number }[] = [];
+  events.forEach((event, index) => {
+    const last = out.at(-1);
+    if (
+      last?.item.kind === 'tool' &&
+      event.kind === 'tool' &&
+      last.item.text === event.text
+    )
+      out[out.length - 1] = { item: event, index, count: last.count + 1 };
+    else out.push({ item: event, index, count: 1 });
+  });
+  return out;
+}
+
 function result(command: CommandEntry): string {
   switch (command.outcome) {
     case 'running':
@@ -499,7 +544,7 @@ function requestItem(
   request: PendingRequest,
   tasks: readonly TaskRecord[],
 ): string {
-  return `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type"><span class="mark you" aria-hidden="true"></span>${e(workerName(record, tasks))} asks to use ${e(request.tool)}<span class="ref">${e(request.id)}</span></p>${requestBody(request)}</article>`;
+  return `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type"><span class="mark you" aria-hidden="true"></span>${e(workerName(record, tasks))} asks to use ${e(toolName(request.tool))}<span class="ref">${e(request.id)}</span></p>${requestBody(request)}</article>`;
 }
 
 /** What the side panel shows. `sub` is HTML, already escaped. */
@@ -531,12 +576,22 @@ function workerPanel(
     .map((request) => requestItem(record, request, tasks))
     .join('')}
   ${paneSwitch}
-  <ol class="session-events pane-summary">${record.events
-    .slice(-60)
-    .map((event, index, shown) => {
+  <ol class="session-events pane-summary">${repeats(record.events.slice(-60))
+    .map(({ item: event, index, count }) => {
       // The position in the whole record stays the same as events arrive, so an open one stays open.
-      const id = `event-${record.id}-${record.events.length - shown.length + index}`;
-      return `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span><div class="event-text">${event.kind === 'agent' ? moreMd(id, event.text, 200) : more(id, event.text, 200)}</div><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`;
+      const id = `event-${record.id}-${record.events.length - Math.min(60, record.events.length) + index}`;
+      // A task agent gets each turn from Verifold, with the messages of the person and the coordinator in it.
+      const label =
+        event.kind === 'you' && record.task
+          ? 'Verifold sent'
+          : eventLabels[event.kind];
+      const text =
+        event.kind === 'tool'
+          ? toolEvent(event.text)
+          : event.kind === 'agent'
+            ? event.text
+            : named(event.text, tasks, live.tasks?.messages);
+      return `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(label)}</span><div class="event-text">${event.kind === 'agent' ? moreMd(id, text, 200) : more(id, text, 200)}${count > 1 ? `<span class="fine">${count} times</span>` : ''}</div><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`;
     })
     .join('')}</ol>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
@@ -658,6 +713,24 @@ function reviewDecision(
     : version.files.filter(
         (file) => file.inScope && file.regular && !scratch(file.path),
       );
+  const scratchFiles = version.files.filter(
+    (file) => file.inScope && file.regular && scratch(file.path),
+  ).length;
+  const outside = version.files.length - selectable.length - scratchFiles;
+  // Accept counts fewer files than changed. Say which ones it leaves out.
+  const leftOut =
+    stale || selectable.length === version.files.length
+      ? ''
+      : `<p class="fine">Not ticked: ${[
+          scratchFiles
+            ? `${scratchFiles} scratch ${scratchFiles === 1 ? 'file' : 'files'}`
+            : '',
+          outside
+            ? `${outside} ${outside === 1 ? 'file' : 'files'} that Accept cannot copy`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' and ')}. The file list shows them.</p>`;
   return `<section class="card decision" aria-labelledby="review-title"><div class="section-title"><h2 id="review-title" tabindex="-1">Version ${version.number} ${e(turnHeadings[version.turn])}</h2><span class="count">${e(since(version.at))}</span></div>
   ${version.note ? `<p class="notice">${e(version.note)}</p>` : ''}
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
@@ -667,6 +740,7 @@ function reviewDecision(
   ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong></p>${inFullMd(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
   ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
   <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
+  ${leftOut}
   ${canChange ? '<p class="fine">Ask for changes opens the message box to the agent. It makes a new version from what you write.</p>' : '<p class="fine" id="task-changes-off">This agent has ended, so it cannot make a new version. Accept the files that you want, or reject the version and start the task again.</p>'}</section>`;
 }
 
@@ -716,14 +790,18 @@ const kindLabels: Record<Message['kind'], string> = {
 };
 
 /** One message: who sent it to whom, what it is, and how far it got. */
-function messageItem(message: Message, tasks: readonly TaskRecord[]): string {
+function messageItem(
+  message: Message,
+  tasks: readonly TaskRecord[],
+  messages: readonly Message[],
+): string {
   const delivery =
     message.to === 'coordinator' && message.delivery === 'queued'
       ? 'Waits for the coordinator'
       : message.via === 'coordinator'
         ? 'Passed to the coordinator'
         : deliveryLabels[message.delivery];
-  return `<li class="message"><p class="message-meta"><span>${e(sender(message.from, tasks))} to ${e(sender(message.to, tasks))}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(sender(message.about.task, tasks))} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, message.text, 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
+  return `<li class="message"><p class="message-meta"><span>${e(sender(message.from, tasks))} to ${e(sender(message.to, tasks))}</span><span>${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><span>${e(delivery)}</span><time datetime="${e(message.at)}">${e(clock(message.at))}</time></p>${message.about ? `<p class="fine">About ${e(sender(message.about.task, tasks))} version ${message.about.version}</p>` : ''}${more(`msg-${message.id}`, named(message.text, tasks, messages), 200)}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 /** The answer to an open blocker or objection. A decision changes no file. Its reason goes to the task that raised it. */
@@ -755,7 +833,7 @@ function notesToPerson(
     .slice(-10)
     .reverse();
   return notes.length
-    ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map((message) => messageItem(message, tasks)).join('')}</ul></details>`
+    ? `<details id="coordinator-notes" open><summary>Notes to you (${notes.length})</summary><ul class="messages">${notes.map((message) => messageItem(message, tasks, messages)).join('')}</ul></details>`
     : '';
 }
 
@@ -773,10 +851,10 @@ function currentNote(
     )
     .at(-1);
   if (!note || Date.now() - Date.parse(note.at) > 12 * 3_600_000) return;
-  const named = new Set(note.text.match(/\btask-\d+\b/g));
+  const ids = new Set(note.text.match(/\btask-\d+\b/g));
   return tasks.some(
     (task) =>
-      named.has(task.id) && Date.parse(task.updatedAt) > Date.parse(note.at),
+      ids.has(task.id) && Date.parse(task.updatedAt) > Date.parse(note.at),
   )
     ? undefined
     : note;
@@ -952,7 +1030,7 @@ function thread(
 /** What a draft task does, where it works, and the person's three choices. */
 function draftCard(task: TaskRecord): string {
   const { assignment } = task;
-  return `<li class="draft"><p><strong>${e(assignment.title)}</strong></p><p class="fine">${e(lead(assignment.objective, 220))}</p><p class="fine">${e(hostName(assignment.host))}${assignment.hostReason ? `: ${e(assignment.hostReason)}` : ''}. Writes ${e(assignment.writable.join(', '))}. Up to ${assignment.minutes} min for each turn.</p><div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}">Start it</button><button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button><button type="button" class="quiet" data-task-select="${e(task.id)}">Write the task yourself</button></div></li>`;
+  return `<li class="draft"><p><strong>${e(assignment.title)}</strong></p><p class="fine">${e(lead(assignment.objective, 220))}</p><p class="fine">${e(hostName(assignment.host))}${assignment.hostReason ? `: ${e(assignment.hostReason.replace(/[\s.!?]+$/, ''))}` : ''}. Writes ${e(assignment.writable.join(', '))}. Up to ${assignment.minutes} min for each turn.</p><div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}">Start it</button><button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button><button type="button" class="quiet" data-task-select="${e(task.id)}">Write the task yourself</button></div></li>`;
 }
 
 /**
@@ -1141,17 +1219,18 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         view: 'home',
         ...(worker.record.task ? { task: worker.record.task.id } : {}),
         kind: 'Permission',
-        title: `${workerName(worker.record, tasks)} asks to use ${request.tool}`,
+        title: `${workerName(worker.record, tasks)} asks to use ${toolName(request.tool)}`,
         why: `It waits for your answer before it continues. Request ${request.id}.`,
         since: request.at,
         body: requestBody(request),
       });
   for (const message of messages) {
+    const text = named(message.text, tasks, messages);
     if (isQuestion(message)) {
       // The first sentence or line is the title, and the rest follows it.
-      const [, first = message.text, rest = ''] =
-        /^\s*([^\n]*?[.?!:])(?:\s+|$)([\s\S]*)$/.exec(message.text) ??
-        /^\s*([^\n]*)\n?([\s\S]*)$/.exec(message.text) ??
+      const [, first = text, rest = ''] =
+        /^\s*([^\n]*?[.?!:])(?:\s+|$)([\s\S]*)$/.exec(text) ??
+        /^\s*([^\n]*)\n?([\s\S]*)$/.exec(text) ??
         [];
       if (message.status === 'open')
         items.push({
@@ -1161,7 +1240,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           title: lead(first, 90),
           why: 'The coordinator waits for your answer.',
           since: message.at,
-          body: `${rest.trim() || first.length > 90 ? `<p class="pre">${e(first.length > 90 ? message.text : rest.trim())}</p>` : ''}${answerForm(message)}`,
+          body: `${rest.trim() || first.length > 90 ? `<p class="pre">${e(first.length > 90 ? text : rest.trim())}</p>` : ''}${answerForm(message)}`,
         });
       continue;
     }
@@ -1178,10 +1257,10 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       view: 'home',
       task: message.from,
       kind: kindLabels[message.kind],
-      title: lead(message.text, 160),
+      title: lead(text, 160),
       why: `From ${from}. ${coordinated ? 'The coordinator already overruled two objections from this task, so this one is yours.' : 'No coordinator runs, so this one is yours.'}`,
       since: message.at,
-      body: `${lead(message.text, 160) === message.text.replace(/\s+/g, ' ').trim() ? '' : `<details class="more" id="need-${e(message.id)}"><summary>Read the whole message</summary><p class="pre">${e(message.text)}</p></details>`}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
+      body: `${lead(text, 160) === text.replace(/\s+/g, ' ').trim() ? '' : `<details class="more" id="need-${e(message.id)}"><summary>Read the whole message</summary><p class="pre">${e(text)}</p></details>`}${message.evidence?.length ? `<ul class="evidence">${message.evidence.map((item) => `<li>${e(item)}</li>`).join('')}</ul>` : ''}${decideForm(message)}`,
     });
   }
   const idea = workspace.candidates.find(
@@ -1250,7 +1329,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         task: task.id,
         kind: 'Stopped work',
         title: `${task.assignment.title} could not start`,
-        why: `${attempt.note ?? 'Its harness did not start.'} No coordinator runs, so only you can start it again.`,
+        why: `${attempt.outcome === 'start-failed' ? `${hostName(task.assignment.host)} did not start.` : 'Verifold could not prepare the task folder.'} No coordinator runs, so only you can start it again.`,
         since: attempt.endedAt,
         body: open,
       });
@@ -1280,7 +1359,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
             ? 'You approve each pod. Nothing is billed until you do.'
             : 'It does not fit your limits right now, for example because a pod already runs. Nothing is billed until you approve it.',
           since: lease.requestedAt,
-          body: leaseRequest(lease, compute),
+          body: leaseRequest(lease, compute, tasks),
         });
       if (lease.notice)
         items.push({
@@ -1371,7 +1450,9 @@ function stalledTeam(
         action.tool === 'verifold_compute' ||
         action.tool === 'verifold_request_pod',
     );
-  const text = note ? note.text.replace(/\s+/g, ' ').trim() : '';
+  const text = note
+    ? named(note.text, tasks, messages).replace(/\s+/g, ' ').trim()
+    : '';
   return {
     key: `stalled:${at ?? ''}`,
     view: 'home',
@@ -1379,15 +1460,19 @@ function stalledTeam(
     title: 'The team stopped',
     why: 'No agent works, and the coordinator waits until you write to it.',
     since: at,
-    body: `${note ? `<p><span class="tag reading">The coordinator wrote at ${e(since(note.at))}</span> ${e(lead(text, 300))}</p>${lead(text, 300) === text ? '' : `<details class="more"><summary>Read the whole note</summary><p class="pre">${e(note.text)}</p></details>`}` : ''}<p class="fine">${open ? `${open === 1 ? '1 task is' : `${open} tasks are`} not done.` : 'Every task is done. The coordinator has not proposed the answer.'}${noKey ? ' No RunPod key is saved, so no task can use a GPU pod.' : ''}</p><div class="actions"><button type="button" class="primary" data-message-to="coordinator">Write to the coordinator</button>${noKey ? '<button type="button" data-view="compute">Open Compute</button>' : ''}</div>`,
+    body: `${note ? `<p><span class="tag reading">The coordinator wrote at ${e(since(note.at))}</span> ${e(lead(text, 300))}</p>${lead(text, 300) === text ? '' : `<details class="more"><summary>Read the whole note</summary><p class="pre">${e(named(note.text, tasks, messages))}</p></details>`}` : ''}<p class="fine">${open ? `${open === 1 ? '1 task is' : `${open} tasks are`} not done.` : 'Every task is done. The coordinator has not proposed the answer.'}${noKey ? ' No RunPod key is saved, so no task can use a GPU pod.' : ''}</p><div class="actions"><button type="button" class="primary" data-message-to="coordinator">Write to the coordinator</button>${noKey ? '<button type="button" data-view="compute">Open Compute</button>' : ''}</div>`,
   };
 }
 
 /** What the person approves for a lease: its cost, what is left after it, what the pod allows, and the coordinator's reason. */
-function leaseRequest(lease: Lease, compute: ComputeView): string {
+function leaseRequest(
+  lease: Lease,
+  compute: ComputeView,
+  tasks: readonly TaskRecord[],
+): string {
   const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
   const left = compute.budget.left;
-  return `<dl class="facts"><div><dt>For</dt><dd>${lease.tasks.map((task) => e(task)).join(', ')}</dd></div>${lease.secrets?.length ? `<div><dt>Secrets</dt><dd>${lease.secrets.map((name) => `<code>${e(name)}</code>`).join(', ')}, as environment variables on the pod</dd></div>` : ''}<div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
+  return `<dl class="facts"><div><dt>For</dt><dd>${e(podFor(lease, tasks))}</dd></div>${lease.secrets?.length ? `<div><dt>Secrets</dt><dd>${lease.secrets.map((name) => `<code>${e(name)}</code>`).join(', ')}, as environment variables on the pod</dd></div>` : ''}<div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
   <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'The coordinator says' : 'Your reason'}</span> ${e(lease.reason)}</div>
   <p class="fine">The pod runs any command as root, with internet access. Files that a task copies to it leave this computer. RunPod erases the disk of the pod when the pod stops. Verifold stops the pod after ${compute.settings.idleMinutes} idle minutes and when Verifold stops, and deletes it at the end of the lease or at your spend limit.</p>
   <div class="actions"><button type="button" class="primary" data-action="compute-lease-approve" data-lease="${e(lease.id)}">Approve, up to ${usd(cost)}</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny</button></div>`;
@@ -1452,7 +1537,7 @@ const actionWords: Record<string, readonly [string, string]> = {
   post: ['Wrote to', 'write to'],
   ask: ['Asked you a question', 'ask you a question'],
   note: ['Kept a note in memory/notes.md', 'keep a note in memory/notes.md'],
-  report_check: ['Reported a check', 'report a check'],
+  report_check: ['Reported check', 'report check'],
   propose_answer: ['Proposed the answer', 'propose the answer'],
   state: ['Read the state of the work', 'read the state of the work'],
   read: ['Read a file of', 'read a file of'],
@@ -1491,7 +1576,7 @@ function actionSentence(
         : undefined;
     return action.ok && message && decided
       ? `${decided} ${sender(message.from, tasks)}.`
-      : `${action.ok ? 'Settled' : 'Tried to settle'} ${typeof input.message === 'string' ? `message ${input.message}` : 'a message'}${action.ok ? '' : '. Verifold refused it'}.`;
+      : `${action.ok ? 'Settled' : 'Tried to settle'} ${message ? `a message from ${sender(message.from, tasks)}` : 'a message'}${action.ok ? '' : '. Verifold refused it'}.`;
   }
   const [done, tried] = actionWords[name] ?? [
     `Used the tool ${action.tool}`,
@@ -1588,7 +1673,7 @@ function coordinatorPanel(
   ${plan}
   ${notesToPerson(messages, tasks)}
   <details id="coordinator-objective-view"><summary>Objective</summary><p class="pre">${e(state.objective)}</p></details>
-  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks, messages))}</p>${action.reason ? `<div class="why"><span class="tag reading">The coordinator's reason</span>${more(`action-${state.actions.length - 1 - index}`, action.reason, 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Verifold records each result. The reasons come from the coordinator.</p></details>
+  <details id="coordinator-actions"${actions.length ? ' open' : ''}><summary>What it did (${state.actions.length})</summary>${actions.length ? `${detailSwitch}<ul class="actions-log">${actions.map((action, index) => `<li><span class="mark ${action.ok ? 'done' : 'failed'}" aria-hidden="true"></span><div><p>${e(actionSentence(action, tasks, messages))}</p>${action.reason ? `<div class="why"><span class="tag reading">The coordinator's reason</span>${more(`action-${state.actions.length - 1 - index}`, named(action.reason, tasks, messages), 120)}</div>` : ''}<p class="fine detail-only">Tool: <code>${e(action.tool)}</code>. Verifold's reply: ${e(action.result)}</p></div><time datetime="${e(action.at)}">${e(clock(action.at))}</time></li>`).join('')}</ul>` : '<p class="empty-note">No actions yet.</p>'}<p class="fine">Verifold records each result. The reasons come from the coordinator.</p></details>
   ${session ? `<details id="coordinator-transcript"><summary>Transcript</summary>${transcriptSlot(`session:${session.id}`, 'Coordinator transcript', '')}</details>` : ''}
   <div class="actions">${paused ? '<button type="button" class="primary" data-action="coordinator-resume">Resume the coordinator</button>' : ''}<button type="button" data-action="coordinator-stop" data-confirm="Click again to stop the coordinator">Stop the coordinator</button></div>
   <p class="fine">If you stop it, the agents finish their turns, and their versions wait for your review.</p>`,
@@ -1602,6 +1687,38 @@ function sender(id: string, tasks: readonly TaskRecord[]): string {
   return tasks.find((task) => task.id === id)?.assignment.title ?? id;
 }
 
+/**
+ * Task and message IDs in a text, as names for the person: "task-2" becomes
+ * the task title in quotes, and "objection m-4" becomes "the objection from"
+ * its task. An ID inside a path, a code span, or another word stays.
+ */
+function named(
+  text: string,
+  tasks: readonly TaskRecord[],
+  messages: readonly Message[] = [],
+): string {
+  const quote = (id: string): string => {
+    const title = tasks.find((task) => task.id === id)?.assignment.title;
+    return title ? `"${title}"` : id;
+  };
+  return text
+    .replace(
+      /\b(your |the )?(objection|blocker|question) (m-\d+)\b/g,
+      (_, owner: string | undefined, kind: string, id: string) => {
+        const from = messages.find((message) => message.id === id)?.from;
+        if (owner === 'your ' || !from) return `${owner ?? 'the '}${kind}`;
+        const name =
+          from === 'coordinator'
+            ? 'the coordinator'
+            : from === 'person'
+              ? 'you'
+              : quote(from);
+        return `the ${kind} from ${name}`;
+      },
+    )
+    .replace(/(?<![\w/.`-])task-\d+(?![\w/`-]|\.\w)/g, quote);
+}
+
 /** What the agents and the coordinator write to each other, newest first, for Records. Nobody posts in it. */
 function renderFeed(
   messages: readonly Message[],
@@ -1611,7 +1728,7 @@ function renderFeed(
     .filter((message) => message.from !== 'person' && message.to !== 'person')
     .reverse();
   const row = (message: Message): string =>
-    `<li class="feed-row">${avatar(message.from === 'coordinator' ? 'coordinator' : 'task', '')}<div class="feed-body"><p class="feed-head"><strong>${e(sender(message.from, tasks))}</strong><span class="feed-to">to ${e(sender(message.to, tasks))}</span><span class="chip ${message.kind}">${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p>${more(`feed-${message.id}`, message.text, 140)}</div></li>`;
+    `<li class="feed-row">${avatar(message.from === 'coordinator' ? 'coordinator' : 'task', '')}<div class="feed-body"><p class="feed-head"><strong>${e(sender(message.from, tasks))}</strong><span class="feed-to">to ${e(sender(message.to, tasks))}</span><span class="chip ${message.kind}">${e(kindLabels[message.kind])}${message.status ? `, ${e(message.status)}` : ''}</span><time datetime="${e(message.at)}">${e(since(message.at))}</time></p>${more(`feed-${message.id}`, named(message.text, tasks, messages), 140)}</div></li>`;
   return `<section class="card" aria-labelledby="feed-title"><div class="section-title"><h2 id="feed-title">Messages between agents</h2><span class="count">${feed.length}</span></div>${
     feed.length
       ? `<ul class="feed">${feed.slice(0, 8).map(row).join('')}</ul>${feed.length > 8 ? `<details id="feed-more"><summary>${feed.length - 8} older messages</summary><ul class="feed">${feed.slice(8).map(row).join('')}</ul></details>` : ''}`
@@ -1689,6 +1806,19 @@ function renderSince(
   ${totals.length ? `<p class="fine">${totals.map(e).join(' ')}</p>` : ''}</section>`;
 }
 
+/** The note of an attempt. A failed start says what it means first, and the error of the harness folds. */
+function attemptNote(
+  attempt: TaskAttempt,
+  host: TaskRecord['assignment']['host'],
+): string {
+  if (
+    attempt.outcome !== 'start-failed' &&
+    attempt.outcome !== 'allocation-failed'
+  )
+    return `<p class="notice">${e(attempt.note ?? '')}</p>`;
+  return `<p class="notice">${attempt.outcome === 'start-failed' ? `${e(hostName(host))} did not start` : 'Verifold could not prepare the task folder'}, so the task did not run. Its messages wait for the next start. Start it again when you are ready.</p><details class="more"><summary><span class="more-hint"><span class="closed">Show the error</span><span class="opened">Hide the error</span></span></summary><p class="pre">${e(attempt.note ?? '')}</p></details>`;
+}
+
 /** The pod of a task: its lease, GPU, state, and end, and what the pod allows. */
 function taskPod(task: string, compute: ComputeView | undefined): string {
   const lease = compute?.leases.findLast(
@@ -1697,7 +1827,7 @@ function taskPod(task: string, compute: ComputeView | undefined): string {
       (isOpen(entry) || entry.state === 'requested'),
   );
   if (!lease) return '';
-  return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.id)}, ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. The agent reaches the pod only through Verifold's pod tools.</p>`;
+  return `<p class="pod-line"><strong>Pod:</strong> ${e(lease.gpu)}, ${e(leaseStates[lease.state].toLowerCase())}${lease.deadline ? `, ends ${e(since(lease.deadline))}` : ''}. <button type="button" class="row-button" data-view="compute">Open Compute</button></p><p class="fine">The pod runs any command of this task as root, on a machine with internet access. Files that the task copies to it leave this computer. The agent reaches the pod only through Verifold's pod tools.</p>`;
 }
 
 /**
@@ -1826,11 +1956,11 @@ function renderTaskPage(
   const activity = attempt?.session
     ? `<details id="task-activity"><summary><h2>What the agent did</h2></summary>${transcriptSlot(`session:${attempt.session}`, `${hostName(assignment.host)} transcript`, '')}${agent ? `<div class="actions">${agent}</div>` : ''}</details>`
     : '';
-  const messages = `<details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary><h2>Messages</h2><span>${thread.length}</span></summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message, all)}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details>`;
+  const messages = `<details id="task-messages"${thread.some((message) => message.status === 'open') ? ' open' : ''}><summary><h2>Messages</h2><span>${thread.length}</span></summary>${thread.length ? `<ul class="messages">${thread.map((message) => `${messageItem(message, all, view.messages ?? [])}${message.status === 'open' && !needKeys.has(`message:${message.id}`) ? `<li class="decide"><p class="fine">The coordinator settles this one. You can settle it first.</p>${decideForm(message)}</li>` : ''}`).join('')}</ul>` : '<p class="empty-note">No messages yet.</p>'}</details>`;
   return `<div class="view task-page">${back}
   <div class="task-title"><h1 id="view-title" tabindex="-1">${e(assignment.title)}</h1></div>
   ${story ? `<p class="task-lead">${e(story)}</p>` : ''}
-  ${attempt?.note && task.state !== 'review' ? `<p class="notice">${e(attempt.note)}</p>` : ''}
+  ${attempt?.note && task.state !== 'review' ? attemptNote(attempt, assignment.host) : ''}
   ${first}
   ${taskPod(task.id, live.compute)}
   <section class="card task-more" aria-label="More about this task">${details}${activity}${messages}${task.state === 'open' || task.state === 'done' ? editForm : ''}${history.length || notes.length ? `<details id="task-history"><summary><h2>History</h2><span>${history.length + notes.length}</span></summary><ul>${[...history, ...notes].join('')}</ul></details>` : ''}</section></div>`;
@@ -2207,19 +2337,36 @@ function renderTasksView(
 interface AuditRow {
   readonly command: CommandEntry;
   readonly view: SessionView;
+  /** The same untagged call with the same result, one after the other, such as a pod job check, shows once. */
+  readonly times: number;
 }
 
 /** The latest 200 commands and every tagged command, newest first. A tagged command never drops out of the audit. */
 function auditRows(views: readonly SessionView[]): AuditRow[] {
   const all = views
     .flatMap((view) =>
-      view.record.commands.map((command) => ({ command, view })),
+      view.record.commands.map((command) => ({ command, view, times: 1 })),
     )
     .sort((a, b) => b.command.at.localeCompare(a.command.at));
   const latest = new Set(all.slice(0, 200));
-  return all
-    .filter((row) => latest.has(row) || row.command.risk.length > 0)
-    .slice(0, 700);
+  const rows: AuditRow[] = [];
+  for (const row of all.filter(
+    (entry) => latest.has(entry) || entry.command.risk.length > 0,
+  )) {
+    const last = rows.at(-1);
+    if (
+      last &&
+      last.view === row.view &&
+      !row.command.risk.length &&
+      !last.command.risk.length &&
+      last.command.tool === row.command.tool &&
+      last.command.action === row.command.action &&
+      result(last.command) === result(row.command)
+    )
+      rows[rows.length - 1] = { ...last, times: last.times + 1 };
+    else rows.push(row);
+  }
+  return rows.slice(0, 700);
 }
 
 const auditFilter =
@@ -2264,9 +2411,9 @@ function auditTable(
     `<div class="table"><table class="audit">${head}<tbody>${list.map(auditRow).join('')}</tbody></table></div>`;
   return `<div class="section-title">${auditFilter}<span class="count">${total} recorded, ${tagged} tagged${byTag ? `: ${e(byTag)}` : ''}</span></div><p class="fine">Tags come from the command text alone. They mark commands worth a look, not findings. Each row is a command that an agent asked for, not every process that it started.</p>${tagged ? '' : '<p class="fine tagged-none">No command has a tag.</p>'}${table(inView)}${taggedOlder.length ? `<details id="audit-tagged"><summary>${taggedOlder.length} older tagged ${taggedOlder.length === 1 ? 'command' : 'commands'}</summary>${table(taggedOlder)}</details>` : ''}${plainOlder.length ? `<details id="audit-more"><summary>${plainOlder.length} older ${plainOlder.length === 1 ? 'command' : 'commands'} without a tag</summary>${rows.length < total ? '<p class="fine">This list holds the latest 200 commands and every tagged one.</p>' : ''}${table(plainOlder)}</details>` : ''}`;
 
-  function auditRow({ command, view }: AuditRow): string {
+  function auditRow({ command, view, times }: AuditRow): string {
     const { record } = view;
-    return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td><span class="agent-name" title="${e(workerName(record, tasks))}">${e(workerName(record, tasks))}</span>${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(command.tool)}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
+    return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td><span class="agent-name" title="${e(workerName(record, tasks))}">${e(workerName(record, tasks))}</span>${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(toolName(command.tool))}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${times > 1 ? `<span class="fine">${times} times, the latest at ${e(clock(command.at))}</span>` : ''}${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
   }
 }
 
@@ -2324,8 +2471,18 @@ const leaseStates: Record<Lease['state'], string> = {
   failed: 'Failed',
 };
 
+/** What a pod is for: the titles of its tasks. */
+function podFor(lease: Lease, tasks: readonly TaskRecord[]): string {
+  return lease.tasks.length
+    ? lease.tasks.map((task) => sender(task, tasks)).join(', ')
+    : 'No task';
+}
+
 /** The pods card: what is spent and reserved, the open leases with their controls, and earlier leases. */
-function renderPods(compute: ComputeView): string {
+function renderPods(
+  compute: ComputeView,
+  tasks: readonly TaskRecord[],
+): string {
   const { budget, settings } = compute;
   const now = Date.now();
   const row = (lease: Lease): string => {
@@ -2341,14 +2498,14 @@ function renderPods(compute: ComputeView): string {
       lease.state === 'ready' && lease.activeAt
         ? Math.floor((now - Date.parse(lease.activeAt)) / 60_000)
         : 0;
-    return `<tr data-state="${lease.state}"><th scope="row">${e(lease.id)}</th><td>${lease.tasks.map((task) => e(task)).join(', ')}</td><td>${e(lease.gpu)}</td><td>${e(leaseStates[lease.state])}${idle >= 5 ? `<span class="fine">Idle ${idle} min</span>` : ''}</td><td>${usd(spent(lease, now))}${isRunning(lease) ? `<span class="fine">${usd(lease.rate)} per hour</span>` : ''}</td><td>${lease.deadline && isOpen(lease) ? e(since(lease.deadline)) : lease.end ? e(lease.end.reason) : '—'}</td><td class="row-actions">${actions}</td></tr>`;
+    return `<tr data-state="${lease.state}"><th scope="row">${e(podFor(lease, tasks))}</th><td>${e(lease.gpu)}</td><td>${e(leaseStates[lease.state])}${idle >= 5 ? `<span class="fine">Idle ${idle} min</span>` : ''}</td><td>${usd(spent(lease, now))}${isRunning(lease) ? `<span class="fine">${usd(lease.rate + diskRate(lease.diskGb))} per hour</span>` : ''}</td><td>${lease.deadline && isOpen(lease) ? e(since(lease.deadline)) : lease.end ? e(lease.end.reason) : '—'}</td><td class="row-actions">${actions}</td></tr>`;
   };
   const current = compute.leases.filter(
     (lease) => isOpen(lease) || lease.state === 'requested',
   );
   const earlier = compute.leases.filter((lease) => !current.includes(lease));
   const head =
-    '<thead><tr><th scope="col">Pod</th><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
+    '<thead><tr><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
   return `<section class="card" aria-labelledby="pods-title"><div class="section-title"><h2 id="pods-title">Pods</h2>${budget.rate ? `<span class="count">${usd(budget.rate)} per hour now</span>` : ''}</div>
   ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for running pods ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
   ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
@@ -2373,7 +2530,10 @@ function keyForm(keyring: ComputeView['keyring']): string {
 }
 
 /** Pod secrets: the stored names, a form for a new one, and the requests that wait for one. */
-function renderSecrets(compute: ComputeView): string {
+function renderSecrets(
+  compute: ComputeView,
+  tasks: readonly TaskRecord[],
+): string {
   const waiting = compute.leases.filter(
     (lease) =>
       lease.state === 'requested' && missingSecrets(lease, compute).length,
@@ -2388,14 +2548,17 @@ function renderSecrets(compute: ComputeView): string {
     ? `<ul class="secrets">${compute.secrets.map((secret) => `<li><span><code>${e(secret.name)}</code> <span class="fine">in ${e(placeNames[secret.place])}, saved ${e(since(secret.savedAt))}</span></span><button type="button" data-action="compute-secret-remove" data-secret="${e(secret.name)}" data-confirm="Click again to remove ${e(secret.name)}">Remove</button></li>`).join('')}</ul>`
     : '';
   return `<section class="card${missing.length ? ' lead' : ''}" aria-labelledby="secrets-title"><h2 id="secrets-title">Secrets for pods</h2>
-  ${missing.length ? `<p>${waiting.map((lease) => e(lease.id)).join(' and ')} ${waiting.length === 1 ? 'waits' : 'wait'} for ${missing.map((name) => `<code>${e(name)}</code>`).join(' and ')}.</p>` : compute.secrets.length ? '' : '<p class="fine">A pod gets a secret, such as an HF_TOKEN for gated models, only when its request names it.</p>'}
+  ${missing.length ? `<p>${waiting.length === 1 ? 'The pod' : 'The pods'} for ${e(waiting.map((lease) => podFor(lease, tasks)).join(' and '))} ${waiting.length === 1 ? 'waits' : 'wait'} for ${missing.map((name) => `<code>${e(name)}</code>`).join(' and ')}.</p>` : compute.secrets.length ? '' : '<p class="fine">A pod gets a secret, such as an HF_TOKEN for gated models, only when its request names it.</p>'}
   ${list}
   ${missing.length ? form : `<details id="secret-add"><summary>Add a secret</summary>${form}</details>`}
   <p class="fine">Agents never see the values. Verifold hides them in the output of pod commands. Use a token with the least access that the work needs, such as a read-only token.</p></section>`;
 }
 
 /** Compute: the RunPod key, the limits that only the person sets, and the GPUs that leases can use. */
-function renderComputeView(compute: ComputeView): string {
+function renderComputeView(
+  compute: ComputeView,
+  tasks: readonly TaskRecord[],
+): string {
   const { key, settings, gpus } = compute;
   const keyCard = key
     ? `<p>The key is in ${e(placeNames[key.place])}. It ends in <code>${e(key.last4)}</code>.</p>
@@ -2471,11 +2634,11 @@ function renderComputeView(compute: ComputeView): string {
     .map((id) => `<code>${e(id)}</code>`)
     .join(', ');
   return `<div class="view">${head}
-  ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? renderSecrets(compute) : ''}
-  ${renderPods(compute)}
+  ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? renderSecrets(compute, tasks) : ''}
+  ${renderPods(compute, tasks)}
   <section class="card" aria-labelledby="limits-title"><h2 id="limits-title">Limits</h2><p>Up to ${usd(settings.limitUsd ?? 0)} for this project, ${usd(settings.maxUsdPerHour)} per hour for one pod, ${settings.maxHoursPerLease} ${settings.maxHoursPerLease === 1 ? 'hour' : 'hours'} for one pod. ${settings.askBeforePod ? 'You approve each pod.' : 'A pod inside these limits starts without asking.'}</p><details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>
   <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2><p>Pods can use ${allowed}.</p><details id="compute-gpus-edit"${gpus ? ' open' : ''}><summary>Change the GPUs</summary>${gpuCard}</details></section>
-  ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? '' : renderSecrets(compute)}
+  ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? '' : renderSecrets(compute, tasks)}
   ${keyLine}</div>`;
 }
 
@@ -3084,8 +3247,9 @@ function renderNow(
         ? 'No task runs. The coordinator works.'
         : 'No task runs.';
     // The coordinator's latest note says what it waits for, while it is current.
-    const note = currentNote(live.tasks?.messages ?? [], tasks);
-    sub = `${done} of ${tasks.length} tasks done.${note ? ` The coordinator wrote at ${clock(note.at)}: "${lead(note.text, 140)}"` : ''}`;
+    const messages = live.tasks?.messages ?? [];
+    const note = currentNote(messages, tasks);
+    sub = `${done} of ${tasks.length} tasks done.${note ? ` The coordinator wrote at ${clock(note.at)}: "${lead(named(note.text, tasks, messages), 140)}"` : ''}`;
   }
   return line
     ? `<section class="card now-card" aria-label="Now"><p class="now-line"><span class="map-label">Now</span> ${e(line)}</p>${sub ? `<p class="fine">${e(sub)}</p>` : ''}</section>`
@@ -3260,7 +3424,7 @@ export function renderDesk(
       : view === 'results'
         ? renderResultsView(workspace, live)
         : view === 'compute' && live.compute
-          ? renderComputeView(live.compute)
+          ? renderComputeView(live.compute, live.tasks?.list ?? [])
           : view === 'research'
             ? renderResearchView(
                 workspace,
