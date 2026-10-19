@@ -2413,7 +2413,7 @@ function auditTable(
 
   function auditRow({ command, view, times }: AuditRow): string {
     const { record } = view;
-    return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td><span class="agent-name" title="${e(workerName(record, tasks))}">${e(workerName(record, tasks))}</span>${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(toolName(command.tool))}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${times > 1 ? `<span class="fine">${times} times, the latest at ${e(clock(command.at))}</span>` : ''}${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td>${e(decisionLabel(command, record.host))}</td><td>${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td>${e(result(command))}</td><td>${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
+    return `<tr${command.risk.length ? ' class="tagged"' : ''}><td>${e(clock(command.at))}</td>${withAgent ? `<td><span class="agent-name" title="${e(workerName(record, tasks))}">${e(workerName(record, tasks))}</span>${record.task ? `<span class="fine">${e(hostName(record.host))}</span>` : ''}</td>` : ''}<td><span class="audit-tool">${e(toolName(command.tool))}</span><code>${e(command.action.length > 300 ? `${command.action.slice(0, 300)}…` : command.action || 'Not reported')}</code>${times > 1 ? `<span class="fine">${times} times, the latest at ${e(clock(command.at))}</span>` : ''}${command.review?.rationale ? `<span class="fine">Reviewer: ${e(command.review.rationale)}</span>` : ''}</td><td data-label="Approved by">${e(decisionLabel(command, record.host))}</td><td data-label="Tags">${command.risk.length ? command.risk.map((tag) => `<span class="risk">${e(tag)}</span>`).join(' ') : '<span class="fine">None</span>'}</td><td data-label="Result">${e(result(command))}</td><td data-label="Review">${needsReview(command) ? `<button type="button" data-action="review" data-command="${e(command.id)}">Mark reviewed</button>` : command.reviewedAt ? 'Reviewed' : '<span class="fine">Not needed</span>'}</td></tr>`;
   }
 }
 
@@ -3490,7 +3490,7 @@ export function renderDesk(
           view === 'home',
         )
       : '';
-  const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}${dock}</main>${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
+  const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${dock}${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
   return {
     html,
     observation: '',
