@@ -1304,9 +1304,11 @@ await test('a direction folder leaves large new files in the project, and a peer
       }[]
     ).some((entry) => entry.result.content[0]?.text === 'x,y\n1,2\n'),
   );
-  // Writing an ignored file is progress, so the first turn does not count toward the backoff.
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 2);
-  assert.equal(lab.lab.view()?.directions[0]?.agent.idleStreak, 0);
+  // Writing an ignored file is progress, so the first turn does not count
+  // toward the backoff: two more turns pass before the agent waits.
+  await until(() => lab.lab.view()?.directions[0]?.agent.idleStreak === 2);
+  await delay(200);
+  assert.equal((await lab.inputs('d-1-alpha')).length, 3);
 });
 
 await test('proof names the folder that holds its commit, and a reply in another direction can be read there', async (t) => {
