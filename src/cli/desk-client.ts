@@ -462,7 +462,8 @@ function showNotify(): void {
 
 /**
  * Draw the arrows of each task map, from what a task waits for to the task.
- * The boxes say the same in words, so the arrows are decoration.
+ * The boxes say the same in words, so the arrows are decoration. A map or a
+ * table that scrolls sideways marks the edge that has more.
  */
 function drawMaps(): void {
   for (const map of content.querySelectorAll<HTMLElement>('[data-map]')) {
@@ -473,6 +474,8 @@ function drawMaps(): void {
     }
     markEdge(map);
   }
+  for (const table of content.querySelectorAll<HTMLElement>('.table'))
+    markEdge(table);
 }
 
 /** Maps that the page showed already. A refresh keeps the place that the person scrolled to. */
@@ -491,12 +494,12 @@ function showFrontier(map: HTMLElement): void {
     map.scrollLeft = before.offsetLeft;
 }
 
-/** A map wider than its card fades at each edge that has more of it out of view. */
-function markEdge(map: HTMLElement): void {
-  map.classList.toggle('more-left', map.scrollLeft > 2);
-  map.classList.toggle(
+/** A map or a table wider than its frame fades at each edge that has more of it out of view. */
+function markEdge(frame: HTMLElement): void {
+  frame.classList.toggle('more-left', frame.scrollLeft > 2);
+  frame.classList.toggle(
     'more-right',
-    map.scrollLeft + map.clientWidth < map.scrollWidth - 2,
+    frame.scrollLeft + frame.clientWidth < frame.scrollWidth - 2,
   );
 }
 
@@ -1221,8 +1224,10 @@ document.addEventListener('click', (event) => {
     closeRail();
     return;
   }
-  // A click beside the message box folds its thread. On a phone, where the box covers the view, it also closes the box.
-  if (
+  // A click on the line above the message box opens its thread. A click beside the box folds the thread, and on a phone it also closes the box.
+  if (event.target instanceof Element && event.target.closest('.dock-threads'))
+    document.body.classList.add('dock-expanded');
+  else if (
     !(
       event.target instanceof Element &&
       event.target.closest('.dock, [data-dock], [data-message-to]')
@@ -1476,7 +1481,7 @@ content.addEventListener(
   (event) => {
     if (
       event.target instanceof HTMLElement &&
-      event.target.matches('[data-map]')
+      event.target.matches('[data-map], .table')
     )
       markEdge(event.target);
   },
