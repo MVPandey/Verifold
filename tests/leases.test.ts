@@ -609,6 +609,32 @@ await test('Needs you shows a request with its cost and limits, and Compute and 
     [`lease:${lease.id}`],
   );
   assert.match(page.html, /The coordinator asks for a NVIDIA RTX A5000 pod/);
+  // The request names its task by title.
+  const titled = renderDesk(
+    snapshot as never,
+    undefined,
+    null,
+    {
+      session: null,
+      controllable: true,
+      compute: compute.view(),
+      tasks: {
+        list: [
+          {
+            id: 'task-2',
+            state: 'running',
+            attempts: [],
+            assignment: { title: 'Train the small model', dependencies: [] },
+          },
+        ],
+        selected: null,
+        idle: [],
+        messages: [],
+      },
+    } as never,
+    { view: 'needs', panel: null },
+  ).html;
+  assert.match(titled, /<dt>For<\/dt><dd>Train the small model<\/dd>/);
   assert.match(page.html, /\$0\.27 per hour/);
   assert.match(
     page.html,
@@ -628,7 +654,7 @@ await test('Needs you shows a request with its cost and limits, and Compute and 
   assert.equal(page.needs.length, 0);
   assert.match(
     page.html,
-    /<tr data-state="ready"><th scope="row">lease-1<\/th>/,
+    /<tr data-state="ready"><th scope="row">task-2<\/th><td>NVIDIA RTX A5000<\/td>[\s\S]*?\$0\.28 per hour/,
   );
   assert.match(
     page.html,
@@ -708,7 +734,10 @@ await test('a pod gets the secrets that its request names, and a missing secret 
     /<button type="button" class="primary" data-view="compute">Add it in Compute<\/button>/,
   );
   page = render('compute');
-  assert.match(page.html, /lease-1 waits for <code>HF_TOKEN<\/code>/);
+  assert.match(
+    page.html,
+    /The pod for task-2 waits for <code>HF_TOKEN<\/code>/,
+  );
   assert.match(page.html, /id="secret-name"[^>]*value="HF_TOKEN"/);
   assert.match(page.html, /<input id="secret-value" type="password"/);
 
