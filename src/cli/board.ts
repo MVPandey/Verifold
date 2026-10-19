@@ -88,6 +88,8 @@ export const boardLimits = {
   paths: 10,
   /** Lines in one digest. */
   digest: 30,
+  /** Shown posts that an agent's read state keeps after its read mark. */
+  seen: 500,
 };
 
 const kinds: readonly PostKind[] = [
@@ -427,28 +429,69 @@ export class Board {
   }
 
   /**
-   * The digest lines of an agent's unread posts: the posts after `readThrough`
-   * that others wrote. Posts that wake the agent come first, then the others
-   * in order, in at most `boardLimits.digest` lines.
+   * The digest of an agent's unread posts, and the agent's read state after
+   * it. Unread posts are the posts after `readThrough` that others wrote and
+   * that are not in `seen`. The `include` posts come first, even when read: for
+   * example the posts of events that come once more. Then come the posts that
+   * wake the agent, then the others in order, in at most `limit` lines. A post
+   * that does not fit stays unread: `readThrough` stops before it, and `seen`
+   * keeps the shown posts after that point.
    */
   digest(
     agent: BoardAgent,
-    readThrough: number,
-    name?: (author: string) => string,
-  ): string[] {
+    read: { readonly readThrough: number; readonly seen?: readonly string[] },
+    options: {
+      readonly include?: readonly string[];
+      readonly limit?: number;
+      readonly name?: (author: string) => string;
+    } = {},
+  ): {
+    readonly lines: string[];
+    readonly readThrough: number;
+    readonly seen: string[];
+  } {
+    const seen = new Set(read.seen ?? []);
     const unread = this.posts.filter(
-      (post) => number(post.id) > readThrough && post.author !== agent.id,
+      (post) =>
+        number(post.id) > read.readThrough &&
+        post.author !== agent.id &&
+        !seen.has(post.id),
     );
+    const listed = new Set(unread.map((post) => post.id));
+    const again: Post[] = [];
+    for (const id of options.include ?? []) {
+      const post = this.get(id);
+      if (post && post.author !== agent.id && !listed.has(id)) {
+        again.push(post);
+        listed.add(id);
+      }
+    }
     const ordered = [
+      ...again,
       ...unread.filter((post) => this.wakes(post, agent)),
       ...unread.filter((post) => !this.wakes(post, agent)),
     ];
-    if (ordered.length <= boardLimits.digest)
-      return ordered.map((post) => postLine(post, name));
-    const shown = boardLimits.digest - 1;
-    return [
-      ...ordered.slice(0, shown).map((post) => postLine(post, name)),
-      `- ${ordered.length - shown} more unread posts. Read them with verifold_board.`,
-    ];
+    const limit = options.limit ?? boardLimits.digest;
+    const shown =
+      ordered.length <= limit ? ordered : ordered.slice(0, limit - 1);
+    const shownIds = new Set(shown.map((post) => post.id));
+    const hidden = unread.filter((post) => !shownIds.has(post.id));
+    const through = hidden[0]
+      ? Math.max(read.readThrough, number(hidden[0].id) - 1)
+      : Math.max(read.readThrough, this.latest());
+    return {
+      lines: [
+        ...shown.map((post) => postLine(post, options.name)),
+        ...(hidden.length
+          ? [
+              `- ${hidden.length} more unread posts. Read them with verifold_board.`,
+            ]
+          : []),
+      ],
+      readThrough: through,
+      seen: [...new Set([...seen, ...shownIds])]
+        .filter((id) => number(id) > through)
+        .slice(-boardLimits.seen),
+    };
   }
 }

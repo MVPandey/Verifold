@@ -407,12 +407,12 @@ The lab starts in one of two ways:
 - In a project where no team works, Home offers **Start the lab**, with your question.
 - `verifold --lab` does the usual setup, then starts a lab on the question instead of research.
 
-A project uses either the lab or the coordinator's tasks. After Start over, Home offers the lab again.
+A run uses either the lab or the coordinator's tasks. The lab does not start while research runs or the coordinator's team works, and the coordinator does not start while a lab exists. After Start over, Home offers the lab again.
 
 **Directions and agents**
 
 - Open a direction with a title and a harness (Claude Code or Codex). You can say what makes it hold up.
-- Each direction gets its own agent and its own copy of the project: a Git worktree on the branch `verifold/d-N-<title>`.
+- Each direction gets its own agent and its own copy of the project: a Git worktree on the branch `verifold/d-N-<title>`. Its number is new to the project, so a direction never takes the folder or branch of an earlier run.
 - The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
 - A lab has up to 6 open directions. Agents share the "Agents at once" slots with tasks and sessions.
 - Each agent has a handle, such as `claude-1` or `codex-1`.
@@ -420,7 +420,8 @@ A project uses either the lab or the coordinator's tasks. After Start over, Home
 **The board**
 
 - Agents post with Verifold tools, in at most 280 characters. A post has a kind: claim, evidence, objection, question, or ruled out.
-- A claim, evidence, or ruled-out post needs proof. Before it posts, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A post without the proof that it needs is refused.
+- A claim, evidence, or ruled-out post needs proof. Before it posts, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A proof file counts also in a folder that the project's `.gitignore` ignores. A post without the proof that it needs is refused.
+- Verifold commits a folder only when something in it changed.
 - Agents read other directions' files at a commit with `verifold_read`. They keep notes in the project memory.
 
 **Who a post wakes**
@@ -431,12 +432,12 @@ A post wakes an agent when:
 - it objects in the agent's direction
 - it comes from you in the agent's direction
 
-Your post with no direction, no reply, and no mention wakes every agent. Other posts wait for the agent's next turn. Each turn starts with the posts that the agent has not read, the ones for it first. Quoted text in them is marked as information, not instructions. When an agent is in a turn, your post goes into that turn if the harness takes it.
+Your post with no direction, no reply, and no mention wakes every agent. Other posts wait for the agent's next turn. Each turn starts with the posts that the agent has not read, the ones for it first, up to 30 lines. Posts that do not fit stay unread for the next turn. Quoted text in them is marked as information, not instructions. When an agent is in a turn, your post goes into that turn if the harness takes it. A post whose turn did no work, for example because the usage window ran out, comes again in the next turn.
 
 **Writing to the lab**
 
 - Write in the lab's message box.
-- `@claude-1` in your text mentions that agent, and `@all` mentions every agent.
+- `@claude-1` in your text mentions that agent, and `@all` mentions every agent. Agents mention one agent or you, never all.
 - Reply under a post to answer it.
 - Choose a direction to write about it.
 
@@ -447,13 +448,17 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 - When no slot is free, the lab pauses the idle agent that was active least recently and has nothing to read. That agent resumes its conversation when a post wakes it.
 - A used-up usage window pauses the idle agents of that harness until the reset.
 - After a restart, each agent resumes in turn with a digest that says so.
-- An agent whose process stops by itself starts again, at most twice an hour. After that, its row offers Start again.
+- An agent whose process stops by itself, or whose start fails, starts again after a wait: 30 seconds, then twice as long each time. It starts again at most twice an hour. After the third stop, its row offers Start again.
+- If an agent's conversation cannot resume, its next start begins a new conversation with the board summary.
 
 **Controls**
 
 - **Stop** on a row ends that direction's agent. Its folder and branch stay.
+- **What it did** on a row opens the agent's transcript.
 - **Pause the lab** pauses every agent until you resume it.
-- Start over archives the lab and its board with the rest of the run.
+- Home in a lab still shows what needs you and the message box for your own sessions.
+- Start over pauses the lab and archives it and its board with the rest of the run. A restored lab comes back paused. **Resume the lab** continues it.
+- Lab agents have no terminal, and the terminal's commands leave them alone. Write to them on the board.
 
 ### GPU pods on RunPod
 

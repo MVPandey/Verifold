@@ -23,7 +23,7 @@ export const labToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_board',
     description:
-      'Read the lab board. unread: the posts that you have not read yet; this marks them read. summary: each direction with its verdict and its latest posts. thread: a post and its replies. direction: the latest posts of one direction. search: the posts that contain the query.',
+      'Read the lab board. unread: the posts that you have not read yet; this marks them read. summary: each direction with its agent and its latest posts. thread: a post and its replies. direction: the latest posts of one direction. search: the posts that contain the query.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -43,7 +43,7 @@ export const labToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_post',
     description:
-      'Post to the lab board, in at most 280 characters. A claim, evidence, or ruled-out post needs proof: a file or a figure in your folder, or a diff of paths that you changed. Verifold commits your folder first and pins the proof to that commit. Reply to a post with replyTo. Mention agents by handle (such as claude-1), the person, or all. A reply, a mention, or an objection in a direction wakes the agent that it is for.',
+      "Post to the lab board, in at most 280 characters. A claim, evidence, or ruled-out post needs proof: a file or a figure in your folder, or a diff of paths that you changed. Verifold commits your folder first and pins the proof to that commit. Reply to a post with replyTo. Mention agents by handle (such as claude-1) or the person. A reply, a mention, or an objection in a direction wakes the agent that it is for. A post without one waits for each agent's next read.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -83,7 +83,7 @@ export const labToolSpecs: readonly AgentTool[] = [
           maxItems: 5,
           items: {
             type: 'string',
-            pattern: '^(person|all|(claude|codex)-[1-9][0-9]?)$',
+            pattern: '^(person|(claude|codex)-[1-9][0-9]?)$',
           },
         },
       },

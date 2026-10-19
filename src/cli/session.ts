@@ -674,6 +674,14 @@ function conversation(record: SessionRecord): boolean {
   );
 }
 
+/** A paused or interrupted session whose harness holds its conversation, so it can resume. */
+export function resumable(record: SessionRecord): boolean {
+  return (
+    (record.status === 'paused' || record.status === 'interrupted') &&
+    conversation(record)
+  );
+}
+
 async function recordIds(root: string): Promise<string[]> {
   let names: string[];
   try {
@@ -1157,10 +1165,7 @@ export class SessionManager {
       typeof id === 'string' && validSessionId(id)
         ? await readRecord(this.root, id)
         : null;
-    if (
-      (saved?.status !== 'paused' && saved?.status !== 'interrupted') ||
-      !conversation(saved)
-    )
+    if (!saved || !resumable(saved))
       fail('That session cannot resume. Choose a paused session.');
     // Another start can begin while the record loads.
     this.ready();
@@ -1290,6 +1295,7 @@ export class SessionManager {
   }
 
   cancel(): void {
+    if (this.current?.agent) fail(agentSession);
     if (this.native) fail(inTerminal);
     const record = this.current;
     if (!this.host || !record || record.status === 'idle')
