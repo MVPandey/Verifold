@@ -351,6 +351,11 @@ await test('desk renders harness Markdown without active content and explains a 
     /<div class="dock-new" data-for="new-agent"><label for="agent-host">Harness <select id="agent-host">[\s\S]*<select id="agent-mode"><option value="ask">Ask me first<\/option><option value="auto">Auto<\/option><\/select><\/label><span>In this project folder<\/span><\/div>/,
   );
   assert.doesNotMatch(html, /new-menu|new-session/);
+  // The message box follows the view instead of sitting inside it, so it never covers the view.
+  assert.match(
+    html,
+    /<\/main><button type="button" class="dock-button" data-dock aria-controls="dock">Message the team<\/button><section class="dock" id="dock"/,
+  );
   assert.match(
     renderDesk(snapshot, undefined, null, live).html,
     /copy-command/,
@@ -1813,7 +1818,12 @@ await test('Records lists the commands of all agents as an audit, and the rail c
   assert.equal(rows.match(/<tr/g)?.length, 20);
   assert.match(
     rows,
-    /^<tr class="tagged"><td>[^<]*<\/td><td><span class="agent-name" title="Fetch the road graphs">Fetch the road graphs<\/span><span class="fine">Codex<\/span><\/td><td><span class="audit-tool">Bash<\/span><code>curl https:\/\/example\.com<\/code><\/td>[\s\S]*?<span class="risk">Network<\/span>[\s\S]*?<td>Reviewed<\/td><\/tr>/,
+    /^<tr class="tagged"><td>[^<]*<\/td><td><span class="agent-name" title="Fetch the road graphs">Fetch the road graphs<\/span><span class="fine">Codex<\/span><\/td><td><span class="audit-tool">Bash<\/span><code>curl https:\/\/example\.com<\/code><\/td>[\s\S]*?<span class="risk">Network<\/span>[\s\S]*?<td data-label="Review">Reviewed<\/td><\/tr>/,
+  );
+  // In a narrow frame each row becomes a card, so each cell after the command carries its column name.
+  assert.match(
+    rows,
+    /<\/code><\/td><td data-label="Approved by">Auto, no person<\/td><td data-label="Tags"><span class="risk">Network<\/span><\/td><td data-label="Result">Done<\/td><td data-label="Review">/,
   );
   // A plain session already names its harness.
   assert.match(rows, />Claude Code session<\/span><\/td>/);
