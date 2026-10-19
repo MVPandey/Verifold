@@ -19,7 +19,7 @@ import {
   type TaskInputFields,
   type TaskRecord,
 } from '../src/cli/tasks.ts';
-import { SessionPool, workerLimit } from '../src/cli/workers.ts';
+import { defaultAgents, SessionPool } from '../src/cli/workers.ts';
 import { ptyLibrary } from '../src/cli/terminals.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
@@ -27,6 +27,7 @@ import { renderDesk } from '../src/cli/desk-view.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { loadPaused } from '../src/cli/session.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
+import { parseWorkspace } from '../src/cli/contracts.ts';
 
 /** The first writable path in a task prompt. Plain sessions write to `out`. */
 const writable = `const match = /Writable paths:\\n- (\\S+)/.exec(text); const folder = match ? match[1] : 'out';`;
@@ -132,6 +133,7 @@ onLine((line) => {
 async function owner(
   t: test.TestContext,
   executables: { claude?: string; codex?: string } = {},
+  agents = 2,
 ): Promise<{ root: string; sessions: SessionPool; tasks: TaskManager }> {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), 'verifold-workers-')),
@@ -164,6 +166,7 @@ async function owner(
   const sessions = new SessionPool(root, {
     clientVersion: 'test',
     ownerId: 'owner-1',
+    agents,
     executables: {
       claude: join(root, 'fake-claude'),
       codex: join(root, 'fake-codex'),
@@ -218,7 +221,7 @@ async function state(
 
 await test('two workers run tasks at the same time, each with its own identity and result', async (t) => {
   const { sessions, tasks } = await owner(t);
-  assert.equal(workerLimit, 2);
+  assert.equal(sessions.limit, 2);
   const a = await tasks.create(task('Baseline', 'claude', 'results/a'));
   const b = await tasks.create(task('Variant', 'codex', 'results/b'));
   const c = await tasks.create(task('Third', 'claude', 'results/c'));
@@ -409,7 +412,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   });
   await assert.rejects(
     sessions.start({ host: 'codex', mode: 'auto', prompt: 'Third' }),
-    /2 workers are running/,
+    /2 agents run, the most that "Agents at once" allows\. Wait for one to end, or raise the setting in Compute\./,
   );
   let requests: string[] = [];
   for (let tries = 0; tries < 1000 && requests.length < 2; tries++) {
@@ -464,6 +467,67 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   sessions.end(first);
   terminalInput(sessions, '/end', io, controls);
   assert.equal(sessions.view(second)?.live, false);
+});
+
+await test('the project record keeps "Agents at once" from 1 to 8', () => {
+  const base = {
+    schemaVersion: 1,
+    visibility: 'private',
+    profile: {
+      name: 'R',
+      interests: ['Graphs'],
+      scholar: '',
+      github: '',
+      session: '',
+    },
+    host: 'claude',
+    candidates: [],
+    selectedId: null,
+  };
+  assert.equal(parseWorkspace(base).agents, undefined);
+  assert.equal(parseWorkspace({ ...base, agents: 5 }).agents, 5);
+  for (const agents of [0, 9, 1.5, '3', null])
+    assert.throws(
+      () => parseWorkspace({ ...base, agents }),
+      /Agents at once must be a whole number from 1 to 8/,
+    );
+});
+
+await test('"Agents at once" admits three agents by default, and a change takes effect for the next start', async (t) => {
+  const { sessions } = await owner(t, {}, defaultAgents);
+  assert.equal(defaultAgents, 3);
+  const start = (prompt: string): Promise<string> =>
+    sessions.start({ host: 'claude', mode: 'ask', prompt: `ASK ${prompt}` });
+  const ids = [await start('one'), await start('two'), await start('three')];
+  assert.equal(new Set(ids).size, 3);
+  assert.equal(sessions.full, true);
+  await assert.rejects(
+    start('four'),
+    /3 agents run, the most that "Agents at once" allows/,
+  );
+  // A higher setting admits one more agent at once.
+  sessions.limit = 4;
+  assert.equal(sessions.full, false);
+  const fourth = await start('four');
+  assert.equal(sessions.views().length, 4);
+  // A lower setting stops no agent. New starts wait until fewer run.
+  sessions.limit = 2;
+  assert.ok(
+    [...ids, fourth].every((id) => sessions.view(id)?.live),
+    'every agent still runs',
+  );
+  await assert.rejects(start('five'), /2 agents run/);
+  const ended = async (id: string): Promise<void> => {
+    sessions.end(id);
+    for (let tries = 0; tries < 1000 && sessions.view(id)?.live; tries++)
+      await delay(20);
+  };
+  await ended(ids[0] ?? '');
+  await ended(ids[1] ?? '');
+  assert.equal(sessions.full, true, 'two agents still run');
+  await ended(fourth);
+  assert.equal(sessions.full, false);
+  await start('again');
 });
 
 const lease = 'c'.repeat(16);

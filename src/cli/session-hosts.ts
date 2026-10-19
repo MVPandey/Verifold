@@ -11,6 +11,7 @@ import {
   codexAppUpdates,
   type TranscriptUpdate,
 } from './transcript.ts';
+import type { LimitSignal } from './quota.ts';
 
 /**
  * `strict`: a task session. The harness itself limits writes to the task folder and asks nothing.
@@ -179,6 +180,8 @@ export type HostEvent =
       readonly costUsd?: number;
     }
   | { readonly type: 'notice'; readonly text: string }
+  /** The harness reported its plan's usage window: open, or used up until a reset. */
+  | ({ readonly type: 'limit' } & LimitSignal)
   /** The harness took a message that `steer` added to the running turn, or refused it. */
   | { readonly type: 'steered'; readonly id: string; readonly taken: boolean }
   /** One transcript update: full messages, tool inputs, and tool results. Private session data. */
@@ -257,6 +260,119 @@ function record(value: unknown): value is Record<string, unknown> {
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
+
+/** A time in epoch seconds, epoch milliseconds, or ISO text, as ISO text. */
+function isoTime(value: unknown): string | null {
+  const time =
+    typeof value === 'number'
+      ? value < 1e12
+        ? value * 1000
+        : value
+      : typeof value === 'string'
+        ? Date.parse(value)
+        : NaN;
+  return Number.isFinite(time) && time > 0
+    ? new Date(time).toISOString()
+    : null;
+}
+
+/**
+ * Claude Code's `rate_limit_info` from a `rate_limit_event`. `status` is
+ * "allowed", "allowed_warning", or "rejected". `resetsAt` is in epoch
+ * seconds, and `unifiedWindows` gives each window's `utilization` from 0 to 1.
+ * Probed on Claude Code 2.1.303.
+ */
+export function claudeLimit(info: unknown): LimitSignal | null {
+  if (!record(info)) return null;
+  const status = str(info.status);
+  if (!status) return null;
+  const window = str(info.rateLimitType) ?? null;
+  const windows = record(info.unifiedWindows) ? info.unifiedWindows : {};
+  const current = window ? windows[window] : undefined;
+  const utilization = record(current) ? current.utilization : undefined;
+  return {
+    exhausted: status === 'rejected',
+    resetsAt: isoTime(info.resetsAt),
+    usedPercent:
+      typeof utilization === 'number' && Number.isFinite(utilization)
+        ? Math.round(utilization * 100)
+        : null,
+    window,
+  };
+}
+
+/**
+ * A Claude Code result that failed on the usage limit. Its text can end with
+ * the reset time as `|<epoch seconds>`.
+ */
+export function claudeLimitResult(
+  event: Record<string, unknown>,
+): LimitSignal | null {
+  if (event.is_error !== true) return null;
+  const text = str(event.result) ?? '';
+  if (!/usage limit|limit reached|hit your limit/i.test(text)) return null;
+  const stamp = /\|(\d{9,13})\b/.exec(text)?.[1];
+  return {
+    exhausted: true,
+    resetsAt: stamp ? isoTime(Number(stamp)) : null,
+    usedPercent: null,
+    window: null,
+  };
+}
+
+/**
+ * Codex's `rateLimits` from `account/rateLimits/updated`: `primary` and
+ * `secondary` windows with `usedPercent` and `resetsAt` (epoch seconds), and
+ * `rateLimitReachedType` once a limit is hit. An account with credits keeps
+ * working past a full window, so only a failed turn parks it. Probed on
+ * Codex 0.160.0.
+ */
+export function codexLimit(value: unknown): LimitSignal | null {
+  if (!record(value)) return null;
+  const windows = [value.primary, value.secondary].filter(record);
+  const used = (window: Record<string, unknown>): number =>
+    typeof window.usedPercent === 'number' ? window.usedPercent : -1;
+  const top = windows.reduce<Record<string, unknown> | undefined>(
+    (best, window) => (!best || used(window) > used(best) ? window : best),
+    undefined,
+  );
+  if (!top) return null;
+  const credits =
+    record(value.credits) &&
+    (value.credits.hasCredits === true || value.credits.unlimited === true);
+  const percent = used(top) >= 0 ? used(top) : null;
+  return {
+    exhausted:
+      !credits &&
+      (Boolean(str(value.rateLimitReachedType)) ||
+        (percent !== null && percent >= 100)),
+    resetsAt: isoTime(top.resetsAt),
+    usedPercent: percent,
+    window:
+      typeof top.windowDurationMins === 'number'
+        ? `${top.windowDurationMins} min`
+        : null,
+  };
+}
+
+/** A Codex error that ends work until the usage window resets. A retried error does not count. */
+function codexUsageError(error: unknown, willRetry: unknown): boolean {
+  return (
+    willRetry !== true &&
+    record(error) &&
+    /usage.?limit|rate.?limit/i.test(
+      `${JSON.stringify(error.codexErrorInfo ?? '')} ${str(error.message) ?? ''}`,
+    )
+  );
+}
+
+/** A used-up window whose reset time the harness did not give. */
+const usedUp: LimitSignal = {
+  exhausted: true,
+  resetsAt: null,
+  usedPercent: null,
+  window: null,
+};
 
 /**
  * Codex thread settings that load none of the user's MCP servers, plugins, or
@@ -507,7 +623,10 @@ function claude(options: HostOptions): HostSession {
       }
       for (const update of claudeUpdates(event))
         emit({ type: 'transcript', update });
-      if (event.type === 'system') {
+      if (event.type === 'rate_limit_event') {
+        const signal = claudeLimit(event.rate_limit_info);
+        if (signal) emit({ type: 'limit', ...signal });
+      } else if (event.type === 'system') {
         if (event.subtype === 'init') {
           const id = str(event.session_id);
           const model = str(event.model);
@@ -599,6 +718,8 @@ function claude(options: HostOptions): HostSession {
       } else if (event.type === 'result') {
         // A steered message that came after the last tool call starts one more turn by itself. Probed on Claude Code 2.1.296.
         if (steers.size) return;
+        const limit = claudeLimitResult(event);
+        if (limit) emit({ type: 'limit', ...limit });
         const cost = event.total_cost_usd;
         emit({
           type: 'turn-end',
@@ -1042,9 +1163,18 @@ function codex(options: HostOptions): HostSession {
     } else if (method === 'item/started' || method === 'item/completed') {
       transcribe(method, params.item, null);
       item(method, params.item);
+    } else if (method === 'account/rateLimits/updated') {
+      const signal = codexLimit(params.rateLimits);
+      if (signal) emit({ type: 'limit', ...signal });
     } else if (method === 'turn/completed') {
       turn = undefined;
       const value = record(params.turn) ? str(params.turn.status) : undefined;
+      if (
+        value === 'failed' &&
+        record(params.turn) &&
+        codexUsageError(params.turn.error, false)
+      )
+        emit({ type: 'limit', ...usedUp });
       emit({
         type: 'turn-end',
         status:
@@ -1071,11 +1201,14 @@ function codex(options: HostOptions): HostSession {
           ...(risk ? { risk } : {}),
           ...(rationale ? { rationale } : {}),
         });
-    } else if (method === 'error')
+    } else if (method === 'error') {
       emit({
         type: 'notice',
         text: `Codex reported an error: ${record(params.error) ? (str(params.error.message) ?? 'unknown') : 'unknown'}.`,
       });
+      if (codexUsageError(params.error, params.willRetry))
+        emit({ type: 'limit', ...usedUp });
+    }
   };
   // Connect when the socket appears. A server that never listens counts as a failed start.
   void (async () => {

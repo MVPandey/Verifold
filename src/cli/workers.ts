@@ -11,8 +11,8 @@ import {
   type SessionView,
 } from './session.ts';
 
-/** Runtime admission: at most this many harness sessions run at the same time. */
-export const workerLimit = 2;
+/** "Agents at once" when the project does not set it. */
+export const defaultAgents = 3;
 
 function fail(message: string): never {
   throw new SessionActionError(message);
@@ -22,32 +22,32 @@ export interface SessionPoolOptions
   extends Omit<SessionManagerOptions, 'onEvent' | 'requests'> {
   /** One event of one worker. `view` is that worker's session. */
   readonly onEvent?: (event: SessionEvent, view: SessionView | null) => void;
+  /** "Agents at once" at start. The default is `defaultAgents`. */
+  readonly agents?: number;
 }
 
 /**
- * The workers of one project owner: a fixed number of slots, each one session
- * manager with its own session, launch, native ID, and record. Tasks and plain
- * sessions share the slots. Request IDs share one counter, so an answer reaches
- * exactly one worker.
+ * The workers of one project owner: one slot for each worker that ran, each
+ * one session manager with its own session, launch, native ID, and record.
+ * Tasks and plain sessions share the slots. At most `limit` of them run at
+ * the same time. Request IDs share one counter, so an answer reaches exactly
+ * one worker.
  */
 export class SessionPool {
   private readonly root: string;
+  private readonly options: SessionPoolOptions;
+  private readonly requests = { next: 1 };
   private readonly slots: SessionManager[] = [];
   private pausedList: PausedSession[] = [];
   /** Whether a task session that is not in a slot can resume. A record does not change until a slot resumes it. */
   private readonly resumable = new Map<string, boolean>();
+  /** "Agents at once". A lower limit stops no worker; new starts wait until fewer run. */
+  limit: number;
 
   constructor(root: string, options: SessionPoolOptions) {
     this.root = root;
-    const requests = { next: 1 };
-    for (let index = 0; index < workerLimit; index++) {
-      const slot: SessionManager = new SessionManager(root, {
-        ...options,
-        requests,
-        onEvent: (event) => options.onEvent?.(event, slot.view()),
-      });
-      this.slots.push(slot);
-    }
+    this.options = options;
+    this.limit = options.agents ?? defaultAgents;
   }
 
   /** Every worker with a session, live or ended, in slot order. */
@@ -68,9 +68,9 @@ export class SessionPool {
     return this.slots.some((slot) => slot.active);
   }
 
-  /** Every slot is in use, so no worker can start. */
+  /** `limit` workers run, so no other worker can start. */
   get full(): boolean {
-    return this.slots.every((slot) => slot.active);
+    return this.slots.filter((slot) => slot.active).length >= this.limit;
   }
 
   async load(): Promise<void> {
@@ -206,12 +206,20 @@ export class SessionPool {
     return slot;
   }
 
+  /** A slot for one more worker: a slot whose worker ended, or a new one. */
   private free(): SessionManager {
-    return (
-      this.slots.find((slot) => !slot.active) ??
+    if (this.full)
       fail(
-        `${workerLimit} workers are running. Wait for one to end, or end one before you start another.`,
-      )
-    );
+        `${this.limit} ${this.limit === 1 ? 'agent runs' : 'agents run'}, the most that "Agents at once" allows. Wait for one to end, or raise the setting in Compute.`,
+      );
+    const idle = this.slots.find((slot) => !slot.active);
+    if (idle) return idle;
+    const slot: SessionManager = new SessionManager(this.root, {
+      ...this.options,
+      requests: this.requests,
+      onEvent: (event) => this.options.onEvent?.(event, slot.view()),
+    });
+    this.slots.push(slot);
+    return slot;
   }
 }
