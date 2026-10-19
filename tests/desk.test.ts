@@ -472,17 +472,18 @@ await test('desk shows one research decision for each phase', async (t) => {
     /class="primary" data-action="research" data-research="approve">/,
   );
   // Research shows the step, its events, and its transcript.
+  const searching = {
+    step: 'Planning the research',
+    events: [
+      {
+        at: new Date().toISOString(),
+        kind: 'tool',
+        text: 'Claude Code requested WebSearch.',
+      },
+    ],
+  };
   const events = await html(
-    {
-      step: 'Planning the research',
-      events: [
-        {
-          at: new Date().toISOString(),
-          kind: 'tool',
-          text: 'Claude Code requested WebSearch.',
-        },
-      ],
-    },
+    { ...searching, running: true, startedAt: new Date().toISOString() },
     false,
     'research',
   );
@@ -490,6 +491,13 @@ await test('desk shows one research decision for each phase', async (t) => {
   assert.match(events, /Now: Searching the web\./);
   assert.doesNotMatch(events, /requested WebSearch/);
   assert.match(events, /data-detail="details"/);
+  // A stopped research agent shows its last step as past, and no current step.
+  const stopped = await html(searching, false, 'research');
+  assert.match(
+    stopped,
+    /Not running<\/span><\/div>\s*<p class="research-step">Last step: Planning the research<\/p>/,
+  );
+  assert.doesNotMatch(stopped, /Now: /);
 });
 
 await test('desk points to the coordinator after a direction and shows its notes to the person', async (t) => {
@@ -1359,6 +1367,39 @@ await test('desk lists in Needs you only the decisions that are the person’s',
     desk({ tasks: fresh, coordinator: coordinator('running') }).needs,
     [],
   );
+  // Every view names the same reviewer. The old version that the idle coordinator left is the person's.
+  const yours = { tasks, coordinator: coordinator('idle') };
+  assert.match(
+    desk(yours, 'task').html,
+    /<p class="fine">The coordinator has not reviewed it in 30 minutes, and nothing wakes it now\. You can decide\.<\/p>/,
+  );
+  assert.match(
+    desk(yours, 'tasks').html,
+    /now-step yours">Version 1 waits for your review/,
+  );
+  assert.match(
+    desk(yours, 'home', 'coordinator').html,
+    /<p class="coordinator-now">Idle\. Version 1 of Title of task-2 waits for your review\.<\/p>/,
+  );
+  // The newer version stays with the coordinator in every view, and the task page says when it comes to the person.
+  const theirs = {
+    tasks: { ...fresh, selected: fresh.list[1] },
+    coordinator: coordinator('idle'),
+  };
+  const pending = desk(theirs, 'task').html;
+  assert.match(
+    pending,
+    /The coordinator reviews it when something wakes it\. If it has not decided by [^,<]+, the version comes to you\. You can decide first\./,
+  );
+  assert.doesNotMatch(pending, /nothing wakes it now/);
+  assert.match(
+    desk(theirs, 'tasks').html,
+    /now-step">The coordinator reviews version 1</,
+  );
+  assert.match(
+    desk(theirs, 'home', 'coordinator').html,
+    /<p class="coordinator-now">Idle\. It reviews version 1 of Title of task-2 when something wakes it\.<\/p>/,
+  );
 });
 
 await test('desk Home lists what changed since the person left and the talk with the coordinator, and Records keeps the messages between agents', async (t) => {
@@ -1794,6 +1835,11 @@ await test('Records lists the commands of all agents as an audit, and the rail c
     /<div class="pane-commands">([\s\S]*?)<\/table>/.exec(panel)?.[1] ?? '';
   assert.match(pane, /206 recorded, 1 tagged/);
   assert.doesNotMatch(pane, /<th scope="col">Agent/);
+  // Its events sit in a box that opens at the newest event, here an empty one.
+  assert.match(
+    panel,
+    /<div class="session-events pane-summary"><ol><\/ol><\/div>/,
+  );
 });
 
 await test('desk maps the tasks with what each agent does now and why', async (t) => {
@@ -3512,4 +3558,237 @@ await test('the desk text has none of the phrases that read as robotic (docs/wor
     ])
       assert.ok(!source.includes(phrase), `${file} says "${phrase}"`);
   }
+});
+
+await test('an open objection marks the checks that use its files, and comes before an optional draft', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    candidates: [
+      {
+        id: 'cycles',
+        title: 'Cycles',
+        recommendation: 'Pilot.',
+        gates: ['Months: they lie on a circle.', 'Control: random is flat.'],
+      },
+    ],
+    selectedId: 'cycles',
+  }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date(Date.now() - 3_600_000).toISOString();
+  const file = (path: string): object => ({ path, bytes: 1, sha256: 'a' });
+  const task = (
+    id: string,
+    title: string,
+    extra: { dependencies?: string[]; files?: string[]; draft?: boolean },
+  ): object => ({
+    schemaVersion: 1,
+    id,
+    revision: 1,
+    state: extra.draft ? 'open' : 'done',
+    createdAt: at,
+    updatedAt: at,
+    attempts: [],
+    artifacts: extra.files
+      ? [{ version: 1, revision: 1, at, files: extra.files.map(file) }]
+      : [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Plan.',
+      title,
+      objective: 'Work.',
+      inputs: [],
+      writable: ['results'],
+      output: 'Files.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies: extra.dependencies ?? [],
+      ...(extra.draft ? { draft: true, extra: true } : {}),
+    },
+  });
+  const check = (number: number, result: string, evidence: string): object => ({
+    check: number,
+    result,
+    value: 'A value.',
+    reason: 'A reason.',
+    question: result === 'judgement' ? 'Is it a circle?' : undefined,
+    evidence: [evidence],
+    at,
+  });
+  const render = (view: DeskView): ReturnType<typeof renderDesk> =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: {
+          list: [
+            task('task-1', 'Collect activations', {
+              files: ['results/acts.json'],
+            }),
+            task('task-2', 'Fit circles', {
+              dependencies: ['task-1'],
+              files: ['results/circles.json'],
+            }),
+            task('task-3', 'Check another model', { draft: true }),
+          ],
+          selected: null,
+          idle: [],
+          messages: [
+            {
+              schemaVersion: 1,
+              id: 'm-1',
+              at,
+              from: 'task-2',
+              to: 'coordinator',
+              kind: 'objection',
+              status: 'open',
+              text: 'The months come from layer 12, not layer 8.',
+              delivery: 'board',
+              about: { task: 'task-1', version: 1 },
+            },
+          ],
+        },
+        coordinator: {
+          state: {
+            schemaVersion: 1,
+            objective: 'Cycles',
+            host: 'claude',
+            model: null,
+            startedAt: at,
+            stoppedAt: at,
+            session: null,
+            created: 3,
+            planApproved: true,
+            cursor: 0,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          results: {
+            schemaVersion: 1,
+            direction: 'cycles',
+            checks: [
+              check(1, 'judgement', 'results/circles.json'),
+              check(2, 'passed', 'results/random.json'),
+            ],
+          },
+          session: null,
+          waiting: 0,
+          limitedUntil: null,
+        },
+      } as never,
+      { view, panel: null },
+    );
+  // Check 1 uses Fit circles, which used the disputed files. Check 2 does not.
+  const answer = render('results').html;
+  const notice =
+    /<p class="notice">An objection to Collect activations is open, and this result uses its files: The months come from layer 12, not layer 8\.<\/p>/g;
+  assert.equal(answer.match(notice)?.length, 1);
+  assert.match(
+    answer,
+    /Months[\s\S]*An objection to Collect activations[\s\S]*Control/,
+  );
+  // Needs you shows the same notice on the judgement. The objection comes first, and the optional draft last.
+  const needs = render('needs');
+  assert.match(needs.html, notice);
+  assert.deepEqual(
+    needs.needs.map((item) => item.key.replace(/:.*/, '')),
+    ['message', 'judgement', 'draft'],
+  );
+  // A desk without a project owner cannot stop the team.
+  assert.equal(needs.stoppable, false);
+});
+
+await test('a failed start offers the other harness only when an agent can start', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const task = {
+    schemaVersion: 1,
+    id: 'task-1',
+    revision: 1,
+    state: 'open',
+    createdAt: at,
+    updatedAt: at,
+    attempts: [
+      {
+        number: 1,
+        revision: 1,
+        claim: 'c-1',
+        workspace: null,
+        restrictions: [],
+        session: null,
+        outcome: 'start-failed',
+        note: 'Codex did not start.',
+        startedAt: at,
+        endedAt: at,
+        versions: [],
+      },
+    ],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Plan.',
+      title: 'Years',
+      objective: 'Work.',
+      inputs: [],
+      writable: ['results'],
+      output: 'Files.',
+      host: 'codex',
+      model: null,
+      minutes: 30,
+      dependencies: [],
+    },
+  };
+  const page = (full: boolean): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        full,
+        tasks: { list: [task], selected: task, idle: [], messages: [] },
+        coordinator: {
+          state: {
+            objective: 'Cycles',
+            host: 'claude',
+            helper: 'codex',
+            stoppedAt: null,
+            planApproved: true,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          session: null,
+          waiting: 0,
+          limitedUntil: null,
+        },
+      } as never,
+      { view: 'task', panel: null },
+    ).html;
+  assert.match(
+    page(false),
+    /data-action="task-switch-host" data-task="task-1">Run it on Claude Code</,
+  );
+  // With every agent slot in use, Run it waits like Start, for the same reason.
+  const full = page(true);
+  assert.match(
+    full,
+    /<p class="notice" id="task-blocked">2 agents already work\.[^<]*<\/p>/,
+  );
+  assert.match(
+    full,
+    /data-action="task-switch-host" data-task="task-1" disabled aria-describedby="task-blocked">Run it on Claude Code</,
+  );
+  assert.match(
+    full,
+    /data-action="task-start" data-task="task-1" disabled aria-describedby="task-blocked">Start task</,
+  );
 });

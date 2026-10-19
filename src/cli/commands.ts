@@ -213,7 +213,7 @@ const terminalHelp = (
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
-When the agent waits for you, other text goes to it as a follow-up. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in Records.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
+When the agent waits for you, other text goes to it as a follow-up. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in the top bar of the desk.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
 
 const requestHint =
   'Type a to allow once or d to deny. The desk shows the full request.';

@@ -44,7 +44,7 @@ Run `verifold` in your terminal.
 - In a folder that is already a Verifold project, Verifold first checks for global setup that is not finished, then opens the project's desk. This does not change the harness or the research that the project saved.
 - In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project and opens the desk before planning and research start.
 
-The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in Records does the same.
+The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in the top bar of the desk does the same.
 
 In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal shows each step as one line. Ctrl+C during setup cancels it and saves nothing. When setup ends, a background process takes over the project, and the same browser tab shows it while planning starts.
 
