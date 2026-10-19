@@ -30,6 +30,8 @@ export interface QuotaEntry {
 const backoffMinutes = [15, 30, 60, 120];
 /** A reset time can be a little early, so work waits this much longer by default. */
 const resetGraceMs = 30_000;
+/** The longest wait for a reported reset. */
+const maxWaitMs = 8 * 24 * 3_600_000;
 
 function entry(value: unknown): QuotaEntry | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -107,7 +109,9 @@ export class Quota {
     if (signal.exhausted) {
       const waiting =
         previous?.exhausted && previous.until ? Date.parse(previous.until) : 0;
-      if (Number.isFinite(reset) && reset > now) until = reset + this.graceMs;
+      // A weekly window resets within 7 days, so a later reset is wrong and waits only 8 days.
+      if (Number.isFinite(reset) && reset > now)
+        until = Math.min(reset, now + maxWaitMs) + this.graceMs;
       else if (waiting > now) {
         // Another session failed during the same wait. The wait stays as it is.
         until = waiting;

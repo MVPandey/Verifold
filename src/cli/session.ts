@@ -146,6 +146,8 @@ export interface SessionRecord {
   readonly cwd?: string;
   /** A task session: the domains that its shell commands may reach. */
   readonly network?: readonly string[];
+  /** A lab agent's session: the agent ID. The agent works in the folder of its direction. */
+  readonly agent?: string;
 }
 
 export interface SessionView {
@@ -608,6 +610,10 @@ function parseRecord(value: unknown): SessionRecord | null {
     /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(record.cwd)
       ? { cwd: record.cwd }
       : {}),
+    ...(typeof record.agent === 'string' &&
+    /^a-[1-9]\d{0,3}$/.test(record.agent)
+      ? { agent: record.agent }
+      : {}),
   };
 }
 
@@ -688,10 +694,11 @@ export async function loadPaused(root: string): Promise<PausedSession[]> {
   const paused: PausedSession[] = [];
   for (const id of await recordIds(root)) {
     const record = await readRecord(root, id);
-    // A task session belongs to its task. The task offers its own next step.
+    // A task session belongs to its task, and a lab agent's session to the lab. Each offers its own next step.
     if (
       (record?.status === 'paused' || record?.status === 'interrupted') &&
       !record.task &&
+      !record.agent &&
       record.mode !== 'coordinator' &&
       record.events.some((event) => event.kind === 'you')
     )
@@ -789,6 +796,9 @@ const inTerminal =
 
 const taskSession =
   'This session belongs to a task. Use the task actions in the desk: accept, ask for changes, or reject.';
+
+const agentSession =
+  'This session belongs to an agent of the lab. Write to it on the board.';
 
 /** A new session record, before its first launch. */
 function fresh(
@@ -1077,6 +1087,38 @@ export class SessionManager {
   }
 
   /**
+   * Start a strict session for a lab agent, in the folder of its direction.
+   * The harness limits writes to that folder and asks nothing. Returns the
+   * session ID.
+   */
+  async startAgent(input: {
+    readonly host: HarnessName;
+    readonly model?: string;
+    readonly prompt: string;
+    readonly cwd: string;
+    readonly agent: string;
+    readonly tools: AgentTools;
+  }): Promise<string> {
+    this.ready();
+    const record: SessionRecord = {
+      ...fresh(input.host, input.model ?? null, 'strict'),
+      agent: input.agent,
+      cwd: relative(this.root, input.cwd).split('\\').join('/'),
+    };
+    const parsed = parseRecord(record);
+    if (!parsed?.cwd || !parsed.agent)
+      fail('A lab agent needs the folder of its direction.');
+    this.current = record;
+    this.tools = input.tools;
+    this.event(
+      'status',
+      `Verifold started ${input.agent} in the folder of its direction, in Strict mode.`,
+    );
+    await this.launch(input.prompt);
+    return record.id;
+  }
+
+  /**
    * Start the coordinator in the project folder. It has only Verifold's tools:
    * Claude Code gets no built-in tools, and Codex a read-only permission
    * profile that cannot read credential files.
@@ -1200,6 +1242,7 @@ export class SessionManager {
 
   send(value: unknown): void {
     if (this.current?.task) fail(taskSession);
+    if (this.current?.agent) fail(agentSession);
     if (this.current?.mode === 'coordinator')
       fail('Send the coordinator a message under Coordinator.');
     this.continueTask(value);
@@ -1262,6 +1305,7 @@ export class SessionManager {
 
   end(reason = 'You ended the session.'): void {
     if (this.current?.task) fail(taskSession);
+    if (this.current?.agent) fail(agentSession);
     this.endTask(reason);
   }
 
@@ -1314,7 +1358,11 @@ export class SessionManager {
     );
   }
 
-  /** Pause a live session and wait for its record. Returns false when the last save failed. */
+  /**
+   * Pause a live session and wait for its record. Returns false when the last
+   * save failed. The manager stays usable, so a lab can park an idle agent and
+   * give its slot to another one.
+   */
   async close(): Promise<boolean> {
     this.generation++;
     // A launch, for example after a terminal, can still be saving its record. It must not start a harness after this.

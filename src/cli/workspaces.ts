@@ -81,6 +81,9 @@ function git(
       [
         '-c',
         'core.hooksPath=/dev/null',
+        // Several agents commit in worktrees of one repository. An automatic gc in one would race the others.
+        '-c',
+        'gc.auto=0',
         '-c',
         'commit.gpgsign=false',
         '-c',
@@ -520,6 +523,18 @@ export function commitVersion(
   message: string,
 ): Promise<{ readonly commit: string; readonly skipped: readonly string[] }> {
   return commitAll(join(root, workspace.path), writable, message);
+}
+
+/**
+ * Commit everything in a lab direction's folder, so other agents can read its
+ * files at this commit. Returns the commit.
+ */
+export async function snapshot(
+  root: string,
+  workspace: Workspace,
+  message: string,
+): Promise<string> {
+  return (await commitAll(join(root, workspace.path), ['.'], message)).commit;
 }
 
 const changeNames: Record<string, ChangedFile['change']> = {
