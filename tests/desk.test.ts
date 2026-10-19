@@ -4032,9 +4032,10 @@ await test('Home says when the coordinator waits for a used-up usage window', as
       } as never,
       { view: 'home', panel: null },
     ).html;
+  // A time that is not today shows its day, such as Tue 00:19.
   assert.match(
     home('usage'),
-    /<span class="map-label">Now<\/span> No task runs\. The coordinator waits for Claude Code&#39;s usage window until \d{2}:\d{2}\./,
+    /<span class="map-label">Now<\/span> No task runs\. The coordinator waits for Claude Code&#39;s usage window until (?:\w{3} )?\d{2}:\d{2}\./,
   );
   // The hourly turn limit is not a usage window.
   assert.doesNotMatch(home('turns'), /usage window/);
