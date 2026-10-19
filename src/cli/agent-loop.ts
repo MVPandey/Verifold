@@ -14,8 +14,12 @@ export interface WakeEvent {
 export type QueuedEvent<E extends WakeEvent> = E & {
   readonly seq: number;
   readonly at: string;
-  /** A Verifold read failed in the turn that first carried the event, so it came once more. */
-  readonly again?: true;
+  /**
+   * The event came once more: `true` when a Verifold read failed in the turn
+   * that first carried it, `limit` when the harness's usage window ran out in
+   * that turn.
+   */
+  readonly again?: true | 'limit';
 };
 
 /** The fields of an agent's record that the loop changes. */
@@ -41,6 +45,8 @@ export interface WakeOwner<E extends WakeEvent, R extends WakeRecord<E>> {
   save(record: R): Promise<void>;
   /** The agent's session can take a turn now. */
   ready(record: R): boolean;
+  /** The usage window of the session's harness is used up until this time, so a turn would fail. */
+  parked?(record: R): string | null;
   /** Send one digest as a turn. Throw when nothing was sent: the events then wait for the next wakeup. */
   send(events: readonly QueuedEvent<E>[], left: number): void;
   /** A digest was sent. */
@@ -54,6 +60,8 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
   private carried: {
     readonly events: readonly QueuedEvent<E>[];
     readFailed: boolean;
+    /** The harness's usage window ran out in this turn, so the turn did no work. */
+    usedUp: boolean;
   } | null = null;
   private limited: string | null = null;
   private readonly owner: WakeOwner<E, R>;
@@ -78,7 +86,7 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
 
   /** Add events for the next wakeup, and wake after `delay`. */
   add(
-    events: readonly (E & { readonly again?: true })[],
+    events: readonly (E & { readonly again?: true | 'limit' })[],
     delay: number = this.limits.debounceMs,
   ): void {
     this.serial(async () => {
@@ -112,17 +120,37 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     if (this.carried) this.carried.readFailed = true;
   }
 
-  /** The session's turn ended, or its process stopped. New events wake it. */
-  turnEnded(): void {
+  /** The owner started a turn itself, outside a digest, for example the first turn. */
+  started(): void {
+    this.carried = { events: [], readFailed: false, usedUp: false };
+  }
+
+  /** The harness's usage window ran out in the current turn, so the turn did no work. */
+  usedUp(): void {
+    if (this.carried) this.carried.usedUp = true;
+  }
+
+  /**
+   * The session's turn ended, or its process stopped. New events wake it.
+   * Returns true when a turn without events ran into a used-up usage window:
+   * nothing comes again by itself, so the owner adds an event.
+   */
+  turnEnded(): boolean {
     // A failed read can hide what an event was about, so its events come once more.
+    // A turn that ran into a used-up usage window did no work, so its events come again after the reset.
     const carried = this.carried;
     this.carried = null;
-    if (carried?.readFailed) {
+    if (carried?.usedUp && carried.events.length)
+      this.add(
+        carried.events.map((event) => ({ ...event, again: 'limit' as const })),
+      );
+    else if (!carried?.usedUp && carried?.readFailed) {
       const again = carried.events.filter((event) => !event.again);
       if (again.length)
         this.add(again.map((event) => ({ ...event, again: true as const })));
     }
     this.schedule();
+    return Boolean(carried?.usedUp && !carried.events.length);
   }
 
   /** Wake after `delay`. A shorter delay replaces a longer one that waits. */
@@ -159,6 +187,12 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     const waiting = record.events.filter((event) => event.seq > record.cursor);
     // A busy session gets the events when its turn ends.
     if (!waiting.length || !this.owner.ready(record)) return;
+    // A turn in a used-up usage window fails at once, so the events wait for the reset.
+    const parked = this.owner.parked?.(record);
+    if (parked) {
+      this.schedule(Math.max(1000, Date.parse(parked) - Date.now()));
+      return;
+    }
     const hour = Date.now() - 3_600_000;
     const recent = record.wakeups.filter((at) => Date.parse(at) > hour);
     if (recent.length >= this.limits.wakeupsPerHour) {
@@ -188,7 +222,7 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
         });
       return;
     }
-    this.carried = { events: sent, readFailed: false };
+    this.carried = { events: sent, readFailed: false, usedUp: false };
     await this.owner.sent?.(sent);
   }
 }
