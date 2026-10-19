@@ -240,7 +240,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   const again: string[] = [];
   const againUrls: string[] = [];
   const second = runCli(
-    ['--no-open', '--lab'],
+    ['ui', '--no-open', '--lab'],
     root,
     terminal(again, againUrls, []),
   );

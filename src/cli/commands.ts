@@ -161,7 +161,7 @@ verifold --lab                        The same, then start a lab on the question
 verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
 verifold init --setup-only [--profile profile.json] [--host name]
 verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
-verifold ui [--no-open]               Open the live research desk and control a harness session there
+verifold ui [--no-open] [--lab]       Open the live research desk and control a harness session there
 verifold stop                         Stop the team that works in the background, with its pods
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
@@ -1510,7 +1510,7 @@ export async function runCli(
     handoff: [],
     view: [],
     status: [],
-    ui: ['no-open'],
+    ui: ['no-open', 'lab'],
     owner: [],
     stop: [],
     session: ['host', 'mode', 'model', 'prompt', 'no-open'],
