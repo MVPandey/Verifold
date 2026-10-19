@@ -975,22 +975,14 @@ function labReply(post: string): void {
 }
 
 /**
- * The key of each lab request that timed out, by its content. A click again
- * on the same action sends the same key, and the desk does the action once.
- * Any answer from the desk clears the keys: the person moved on, so a later
- * click is a new action.
+ * A lab request with a new key for each click. The desk runs a request with
+ * a key that it saw in the last minute once, so a request that the network
+ * sends twice does nothing twice.
  */
-const labKeys = new Map<string, string>();
-
 function labKeyed(body: Record<string, unknown>): Record<string, unknown> {
-  const content = JSON.stringify(body);
-  let key = labKeys.get(content);
-  if (!key) {
-    key = [...crypto.getRandomValues(new Uint8Array(16))]
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join('');
-    labKeys.set(content, key);
-  }
+  const key = [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
   return { ...body, key };
 }
 
@@ -1208,18 +1200,14 @@ async function act(button: HTMLElement): Promise<void> {
       },
       body: JSON.stringify(body),
       cache: 'no-store',
-      // A compute action waits for RunPod, for up to 8 seconds. A lab
-      // action can wait for a new folder or an agent's start.
+      // A compute action waits for RunPod, for up to 8 seconds. A slow lab
+      // action answers within a few seconds and goes on in the background.
       signal: AbortSignal.timeout(
-        action?.startsWith('compute-')
+        action?.startsWith('compute-') || action?.startsWith('lab-')
           ? 15000
-          : action?.startsWith('lab-')
-            ? 60000
-            : 5000,
+          : 5000,
       ),
     });
-    // The desk answered, so the next lab click is a new action.
-    labKeys.clear();
     const reply: unknown = await response.json().catch(() => null);
     if (!response.ok)
       throw new Error(
@@ -1277,10 +1265,7 @@ async function act(button: HTMLElement): Promise<void> {
     actionLabel.textContent =
       error instanceof Error && error.name !== 'TimeoutError'
         ? error.message
-        : typeof body.key === 'string'
-          ? // The desk keeps the action. The page refreshes, and a click again does not repeat it.
-            `Still working: ${name}. The lab shows the result when it ends.`
-          : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
+        : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
     failure = { selector, message: actionLabel.textContent };
   } finally {
     // The key and secret fields are empty after each try, so a value stays on the page no longer than needed.

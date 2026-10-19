@@ -808,6 +808,68 @@ const taskSession =
 const agentSession =
   'This session belongs to an agent of the lab. Write to it on the board.';
 
+/** The checked input of a plain session's start, or an error the person can read. */
+export function startInput(input: {
+  readonly host: unknown;
+  readonly mode: unknown;
+  readonly model?: unknown;
+  readonly prompt: unknown;
+}): {
+  readonly host: HarnessName;
+  readonly mode: 'ask' | 'auto';
+  readonly model: string | undefined;
+  readonly prompt: string;
+} {
+  const host =
+    input.host === 'claude' || input.host === 'codex'
+      ? input.host
+      : fail('Choose Claude Code or Codex.');
+  const mode =
+    input.mode === 'ask' || input.mode === 'auto'
+      ? input.mode
+      : fail('Choose Ask me or Auto.');
+  const model: unknown =
+    input.model === undefined || input.model === '' ? undefined : input.model;
+  try {
+    validateModel(model);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : 'Invalid model.');
+  }
+  if (
+    typeof input.prompt !== 'string' ||
+    !input.prompt.trim() ||
+    input.prompt.length > 100_000
+  )
+    fail('Write a message for the harness, up to 100,000 characters.');
+  return { host, mode, model, prompt: input.prompt.trim() };
+}
+
+/**
+ * Why the person cannot resume or restart this session, or null when they
+ * can. A lab agent's session resumes only through the lab.
+ */
+export async function refusal(
+  root: string,
+  id: unknown,
+  action: 'resume' | 'restart',
+): Promise<string | null> {
+  const saved =
+    typeof id === 'string' && validSessionId(id)
+      ? await readRecord(root, id)
+      : null;
+  if (saved?.agent) return agentSession;
+  if (action === 'resume')
+    return saved && resumable(saved)
+      ? null
+      : 'That session cannot resume. Choose a paused session.';
+  return saved &&
+    (saved.status === 'paused' || saved.status === 'interrupted') &&
+    !conversation(saved) &&
+    saved.events.some((event) => event.kind === 'you')
+    ? null
+    : 'That session cannot start again. Resume it, or start a new session.';
+}
+
 /** A new session record, before its first launch. */
 function fresh(
   host: HarnessName,
@@ -1040,22 +1102,7 @@ export class SessionManager {
     readonly prompt: unknown;
   }): Promise<void> {
     this.ready();
-    const host =
-      input.host === 'claude' || input.host === 'codex'
-        ? input.host
-        : fail('Choose Claude Code or Codex.');
-    const mode =
-      input.mode === 'ask' || input.mode === 'auto'
-        ? input.mode
-        : fail('Choose Ask me or Auto.');
-    const model =
-      input.model === undefined || input.model === '' ? undefined : input.model;
-    try {
-      validateModel(model);
-    } catch (error) {
-      fail(error instanceof Error ? error.message : 'Invalid model.');
-    }
-    const prompt = this.text(input.prompt);
+    const { host, mode, model, prompt } = startInput(input);
     this.current = fresh(host, model ?? null, mode);
     this.tools = undefined;
     this.event('you', prompt);
@@ -1223,6 +1270,8 @@ export class SessionManager {
         ? await readRecord(this.root, id)
         : null;
     const prompt = saved?.events.find((event) => event.kind === 'you')?.text;
+    // A lab agent starts again only through the lab, which gives it its tools.
+    if (saved?.agent) fail(agentSession);
     if (
       (saved?.status !== 'paused' && saved?.status !== 'interrupted') ||
       conversation(saved) ||

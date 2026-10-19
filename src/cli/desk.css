@@ -1318,7 +1318,8 @@ details.more > * + * {
   font-weight: 650;
 }
 .chip.blocker,
-.chip.objection {
+.chip.objection,
+.chip.kind-objection {
   border-color: var(--caution-line);
   background: var(--caution-bg);
   color: var(--caution);
@@ -3520,14 +3521,14 @@ body:not(:has(.rail)) .menu-button {
   padding-left: 14px;
   border-left: 2px solid var(--tint-line);
 }
-.chip.claim,
-.chip.evidence,
-.chip.rerun {
+.chip.kind-claim,
+.chip.kind-evidence,
+.chip.kind-rerun {
   border-color: var(--tint-line);
   background: var(--lavender);
   color: var(--tint-ink);
 }
-.chip.ruled-out {
+.chip.kind-ruled-out {
   color: var(--muted);
 }
 .lab-compose textarea {

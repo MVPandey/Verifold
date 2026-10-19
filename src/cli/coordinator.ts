@@ -16,6 +16,7 @@ import {
   type SessionView,
 } from './session.ts';
 import type { AgentTool, AgentTools } from './session-hosts.ts';
+import type { RunTeam } from './team.ts';
 import {
   isDraft,
   isQuestion,
@@ -178,10 +179,7 @@ export class Coordinator {
     | undefined;
   /** "Agents at once" of the project. */
   private readonly agents: () => number;
-  private readonly blocked: (() => string | null) | undefined;
-  private readonly gate:
-    | (<T>(work: () => Promise<T>) => Promise<T>)
-    | undefined;
+  private readonly team: RunTeam | undefined;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -199,18 +197,11 @@ export class Coordinator {
       readonly onChange?: () => void;
       readonly quota?: { parked(host: HarnessName): string | null };
       readonly agents?: () => number;
-      /** Why the coordinator cannot start now, such as a lab on the run. */
-      readonly blocked?: () => string | null;
-      /**
-       * One run has one team. A start runs through this gate, which a lab's
-       * start shares, so the check and the start of one cannot come between
-       * the check and the start of the other.
-       */
-      readonly gate?: <T>(work: () => Promise<T>) => Promise<T>;
+      /** One run has one team. The coordinator starts only when the guard gives its team the run. */
+      readonly team?: RunTeam;
     },
   ) {
-    this.blocked = options.blocked;
-    this.gate = options.gate;
+    this.team = options.team;
     this.quota = options.quota;
     this.agents = options.agents ?? (() => defaultAgents);
     this.memory = options.memory;
@@ -322,16 +313,9 @@ export class Coordinator {
     /** The person approves the first task plan before any task starts. */
     readonly guided: boolean;
   }): Promise<void> {
-    const start = (): Promise<void> => this.startNow(input);
-    return this.gate ? this.gate(start) : start();
-  }
-
-  private startNow(input: Parameters<Coordinator['start']>[0]): Promise<void> {
     return this.serial(async () => {
       if (this.state && !this.state.stoppedAt)
         fail('The coordinator already runs. Stop it first.');
-      const blocked = this.blocked?.();
-      if (blocked) fail(blocked);
       const objective =
         typeof input.objective === 'string' &&
         input.objective.trim() &&
@@ -356,22 +340,30 @@ export class Coordinator {
         input.helper !== host
           ? input.helper
           : null;
-      await this.save({
-        schemaVersion: 1,
-        objective,
-        host,
-        model,
-        helper,
-        startedAt: new Date().toISOString(),
-        stoppedAt: null,
-        session: null,
-        created: 0,
-        planApproved: !input.guided,
-        cursor: 0,
-        wakeups: [],
-        events: [],
-        actions: [],
-      });
+      // The check and the claim of the run are one step: a lab cannot start in between.
+      const release = this.team?.claim('coordinator') ?? (() => {});
+      try {
+        await this.save({
+          schemaVersion: 1,
+          objective,
+          host,
+          model,
+          helper,
+          startedAt: new Date().toISOString(),
+          stoppedAt: null,
+          session: null,
+          created: 0,
+          planApproved: !input.guided,
+          cursor: 0,
+          wakeups: [],
+          events: [],
+          actions: [],
+        });
+      } catch (error) {
+        // No coordinator record was written, so the run is free again.
+        release();
+        throw error;
+      }
       let session: string;
       // The first turn carries no events, but it can still run into a used-up usage window.
       this.loop.started();
@@ -411,20 +403,16 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       );
   }
 
-  /**
-   * Start the coordinator for the chosen direction, unless one already runs.
-   * Returns true when a coordinator runs for it, so the messages that waited
-   * for research can go to it.
-   */
-  async startForDirection(workspace: Workspace): Promise<boolean> {
-    if (this.state && !this.state.stoppedAt) return true;
-    const blocked = this.blocked?.();
+  /** Start the coordinator for the chosen direction, unless one already runs or a lab owns the run. */
+  async startForDirection(workspace: Workspace): Promise<void> {
+    if (this.state && !this.state.stoppedAt) return;
+    const blocked = this.team?.refusal('coordinator');
     if (blocked) {
       this.progress?.(blocked);
-      return false;
+      return;
     }
     const objective = directionObjective(workspace);
-    if (!objective) return false;
+    if (!objective) return;
     await this.start({
       objective,
       host: workspace.host,
@@ -434,7 +422,6 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       // D91: an autonomous project starts the plan at once. A guided one waits for the person.
       guided: workspace.research?.autonomy !== 'autonomous',
     });
-    return true;
   }
 
   /**

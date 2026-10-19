@@ -36,6 +36,7 @@ import {
   type ChangedFile,
   type Workspace,
 } from './workspaces.ts';
+import type { RunTeam } from './team.ts';
 
 /**
  * Scoped tasks: what one worker must do, with its inputs, writable paths, and
@@ -294,7 +295,8 @@ export interface TaskManagerOptions {
   readonly memory?: {
     note(who: string, text: unknown): Promise<string>;
     digest(): Promise<string>;
-  };
+  } /** One run has one team. A task needs the coordinator's team's run. */;
+  readonly team?: RunTeam;
 }
 
 const agentEnded =
@@ -416,37 +418,52 @@ export class TaskManager {
     reason = 'Created',
   ): Promise<string> {
     return this.serial(async () => {
-      const existing = await this.list();
-      if (existing.length >= limits.tasks)
-        fail(`A project holds at most ${limits.tasks} tasks.`);
-      const number =
-        Math.max(0, ...existing.map((task) => Number(task.id.slice(5)))) + 1;
-      const id = `task-${number}`;
-      const folder = join(this.directory, id);
-      await mkdir(folder, { recursive: true, mode: 0o700 });
-      let assignment: Assignment;
+      // A task makes the run the coordinator's team's. A create that fails gives the run back.
+      const release = this.options.team?.claim('coordinator') ?? (() => {});
       try {
-        assignment = await this.assignment(id, 1, fields, reason, existing, by);
+        return await this.createNow(fields, by, reason);
       } catch (error) {
-        // A folder without task.json is not a task. Remove it, so the next create starts clean.
-        await rm(folder, { recursive: true, force: true });
+        release();
         throw error;
       }
-      const now = new Date().toISOString();
-      await this.write({
-        schemaVersion: 1,
-        id,
-        revision: 1,
-        state: 'open',
-        createdAt: now,
-        updatedAt: now,
-        assignment,
-        claim: null,
-        attempts: [],
-      });
-      this.told(by, id, `The person created ${id}: ${assignment.title}.`);
-      return id;
     });
+  }
+
+  private async createNow(
+    fields: TaskInputFields,
+    by: Actor,
+    reason: string,
+  ): Promise<string> {
+    const existing = await this.list();
+    if (existing.length >= limits.tasks)
+      fail(`A project holds at most ${limits.tasks} tasks.`);
+    const number =
+      Math.max(0, ...existing.map((task) => Number(task.id.slice(5)))) + 1;
+    const id = `task-${number}`;
+    const folder = join(this.directory, id);
+    await mkdir(folder, { recursive: true, mode: 0o700 });
+    let assignment: Assignment;
+    try {
+      assignment = await this.assignment(id, 1, fields, reason, existing, by);
+    } catch (error) {
+      // A folder without task.json is not a task. Remove it, so the next create starts clean.
+      await rm(folder, { recursive: true, force: true });
+      throw error;
+    }
+    const now = new Date().toISOString();
+    await this.write({
+      schemaVersion: 1,
+      id,
+      revision: 1,
+      state: 'open',
+      createdAt: now,
+      updatedAt: now,
+      assignment,
+      claim: null,
+      attempts: [],
+    });
+    this.told(by, id, `The person created ${id}: ${assignment.title}.`);
+    return id;
   }
 
   /** A new revision. Earlier attempts keep the assignment of their own revision. */
@@ -497,6 +514,8 @@ export class TaskManager {
    */
   start(id: unknown, by: Actor = 'person'): Promise<void> {
     return this.serial(async () => {
+      const refused = this.options.team?.refusal('coordinator');
+      if (refused) fail(refused);
       const task = await this.load(id);
       if (task.state !== 'open') fail('Only an open task can start.');
       if (by === 'coordinator' && isDraft(task))
