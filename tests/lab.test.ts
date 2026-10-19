@@ -1112,7 +1112,13 @@ await test('start over parks the lab, a restore brings it back paused, and a new
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
   await lab.lab.suspend();
+  // A suspended lab takes no change, so nothing lands in the files that move.
+  await assert.rejects(lab.lab.post({ text: 'Late.' }), /moving the lab/);
   const archive = await archiveRun(lab.root);
+  await delay(200);
+  const left = await readdir(join(lab.root, '.verifold'));
+  for (const part of ['lab.json', 'lab', 'board'])
+    assert.ok(!left.includes(part), part);
   await lab.lab.reload();
   await lab.sessions.forget();
   assert.equal(lab.lab.exists, false);
@@ -1133,6 +1139,7 @@ await test('start over parks the lab, a restore brings it back paused, and a new
     'Do LLMs store months on circles?',
   );
   assert.ok(lab.lab.view()?.state.pausedAt);
+  assert.equal(lab.lab.view()?.directions[0]?.agent.direction, 'd-1');
   const before = (await lab.inputs('d-1-alpha')).length;
   await lab.lab.resume();
   await until(
