@@ -368,6 +368,15 @@ button:disabled {
     0 0 0 2px var(--surface),
     0 0 0 4px currentColor;
 }
+/* Stop the team in the top bar. After the first click it asks again, in red. */
+.stop-button {
+  flex: none;
+  white-space: nowrap;
+}
+.stop-button[data-armed] {
+  border-color: var(--red);
+  color: var(--red);
+}
 .connection-note {
   flex: none;
   display: flex;
@@ -2503,10 +2512,16 @@ body[data-pane='terminal'] .panel:has(.pane-terminal) {
     margin-top: 6px;
   }
 }
+/* The list opens at the newest event. A reversed column scrolls from its end. */
 .session-events {
   max-height: 520px;
   overflow: auto;
+  display: flex;
+  flex-direction: column-reverse;
+}
+.session-events ol {
   list-style: none;
+  margin: 0;
   padding: 0;
 }
 .event {
@@ -3339,6 +3354,15 @@ body:not(.dock-expanded) .dock-threads {
   /* The dot says the connection state. The word stays for screen readers. */
   #connection {
     font-size: 0;
+  }
+  /* "Stop" shows, and the full name stays for screen readers. The question after the first click shows in full. */
+  .stop-button:not([data-armed]) {
+    font-size: 0;
+  }
+  .stop-button:not([data-armed])::before {
+    content: 'Stop';
+    content: 'Stop' / '';
+    font-size: 13px;
   }
 }
 /* Setup has no rail, so it needs no menu. */
