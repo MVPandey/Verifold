@@ -580,6 +580,8 @@ async function serveDesk(
         },
         // Lab agents' turns go to the lab. Task turns come through onTaskTurn.
         onTurnEnd: (record) => owned.lab?.turnEnded(record),
+        // A task or the person's session that finds every slot taken gets the slot of a lab agent that had its turn.
+        makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
         onTaskTurn: (task, turn, detail, reply) =>
           void owned.tasks
             ?.turnEnded(task, turn, detail, reply)
@@ -688,6 +690,8 @@ async function serveDesk(
           const workspace = await loadWorkspace(root).catch(() => null);
           return workspace?.host === host ? (workspace.model ?? null) : null;
         },
+        // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
+        runs: session === undefined,
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;

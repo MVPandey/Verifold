@@ -343,22 +343,23 @@ async function changeRun(
   )
     throw new SessionActionError('Your session is running. End it first.');
   // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
-  await labRun?.suspend();
-  const state = coordinator?.view()?.state;
-  if (state && !state.stoppedAt) await coordinator?.stop();
-  for (const task of list)
-    if (task.state === 'open' || task.state === 'review')
-      await tasks.cancel(task.id);
-  // The memory keeps what this run did, decided, and found, as an earlier run.
-  await memory?.freeze(
-    `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
-  );
+  const paused = (await labRun?.suspend()) ?? false;
   try {
+    const state = coordinator?.view()?.state;
+    if (state && !state.stoppedAt) await coordinator?.stop();
+    for (const task of list)
+      if (task.state === 'open' || task.state === 'review')
+        await tasks.cancel(task.id);
+    // The memory keeps what this run did, decided, and found, as an earlier run.
+    await memory?.freeze(
+      `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+    );
     if (restore === undefined) await archiveRun(root);
     else await restoreRun(root, restore);
   } catch (error) {
-    // The records moved in part or not at all. The lab reads them again.
+    // The records moved in part or not at all. The lab reads them again and works as before.
     await labRun?.reload();
+    if (paused) await labRun?.resume().catch(() => {});
     throw error;
   }
   memory?.schedule();
@@ -1154,7 +1155,10 @@ export async function startDesk(
           /* Missing or unsafe reports remain unavailable. */
         }
       }
-      const workers = sessions?.views() ?? [];
+      // Lab agents belong to the lab view. The person reaches them on the board.
+      const workers = (sessions?.views() ?? []).filter(
+        (view) => !view.record.agent,
+      );
       // A version in review whose agent paused when Verifold stopped can still get changes.
       const resumable: string[] = [];
       for (const entry of taskList) {
