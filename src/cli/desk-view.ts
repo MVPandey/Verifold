@@ -36,8 +36,14 @@ import {
   type CoordinatorView,
 } from './coordinator.ts';
 import { defaultAgents } from './workers.ts';
-import { teamWorks, type LabView } from './lab.ts';
-import { labMember, renderLab, renderLabStart } from './desk-lab.ts';
+import type { LabView } from './lab.ts';
+import type { TeamKind } from './team.ts';
+import {
+  labMember,
+  renderLab,
+  renderLabStart,
+  type LabWork,
+} from './desk-lab.ts';
 import { scratch } from './workspaces.ts';
 import {
   decisionLabel,
@@ -78,6 +84,10 @@ export interface DeskSession {
   readonly archives?: readonly ArchivedRun[];
   /** The lab of a project owner. Null: the project has none yet. */
   readonly lab?: LabView | null;
+  /** A lab action that runs in the background, or the one that failed there. */
+  readonly labWork?: LabWork | null;
+  /** The team that owns the run: the coordinator's team, a lab, or none yet. */
+  readonly team?: TeamKind | null;
 }
 
 export interface TaskView {
@@ -1231,7 +1241,13 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   const record = snapshot.attempts.find((entry) => entry.id === latest)?.record;
   const since = record?.finishedAt ?? record?.startedAt ?? null;
   const phase = workspace.research?.phase;
-  if (live.research && !live.research.running && !workspace.selectedId) {
+  // A lab run has no research to continue.
+  if (
+    live.research &&
+    !live.research.running &&
+    !workspace.selectedId &&
+    !live.lab
+  ) {
     if (phase === 'awaiting-plan-review')
       items.push({
         key: `research-plan:${latest ?? ''}`,
@@ -3229,7 +3245,7 @@ function renderRail(
   // Each lab agent with its direction. Its row opens the lab.
   for (const entry of live.lab?.directions ?? [])
     if (entry.direction.state === 'open') {
-      const { face, line } = labMember(entry);
+      const { face, line } = labMember(entry, clock);
       team.push(
         member(
           'session',
@@ -3435,18 +3451,9 @@ function renderHome(
     const next = nextResearchAction(workspace);
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk starts nothing. To start an agent, pick A new agent in the message box.' : 'This desk shows saved work. It starts nothing.'}</p></section>`;
   }
-  // A project with no team at work can start a lab instead.
+  // A run that no team owns yet can start a lab instead, while no research step runs.
   const labStart =
-    live.lab === null &&
-    !teamWorks({
-      tasks: tasks.length,
-      coordinator: Boolean(
-        live.coordinator?.state && !live.coordinator.state.stoppedAt,
-      ),
-      // Research that has found no direction yet stops when the person starts the lab.
-      research:
-        (live.research?.running ?? false) && workspace.candidates.length > 0,
-    })
+    live.lab === null && !live.team && !live.research?.running
       ? renderLabStart(workspace.research?.topic)
       : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
@@ -3616,6 +3623,7 @@ export function renderDesk(
                         clock,
                         (source, label) => transcriptSlot(source, label, ''),
                         `${needsCard(needs)}${renderPodsLine(live.compute)}${renderPaused(live)}`,
+                        live.labWork ?? null,
                       )
                     : renderHome(
                         snapshot,
@@ -3626,8 +3634,9 @@ export function renderDesk(
                         frame.since,
                         frame.hideFinished === true,
                       );
+  // In a lab, Home has its own box: posts go to the board.
   const dock =
-    view === 'home' ||
+    (view === 'home' && !live.lab) ||
     view === 'research' ||
     view === 'tasks' ||
     view === 'task' ||

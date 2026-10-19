@@ -38,7 +38,8 @@ import { TaskManager, type TaskPlace } from './tasks.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
-import { Lab, labWorks, researchForLab } from './lab.ts';
+import { Lab } from './lab.ts';
+import { labOnDisk, labWorks, RunTeam } from './team.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -566,8 +567,20 @@ async function serveDesk(
         tasks?: TaskManager;
         coordinator?: Coordinator;
         lab?: Lab;
+        runner?: ResearchRunner;
         session?: string;
       } = {};
+      // One run has one team: the coordinator's team or a lab. Every start of either one asks this guard.
+      const team = new RunTeam({
+        researchBusy: () => owned.runner?.busy ?? false,
+        read: async () =>
+          owned.lab?.exists
+            ? 'lab'
+            : (await owned.tasks?.list())?.length ||
+                owned.coordinator?.view()?.state
+              ? 'coordinator'
+              : null,
+      });
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);
       await quota.load();
@@ -583,7 +596,7 @@ async function serveDesk(
         },
         // Lab agents' turns go to the lab. Task turns come through onTaskTurn.
         onTurnEnd: (record) => owned.lab?.turnEnded(record),
-        // A task or the person's session that finds every slot taken gets the slot of a lab agent that had its turn.
+        // The person's session that finds every slot taken gets the slot of a lab agent that had its turn.
         makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
         onTaskTurn: (task, turn, detail, reply) =>
           void owned.tasks
@@ -642,16 +655,10 @@ async function serveDesk(
         onEvent: (event) => owned.coordinator?.notify(event),
         pods: compute.podTools(),
         memory,
+        team,
         onChange: remember,
       });
       owned.tasks = tasks;
-      // One run has one team. A lab and a coordinator start one at a time, so each one's check sees the other's start.
-      let team: Promise<unknown> = Promise.resolve();
-      const gate = <T>(work: () => Promise<T>): Promise<T> => {
-        const next = team.then(work, work);
-        team = next.catch(() => {});
-        return next;
-      };
       const runner = new ResearchRunner(root, {
         signal: running,
         io,
@@ -662,20 +669,18 @@ async function serveDesk(
           await memory.write().catch(() => {
             /* The coordinator still starts. A task input that is missing is refused with its name. */
           });
-          if (
-            await owned.coordinator?.startForDirection(
-              await loadWorkspace(root),
-            )
-          )
-            await tasks.passToCoordinator();
+          await owned.coordinator?.startForDirection(await loadWorkspace(root));
+          // The messages that waited for research wait for the coordinator now, also one that the person starts later.
+          await tasks.passToCoordinator();
         },
-        blocked: () => (owned.lab?.exists ? labWorks : null),
+        blocked: () => team.refusal('coordinator'),
         inbox: {
           post: (text) => tasks.post('research', text),
           take: () => tasks.takeResearch(),
         },
         onChange: remember,
       });
+      owned.runner = runner;
       // The coordinator has its own session, outside the worker slots.
       const coordinator = new Coordinator(root, {
         tasks,
@@ -683,9 +688,7 @@ async function serveDesk(
         memory,
         quota,
         agents: () => sessions.limit,
-        // One run has one team: the coordinator does not start while a lab exists.
-        blocked: () => (owned.lab?.exists ? labWorks : null),
-        gate,
+        team,
         onChange: remember,
         ...(io.progress ? { progress: io.progress } : {}),
         sessions: new SessionManager(root, {
@@ -704,19 +707,7 @@ async function serveDesk(
         sessions,
         memory,
         quota,
-        team: async () => {
-          const research = await researchForLab(
-            runner,
-            (await loadWorkspace(root)).candidates.length,
-          );
-          const lead = coordinator.view()?.state;
-          return {
-            tasks: (await tasks.list()).length,
-            coordinator: Boolean(lead && !lead.stoppedAt),
-            research,
-          };
-        },
-        gate,
+        team,
         model: async (host) => {
           const workspace = await loadWorkspace(root).catch(() => null);
           return workspace?.host === host ? (workspace.model ?? null) : null;
@@ -747,6 +738,7 @@ async function serveDesk(
         await sessions.load();
         await coordinator.load();
         await lab.load();
+        await team.reload();
         await compute.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
@@ -771,6 +763,7 @@ async function serveDesk(
             compute,
             memory,
             lab,
+            team,
           );
         else {
           desk = await startDesk(
@@ -784,7 +777,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
-            { stop: () => quit.abort(), reuse: run.owner?.desk, lab },
+            { stop: () => quit.abort(), reuse: run.owner?.desk, lab, team },
           );
           await announce(
             desk,
@@ -1718,6 +1711,8 @@ export async function runCli(
     return;
   }
   if (command === 'research') {
+    // One run has one team: research does not work on a lab's run.
+    if (await labOnDisk(root)) throw new Error(labWorks);
     const result = await owned(root, io, () =>
       runResearch(
         root,
@@ -1779,6 +1774,7 @@ export async function runCli(
     return;
   }
   if (command === 'select') {
+    if (await labOnDisk(root)) throw new Error(labWorks);
     if (!workspace.candidates.length)
       throw new Error('Import host recommendations with ideas --from first.');
     let id = values.id;

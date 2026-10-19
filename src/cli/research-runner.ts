@@ -245,6 +245,9 @@ export class ResearchRunner {
       );
     const inbox =
       this.options.inbox ?? fail('Research takes no messages here.');
+    // A message that no step can take is not saved.
+    const blocked = this.options.blocked?.();
+    if (blocked) fail(blocked);
     await inbox.post(text);
     if (!this.running && !this.starting && workspace.research?.phase)
       await this.start({});

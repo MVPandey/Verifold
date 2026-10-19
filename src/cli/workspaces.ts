@@ -4,6 +4,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   realpath,
@@ -46,6 +47,10 @@ const limits = {
   bytes: 200 * 1024 * 1024,
   fileBytes: 50 * 1024 * 1024,
   diffBytes: 512 * 1024,
+  /** A lab direction's folder leaves out larger files that are not committed. Its agent reads them in the project folder. */
+  lightFileBytes: 1024 * 1024,
+  /** A lab direction's folder copies at most this much that is not committed. */
+  lightBytes: 50 * 1024 * 1024,
 };
 
 /**
@@ -200,14 +205,28 @@ async function contained(root: string, path: string): Promise<void> {
   }
 }
 
-/** Regular files under `path` in a folder, within the limits. Symbolic links are skipped. */
-async function walk(root: string, path: string): Promise<string[]> {
+/**
+ * Regular files under `path` in a folder, within the limits. Symbolic links
+ * are skipped. A `light` walk leaves out tool folders, files above
+ * `lightFileBytes`, and every file after `lightBytes`, instead of failing.
+ */
+async function walk(
+  root: string,
+  path: string,
+  light = false,
+): Promise<string[]> {
   const found: string[] = [];
   let bytes = 0;
   const visit = async (rel: string): Promise<void> => {
     const stats = await lstat(join(root, rel)).catch(() => null);
     if (!stats || stats.isSymbolicLink()) return;
     if (stats.isFile()) {
+      if (
+        light &&
+        (stats.size > limits.lightFileBytes ||
+          bytes + stats.size > limits.lightBytes)
+      )
+        return;
       bytes += stats.size;
       found.push(rel);
       if (found.length > limits.files || bytes > limits.bytes)
@@ -218,7 +237,10 @@ async function walk(root: string, path: string): Promise<string[]> {
     }
     if (!stats.isDirectory()) return;
     for (const name of (await readdir(join(root, rel))).sort())
-      if (rel !== '.' || !['.git', '.verifold'].includes(name))
+      if (
+        (rel !== '.' || !['.git', '.verifold'].includes(name)) &&
+        !(light && toolFolders.includes(name))
+      )
         await visit(rel === '.' ? name : `${rel}/${name}`);
   };
   await visit(path);
@@ -234,9 +256,12 @@ async function startFiles(
   root: string,
   kind: Workspace['kind'],
   writable: readonly string[],
+  light: boolean,
 ): Promise<string[]> {
   if (kind === 'folder')
-    return (await Promise.all(writable.map((path) => walk(root, path)))).flat();
+    return (
+      await Promise.all(writable.map((path) => walk(root, path, light)))
+    ).flat();
   const changed = await list(root, [
     'status',
     '--porcelain=v1',
@@ -250,7 +275,26 @@ async function startFiles(
     throw new WorkspaceError(
       `The writable paths have more than ${limits.files} uncommitted changes.`,
     );
-  return changed.map((entry) => entry.slice(3));
+  const paths = changed.map((entry) => entry.slice(3));
+  if (!light) return paths;
+  // New files above the size limit stay in the project folder. A deletion or a changed tracked file is copied.
+  const kept: string[] = [];
+  let bytes = 0;
+  for (const [index, path] of paths.entries()) {
+    const stats = await lstat(join(root, path)).catch(() => null);
+    const size = stats?.isFile() ? stats.size : 0;
+    const tracked = !changed[index]?.startsWith('??');
+    if (
+      !tracked &&
+      (leftOut(path) ||
+        size > limits.lightFileBytes ||
+        bytes + size > limits.lightBytes)
+    )
+      continue;
+    bytes += size;
+    kept.push(path);
+  }
+  return kept;
 }
 
 /** Environments and caches that tools make as a side effect. A version leaves them out, even inside writable paths. */
@@ -480,6 +524,11 @@ export async function allocate(
       readonly path: string;
       readonly copy: string;
     }[];
+    /**
+     * A lab direction's folder: new files above 1 MB, tool folders, and
+     * anything after 50 MB stay in the project folder instead of being copied.
+     */
+    readonly light?: boolean;
   },
 ): Promise<Workspace> {
   if (!/^[a-z0-9][a-z0-9-]{0,80}$/.test(options.name))
@@ -495,7 +544,12 @@ export async function allocate(
   const kind = (await gitProject(root)) ? 'git' : 'folder';
   for (const writable of options.writable)
     await contained(root, join(root, writable));
-  const copies = await startFiles(root, kind, options.writable);
+  const copies = await startFiles(
+    root,
+    kind,
+    options.writable,
+    options.light ?? false,
+  );
   let branch: string | null = null;
   if (kind === 'git') {
     branch = `verifold/${options.name}`;
@@ -669,6 +723,67 @@ export function readAt(
   path: string,
 ): Promise<Buffer | null> {
   return fileAt(join(root, workspace.path), commit, path);
+}
+
+/**
+ * A fingerprint of a lab direction's folder: its commit, plus the path, size,
+ * and change time of each file that is not committed, ignored files too. A
+ * turn that writes only ignored output still changes it.
+ */
+export async function folderState(
+  root: string,
+  workspace: Workspace,
+): Promise<string> {
+  const target = join(root, workspace.path);
+  const hash = createHash('sha256').update(await head(target));
+  const entries = (
+    await list(target, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--no-renames',
+      '--untracked-files=all',
+      '--ignored=traditional',
+      '--',
+      '.',
+      ...caches,
+    ])
+  ).slice(0, limits.files);
+  for (const entry of entries) {
+    const stats = await lstat(join(target, entry.slice(3))).catch(() => null);
+    hash.update(`${entry}\0${stats?.size ?? -1}\0${stats?.mtimeMs ?? -1}\0`);
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * A file as it is now in a workspace folder, read up to `bytes`, or null when
+ * it is not a regular file inside the folder. A symbolic link, or a path that
+ * leads outside the folder, reads as null.
+ */
+export async function readWorking(
+  root: string,
+  workspace: Workspace,
+  path: string,
+  bytes: number,
+): Promise<{ readonly content: Buffer; readonly size: number } | null> {
+  const folder = await realpath(join(root, workspace.path)).catch(() => null);
+  if (!folder) return null;
+  const file = join(folder, path);
+  const stats = await lstat(file).catch(() => null);
+  if (!stats?.isFile()) return null;
+  const real = await realpath(file).catch(() => null);
+  const rel = real ? relative(folder, real) : '..';
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  const handle = await open(real ?? file, 'r').catch(() => null);
+  if (!handle) return null;
+  try {
+    const content = Buffer.alloc(Math.min(stats.size, bytes));
+    const { bytesRead } = await handle.read(content, 0, content.length, 0);
+    return { content: content.subarray(0, bytesRead), size: stats.size };
+  } finally {
+    await handle.close();
+  }
 }
 
 /** The content of a file at a commit, or null when it does not exist there. */
