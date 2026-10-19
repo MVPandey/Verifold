@@ -15,14 +15,23 @@ import { changeWorkspace } from './storage.ts';
 /**
  * Start over and restore. A run is the record of one pass through the
  * question: its research attempts, tasks and their versions, messages, the
- * coordinator, the results, and the session records. Start over moves these
+ * coordinator, the lab and its board, the results, and the session records. Start over moves these
  * into `.verifold/archive/<id>/` and keeps the question, the brief, the
  * settings, the compute records, and the project files. Nothing is deleted.
  * The caller makes sure that nothing runs.
  */
 
 /** The parts of `.verifold/` that belong to a run. Results files are matched by name. */
-const parts = ['runs', 'tasks', 'messages', 'coordinator', 'sessions'];
+const parts = [
+  'runs',
+  'tasks',
+  'messages',
+  'coordinator',
+  'sessions',
+  'lab.json',
+  'lab',
+  'board',
+];
 
 function isResults(name: string): boolean {
   return /^results(-[a-z0-9-]{1,80})?\.json$/.test(name);

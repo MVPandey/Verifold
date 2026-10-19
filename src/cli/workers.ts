@@ -125,6 +125,26 @@ export class SessionPool {
     await slot.resumeTask(id, input);
   }
 
+  /** Start a lab agent's session in a free slot. Returns its ID. */
+  startAgent(
+    input: Parameters<SessionManager['startAgent']>[0],
+  ): Promise<string> {
+    return this.free().startAgent(input);
+  }
+
+  /** Continue a lab agent's paused session in a free slot, with its tools. */
+  async resumeAgent(id: string, tools: AgentTools): Promise<void> {
+    await this.free().resume(id, tools);
+  }
+
+  /**
+   * Pause a live session and free its slot. Its native session stays, so it
+   * can resume later. Returns false when its record could not be saved.
+   */
+  park(id: string): Promise<boolean> {
+    return this.slot(id)?.close() ?? Promise.resolve(true);
+  }
+
   async restart(id: unknown): Promise<void> {
     await this.free().restart(id);
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
