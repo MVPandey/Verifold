@@ -356,9 +356,10 @@ function renderResearch(
   attempt: string | undefined,
 ): string {
   if (!view?.step) return '';
-  const now = researchNow(view.events);
+  // A stopped agent has no current step, so its last one shows as past.
+  const now = view.running ? researchNow(view.events) : '';
   return `<section class="card research-live" aria-labelledby="research-live-title"><div class="section-title"><h2 id="research-live-title">Research agent</h2><span class="status ${view.running ? 'active' : 'muted'}">${view.running ? 'Running' : 'Not running'}</span></div>
-  <p class="research-step">${e(view.step)}${view.running && view.startedAt ? `, for ${e(elapsed(view.startedAt))}` : ''}</p>
+  <p class="research-step">${view.running ? `${e(view.step)}${view.startedAt ? `, for ${e(elapsed(view.startedAt))}` : ''}` : `Last step: ${e(view.step)}`}</p>
   ${detailSwitch}
   ${now ? `<p class="research-summary summary-only">Now: ${e(now)}.</p>` : ''}
   ${attempt ? `${transcriptSlot(`attempt:${attempt}`, 'Research transcript')}${transcriptNote}` : ''}
@@ -531,14 +532,14 @@ function workerPanel(
     .map((request) => requestItem(record, request, tasks))
     .join('')}
   ${paneSwitch}
-  <ol class="session-events pane-summary">${record.events
+  <div class="session-events pane-summary"><ol>${record.events
     .slice(-60)
     .map((event, index, shown) => {
       // The position in the whole record stays the same as events arrive, so an open one stays open.
       const id = `event-${record.id}-${record.events.length - shown.length + index}`;
       return `<li class="event event-${e(event.kind)}"><span class="event-kind">${e(eventLabels[event.kind])}</span><div class="event-text">${event.kind === 'agent' ? moreMd(id, event.text, 200) : more(id, event.text, 200)}</div><time datetime="${e(event.at)}">${e(clock(event.at))}</time></li>`;
     })
-    .join('')}</ol>
+    .join('')}</ol></div>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
   <div class="pane-terminal">${renderTerminal(view, live)}</div>
   <div class="pane-commands">${record.commands.length ? auditTable([view], tasks, false) : '<p class="empty-note">This agent has run no commands yet.</p>'}</div>
@@ -651,7 +652,7 @@ function reviewDecision(
   version: TaskVersion,
   canChange: boolean,
   stale: string | undefined,
-  reviewer: boolean,
+  why: string,
 ): string {
   const selectable = stale
     ? []
@@ -663,7 +664,7 @@ function reviewDecision(
   ${stale ? `<p class="notice">${e(stale)}</p>` : ''}
   ${version.conflicts?.length ? `<p class="notice">These files changed in your project after the task started, so Verifold copied nothing: ${e(version.conflicts.join(', '))}. Ask for changes, or reject the version.</p>` : ''}
   ${version.skipped.length ? `<p class="notice">These files are larger than 50 MB and are not in the version: ${e(version.skipped.join(', '))}.</p>` : ''}
-  ${reviewer ? '<p class="fine">The coordinator reviews this version. You can decide first.</p>' : ''}
+  <p class="fine">${e(why)}</p>
   ${version.reply ? `<div class="agent-says"><p class="msg-meta"><strong>The agent says</strong></p>${inFullMd(`reply-${task.id}-${version.number}`, version.reply)}</div>` : '<p class="empty-note">The agent ended its turn without a reply.</p>'}
   ${version.files.length ? '' : '<p class="empty-note">This version changed no files.</p>'}
   <div class="actions"><button type="button" class="primary" data-action="task-accept" data-task="${e(task.id)}" data-version="${version.number}"${selectable.length ? '' : ' disabled'}>Accept ${selectable.length} ${selectable.length === 1 ? 'file' : 'files'}</button><button type="button" data-message-to="${e(task.id)}"${canChange ? '' : ' disabled aria-describedby="task-changes-off"'}>Ask for changes</button><button type="button" data-action="task-reject" data-task="${e(task.id)}" data-version="${version.number}" data-confirm="Click again to reject version ${version.number}">Reject</button></div>
@@ -1023,8 +1024,92 @@ function judgementForm(entry: CheckResult): string {
   return `<label class="field" for="rule-${entry.check}">Your ruling and its reason</label><input id="rule-${entry.check}" type="text" maxlength="2000"><div class="actions">${button('passed', 'It passed')}${button('partial', 'It partly passed')}${button('failed', 'It failed')}</div><p class="fine">Your ruling is final. The coordinator gets it when it next wakes up.</p>`;
 }
 
+/**
+ * A notice for each open objection that a check result rests on: the objection
+ * is about a task whose accepted files, or the files of a task that waits for
+ * it, are evidence for the check.
+ */
+function disputeNotes(
+  entry: CheckResult,
+  tasks: readonly TaskRecord[],
+  messages: readonly Message[],
+): string {
+  return messages
+    .filter((message) => {
+      if (
+        message.kind !== 'objection' ||
+        message.status !== 'open' ||
+        !message.about
+      )
+        return false;
+      const reach = new Set([message.about.task]);
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const task of tasks)
+          if (
+            !reach.has(task.id) &&
+            task.assignment.dependencies.some((id) => reach.has(id))
+          ) {
+            reach.add(task.id);
+            grew = true;
+          }
+      }
+      return tasks.some(
+        (task) =>
+          reach.has(task.id) &&
+          task.artifacts?.some((artifact) =>
+            artifact.files.some((file) => entry.evidence.includes(file.path)),
+          ),
+      );
+    })
+    .map(
+      (message) =>
+        `<p class="notice">An objection to ${e(sender(message.about?.task ?? '', tasks))} is open, and this result uses its files: ${e(lead(message.text, 160))}</p>`,
+    )
+    .join('');
+}
+
 /** How long a version waits for an idle coordinator before it is the person's to review. */
 const reviewWaitMs = 30 * 60_000;
+
+/**
+ * Who decides on the latest version of a task in review. Every view uses this
+ * one rule, so no two views disagree. A coordinator that works, has events
+ * queued, or waits out its hourly limit reviews the version. An idle
+ * coordinator with nothing queued reviews it only when something else wakes
+ * it, so after 30 minutes the version goes to the person.
+ */
+function reviewOf(
+  task: TaskRecord,
+  coordinator: CoordinatorView | null | undefined,
+): { version: TaskVersion; yours: boolean; why: string } | null {
+  const version = task.attempts.at(-1)?.versions.at(-1);
+  if (task.state !== 'review' || !version || version.decision) return null;
+  if (!coordinator?.state || coordinator.state.stoppedAt)
+    return {
+      version,
+      yours: true,
+      why: 'No coordinator runs, so you review it.',
+    };
+  const idle =
+    coordinator.session?.record.status === 'idle' &&
+    !coordinator.waiting &&
+    !coordinator.limitedUntil;
+  const due = Date.parse(version.at) + reviewWaitMs;
+  if (idle && Date.now() >= due)
+    return {
+      version,
+      yours: true,
+      why: 'The coordinator has not reviewed it in 30 minutes, and nothing wakes it now. You can decide.',
+    };
+  return {
+    version,
+    yours: false,
+    why: idle
+      ? `The coordinator reviews it when something wakes it. If it has not decided by ${clock(new Date(due).toISOString())}, the version comes to you. You can decide first.`
+      : 'The coordinator reviews this version. You can decide first.',
+  };
+}
 
 /** A decision that only the person can make. Its key stays the same while it waits, so the page notifies once. */
 interface Need {
@@ -1120,19 +1205,6 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         ? '<div class="actions"><button type="button" class="primary" data-view="research" data-focus="plan-card-title">Read the plan</button></div>'
         : '<div class="actions"><button type="button" class="primary" data-panel="coordinator" data-focus="plan-title">Read the plan</button></div>',
     });
-  for (const task of tasks.filter(isDraft))
-    items.push({
-      key: `draft:${task.id}:${task.revision}`,
-      view: 'tasks',
-      task: task.id,
-      kind: 'Draft task',
-      title: task.assignment.title,
-      why: task.assignment.extra
-        ? 'An add-on from research. It starts when you start it.'
-        : 'You asked the coordinator for new work. It starts when you start it.',
-      since: task.updatedAt,
-      body: `<ul class="drafts">${draftCard(task)}</ul>`,
-    });
   const workers = live.workers ?? (live.session ? [live.session] : []);
   for (const worker of workers)
     for (const request of worker.record.requests.slice(0, 10))
@@ -1197,7 +1269,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         title: `Check ${entry.check}: ${entry.question ?? 'needs your judgement'}`,
         why: 'The evidence does not decide it. You do.',
         since: entry.at,
-        body: `<p class="fine">${e(idea?.gates[entry.check - 1] ?? '')}</p><p><span class="tag reading">The coordinator says</span> ${e(entry.value)}</p>${judgementForm(entry)}`,
+        body: `<p class="fine">${e(idea?.gates[entry.check - 1] ?? '')}</p><p><span class="tag reading">The coordinator says</span> ${e(entry.value)}</p>${disputeNotes(entry, tasks, messages)}${judgementForm(entry)}`,
       });
   if (results?.answer && !results.answer.decision)
     items.push({
@@ -1209,33 +1281,19 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       since: results.answer.at,
       body: '<div class="actions"><button type="button" class="primary" data-view="results">Read the answer</button></div>',
     });
-  // An idle coordinator with nothing queued does not review a version by itself. After a while, the person can.
-  const idle =
-    coordinated &&
-    status === 'idle' &&
-    !coordinator?.waiting &&
-    !coordinator?.limitedUntil;
   for (const task of tasks) {
     const attempt = task.attempts.at(-1);
-    const version = attempt?.versions.at(-1);
+    const review = reviewOf(task, coordinator);
     const open = `<div class="actions"><button type="button" class="primary" data-task-select="${e(task.id)}">Open the task</button></div>`;
-    if (
-      task.state === 'review' &&
-      version &&
-      !version.decision &&
-      (!coordinated ||
-        (idle && Date.now() - Date.parse(version.at) >= reviewWaitMs))
-    )
+    if (review?.yours)
       items.push({
-        key: `review:${task.id}:${attempt?.number ?? 0}:${version.number}`,
+        key: `review:${task.id}:${attempt?.number ?? 0}:${review.version.number}`,
         view: 'tasks',
         task: task.id,
         kind: 'Review',
-        title: `Version ${version.number} of ${task.assignment.title} waits for your review`,
-        why: coordinated
-          ? 'The coordinator has not reviewed it in 30 minutes, and nothing wakes it now. You can decide.'
-          : 'No coordinator runs, so you review it.',
-        since: version.at,
+        title: `Version ${review.version.number} of ${task.assignment.title} waits for your review`,
+        why: review.why,
+        since: review.version.at,
         body: open,
       });
     else if (
@@ -1293,6 +1351,20 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,
         });
     }
+  // A draft is optional work, so the decisions that hold the team up come first.
+  for (const task of tasks.filter(isDraft))
+    items.push({
+      key: `draft:${task.id}:${task.revision}`,
+      view: 'tasks',
+      task: task.id,
+      kind: 'Draft task',
+      title: task.assignment.title,
+      why: task.assignment.extra
+        ? 'An add-on from research. It starts when you start it.'
+        : 'You asked the coordinator for new work. It starts when you start it.',
+      since: task.updatedAt,
+      body: `<ul class="drafts">${draftCard(task)}</ul>`,
+    });
   // A notice about a pod is news, not a decision, and a version that the idle coordinator left
   // is a sign of the stop, so the team can still be stopped beside them.
   if (
@@ -1566,6 +1638,15 @@ function coordinatorPanel(
   const planning =
     session?.status === 'running' || session?.status === 'starting';
   const waits = planWaits(view, tasks);
+  // An idle coordinator names the version that waits, with the same rule as the other views.
+  const pending = tasks.flatMap((task) => {
+    const review = reviewOf(task, view);
+    return review ? [{ title: task.assignment.title, ...review }] : [];
+  });
+  const left = pending.find((entry) => entry.yours) ?? pending[0];
+  const idle = left
+    ? `Idle. ${left.yours ? `Version ${left.version.number} of ${left.title} waits for your review.` : `It reviews version ${left.version.number} of ${left.title} when something wakes it.`}`
+    : 'Idle. Nothing new to review.';
   // What the coordinator does or waits for comes first. A pause or the hourly limit has its own notice.
   const now =
     paused || view.limitedUntil
@@ -1574,7 +1655,7 @@ function coordinatorPanel(
         ? 'It works now.'
         : view.waiting
           ? `${view.waiting} ${view.waiting === 1 ? 'change waits' : 'changes wait'} for its next turn.`
-          : 'Idle. Nothing new to review.';
+          : idle;
   const plan = state.planApproved
     ? ''
     : `<div class="subcard${waits ? ' needs' : ''}" role="region" aria-labelledby="plan-title"><h3 id="plan-title" tabindex="-1">${waits ? 'The plan waits for you' : planned.length ? 'The coordinator drafts the plan' : 'No plan yet'}</h3><p>No task starts before you start the work. To change the plan, write to the coordinator, or edit a task in Work.</p>${planned.length ? `<ul>${planned.map((task) => `<li><strong>${e(task.assignment.title)}</strong>: ${e(lead(task.assignment.objective, 200))}${task.assignment.dependencies.length ? ` (waits for ${e(task.assignment.dependencies.map((id) => sender(id, tasks)).join(', '))})` : ''}</li>`).join('')}</ul>` : '<p class="empty-note">The coordinator has not created tasks yet.</p>'}<div class="actions"><button type="button" class="primary" data-action="coordinator-approve"${waits ? '' : ' disabled'}>Start the work</button>${planning ? '<p class="fine">The coordinator still drafts the plan.</p>' : ''}</div></div>`;
@@ -1755,7 +1836,7 @@ function renderTaskPage(
   let first = '';
   switch (task.state) {
     case 'open':
-      first = `<section class="card decision"><h2>${isDraft(task) ? 'The coordinator drafted this task for you' : waiting.length ? 'The task waits' : team && !team.stoppedAt ? 'Not started' : 'Ready to start'}</h2>${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : !isDraft(task) && team && !team.stoppedAt ? '<p class="fine">The coordinator starts it when it is ready. You can start it now yourself.</p>' : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}">Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button>${isDraft(task) ? `<button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button>` : ''}${cancel}</div></section>`;
+      first = `<section class="card decision"><h2>${isDraft(task) ? 'The coordinator drafted this task for you' : waiting.length ? 'The task waits' : team && !team.stoppedAt ? 'Not started' : 'Ready to start'}</h2>${blocked ? `<p class="notice" id="task-blocked">${e(blocked)}</p>` : !isDraft(task) && team && !team.stoppedAt ? '<p class="fine">The coordinator starts it when it is ready. You can start it now yourself.</p>' : ''}${moveTo ? `<div class="actions"><button type="button" class="primary" data-action="task-switch-host" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Run it on ${e(hostName(moveTo))}</button></div><p class="fine">Its start on ${e(hostName(assignment.host))} failed. The other harness of the team can run it.</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="task-start" data-task="${e(task.id)}"${blocked ? ' disabled aria-describedby="task-blocked"' : ''}>Start task</button>${isDraft(task) ? `<button type="button" data-message-to="coordinator" data-about="${e(assignment.title)}">Change it</button>` : ''}${cancel}</div></section>`;
       break;
     case 'claimed':
       first =
@@ -1781,7 +1862,7 @@ function renderTaskPage(
                   !!view.resumable?.includes(attempt.session)),
               used &&
                 `${used} It cannot be accepted. Reject it and start the task again, so it uses the new files.`,
-              !!team && !team.stoppedAt,
+              reviewOf(task, live.coordinator)?.why ?? '',
             )}${reviewFiles(task, version, used)}`
           : `<section class="card decision"><p class="notice">${e(attempt?.note ?? 'No version is ready.')}</p><div class="actions">${cancel}</div></section>`;
       break;
@@ -1974,8 +2055,9 @@ function lastStep(
 function taskTurn(
   task: TaskRecord,
   all: readonly TaskRecord[],
-  coordinated: boolean,
+  coordinator: CoordinatorView | null | undefined,
 ): [string, boolean] {
+  const coordinated = !!coordinator?.state && !coordinator.state.stoppedAt;
   const waiting = task.assignment.dependencies.filter(
     (id) => all.find((entry) => entry.id === id)?.state !== 'done',
   );
@@ -1994,10 +2076,12 @@ function taskTurn(
       return ['Starting', false];
     case 'running':
       return ['Working', false];
-    case 'review':
-      return coordinated
+    case 'review': {
+      const review = reviewOf(task, coordinator);
+      return (review ? !review.yours : coordinated)
         ? ['The coordinator reviews it', false]
         : ['Waits for your review', true];
+    }
     case 'done':
       return ['Done', false];
     case 'cancelled':
@@ -2026,7 +2110,6 @@ function renderMap(
     ? view.list.filter((task) => !finished(task))
     : view.list;
   const state = live.coordinator?.state;
-  const coordinated = !!state && !state.stoppedAt;
   const depth = new Map<string, number>();
   const measure = (task: TaskRecord, seen: ReadonlySet<string>): number => {
     const known = depth.get(task.id);
@@ -2048,7 +2131,7 @@ function renderMap(
   for (const task of tasks) measure(task, new Set());
   const columns = Math.max(1, ...depth.values());
   const box = (task: TaskRecord): string => {
-    const [turn, yours] = taskTurn(task, tasks, coordinated);
+    const [turn, yours] = taskTurn(task, tasks, live.coordinator);
     const attempt = task.attempts.at(-1);
     const version = attempt?.versions.at(-1);
     const time =
@@ -2094,8 +2177,6 @@ function renderMap(
  */
 function renderNowStrip(view: TaskView, live: DeskSession): string {
   const workers = live.workers ?? (live.session ? [live.session] : []);
-  const state = live.coordinator?.state;
-  const coordinated = !!state && !state.stoppedAt;
   const order = { running: 0, claimed: 0, review: 1 } as const;
   const rows = view.list
     .filter(
@@ -2110,7 +2191,7 @@ function renderNowStrip(view: TaskView, live: DeskSession): string {
     const attempt = task.attempts.at(-1);
     const version = attempt?.versions.at(-1);
     const step = lastStep(task, workers);
-    const [turn, yours] = taskTurn(task, view.list, coordinated);
+    const [turn, yours] = taskTurn(task, view.list, live.coordinator);
     const busy = task.state !== 'review';
     // A quiet agent keeps its latest step, with the time since it.
     const quiet =
@@ -2292,7 +2373,7 @@ function renderResultsView(workspace: Workspace, live: DeskSession): string {
         /^([^:\n]{1,60}):\s*([\s\S]*)$/.exec(gate) ?? [];
       return `<li class="check-row" data-result="${outcome ?? 'none'}"><span class="check-num">${index + 1}</span><div class="check-body">${name ? `<p class="check-name">${e(name)}</p>` : ''}<div class="check-text">${more(`check-text-${index + 1}`, rule, 200)}</div>${
         entry
-          ? `<p class="check-value"><span class="tag reading">The coordinator says</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p><div class="why"><span class="tag reading">The coordinator's reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
+          ? `<p class="check-value"><span class="tag reading">The coordinator says</span> ${e(entry.value)}</p><p class="fine">Evidence: ${entry.evidence.map((path) => `<code>${e(path)}</code>`).join(' ')}</p>${disputeNotes(entry, live.tasks?.list ?? [], live.tasks?.messages ?? [])}<div class="why"><span class="tag reading">The coordinator's reason</span>${more(`check-reason-${index + 1}`, entry.reason, 120)}</div>${entry.ruling ? `<p class="ruling">You ruled: ${e(outcomeLabels[entry.ruling.result].toLowerCase())}. ${e(entry.ruling.reason)}</p>` : entry.result === 'judgement' ? `<p class="ruling-question"><strong>${e(entry.question ?? 'It needs your judgement.')}</strong></p>${judgementForm(entry)}` : ''}`
           : ''
       }</div><span class="check-result">${outcome ? e(outcomeLabels[outcome]) : 'Not reported yet'}</span></li>`;
     })
@@ -2493,7 +2574,7 @@ function renderRuns(
   tasks: readonly TaskRecord[],
 ): string {
   return `<section class="card" aria-labelledby="runs-title"><div class="section-title"><h2 id="runs-title">Runs</h2><span class="count">${archives.length} archived</span></div>
-  <div class="run-now"><p><strong>This run</strong> <span class="fine">${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}</span></p><p class="fine">Start over archives this run and starts research again from the same question. Nothing is deleted.</p><details id="run-parts"><summary>What moves and what stays</summary><p class="fine">The tasks and their versions, the messages, the coordinator and its log, the results, the research attempts, and the session records move to the archive. The question, the brief, your settings, the memory, and the files that you accepted into the project stay.</p></details><div class="actions"><button type="button" data-action="start-over" data-confirm="Click again to archive this run and start over">Start over</button><button type="button" data-action="stop" data-confirm="Click again to stop the agents and pods">Stop the team</button></div></div>
+  <div class="run-now"><p><strong>This run</strong> <span class="fine">${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}</span></p><p class="fine">Start over archives this run and starts research again from the same question. Nothing is deleted.</p><details id="run-parts"><summary>What moves and what stays</summary><p class="fine">The tasks and their versions, the messages, the coordinator and its log, the results, the research attempts, and the session records move to the archive. The question, the brief, your settings, the memory, and the files that you accepted into the project stay.</p></details><div class="actions"><button type="button" data-action="start-over" data-confirm="Click again to archive this run and start over">Start over</button></div></div>
   ${archives.length ? `<ul class="archives">${archives.map((run) => `<li><span><strong>${e(time(run.at))}</strong>${run.direction ? ` ${e(run.direction)}` : ''} <span class="fine">${run.tasks} ${run.tasks === 1 ? 'task' : 'tasks'}, ${e(bytes(run.bytes))}</span></span><button type="button" data-action="restore" data-archive="${e(run.id)}" data-confirm="Click again to restore this run">Restore</button></li>`).join('')}</ul><p class="fine">Restore brings an archived run back. The current run moves to the archive first, so nothing is lost.</p>` : ''}</section>`;
 }
 
@@ -2734,7 +2815,7 @@ export const terminalPage = `<!doctype html><html lang="en"><head><meta charset=
  * The desk shell. The page fills #content with the rail, one view, and the
  * panel, and keeps the top bar.
  */
-export const deskPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Verifold</title><link rel="icon" href="/symbol.webp"><link rel="stylesheet" href="/desk.css"><script type="module" src="/desk-client.js"></script></head><body><a class="skip" href="#view">Skip to the main view</a><header class="topbar"><button id="menu" class="icon-button menu-button" type="button" aria-label="Show the views and the team" aria-expanded="false">☰</button><a class="brand" href="/" aria-label="Verifold research desk"><img src="/symbol.webp" alt="" width="26" height="26"><span>verifold</span></a><div class="project"><strong id="project-title">Research desk</strong><span class="stage" id="stage" hidden></span></div><span class="spacer"></span><span id="action-status" role="status"></span><span id="observation"></span><span id="connection" role="status">Connecting…</span><button id="needs" class="needs-button" type="button" data-view="needs" hidden><span class="needs-label">Needs you</span><span class="count" id="needs-count">0</span></button><button id="theme" class="icon-button" type="button" aria-label="Switch the color theme" title="Switch the color theme">◐</button></header><div class="connection-note" id="connection-note" hidden><span id="connection-message"></span><button id="retry" type="button">Refresh</button></div><div id="content" class="frame"><main id="view" class="solo" tabindex="-1"><div class="empty"><h1>Opening your research desk</h1><p>Reading the selected project. This does not start research.</p></div></main></div></body></html>`;
+export const deskPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Verifold</title><link rel="icon" href="/symbol.webp"><link rel="stylesheet" href="/desk.css"><script type="module" src="/desk-client.js"></script></head><body><a class="skip" href="#view">Skip to the main view</a><header class="topbar"><button id="menu" class="icon-button menu-button" type="button" aria-label="Show the views and the team" aria-expanded="false">☰</button><a class="brand" href="/" aria-label="Verifold research desk"><img src="/symbol.webp" alt="" width="26" height="26"><span>verifold</span></a><div class="project"><strong id="project-title">Research desk</strong><span class="stage" id="stage" hidden></span></div><span class="spacer"></span><span id="action-status" role="status"></span><span id="observation"></span><span id="connection" role="status">Connecting…</span><button id="needs" class="needs-button" type="button" data-view="needs" hidden><span class="needs-label">Needs you</span><span class="count" id="needs-count">0</span></button><button id="stop-team" class="stop-button" type="button" data-action="stop" data-confirm="Click again to stop the agents and pods" hidden>Stop the team</button><button id="theme" class="icon-button" type="button" aria-label="Switch the color theme" title="Switch the color theme">◐</button></header><div class="connection-note" id="connection-note" hidden><span id="connection-message"></span><button id="retry" type="button">Refresh</button></div><div id="content" class="frame"><main id="view" class="solo" tabindex="-1"><div class="empty"><h1>Opening your research desk</h1><p>Reading the selected project. This does not start research.</p></div></main></div></body></html>`;
 
 /** The stages of a project, from the question to the answer. Home draws them as an arc. */
 const stageNames = ['Ask', 'Plan', 'Work', 'Answer'] as const;
@@ -3235,6 +3316,8 @@ export function renderDesk(
   needs: { key: string; title: string }[];
   /** The tab icon shows the part of the planned tasks that is done. */
   work: { done: number; total: number } | null;
+  /** A project owner runs the team, so the top bar offers Stop the team. */
+  stoppable: boolean;
 } {
   const { workspace, attempts } = snapshot;
   const active = attempts.filter((attempt) => attempt.activity === 'recent');
@@ -3334,6 +3417,7 @@ export function renderDesk(
     stage: stageText(at),
     needs: needs.map(({ key, title }) => ({ key, title })),
     work: at.work ?? null,
+    stoppable: live.archives !== undefined,
   };
 }
 
