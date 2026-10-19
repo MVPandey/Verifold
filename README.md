@@ -52,7 +52,7 @@ You can close the terminal. Run `verifold` in the folder to come back, or `verif
 
 Verifold is in early development. The [guide](docs/guide.md) describes everything that works in this checkout. Limits to know first:
 
-- At most two agents run tasks or sessions at the same time. Research and the coordinator do not count.
+- Three agents run tasks or sessions at the same time unless you change "Agents at once" in Compute (1 to 8). Research and the coordinator do not count.
 - Verifold needs a terminal and Node. There is no desktop app yet.
 - The desk is a local web page on this computer. Other devices cannot open it.
 - Your harness sends what it reads to its model provider. Verifold keeps its records in your project folder and publishes nothing.

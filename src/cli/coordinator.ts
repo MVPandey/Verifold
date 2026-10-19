@@ -29,7 +29,8 @@ import { ResultsStore, type Results } from './results.ts';
 import type { Compute } from './compute.ts';
 import { spent, usd } from './leases.ts';
 import { loadWorkspace } from './storage.ts';
-import { workerLimit } from './workers.ts';
+import { defaultAgents } from './workers.ts';
+import type { LimitSignal } from './quota.ts';
 import { scratch } from './workspaces.ts';
 
 /**
@@ -96,8 +97,10 @@ export interface CoordinatorView {
   readonly session: SessionView | null;
   /** Events that wait for the next wakeup. */
   readonly waiting: number;
-  /** The wakeup limit holds events until this time. */
+  /** The wakeup limit or the harness's usage window holds events until this time. */
   readonly limitedUntil: string | null;
+  /** What holds the events: the hourly turns, or the usage window of the coordinator's harness. */
+  readonly limitedBy?: 'turns' | 'usage' | null;
 }
 
 function fail(message: string): never {
@@ -169,6 +172,12 @@ export class Coordinator {
   private readonly onChange: (() => void) | undefined;
   /** The current turn carries a message from the person. New tasks of this turn wait for the person. */
   private answering = false;
+  /** The usage windows of the harness accounts. The coordinator does not wake into a used-up one. */
+  private readonly quota:
+    | { parked(host: HarnessName): string | null }
+    | undefined;
+  /** "Agents at once" of the project. */
+  private readonly agents: () => number;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -184,8 +193,12 @@ export class Coordinator {
         digest(): Promise<string>;
       };
       readonly onChange?: () => void;
+      readonly quota?: { parked(host: HarnessName): string | null };
+      readonly agents?: () => number;
     },
   ) {
+    this.quota = options.quota;
+    this.agents = options.agents ?? (() => defaultAgents);
     this.memory = options.memory;
     this.onChange = options.onChange;
     this.root = root;
@@ -202,12 +215,13 @@ export class Coordinator {
         ready: (state) =>
           state.session !== null &&
           this.sessions.idleSession() === state.session,
+        parked: (state) => this.quota?.parked(state.host) ?? null,
         send: (events, left) => {
           this.answering = events.some(
             (event) => event.kind === 'person' && event.message !== undefined,
           );
           this.sessions.continueTask(
-            `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${events.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${left ? `\n- ${left} more events follow in the next digest.` : ''}${events.some((event) => event.again) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
+            `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${events.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${left ? `\n- ${left} more events follow in the next digest.` : ''}${events.some((event) => event.again === true) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}${events.some((event) => event.again === 'limit') ? '\n\nEvents marked "again" were in your last digest too, but your harness\'s usage window ran out in that turn. Act on them now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
           );
         },
         sent: (events) =>
@@ -265,6 +279,8 @@ export class Coordinator {
   view(): CoordinatorView | null {
     const state = this.state;
     if (!state) return null;
+    // A used-up window holds the coordinator even when no event waits yet.
+    const parked = state.stoppedAt ? null : this.quota?.parked(state.host);
     return {
       state,
       session: state.session
@@ -274,7 +290,8 @@ export class Coordinator {
             : null))
         : null,
       waiting: state.events.filter((event) => event.seq > state.cursor).length,
-      limitedUntil: this.loop.limitedUntil,
+      limitedUntil: parked ?? this.loop.limitedUntil,
+      limitedBy: parked ? 'usage' : this.loop.limitedUntil ? 'turns' : null,
       results: this.results.current(),
     };
   }
@@ -335,6 +352,8 @@ export class Coordinator {
         actions: [],
       });
       let session: string;
+      // The first turn carries no events, but it can still run into a used-up usage window.
+      this.loop.started();
       try {
         session = await this.sessions.startCoordinator({
           host,
@@ -344,7 +363,7 @@ export class Coordinator {
 Objective:
 ${objective}
 ${input.context ? `\n${input.context}\n` : ''}${memoryText(await this.memory?.digest())}
-${helper ? `The team: ${hostName(host)} leads: it runs research and you. ${hostName(helper)} helps. Give each task the harness that fits it, and say why in hostReason. When a check compares two results, run the second one on the other harness, so that a mistake of one model family cannot pass both. Tasks run on ${hostName(host)} when you name no harness${model ? `, with the model ${model}` : ''}.` : `Workers run on ${hostName(host)}${model ? `, with the model ${model}` : ''}.`} Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
+${helper ? `The team: ${hostName(host)} leads: it runs research and you. ${hostName(helper)} helps. Give each task the harness that fits it, and say why in hostReason. When a check compares two results, run the second one on the other harness, so that a mistake of one model family cannot pass both. Tasks run on ${hostName(host)} when you name no harness${model ? `, with the model ${model}` : ''}.` : `Workers run on ${hostName(host)}${model ? `, with the model ${model}` : ''}.`} Up to ${this.agents()} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
 ${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan for the person: what the tasks do, about how long the work takes, and why each task runs on its harness. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
           tools: this.tools(),
@@ -505,7 +524,14 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
    */
   turnEnded(record?: SessionRecord): void {
     this.answering = false;
-    this.loop.turnEnded();
+    // A first turn that ran into a used-up usage window did no work. It continues after the reset.
+    if (this.loop.turnEnded())
+      this.loop.add([
+        {
+          kind: 'restart',
+          text: "Your harness's usage window ran out in your last turn, so that turn did no work. Continue now: read verifold_state.",
+        },
+      ]);
     if (record)
       this.tasks
         .coordinatorTurnEnded(record.status === 'idle', lastReply(record))
@@ -518,6 +544,15 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       !state.planApproved
     )
       this.progress?.('The plan waits for you in the desk.');
+  }
+
+  /**
+   * The coordinator's own harness reported its usage window. A used-up window
+   * in a turn means that the turn did no work. The quota records the window
+   * for the account, so the next wakeup waits for the reset.
+   */
+  limited(signal: LimitSignal): void {
+    if (signal.exhausted) this.loop.usedUp();
   }
 
   /** Stop the wakeups and pause the session. Returns false when its record could not be saved. */
@@ -940,7 +975,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     const value = {
       objective: state.objective,
       limits: {
-        workers: workerLimit,
+        workers: this.agents(),
         running: all.filter((task) =>
           ['claimed', 'running'].includes(task.state),
         ).length,

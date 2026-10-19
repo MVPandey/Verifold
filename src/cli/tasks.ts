@@ -249,7 +249,7 @@ export type Actor = 'person' | 'coordinator';
 
 /** A change that the coordinator hears about: a version, a message for it, a failed start, or the person's action. */
 export interface TaskEvent {
-  /** `pod`: a GPU pod lease changed. `restart`: the coordinator resumed after Verifold restarted. */
+  /** `pod`: a GPU pod lease changed. `restart`: the coordinator resumed after Verifold restarted, or its first turn ran into a used-up usage window. */
   readonly kind:
     | 'version'
     | 'message'

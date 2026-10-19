@@ -13,6 +13,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { validateModel, type HarnessName } from './harness.ts';
 import { processStart, stopRecordedProcess } from './owner.ts';
 import { openTerminal, type Terminal } from './terminals.ts';
+import type { LimitSignal } from './quota.ts';
 import {
   startHostSession,
   strictClaudeEnvironment,
@@ -184,6 +185,8 @@ export interface SessionManagerOptions {
   ) => void;
   /** A turn ended, a resumed session became ready, or the harness process exited. */
   readonly onTurnEnd?: (record: SessionRecord) => void;
+  /** The harness reported its plan's usage window. The window belongs to the account, not to this session. */
+  readonly onLimit?: (host: HarnessName, signal: LimitSignal) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
   readonly requests?: { next: number };
 }
@@ -846,6 +849,8 @@ export class SessionManager {
     readonly writer: TranscriptWriter;
     readonly apply: (update: TranscriptUpdate) => void;
   } | null = null;
+  /** The harness said that its usage window is used up. The record says so once. */
+  private usedUp = false;
   /** Messages in the running turn that the harness has not taken yet, with their text and the caller's callback. */
   private steers = new Map<
     string,
@@ -1731,6 +1736,22 @@ export class SessionManager {
       case 'notice':
         this.event('notice', event.text);
         break;
+      case 'limit': {
+        const signal: LimitSignal = {
+          exhausted: event.exhausted,
+          resetsAt: event.resetsAt,
+          usedPercent: event.usedPercent,
+          window: event.window,
+        };
+        if (signal.exhausted && !this.usedUp)
+          this.event(
+            'status',
+            `${name} reports that its usage window is used up. Its turns fail until the window resets.`,
+          );
+        this.usedUp = signal.exhausted;
+        this.options.onLimit?.(record.host, signal);
+        break;
+      }
       case 'steered': {
         const steer = this.steers.get(event.id);
         if (!steer) break;

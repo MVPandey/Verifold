@@ -475,11 +475,15 @@ await test('the desk stores a key and limits through actions, and no reply holds
   const compute = new Compute(root, { store, url: api.url });
   await compute.load();
   const owner = new AbortController();
+  const pool = new SessionPool(root, {
+    clientVersion: 'test',
+    ownerId: 'owner-1',
+  });
   const desk = await startDesk(
     root,
     owner.signal,
     pathToFileURL(`${assets}/cli/`),
-    new SessionPool(root, { clientVersion: 'test', ownerId: 'owner-1' }),
+    pool,
     undefined,
     undefined,
     undefined,
@@ -559,6 +563,34 @@ await test('the desk stores a key and limits through actions, and no reply holds
   );
   assert.equal((await post({ action: 'compute-key-remove' })).status, 200);
   assert.equal((await post({ action: 'compute-unknown' })).status, 400);
+  // "Agents at once" needs the token, takes 1 to 8, and holds for the next start.
+  const anonymous = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'compute-agents', agents: 4 }),
+  });
+  assert.equal(anonymous.status, 401);
+  for (const agents of [0, 9, 2.5, '4'])
+    assert.equal(
+      (await post({ action: 'compute-agents', agents })).status,
+      409,
+    );
+  assert.equal(pool.limit, 3);
+  assert.equal(
+    (await post({ action: 'compute-agents', agents: 4 })).status,
+    200,
+  );
+  assert.equal(pool.limit, 4);
+  const workspace = JSON.parse(
+    await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
+  ) as { agents: number };
+  assert.equal(workspace.agents, 4);
+  assert.match(
+    await (
+      await fetch(`${url.origin}/api/view?view=compute`, { headers })
+    ).text(),
+    /Up to 4 agents run tasks and sessions at the same time\./,
+  );
 });
 
 await test('verifold runpod key stores, shows, checks, and removes the key without printing it', async (t) => {
