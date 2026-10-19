@@ -48,6 +48,7 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
+import type { Lab } from './lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
@@ -66,6 +67,7 @@ export interface DeskServer {
     coordinator: Coordinator,
     compute: Compute,
     memory: ProjectMemory,
+    lab?: Lab,
   ): Promise<void>;
   /** The origin of the page server, the only other origin that the desk frames. */
   readonly pages: string;
@@ -320,6 +322,7 @@ async function changeRun(
   tasks: TaskManager,
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
+  labRun: Lab | undefined,
   restore?: unknown,
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
@@ -333,8 +336,15 @@ async function changeRun(
     throw new SessionActionError(
       'A task turn is running. Stop it first, or wait for its version.',
     );
-  if (sessions.views().some((view) => view.live && !view.record.task))
+  if (
+    sessions
+      .views()
+      .some((view) => view.live && !view.record.task && !view.record.agent)
+  )
     throw new SessionActionError('Your session is running. End it first.');
+  // The lab's agents pause with the run. A restored lab comes back paused.
+  const lab = labRun?.exists ?? false;
+  if (lab && !labRun?.paused) await labRun?.pause();
   const state = coordinator?.view()?.state;
   if (state && !state.stoppedAt) await coordinator?.stop();
   for (const task of list)
@@ -348,10 +358,17 @@ async function changeRun(
   else await restoreRun(root, restore);
   memory?.schedule();
   await coordinator?.reload();
+  await labRun?.reload();
   research?.clear();
   await sessions.forget();
   // A new run starts its research from the question. A restored run continues where it was.
-  if (restore === undefined && research && (await loadWorkspace(root)).research)
+  // After a lab, Home offers the lab again instead.
+  if (
+    restore === undefined &&
+    !lab &&
+    research &&
+    (await loadWorkspace(root)).research
+  )
     await research.start({});
 }
 
@@ -366,6 +383,7 @@ async function act(
   root: string,
   body: Record<string, unknown>,
   memory?: ProjectMemory,
+  lab?: Lab,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -417,9 +435,54 @@ async function act(
       tasks,
       coordinator,
       memory,
+      lab,
       body.action === 'restore' ? body.archive : undefined,
     );
     return 200;
+  }
+  if (typeof body.action === 'string' && body.action.startsWith('lab-')) {
+    if (!lab || !tasks) throw new SessionActionError('This desk runs no lab.');
+    switch (body.action) {
+      case 'lab-start':
+        // The lab and the coordinator's team do not share one run.
+        if (
+          (await tasks.list()).length ||
+          (coordinator?.view()?.state && !coordinator.view()?.state.stoppedAt)
+        )
+          throw new SessionActionError(
+            'The team already works on this project. Start over in Records first, then start the lab.',
+          );
+        await lab.start(body.question);
+        return 200;
+      case 'lab-post':
+        await lab.post({
+          text: body.text,
+          direction: body.direction,
+          replyTo: body.replyTo,
+        });
+        return 200;
+      case 'lab-direction-add':
+        await lab.addDirection({
+          title: body.title,
+          harness: body.harness,
+          bar: body.bar,
+        });
+        return 200;
+      case 'lab-direction-stop':
+        await lab.stopDirection(body.direction);
+        return 200;
+      case 'lab-agent-restart':
+        await lab.restartAgent(body.agent);
+        return 200;
+      case 'lab-pause':
+        await lab.pause();
+        return 200;
+      case 'lab-resume':
+        await lab.resume();
+        return 200;
+      default:
+        return 400;
+    }
   }
   // The message box: to research, the coordinator, a task agent, or a session that the person started.
   // The words can also start a new coordinator or a new agent.
@@ -593,6 +656,8 @@ export async function startDesk(
   memory?: ProjectMemory,
   options: {
     readonly stop?: () => void;
+    /** The lab of the project owner. */
+    readonly lab?: Lab;
     readonly reuse?:
       | {
           readonly port: number;
@@ -606,6 +671,7 @@ export async function startDesk(
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
   let project: string | null = root === null ? null : await realpath(root);
+  let lab = options.lab;
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -798,6 +864,7 @@ export async function startDesk(
             project ?? '',
             body,
             memory,
+            lab,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
@@ -1130,7 +1197,10 @@ export async function startDesk(
           /* Missing or unsafe reports remain unavailable. */
         }
       }
-      const workers = sessions?.views() ?? [];
+      // Lab agents belong to the lab view. The person reaches them on the board.
+      const workers = (sessions?.views() ?? []).filter(
+        (view) => !view.record.agent,
+      );
       // A version in review whose agent paused when Verifold stopped can still get changes.
       const resumable: string[] = [];
       for (const entry of taskList) {
@@ -1170,6 +1240,7 @@ export async function startDesk(
             ...(research ? { research: research.view() } : {}),
             ...(coordinator ? { coordinator: coordinator.view() } : {}),
             ...(compute ? { compute: compute.view() } : {}),
+            ...(lab ? { lab: lab.view() } : {}),
             ...(tasks ? { archives: await listArchives(root) } : {}),
             ...(tasks
               ? {
@@ -1241,7 +1312,16 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner, taskManager, lead, pods, notes) => {
+    attach: async (
+      next,
+      owner,
+      runner,
+      taskManager,
+      lead,
+      pods,
+      notes,
+      labOwner,
+    ) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
@@ -1250,6 +1330,7 @@ export async function startDesk(
       coordinator = lead;
       compute = pods;
       memory = notes;
+      lab = labOwner;
       project = resolved;
     },
     pages: pages.origin,

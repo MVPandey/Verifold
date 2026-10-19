@@ -1099,6 +1099,11 @@ await test('the session command needs a prompt and valid options', async () => {
       runCli(['status', '--mode', 'auto'], root, io),
       /--mode is not valid for status/,
     );
+    // --lab belongs to a bare verifold only.
+    await assert.rejects(
+      runCli(['status', '--lab'], root, io),
+      /--lab is not valid for status/,
+    );
     await assert.rejects(
       runCli(
         ['session', '--prompt', 'x', '--host', 'other', '--no-open'],

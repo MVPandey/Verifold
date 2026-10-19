@@ -3420,3 +3420,111 @@ body:not(:has(.rail)) .menu-button {
 .host-why {
   display: block;
 }
+
+/* ---------- The lab ---------- */
+/* One row for each direction: its verdict, title, agent, and state. */
+.lab-directions {
+  list-style: none;
+  padding: 0;
+}
+.lab-direction {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.lab-direction:first-child {
+  border-top: 0;
+}
+.lab-direction-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.lab-agent {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.verdict {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.verdict.leading {
+  color: var(--violet);
+}
+.verdict.holds-up {
+  color: var(--green);
+}
+.verdict.holds-up::before {
+  content: '✓ ';
+  content: '✓ ' / '';
+}
+.verdict.ruled-out::before {
+  content: '✕ ';
+  content: '✕ ' / '';
+}
+@media (max-width: 600px) {
+  .lab-direction {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .lab-direction .verdict,
+  .lab-direction-text {
+    grid-column: 1 / -1;
+  }
+}
+
+/* The board: threads by direction, each post one point with its proof. */
+.lab-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+.lab-thread > h3 {
+  font-size: 13px;
+  color: var(--muted);
+}
+.post {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.post > * + * {
+  margin-top: 6px;
+}
+.post.note {
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+.post .proof {
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.replies {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--tint-line);
+}
+.chip.claim,
+.chip.evidence,
+.chip.rerun {
+  border-color: var(--tint-line);
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+.chip.ruled-out {
+  color: var(--muted);
+}
+.lab-compose textarea {
+  min-height: 72px;
+}
