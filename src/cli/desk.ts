@@ -363,8 +363,12 @@ async function changeRun(
     throw error;
   }
   memory?.schedule();
-  await coordinator?.reload();
-  await labRun?.reload();
+  try {
+    await coordinator?.reload();
+  } finally {
+    // The records moved, so the lab reads them again even when the coordinator's reload fails.
+    await labRun?.reload();
+  }
   research?.clear();
   await sessions.forget();
   // A new run starts its research from the question. A restored run continues where it was.

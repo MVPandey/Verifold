@@ -5,7 +5,7 @@ import type { AgentTool } from './session-hosts.ts';
  * a change here raises `labToolsVersion`, and a Codex agent with an older
  * thread starts a new one.
  */
-export const labToolsVersion = 1;
+export const labToolsVersion = 2;
 
 /** The kinds of post that an agent can write. A rerun comes from a checker that Verifold starts. */
 export const agentPostKinds = [
@@ -94,7 +94,7 @@ export const labToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_read',
     description:
-      "Read a file in a direction's folder, yours or another agent's, at a commit. Without a commit, Verifold reads its newest snapshot. A binary file gives its size only.",
+      "Read a file in a direction's folder, yours or another agent's. Without a commit, Verifold reads the file as it is now, also when the project ignores it. With a commit, such as the one that a post's proof names, it reads the file at that commit. A binary file gives its size only.",
     inputSchema: {
       type: 'object',
       properties: {

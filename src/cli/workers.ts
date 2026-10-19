@@ -2,8 +2,10 @@ import type { Terminal } from './terminals.ts';
 import type { AgentTools } from './session-hosts.ts';
 import {
   loadPaused,
+  refusal,
   resumableTask,
   SessionActionError,
+  startInput,
   SessionManager,
   type PausedSession,
   type SessionEvent,
@@ -28,8 +30,8 @@ export interface SessionPoolOptions
   /** "Agents at once" at start. The default is `defaultAgents`. */
   readonly agents?: number;
   /**
-   * Called when a task or the person's session finds every slot taken. A lab
-   * parks an agent that had its turn. Returns when the slot is free or not.
+   * Called when the person's own session finds every slot taken. A lab parks
+   * an agent that had its turn. Tasks never call it: a lab run has no tasks.
    */
   readonly makeRoom?: () => Promise<unknown>;
 }
@@ -37,8 +39,8 @@ export interface SessionPoolOptions
 /**
  * The workers of one project owner: one slot for each worker that ran, each
  * one session manager with its own session, launch, native ID, and record.
- * Tasks, plain sessions, and lab agents share the slots. At most `limit` of
- * them run at the same time. A start takes its slot before its first await,
+ * Tasks, plain sessions, and lab agents share the slots, but one run has
+ * either tasks or a lab, never both. At most `limit` of them run at once. A start takes its slot before its first await,
  * so two starts can never take the same slot or pass the limit together.
  * Request IDs share one counter, so an answer reaches exactly one worker.
  */
@@ -49,6 +51,8 @@ export class SessionPool {
   private readonly slots: SessionManager[] = [];
   /** Slots that a start took and whose session is not active yet. */
   private readonly taken = new Set<SessionManager>();
+  /** The owner closes the pool: no new start takes a slot. */
+  private closing = false;
   private pausedList: PausedSession[] = [];
   /** Whether a task session that is not in a slot can resume. A record does not change until a slot resumes it. */
   private readonly resumable = new Map<string, boolean>();
@@ -103,20 +107,29 @@ export class SessionPool {
 
   /** Start a plain session in a free slot. Returns its ID. */
   start(input: Parameters<SessionManager['start']>[0]): Promise<string> {
-    return this.withRoom(async (slot) => {
-      await slot.start(input);
-      return slot.view()?.record.id ?? fail('The session did not start.');
-    });
+    return this.withRoom(
+      () => {
+        startInput(input);
+        return Promise.resolve();
+      },
+      async (slot) => {
+        await slot.start(input);
+        return slot.view()?.record.id ?? fail('The session did not start.');
+      },
+    );
   }
 
   startTask(
     input: Parameters<SessionManager['startTask']>[0],
   ): Promise<string> {
-    return this.withRoom((slot) => slot.startTask(input));
+    return this.use((slot) => slot.startTask(input));
   }
 
   async resume(id: unknown): Promise<void> {
-    await this.withRoom((slot) => slot.resume(id));
+    await this.withRoom(
+      () => this.check(id, 'resume'),
+      (slot) => slot.resume(id),
+    );
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
   }
 
@@ -135,7 +148,7 @@ export class SessionPool {
     id: string,
     input: { readonly prompt: string; readonly tools?: AgentTools },
   ): Promise<void> {
-    await this.withRoom((slot) => {
+    await this.use((slot) => {
       this.resumable.delete(id);
       return slot.resumeTask(id, input);
     });
@@ -165,7 +178,10 @@ export class SessionPool {
   }
 
   async restart(id: unknown): Promise<void> {
-    await this.withRoom((slot) => slot.restart(id));
+    await this.withRoom(
+      () => this.check(id, 'restart'),
+      (slot) => slot.restart(id),
+    );
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
   }
 
@@ -231,12 +247,15 @@ export class SessionPool {
 
   /** Pause or end every worker. Returns false when a record could not be saved. */
   async close(): Promise<boolean> {
+    this.closing = true;
     const saved = await Promise.all(this.slots.map((slot) => slot.close()));
     return saved.every(Boolean);
   }
 
+  /** The slot of a session. A session that resumed in another slot is found in its live one. */
   private slot(id: unknown): SessionManager | undefined {
-    return this.slots.find((slot) => slot.view()?.record.id === id);
+    const slots = this.slots.filter((slot) => slot.view()?.record.id === id);
+    return slots.find((slot) => slot.view()?.live) ?? slots[0];
   }
 
   private live(id: unknown): SessionManager {
@@ -245,15 +264,29 @@ export class SessionPool {
     return slot;
   }
 
+  /** Refuse a resume or restart that cannot happen, before a lab agent gives its slot for it. */
+  private async check(
+    id: unknown,
+    action: 'resume' | 'restart',
+  ): Promise<void> {
+    const reason = await refusal(this.root, id, action);
+    if (reason) fail(reason);
+  }
+
   /**
-   * A start of a task or the person's session. A full pool first asks the
-   * lab to park an agent that had its turn. A pool with room takes the slot
-   * in the same step, so a close that follows the call closes it too.
+   * A start of the person's own session. A pool with room takes the slot at
+   * once, before any await. A full pool checks the input first, so no lab
+   * agent gives its slot for a start that cannot happen, then asks the lab to
+   * park an agent that had its turn. A close that comes meanwhile wins.
    */
   private async withRoom<T>(
+    check: () => Promise<void>,
     start: (slot: SessionManager) => Promise<T>,
   ): Promise<T> {
-    if (this.full && this.options.makeRoom) await this.options.makeRoom();
+    if (this.full && this.options.makeRoom) {
+      await check();
+      if (!this.closing) await this.options.makeRoom();
+    }
     return this.use(start);
   }
 
@@ -264,6 +297,7 @@ export class SessionPool {
   private async use<T>(
     start: (slot: SessionManager) => Promise<T>,
   ): Promise<T> {
+    if (this.closing) fail('Verifold is stopping. Start it again first.');
     const slot = this.free();
     this.taken.add(slot);
     try {
