@@ -544,6 +544,12 @@ export class Lab {
   private queue: Promise<unknown> = Promise.resolve();
   private ticker: NodeJS.Timeout | undefined;
   private closing = false;
+  /**
+   * Start over or a restore moves the records. Until `reload`, the lab writes
+   * nothing and changes nothing, so a late change of the earlier run cannot
+   * land in the moved or restored files.
+   */
+  private suspended = false;
   /** Agents whose turn runs now. A session that resumes is ready before its first turn. */
   private readonly turning = new Set<string>();
   /** Agents that posted in their current turn. */
@@ -562,9 +568,8 @@ export class Lab {
     this.options = options;
     this.timing = { ...labTiming, ...options.timing };
     this.board = new Board(root);
-    this.stateFile = new RecordFile(
-      join(root, '.verifold', 'lab.json'),
-      () => this.state,
+    this.stateFile = new RecordFile(join(root, '.verifold', 'lab.json'), () =>
+      this.suspended ? null : this.state,
     );
   }
 
@@ -616,6 +621,7 @@ export class Lab {
       await Promise.all(
         [this.stateFile, ...this.files.values()].map((file) => file.flush()),
       );
+      this.suspended = true;
     });
   }
 
@@ -632,6 +638,7 @@ export class Lab {
       this.settling.clear();
       this.retryAt.clear();
       await this.load();
+      this.suspended = false;
     });
     if (this.state) this.watch();
   }
@@ -1137,6 +1144,8 @@ export class Lab {
   }
 
   private current(): LabState {
+    if (this.suspended)
+      fail('Verifold is moving the lab to the archive. Try again in a moment.');
     return this.state ?? fail('Start the lab first.');
   }
 
@@ -1154,6 +1163,7 @@ export class Lab {
   /** The agent works: its direction is open and nobody stopped it. */
   private active(agent: AgentRecord): boolean {
     return (
+      !this.suspended &&
       !agent.stoppedAt &&
       agent.stopReason !== 'crashed' &&
       this.state?.directions.find((entry) => entry.id === agent.direction)
@@ -1166,7 +1176,7 @@ export class Lab {
     this.files.set(
       agent.id,
       new RecordFile(join(this.folder, 'agents', `${agent.id}.json`), () =>
-        this.agents.get(agent.id),
+        this.suspended ? null : this.agents.get(agent.id),
       ),
     );
   }
