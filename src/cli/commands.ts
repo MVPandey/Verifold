@@ -158,16 +158,8 @@ verifold [--no-open]                  Set up a project or open its research desk
 verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
 verifold init --setup-only [--profile profile.json] [--host name]
 verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
-verifold recommend                    Print a research request for your host
-verifold ideas --from ideas.json       Import host recommendations
-verifold select [--id idea-id]         Choose an idea explicitly
-verifold literature [--memory]        Print an optional paper/context request
-verifold handoff                      Print a planning request for your harness (older flow)
-verifold view                         Generate a private local HTML workspace
 verifold ui [--no-open]               Open the live research desk and control a harness session there
 verifold stop                         Stop the team that works in the background, with its pods
-verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model name] [--no-open]
-                                      Run one harness session; answer its requests here or on the desk
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
 verifold runpod key set [--file]      Store a RunPod API key from hidden input or stdin, after a check
@@ -179,6 +171,16 @@ verifold runpod secret list|remove NAME
                                       List the secret names, or remove one
 verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when the desk does not run
 
+Older commands:
+verifold recommend                    Print a research request for your host
+verifold ideas --from ideas.json       Import host recommendations
+verifold select [--id idea-id]         Choose an idea explicitly
+verifold literature [--memory]        Print an optional paper/context request
+verifold handoff                      Print a planning request for your harness
+verifold view                         Generate a private local HTML workspace
+verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model name] [--no-open]
+                                      Run one harness session; answer its requests here or on the desk
+
 Options: --workspace path (default: the current folder), --help, --version
 
 Setup connects your harness, asks for a project folder and your question, and has
@@ -189,9 +191,11 @@ another folder (default: ~/.verifold/agency). --setup-only sets up without resea
 and offers a research memory that other projects can reuse. Without a terminal,
 research needs --host, --topic, and --autonomy autonomous.
 
-Research searches the web and proposes directions. It runs no experiments. Keeping
-PDFs is optional and comes after you choose a direction. Verifold keeps its records
-in .verifold/, and Claude Code or Codex keeps its own permissions and sessions.
+Research searches the web and proposes directions. After you choose one, the
+coordinator plans tasks, and task agents run the experiments on this computer, or
+on RunPod GPU pods within the limits that you set. Keeping PDFs is optional and
+comes after you choose a direction. Verifold keeps its records in .verifold/, and
+Claude Code or Codex keeps its own permissions and sessions.
 With a terminal, the team works in a background process, so closing the terminal
 or Ctrl+C does not stop it. Type /help in the terminal for its commands, and run
 verifold stop to stop the team. Session records are in .verifold/sessions/.
