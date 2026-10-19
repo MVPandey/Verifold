@@ -974,6 +974,25 @@ function labReply(post: string): void {
   document.getElementById('lab-text')?.focus();
 }
 
+/**
+ * The key of each lab request that has no answer yet, by its content. A click
+ * again after a timeout sends the same key, and the desk does the action once.
+ */
+const labKeys = new Map<string, string>();
+
+/** A lab request with its key. */
+function labKeyed(body: Record<string, unknown>): Record<string, unknown> {
+  const content = JSON.stringify(body);
+  let key = labKeys.get(content);
+  if (!key) {
+    key = [...crypto.getRandomValues(new Uint8Array(16))]
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+    labKeys.set(content, key);
+  }
+  return { ...body, key };
+}
+
 /** A lab action. */
 function labRequest(button: HTMLElement): Record<string, unknown> {
   const action = button.dataset.action ?? '';
@@ -995,7 +1014,7 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
         bar: field('lab-bar'),
       };
     case 'lab-direction-stop':
-      return { action, direction: button.dataset.direction };
+      return { action, direction: button.dataset.labDirection };
     case 'lab-agent-restart':
       return { action, agent: button.dataset.agent };
     default:
@@ -1148,7 +1167,7 @@ async function act(button: HTMLElement): Promise<void> {
                           : action?.startsWith('compute-')
                             ? computeRequest(button)
                             : action?.startsWith('lab-')
-                              ? labRequest(button)
+                              ? labKeyed(labRequest(button))
                               : { action };
   const selector = [
     ['action', action],
@@ -1167,7 +1186,7 @@ async function act(button: HTMLElement): Promise<void> {
     ['result', button.dataset.result],
     ['lease', button.dataset.lease],
     ['archive', button.dataset.archive],
-    ['direction', button.dataset.direction],
+    ['lab-direction', button.dataset.labDirection],
     ['agent', button.dataset.agent],
   ]
     .filter(([, value]) => value)
@@ -1189,9 +1208,14 @@ async function act(button: HTMLElement): Promise<void> {
       },
       body: JSON.stringify(body),
       cache: 'no-store',
-      // A compute action waits for RunPod, for up to 8 seconds.
+      // A compute action waits for RunPod, for up to 8 seconds. A lab
+      // action can wait for a new folder or an agent's start.
       signal: AbortSignal.timeout(
-        action?.startsWith('compute-') ? 15000 : 5000,
+        action?.startsWith('compute-')
+          ? 15000
+          : action?.startsWith('lab-')
+            ? 60000
+            : 5000,
       ),
     });
     const reply: unknown = await response.json().catch(() => null);
@@ -1206,6 +1230,9 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = name ? `Done: ${name}` : 'Done';
     failure = undefined;
+    if (typeof body.key === 'string')
+      for (const [content, key] of labKeys)
+        if (key === body.key) labKeys.delete(content);
     if (action === 'stop') showStopped();
     // A new agent from the message box becomes the agent that the box writes to.
     if (body.action === 'message' && body.to === 'new-agent')

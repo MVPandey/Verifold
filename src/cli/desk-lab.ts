@@ -1,21 +1,21 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import type { Artifact, Post, PostKind } from './board.ts';
-import type { DirectionView, LabView, Verdict } from './lab.ts';
+import { labLimits, type DirectionView, type LabView } from './lab.ts';
 import { hostName } from './session.ts';
 
 /**
  * The lab's view in the desk: the question, one row for each direction with
  * its agent and state, the board as threads by direction, and one message
  * box. Every agent text is escaped. The view keeps a few words on each row;
- * files and runs stay in the folders.
+ * files and runs stay in the folders, and each agent's transcript opens from
+ * its row.
  */
 
-const verdictWords: Record<Verdict, string> = {
-  open: 'Open',
-  leading: 'Leading',
-  'holds-up': 'Holds up',
-  'ruled-out': 'Ruled out',
-};
+/** A place for a transcript that the page fills: the desk view's slot. */
+type TranscriptSlot = (source: string, label: string) => string;
+
+/** How often an agent stopped by itself before it waits for the person. */
+const crashedText = `Stopped by itself ${labLimits.restartsPerHour + 1} times in an hour`;
 
 const kindWords: Record<PostKind, string> = {
   plan: 'Plan',
@@ -54,7 +54,7 @@ function statusText(
     case 'stopped':
       return 'Stopped';
     case 'crashed':
-      return 'Stopped by itself twice';
+      return crashedText;
   }
 }
 
@@ -70,19 +70,31 @@ function proofText(artifact: Artifact): string {
   }
 }
 
+/**
+ * One direction: its title and bar, its agent, its state, its controls, and
+ * the agent's transcript. A control keeps its direction in
+ * `data-lab-direction`: the page opens a research direction on a click of an
+ * element with `data-direction`.
+ */
 function directionRow(
   entry: DirectionView,
   clock: (value: string) => string,
+  slot: TranscriptSlot,
 ): string {
   const { direction, agent, status } = entry;
   const active = status === 'working' || status === 'starting';
-  const control =
+  const controls = [
     status === 'crashed'
       ? `<button type="button" data-action="lab-agent-restart" data-agent="${e(agent.id)}">Start again</button>`
-      : direction.state === 'open'
-        ? `<button type="button" class="quiet" data-action="lab-direction-stop" data-direction="${e(direction.id)}" data-confirm="Click again to stop this direction">Stop</button>`
-        : '';
-  return `<li class="lab-direction"><span class="verdict ${direction.verdict}">${verdictWords[direction.verdict]}</span><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(direction.bar)}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(statusText(entry, clock))}</span>${control}</li>`;
+      : '',
+    direction.state === 'open'
+      ? `<button type="button" class="quiet" data-action="lab-direction-stop" data-lab-direction="${e(direction.id)}" data-confirm="Click again to stop this direction">Stop</button>`
+      : '',
+  ].join('');
+  const transcript = agent.session
+    ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
+    : '';
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(direction.bar)}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(statusText(entry, clock))}</span>${controls}${transcript}</li>`;
 }
 
 function postHtml(
@@ -101,8 +113,8 @@ function postHtml(
 
 /**
  * The board as threads: one group for each direction and one for posts
- * without a direction, the group with the newest post first. A reply shows
- * under the post that it answers.
+ * without a direction. The group and the thread with the newest activity,
+ * replies included, come first. A reply shows under the post that it answers.
  */
 function board(
   view: LabView,
@@ -122,16 +134,21 @@ function board(
   // All replies of a thread show under its first post.
   const thread = (post: Post): Post[] =>
     (replies.get(post.id) ?? []).flatMap((reply) => [reply, ...thread(reply)]);
+  // A thread's activity is its newest post. Post numbers grow with time.
+  const latest = (post: Post): number =>
+    Math.max(
+      Number(post.id.slice(2)),
+      ...thread(post).map((reply) => Number(reply.id.slice(2))),
+    );
   const groups = new Map<string, Post[]>();
   for (const post of roots) {
     const key = post.direction ?? '';
     groups.set(key, [...(groups.get(key) ?? []), post]);
   }
+  const newest = (list: readonly Post[]): number =>
+    Math.max(...list.map(latest));
   return [...groups.entries()]
-    .sort(
-      ([, a], [, b]) =>
-        Date.parse(b.at(-1)?.at ?? '') - Date.parse(a.at(-1)?.at ?? ''),
-    )
+    .sort(([, a], [, b]) => newest(b) - newest(a))
     .map(([key, list]) => {
       const title = key
         ? (view.state.directions.find((entry) => entry.id === key)?.title ??
@@ -140,17 +157,23 @@ function board(
       return `<section class="lab-thread" aria-label="${e(title)}"><h3>${e(title)}</h3>${[
         ...list,
       ]
-        .reverse()
+        .sort((a, b) => latest(b) - latest(a))
         .map((post) => postHtml(post, name, clock, thread(post)))
         .join('')}</section>`;
     })
     .join('');
 }
 
-/** The lab's main view. `clock` formats a time. */
+/**
+ * Home for a lab. `clock` formats a time, and `slot` places a transcript.
+ * `needs` is Home's HTML for what waits for the person, such as a permission
+ * request of their own session. It shows above the directions.
+ */
 export function renderLab(
   view: LabView,
   clock: (value: string) => string,
+  slot: TranscriptSlot,
+  needs = '',
 ): string {
   const { state } = view;
   const name = (author: string): string =>
@@ -165,9 +188,9 @@ export function renderLab(
   const handles = open.map((entry) => `@${entry.agent.handle}`);
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Lab</h1><p class="question">${e(state.question)}</p></div>
   <div class="view lab">
-  ${state.pausedAt ? `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.</p>` : ''}
+  ${state.pausedAt ? `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.</p>` : ''}${needs}
   <section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Directions</h2><span class="actions">${state.pausedAt ? '<button type="button" data-action="lab-resume">Resume the lab</button>' : '<button type="button" class="quiet" data-action="lab-pause">Pause the lab</button>'}</span></div>
-  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
+  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
   <details id="lab-add"${view.directions.length ? '' : ' open'}><summary>Open a direction</summary>
   <label class="field" for="lab-title">Title</label><input id="lab-title" type="text" maxlength="120" placeholder="Years wind on a helix">
   <label class="field" for="lab-harness">Agent</label><select id="lab-harness"><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
@@ -202,7 +225,7 @@ export function labMember(entry: DirectionView): {
     case 'paused':
       return { face: 'paused', line: 'Paused' };
     case 'crashed':
-      return { face: 'failed', line: 'Stopped by itself twice' };
+      return { face: 'failed', line: crashedText };
     case 'stopped':
       return { face: 'ended', line: 'Stopped' };
     case 'idle':

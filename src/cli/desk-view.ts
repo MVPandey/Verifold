@@ -36,7 +36,7 @@ import {
   type CoordinatorView,
 } from './coordinator.ts';
 import { defaultAgents } from './workers.ts';
-import type { LabView } from './lab.ts';
+import { teamWorks, type LabView } from './lab.ts';
 import { labMember, renderLab, renderLabStart } from './desk-lab.ts';
 import { scratch } from './workspaces.ts';
 import {
@@ -919,11 +919,14 @@ function recipients(workspace: Workspace, live: DeskSession): Recipient[] {
   ];
 }
 
-/** The live sessions that the person started: not a task worker, not the coordinator. */
+/** The live sessions that the person started: not a task worker, a lab agent, or the coordinator. */
 function plainSessions(live: DeskSession): SessionView[] {
   return (live.workers ?? []).filter(
     (view) =>
-      view.live && !view.record.task && view.record.mode !== 'coordinator',
+      view.live &&
+      !view.record.task &&
+      !view.record.agent &&
+      view.record.mode !== 'coordinator',
   );
 }
 
@@ -3377,6 +3380,13 @@ function renderHomeAnswer(workspace: Workspace, live: DeskSession): string {
   return `<section class="card answer-home" aria-labelledby="home-answer-title"><div class="section-title"><h2 id="home-answer-title">The answer</h2><span class="tag reading">Proposed by the coordinator</span></div><p class="statement">${e(answer.statement)}</p>${answer.decision?.kind === 'accepted' ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>` : '<div class="actions"><button type="button" class="primary" data-view="results" data-focus="answer-title">Read the answer</button></div><p class="fine">Read it with its checks and evidence. Then accept it, or ask for more work.</p>'}</section>`;
 }
 
+/** Home's card of what waits for the person, or nothing. */
+function needsCard(needs: readonly Need[]): string {
+  return needs.length
+    ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>`
+    : '';
+}
+
 /** The work on Home after the person started it: the task map, and the results of the checks. */
 function renderHomeWork(
   workspace: Workspace,
@@ -3428,12 +3438,17 @@ function renderHome(
   // A project with no team at work can start a lab instead.
   const labStart =
     live.lab === null &&
-    !tasks.length &&
-    (!live.coordinator?.state || live.coordinator.state.stoppedAt !== null)
+    !teamWorks({
+      tasks: tasks.length,
+      coordinator: Boolean(
+        live.coordinator?.state && !live.coordinator.state.stoppedAt,
+      ),
+      research: live.research?.running ?? false,
+    })
       ? renderLabStart(workspace.research?.topic)
       : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${labStart}${renderNow(workspace, live, needs)}${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
+  <div class="view">${labStart}${renderNow(workspace, live, needs)}${needsCard(needs)}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -3594,7 +3609,12 @@ export function renderDesk(
                       live.archives,
                     )
                   : view === 'home' && live.lab
-                    ? renderLab(live.lab, clock)
+                    ? renderLab(
+                        live.lab,
+                        clock,
+                        (source, label) => transcriptSlot(source, label, ''),
+                        `${needsCard(needs)}${renderPodsLine(live.compute)}${renderPaused(live)}`,
+                      )
                     : renderHome(
                         snapshot,
                         live,
@@ -3604,9 +3624,8 @@ export function renderDesk(
                         frame.since,
                         frame.hideFinished === true,
                       );
-  // The lab has its own message box.
   const dock =
-    (view === 'home' && !live.lab) ||
+    view === 'home' ||
     view === 'research' ||
     view === 'tasks' ||
     view === 'task' ||

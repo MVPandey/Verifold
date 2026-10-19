@@ -17,10 +17,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
-import { Lab } from '../src/cli/lab.ts';
+import { Lab, labWorks, teamWorks } from '../src/cli/lab.ts';
+import { Coordinator } from '../src/cli/coordinator.ts';
+import { renderDesk } from '../src/cli/desk-view.ts';
+import { renderLab } from '../src/cli/desk-lab.ts';
+import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
-import { readRecord } from '../src/cli/session.ts';
-import { archiveRun } from '../src/cli/archive.ts';
+import { readRecord, SessionManager } from '../src/cli/session.ts';
+import { archiveRun, restoreRun } from '../src/cli/archive.ts';
+import { terminalInput, type CliIO } from '../src/cli/commands.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { TaskManager } from '../src/cli/tasks.ts';
 
@@ -205,6 +210,7 @@ const timing = {
   continueMs: 50,
   tickMs: 40,
   backoffMs: [60_000, 60_000, 60_000],
+  retryMs: 300,
 };
 
 function git(cwd: string, ...args: string[]): string {
@@ -226,13 +232,23 @@ function git(cwd: string, ...args: string[]): string {
 
 async function fixture(
   t: test.TestContext,
-  options: { readonly agents?: number } = {},
+  options: {
+    readonly agents?: number;
+    /** The project's memory. Its digest runs while an agent's first prompt is made. */
+    readonly memory?: (sessions: SessionPool) => {
+      note(who: string, text: unknown): Promise<string>;
+      digest(): Promise<string>;
+    };
+    readonly gitignore?: string;
+  } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
   const root = join(base, 'project');
   await mkdir(root);
   git(root, 'init', '--quiet');
   await writeFile(join(root, 'README.md'), '# Project\n');
+  if (options.gitignore)
+    await writeFile(join(root, '.gitignore'), options.gitignore);
   await changeWorkspace(root, () => ({
     schemaVersion: 1,
     visibility: 'private',
@@ -277,7 +293,12 @@ async function fixture(
         owned.lab?.limited(host, signal);
       },
     });
-    const lab = new Lab(root, { sessions, quota, timing });
+    const lab = new Lab(root, {
+      sessions,
+      quota,
+      timing,
+      ...(options.memory ? { memory: options.memory(sessions) } : {}),
+    });
     owned.lab = lab;
     return { sessions, lab };
   };
@@ -641,8 +662,17 @@ await test('an agent whose process stops by itself starts again, twice an hour a
     { calls: [{ name: 'EXIT' }] },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  const first = Date.now();
+  // A restart waits first: 300 ms in the tests, doubled after each stop.
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  assert.ok(
+    Date.now() - first >= 250,
+    `restarted after ${Date.now() - first} ms`,
+  );
   await until(() => lab.lab.view()?.directions[0]?.status === 'crashed');
   assert.equal((await lab.inputs('d-1-alpha')).length, 3);
+  assert.equal(lab.lab.view()?.directions[0]?.agent.restarts.length, 3);
   await lab.lab.restartAgent('a-1');
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 4);
 });
@@ -851,7 +881,8 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   const view = await home();
   assert.match(view, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
   assert.match(view, /Do months lie on a circle\?/);
-  assert.doesNotMatch(view, /data-action="message"/);
+  // The message box for the person's own sessions stays on Home.
+  assert.match(view, /id="message-text"/);
 
   // Agent and person text is escaped. A mention of an unknown handle is refused.
   await lab.lab.pause();
@@ -883,10 +914,344 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   assert.match(board, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(board, /<img/);
   assert.match(board, /claude-1 <span class="fine">Claude Code<\/span>/);
-  assert.match(board, /data-action="lab-direction-stop" data-direction="d-1"/);
+  assert.match(
+    board,
+    /data-action="lab-direction-stop" data-lab-direction="d-1"/,
+  );
+  // The page opens an item on a click of these attributes before it sends an
+  // action, so no lab control may carry one.
+  const controls =
+    board.match(/<button[^>]*data-action="lab-[^"]*"[^>]*>/g) ?? [];
+  assert.ok(controls.length >= 4);
+  for (const control of controls)
+    assert.doesNotMatch(
+      control,
+      / data-(direction|view|panel|task-select|worker|attempt|message-to|dock|diff)=/,
+      control,
+    );
+  // A request that comes again with its key runs once.
+  const before = lab.lab.view()?.posts.length ?? 0;
+  const key = 'a1'.repeat(16);
+  assert.equal(
+    (await post({ action: 'lab-post', text: 'Once.', key }))[0],
+    200,
+  );
+  assert.equal(
+    (await post({ action: 'lab-post', text: 'Once.', key }))[0],
+    200,
+  );
+  assert.equal(lab.lab.view()?.posts.length, before + 1);
   assert.equal(
     (await post({ action: 'lab-direction-stop', direction: 'd-1' }))[0],
     200,
   );
   assert.match(await home(), /<span class="status">Stopped<\/span>/);
+});
+
+await test('one run has one team: research, the coordinator, and a lab keep apart', async (t) => {
+  assert.equal(
+    teamWorks({ tasks: 0, coordinator: false, research: false }),
+    null,
+  );
+  assert.match(
+    teamWorks({ tasks: 0, coordinator: false, research: true }) ?? '',
+    /Research is running/,
+  );
+  assert.match(
+    teamWorks({ tasks: 2, coordinator: false, research: false }) ?? '',
+    /already works/,
+  );
+  const lab = await fixture(t);
+  const busy = new Lab(lab.root, {
+    sessions: lab.sessions,
+    timing,
+    team: () =>
+      Promise.resolve({ tasks: 0, coordinator: true, research: false }),
+  });
+  await assert.rejects(busy.start('A question.'), /already works/);
+  assert.equal(busy.exists, false);
+  const coordinator = new Coordinator(lab.root, {
+    tasks: new TaskManager(lab.root, {
+      ownerId: 'owner-1',
+      sessions: lab.sessions,
+    }),
+    sessions: new SessionManager(lab.root, {
+      clientVersion: 'test',
+      ownerId: 'owner-1',
+    }),
+    blocked: () => labWorks,
+  });
+  await assert.rejects(
+    coordinator.start({ objective: 'Go.', host: 'claude', guided: true }),
+    /A lab works on this project/,
+  );
+});
+
+await test('Home in a lab still shows what needs the person, and the transcript of each agent', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: [{ name: 'WAIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  const at = new Date().toISOString();
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261002T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'running',
+      mode: 'ask',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: at,
+      events: [],
+      commands: [],
+      requests: [
+        {
+          id: 'R1',
+          native: 'n-1',
+          tool: 'Bash',
+          action: 'curl -sI https://example.org',
+          at,
+        },
+      ],
+    },
+  };
+  const html = renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+    session: worker,
+    workers: [worker],
+    controllable: true,
+    lab: lab.lab.view(),
+  } as never).html;
+  assert.match(html, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
+  assert.match(html, /Claude Code session asks to use Bash/);
+  assert.match(html, /id="message-text"/);
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  assert.match(
+    html,
+    new RegExp(
+      `<summary>What claude-1 did</summary><div class="transcript-slot" data-source="session:${session}"`,
+    ),
+  );
+});
+
+await test('proof in a folder that the project ignores is pinned, and a turn that changes nothing adds no commit', async (t) => {
+  const lab = await fixture(t, { gitignore: 'results/\n' });
+  await lab.script('d-1-circles', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'results/fig.png', text: 'PNG' } },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'Months lie on a circle.',
+            artifacts: [{ type: 'figure', path: 'results/fig.png' }],
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [
+    { title: 'Circles', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  await until(
+    () => lab.lab.view()?.posts.some((post) => post.kind === 'claim') ?? false,
+  );
+  const proof = lab.lab.view()?.posts.find((post) => post.kind === 'claim')
+    ?.artifacts[0];
+  assert.equal(proof?.type, 'figure');
+  if (proof?.type === 'figure')
+    assert.equal(
+      git(lab.root, 'show', `${proof.commit}:results/fig.png`),
+      'PNG',
+    );
+  // Beta changes nothing in two turns, so its branch keeps its start commit.
+  await until(() => lab.lab.view()?.directions[1]?.agent.idleStreak === 2);
+  const beta = lab.lab.view()?.directions[1]?.direction;
+  assert.equal(
+    git(lab.root, 'rev-parse', beta?.workspace.branch ?? '').trim(),
+    beta?.workspace.start,
+  );
+  assert.equal(beta?.head, beta?.workspace.start);
+});
+
+await test('a post whose turn ran into a used-up usage window comes again after the reset', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    { when: 'check layer 12', calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  await until(() => lab.lab.view()?.directions[0]?.status === 'idle');
+  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 3);
+  const signal = {
+    exhausted: true,
+    resetsAt: new Date(Date.now() + 1200).toISOString(),
+    usedPercent: 100,
+    window: 'five_hour',
+  };
+  lab.quota.record('claude', signal);
+  lab.lab.limited('claude', signal);
+  // A second post goes into the waiting turn, which then ends.
+  await lab.lab.post({ text: 'Thanks.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
+  const again = (await lab.inputs('d-1-alpha'))[3] ?? '';
+  assert.match(again, /check layer 12/);
+  assert.match(again, /usage window ran out/);
+  assert.doesNotMatch(again, /Thanks\./);
+});
+
+await test('start over parks the lab, a restore brings it back paused, and a new lab never reuses a folder', async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.suspend();
+  const archive = await archiveRun(lab.root);
+  await lab.lab.reload();
+  await lab.sessions.forget();
+  assert.equal(lab.lab.exists, false);
+  // A new lab opens Alpha again. Its folder and branch get a new number.
+  await lab.lab.start('Another question.');
+  assert.equal(
+    await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' }),
+    'd-2',
+  );
+  await until(async () => (await lab.inputs('d-2-alpha')).length >= 1);
+  // Restore the first run: it comes back paused, and resumes when the person resumes it.
+  await lab.lab.suspend();
+  await restoreRun(lab.root, archive);
+  await lab.lab.reload();
+  await lab.sessions.forget();
+  assert.equal(
+    lab.lab.view()?.state.question,
+    'Do LLMs store months on circles?',
+  );
+  assert.ok(lab.lab.view()?.state.pausedAt);
+  const before = (await lab.inputs('d-1-alpha')).length;
+  await lab.lab.resume();
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha'))
+        .slice(before)
+        .some((input) => input.includes('The person resumed the lab')),
+    20_000,
+  );
+});
+
+await test('an agent whose start finds the pool full waits for a slot, and no failure counts', async (t) => {
+  let person: string | undefined;
+  const lab = await fixture(t, {
+    agents: 1,
+    // The person's session takes the only slot while the agent's first prompt is made.
+    memory: (sessions) => ({
+      note: () => Promise.resolve('Noted.'),
+      digest: async () => {
+        person ??= await sessions.start({
+          host: 'claude',
+          mode: 'ask',
+          prompt: 'Hello.',
+        });
+        return '';
+      },
+    }),
+  });
+  await lab.lab.start('A question.');
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await until(() => person !== undefined);
+  await delay(400);
+  const waiting = lab.lab.view()?.directions[0];
+  assert.equal(waiting?.status, 'slot');
+  assert.deepEqual(waiting?.agent.restarts, []);
+  assert.equal((await lab.inputs('d-1-alpha')).length, 0);
+  lab.sessions.end(person);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+});
+
+await test('an agent cannot mention all, and the terminal and cancel leave lab agents alone', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: { kind: 'question', text: 'Anyone?', mentions: ['all'] },
+        },
+        { name: 'WAIT' },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(
+    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length === 1,
+  );
+  const [result] = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  assert.equal(result?.result.isError, true);
+  assert.match(
+    result?.result.content[0]?.text ?? '',
+    /Mention agents by handle/,
+  );
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  assert.throws(() => lab.sessions.cancel(session), /agent of the lab/);
+  const lines: string[] = [];
+  const io = {
+    interactive: true,
+    out: () => {},
+    progress: (line: string) => lines.push(line),
+  } as unknown as CliIO;
+  terminalInput(lab.sessions, '/cancel', io, {
+    open: () => {},
+    host: 'claude',
+  });
+  terminalInput(lab.sessions, 'Hello?', io, { open: () => {}, host: 'claude' });
+  assert.deepEqual(lines, [
+    'Nothing is running.',
+    'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
+  ]);
+  assert.equal(lab.lab.view()?.directions[0]?.status, 'working');
+});
+
+await test('the lab view puts the newest activity first, and a crashed agent can be stopped', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('A question.');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await lab.lab.addDirection({ title: 'Beta', harness: 'claude' });
+  const first = await lab.lab.post({ text: 'Old point.', direction: 'd-1' });
+  await lab.lab.post({ text: 'Newer point.', direction: 'd-2' });
+  // A reply to the old point is the newest activity, so Alpha comes first.
+  await lab.lab.post({ text: 'A reply.', replyTo: first.id });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const crashed = {
+    ...view,
+    directions: view.directions.map((entry, index) =>
+      index === 0 ? { ...entry, status: 'crashed' as const } : entry,
+    ),
+  };
+  const html = renderLab(
+    crashed,
+    (value) => value,
+    () => '',
+  );
+  assert.ok(
+    html.indexOf('aria-label="Alpha"') < html.indexOf('aria-label="Beta"'),
+  );
+  const row = html.slice(
+    html.indexOf('<li class="lab-direction">'),
+    html.indexOf('</li>'),
+  );
+  assert.match(row, /Stopped by itself 3 times in an hour/);
+  assert.match(row, /data-action="lab-agent-restart"/);
+  assert.match(
+    row,
+    /data-action="lab-direction-stop" data-lab-direction="d-1"/,
+  );
 });

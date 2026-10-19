@@ -38,7 +38,7 @@ import { TaskManager, type TaskPlace } from './tasks.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
-import { Lab } from './lab.ts';
+import { Lab, labWorks } from './lab.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -274,7 +274,10 @@ export function terminalInput(
 ): void {
   const value = line.trim();
   if (!value) return;
-  const live = sessions.views().filter((view) => view.live);
+  // Lab agents take posts on the board, not terminal input.
+  const live = sessions
+    .views()
+    .filter((view) => view.live && !view.record.agent);
   const requests = live.flatMap((view) => view.record.requests);
   /** The one live session that fits, or a message that names where to act. */
   const only = (
@@ -666,6 +669,8 @@ async function serveDesk(
         memory,
         quota,
         agents: () => sessions.limit,
+        // One run has one team: the coordinator does not start while a lab exists.
+        blocked: () => (owned.lab?.exists ? labWorks : null),
         onChange: remember,
         ...(io.progress ? { progress: io.progress } : {}),
         sessions: new SessionManager(root, {
@@ -684,6 +689,14 @@ async function serveDesk(
         sessions,
         memory,
         quota,
+        team: async () => {
+          const team = coordinator.view()?.state;
+          return {
+            tasks: (await tasks.list()).length,
+            coordinator: Boolean(team && !team.stoppedAt),
+            research: runner.running,
+          };
+        },
         model: async (host) => {
           const workspace = await loadWorkspace(root).catch(() => null);
           return workspace?.host === host ? (workspace.model ?? null) : null;
@@ -766,7 +779,7 @@ async function serveDesk(
           io.progress?.(
             'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
-        if (run.lab) await startLab(root, lab, tasks, coordinator, io);
+        if (run.lab) await startLab(root, lab, research?.topic, io);
         else if (research) await runner.start(research);
         io.listen?.(
           (line) =>
@@ -861,35 +874,36 @@ function ownerLog(root: string): (line: string) => void {
 }
 
 /**
- * `verifold --lab`: start a lab on the project's question, unless the project
- * has one, or the coordinator's team already works on it.
+ * `verifold --lab`: start a lab on the question of setup or of the project,
+ * unless the project has one. The lab says why it cannot start, for example
+ * when the coordinator's team works on the run. A failure does not stop the
+ * owner.
  */
 async function startLab(
   root: string,
   lab: Lab,
-  tasks: TaskManager,
-  coordinator: Coordinator,
+  question: string | undefined,
   io: CliIO,
 ): Promise<void> {
   if (lab.exists) return;
-  const team = coordinator.view()?.state;
-  if ((await tasks.list()).length || (team && !team.stoppedAt)) {
+  try {
+    const asked =
+      question ?? (await loadWorkspace(root)).research?.topic ?? undefined;
+    if (!asked) {
+      io.progress?.(
+        'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
+      );
+      return;
+    }
+    await lab.start(asked);
     io.progress?.(
-      'The team already works on this project, so Verifold started no lab. Start over in Records first.',
+      'The lab started. Open a direction in the desk: each one gets its own agent.',
     );
-    return;
-  }
-  const question = (await loadWorkspace(root)).research?.topic;
-  if (!question) {
+  } catch (error) {
     io.progress?.(
-      'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
+      `Verifold started no lab: ${error instanceof Error ? error.message : 'unknown error'}`,
     );
-    return;
   }
-  await lab.start(question);
-  io.progress?.(
-    'The lab started. Open a direction in the desk: each one gets its own agent.',
-  );
 }
 
 /** The research and the setup desk that a background owner gets in its input. Anything else is left out. */
@@ -1094,6 +1108,10 @@ async function attachTeam(
         `Verifold already runs in this project in another terminal (process ${running.pid}). Use that terminal, or press Ctrl+C there and run verifold again.`,
       );
     control = saved;
+    if (start.lab)
+      io.progress?.(
+        'Verifold already works in the background, so --lab started nothing. Start the lab from Home in the desk.',
+      );
   } else {
     control = await newControl();
     try {

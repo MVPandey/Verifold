@@ -178,6 +178,7 @@ export class Coordinator {
     | undefined;
   /** "Agents at once" of the project. */
   private readonly agents: () => number;
+  private readonly blocked: (() => string | null) | undefined;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -195,8 +196,11 @@ export class Coordinator {
       readonly onChange?: () => void;
       readonly quota?: { parked(host: HarnessName): string | null };
       readonly agents?: () => number;
+      /** Why the coordinator cannot start now, such as a lab on the run. */
+      readonly blocked?: () => string | null;
     },
   ) {
+    this.blocked = options.blocked;
     this.quota = options.quota;
     this.agents = options.agents ?? (() => defaultAgents);
     this.memory = options.memory;
@@ -311,6 +315,8 @@ export class Coordinator {
     return this.serial(async () => {
       if (this.state && !this.state.stoppedAt)
         fail('The coordinator already runs. Stop it first.');
+      const blocked = this.blocked?.();
+      if (blocked) fail(blocked);
       const objective =
         typeof input.objective === 'string' &&
         input.objective.trim() &&
@@ -393,6 +399,11 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
   /** Start the coordinator for the chosen direction, unless one already runs. */
   async startForDirection(workspace: Workspace): Promise<void> {
     if (this.state && !this.state.stoppedAt) return;
+    const blocked = this.blocked?.();
+    if (blocked) {
+      this.progress?.(blocked);
+      return;
+    }
     const objective = directionObjective(workspace);
     if (!objective) return;
     await this.start({

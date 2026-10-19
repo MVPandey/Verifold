@@ -342,9 +342,9 @@ async function changeRun(
       .some((view) => view.live && !view.record.task && !view.record.agent)
   )
     throw new SessionActionError('Your session is running. End it first.');
-  // The lab's agents pause with the run. A restored lab comes back paused.
+  // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
   const lab = labRun?.exists ?? false;
-  if (lab && !labRun?.paused) await labRun?.pause();
+  await labRun?.suspend();
   const state = coordinator?.view()?.state;
   if (state && !state.stoppedAt) await coordinator?.stop();
   for (const task of list)
@@ -370,6 +370,52 @@ async function changeRun(
     (await loadWorkspace(root)).research
   )
     await research.start({});
+}
+
+/** Lab actions by their key, for 10 minutes, so a repeated request runs once. */
+const labRequests = new Map<
+  string,
+  { readonly at: number; readonly done: Promise<number> }
+>();
+
+/** One lab action. The lab checks its input and its state. */
+async function labAction(
+  lab: Lab,
+  body: Record<string, unknown>,
+): Promise<number> {
+  switch (body.action) {
+    case 'lab-start':
+      await lab.start(body.question);
+      return 200;
+    case 'lab-post':
+      await lab.post({
+        text: body.text,
+        direction: body.direction,
+        replyTo: body.replyTo,
+      });
+      return 200;
+    case 'lab-direction-add':
+      await lab.addDirection({
+        title: body.title,
+        harness: body.harness,
+        bar: body.bar,
+      });
+      return 200;
+    case 'lab-direction-stop':
+      await lab.stopDirection(body.direction);
+      return 200;
+    case 'lab-agent-restart':
+      await lab.restartAgent(body.agent);
+      return 200;
+    case 'lab-pause':
+      await lab.pause();
+      return 200;
+    case 'lab-resume':
+      await lab.resume();
+      return 200;
+    default:
+      return 400;
+  }
 }
 
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
@@ -441,48 +487,22 @@ async function act(
     return 200;
   }
   if (typeof body.action === 'string' && body.action.startsWith('lab-')) {
-    if (!lab || !tasks) throw new SessionActionError('This desk runs no lab.');
-    switch (body.action) {
-      case 'lab-start':
-        // The lab and the coordinator's team do not share one run.
-        if (
-          (await tasks.list()).length ||
-          (coordinator?.view()?.state && !coordinator.view()?.state.stoppedAt)
-        )
-          throw new SessionActionError(
-            'The team already works on this project. Start over in Records first, then start the lab.',
-          );
-        await lab.start(body.question);
-        return 200;
-      case 'lab-post':
-        await lab.post({
-          text: body.text,
-          direction: body.direction,
-          replyTo: body.replyTo,
-        });
-        return 200;
-      case 'lab-direction-add':
-        await lab.addDirection({
-          title: body.title,
-          harness: body.harness,
-          bar: body.bar,
-        });
-        return 200;
-      case 'lab-direction-stop':
-        await lab.stopDirection(body.direction);
-        return 200;
-      case 'lab-agent-restart':
-        await lab.restartAgent(body.agent);
-        return 200;
-      case 'lab-pause':
-        await lab.pause();
-        return 200;
-      case 'lab-resume':
-        await lab.resume();
-        return 200;
-      default:
-        return 400;
+    if (!lab) throw new SessionActionError('This desk runs no lab.');
+    // A click again after a timeout sends the same key: the action runs once.
+    const key =
+      typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
+        ? body.key
+        : null;
+    const known = key ? labRequests.get(key) : undefined;
+    if (known) return known.done;
+    const done = labAction(lab, body);
+    if (key) {
+      for (const [old, entry] of labRequests)
+        if (entry.at < Date.now() - 600_000) labRequests.delete(old);
+      labRequests.set(key, { at: Date.now(), done });
+      done.catch(() => labRequests.delete(key));
     }
+    return done;
   }
   // The message box: to research, the coordinator, a task agent, or a session that the person started.
   // The words can also start a new coordinator or a new agent.
@@ -497,6 +517,8 @@ async function act(
       const id = body.to.slice('session:'.length);
       if (sessions.view(id)?.record.task)
         throw new SessionActionError('Write to a task agent by its task.');
+      if (sessions.view(id)?.record.agent)
+        throw new SessionActionError('Write to a lab agent on the board.');
       const text = typeof body.text === 'string' ? body.text : '';
       // A running turn takes the message. A waiting session, or a turn that ended first, gets it as its next turn.
       if (
