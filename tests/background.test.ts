@@ -291,6 +291,15 @@ await test('verifold stop says when nothing runs, and points to an older owner i
     out.pop() ?? '',
     /^verifold stop \[--workspace path\]\n\nStops the team/,
   );
+  // The full help lists the main commands first and the older ones under their own heading.
+  await runCli(['--help'], root, io(out));
+  const help = out.pop() ?? '';
+  assert.match(
+    help,
+    /verifold pods \[stop <lease\|all>\][^\n]*\n\nOlder commands:\nverifold recommend[\s\S]*verifold session --prompt/,
+  );
+  assert.doesNotMatch(help, /runs no experiments|older flow/);
+  assert.match(help, /task agents run the experiments/);
   await runCli(['stop'], root, io(out));
   assert.deepEqual(out, ['Verifold does not run in this project.']);
   const owner = await claimOwner(root, 'test');
