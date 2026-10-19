@@ -3422,14 +3422,14 @@ body:not(:has(.rail)) .menu-button {
 }
 
 /* ---------- The lab ---------- */
-/* One row for each direction: its verdict, title, agent, and state. */
+/* One row for each direction: its title, agent, state, and controls. Its transcript opens below it. */
 .lab-directions {
   list-style: none;
   padding: 0;
 }
 .lab-direction {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 4px 14px;
   padding: 10px 0;
@@ -3448,33 +3448,38 @@ body:not(:has(.rail)) .menu-button {
   font-weight: 650;
   white-space: nowrap;
 }
-.verdict {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--muted);
+.lab-controls {
+  display: flex;
+  gap: 6px;
 }
-.verdict.leading {
-  color: var(--violet);
+.lab-controls:empty {
+  display: none;
 }
-.verdict.holds-up {
-  color: var(--green);
+.lab-direction .lab-activity {
+  grid-column: 1 / -1;
 }
-.verdict.holds-up::before {
-  content: '✓ ';
-  content: '✓ ' / '';
-}
-.verdict.ruled-out::before {
-  content: '✕ ';
-  content: '✕ ' / '';
-}
+/* On a phone the title takes the first line, the agent and its state the next, then the controls. A long state wraps. */
 @media (max-width: 600px) {
   .lab-direction {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
   }
-  .lab-direction .verdict,
-  .lab-direction-text {
+  .lab-direction-text,
+  .lab-direction .lab-controls {
     grid-column: 1 / -1;
   }
+  .lab-direction .status {
+    white-space: normal;
+  }
+}
+.lab-replying {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lab-replying[hidden] {
+  display: none;
 }
 
 /* The board: threads by direction, each post one point with its proof. */

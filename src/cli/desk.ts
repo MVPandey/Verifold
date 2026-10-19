@@ -344,22 +344,23 @@ async function changeRun(
     throw new SessionActionError('Your session is running. End it first.');
   // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
   const lab = labRun?.exists ?? false;
-  await labRun?.suspend();
-  const state = coordinator?.view()?.state;
-  if (state && !state.stoppedAt) await coordinator?.stop();
-  for (const task of list)
-    if (task.state === 'open' || task.state === 'review')
-      await tasks.cancel(task.id);
-  // The memory keeps what this run did, decided, and found, as an earlier run.
-  await memory?.freeze(
-    `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
-  );
+  const paused = (await labRun?.suspend()) ?? false;
   try {
+    const state = coordinator?.view()?.state;
+    if (state && !state.stoppedAt) await coordinator?.stop();
+    for (const task of list)
+      if (task.state === 'open' || task.state === 'review')
+        await tasks.cancel(task.id);
+    // The memory keeps what this run did, decided, and found, as an earlier run.
+    await memory?.freeze(
+      `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+    );
     if (restore === undefined) await archiveRun(root);
     else await restoreRun(root, restore);
   } catch (error) {
-    // The records moved in part or not at all. The lab reads them again.
+    // The records moved in part or not at all. The lab reads them again and works as before.
     await labRun?.reload();
+    if (paused) await labRun?.resume().catch(() => {});
     throw error;
   }
   memory?.schedule();
@@ -378,11 +379,18 @@ async function changeRun(
     await research.start({});
 }
 
-/** Lab actions by their key, for 10 minutes, so a repeated request runs once. */
-const labRequests = new Map<
+/**
+ * Lab actions by their key: an action while it runs, and its answer for a
+ * minute after it ends. A click again after a timeout sends the same key, so
+ * the action runs once. Each desk keeps its own.
+ */
+type LabRequests = Map<
   string,
-  { readonly at: number; readonly done: Promise<number> }
->();
+  { readonly done: Promise<number>; ended: number | null }
+>;
+
+/** How long the answer of a lab action stays for a click again. */
+const labAnswerMs = 60_000;
 
 /** One lab action. The lab checks its input and its state. */
 async function labAction(
@@ -396,6 +404,7 @@ async function labAction(
     case 'lab-post':
       await lab.post({
         text: body.text,
+        kind: body.kind,
         direction: body.direction,
         replyTo: body.replyTo,
       });
@@ -436,6 +445,7 @@ async function act(
   body: Record<string, unknown>,
   memory?: ProjectMemory,
   lab?: Lab,
+  labRequests?: LabRequests,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -494,19 +504,29 @@ async function act(
   }
   if (typeof body.action === 'string' && body.action.startsWith('lab-')) {
     if (!lab) throw new SessionActionError('This desk runs no lab.');
-    // A click again after a timeout sends the same key: the action runs once.
     const key =
       typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
         ? body.key
         : null;
-    const known = key ? labRequests.get(key) : undefined;
-    if (known) return known.done;
-    const done = labAction(lab, body);
-    if (key) {
+    if (key && labRequests) {
+      const now = Date.now();
       for (const [old, entry] of labRequests)
-        if (entry.at < Date.now() - 600_000) labRequests.delete(old);
-      labRequests.set(key, { at: Date.now(), done });
-      done.catch(() => labRequests.delete(key));
+        if (entry.ended !== null && entry.ended < now - labAnswerMs)
+          labRequests.delete(old);
+      const known = labRequests.get(key);
+      if (known) return known.done;
+    }
+    const done = labAction(lab, body);
+    if (key && labRequests) {
+      const entry = { done, ended: null as number | null };
+      labRequests.set(key, entry);
+      // A refused action keeps no answer: a click again tries it again.
+      done.then(
+        () => {
+          entry.ended = Date.now();
+        },
+        () => labRequests.delete(key),
+      );
     }
     return done;
   }
@@ -700,6 +720,7 @@ export async function startDesk(
   // In setup mode the project does not exist yet. attach() sets it.
   let project: string | null = root === null ? null : await realpath(root);
   let lab = options.lab;
+  const labRequests: LabRequests = new Map();
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -893,6 +914,7 @@ export async function startDesk(
             body,
             memory,
             lab,
+            labRequests,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;

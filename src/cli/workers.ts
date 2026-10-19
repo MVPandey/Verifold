@@ -18,26 +18,37 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
+/** Every slot is taken. The caller can wait and try again; nothing failed. */
+export class PoolFullError extends SessionActionError {}
+
 export interface SessionPoolOptions
   extends Omit<SessionManagerOptions, 'onEvent' | 'requests'> {
   /** One event of one worker. `view` is that worker's session. */
   readonly onEvent?: (event: SessionEvent, view: SessionView | null) => void;
   /** "Agents at once" at start. The default is `defaultAgents`. */
   readonly agents?: number;
+  /**
+   * Called when a task or the person's session finds every slot taken. A lab
+   * parks an agent that had its turn. Returns when the slot is free or not.
+   */
+  readonly makeRoom?: () => Promise<unknown>;
 }
 
 /**
  * The workers of one project owner: one slot for each worker that ran, each
  * one session manager with its own session, launch, native ID, and record.
- * Tasks and plain sessions share the slots. At most `limit` of them run at
- * the same time. Request IDs share one counter, so an answer reaches exactly
- * one worker.
+ * Tasks, plain sessions, and lab agents share the slots. At most `limit` of
+ * them run at the same time. A start takes its slot before its first await,
+ * so two starts can never take the same slot or pass the limit together.
+ * Request IDs share one counter, so an answer reaches exactly one worker.
  */
 export class SessionPool {
   private readonly root: string;
   private readonly options: SessionPoolOptions;
   private readonly requests = { next: 1 };
   private readonly slots: SessionManager[] = [];
+  /** Slots that a start took and whose session is not active yet. */
+  private readonly taken = new Set<SessionManager>();
   private pausedList: PausedSession[] = [];
   /** Whether a task session that is not in a slot can resume. A record does not change until a slot resumes it. */
   private readonly resumable = new Map<string, boolean>();
@@ -68,9 +79,12 @@ export class SessionPool {
     return this.slots.some((slot) => slot.active);
   }
 
-  /** `limit` workers run, so no other worker can start. */
+  /** `limit` workers run or start, so no other worker can start. */
   get full(): boolean {
-    return this.slots.filter((slot) => slot.active).length >= this.limit;
+    return (
+      this.slots.filter((slot) => slot.active || this.taken.has(slot)).length >=
+      this.limit
+    );
   }
 
   async load(): Promise<void> {
@@ -88,20 +102,21 @@ export class SessionPool {
   }
 
   /** Start a plain session in a free slot. Returns its ID. */
-  async start(input: Parameters<SessionManager['start']>[0]): Promise<string> {
-    const slot = this.free();
-    await slot.start(input);
-    return slot.view()?.record.id ?? fail('The session did not start.');
+  start(input: Parameters<SessionManager['start']>[0]): Promise<string> {
+    return this.withRoom(async (slot) => {
+      await slot.start(input);
+      return slot.view()?.record.id ?? fail('The session did not start.');
+    });
   }
 
   startTask(
     input: Parameters<SessionManager['startTask']>[0],
   ): Promise<string> {
-    return this.free().startTask(input);
+    return this.withRoom((slot) => slot.startTask(input));
   }
 
   async resume(id: unknown): Promise<void> {
-    await this.free().resume(id);
+    await this.withRoom((slot) => slot.resume(id));
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
   }
 
@@ -120,21 +135,25 @@ export class SessionPool {
     id: string,
     input: { readonly prompt: string; readonly tools?: AgentTools },
   ): Promise<void> {
-    const slot = this.free();
-    this.resumable.delete(id);
-    await slot.resumeTask(id, input);
+    await this.withRoom((slot) => {
+      this.resumable.delete(id);
+      return slot.resumeTask(id, input);
+    });
   }
 
-  /** Start a lab agent's session in a free slot. Returns its ID. */
+  /**
+   * Start a lab agent's session in a free slot. Returns its ID. A full pool
+   * throws `PoolFullError` before anything starts. The lab makes its own room.
+   */
   startAgent(
     input: Parameters<SessionManager['startAgent']>[0],
   ): Promise<string> {
-    return this.free().startAgent(input);
+    return this.use((slot) => slot.startAgent(input));
   }
 
   /** Continue a lab agent's paused session in a free slot, with its tools. */
-  async resumeAgent(id: string, tools: AgentTools): Promise<void> {
-    await this.free().resume(id, tools);
+  resumeAgent(id: string, tools: AgentTools): Promise<void> {
+    return this.use((slot) => slot.resume(id, tools));
   }
 
   /**
@@ -146,7 +165,7 @@ export class SessionPool {
   }
 
   async restart(id: unknown): Promise<void> {
-    await this.free().restart(id);
+    await this.withRoom((slot) => slot.restart(id));
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
   }
 
@@ -226,13 +245,43 @@ export class SessionPool {
     return slot;
   }
 
+  /**
+   * A start of a task or the person's session. A full pool first asks the
+   * lab to park an agent that had its turn. A pool with room takes the slot
+   * in the same step, so a close that follows the call closes it too.
+   */
+  private async withRoom<T>(
+    start: (slot: SessionManager) => Promise<T>,
+  ): Promise<T> {
+    if (this.full && this.options.makeRoom) await this.options.makeRoom();
+    return this.use(start);
+  }
+
+  /**
+   * Take a free slot at once, before any await, and run a start in it. The
+   * slot counts as taken until the start ends.
+   */
+  private async use<T>(
+    start: (slot: SessionManager) => Promise<T>,
+  ): Promise<T> {
+    const slot = this.free();
+    this.taken.add(slot);
+    try {
+      return await start(slot);
+    } finally {
+      this.taken.delete(slot);
+    }
+  }
+
   /** A slot for one more worker: a slot whose worker ended, or a new one. */
   private free(): SessionManager {
     if (this.full)
-      fail(
+      throw new PoolFullError(
         `${this.limit} ${this.limit === 1 ? 'agent runs' : 'agents run'}, the most that "Agents at once" allows. Wait for one to end, or raise the setting in Compute.`,
       );
-    const idle = this.slots.find((slot) => !slot.active);
+    const idle = this.slots.find(
+      (slot) => !slot.active && !this.taken.has(slot),
+    );
     if (idle) return idle;
     const slot: SessionManager = new SessionManager(this.root, {
       ...this.options,

@@ -38,7 +38,7 @@ import { TaskManager, type TaskPlace } from './tasks.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
-import { Lab, labWorks } from './lab.ts';
+import { Lab, labWorks, researchForLab } from './lab.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -583,6 +583,8 @@ async function serveDesk(
         },
         // Lab agents' turns go to the lab. Task turns come through onTaskTurn.
         onTurnEnd: (record) => owned.lab?.turnEnded(record),
+        // A task or the person's session that finds every slot taken gets the slot of a lab agent that had its turn.
+        makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
         onTaskTurn: (task, turn, detail, reply) =>
           void owned.tasks
             ?.turnEnded(task, turn, detail, reply)
@@ -643,6 +645,13 @@ async function serveDesk(
         onChange: remember,
       });
       owned.tasks = tasks;
+      // One run has one team. A lab and a coordinator start one at a time, so each one's check sees the other's start.
+      let team: Promise<unknown> = Promise.resolve();
+      const gate = <T>(work: () => Promise<T>): Promise<T> => {
+        const next = team.then(work, work);
+        team = next.catch(() => {});
+        return next;
+      };
       const runner = new ResearchRunner(root, {
         signal: running,
         io,
@@ -653,9 +662,14 @@ async function serveDesk(
           await memory.write().catch(() => {
             /* The coordinator still starts. A task input that is missing is refused with its name. */
           });
-          await owned.coordinator?.startForDirection(await loadWorkspace(root));
-          await tasks.passToCoordinator();
+          if (
+            await owned.coordinator?.startForDirection(
+              await loadWorkspace(root),
+            )
+          )
+            await tasks.passToCoordinator();
         },
+        blocked: () => (owned.lab?.exists ? labWorks : null),
         inbox: {
           post: (text) => tasks.post('research', text),
           take: () => tasks.takeResearch(),
@@ -671,6 +685,7 @@ async function serveDesk(
         agents: () => sessions.limit,
         // One run has one team: the coordinator does not start while a lab exists.
         blocked: () => (owned.lab?.exists ? labWorks : null),
+        gate,
         onChange: remember,
         ...(io.progress ? { progress: io.progress } : {}),
         sessions: new SessionManager(root, {
@@ -690,17 +705,24 @@ async function serveDesk(
         memory,
         quota,
         team: async () => {
-          const team = coordinator.view()?.state;
+          const research = await researchForLab(
+            runner,
+            (await loadWorkspace(root)).candidates.length,
+          );
+          const lead = coordinator.view()?.state;
           return {
             tasks: (await tasks.list()).length,
-            coordinator: Boolean(team && !team.stoppedAt),
-            research: runner.running,
+            coordinator: Boolean(lead && !lead.stoppedAt),
+            research,
           };
         },
+        gate,
         model: async (host) => {
           const workspace = await loadWorkspace(root).catch(() => null);
           return workspace?.host === host ? (workspace.model ?? null) : null;
         },
+        // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
+        runs: session === undefined,
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;
@@ -885,7 +907,12 @@ async function startLab(
   question: string | undefined,
   io: CliIO,
 ): Promise<void> {
-  if (lab.exists) return;
+  if (lab.exists) {
+    io.progress?.(
+      'This project has a lab already, so --lab started nothing new. Open it on Home in the desk.',
+    );
+    return;
+  }
   try {
     const asked =
       question ?? (await loadWorkspace(root)).research?.topic ?? undefined;

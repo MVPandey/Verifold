@@ -1243,8 +1243,9 @@ await test('use this instead: before the work starts, another direction gets its
       ask: () => Promise.reject(new Error('No prompts')),
       out: () => {},
     },
-    onSelect: async () =>
-      coordinator.startForDirection(await loadWorkspace(root)),
+    onSelect: async () => {
+      await coordinator.startForDirection(await loadWorkspace(root));
+    },
   });
   await coordinator.startForDirection(await loadWorkspace(root));
   await turns(1);

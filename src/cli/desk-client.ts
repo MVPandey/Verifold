@@ -957,16 +957,16 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
-/** The lab's message box says which post the next post answers. */
+/** The lab's message box says which post the next post answers, with a control to stop replying. */
 function showReply(): void {
+  const post = field('lab-reply');
   const note = document.getElementById('lab-reply-note');
-  if (note)
-    note.textContent = field('lab-reply')
-      ? `Replies to ${field('lab-reply')}.`
-      : '';
+  const line = document.getElementById('lab-replying');
+  if (note) note.textContent = post ? `Replying to ${post}.` : '';
+  if (line) line.hidden = !post;
 }
 
-/** Reply to a post: the next post from the lab's message box answers it. Nothing goes to the server yet. */
+/** Reply to a post, or stop replying with an empty `post`. Nothing goes to the server yet. */
 function labReply(post: string): void {
   const reply = document.getElementById('lab-reply');
   if (reply instanceof HTMLInputElement) reply.value = post;
@@ -975,12 +975,13 @@ function labReply(post: string): void {
 }
 
 /**
- * The key of each lab request that has no answer yet, by its content. A click
- * again after a timeout sends the same key, and the desk does the action once.
+ * The key of each lab request that timed out, by its content. A click again
+ * on the same action sends the same key, and the desk does the action once.
+ * Any answer from the desk clears the keys: the person moved on, so a later
+ * click is a new action.
  */
 const labKeys = new Map<string, string>();
 
-/** A lab request with its key. */
 function labKeyed(body: Record<string, unknown>): Record<string, unknown> {
   const content = JSON.stringify(body);
   let key = labKeys.get(content);
@@ -993,7 +994,6 @@ function labKeyed(body: Record<string, unknown>): Record<string, unknown> {
   return { ...body, key };
 }
 
-/** A lab action. */
 function labRequest(button: HTMLElement): Record<string, unknown> {
   const action = button.dataset.action ?? '';
   switch (action) {
@@ -1119,8 +1119,8 @@ function researchBody(kind: string | undefined): Record<string, unknown> {
 /** Send one session action. The server owns validation and the session state. */
 async function act(button: HTMLElement): Promise<void> {
   const action = button.dataset.action;
-  if (action === 'lab-reply') {
-    labReply(button.dataset.post ?? '');
+  if (action === 'lab-reply' || action === 'lab-reply-clear') {
+    labReply(action === 'lab-reply' ? (button.dataset.post ?? '') : '');
     return;
   }
   const body =
@@ -1218,6 +1218,8 @@ async function act(button: HTMLElement): Promise<void> {
             : 5000,
       ),
     });
+    // The desk answered, so the next lab click is a new action.
+    labKeys.clear();
     const reply: unknown = await response.json().catch(() => null);
     if (!response.ok)
       throw new Error(
@@ -1230,9 +1232,6 @@ async function act(button: HTMLElement): Promise<void> {
       );
     actionLabel.textContent = name ? `Done: ${name}` : 'Done';
     failure = undefined;
-    if (typeof body.key === 'string')
-      for (const [content, key] of labKeys)
-        if (key === body.key) labKeys.delete(content);
     if (action === 'stop') showStopped();
     // A new agent from the message box becomes the agent that the box writes to.
     if (body.action === 'message' && body.to === 'new-agent')
@@ -1278,7 +1277,10 @@ async function act(button: HTMLElement): Promise<void> {
     actionLabel.textContent =
       error instanceof Error && error.name !== 'TimeoutError'
         ? error.message
-        : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
+        : typeof body.key === 'string'
+          ? // The desk keeps the action. The page refreshes, and a click again does not repeat it.
+            `Still working: ${name}. The lab shows the result when it ends.`
+          : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
     failure = { selector, message: actionLabel.textContent };
   } finally {
     // The key and secret fields are empty after each try, so a value stays on the page no longer than needed.

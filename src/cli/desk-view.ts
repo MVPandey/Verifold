@@ -3443,7 +3443,9 @@ function renderHome(
       coordinator: Boolean(
         live.coordinator?.state && !live.coordinator.state.stoppedAt,
       ),
-      research: live.research?.running ?? false,
+      // Research that has found no direction yet stops when the person starts the lab.
+      research:
+        (live.research?.running ?? false) && workspace.candidates.length > 0,
     })
       ? renderLabStart(workspace.research?.topic)
       : '';

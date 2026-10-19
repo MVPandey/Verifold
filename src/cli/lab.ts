@@ -13,6 +13,7 @@ import { WakeLoop, type QueuedEvent } from './agent-loop.ts';
 import {
   Board,
   boardLimits,
+  idNumber,
   postLine,
   type Artifact,
   type Post,
@@ -40,8 +41,10 @@ import {
   release,
   snapshot,
   workspaceNames,
+  WorkspaceError,
   type Workspace,
 } from './workspaces.ts';
+import { PoolFullError } from './workers.ts';
 
 /**
  * The lab: several harness agents work on one question at the same time. Each
@@ -168,6 +171,11 @@ export interface AgentRecord {
   /** When its process stopped by itself, recently. */
   readonly restarts: readonly string[];
   readonly actions: readonly LabAction[];
+  /**
+   * The last `verifold_board` read of unread posts, by its call ID. The read
+   * marks posts read, so a repeated call gets this answer again.
+   */
+  readonly lastRead: { readonly key: string; readonly text: string } | null;
 }
 
 /** What the desk shows of one direction. */
@@ -228,31 +236,64 @@ export interface RunTeam {
   readonly tasks: number;
   /** The coordinator runs. */
   readonly coordinator: boolean;
-  /** A research step runs, and can choose a direction for the coordinator. */
+  /** A research step runs that has found directions, which it can give to the coordinator. */
   readonly research: boolean;
 }
 
 /**
  * Why a lab cannot start on this run, or null. One run has one team: the
  * coordinator's tasks, or a lab. The desk, the CLI, and `Lab.start` use this
- * rule, and the coordinator does not start while a lab exists.
+ * rule, and neither the coordinator nor research starts while a lab exists.
  */
 export function teamWorks(run: RunTeam): string | null {
-  if (run.research)
-    return 'Research is running. Wait for its step to end, or cancel it, then start the lab.';
   if (run.tasks || run.coordinator)
-    return 'The team already works on this project. Start over in Records first, then start the lab.';
+    return "This run belongs to the coordinator's team. Start over in Records, then start the lab on the new run.";
+  if (run.research)
+    return 'Research is running and has found directions. Wait for its step to end, or cancel it in Research, then start the lab.';
   return null;
 }
 
-/** Why the coordinator cannot start: a lab works on the run. */
+/**
+ * Research that has found no direction yet stops for a lab: Start over begins
+ * it by itself. Returns whether research still works on the run, with
+ * directions that it could give to the coordinator.
+ */
+export async function researchForLab(
+  research: {
+    readonly running: boolean;
+    readonly busy: boolean;
+    cancel(): void;
+    settled(): Promise<void>;
+  },
+  directions: number,
+): Promise<boolean> {
+  if (research.running && !directions) {
+    try {
+      research.cancel();
+    } catch {
+      /* The step ended by itself. */
+    }
+    await research.settled();
+  }
+  return research.busy && directions > 0;
+}
+
+/** Why the coordinator or research cannot start: a lab works on the run. */
 export const labWorks =
-  'A lab works on this project. Start over in Records first, then start the coordinator.';
+  'A lab works on this run. Start over in Records to use research and the coordinator on a new run.';
 
 export interface LabOptions {
   readonly sessions: LabSessions;
-  /** What else works on the run. A lab starts only when nothing does. */
+  /**
+   * What else works on the run, after research that has found no direction
+   * yet stops for the lab. A lab starts only when nothing works.
+   */
   readonly team?: () => Promise<RunTeam>;
+  /**
+   * One run has one team. The start of a lab runs through this gate, which
+   * the coordinator's start shares.
+   */
+  readonly gate?: <T>(work: () => Promise<T>) => Promise<T>;
   readonly memory?: {
     note(who: string, text: unknown): Promise<string>;
     digest(): Promise<string>;
@@ -263,6 +304,12 @@ export interface LabOptions {
   readonly model?: (host: HarnessName) => Promise<string | null>;
   readonly progress?: (line: string) => void;
   readonly timing?: Partial<typeof labTiming>;
+  /**
+   * Agents start, resume, and wake. False in a process that runs one session
+   * of the person and then ends: it shows the lab, and its changes wait for
+   * the project's owner.
+   */
+  readonly runs?: boolean;
 }
 
 function fail(message: string): never {
@@ -277,6 +324,12 @@ type ProofRequest = (
 
 const stoppedText =
   'This session no longer works for the lab, so Verifold did nothing.';
+
+const movingText =
+  'Verifold is moving the lab to the archive. Try again in a moment.';
+
+/** Agent handles such as claude-12. */
+const handlePattern = '(?:claude|codex)-[1-9]\\d{0,3}';
 
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -456,7 +509,7 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
     typeof value.id !== 'string' ||
     !agentId.test(value.id) ||
     typeof value.handle !== 'string' ||
-    !/^(claude|codex)-[1-9]\d?$/.test(value.handle) ||
+    !new RegExp(`^${handlePattern}$`).test(value.handle) ||
     (value.host !== 'claude' && value.host !== 'codex') ||
     typeof value.direction !== 'string' ||
     !directionId.test(value.direction) ||
@@ -543,6 +596,14 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
         ? [action as unknown as LabAction]
         : [];
     }),
+    lastRead: (() => {
+      const read = object(value.lastRead);
+      return read &&
+        typeof read.key === 'string' &&
+        typeof read.text === 'string'
+        ? { key: read.key.slice(0, 200), text: read.text }
+        : null;
+    })(),
   };
 }
 
@@ -555,11 +616,6 @@ function slug(id: string, title: string): string {
     .slice(0, 40)
     .replace(/-+$/, '');
   return words ? `${id}-${words}` : id;
-}
-
-/** The number in an ID such as p-12 or d-3. */
-function number(id: string): number {
-  return Number(id.slice(2));
 }
 
 export class Lab {
@@ -593,6 +649,14 @@ export class Lab {
   private readonly git = new Map<string, Promise<unknown>>();
   /** When an agent whose start failed can start again. */
   private readonly retryAt = new Map<string, number>();
+  /** The order of the commits of each direction, so an older one never becomes its newest. */
+  private commits = 0;
+  private readonly applied = new Map<string, number>();
+  /** When each agent's session started or resumed, and the turns it ended since. */
+  private readonly launches = new Map<
+    string,
+    { readonly at: number; turns: number }
+  >();
 
   constructor(root: string, options: LabOptions) {
     this.root = root;
@@ -643,10 +707,12 @@ export class Lab {
   /**
    * Before Start over or a restore: pause the lab, so every agent's session
    * parks, and wait until every record is on disk. The caller then moves the
-   * records and calls `reload`.
+   * records and calls `reload`. Returns true when this paused the lab, so a
+   * caller whose move failed can resume it.
    */
-  async suspend(): Promise<void> {
-    if (this.state && !this.state.pausedAt) await this.pause();
+  async suspend(): Promise<boolean> {
+    const pausing = Boolean(this.state && !this.state.pausedAt);
+    if (pausing) await this.pause();
     await this.serial(async () => {
       for (const loop of this.loops.values()) await loop.close();
       await Promise.all(
@@ -654,6 +720,7 @@ export class Lab {
       );
       this.suspended = true;
     });
+    return pausing;
   }
 
   /**
@@ -668,6 +735,8 @@ export class Lab {
       this.posted.clear();
       this.settling.clear();
       this.retryAt.clear();
+      this.launches.clear();
+      this.applied.clear();
       await this.load();
       this.suspended = false;
     });
@@ -679,7 +748,7 @@ export class Lab {
    * says so, and the lab resumes them one at a time.
    */
   resumeAll(): void {
-    if (!this.state) return;
+    if (!this.state || this.options.runs === false) return;
     for (const agent of this.agents.values())
       if (this.active(agent))
         this.loop(agent.id).add(
@@ -721,7 +790,13 @@ export class Lab {
 
   /** Start the lab on a question, when nothing else works on the run. */
   start(question: unknown): Promise<void> {
+    const start = (): Promise<void> => this.startNow(question);
+    return this.options.gate ? this.options.gate(start) : start();
+  }
+
+  private startNow(question: unknown): Promise<void> {
     return this.serial(async () => {
+      if (this.suspended) fail(movingText);
       if (this.state) fail('The lab already runs.');
       const team = await this.options.team?.();
       const blocked = team ? teamWorks(team) : null;
@@ -788,7 +863,7 @@ export class Lab {
         },
       );
       const state = this.current();
-      const id = `d-${Math.max(0, ...used, ...state.directions.map((entry) => number(entry.id))) + 1}`;
+      const id = `d-${Math.max(0, ...used, ...state.directions.map((entry) => idNumber(entry.id))) + 1}`;
       let workspace: Workspace;
       try {
         workspace = await allocate(this.root, {
@@ -838,8 +913,10 @@ export class Lab {
     this.roomForDirection();
     const state = this.current();
     const { title, host, bar } = input;
-    const agent = `a-${Math.max(0, ...[...this.agents.keys()].map(number)) + 1}`;
+    const agent = `a-${Math.max(0, ...[...this.agents.keys()].map(idNumber)) + 1}`;
     const handle = state.handles[host] + 1;
+    if (handle > 9999 || idNumber(agent) > 9999)
+      fail('This lab has opened as many directions as it can.');
     const now = new Date().toISOString();
     const record: AgentRecord = {
       schemaVersion: 1,
@@ -862,9 +939,9 @@ export class Lab {
       idleStreak: 0,
       restarts: [],
       actions: [],
+      lastRead: null,
     };
     this.track(record);
-    await this.saveAgent(record);
     this.state = {
       ...state,
       handles: { ...state.handles, [host]: handle },
@@ -884,7 +961,18 @@ export class Lab {
         },
       ],
     };
-    await this.stateFile.save();
+    try {
+      await this.saveAgent(record);
+      await this.stateFile.save();
+    } catch (error) {
+      // The direction is not open: memory and the files go back to before.
+      this.state = state;
+      this.agents.delete(agent);
+      this.files.delete(agent);
+      await this.stateFile.save().catch(() => {});
+      await rm(join(this.folder, 'agents', `${agent}.json`), { force: true });
+      throw error;
+    }
     // A full board refuses the note. The direction is open all the same.
     await this.add({
       author: 'verifold',
@@ -946,6 +1034,7 @@ export class Lab {
           stopReason: 'person',
         }));
       }
+      // A full board refuses the note. The direction is stopped all the same.
       await this.add({
         author: 'verifold',
         kind: 'status',
@@ -956,7 +1045,7 @@ export class Lab {
         ),
         mentions: [],
         artifacts: [],
-      });
+      }).catch(() => {});
     });
   }
 
@@ -1045,7 +1134,7 @@ export class Lab {
         ...new Set(
           [
             ...body.matchAll(
-              /(?:^|\s)@((?:claude|codex)-[1-9]\d?|all|person)\b/g,
+              new RegExp(`(?:^|\\s)@(${handlePattern}|all|person)\\b`, 'g'),
             ),
           ].map((match) => this.mention(match[1] ?? '', true)),
         ),
@@ -1084,6 +1173,8 @@ export class Lab {
         ]);
       const posted = this.posted.delete(agent.id);
       if (turned) {
+        const launch = this.launches.get(agent.id);
+        if (launch) launch.turns += 1;
         this.settling.add(agent.id);
         void this.afterTurn(agent.id, posted)
           .catch(() => {})
@@ -1091,7 +1182,9 @@ export class Lab {
       }
       return;
     }
-    loop.turnEnded();
+    // A turn that stopped or paused did not finish: its digest comes again.
+    loop.turnEnded(turned);
+    this.launches.delete(agent.id);
     if (record.status !== 'ended' && record.status !== 'failed') return;
     // The process stopped by itself: a pause or a stop ends no turn. The lab
     // starts it again after a wait, at most twice an hour.
@@ -1181,8 +1274,7 @@ export class Lab {
   }
 
   private current(): LabState {
-    if (this.suspended)
-      fail('Verifold is moving the lab to the archive. Try again in a moment.');
+    if (this.suspended) fail(movingText);
     return this.state ?? fail('Start the lab first.');
   }
 
@@ -1417,21 +1509,32 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     callId: string,
   ): Promise<{ readonly ok: boolean; readonly text: string }> {
     const refused = { ok: false, text: stoppedText };
+    const args = object(input) ?? {};
     const known = await this.serial(() => {
       const agent = this.usable(id, generation);
       if (!agent) return refused;
+      if (
+        name === 'verifold_board' &&
+        args.view === 'unread' &&
+        agent.lastRead?.key === callId
+      )
+        return { ok: true, text: agent.lastRead.text };
       const action = agent.actions.find((entry) => entry.key === callId);
       return action ? { ok: action.ok, text: action.result } : null;
     });
     if (known) return known;
-    const args = object(input) ?? {};
     let result: { ok: boolean; text: string };
+    // A read that Verifold could not do, as opposed to one that it refused.
+    let broken = false;
     try {
       result = {
         ok: true,
         text: await this.act(id, generation, name, args, callId),
       };
     } catch (error) {
+      broken = !(
+        error instanceof SessionActionError || error instanceof WorkspaceError
+      );
       result = {
         ok: false,
         text:
@@ -1443,7 +1546,8 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     return this.serial(async () => {
       if (!this.usable(id, generation)) return result;
       const read = name === 'verifold_board' || name === 'verifold_read';
-      if (read && !result.ok) this.loops.get(id)?.readFailed();
+      // A refusal, such as a path that does not exist, tells the agent what it needs. Only a broken read hides events.
+      if (read && broken) this.loops.get(id)?.readFailed();
       if (!read)
         await this.update(id, (agent) => ({
           ...agent,
@@ -1472,7 +1576,11 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     switch (name) {
       case 'verifold_board':
         return this.serial(() =>
-          this.read(this.usable(id, generation) ?? fail(stoppedText), args),
+          this.read(
+            this.usable(id, generation) ?? fail(stoppedText),
+            args,
+            callId,
+          ),
         );
       case 'verifold_post':
         return this.postFor(id, generation, args, callId);
@@ -1560,25 +1668,21 @@ Start now: plan the next step of your direction, do it, and post what you find.`
         host: agent.host,
       };
     });
-    const commit = draft.proof.length
-      ? await this.inDirection(draft.own.id, () =>
-          snapshot(
-            this.root,
-            draft.own.workspace,
-            `Verifold: proof for a post of ${draft.handle}`,
-            draft.proof.flatMap((entry) =>
-              entry.type === 'diff' ? entry.paths : [entry.path],
-            ),
+    const made = draft.proof.length
+      ? await this.commit(
+          draft.own,
+          `Verifold: proof for a post of ${draft.handle}`,
+          draft.proof.flatMap((entry) =>
+            entry.type === 'diff' ? entry.paths : [entry.path],
           ),
         )
       : null;
-    const artifacts = commit
-      ? await this.proof(draft.own, commit, draft.proof)
+    const artifacts = made
+      ? await this.proof(draft.own, made.commit, draft.proof)
       : [];
     return this.serial(async () => {
       if (!this.usable(id, generation)) fail(stoppedText);
-      if (commit)
-        await this.setHead(draft.own.id, draft.own.workspace.path, commit);
+      if (made) await this.setHead(draft.own, made);
       const post = await this.add({
         author: id,
         harness: draft.host,
@@ -1599,6 +1703,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
   private async read(
     agent: AgentRecord,
     args: Record<string, unknown>,
+    callId: string,
   ): Promise<string> {
     const name = (author: string): string => this.name(author);
     const limit =
@@ -1621,14 +1726,17 @@ Start now: plan the next step of your direction, do it, and post what you find.`
           agent,
           { limit, name },
         );
+        const answer = digest.lines.length
+          ? digest.lines.join('\n')
+          : 'No unread posts.';
+        // The answer is kept with the call ID, so a repeated call gets it again.
         await this.update(agent.id, (current) => ({
           ...current,
           readThrough: digest.readThrough,
           seen: digest.seen,
+          lastRead: { key: callId, text: answer },
         }));
-        return digest.lines.length
-          ? digest.lines.join('\n')
-          : 'No unread posts.';
+        return answer;
       }
       case 'summary':
         return this.summary();
@@ -1785,27 +1893,42 @@ Start now: plan the next step of your direction, do it, and post what you find.`
   }
 
   /**
+   * Commit a direction's folder in its Git queue. The order number grows with
+   * each commit of the lab, so the order of the commits of one direction is
+   * the order in which they were made.
+   */
+  private commit(
+    direction: Direction,
+    message: string,
+    named: readonly string[] = [],
+  ): Promise<{ readonly commit: string; readonly order: number }> {
+    return this.inDirection(direction.id, async () => ({
+      commit: await snapshot(this.root, direction.workspace, message, named),
+      order: ++this.commits,
+    }));
+  }
+
+  /**
    * A commit of a direction's folder becomes its newest, so other agents read
-   * its files there. Returns true when the newest commit changed.
+   * its files there. A commit older than one already applied changes nothing,
+   * so two posts whose proof ends in a different order keep the newest.
+   * Returns true when the newest commit changed.
    */
   private async setHead(
-    id: string,
-    path: string,
-    commit: string,
+    of: Direction,
+    made: { readonly commit: string; readonly order: number },
   ): Promise<boolean> {
     const state = this.state;
-    const direction = state?.directions.find((entry) => entry.id === id);
+    const direction = state?.directions.find((entry) => entry.id === of.id);
     // After Start over the direction can be gone, or be another one.
-    if (
-      !state ||
-      direction?.workspace.path !== path ||
-      direction.head === commit
-    )
-      return false;
+    if (!state || direction?.workspace.path !== of.workspace.path) return false;
+    if ((this.applied.get(of.id) ?? 0) > made.order) return false;
+    this.applied.set(of.id, made.order);
+    if (direction.head === made.commit) return false;
     this.state = {
       ...state,
       directions: state.directions.map((entry) =>
-        entry.id === id ? { ...entry, head: commit } : entry,
+        entry.id === of.id ? { ...entry, head: made.commit } : entry,
       ),
     };
     await this.stateFile.save();
@@ -1847,7 +1970,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
                 this.update(agent.id, (current) => ({
                   ...current,
                   seen:
-                    number(post.id) > current.readThrough
+                    idNumber(post.id) > current.readThrough
                       ? [...current.seen, post.id].slice(-boardLimits.seen)
                       : current.seen,
                 })),
@@ -1884,16 +2007,11 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     const direction = this.direction(agent.direction);
     let changed = false;
     try {
-      const commit = await this.inDirection(direction.id, () =>
-        snapshot(
-          this.root,
-          direction.workspace,
-          `Verifold: after a turn of ${agent.handle}`,
-        ),
+      const made = await this.commit(
+        direction,
+        `Verifold: after a turn of ${agent.handle}`,
       );
-      changed = await this.serial(() =>
-        this.setHead(direction.id, direction.workspace.path, commit),
-      );
+      changed = await this.serial(() => this.setHead(direction, made));
     } catch {
       /* A failed commit counts as no change. The next turn commits again. */
     }
@@ -1982,7 +2100,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
 
   /** Start the ticks that start, resume, and park agents. */
   private watch(): void {
-    if (this.ticker || this.closing) return;
+    if (this.ticker || this.closing || this.options.runs === false) return;
     this.ticker = setInterval(
       () => void this.serial(() => this.tick()).catch(() => {}),
       this.timing.tickMs,
@@ -1991,18 +2109,27 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     this.kick();
   }
 
+  /** When the agent's hourly turns allow its next one, or null when they allow it now. */
+  private turnsUntil(agent: AgentRecord): number | null {
+    const hour = Date.now() - 3_600_000;
+    const recent = agent.wakeups.filter((at) => Date.parse(at) > hour);
+    return recent.length >= labLimits.wakeupsPerHour
+      ? Date.parse(recent[0] ?? '') + 3_600_000
+      : null;
+  }
+
   /**
    * One tick. An agent of a used-up harness parks to free its slot. An agent
    * whose events wait, or that never started, starts or resumes, one per tick,
-   * when a slot is free or an idle agent can give its slot.
+   * when a slot is free or an agent that had its turn can give its slot. The
+   * agent that waited longest goes first, so every direction gets turns.
    */
   private async tick(): Promise<void> {
     const state = this.state;
     if (!state || state.pausedAt || this.closing) return;
     const sessions = this.options.sessions;
-    for (const agent of [...this.agents.values()].sort(
-      (a, b) => number(a.id) - number(b.id),
-    )) {
+    const waiting: AgentRecord[] = [];
+    for (const agent of this.agents.values()) {
       if (!this.active(agent)) continue;
       const live = agent.session
         ? (sessions.view(agent.session)?.live ?? false)
@@ -2018,18 +2145,32 @@ Start now: plan the next step of your direction, do it, and post what you find.`
         continue;
       }
       if (parked || (agent.session !== null && !this.waiting(agent))) continue;
-      // A start that failed waits before the next one.
+      // A start that failed waits before the next one, and so do the hourly turns.
       if ((this.retryAt.get(agent.id) ?? 0) > Date.now()) continue;
-      if (sessions.full && !(await this.free(agent.id))) continue;
-      await this.launch(agent.id);
-      return;
+      if ((this.turnsUntil(agent) ?? 0) > Date.now()) continue;
+      waiting.push(agent);
     }
+    const next = waiting.sort(
+      (a, b) =>
+        Date.parse(a.wakeups.at(-1) ?? a.startedAt) -
+        Date.parse(b.wakeups.at(-1) ?? b.startedAt),
+    )[0];
+    if (!next) return;
+    if (sessions.full && !(await this.free(next.id))) return;
+    await this.launch(next.id);
   }
 
-  /** Park the idle agent that was active least recently and has nothing to read, so its slot is free. */
-  private async free(except: string): Promise<boolean> {
+  /**
+   * Park one agent that had its turn, so another agent or the person's
+   * session can use its slot. An agent that waits for its hourly turns goes
+   * first, then the one that has held its slot longest. An agent whose turn
+   * runs, or that has not ended a turn since it started, keeps its slot.
+   * Returns true when a slot is free.
+   */
+  private async free(except?: string): Promise<boolean> {
     const sessions = this.options.sessions;
-    const idle = [...this.agents.values()]
+    const now = Date.now();
+    const candidates = [...this.agents.values()]
       .filter(
         (agent) =>
           agent.id !== except &&
@@ -2038,26 +2179,38 @@ Start now: plan the next step of your direction, do it, and post what you find.`
           sessions.idle(agent.session) &&
           !this.turning.has(agent.id) &&
           !this.settling.has(agent.id) &&
-          !this.waiting(agent) &&
-          // Its next turn is due soon, unless it waits after turns that changed nothing.
-          (!this.next.has(agent.id) || agent.idleStreak >= 2),
+          (this.launches.get(agent.id)?.turns ?? 1) > 0,
       )
-      .sort(
-        (a, b) =>
-          Date.parse(a.wakeups.at(-1) ?? a.startedAt) -
-          Date.parse(b.wakeups.at(-1) ?? b.startedAt),
-      );
-    const agent = idle[0];
+      .map((agent) => ({
+        agent,
+        capped: (this.turnsUntil(agent) ?? 0) > now,
+        since: this.launches.get(agent.id)?.at ?? 0,
+      }))
+      .sort((a, b) => Number(b.capped) - Number(a.capped) || a.since - b.since);
+    const agent = candidates[0]?.agent;
     if (!agent?.session) return false;
     await sessions.park(agent.session);
     return !sessions.full;
   }
 
   /**
+   * A task or the person's session needs a slot and every slot is taken: an
+   * agent that had its turn gives its slot. The agent continues when a slot
+   * is free again.
+   */
+  yieldSlot(): Promise<boolean> {
+    return this.serial(() =>
+      this.state && !this.suspended ? this.free() : false,
+    );
+  }
+
+  /**
    * Start or resume an agent's session. A paused session resumes with its
    * conversation. A session without a conversation, a Codex thread with older
    * tools, or a session whose resume failed starts again with the board
-   * summary. A full pool is no failure: the agent waits for the next tick. A
+   * summary. Its unread posts stay unread, so its next digest carries them.
+   * The start takes its slot before any await, so a full pool refuses it at
+   * once: the agent waits for the next tick and keeps its conversation. A
    * start that fails counts as a stop by itself and waits before the next one.
    */
   private async launch(id: string): Promise<void> {
@@ -2071,57 +2224,57 @@ Start now: plan the next step of your direction, do it, and post what you find.`
       !(agent.host === 'codex' && agent.toolsVersion < labToolsVersion)
         ? await readRecord(this.root, agent.session)
         : null;
-    if (saved && resumable(saved)) {
-      if (sessions.full) return;
-      await this.update(id, (current) => ({ ...current, generation }));
-      try {
-        // The pool is not full, so the start takes a slot at once.
-        await sessions.resumeAgent(saved.id, tools);
-        this.retryAt.delete(id);
-      } catch (error) {
-        // The next start begins a new session with the board summary.
-        await this.update(id, (current) => ({ ...current, session: null }));
-        this.options.progress?.(
-          `${agent.handle} could not resume its conversation, so its next start begins a new one: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-        await this.countStop(id);
-      }
-      return;
-    }
-    const prompt = await this.firstPrompt(agent);
+    const resume = saved !== null && resumable(saved);
+    const prompt = resume ? null : await this.firstPrompt(agent);
+    // From here on nothing awaits before the start takes its slot.
     if (sessions.full) return;
-    await this.update(id, (current) => ({
+    const loop = this.loop(id);
+    const saving = this.update(id, (current) => ({
       ...current,
       generation,
-      toolsVersion: labToolsVersion,
-    }));
-    const loop = this.loop(id);
-    loop.started();
-    this.turning.add(id);
-    this.posted.delete(id);
+      ...(resume ? {} : { toolsVersion: labToolsVersion }),
+    })).catch(() => {
+      /* The next save writes the record. */
+    });
+    if (!resume) {
+      loop.started();
+      this.turning.add(id);
+      this.posted.delete(id);
+    }
     try {
-      const session = await sessions.startAgent({
-        host: agent.host,
-        ...(agent.model ? { model: agent.model } : {}),
-        prompt,
-        cwd: join(this.root, direction.workspace.path),
-        agent: id,
-        tools,
-      });
+      if (resume) await sessions.resumeAgent(saved.id, tools);
+      else {
+        const session = await sessions.startAgent({
+          host: agent.host,
+          ...(agent.model ? { model: agent.model } : {}),
+          prompt: prompt ?? '',
+          cwd: join(this.root, direction.workspace.path),
+          agent: id,
+          tools,
+        });
+        await this.update(id, (current) => ({ ...current, session }));
+      }
       this.retryAt.delete(id);
-      await this.update(id, (current) => ({
-        ...current,
-        session,
-        readThrough: this.board.latest(),
-        seen: [],
-      }));
+      this.launches.set(id, { at: Date.now(), turns: 0 });
     } catch (error) {
-      this.turning.delete(id);
-      loop.turnEnded();
+      await saving;
+      if (!resume) {
+        this.turning.delete(id);
+        loop.turnEnded();
+      }
+      // Another start took the last slot first. Nothing failed.
+      if (error instanceof PoolFullError) return;
+      // The next start begins a new session with the board summary.
+      if (resume)
+        await this.update(id, (current) => ({ ...current, session: null }));
       this.options.progress?.(
-        `${agent.handle} did not start: ${error instanceof Error ? error.message : 'unknown error'}`,
+        resume
+          ? `${agent.handle} could not resume its conversation, so its next start begins a new one: ${error instanceof Error ? error.message : 'unknown error'}`
+          : `${agent.handle} did not start: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
       await this.countStop(id);
+      return;
     }
+    await saving;
   }
 }

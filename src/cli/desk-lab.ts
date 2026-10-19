@@ -1,5 +1,5 @@
 import { escapeHtml as e } from '../ui/dom.ts';
-import type { Artifact, Post, PostKind } from './board.ts';
+import { idNumber, type Artifact, type Post, type PostKind } from './board.ts';
 import { labLimits, type DirectionView, type LabView } from './lab.ts';
 import { hostName } from './session.ts';
 
@@ -48,7 +48,7 @@ function statusText(
     case 'usage':
       return `Waits for ${hostName(entry.agent.host)}'s usage window until ${until}`;
     case 'turns':
-      return `Waits until ${until}: 12 turns an hour`;
+      return `Waits until ${until}: ${labLimits.wakeupsPerHour} turns an hour`;
     case 'paused':
       return 'Paused';
     case 'stopped':
@@ -72,7 +72,7 @@ function proofText(artifact: Artifact): string {
 
 /**
  * One direction: its title and bar, its agent, its state, its controls, and
- * the agent's transcript. A control keeps its direction in
+ * the agent's transcript under them. A control keeps its direction in
  * `data-lab-direction`: the page opens a research direction on a click of an
  * element with `data-direction`.
  */
@@ -94,7 +94,7 @@ function directionRow(
   const transcript = agent.session
     ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
     : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(direction.bar)}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(statusText(entry, clock))}</span>${controls}${transcript}</li>`;
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(direction.bar)}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(statusText(entry, clock))}</span><span class="lab-controls">${controls}</span>${transcript}</li>`;
 }
 
 function postHtml(
@@ -132,33 +132,47 @@ function board(
       replies.set(post.replyTo, [...(replies.get(post.replyTo) ?? []), post]);
     else roots.push(post);
   // All replies of a thread show under its first post.
-  const thread = (post: Post): Post[] =>
-    (replies.get(post.id) ?? []).flatMap((reply) => [reply, ...thread(reply)]);
-  // A thread's activity is its newest post. Post numbers grow with time.
-  const latest = (post: Post): number =>
-    Math.max(
-      Number(post.id.slice(2)),
-      ...thread(post).map((reply) => Number(reply.id.slice(2))),
-    );
-  const groups = new Map<string, Post[]>();
-  for (const post of roots) {
-    const key = post.direction ?? '';
-    groups.set(key, [...(groups.get(key) ?? []), post]);
+  const under = (post: Post): Post[] =>
+    (replies.get(post.id) ?? []).flatMap((reply) => [reply, ...under(reply)]);
+  // Each thread once: its replies, and its activity, the number of its newest post.
+  const threads = new Map(
+    roots.map((root) => {
+      const list = under(root);
+      return [
+        root.id,
+        {
+          root,
+          list,
+          latest: Math.max(
+            idNumber(root.id),
+            ...list.map((post) => idNumber(post.id)),
+          ),
+        },
+      ] as const;
+    }),
+  );
+  const groups = new Map<string, { latest: number; ids: string[] }>();
+  for (const { root, latest } of threads.values()) {
+    const key = root.direction ?? '';
+    const group = groups.get(key) ?? { latest: 0, ids: [] };
+    group.latest = Math.max(group.latest, latest);
+    group.ids.push(root.id);
+    groups.set(key, group);
   }
-  const newest = (list: readonly Post[]): number =>
-    Math.max(...list.map(latest));
   return [...groups.entries()]
-    .sort(([, a], [, b]) => newest(b) - newest(a))
-    .map(([key, list]) => {
+    .sort(([, a], [, b]) => b.latest - a.latest)
+    .map(([key, group]) => {
       const title = key
         ? (view.state.directions.find((entry) => entry.id === key)?.title ??
           key)
         : 'Not about one direction';
-      return `<section class="lab-thread" aria-label="${e(title)}"><h3>${e(title)}</h3>${[
-        ...list,
-      ]
-        .sort((a, b) => latest(b) - latest(a))
-        .map((post) => postHtml(post, name, clock, thread(post)))
+      return `<section class="lab-thread" aria-label="${e(title)}"><h3>${e(title)}</h3>${group.ids
+        .flatMap((id) => {
+          const thread = threads.get(id);
+          return thread ? [thread] : [];
+        })
+        .sort((a, b) => b.latest - a.latest)
+        .map((thread) => postHtml(thread.root, name, clock, thread.list))
         .join('')}</section>`;
     })
     .join('');
@@ -199,8 +213,9 @@ export function renderLab(
   <section class="card lab-compose" aria-labelledby="compose-title"><h2 id="compose-title">Write to the lab</h2>
   <textarea id="lab-text" rows="3" maxlength="4000" aria-labelledby="compose-title" placeholder="Write to the lab. ${e(handles[0] ?? '@claude-1')} wakes that agent."></textarea>
   <input id="lab-reply" type="hidden" value="">
+  <p class="lab-replying" id="lab-replying" hidden><span id="lab-reply-note"></span><button type="button" class="quiet" data-action="lab-reply-clear" aria-label="Stop replying">×</button></p>
   <div class="fields"><label class="field" for="lab-direction">About<select id="lab-direction"><option value="">Any direction</option>${state.directions.map((direction) => `<option value="${e(direction.id)}">${e(direction.title)}</option>`).join('')}</select></label></div>
-  <div class="actions"><button type="button" class="primary" data-action="lab-post">Post</button><span class="fine" id="lab-reply-note"></span></div>
+  <div class="actions"><button type="button" class="primary" data-action="lab-post">Post</button></div>
   <p class="fine">${handles.length ? `Mention ${e(handles.join(', '))}, or @all. A post to nobody wakes every agent.` : 'Agents read your posts once their directions open.'}</p></section>
   <section aria-labelledby="board-title"><div class="section-title"><h2 id="board-title">Board</h2><span class="count">${view.posts.length} ${view.posts.length === 1 ? 'post' : 'posts'}</span></div>${board(view, name, clock)}</section>
   </div>`;

@@ -261,7 +261,8 @@ function check(entry: Record<string, unknown>): Post | string {
   };
 }
 
-function number(id: string): number {
+/** The number in an ID such as p-12, d-3, or a-1. Numbers grow with time. */
+export function idNumber(id: string): number {
   return Number(id.slice(2));
 }
 
@@ -346,7 +347,7 @@ export class Board {
   /** The number of the newest post, or 0. A new agent's read cursor starts here. */
   latest(): number {
     const post = this.posts.at(-1);
-    return post ? number(post.id) : 0;
+    return post ? idNumber(post.id) : 0;
   }
 
   /**
@@ -453,7 +454,7 @@ export class Board {
     const seen = new Set(read.seen ?? []);
     const unread = this.posts.filter(
       (post) =>
-        number(post.id) > read.readThrough &&
+        idNumber(post.id) > read.readThrough &&
         post.author !== agent.id &&
         !seen.has(post.id),
     );
@@ -472,12 +473,15 @@ export class Board {
       ...unread.filter((post) => !this.wakes(post, agent)),
     ];
     const limit = options.limit ?? boardLimits.digest;
+    // When the posts do not fit, the last line says how many more wait. It never takes the only line.
     const shown =
-      ordered.length <= limit ? ordered : ordered.slice(0, limit - 1);
+      ordered.length <= limit
+        ? ordered
+        : ordered.slice(0, Math.max(1, limit - 1));
     const shownIds = new Set(shown.map((post) => post.id));
     const hidden = unread.filter((post) => !shownIds.has(post.id));
     const through = hidden[0]
-      ? Math.max(read.readThrough, number(hidden[0].id) - 1)
+      ? Math.max(read.readThrough, idNumber(hidden[0].id) - 1)
       : Math.max(read.readThrough, this.latest());
     return {
       lines: [
@@ -490,7 +494,7 @@ export class Board {
       ],
       readThrough: through,
       seen: [...new Set([...seen, ...shownIds])]
-        .filter((id) => number(id) > through)
+        .filter((id) => idNumber(id) > through)
         .slice(-boardLimits.seen),
     };
   }

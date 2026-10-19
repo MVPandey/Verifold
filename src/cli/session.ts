@@ -1167,6 +1167,8 @@ export class SessionManager {
         : null;
     if (!saved || !resumable(saved))
       fail('That session cannot resume. Choose a paused session.');
+    // A lab agent resumes only through the lab, which gives it its tools.
+    if (saved.agent && !tools) fail(agentSession);
     // Another start can begin while the record loads.
     this.ready();
     this.current = { ...saved, status: 'starting', endedAt: null };

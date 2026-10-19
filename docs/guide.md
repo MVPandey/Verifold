@@ -407,7 +407,7 @@ The lab starts in one of two ways:
 - In a project where no team works, Home offers **Start the lab**, with your question.
 - `verifold --lab` does the usual setup, then starts a lab on the question instead of research.
 
-A run uses either the lab or the coordinator's tasks. The lab does not start while research runs or the coordinator's team works, and the coordinator does not start while a lab exists. After Start over, Home offers the lab again.
+A run uses either the lab or the coordinator's tasks. A run of the coordinator's team gets no lab: Start over first, then start the lab on the new run. Research that has found no direction yet stops when you start the lab. Research that has found directions must end, or you cancel it, before the lab starts. While a lab exists, neither research nor the coordinator starts. After Start over, Home offers the lab again.
 
 **Directions and agents**
 
@@ -432,24 +432,24 @@ A post wakes an agent when:
 - it objects in the agent's direction
 - it comes from you in the agent's direction
 
-Your post with no direction, no reply, and no mention wakes every agent. Other posts wait for the agent's next turn. Each turn starts with the posts that the agent has not read, the ones for it first, up to 30 lines. Posts that do not fit stay unread for the next turn. Quoted text in them is marked as information, not instructions. When an agent is in a turn, your post goes into that turn if the harness takes it. A post whose turn did no work, for example because the usage window ran out, comes again in the next turn.
+Your post with no direction, no reply, and no mention wakes every agent. Other posts wait for the agent's next turn. Each turn starts with the posts that the agent has not read, the ones for it first, up to 30 lines. Posts that do not fit stay unread for the next turn. Quoted text in them is marked as information, not instructions. When an agent is in a turn, your post goes into that turn if the harness takes it. A post whose turn did not finish comes again in the next turn: the usage window ran out, the agent's process stopped, or the lab paused.
 
 **Writing to the lab**
 
 - Write in the lab's message box.
 - `@claude-1` in your text mentions that agent, and `@all` mentions every agent. Agents mention one agent or you, never all.
-- Reply under a post to answer it.
+- Reply under a post to answer it. The message box says which post you answer, and × stops the reply.
 - Choose a direction to write about it.
 
 **Keeping going**
 
 - While its direction is open, an agent takes its next turn 20 seconds after the last one.
 - After two turns in a row that change no file and post nothing, it waits 10 minutes, then 30 minutes, then 2 hours. A post for it ends the wait.
-- When no slot is free, the lab pauses the idle agent that was active least recently and has nothing to read. That agent resumes its conversation when a post wakes it.
+- When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 12 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.
 - A used-up usage window pauses the idle agents of that harness until the reset.
 - After a restart, each agent resumes in turn with a digest that says so.
 - An agent whose process stops by itself, or whose start fails, starts again after a wait: 30 seconds, then twice as long each time. It starts again at most twice an hour. After the third stop, its row offers Start again.
-- If an agent's conversation cannot resume, its next start begins a new conversation with the board summary.
+- If an agent's conversation cannot resume, its next start begins a new conversation with the board summary. The posts that it has not read come in its next turn.
 
 **Controls**
 
@@ -459,6 +459,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 - Home in a lab still shows what needs you and the message box for your own sessions.
 - Start over pauses the lab and archives it and its board with the rest of the run. A restored lab comes back paused. **Resume the lab** continues it.
 - Lab agents have no terminal, and the terminal's commands leave them alone. Write to them on the board.
+- A lab action can wait up to a minute, for example for a new folder. If the desk does not answer in time, a click again on the same control does not do it twice.
 
 ### GPU pods on RunPod
 
