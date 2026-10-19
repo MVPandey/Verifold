@@ -353,8 +353,14 @@ async function changeRun(
   await memory?.freeze(
     `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
   );
-  if (restore === undefined) await archiveRun(root);
-  else await restoreRun(root, restore);
+  try {
+    if (restore === undefined) await archiveRun(root);
+    else await restoreRun(root, restore);
+  } catch (error) {
+    // The records moved in part or not at all. The lab reads them again.
+    await labRun?.reload();
+    throw error;
+  }
   memory?.schedule();
   await coordinator?.reload();
   await labRun?.reload();
