@@ -915,11 +915,14 @@ function recipients(workspace: Workspace, live: DeskSession): Recipient[] {
   ];
 }
 
-/** The live sessions that the person started: not a task worker, not the coordinator. */
+/** The live sessions that the person started: not a task worker, a lab agent, or the coordinator. */
 function plainSessions(live: DeskSession): SessionView[] {
   return (live.workers ?? []).filter(
     (view) =>
-      view.live && !view.record.task && view.record.mode !== 'coordinator',
+      view.live &&
+      !view.record.task &&
+      !view.record.agent &&
+      view.record.mode !== 'coordinator',
   );
 }
 

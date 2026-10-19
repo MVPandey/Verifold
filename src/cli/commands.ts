@@ -273,7 +273,10 @@ export function terminalInput(
 ): void {
   const value = line.trim();
   if (!value) return;
-  const live = sessions.views().filter((view) => view.live);
+  // Lab agents take posts on the board, not terminal input.
+  const live = sessions
+    .views()
+    .filter((view) => view.live && !view.record.agent);
   const requests = live.flatMap((view) => view.record.requests);
   /** The one live session that fits, or a message that names where to act. */
   const only = (
@@ -732,6 +735,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
+            lab,
           );
         else {
           desk = await startDesk(
@@ -745,7 +749,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
-            { stop: () => quit.abort(), reuse: run.owner?.desk },
+            { stop: () => quit.abort(), reuse: run.owner?.desk, lab },
           );
           await announce(
             desk,

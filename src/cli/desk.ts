@@ -48,6 +48,7 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
+import type { Lab } from './lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
@@ -66,6 +67,7 @@ export interface DeskServer {
     coordinator: Coordinator,
     compute: Compute,
     memory: ProjectMemory,
+    lab?: Lab,
   ): Promise<void>;
   /** The origin of the page server, the only other origin that the desk frames. */
   readonly pages: string;
@@ -320,6 +322,7 @@ async function changeRun(
   tasks: TaskManager,
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
+  labRun: Lab | undefined,
   restore?: unknown,
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
@@ -333,8 +336,14 @@ async function changeRun(
     throw new SessionActionError(
       'A task turn is running. Stop it first, or wait for its version.',
     );
-  if (sessions.views().some((view) => view.live && !view.record.task))
+  if (
+    sessions
+      .views()
+      .some((view) => view.live && !view.record.task && !view.record.agent)
+  )
     throw new SessionActionError('Your session is running. End it first.');
+  // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
+  await labRun?.suspend();
   const state = coordinator?.view()?.state;
   if (state && !state.stoppedAt) await coordinator?.stop();
   for (const task of list)
@@ -348,6 +357,7 @@ async function changeRun(
   else await restoreRun(root, restore);
   memory?.schedule();
   await coordinator?.reload();
+  await labRun?.reload();
   research?.clear();
   await sessions.forget();
   // A new run starts its research from the question. A restored run continues where it was.
@@ -366,6 +376,7 @@ async function act(
   root: string,
   body: Record<string, unknown>,
   memory?: ProjectMemory,
+  lab?: Lab,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -417,6 +428,7 @@ async function act(
       tasks,
       coordinator,
       memory,
+      lab,
       body.action === 'restore' ? body.archive : undefined,
     );
     return 200;
@@ -434,6 +446,8 @@ async function act(
       const id = body.to.slice('session:'.length);
       if (sessions.view(id)?.record.task)
         throw new SessionActionError('Write to a task agent by its task.');
+      if (sessions.view(id)?.record.agent)
+        throw new SessionActionError('Write to a lab agent on the board.');
       const text = typeof body.text === 'string' ? body.text : '';
       // A running turn takes the message. A waiting session, or a turn that ended first, gets it as its next turn.
       if (
@@ -593,6 +607,8 @@ export async function startDesk(
   memory?: ProjectMemory,
   options: {
     readonly stop?: () => void;
+    /** The lab of the project owner. */
+    readonly lab?: Lab;
     readonly reuse?:
       | {
           readonly port: number;
@@ -606,6 +622,7 @@ export async function startDesk(
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
   let project: string | null = root === null ? null : await realpath(root);
+  let lab = options.lab;
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -798,6 +815,7 @@ export async function startDesk(
             project ?? '',
             body,
             memory,
+            lab,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
@@ -1241,7 +1259,16 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner, taskManager, lead, pods, notes) => {
+    attach: async (
+      next,
+      owner,
+      runner,
+      taskManager,
+      lead,
+      pods,
+      notes,
+      labOwner,
+    ) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
@@ -1250,6 +1277,7 @@ export async function startDesk(
       coordinator = lead;
       compute = pods;
       memory = notes;
+      lab = labOwner;
       project = resolved;
     },
     pages: pages.origin,
