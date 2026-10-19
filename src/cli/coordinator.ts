@@ -3,6 +3,7 @@ import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Workspace } from './contracts.ts';
 import { validateModel, type HarnessName } from './harness.ts';
+import { WakeLoop, type QueuedEvent } from './agent-loop.ts';
 import { messageLimits } from './messages.ts';
 import { loadPrompt } from './prompts.ts';
 import {
@@ -52,12 +53,7 @@ export const coordinatorLimits = {
   debounceMs: 20_000,
 };
 
-export interface CoordinatorEvent extends TaskEvent {
-  readonly seq: number;
-  readonly at: string;
-  /** A Verifold read failed in the turn that first carried the event, so it came once more. */
-  readonly again?: true;
-}
+export type CoordinatorEvent = QueuedEvent<TaskEvent>;
 
 /** One tool call of the coordinator, with its reason and Verifold's answer. */
 export interface CoordinatorAction {
@@ -150,9 +146,8 @@ export class Coordinator {
   private readonly sessions: SessionManager;
   private readonly debounceMs: number;
   private state: CoordinatorState | null = null;
-  private timer: NodeJS.Timeout | undefined;
-  private limitedUntil: string | null = null;
-  private queue: Promise<unknown> = Promise.resolve();
+  /** Events wake the coordinator's session one digest at a time. Every record change runs in its queue. */
+  private readonly loop: WakeLoop<TaskEvent, CoordinatorState>;
   /** The saved session record after a restart, until the session resumes. */
   private saved: SessionRecord | null = null;
   /** Verifold is stopping. Tool calls change nothing. */
@@ -174,11 +169,6 @@ export class Coordinator {
   private readonly onChange: (() => void) | undefined;
   /** The current turn carries a message from the person. New tasks of this turn wait for the person. */
   private answering = false;
-  /** The events of the current turn's digest, and whether a read of the state or a file failed in that turn. */
-  private carried: {
-    readonly events: readonly CoordinatorEvent[];
-    readFailed: boolean;
-  } | null = null;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -205,6 +195,28 @@ export class Coordinator {
     this.compute = options.compute;
     this.results = new ResultsStore(root);
     this.debounceMs = options.debounceMs ?? coordinatorLimits.debounceMs;
+    this.loop = new WakeLoop(
+      {
+        record: () => (this.state && !this.state.stoppedAt ? this.state : null),
+        save: (state) => this.save(state),
+        ready: (state) =>
+          state.session !== null &&
+          this.sessions.idleSession() === state.session,
+        send: (events, left) => {
+          this.answering = events.some(
+            (event) => event.kind === 'person' && event.message !== undefined,
+          );
+          this.sessions.continueTask(
+            `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${events.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${left ? `\n- ${left} more events follow in the next digest.` : ''}${events.some((event) => event.again) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
+          );
+        },
+        sent: (events) =>
+          this.tasks.sentToCoordinator(
+            events.flatMap((event) => (event.message ? [event.message] : [])),
+          ),
+      },
+      { ...coordinatorLimits, debounceMs: this.debounceMs },
+    );
   }
 
   private get file(): string {
@@ -241,11 +253,9 @@ export class Coordinator {
   /** Read the records again, after Start over or a restore changed them. The coordinator must be stopped. */
   async reload(): Promise<void> {
     await this.serial(async () => {
-      clearTimeout(this.timer);
-      this.timer = undefined;
+      this.loop.cancel(true);
       this.state = null;
       this.saved = null;
-      this.limitedUntil = null;
       this.answering = false;
       this.sessions.forget();
       await this.load();
@@ -264,7 +274,7 @@ export class Coordinator {
             : null))
         : null,
       waiting: state.events.filter((event) => event.seq > state.cursor).length,
-      limitedUntil: this.limitedUntil,
+      limitedUntil: this.loop.limitedUntil,
       results: this.results.current(),
     };
   }
@@ -415,8 +425,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     return this.serial(async () => {
       const state = this.current();
       if (state.stoppedAt) fail('The coordinator is already stopped.');
-      clearTimeout(this.timer);
-      this.timer = undefined;
+      this.loop.cancel();
       if (this.sessions.view()?.live)
         this.sessions.endTask('You stopped the coordinator.');
       await this.save({ ...state, stoppedAt: new Date().toISOString() });
@@ -484,41 +493,10 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
 
   /** A task event. It waits for the next wakeup. An event from the person, or a restart, wakes an idle coordinator at once. */
   notify(event: TaskEvent): void {
-    this.append(
+    this.loop.add(
       [event],
       event.kind === 'person' || event.kind === 'restart' ? 0 : this.debounceMs,
     );
-  }
-
-  /** Add events for the next wakeup, and wake after `delay`. */
-  private append(
-    events: readonly (TaskEvent & { readonly again?: true })[],
-    delay: number,
-  ): void {
-    this.serial(async () => {
-      const state = this.state;
-      if (!state || state.stoppedAt) return;
-      const first = (state.events.at(-1)?.seq ?? 0) + 1;
-      const at = new Date().toISOString();
-      // The schedule comes first: the events are in memory even if the save fails.
-      const saving = this.save({
-        ...state,
-        events: [
-          ...state.events,
-          ...events.map((event, index) => ({
-            ...event,
-            // One line, so the lines of a digest stay apart. It holds a whole message of up to 4000 characters.
-            text: event.text.replace(/[\r\n]+/g, ' ').slice(0, 6000),
-            seq: first + index,
-            at,
-          })),
-        ].slice(-coordinatorLimits.events),
-      });
-      this.schedule(delay);
-      await saving;
-    }).catch(() => {
-      /* The next save writes the events. */
-    });
   }
 
   /**
@@ -527,23 +505,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
    */
   turnEnded(record?: SessionRecord): void {
     this.answering = false;
-    // A failed read can hide what an event was about, so its events come once more.
-    const carried = this.carried;
-    this.carried = null;
-    if (carried?.readFailed) {
-      const again = carried.events.filter((event) => !event.again);
-      if (again.length)
-        this.append(
-          again.map(({ kind, task, message, text }) => ({
-            kind,
-            ...(task ? { task } : {}),
-            ...(message ? { message } : {}),
-            text,
-            again: true as const,
-          })),
-          this.debounceMs,
-        );
-    }
+    this.loop.turnEnded();
     if (record)
       this.tasks
         .coordinatorTurnEnded(record.status === 'idle', lastReply(record))
@@ -556,77 +518,13 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       !state.planApproved
     )
       this.progress?.('The plan waits for you in the desk.');
-    this.schedule();
   }
 
   /** Stop the wakeups and pause the session. Returns false when its record could not be saved. */
   async close(): Promise<boolean> {
     this.closing = true;
-    clearTimeout(this.timer);
-    this.timer = undefined;
-    await this.queue;
+    await this.loop.close();
     return this.sessions.close();
-  }
-
-  /** Wake after `delay`. A shorter delay replaces a longer one that waits. */
-  private schedule(delay = this.debounceMs): void {
-    const state = this.state;
-    if (!state || state.stoppedAt || (this.timer && delay >= this.debounceMs))
-      return;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      this.serial(() => this.wake()).catch(() => {
-        /* The events wait for the next wakeup. */
-      });
-    }, delay);
-    this.timer.unref();
-  }
-
-  /** Send the waiting events as one turn, within the hourly limit. */
-  private async wake(): Promise<void> {
-    const state = this.state;
-    if (!state || state.stoppedAt || !state.session) return;
-    const waiting = state.events.filter((event) => event.seq > state.cursor);
-    // A busy coordinator gets the events when its turn ends.
-    if (!waiting.length || this.sessions.idleSession() !== state.session)
-      return;
-    const hour = Date.now() - 3_600_000;
-    const recent = state.wakeups.filter((at) => Date.parse(at) > hour);
-    if (recent.length >= coordinatorLimits.wakeupsPerHour) {
-      const next = Date.parse(recent[0] ?? '') + 3_600_000 + 1000;
-      this.limitedUntil = new Date(next).toISOString();
-      this.schedule(Math.max(1000, next - Date.now()));
-      return;
-    }
-    this.limitedUntil = null;
-    const sent = waiting.slice(0, coordinatorLimits.digest);
-    this.answering = sent.some(
-      (event) => event.kind === 'person' && event.message !== undefined,
-    );
-    // The cursor is saved first, so a restart never repeats a digest.
-    await this.save({
-      ...state,
-      cursor: sent.at(-1)?.seq ?? state.cursor,
-      wakeups: [...recent, new Date().toISOString()],
-    });
-    try {
-      this.sessions.continueTask(
-        `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${sent.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}${sent.some((event) => event.again) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
-      );
-    } catch {
-      // Nothing was sent, so the events wait for the next wakeup.
-      await this.save({
-        ...this.current(),
-        cursor: state.cursor,
-        wakeups: state.wakeups,
-      });
-      return;
-    }
-    this.carried = { events: sent, readFailed: false };
-    await this.tasks.sentToCoordinator(
-      sent.flatMap((event) => (event.message ? [event.message] : [])),
-    );
   }
 
   private tools(): AgentTools {
@@ -669,7 +567,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       };
     }
     const read = name === 'verifold_state' || name === 'verifold_read';
-    if (read && !result.ok && this.carried) this.carried.readFailed = true;
+    if (read && !result.ok) this.loop.readFailed();
     if (!read) {
       const current = this.current();
       await this.save({
@@ -1144,9 +1042,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
 
   /** Run one change after the previous one ends. */
   private serial<T>(work: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(work, work);
-    this.queue = next.catch(() => {});
-    return next;
+    return this.loop.serial(work);
   }
 
   private async save(state: CoordinatorState): Promise<void> {
