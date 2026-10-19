@@ -190,6 +190,8 @@ export interface LabView {
   readonly state: LabState;
   readonly directions: readonly DirectionView[];
   readonly posts: readonly Post[];
+  /** The handle of each agent, such as claude-1, by agent ID. */
+  readonly handles: Readonly<Record<string, string>>;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -541,6 +543,11 @@ export class Lab {
     return this.state !== null;
   }
 
+  /** The person paused the lab. */
+  get paused(): boolean {
+    return Boolean(this.state?.pausedAt);
+  }
+
   /** Read the lab, its agents, and the board. A project without `lab.json` has no lab. */
   async load(): Promise<void> {
     this.state = parseState(
@@ -606,6 +613,9 @@ export class Lab {
     return {
       state,
       posts: this.board.list(),
+      handles: Object.fromEntries(
+        [...this.agents.values()].map((agent) => [agent.id, agent.handle]),
+      ),
       directions: state.directions.flatMap((direction) => {
         const agent = this.agents.get(direction.agent);
         return agent
@@ -677,11 +687,18 @@ export class Lab {
           : text(input.bar, labLimits.bar, 'what makes the direction hold up');
       const id = `d-${Math.max(0, ...state.directions.map((entry) => number(entry.id))) + 1}`;
       const agent = `a-${Math.max(0, ...[...this.agents.keys()].map(number)) + 1}`;
-      const workspace = await allocate(this.root, {
-        name: slug(id, title),
-        writable: ['.'],
-        inputs: [],
-      });
+      let workspace: Workspace;
+      try {
+        workspace = await allocate(this.root, {
+          name: slug(id, title),
+          writable: ['.'],
+          inputs: [],
+        });
+      } catch (error) {
+        fail(
+          `Verifold could not prepare the direction's folder: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
       const handle = state.handles[host] + 1;
       const now = new Date().toISOString();
       const record: AgentRecord = {

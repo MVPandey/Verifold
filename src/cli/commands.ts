@@ -157,6 +157,7 @@ again.`,
 const help = `Verifold - private research with your existing agent harness
 
 verifold [--no-open]                  Set up a project or open its research desk
+verifold --lab                        The same, then start a lab on the question instead of research
 verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
 verifold init --setup-only [--profile profile.json] [--host name]
 verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
@@ -428,6 +429,8 @@ interface DeskRun {
   };
   /** After setup, close the desk and return the project, so a background owner takes over. */
   readonly handoff?: boolean;
+  /** Start a lab on the project's question instead of research, unless the team already works. */
+  readonly lab?: boolean;
   /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
   readonly owner?: {
     readonly control: Control;
@@ -732,6 +735,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
+            lab,
           );
         else {
           desk = await startDesk(
@@ -745,7 +749,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
-            { stop: () => quit.abort(), reuse: run.owner?.desk },
+            { stop: () => quit.abort(), reuse: run.owner?.desk, lab },
           );
           await announce(
             desk,
@@ -762,7 +766,8 @@ async function serveDesk(
           io.progress?.(
             'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
-        if (research) await runner.start(research);
+        if (run.lab) await startLab(root, lab, tasks, coordinator, io);
+        else if (research) await runner.start(research);
         io.listen?.(
           (line) =>
             terminalInput(sessions, line, io, {
@@ -855,10 +860,43 @@ function ownerLog(root: string): (line: string) => void {
   };
 }
 
+/**
+ * `verifold --lab`: start a lab on the project's question, unless the project
+ * has one, or the coordinator's team already works on it.
+ */
+async function startLab(
+  root: string,
+  lab: Lab,
+  tasks: TaskManager,
+  coordinator: Coordinator,
+  io: CliIO,
+): Promise<void> {
+  if (lab.exists) return;
+  const team = coordinator.view()?.state;
+  if ((await tasks.list()).length || (team && !team.stoppedAt)) {
+    io.progress?.(
+      'The team already works on this project, so Verifold started no lab. Start over in Records first.',
+    );
+    return;
+  }
+  const question = (await loadWorkspace(root)).research?.topic;
+  if (!question) {
+    io.progress?.(
+      'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
+    );
+    return;
+  }
+  await lab.start(question);
+  io.progress?.(
+    'The lab started. Open a direction in the desk: each one gets its own agent.',
+  );
+}
+
 /** The research and the setup desk that a background owner gets in its input. Anything else is left out. */
 function ownerStart(value: unknown): {
   readonly research: ResearchOptions | undefined;
   readonly desk: DeskPlace | undefined;
+  readonly lab: boolean;
 } {
   const data = (value ?? {}) as Record<string, unknown>;
   const research = (data.research ?? null) as Record<string, unknown> | null;
@@ -898,6 +936,7 @@ function ownerStart(value: unknown): {
               : {}),
           }
         : undefined,
+    lab: data.lab === true,
   };
 }
 
@@ -924,7 +963,7 @@ async function runOwner(
     throw new Error(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
-  const { research, desk } = ownerStart(input);
+  const { research, desk, lab } = ownerStart(input);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
   let early: string[] | null = [];
@@ -994,6 +1033,7 @@ async function runOwner(
         noOpen: true,
         research,
         harness,
+        lab,
         owner: { control, keys: io.background.keys, desk },
       },
     );
@@ -1042,6 +1082,7 @@ async function attachTeam(
     readonly noOpen: boolean;
     readonly research?: ResearchOptions | undefined;
     readonly desk?: DeskPlace;
+    readonly lab?: boolean;
   },
 ): Promise<void> {
   const running = await liveOwner(root);
@@ -1062,6 +1103,7 @@ async function attachTeam(
           ...control,
           ...(start.research ? { research: start.research } : {}),
           ...(start.desk ? { desk: start.desk } : {}),
+          ...(start.lab ? { lab: true } : {}),
         }),
       );
     } catch (error) {
@@ -1382,6 +1424,7 @@ export async function runCli(
       from: { type: 'string' },
       id: { type: 'string' },
       'no-open': { type: 'boolean' },
+      lab: { type: 'boolean' },
       file: { type: 'boolean' },
       mode: { type: 'string' },
       prompt: { type: 'string' },
@@ -1462,7 +1505,10 @@ export async function runCli(
   for (const key of Object.keys(values))
     if (
       key !== 'workspace' &&
-      !(launch && (key === 'no-open' || key === 'agency-dir')) &&
+      !(
+        launch &&
+        (key === 'no-open' || key === 'agency-dir' || key === 'lab')
+      ) &&
       !allowed[command]?.includes(key)
     )
       throw new Error(`--${key} is not valid for ${command}.`);
@@ -1529,9 +1575,10 @@ export async function runCli(
       );
     }
     const noOpen = values['no-open'] ?? false;
+    const lab = values.lab ?? false;
     if (io.interactive && io.background)
-      await attachTeam(root, io, signal, io.background, { noOpen });
-    else await serveDesk(root, io, signal, { noOpen });
+      await attachTeam(root, io, signal, io.background, { noOpen, lab });
+    else await serveDesk(root, io, signal, { noOpen, lab });
     return;
   }
   if (command === 'owner') {
@@ -1581,12 +1628,14 @@ export async function runCli(
         harness,
         setup: { cwd, options },
         handoff: background !== undefined,
+        lab: values.lab ?? false,
       });
       if (handoff && background)
         await attachTeam(handoff.root, io, signal, background, {
           noOpen: false,
           research: handoff.research,
           desk: handoff.desk,
+          lab: values.lab ?? false,
         });
       return;
     }
@@ -1602,6 +1651,7 @@ export async function runCli(
       const run = {
         noOpen: values['no-open'] ?? false,
         research: initialized.research ?? undefined,
+        lab: values.lab ?? false,
       };
       if (background)
         await attachTeam(initialized.root, io, signal, background, run);

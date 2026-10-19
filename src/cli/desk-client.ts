@@ -340,6 +340,7 @@ async function render(html: string): Promise<void> {
         field.value = value;
     }
     showThread();
+    showReply();
     // A section that is new to the page keeps the state that the server gave it.
     for (const detail of content.querySelectorAll<HTMLDetailsElement>(
       'details[id]',
@@ -956,6 +957,52 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
+/** The lab's message box says which post the next post answers. */
+function showReply(): void {
+  const note = document.getElementById('lab-reply-note');
+  if (note)
+    note.textContent = field('lab-reply')
+      ? `Replies to ${field('lab-reply')}.`
+      : '';
+}
+
+/** Reply to a post: the next post from the lab's message box answers it. Nothing goes to the server yet. */
+function labReply(post: string): void {
+  const reply = document.getElementById('lab-reply');
+  if (reply instanceof HTMLInputElement) reply.value = post;
+  showReply();
+  document.getElementById('lab-text')?.focus();
+}
+
+/** A lab action. */
+function labRequest(button: HTMLElement): Record<string, unknown> {
+  const action = button.dataset.action ?? '';
+  switch (action) {
+    case 'lab-start':
+      return { action, question: field('lab-question') };
+    case 'lab-post':
+      return {
+        action,
+        text: field('lab-text'),
+        direction: field('lab-direction'),
+        replyTo: field('lab-reply'),
+      };
+    case 'lab-direction-add':
+      return {
+        action,
+        title: field('lab-title'),
+        harness: field('lab-harness'),
+        bar: field('lab-bar'),
+      };
+    case 'lab-direction-stop':
+      return { action, direction: button.dataset.direction };
+    case 'lab-agent-restart':
+      return { action, agent: button.dataset.agent };
+    default:
+      return { action };
+  }
+}
+
 /** A compute action. The RunPod key and secret values go only into this request body. */
 function computeRequest(button: HTMLElement): Record<string, unknown> {
   const action = button.dataset.action ?? '';
@@ -1053,6 +1100,10 @@ function researchBody(kind: string | undefined): Record<string, unknown> {
 /** Send one session action. The server owns validation and the session state. */
 async function act(button: HTMLElement): Promise<void> {
   const action = button.dataset.action;
+  if (action === 'lab-reply') {
+    labReply(button.dataset.post ?? '');
+    return;
+  }
   const body =
     action === 'cancel' || action === 'end' || action === 'terminal-return'
       ? { action, session: button.dataset.session }
@@ -1096,7 +1147,9 @@ async function act(button: HTMLElement): Promise<void> {
                           ? taskRequest(button)
                           : action?.startsWith('compute-')
                             ? computeRequest(button)
-                            : { action };
+                            : action?.startsWith('lab-')
+                              ? labRequest(button)
+                              : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -1114,6 +1167,8 @@ async function act(button: HTMLElement): Promise<void> {
     ['result', button.dataset.result],
     ['lease', button.dataset.lease],
     ['archive', button.dataset.archive],
+    ['direction', button.dataset.direction],
+    ['agent', button.dataset.agent],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -1181,6 +1236,8 @@ async function act(button: HTMLElement): Promise<void> {
             (name) => `task-new-${name}`,
           )
         : []),
+      ...(body.action === 'lab-post' ? ['lab-text', 'lab-reply'] : []),
+      ...(body.action === 'lab-direction-add' ? ['lab-title', 'lab-bar'] : []),
     ]) {
       const element = document.getElementById(id);
       if (

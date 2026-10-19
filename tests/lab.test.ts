@@ -13,7 +13,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
@@ -21,6 +21,8 @@ import { Lab } from '../src/cli/lab.ts';
 import { Quota } from '../src/cli/quota.ts';
 import { readRecord } from '../src/cli/session.ts';
 import { archiveRun } from '../src/cli/archive.ts';
+import { startDesk } from '../src/cli/desk.ts';
+import { TaskManager } from '../src/cli/tasks.ts';
 
 /**
  * A fake Claude Code for lab agents. Its folder name (such as d-1-circles)
@@ -750,4 +752,141 @@ await test('the person cannot open more directions than the limit, or post as an
     lab.lab.post({ text: '@codex-9 hello' }),
     /No agent of the lab has the handle codex-9/,
   );
+});
+
+await test('the desk offers the lab, shows posts escaped, and takes lab actions only with its token', async (t) => {
+  const lab = await fixture(t);
+  const assets = join(lab.base, 'assets');
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
+    'desk-map.js',
+    'desk-motion.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  for (const name of [
+    'purify.js',
+    'idiomorph.js',
+    'xterm.js',
+    'xterm.css',
+    'addon-fit.js',
+  ])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const tasks = new TaskManager(lab.root, {
+    ownerId: 'owner-1',
+    sessions: lab.sessions,
+  });
+  const stop = new AbortController();
+  const desk = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${assets}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    tasks,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const post = async (
+    body: unknown,
+    authorized = true,
+  ): Promise<[number, Record<string, unknown>]> => {
+    const response = await fetch(`${url.origin}/api/action`, {
+      method: 'POST',
+      headers: {
+        ...(authorized ? headers : {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    return [
+      response.status,
+      (await response.json().catch(() => ({}))) as Record<string, unknown>,
+    ];
+  };
+  const home = async (): Promise<string> =>
+    (
+      (await (
+        await fetch(`${url.origin}/api/view?view=home`, { headers })
+      ).json()) as { html: string }
+    ).html;
+
+  // A project with no team at work offers the lab on Home.
+  assert.match(await home(), /data-action="lab-start"/);
+  assert.equal(
+    (await post({ action: 'lab-start', question: 'Q?' }, false))[0],
+    401,
+  );
+  assert.equal(
+    (
+      await post({
+        action: 'lab-start',
+        question: 'Do months lie on a circle?',
+      })
+    )[0],
+    200,
+  );
+  assert.deepEqual(await post({ action: 'lab-start', question: 'Again' }), [
+    409,
+    { error: 'The lab already runs.' },
+  ]);
+  const view = await home();
+  assert.match(view, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
+  assert.match(view, /Do months lie on a circle\?/);
+  assert.doesNotMatch(view, /data-action="message"/);
+
+  // Agent and person text is escaped. A mention of an unknown handle is refused.
+  await lab.lab.pause();
+  assert.equal(
+    (
+      await post({
+        action: 'lab-direction-add',
+        title: 'Circles',
+        harness: 'claude',
+      })
+    )[0],
+    200,
+  );
+  assert.equal(
+    (
+      await post({
+        action: 'lab-post',
+        text: '<img src=x onerror=alert(1)> @claude-1 look here',
+      })
+    )[0],
+    200,
+  );
+  assert.deepEqual(lab.lab.view()?.posts.at(-1)?.mentions, ['a-1']);
+  assert.equal(
+    (await post({ action: 'lab-post', text: '@codex-4 hello' }))[0],
+    409,
+  );
+  const board = await home();
+  assert.match(board, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(board, /<img/);
+  assert.match(board, /claude-1 <span class="fine">Claude Code<\/span>/);
+  assert.match(board, /data-action="lab-direction-stop" data-direction="d-1"/);
+  assert.equal(
+    (await post({ action: 'lab-direction-stop', direction: 'd-1' }))[0],
+    200,
+  );
+  assert.match(await home(), /<span class="status">Stopped<\/span>/);
 });

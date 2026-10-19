@@ -924,6 +924,7 @@ export class SessionManager {
         'Open the terminal between turns. Wait for the turn to end, or cancel it.',
       );
     if (record.mode === 'coordinator') fail('The coordinator has no terminal.');
+    if (record.agent) fail(agentSession);
     const native =
       record.nativeSessionId ??
       fail('The harness has not reported its session yet.');
