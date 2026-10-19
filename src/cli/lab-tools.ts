@@ -83,7 +83,7 @@ export const labToolSpecs: readonly AgentTool[] = [
           maxItems: 5,
           items: {
             type: 'string',
-            pattern: '^(person|(claude|codex)-[1-9][0-9]?)$',
+            pattern: '^(person|(claude|codex)-[1-9][0-9]{0,3})$',
           },
         },
       },

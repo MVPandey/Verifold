@@ -466,3 +466,58 @@ await test('a lab that cannot start leaves the owner running and says why', asyn
   owner.abort();
   await done.catch(() => {});
 });
+
+await test('--lab in a project that has a lab starts nothing new and says so', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await mkdir(join(root, '.verifold', 'lab', 'agents'), { recursive: true });
+  await writeFile(
+    join(root, '.verifold', 'lab.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      question: 'The first question.',
+      startedAt: '2026-10-19T12:00:00.000Z',
+      pausedAt: null,
+      handles: { claude: 0, codex: 0 },
+      directions: [],
+    }),
+  );
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  const owner = new AbortController();
+  const done = runCli(
+    ['owner'],
+    root,
+    {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      browse: () => Promise.resolve(true),
+      deskAssets: assets,
+      background: {
+        keys,
+        start: () => Promise.reject(new Error('The owner starts no owner.')),
+        input: () =>
+          Promise.resolve(
+            JSON.stringify({
+              ...control,
+              research: { topic: 'Another question.' },
+              lab: true,
+            }),
+          ),
+      },
+    },
+    owner.signal,
+  );
+  const log = join(root, '.verifold', 'owner.log');
+  await until(
+    async () =>
+      existsSync(log) &&
+      (await readFile(log, 'utf8')).includes('This project has a lab already'),
+  );
+  const lab = JSON.parse(
+    await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
+  ) as { question: string };
+  assert.equal(lab.question, 'The first question.');
+  owner.abort();
+  await done.catch(() => {});
+});

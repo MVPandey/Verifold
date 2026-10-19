@@ -45,6 +45,8 @@ export interface ResearchRunnerOptions {
   readonly onSelect?: () => Promise<void>;
   /** A step ended, or a direction was chosen. The project memory follows. */
   readonly onChange?: () => void;
+  /** Why research cannot start or choose a direction now, such as a lab on the run. */
+  readonly blocked?: () => string | null;
   /** The person's messages to research: `post` keeps one until a step takes it, and `take` gives the waiting ones to a step. */
   readonly inbox?: {
     readonly post: (text: unknown) => Promise<unknown>;
@@ -82,6 +84,11 @@ export class ResearchRunner {
     return this.work !== null;
   }
 
+  /** A research step runs, or one is checking its input before it starts. */
+  get busy(): boolean {
+    return this.running || this.starting;
+  }
+
   view(): ResearchView {
     return {
       running: this.running,
@@ -96,6 +103,8 @@ export class ResearchRunner {
   async start(input: ResearchOptions): Promise<void> {
     if (this.running || this.starting)
       fail('Research is already running. Wait for it, or cancel it.');
+    const blocked = this.options.blocked?.();
+    if (blocked) fail(blocked);
     this.starting = true;
     let phase: string | undefined;
     try {
@@ -249,6 +258,8 @@ export class ResearchRunner {
   async select(id: unknown, replace = false): Promise<void> {
     if (this.running || this.starting)
       fail('Wait for research to end before you choose a direction.');
+    const blocked = this.options.blocked?.();
+    if (blocked) fail(blocked);
     this.starting = true;
     try {
       await selectIdea(this.root, id, undefined, replace);
