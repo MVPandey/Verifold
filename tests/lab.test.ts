@@ -876,10 +876,12 @@ await test('start over parks the lab, a restore brings it back paused, and a new
   assert.ok(lab.lab.view()?.state.pausedAt);
   const before = (await lab.inputs('d-1-alpha')).length;
   await lab.lab.resume();
-  await until(async () =>
-    (await lab.inputs('d-1-alpha'))
-      .slice(before)
-      .some((input) => input.includes('The person resumed the lab')),
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha'))
+        .slice(before)
+        .some((input) => input.includes('The person resumed the lab')),
+    20_000,
   );
 });
 

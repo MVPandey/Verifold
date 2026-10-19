@@ -1832,6 +1832,8 @@ Start now: plan the next step of your direction, do it, and post what you find.`
   private async afterTurn(id: string, posted: boolean): Promise<void> {
     const agent = this.agents.get(id);
     if (!agent || !this.active(agent) || this.closing) return;
+    // After Start over, another run can have an agent with the same ID.
+    const { generation } = agent;
     const direction = this.direction(agent.direction);
     let changed = false;
     try {
@@ -1850,7 +1852,12 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     }
     await this.serial(async () => {
       const current = this.agents.get(id);
-      if (!current || !this.active(current) || this.closing) return;
+      if (
+        current?.generation !== generation ||
+        !this.active(current) ||
+        this.closing
+      )
+        return;
       const idleStreak = changed || posted ? 0 : current.idleStreak + 1;
       await this.update(id, (entry) => ({ ...entry, idleStreak }));
       if (this.state?.pausedAt) return;
