@@ -33,6 +33,8 @@ export interface Workspace {
   readonly model?: string;
   /** The second harness of the team. The coordinator can give it tasks. The lead (`host`) runs research and the coordinator. */
   readonly helper?: 'claude' | 'codex';
+  /** How many agents may run at the same time, 1 to 8. Absent means the default, 3. */
+  readonly agents?: number;
   readonly context?: string;
   readonly candidates: readonly Candidate[];
   readonly selectedId: string | null;
@@ -103,6 +105,8 @@ export function parseWorkspace(value: unknown): Workspace {
   const helper = (['claude', 'codex'] as const).find(
     (name) => name === data.helper && name !== host,
   );
+  if (data.agents !== undefined && !validAgents(data.agents))
+    throw new Error('Agents at once must be a whole number from 1 to 8.');
   return {
     schemaVersion: 1,
     visibility: 'private',
@@ -110,6 +114,7 @@ export function parseWorkspace(value: unknown): Workspace {
     host,
     ...(data.model ? { model: data.model } : {}),
     ...(helper ? { helper } : {}),
+    ...(data.agents === undefined ? {} : { agents: data.agents }),
     ...(data.context === undefined
       ? {}
       : { context: parseContext(data.context) }),
@@ -119,6 +124,11 @@ export function parseWorkspace(value: unknown): Workspace {
       ? {}
       : { research: parseResearchState(data.research) }),
   };
+}
+
+/** A valid "Agents at once" setting: a whole number from 1 to 8. */
+export function validAgents(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 8;
 }
 
 export function parseContext(value: unknown): string {

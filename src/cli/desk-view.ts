@@ -35,7 +35,7 @@ import {
   type CoordinatorAction,
   type CoordinatorView,
 } from './coordinator.ts';
-import { workerLimit } from './workers.ts';
+import { defaultAgents } from './workers.ts';
 import { scratch } from './workspaces.ts';
 import {
   decisionLabel,
@@ -55,8 +55,10 @@ export interface DeskSession {
   readonly session: SessionView | null;
   /** Every worker with a session, live or ended. */
   readonly workers?: readonly SessionView[];
-  /** Every worker slot is in use. */
+  /** As many agents run as "Agents at once" allows. */
   readonly full?: boolean;
+  /** "Agents at once" of this project. */
+  readonly agents?: number;
   /** True when terminal panes work here, or why they do not. */
   readonly terminals?: true | string;
   /** The desk process owns a session manager, so the page can start and control a session. */
@@ -959,7 +961,9 @@ function messageState(
       : status === 'paused' || status === 'interrupted'
         ? 'Waits: the coordinator is paused'
         : view?.limitedUntil
-          ? `Waits until ${clock(view.limitedUntil)}`
+          ? view.limitedBy === 'usage'
+            ? `Waits for ${hostName(view.state.host)}'s usage window until ${clock(view.limitedUntil)}`
+            : `Waits until ${clock(view.limitedUntil)}`
           : status === 'running' || status === 'starting'
             ? 'Waits for its current turn to end'
             : 'Waits for the coordinator',
@@ -1751,7 +1755,7 @@ function coordinatorPanel(
     title: 'Coordinator',
     sub: `<span class="status ${paused || session?.status === 'failed' ? 'muted' : 'active'}">${e(status)}</span>`,
     body: `${now ? `<p class="coordinator-now">${e(now)}</p>` : ''}<p class="session-meta"><span>${e(hostName(state.host))}</span><span>Model: ${e(state.model ?? 'harness default')}</span><span class="detail-only">${state.created} of ${coordinatorLimits.tasks} tasks created</span><span class="detail-only">${wakeups} of ${coordinatorLimits.wakeupsPerHour} turns this hour</span></p>
-  ${view.limitedUntil ? `<p class="notice">The coordinator used its turns for this hour. It continues at ${e(clock(view.limitedUntil))}.</p>` : ''}
+  ${view.limitedUntil ? `<p class="notice">${view.limitedBy === 'usage' ? `The coordinator waits for ${e(hostName(state.host))}'s usage window until ${e(clock(view.limitedUntil))}. The window is used up, so a turn would fail.` : `The coordinator used its turns for this hour. It continues at ${e(clock(view.limitedUntil))}.`}</p>` : ''}
   ${paused ? '<p class="notice">The coordinator paused when Verifold stopped. Resume it to continue with the same conversation.</p>' : ''}
   ${plan}
   ${notesToPerson(messages, tasks)}
@@ -1948,7 +1952,7 @@ function renderTaskPage(
   const blocked = waiting.length
     ? `This task waits for ${waiting.map(name).join(', ')}.`
     : live.full
-      ? `${workerLimit} agents already work. Wait for one to finish, or end a session.`
+      ? `${live.agents ?? defaultAgents} agents already work, the most that "Agents at once" allows. Wait for one to finish, or end a session.`
       : undefined;
   const workers = live.workers ?? (live.session ? [live.session] : []);
   const agent =
@@ -2641,8 +2645,10 @@ function renderSecrets(
 function renderComputeView(
   compute: ComputeView,
   tasks: readonly TaskRecord[],
+  agents: number,
 ): string {
   const { key, settings, gpus } = compute;
+  const agentsCard = `<section class="card" aria-labelledby="agents-title"><h2 id="agents-title">Agents at once</h2><p>Up to ${agents} ${agents === 1 ? 'agent runs' : 'agents run'} tasks and sessions at the same time. Each agent uses your Claude Code or Codex plan, so more agents reach the plan's usage limit sooner.</p><details id="agents-edit"><summary>Change it</summary><label class="field" for="team-agents">Agents at once, 1 to 8<input id="team-agents" type="number" min="1" max="8" step="1" value="${agents}"></label><div class="actions"><button type="button" data-action="compute-agents">Save</button></div></details></section>`;
   const keyCard = key
     ? `<p>The key is in ${e(placeNames[key.place])}. It ends in <code>${e(key.last4)}</code>.</p>
       ${key.problem ? `<p class="notice">The check at ${e(since(key.checkedAt ?? key.savedAt))} failed. ${e(key.problem)}</p>` : key.checkedAt ? `<p class="notice-ok">It worked at ${e(since(key.checkedAt))}.</p>` : ''}
@@ -2708,11 +2714,11 @@ function renderComputeView(
       .map((text) => `<li>${text}</li>`)
       .join('')}</ol>`;
   if (step === 1)
-    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 1 of 3</p><h2 id="setup-title">Store a RunPod key</h2><p>Pods run on your RunPod account. Verifold needs a key to start and stop them.</p>${keyForm(compute.keyring)}${later(2)}</section></div>`;
+    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 1 of 3</p><h2 id="setup-title">Store a RunPod key</h2><p>Pods run on your RunPod account. Verifold needs a key to start and stop them.</p>${keyForm(compute.keyring)}${later(2)}</section>${agentsCard}</div>`;
   if (step === 2)
-    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 2 of 3</p><h2 id="setup-title">Set a spend limit</h2><p>Pods stay off until you set one. Verifold stops every pod before this project spends more.</p>${limitsForm}${later(3)}</section>${keyLine}</div>`;
+    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 2 of 3</p><h2 id="setup-title">Set a spend limit</h2><p>Pods stay off until you set one. Verifold stops every pod before this project spends more.</p>${limitsForm}${later(3)}</section>${keyLine}${agentsCard}</div>`;
   if (step === 3)
-    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 3 of 3</p><h2 id="setup-title">Choose the GPUs that pods can use</h2>${gpuCard}<details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>${keyLine}</div>`;
+    return `<div class="view">${head}<section class="card lead" aria-labelledby="setup-title"><p class="step-count">Step 3 of 3</p><h2 id="setup-title">Choose the GPUs that pods can use</h2>${gpuCard}<details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>${keyLine}${agentsCard}</div>`;
   const allowed = settings.gpuTypes
     .map((id) => `<code>${e(id)}</code>`)
     .join(', ');
@@ -2722,7 +2728,8 @@ function renderComputeView(
   <section class="card" aria-labelledby="limits-title"><h2 id="limits-title">Limits</h2><p>Up to ${usd(settings.limitUsd ?? 0)} for this project, ${usd(settings.maxUsdPerHour)} per hour for one pod, ${settings.maxHoursPerLease} ${settings.maxHoursPerLease === 1 ? 'hour' : 'hours'} for one pod. ${settings.askBeforePod ? 'You approve each pod.' : 'A pod inside these limits starts without asking.'}</p><details id="compute-limits-edit"><summary>Change the limits</summary>${limitsForm}</details></section>
   <section class="card" aria-labelledby="gpus-title"><h2 id="gpus-title">GPUs</h2><p>Pods can use ${allowed}.</p><details id="compute-gpus-edit"${gpus ? ' open' : ''}><summary>Change the GPUs</summary>${gpuCard}</details></section>
   ${compute.leases.some((lease) => lease.state === 'requested' && missingSecrets(lease, compute).length) ? '' : renderSecrets(compute, tasks)}
-  ${keyLine}</div>`;
+  ${keyLine}
+  ${agentsCard}</div>`;
 }
 
 /** The record of this owner: every worker's commands, then every research attempt. */
@@ -3297,6 +3304,11 @@ function renderNow(
   );
   const state = live.coordinator?.state;
   const answer = resultsOf(workspace, live)?.answer;
+  const held = live.coordinator;
+  const usage =
+    held?.limitedBy === 'usage' && held.limitedUntil
+      ? `The coordinator waits for ${hostName(held.state.host)}'s usage window until ${clock(held.limitedUntil)}.`
+      : '';
   const done = tasks.filter((task) => task.state === 'done').length;
   const running = tasks.filter(
     (task) => task.state === 'running' || task.state === 'claimed',
@@ -3314,10 +3326,10 @@ function renderNow(
   else if (state && !state.stoppedAt && !state.planApproved)
     line = planWaits(live.coordinator, live.tasks?.list ?? [])
       ? 'The plan waits for you.'
-      : 'The coordinator drafts the plan.';
+      : usage || 'The coordinator drafts the plan.';
   else if (running.length) {
     line = `${running.map((task) => `${task.assignment.title} runs on ${hostName(task.assignment.host)}`).join('. ')}.`;
-    sub = `${done} of ${tasks.length} tasks done.`;
+    sub = `${done} of ${tasks.length} tasks done.${usage ? ` ${usage}` : ''}`;
   } else if (needs.length) {
     line = 'Nothing runs. The team waits for you.';
     sub = tasks.length ? `${done} of ${tasks.length} tasks done.` : '';
@@ -3325,8 +3337,9 @@ function renderNow(
     // Without a session record yet, the coordinator is starting, as the rail says.
     const status = live.coordinator?.session?.record.status ?? 'starting';
     const working = status === 'running' || status === 'starting';
-    line =
-      state && !state.stoppedAt && working
+    line = usage
+      ? `No task runs. ${usage}`
+      : state && !state.stoppedAt && working
         ? 'No task runs. The coordinator works.'
         : 'No task runs.';
     // The coordinator's latest note says what it waits for, while it is current.
@@ -3509,7 +3522,11 @@ export function renderDesk(
       : view === 'results'
         ? renderResultsView(workspace, live)
         : view === 'compute' && live.compute
-          ? renderComputeView(live.compute, live.tasks?.list ?? [])
+          ? renderComputeView(
+              live.compute,
+              live.tasks?.list ?? [],
+              live.agents ?? defaultAgents,
+            )
           : view === 'research'
             ? renderResearchView(
                 workspace,

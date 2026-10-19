@@ -264,7 +264,7 @@ The session runs in the project folder, with the harness's own sign-in, settings
 - Claude Code starts with `--strict-mcp-config`. Plugin skills and hooks still load.
 - Codex starts each thread with plugins, apps, and each configured MCP server turned off. If Codex does not report its configuration, the session stops.
 
-Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to two agents at the same time: sessions, tasks, or one of each. Research can run at the same time. If a desk action fails, the reason shows next to that control.
+Verifold starts Claude Code with its stream-json control protocol (`--permission-prompt-tool stdio`) and Codex with `codex app-server`. The owner runs up to three agents at the same time, sessions or tasks, unless you change "Agents at once" in Compute. Research can run at the same time. If a desk action fails, the reason shows next to that control.
 
 In Ask me mode, each permission request from the harness goes to the desk and to the terminal. You allow it once or deny it, and the harness enforces your answer. For Codex, Verifold sends approvals to you (`approvalsReviewer: "user"`), even if your Codex configuration uses its reviewer agent. Codex runs commands inside its sandbox without a request, so a network call that the sandbox blocks can fail without a request.
 
@@ -297,11 +297,11 @@ When Verifold stops (`verifold stop`, Stop the team in the desk, or Ctrl+C in th
 
 If Verifold stops without saving the end of its work, for example after a forced stop, the next `verifold` in the folder checks each unfinished session and research attempt before it starts anything. A harness process that still runs stops first, but only when its recorded process start time matches, so a reused process ID cannot cause a wrong stop. The work becomes interrupted, with an unknown result, and tool calls that were running show as unknown. A session with a recorded conversation can resume. A session without one runs its first request again. Claude Code keeps its session ID for that run, so it cannot create a second conversation. An interrupted research attempt keeps its files, and Continue research runs the step again.
 
-### Two agents at once
+### Agents at once
 
-Verifold runs up to two harness agents at the same time. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A third start waits until one of them ends. A cancel, a permission request, a burst of output, or a failure in one agent does not change the other.
+Verifold runs up to three harness agents at the same time. "Agents at once" in Compute changes this, from 1 to 8, and the project record keeps it. Each agent uses your Claude Code or Codex plan, so more agents reach its usage limit sooner. A lower setting stops no agent: new starts wait until fewer run. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A start beyond the setting waits until one of them ends. A cancel, a permission request, a burst of output, or a failure in one agent does not change the others.
 
-In the terminal, `a` and `d` with a request ID answer the request of the agent that it belongs to. When two agents could get a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
+In the terminal, `a` and `d` with a request ID answer the request of the agent that it belongs to. When more than one agent could get a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
 
 What each harness supports in Verifold:
 
@@ -384,7 +384,7 @@ In a team with a helper, the coordinator picks the harness for each task from th
 
 In a guided project, no task starts until you start the work in the plan. To change the plan first, ask the coordinator for a change, or edit a task. In an autonomous project, the coordinator starts the plan at once.
 
-The coordinator is one harness session outside the two agent slots. Claude Code runs it with `--tools ""`, so it has no built-in tools. Codex runs it with a permission profile that extends its `:read-only` profile, without the credential files, and the approval policy `never`. Both load none of your MCP servers. It acts only through Verifold tools, and each tool calls the same task operation that you use: create, revise, start, stop, accept, ask for changes, reject, cancel, post a message, and decide an objection or a blocker. It can also ask you a question. It reads versions with a tool, up to 64 KB of text for each file. Verifold checks each action before it changes anything. A refused action changes nothing, and the coordinator reads the reason. It can create up to 12 tasks, and it can give a task the domains that its shell commands need, with a reason.
+The coordinator is one harness session outside the agent slots. Claude Code runs it with `--tools ""`, so it has no built-in tools. Codex runs it with a permission profile that extends its `:read-only` profile, without the credential files, and the approval policy `never`. Both load none of your MCP servers. It acts only through Verifold tools, and each tool calls the same task operation that you use: create, revise, start, stop, accept, ask for changes, reject, cancel, post a message, and decide an objection or a blocker. It can also ask you a question. It reads versions with a tool, up to 64 KB of text for each file. Verifold checks each action before it changes anything. A refused action changes nothing, and the coordinator reads the reason. It can create up to 12 tasks, and it can give a task the domains that its shell commands need, with a reason.
 
 Every change keeps the coordinator's reason, and the desk lists the actions as plain sentences, for example "Started Implementation A". Details shows the tool name and Verifold's reply for each action. A decision on a version or a message says that the coordinator made it, and a revision says that the coordinator wrote it. A version also keeps the agent's last reply, a model claim. A repeated tool call with the same harness call ID gets the earlier answer and changes nothing.
 
@@ -393,6 +393,8 @@ The coordinator settles objections. It can uphold an objection and revise the ta
 When the work waits for something that only you can give, such as a RunPod key, a spend limit, or a choice, the coordinator asks you a question. Needs you shows it until you answer, and the rail shows "Waits for your answer". Write your answer and send it, or click Done when there is nothing to say. The coordinator gets your answer at once.
 
 Events wake the coordinator: a version ready for review, a message for it, a blocker or an objection, a failed start, or your action on a task. Its own actions do not wake it. Events within 20 seconds join one digest turn, with at most 12 turns an hour. A message from you does not wait for other events. Verifold saves the position of each digest before it sends it, so a restart never repeats one.
+
+Claude Code and Codex report the usage window of your plan. When the window of the coordinator's harness is used up, a turn would fail, so the coordinator does not wake. Its events wait until the reset time plus 30 seconds. When the harness gives no reset time, the wait is 15 minutes, then 30, 60, and 120 minutes while the window stays used up. The events of a turn that ran into the limit come again after the reset, marked "again". The window belongs to the harness account, so every session of that harness reports to the same record, `.verifold/quota.json`, and a restart keeps the wait. Home, the coordinator panel, and messages that wait for the coordinator say "waits for Claude Code's usage window until 19:00". A Codex account with credits keeps working past a full window, so only a failed turn starts its wait.
 
 Stop the coordinator ends its session. Running agents finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the agents. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.
 
@@ -493,7 +495,7 @@ This guide describes the current source checkout. The published npm package can 
 | Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.                   |
 | Harness transcripts        | Shows each harness run as in its CLI, with tool input and output and nested subagent steps.                     |
 | Scoped tasks               | Runs a task in its own copy of the project with Strict limits. You review each version first.                   |
-| Two agents at once         | Runs up to two Claude Code or Codex agents at once, each with its own task, session, and record.                |
+| Agents at once             | Runs up to three Claude Code or Codex agents at once (1 to 8), each with its own task, session, and record.     |
 | Agent terminals            | Opens an agent in its own Claude Code or Codex terminal in the desk. One view at a time types.                  |
 | Task handoffs              | Gives a task the accepted files of the tasks that it waits for, and blocks use of replaced files.               |
 | Team messages              | Agents post notes, report blockers, and raise objections with evidence. You decide in the desk.                 |
@@ -514,7 +516,7 @@ Stages 1 to 6 are in this checkout:
 1. The [controlled harness session](#controlled-harness-session).
 2. Persistent ownership with recovery, research in the desk, browser setup, and [harness transcripts](#harness-transcripts).
 3. [Scoped tasks](#scoped-tasks).
-4. [Two agents at once](#two-agents-at-once).
+4. [Agents at once](#agents-at-once).
 5. [Agent terminals](#agent-terminals).
 6. The [coordinator](#coordinator), with task handoffs and messages.
 

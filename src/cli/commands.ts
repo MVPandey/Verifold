@@ -35,7 +35,8 @@ import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { TaskManager, type TaskPlace } from './tasks.ts';
-import { SessionPool } from './workers.ts';
+import { defaultAgents, SessionPool } from './workers.ts';
+import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
@@ -559,9 +560,16 @@ async function serveDesk(
         coordinator?: Coordinator;
         session?: string;
       } = {};
+      // Usage windows belong to the harness accounts. Every session reports them here.
+      const quota = new Quota(root);
+      await quota.load();
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
+        agents:
+          (await loadWorkspace(root).catch(() => null))?.agents ??
+          defaultAgents,
+        onLimit: (host, signal) => quota.record(host, signal),
         onTaskTurn: (task, turn, detail, reply) =>
           void owned.tasks
             ?.turnEnded(task, turn, detail, reply)
@@ -646,12 +654,18 @@ async function serveDesk(
         tasks,
         compute,
         memory,
+        quota,
+        agents: () => sessions.limit,
         onChange: remember,
         ...(io.progress ? { progress: io.progress } : {}),
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
           onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
+          onLimit: (host, signal) => {
+            quota.record(host, signal);
+            owned.coordinator?.limited(signal);
+          },
         }),
       });
       owned.coordinator = coordinator;

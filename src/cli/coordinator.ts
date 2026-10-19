@@ -28,7 +28,8 @@ import { ResultsStore, type Results } from './results.ts';
 import type { Compute } from './compute.ts';
 import { spent, usd } from './leases.ts';
 import { loadWorkspace } from './storage.ts';
-import { workerLimit } from './workers.ts';
+import { defaultAgents } from './workers.ts';
+import type { LimitSignal } from './quota.ts';
 import { scratch } from './workspaces.ts';
 
 /**
@@ -55,8 +56,12 @@ export const coordinatorLimits = {
 export interface CoordinatorEvent extends TaskEvent {
   readonly seq: number;
   readonly at: string;
-  /** A Verifold read failed in the turn that first carried the event, so it came once more. */
-  readonly again?: true;
+  /**
+   * The event came once more: `true` when a Verifold read failed in the turn
+   * that first carried it, `limit` when the harness's usage window ran out in
+   * that turn.
+   */
+  readonly again?: true | 'limit';
 }
 
 /** One tool call of the coordinator, with its reason and Verifold's answer. */
@@ -100,8 +105,10 @@ export interface CoordinatorView {
   readonly session: SessionView | null;
   /** Events that wait for the next wakeup. */
   readonly waiting: number;
-  /** The wakeup limit holds events until this time. */
+  /** The wakeup limit or the harness's usage window holds events until this time. */
   readonly limitedUntil: string | null;
+  /** What holds the events: the hourly turns, or the usage window of the coordinator's harness. */
+  readonly limitedBy?: 'turns' | 'usage' | null;
 }
 
 function fail(message: string): never {
@@ -152,6 +159,12 @@ export class Coordinator {
   private state: CoordinatorState | null = null;
   private timer: NodeJS.Timeout | undefined;
   private limitedUntil: string | null = null;
+  /** The usage windows of the harness accounts. The coordinator does not wake into a used-up one. */
+  private readonly quota:
+    | { parked(host: HarnessName): string | null }
+    | undefined;
+  /** "Agents at once" of the project. */
+  private readonly agents: () => number;
   private queue: Promise<unknown> = Promise.resolve();
   /** The saved session record after a restart, until the session resumes. */
   private saved: SessionRecord | null = null;
@@ -178,6 +191,8 @@ export class Coordinator {
   private carried: {
     readonly events: readonly CoordinatorEvent[];
     readFailed: boolean;
+    /** The harness's usage window ran out in this turn, so the turn did no work. */
+    usedUp: boolean;
   } | null = null;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
@@ -194,8 +209,12 @@ export class Coordinator {
         digest(): Promise<string>;
       };
       readonly onChange?: () => void;
+      readonly quota?: { parked(host: HarnessName): string | null };
+      readonly agents?: () => number;
     },
   ) {
+    this.quota = options.quota;
+    this.agents = options.agents ?? (() => defaultAgents);
     this.memory = options.memory;
     this.onChange = options.onChange;
     this.root = root;
@@ -255,6 +274,8 @@ export class Coordinator {
   view(): CoordinatorView | null {
     const state = this.state;
     if (!state) return null;
+    // A used-up window holds the coordinator even when no event waits yet.
+    const parked = state.stoppedAt ? null : this.quota?.parked(state.host);
     return {
       state,
       session: state.session
@@ -264,7 +285,8 @@ export class Coordinator {
             : null))
         : null,
       waiting: state.events.filter((event) => event.seq > state.cursor).length,
-      limitedUntil: this.limitedUntil,
+      limitedUntil: parked ?? this.limitedUntil,
+      limitedBy: parked ? 'usage' : this.limitedUntil ? 'turns' : null,
       results: this.results.current(),
     };
   }
@@ -325,6 +347,8 @@ export class Coordinator {
         actions: [],
       });
       let session: string;
+      // The first turn carries no events, but it can still run into a used-up usage window.
+      this.carried = { events: [], readFailed: false, usedUp: false };
       try {
         session = await this.sessions.startCoordinator({
           host,
@@ -334,12 +358,13 @@ export class Coordinator {
 Objective:
 ${objective}
 ${input.context ? `\n${input.context}\n` : ''}${memoryText(await this.memory?.digest())}
-${helper ? `The team: ${hostName(host)} leads: it runs research and you. ${hostName(helper)} helps. Give each task the harness that fits it, and say why in hostReason. When a check compares two results, run the second one on the other harness, so that a mistake of one model family cannot pass both. Tasks run on ${hostName(host)} when you name no harness${model ? `, with the model ${model}` : ''}.` : `Workers run on ${hostName(host)}${model ? `, with the model ${model}` : ''}.`} Up to ${workerLimit} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
+${helper ? `The team: ${hostName(host)} leads: it runs research and you. ${hostName(helper)} helps. Give each task the harness that fits it, and say why in hostReason. When a check compares two results, run the second one on the other harness, so that a mistake of one model family cannot pass both. Tasks run on ${hostName(host)} when you name no harness${model ? `, with the model ${model}` : ''}.` : `Workers run on ${hostName(host)}${model ? `, with the model ${model}` : ''}.`} Up to ${this.agents()} workers run at the same time. You can create up to ${coordinatorLimits.tasks} tasks.
 
 ${input.guided ? 'In this project, the person approves your first task plan before any task starts. Start now: read verifold_state, create the tasks for the first step, and end your turn with a short summary of the plan for the person: what the tasks do, about how long the work takes, and why each task runs on its harness. Verifold wakes you when the person approves it or writes to you.' : 'Start now: read verifold_state, create the tasks for the first step, and start the ones that can run.'}`,
           tools: this.tools(),
         });
       } catch (error) {
+        this.carried = null;
         // A coordinator that did not start counts as stopped, so the person can start it again.
         await this.save({
           ...this.current(),
@@ -492,7 +517,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
 
   /** Add events for the next wakeup, and wake after `delay`. */
   private append(
-    events: readonly (TaskEvent & { readonly again?: true })[],
+    events: readonly (TaskEvent & { readonly again?: true | 'limit' })[],
     delay: number,
   ): void {
     this.serial(async () => {
@@ -528,9 +553,28 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
   turnEnded(record?: SessionRecord): void {
     this.answering = false;
     // A failed read can hide what an event was about, so its events come once more.
+    // A turn that ran into a used-up usage window did no work, so its events wait for the reset.
     const carried = this.carried;
     this.carried = null;
-    if (carried?.readFailed) {
+    if (carried?.usedUp)
+      this.append(
+        carried.events.length
+          ? carried.events.map(({ kind, task, message, text }) => ({
+              kind,
+              ...(task ? { task } : {}),
+              ...(message ? { message } : {}),
+              text,
+              again: 'limit' as const,
+            }))
+          : [
+              {
+                kind: 'restart',
+                text: "Your harness's usage window ran out in your last turn, so that turn did no work. Continue now: read verifold_state.",
+              },
+            ],
+        this.debounceMs,
+      );
+    else if (carried?.readFailed) {
       const again = carried.events.filter((event) => !event.again);
       if (again.length)
         this.append(
@@ -557,6 +601,15 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     )
       this.progress?.('The plan waits for you in the desk.');
     this.schedule();
+  }
+
+  /**
+   * The coordinator's own harness reported its usage window. A used-up window
+   * in a turn means that the turn did no work. The quota records the window
+   * for the account, so the next wakeup waits for the reset.
+   */
+  limited(signal: LimitSignal): void {
+    if (signal.exhausted && this.carried) this.carried.usedUp = true;
   }
 
   /** Stop the wakeups and pause the session. Returns false when its record could not be saved. */
@@ -591,6 +644,12 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     // A busy coordinator gets the events when its turn ends.
     if (!waiting.length || this.sessions.idleSession() !== state.session)
       return;
+    // A turn in a used-up usage window fails at once, so the events wait for the reset.
+    const parked = this.quota?.parked(state.host);
+    if (parked) {
+      this.schedule(Math.max(1000, Date.parse(parked) - Date.now()));
+      return;
+    }
     const hour = Date.now() - 3_600_000;
     const recent = state.wakeups.filter((at) => Date.parse(at) > hour);
     if (recent.length >= coordinatorLimits.wakeupsPerHour) {
@@ -612,7 +671,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     });
     try {
       this.sessions.continueTask(
-        `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${sent.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}${sent.some((event) => event.again) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
+        `Events since your last turn. Each line comes from Verifold; quoted text in it comes from agents or the person:\n${sent.map((event) => `- [${event.kind}${event.again ? ', again' : ''}] ${event.text}`).join('\n')}${waiting.length > sent.length ? `\n- ${waiting.length - sent.length} more events follow in the next digest.` : ''}${sent.some((event) => event.again === true) ? '\n\nEvents marked "again" were in your last digest too, but a Verifold read failed in that turn. Read them again now.' : ''}${sent.some((event) => event.again === 'limit') ? '\n\nEvents marked "again" were in your last digest too, but your harness\'s usage window ran out in that turn. Act on them now.' : ''}\n\nRead verifold_state for details. Act on these events, then end your turn with a short summary.`,
       );
     } catch {
       // Nothing was sent, so the events wait for the next wakeup.
@@ -623,7 +682,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       });
       return;
     }
-    this.carried = { events: sent, readFailed: false };
+    this.carried = { events: sent, readFailed: false, usedUp: false };
     await this.tasks.sentToCoordinator(
       sent.flatMap((event) => (event.message ? [event.message] : [])),
     );
@@ -1042,7 +1101,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
     const value = {
       objective: state.objective,
       limits: {
-        workers: workerLimit,
+        workers: this.agents(),
         running: all.filter((task) =>
           ['claimed', 'running'].includes(task.state),
         ).length,

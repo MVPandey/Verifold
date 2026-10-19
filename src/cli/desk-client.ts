@@ -984,6 +984,8 @@ function computeRequest(button: HTMLElement): Record<string, unknown> {
     return { action, secret: button.dataset.secret };
   if (action.startsWith('compute-lease-'))
     return { action, lease: button.dataset.lease };
+  if (action === 'compute-agents')
+    return { action, agents: Number(field('team-agents')) };
   if (action !== 'compute-settings') return { action };
   // Without the GPU table, the saved GPU list stays.
   const boxes = Array.from(

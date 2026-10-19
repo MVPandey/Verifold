@@ -48,7 +48,8 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
-import { loadWorkspace } from './storage.ts';
+import { changeWorkspace, loadWorkspace } from './storage.ts';
+import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
 
 export interface DeskServer {
@@ -463,6 +464,20 @@ async function act(
     body.action.startsWith('task-')
   ) {
     await taskAction(tasks, body, coordinator);
+    return 200;
+  }
+  if (body.action === 'compute-agents') {
+    const agents = body.agents;
+    if (!validAgents(agents))
+      throw new SessionActionError(
+        'Choose a whole number of agents from 1 to 8.',
+      );
+    await changeWorkspace(root, (current) => {
+      if (!current) throw new SessionActionError('The project has no record.');
+      return { ...current, agents };
+    });
+    // A lower limit stops no agent. New starts wait until fewer run.
+    sessions.limit = agents;
     return 200;
   }
   if (
@@ -1148,6 +1163,7 @@ export async function startDesk(
             workers,
             session: worker,
             full: sessions?.full ?? false,
+            ...(sessions ? { agents: sessions.limit } : {}),
             terminals: await terminalSupport(),
             controllable: sessions !== undefined,
             paused: sessions?.paused() ?? [],

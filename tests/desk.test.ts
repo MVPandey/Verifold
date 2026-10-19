@@ -3937,6 +3937,7 @@ await test('a failed start offers the other harness only when an agent can start
         session: null,
         controllable: true,
         full,
+        agents: 2,
         tasks: { list: [task], selected: task, idle: [], messages: [] },
         coordinator: {
           state: {
@@ -3964,7 +3965,7 @@ await test('a failed start offers the other harness only when an agent can start
   const full = page(true);
   assert.match(
     full,
-    /<p class="notice" id="task-blocked">2 agents already work\.[^<]*<\/p>/,
+    /<p class="notice" id="task-blocked">2 agents already work, the most that &quot;Agents at once&quot; allows\.[^<]*<\/p>/,
   );
   assert.match(
     full,
@@ -3974,4 +3975,67 @@ await test('a failed start offers the other harness only when an agent can start
     full,
     /data-action="task-start" data-task="task-1" disabled aria-describedby="task-blocked">Start task</,
   );
+});
+
+await test('Home says when the coordinator waits for a used-up usage window', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = await readDeskSnapshot(root);
+  const at = new Date().toISOString();
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  const task = {
+    schemaVersion: 1,
+    id: 'task-1',
+    revision: 1,
+    state: 'open',
+    createdAt: at,
+    updatedAt: at,
+    attempts: [],
+    assignment: {
+      by: 'coordinator',
+      reason: 'Plan.',
+      title: 'Years',
+      objective: 'Work.',
+      inputs: [],
+      writable: ['results'],
+      output: 'Files.',
+      host: 'claude',
+      model: null,
+      minutes: 30,
+      dependencies: [],
+    },
+  };
+  const home = (limitedBy: 'usage' | 'turns'): string =>
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        tasks: { list: [task], selected: null, idle: [], messages: [] },
+        coordinator: {
+          state: {
+            objective: 'Cycles',
+            host: 'claude',
+            stoppedAt: null,
+            planApproved: true,
+            wakeups: [],
+            events: [],
+            actions: [],
+          },
+          session: null,
+          waiting: 1,
+          limitedUntil: until,
+          limitedBy,
+        },
+      } as never,
+      { view: 'home', panel: null },
+    ).html;
+  assert.match(
+    home('usage'),
+    /<span class="map-label">Now<\/span> No task runs\. The coordinator waits for Claude Code&#39;s usage window until \d{2}:\d{2}\./,
+  );
+  // The hourly turn limit is not a usage window.
+  assert.doesNotMatch(home('turns'), /usage window/);
 });

@@ -30,11 +30,14 @@ import { startDesk } from '../src/cli/desk.ts';
 import { SessionPool } from '../src/cli/workers.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
+import { Quota } from '../src/cli/quota.ts';
 
 /**
  * A fake Claude Code coordinator. Each turn runs the next list of tool calls
  * from script.json, one after another over the SDK MCP channel, and writes
  * each answer to results.jsonl. A turn without a script entry only replies.
+ * A turn whose first entry is named LIMIT fails on a used-up usage window
+ * that resets at its `resetsAt` (epoch seconds), as Claude Code reports it.
  */
 const coordinatorHost = `const fs = require('node:fs');
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
@@ -66,6 +69,10 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   next = 0;
   turn++;
   fs.writeFileSync('turns.txt', String(turn));
+  if (calls[0]?.name === 'LIMIT') {
+    out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: calls[0].arguments.resetsAt, rateLimitType: 'five_hour' } });
+    return out({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your usage limit." });
+  }
   out({ type: 'assistant', message: { content: [{ type: 'text', text: 'Turn ' + turn + ' done.' }] } });
   call();
 });`;
@@ -125,6 +132,7 @@ async function team(
     note(who: string, text: unknown): Promise<string>;
     digest(): Promise<string>;
   },
+  quota?: (root: string) => Quota,
 ): Promise<{
   root: string;
   tasks: TaskManager;
@@ -164,6 +172,7 @@ async function team(
     { mode: 0o700 },
   );
   const workers = new Workers();
+  const limits = quota?.(root);
   const owned: { coordinator?: Coordinator } = {};
   const tasks = new TaskManager(root, {
     ownerId: 'owner-1',
@@ -175,11 +184,20 @@ async function team(
     debounceMs,
     ...(compute ? { compute: await compute(root) } : {}),
     ...(memory ? { memory } : {}),
+    ...(limits ? { quota: limits } : {}),
     sessions: new SessionManager(root, {
       clientVersion: 'test',
       ownerId: 'owner-1',
       executables: { claude: join(root, 'fake-claude') },
       onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
+      ...(limits
+        ? {
+            onLimit: (host, signal) => {
+              limits.record(host, signal);
+              owned.coordinator?.limited(signal);
+            },
+          }
+        : {}),
     }),
   });
   owned.coordinator = coordinator;
@@ -706,6 +724,86 @@ await test('events come once more after a read failed, and a resumed coordinator
   } finally {
     await next.close();
   }
+});
+
+await test('a used-up usage window holds the coordinator until the reset, and the events of the failed turn come again', async (t) => {
+  const { root, tasks, coordinator, script, inputs, turns } = await team(
+    t,
+    30,
+    undefined,
+    undefined,
+    (folder) => new Quota(folder, { graceMs: 0 }),
+  );
+  const resetsAt = Math.ceil(Date.now() / 1000) + 2;
+  await script([[], [{ name: 'LIMIT', arguments: { resetsAt } }], []]);
+  await coordinator.start({
+    objective: 'Wait.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  // The person's message wakes the coordinator, and that turn fails on the used-up window.
+  await tasks.post('coordinator', 'Check the seeds.');
+  await turns(2);
+  assert.equal(coordinator.view()?.limitedBy, 'usage');
+  assert.equal(
+    coordinator.view()?.limitedUntil,
+    new Date(resetsAt * 1000).toISOString(),
+  );
+  const saved = JSON.parse(
+    await readFile(join(root, '.verifold', 'quota.json'), 'utf8'),
+  ) as { claude: { exhausted: boolean; until: string } };
+  assert.equal(saved.claude.exhausted, true);
+  // The coordinator panel says why the coordinator waits.
+  const html = renderDesk(
+    await readDeskSnapshot(root),
+    undefined,
+    null,
+    { session: null, controllable: true, coordinator: coordinator.view() },
+    { view: 'home', panel: 'coordinator' },
+  ).html;
+  assert.match(
+    html,
+    /The coordinator waits for Claude Code's usage window until \d{2}:\d{2}\. The window is used up, so a turn would fail\./,
+  );
+  // No turn starts inside the window.
+  await delay(500);
+  assert.equal((await inputs()).length, 2);
+  // After the reset, the events of the failed turn come again, marked.
+  await turns(3);
+  const third = (await inputs())[2] ?? '';
+  assert.match(
+    third,
+    /- \[person, again\] m-1 from person: "Check the seeds\."/,
+  );
+  assert.match(third, /your harness's usage window ran out in that turn/);
+  assert.ok(Date.now() >= resetsAt * 1000);
+  assert.equal(coordinator.view()?.limitedBy, null);
+});
+
+await test('a first turn that runs into a used-up usage window continues after the reset', async (t) => {
+  const { coordinator, script, inputs, turns } = await team(
+    t,
+    30,
+    undefined,
+    undefined,
+    (folder) => new Quota(folder, { graceMs: 0 }),
+  );
+  const resetsAt = Math.ceil(Date.now() / 1000) + 2;
+  await script([[{ name: 'LIMIT', arguments: { resetsAt } }], []]);
+  await coordinator.start({
+    objective: 'Wait.',
+    host: 'claude',
+    guided: false,
+  });
+  await turns(1);
+  assert.equal(coordinator.view()?.limitedBy, 'usage');
+  await turns(2);
+  assert.ok(Date.now() >= resetsAt * 1000);
+  assert.match(
+    (await inputs())[1] ?? '',
+    /- \[restart\] Your harness's usage window ran out in your last turn, so that turn did no work\./,
+  );
 });
 
 await test('in Guided research no task starts before the person approves the plan, and two overrules send the next objection to the person', async (t) => {
