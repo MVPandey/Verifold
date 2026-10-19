@@ -20,7 +20,8 @@ import { SessionPool } from '../src/cli/workers.ts';
 import { Lab } from '../src/cli/lab.ts';
 import { Quota } from '../src/cli/quota.ts';
 import { readRecord } from '../src/cli/session.ts';
-import { archiveRun } from '../src/cli/archive.ts';
+import { archiveRun, restoreRun } from '../src/cli/archive.ts';
+import { terminalInput, type CliIO } from '../src/cli/commands.ts';
 
 /**
  * A fake Claude Code for lab agents. Its folder name (such as d-1-circles)
@@ -203,6 +204,7 @@ const timing = {
   continueMs: 50,
   tickMs: 40,
   backoffMs: [60_000, 60_000, 60_000],
+  retryMs: 300,
 };
 
 function git(cwd: string, ...args: string[]): string {
@@ -224,13 +226,23 @@ function git(cwd: string, ...args: string[]): string {
 
 async function fixture(
   t: test.TestContext,
-  options: { readonly agents?: number } = {},
+  options: {
+    readonly agents?: number;
+    /** The project's memory. Its digest runs while an agent's first prompt is made. */
+    readonly memory?: (sessions: SessionPool) => {
+      note(who: string, text: unknown): Promise<string>;
+      digest(): Promise<string>;
+    };
+    readonly gitignore?: string;
+  } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
   const root = join(base, 'project');
   await mkdir(root);
   git(root, 'init', '--quiet');
   await writeFile(join(root, 'README.md'), '# Project\n');
+  if (options.gitignore)
+    await writeFile(join(root, '.gitignore'), options.gitignore);
   await changeWorkspace(root, () => ({
     schemaVersion: 1,
     visibility: 'private',
@@ -275,7 +287,12 @@ async function fixture(
         owned.lab?.limited(host, signal);
       },
     });
-    const lab = new Lab(root, { sessions, quota, timing });
+    const lab = new Lab(root, {
+      sessions,
+      quota,
+      timing,
+      ...(options.memory ? { memory: options.memory(sessions) } : {}),
+    });
     owned.lab = lab;
     return { sessions, lab };
   };
@@ -639,8 +656,17 @@ await test('an agent whose process stops by itself starts again, twice an hour a
     { calls: [{ name: 'EXIT' }] },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  const first = Date.now();
+  // A restart waits first: 300 ms in the tests, doubled after each stop.
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  assert.ok(
+    Date.now() - first >= 250,
+    `restarted after ${Date.now() - first} ms`,
+  );
   await until(() => lab.lab.view()?.directions[0]?.status === 'crashed');
   assert.equal((await lab.inputs('d-1-alpha')).length, 3);
+  assert.equal(lab.lab.view()?.directions[0]?.agent.restarts.length, 3);
   await lab.lab.restartAgent('a-1');
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 4);
 });
@@ -750,4 +776,183 @@ await test('the person cannot open more directions than the limit, or post as an
     lab.lab.post({ text: '@codex-9 hello' }),
     /No agent of the lab has the handle codex-9/,
   );
+});
+
+await test('proof in a folder that the project ignores is pinned, and a turn that changes nothing adds no commit', async (t) => {
+  const lab = await fixture(t, { gitignore: 'results/\n' });
+  await lab.script('d-1-circles', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'results/fig.png', text: 'PNG' } },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'Months lie on a circle.',
+            artifacts: [{ type: 'figure', path: 'results/fig.png' }],
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [
+    { title: 'Circles', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  await until(
+    () => lab.lab.view()?.posts.some((post) => post.kind === 'claim') ?? false,
+  );
+  const proof = lab.lab.view()?.posts.find((post) => post.kind === 'claim')
+    ?.artifacts[0];
+  assert.equal(proof?.type, 'figure');
+  if (proof?.type === 'figure')
+    assert.equal(
+      git(lab.root, 'show', `${proof.commit}:results/fig.png`),
+      'PNG',
+    );
+  // Beta changes nothing in two turns, so its branch keeps its start commit.
+  await until(() => lab.lab.view()?.directions[1]?.agent.idleStreak === 2);
+  const beta = lab.lab.view()?.directions[1]?.direction;
+  assert.equal(
+    git(lab.root, 'rev-parse', beta?.workspace.branch ?? '').trim(),
+    beta?.workspace.start,
+  );
+  assert.equal(beta?.head, beta?.workspace.start);
+});
+
+await test('a post whose turn ran into a used-up usage window comes again after the reset', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    { when: 'check layer 12', calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  await until(() => lab.lab.view()?.directions[0]?.status === 'idle');
+  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 3);
+  const signal = {
+    exhausted: true,
+    resetsAt: new Date(Date.now() + 1200).toISOString(),
+    usedPercent: 100,
+    window: 'five_hour',
+  };
+  lab.quota.record('claude', signal);
+  lab.lab.limited('claude', signal);
+  // A second post goes into the waiting turn, which then ends.
+  await lab.lab.post({ text: 'Thanks.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
+  const again = (await lab.inputs('d-1-alpha'))[3] ?? '';
+  assert.match(again, /check layer 12/);
+  assert.match(again, /usage window ran out/);
+  assert.doesNotMatch(again, /Thanks\./);
+});
+
+await test('start over parks the lab, a restore brings it back paused, and a new lab never reuses a folder', async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.suspend();
+  const archive = await archiveRun(lab.root);
+  await lab.lab.reload();
+  await lab.sessions.forget();
+  assert.equal(lab.lab.exists, false);
+  // A new lab opens Alpha again. Its folder and branch get a new number.
+  await lab.lab.start('Another question.');
+  assert.equal(
+    await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' }),
+    'd-2',
+  );
+  await until(async () => (await lab.inputs('d-2-alpha')).length >= 1);
+  // Restore the first run: it comes back paused, and resumes when the person resumes it.
+  await lab.lab.suspend();
+  await restoreRun(lab.root, archive);
+  await lab.lab.reload();
+  await lab.sessions.forget();
+  assert.equal(
+    lab.lab.view()?.state.question,
+    'Do LLMs store months on circles?',
+  );
+  assert.ok(lab.lab.view()?.state.pausedAt);
+  const before = (await lab.inputs('d-1-alpha')).length;
+  await lab.lab.resume();
+  await until(async () =>
+    (await lab.inputs('d-1-alpha'))
+      .slice(before)
+      .some((input) => input.includes('The person resumed the lab')),
+  );
+});
+
+await test('an agent whose start finds the pool full waits for a slot, and no failure counts', async (t) => {
+  let person: string | undefined;
+  const lab = await fixture(t, {
+    agents: 1,
+    // The person's session takes the only slot while the agent's first prompt is made.
+    memory: (sessions) => ({
+      note: () => Promise.resolve('Noted.'),
+      digest: async () => {
+        person ??= await sessions.start({
+          host: 'claude',
+          mode: 'ask',
+          prompt: 'Hello.',
+        });
+        return '';
+      },
+    }),
+  });
+  await lab.lab.start('A question.');
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await until(() => person !== undefined);
+  await delay(400);
+  const waiting = lab.lab.view()?.directions[0];
+  assert.equal(waiting?.status, 'slot');
+  assert.deepEqual(waiting?.agent.restarts, []);
+  assert.equal((await lab.inputs('d-1-alpha')).length, 0);
+  lab.sessions.end(person);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+});
+
+await test('an agent cannot mention all, and the terminal and cancel leave lab agents alone', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: { kind: 'question', text: 'Anyone?', mentions: ['all'] },
+        },
+        { name: 'WAIT' },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(
+    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length === 1,
+  );
+  const [result] = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  assert.equal(result?.result.isError, true);
+  assert.match(
+    result?.result.content[0]?.text ?? '',
+    /Mention agents by handle/,
+  );
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  assert.throws(() => lab.sessions.cancel(session), /agent of the lab/);
+  const lines: string[] = [];
+  const io = {
+    interactive: true,
+    out: () => {},
+    progress: (line: string) => lines.push(line),
+  } as unknown as CliIO;
+  terminalInput(lab.sessions, '/cancel', io, {
+    open: () => {},
+    host: 'claude',
+  });
+  terminalInput(lab.sessions, 'Hello?', io, { open: () => {}, host: 'claude' });
+  assert.deepEqual(lines, [
+    'Nothing is running.',
+    'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
+  ]);
+  assert.equal(lab.lab.view()?.directions[0]?.status, 'working');
 });

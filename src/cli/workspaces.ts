@@ -363,12 +363,18 @@ async function ownExclusions(
  * Commit everything in the workspace. Inside writable paths, ignored files
  * count too, so output in an ignored folder is kept. Environments, caches, and
  * the files that the task's own `.gitignore` ignores stay out. Files above the
- * size limit stay out of the commit and are listed.
+ * size limit stay out of the commit and are listed. `named` files count even
+ * when a `.gitignore` ignores them. With `empty: false`, a workspace without
+ * changes keeps its commit.
  */
 async function commitAll(
   target: string,
   writable: readonly string[],
   message: string,
+  options: {
+    readonly named?: readonly string[];
+    readonly empty?: boolean;
+  } = {},
 ): Promise<{ readonly commit: string; readonly skipped: readonly string[] }> {
   // Git refuses a path that does not exist. A writable folder can be new.
   const forced: string[] = [];
@@ -427,14 +433,26 @@ async function commitAll(
       ...exclude,
       ...own.ignored.map((file) => `:(exclude,literal)${file}`),
     ]);
+  const named: string[] = [];
+  for (const path of options.named ?? []) {
+    const stats = await lstat(join(target, path)).catch(() => null);
+    if (stats?.isFile() && stats.size <= limits.fileBytes) named.push(path);
+  }
+  if (named.length)
+    await git(target, [
+      'add',
+      '--force',
+      '--',
+      ...named.map((path) => `:(literal)${path}`),
+    ]);
   // An ignored folder is one pending entry, so count again what Git holds now.
-  if (
-    (await list(target, ['diff', '--cached', '--name-only', '-z'])).length >
-    limits.files
-  ) {
+  const staged = await list(target, ['diff', '--cached', '--name-only', '-z']);
+  if (staged.length > limits.files) {
     await git(target, ['reset', '--quiet']);
     throw tooMany();
   }
+  if (!staged.length && options.empty === false)
+    return { commit: await head(target), skipped };
   await git(target, [
     'commit',
     '--quiet',
@@ -527,14 +545,54 @@ export function commitVersion(
 
 /**
  * Commit everything in a lab direction's folder, so other agents can read its
- * files at this commit. Returns the commit.
+ * files at this commit. The `named` files, such as the proof of a post, count
+ * even when the project ignores them. A folder without changes keeps its
+ * commit. Returns the commit.
  */
 export async function snapshot(
   root: string,
   workspace: Workspace,
   message: string,
+  named: readonly string[] = [],
 ): Promise<string> {
-  return (await commitAll(join(root, workspace.path), ['.'], message)).commit;
+  return (
+    await commitAll(join(root, workspace.path), ['.'], message, {
+      named,
+      empty: false,
+    })
+  ).commit;
+}
+
+/**
+ * The workspace names in use: the folders under `.verifold/workspaces`, the
+ * Git folders of folder projects, and Verifold's branches. A new workspace
+ * must take another name. Start over keeps them all.
+ */
+export async function workspaceNames(root: string): Promise<string[]> {
+  const names = async (folder: string): Promise<string[]> => {
+    try {
+      return await readdir(join(root, '.verifold', folder));
+    } catch {
+      return [];
+    }
+  };
+  const branches = (await gitProject(root))
+    ? (
+        await git(root, [
+          'for-each-ref',
+          '--format=%(refname:lstrip=3)',
+          'refs/heads/verifold/',
+        ])
+      )
+        .toString('utf8')
+        .split('\n')
+        .filter(Boolean)
+    : [];
+  return [
+    ...(await names('workspaces')),
+    ...(await names(join('tasks', 'git'))),
+    ...branches,
+  ];
 }
 
 const changeNames: Record<string, ChangedFile['change']> = {
