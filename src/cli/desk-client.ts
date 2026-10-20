@@ -345,6 +345,13 @@ async function render(html: string): Promise<void> {
       ADD_ATTR: ['target'],
     });
   const apply = (): void => {
+    // A morph keeps the children of the focused element, so a panel that shows another item lets go of focus first.
+    if (
+      !same &&
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement.closest('#panel')
+    )
+      document.activeElement.blur();
     // A new view replaces the page: nothing on it carries over, and a morph can move a kept heading into it.
     // The morph returns a promise only when it waits for a new head. A morph of #content does not.
     if (opened) content.replaceChildren(template.content);

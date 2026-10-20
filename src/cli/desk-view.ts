@@ -3809,7 +3809,8 @@ export function renderDesk(
     html,
     observation: '',
     title: snapshot.project,
-    stage: stageText(at),
+    // A lab's header says where it stands. The research arc does not apply to it.
+    stage: live.lab ? '' : stageText(at),
     needs: needs.map(({ key, title }) => ({ key, title })),
     work: at.work ?? null,
     stoppable: live.archives !== undefined,
