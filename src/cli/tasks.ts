@@ -296,7 +296,8 @@ export interface TaskManagerOptions {
   readonly memory?: {
     note(who: string, text: unknown): Promise<string>;
     digest(): Promise<string>;
-  } /** One run has one team. A task needs the coordinator's team's run. */;
+  };
+  /** One run has one team. A task needs the coordinator's team's run. */
   readonly team?: RunTeam;
 }
 
@@ -418,15 +419,12 @@ export class TaskManager {
     by: Actor = 'person',
     reason = 'Created',
   ): Promise<string> {
-    return this.serial(async () => {
-      // A task makes the run the coordinator's team's. A create that fails gives the run back.
-      const release = this.options.team?.claim('coordinator') ?? (() => {});
-      try {
-        return await this.createNow(fields, by, reason);
-      } catch (error) {
-        release();
-        throw error;
-      }
+    return this.serial(() => {
+      // A task makes the run the coordinator's team's: the check and the new record are one step under the run's lock.
+      const make = (): Promise<string> => this.createNow(fields, by, reason);
+      return this.options.team
+        ? this.options.team.exclusive('coordinator', make)
+        : make();
     });
   }
 
@@ -515,7 +513,7 @@ export class TaskManager {
    */
   start(id: unknown, by: Actor = 'person'): Promise<void> {
     return this.serial(async () => {
-      const refused = this.options.team?.refusal('coordinator');
+      const refused = await this.options.team?.refusal('coordinator');
       if (refused) fail(refused);
       const task = await this.load(id);
       if (task.state !== 'open') fail('Only an open task can start.');

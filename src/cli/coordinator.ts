@@ -340,10 +340,10 @@ export class Coordinator {
         input.helper !== host
           ? input.helper
           : null;
-      // The check and the claim of the run are one step: a lab cannot start in between.
-      const release = this.team?.claim('coordinator') ?? (() => {});
-      try {
-        await this.save({
+      // The check and the record that takes the run are one step under the run's lock: a lab cannot start in between.
+      const before = this.state;
+      const take = (): Promise<void> =>
+        this.save({
           schemaVersion: 1,
           objective,
           host,
@@ -358,12 +358,12 @@ export class Coordinator {
           wakeups: [],
           events: [],
           actions: [],
+        }).catch((error: unknown) => {
+          // No coordinator record was written, so the run is free again.
+          this.state = before;
+          throw error;
         });
-      } catch (error) {
-        // No coordinator record was written, so the run is free again.
-        release();
-        throw error;
-      }
+      await (this.team ? this.team.exclusive('coordinator', take) : take());
       let session: string;
       // The first turn carries no events, but it can still run into a used-up usage window.
       this.loop.started();
@@ -406,7 +406,7 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
   /** Start the coordinator for the chosen direction, unless one already runs or a lab owns the run. */
   async startForDirection(workspace: Workspace): Promise<void> {
     if (this.state && !this.state.stoppedAt) return;
-    const blocked = this.team?.refusal('coordinator');
+    const blocked = await this.team?.refusal('coordinator');
     if (blocked) {
       this.progress?.(blocked);
       return;

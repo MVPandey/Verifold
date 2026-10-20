@@ -1218,7 +1218,17 @@ async function act(button: HTMLElement): Promise<void> {
           ? reply.error
           : 'That did not work. Refresh, then try again.',
       );
-    actionLabel.textContent = name ? `Done: ${name}` : 'Done';
+    // A slow lab action goes on in the background. Its form stays, so nothing typed is lost if it fails.
+    const pending =
+      reply !== null &&
+      typeof reply === 'object' &&
+      'pending' in reply &&
+      reply.pending === true;
+    actionLabel.textContent = pending
+      ? `Still working: ${name || 'the action'}. The lab shows how it ends.`
+      : name
+        ? `Done: ${name}`
+        : 'Done';
     failure = undefined;
     if (action === 'stop') showStopped();
     // A new agent from the message box becomes the agent that the box writes to.
@@ -1236,23 +1246,27 @@ async function act(button: HTMLElement): Promise<void> {
       opener = undefined;
       navigate({ view: 'task', panel: '' }, '#view-title', 'start');
     }
-    for (const id of [
-      'message-text',
-      'setup-answer',
-      'setup-feedback',
-      'task-edit-reason',
-      'answer-note',
-      ...(body.action === 'coordinator-rule'
-        ? [`rule-${String(body.check)}`]
-        : []),
-      ...(body.action === 'task-create'
-        ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
-            (name) => `task-new-${name}`,
-          )
-        : []),
-      ...(body.action === 'lab-post' ? ['lab-text', 'lab-reply'] : []),
-      ...(body.action === 'lab-direction-add' ? ['lab-title', 'lab-bar'] : []),
-    ]) {
+    for (const id of pending
+      ? []
+      : [
+          'message-text',
+          'setup-answer',
+          'setup-feedback',
+          'task-edit-reason',
+          'answer-note',
+          ...(body.action === 'coordinator-rule'
+            ? [`rule-${String(body.check)}`]
+            : []),
+          ...(body.action === 'task-create'
+            ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
+                (name) => `task-new-${name}`,
+              )
+            : []),
+          ...(body.action === 'lab-post' ? ['lab-text', 'lab-reply'] : []),
+          ...(body.action === 'lab-direction-add'
+            ? ['lab-title', 'lab-bar']
+            : []),
+        ]) {
       const element = document.getElementById(id);
       if (
         (element instanceof HTMLTextAreaElement ||

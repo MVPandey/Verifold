@@ -37,9 +37,9 @@ import {
 } from './coordinator.ts';
 import { defaultAgents } from './workers.ts';
 import type { LabView } from './lab.ts';
-import type { TeamKind } from './team.ts';
+import { labWorks } from './team.ts';
 import {
-  labMember,
+  stateOf,
   renderLab,
   renderLabStart,
   type LabWork,
@@ -86,8 +86,8 @@ export interface DeskSession {
   readonly lab?: LabView | null;
   /** A lab action that runs in the background, or the one that failed there. */
   readonly labWork?: LabWork | null;
-  /** The team that owns the run: the coordinator's team, a lab, or none yet. */
-  readonly team?: TeamKind | null;
+  /** The person can start a lab on this run now: the run's guard allows it, and this desk runs the lab. */
+  readonly labCanStart?: boolean;
 }
 
 export interface TaskView {
@@ -398,7 +398,8 @@ function renderDecision(
   place: 'home' | 'research',
 ): string {
   const research = live.research;
-  if (!research || workspace.selectedId) return '';
+  // A lab run has no research steps.
+  if (!research || workspace.selectedId || live.lab) return '';
   const home = place === 'home';
   if (research.running)
     return home
@@ -2921,6 +2922,7 @@ function renderPlanCard(workspace: Workspace, live: DeskSession): string {
 function choosable(workspace: Workspace, live: DeskSession): boolean {
   return (
     live.research !== undefined &&
+    !live.lab &&
     !live.research.running &&
     !workspace.selectedId &&
     workspace.research?.phase === 'directions'
@@ -2957,6 +2959,7 @@ function renderResearchView(
   const research = workspace.research;
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Plan</h1><p>${e(workspace.selectedId ? 'Direction chosen' : phaseLabel(research?.phase))}</p></div>
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
+  ${live.lab ? `<p class="notice">${e(labWorks)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
   ${renderPlanCard(workspace, live)}
   ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Why</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button><span class="selected-label">${e(directionRole(idea, workspace, live))}</span></th><td data-label="Why">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
@@ -3245,7 +3248,7 @@ function renderRail(
   // Each lab agent with its direction. Its row opens the lab.
   for (const entry of live.lab?.directions ?? [])
     if (entry.direction.state === 'open') {
-      const { face, line } = labMember(entry, clock);
+      const { face, text: line } = stateOf(entry, clock);
       team.push(
         member(
           'session',
@@ -3452,10 +3455,9 @@ function renderHome(
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk starts nothing. To start an agent, pick A new agent in the message box.' : 'This desk shows saved work. It starts nothing.'}</p></section>`;
   }
   // A run that no team owns yet can start a lab instead, while no research step runs.
-  const labStart =
-    live.lab === null && !live.team && !live.research?.running
-      ? renderLabStart(workspace.research?.topic)
-      : '';
+  const labStart = live.labCanStart
+    ? renderLabStart(workspace.research?.topic)
+    : '';
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
   <div class="view">${labStart}${renderNow(workspace, live, needs)}${needsCard(needs)}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
 }
@@ -3498,13 +3500,16 @@ function renderPanel(
           'Research proposes directions after it searches the sources.',
         );
   } else if (panel === 'coordinator')
-    shown = coordinatorPanel(
-      live.coordinator ?? null,
-      workspace,
-      workspace.host,
-      tasks,
-      messages,
-    );
+    shown =
+      live.lab && !live.coordinator?.state
+        ? gone('Agent', 'Coordinator', labWorks)
+        : coordinatorPanel(
+            live.coordinator ?? null,
+            workspace,
+            workspace.host,
+            tasks,
+            messages,
+          );
   else if (panel === 'attempt')
     shown = chosen
       ? attemptPanel(chosen, workspace, live, report)
@@ -3601,8 +3606,9 @@ export function renderDesk(
                     )?.title ??
                       live.coordinator?.state?.objective ??
                       'Your tasks',
-                    // Before a direction and a coordinator, Tasks offers to start one with your own objective.
+                    // Before a direction and a coordinator, Tasks offers to start one with your own objective. A lab run has no coordinator.
                     live.coordinator !== undefined &&
+                      !live.lab &&
                       !workspace.selectedId &&
                       !live.coordinator?.state,
                     needs,

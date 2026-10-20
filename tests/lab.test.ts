@@ -870,20 +870,61 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
       ).json()) as { html: string }
     ).html;
 
+  // A slow lab action answers at once or goes on in the background, so the
+  // test waits for its result, not for one answer.
+  const slow = async (
+    body: Record<string, unknown>,
+    done: () => boolean,
+  ): Promise<void> => {
+    const [status, reply] = await post(body);
+    if (status === 202) assert.deepEqual(reply, { ok: true, pending: true });
+    else assert.equal(status, 200);
+    await until(done);
+  };
   // A project with no team at work offers the lab on Home.
   assert.match(await home(), /data-action="lab-start"/);
+  // A desk that runs one session never offers the lab: it could not start one.
+  const viewer = new Lab(lab.root, {
+    sessions: lab.sessions,
+    timing,
+    runs: false,
+  });
+  await viewer.load();
+  const quietStop = new AbortController();
+  const quiet = await startDesk(
+    lab.root,
+    quietStop.signal,
+    pathToFileURL(`${assets}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    tasks,
+    undefined,
+    undefined,
+    undefined,
+    { lab: viewer },
+  );
+  t.after(async () => {
+    quietStop.abort();
+    await quiet.closed;
+    await viewer.close();
+  });
+  const quietUrl = new URL(quiet.url);
+  const quietHome = (
+    (await (
+      await fetch(`${quietUrl.origin}/api/view?view=home`, {
+        headers: { Authorization: `Bearer ${quietUrl.hash.slice(1)}` },
+      })
+    ).json()) as { html: string }
+  ).html;
+  assert.doesNotMatch(quietHome, /data-action="lab-start"/);
   assert.equal(
     (await post({ action: 'lab-start', question: 'Q?' }, false))[0],
     401,
   );
-  assert.equal(
-    (
-      await post({
-        action: 'lab-start',
-        question: 'Do months lie on a circle?',
-      })
-    )[0],
-    200,
+  await slow(
+    { action: 'lab-start', question: 'Do months lie on a circle?' },
+    () => lab.lab.exists,
   );
   assert.deepEqual(await post({ action: 'lab-start', question: 'Again' }), [
     409,
@@ -891,6 +932,17 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   ]);
   const view = await home();
   assert.match(view, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
+  // A lab run offers no research step, no coordinator, and no new task.
+  const page = async (name: string): Promise<string> =>
+    (
+      (await (
+        await fetch(`${url.origin}/api/view?view=${name}`, { headers })
+      ).json()) as { html: string }
+    ).html;
+  const plan = await page('research');
+  assert.match(plan, /A lab works on this run/);
+  assert.doesNotMatch(plan, /data-action="research"/);
+  assert.doesNotMatch(await page('tasks'), /Open the coordinator/);
   assert.match(view, /Do months lie on a circle\?/);
   // In a lab, Home's one box posts to the board: no Research or coordinator recipient.
   assert.doesNotMatch(view, /id="message-text"/);
@@ -898,15 +950,9 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
 
   // Agent and person text is escaped. A mention of an unknown handle is refused.
   await lab.lab.pause();
-  assert.equal(
-    (
-      await post({
-        action: 'lab-direction-add',
-        title: 'Circles',
-        harness: 'claude',
-      })
-    )[0],
-    200,
+  await slow(
+    { action: 'lab-direction-add', title: 'Circles', harness: 'claude' },
+    () => lab.lab.view()?.directions.length === 1,
   );
   assert.equal(
     (
@@ -1021,13 +1067,20 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
 await test('one run has one team: research, the coordinator, tasks, and a lab keep apart', async (t) => {
   const lab = await fixture(t);
   let busy = false;
+  // The guard keeps no state: it asks the owners each time.
+  const owned: { lab?: Lab; coordinator?: Coordinator; tasks?: TaskManager } =
+    {};
   const team = new RunTeam({
+    lab: () => owned.lab?.exists ?? false,
+    coordinator: async () =>
+      Boolean(
+        owned.coordinator?.view()?.state || (await owned.tasks?.list())?.length,
+      ),
     researchBusy: () => busy,
-    read: () => Promise.resolve(null),
   });
   // A research step that runs keeps the lab out, and the lab never cancels it.
   busy = true;
-  assert.match(team.refusal('lab') ?? '', /Research is running/);
+  assert.match((await team.refusal('lab')) ?? '', /Research is running/);
   busy = false;
   const tasks = new TaskManager(lab.root, {
     ownerId: 'owner-1',
@@ -1044,11 +1097,12 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
     team,
   });
   const shared = new Lab(lab.root, { sessions: lab.sessions, timing, team });
+  Object.assign(owned, { lab: shared, coordinator, tasks });
   t.after(() => shared.close());
-  // A lab start that fails its own check gives the run back.
+  // A lab start that fails its own check leaves the run free.
   await assert.rejects(shared.start(''), /Write the question/);
-  assert.equal(team.team, null);
-  // The lab and the coordinator start at the same time: the first claim wins, and the other is refused.
+  assert.equal(await team.team(), null);
+  // The lab and the coordinator start at the same time: the first one under the lock wins, and the other is refused.
   const [started, led] = await Promise.allSettled([
     shared.start('A question.'),
     coordinator.start({ objective: 'Go.', host: 'claude', guided: true }),
@@ -1059,7 +1113,7 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
     String(led.status === 'rejected' ? led.reason : ''),
     /A lab works on this run/,
   );
-  assert.equal(team.team, 'lab');
+  assert.equal(await team.team(), 'lab');
   // No task, research step, or research message works on a lab's run.
   await assert.rejects(
     tasks.create({
@@ -1078,7 +1132,7 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
       ask: () => Promise.reject(new Error('No prompts')),
       out: () => {},
     },
-    blocked: () => team.refusal('coordinator'),
+    team,
     inbox: {
       post: () => Promise.reject(new Error('A message was saved.')),
       take: () => Promise.resolve([]),
@@ -1087,13 +1141,14 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
   await assert.rejects(research.start({ topic: 'More.' }), /A lab works/);
   await assert.rejects(research.select('idea-1'), /A lab works/);
   await assert.rejects(research.message('Hello.'), /A lab works/);
+  assert.equal(research.busy, false);
   // A run that the coordinator's team owns keeps the lab out.
   const other = new RunTeam({
+    lab: () => false,
+    coordinator: () => Promise.resolve(true),
     researchBusy: () => false,
-    read: () => Promise.resolve('coordinator'),
   });
-  await other.reload();
-  assert.match(other.refusal('lab') ?? '', /coordinator's team/);
+  assert.match((await other.refusal('lab')) ?? '', /coordinator's team/);
 });
 
 await test('Home in a lab still shows what needs the person, and the transcript of each agent', async (t) => {
