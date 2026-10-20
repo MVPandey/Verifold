@@ -27,6 +27,7 @@ import {
 import { RunTeam } from '../src/cli/team.ts';
 import type { PodRuns, Sandbox } from '../src/cli/runs.ts';
 import type { Lease } from '../src/cli/leases.ts';
+import { secretGuard } from '../src/cli/runpod.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
@@ -868,6 +869,7 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
   const leases = new Map([
     ['lease-1', lease('lease-1', 'd-1')],
     ['lease-2', lease('lease-2', 'd-2')],
+    ['lease-3', { ...lease('lease-3', 'd-1'), state: 'requested' as const }],
   ]);
   const runs: PodRuns = {
     pick: (direction) => {
@@ -882,8 +884,9 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
     log: () =>
       Promise.resolve({ bytes: 15, head: 'METRIC acc=0.9\n', tail: null }),
     metrics: () => Promise.resolve('METRIC acc=0.9\n'),
-    fetch: () => Promise.resolve(null),
+    fetch: () => Promise.resolve(),
     remove: () => Promise.resolve(),
+    guard: () => Promise.resolve(secretGuard({})),
   };
   const compute: LabCompute = {
     describe: () => Promise.resolve('{"podsOn":true}'),
@@ -993,12 +996,61 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
       input.includes('[pod] lease-1: The pod is ready.'),
     ),
   );
-  // A stopped direction's leases end, so its pod bills no more. Another direction's lease stays.
+  // A stopped direction's leases end, so its pod bills no more, and its request is withdrawn. Another direction's lease stays.
   await lab.lab.stopDirection('d-1');
-  await until(() => ended.length === 1);
+  await until(() => ended.length === 2);
   assert.deepEqual(ended, [
     { id: 'lease-1', by: 'person', reason: 'you stopped d-1.' },
+    { id: 'lease-3', by: 'person', reason: 'you stopped d-1.' },
   ]);
+});
+
+await test('a paused lab starts no pod', async (t) => {
+  const asked: unknown[] = [];
+  const compute: LabCompute = {
+    describe: () => Promise.resolve('{}'),
+    requestPod: (input) => {
+      asked.push(input);
+      return Promise.resolve('Started lease-1.');
+    },
+    podsOn: () => true,
+    leases: {
+      list: () => [],
+      get: () => {
+        throw new Error('No lease.');
+      },
+      end: () => Promise.reject(new Error('No lease.')),
+    },
+    podRuns: () => ({}) as PodRuns,
+  };
+  const lab = await fixture(t, { compute });
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.pause();
+  // A call that the agent's session makes while the lab is paused, such as one that was under way.
+  const agent = lab.lab.view()?.directions[0]?.agent;
+  const result = await (
+    lab.lab as unknown as {
+      call(
+        id: string,
+        generation: string,
+        name: string,
+        input: unknown,
+        callId: string,
+      ): Promise<{ ok: boolean; text: string }>;
+    }
+  ).call(
+    agent?.id ?? '',
+    agent?.generation ?? '',
+    'verifold_request_pod',
+    { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' },
+    'c-1',
+  );
+  assert.deepEqual(result, {
+    ok: false,
+    text: 'The lab is paused, so no pod starts now.',
+  });
+  assert.deepEqual(asked, []);
 });
 
 await test('start over moves the lab and its board into the archive', async (t) => {

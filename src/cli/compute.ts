@@ -9,7 +9,7 @@ import {
   type SecretStatus,
   type SecretStore,
 } from './credentials.ts';
-import { RunPod, hideSecrets, type GpuOffer } from './runpod.ts';
+import { RunPod, hideSecrets, secretGuard, type GpuOffer } from './runpod.ts';
 import {
   Leases,
   isOpen,
@@ -510,16 +510,24 @@ export class Compute {
 
   /** A function that hides the secret values of a lease's pod in a text. */
   private async hider(id: string): Promise<(text: string) => string> {
+    const values = await this.leaseSecrets(id);
+    return (text) => hideSecrets(text, values);
+  }
+
+  /** The secret values of a lease's pod, or none when they cannot be read. */
+  private async leaseSecrets(
+    id: string,
+  ): Promise<Readonly<Record<string, string>>> {
     const lease = this.leases.list().find((entry) => entry.id === id);
-    let values = this.hidden.get(id);
-    if (!values && lease?.secrets?.length)
-      values = await this.secretValues(lease).catch(() => ({}));
-    return (text) => hideSecrets(text, values ?? {});
+    const values = this.hidden.get(id);
+    if (values || !lease?.secrets?.length) return values ?? {};
+    return this.secretValues(lease).catch(() => ({}));
   }
 
   /**
    * The pod work of lab runs. Each call needs the lease's pod ready, and no
-   * text that it returns or throws holds a secret value.
+   * error that it throws holds a secret value. The ledger hides a job's texts
+   * with the run's guard.
    */
   podRuns(): PodRuns {
     const ready = (id: string): PodTarget => {
@@ -536,14 +544,14 @@ export class Compute {
       if (Date.now() - Date.parse(lease?.activeAt ?? '') >= 60_000)
         void this.leases.active(id).catch(() => undefined);
     };
-    // Each call hides secrets in its result and in its error.
+    // Each call hides secrets in its error.
     const hidden = async <T>(
       id: string,
-      work: (target: PodTarget, hide: (text: string) => string) => Promise<T>,
+      work: (target: PodTarget) => Promise<T>,
     ): Promise<T> => {
       const hide = await this.hider(id);
       try {
-        return await work(ready(id), hide);
+        return await work(ready(id));
       } catch (error) {
         if (error instanceof Error) error.message = hide(error.message);
         throw error;
@@ -576,6 +584,7 @@ export class Compute {
               : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },
+      guard: async (id) => secretGuard(await this.leaseSecrets(id)),
       send: (id, run, folder) =>
         hidden(id, async (target) => {
           void this.leases.active(id).catch(() => undefined);
@@ -592,70 +601,29 @@ export class Compute {
           void this.leases.active(id).catch(() => undefined);
         }),
       state: (id, run) =>
-        hidden(id, async (target, hide) => {
+        hidden(id, async (target) => {
           const state = await this.shell.runState(target, run);
           touch(id);
-          return { ...state, tail: hide(state.tail) };
+          return state;
         }),
       stop: (id, run, signal) =>
         hidden(id, (target) => this.shell.stopRun(target, run, signal)),
       log: (id, run, head, tail) =>
-        hidden(id, async (target, hide) => {
+        hidden(id, async (target) => {
           const log = await this.shell.runLog(target, run, head, tail);
           return {
             bytes: log.bytes,
-            head: hide(log.head.toString('utf8')),
-            tail: log.tail ? hide(log.tail.toString('utf8')) : null,
+            head: log.head.toString('utf8'),
+            tail: log.tail ? log.tail.toString('utf8') : null,
           };
         }),
       metrics: (id, run) =>
-        hidden(id, async (target, hide) =>
-          hide(await this.shell.runMetrics(target, run)),
-        ),
+        hidden(id, (target) => this.shell.runMetrics(target, run)),
       fetch: (id, run, paths, folder) =>
         hidden(id, async (target) => {
           const found = await this.shell.existing(target, run, paths);
-          if (!found.length) return null;
-          const { copied } = await this.shell.copyFrom(
-            target,
-            run,
-            folder,
-            ['.'],
-            found,
-          );
-          // A file whose name or content holds a secret value stays on the pod: the agent would read it.
-          const values = Object.values(this.hidden.get(id) ?? {}).filter(
-            Boolean,
-          );
-          const held: string[] = [];
-          let named = 0;
-          if (values.length)
-            for (const path of copied) {
-              const inName = values.some((value) => path.includes(value));
-              const content = inName
-                ? null
-                : await readFile(join(folder, path));
-              if (
-                inName ||
-                values.some((value) => content?.includes(value) === true)
-              ) {
-                await rm(join(folder, path), { force: true });
-                if (inName) named++;
-                else held.push(path);
-              }
-            }
-          return (
-            [
-              held.length
-                ? `Verifold kept no copy of ${held.slice(0, 5).join(', ')}, because ${held.length === 1 ? 'it holds' : 'they hold'} the value of a pod secret.`
-                : '',
-              named
-                ? `Verifold kept no copy of ${named} ${named === 1 ? 'file' : 'files'} whose name holds the value of a pod secret.`
-                : '',
-            ]
-              .filter(Boolean)
-              .join(' ') || null
-          );
+          if (found.length)
+            await this.shell.copyFrom(target, run, folder, ['.'], found);
         }),
       remove: (id, run) =>
         hidden(id, (target) => this.shell.removeRun(target, run)),

@@ -730,6 +730,8 @@ async function serveDesk(
       });
       owned.lab = lab;
       // While an agent works, a lab run runs, or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
+      // Lease recovery that waits for the lab's pod runs. The owner's stop waits for it.
+      let leasesRecovered: Promise<void> = Promise.resolve();
       const awake = new KeepAwake();
       const working = setInterval(() => {
         awake.set(
@@ -755,8 +757,19 @@ async function serveDesk(
         await lab.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
-        await compute.leases.recover();
-        compute.watch();
+        // The lab's pod runs of an earlier owner read their jobs first, in the background, so the desk opens at once.
+        const pending = lab.podRunsRecovering;
+        if (pending)
+          leasesRecovered = pending
+            .then(() => compute.leases.recover())
+            .catch(() => {
+              /* recover() keeps its problem for the view. */
+            })
+            .then(() => compute.watch());
+        else {
+          await compute.leases.recover();
+          compute.watch();
+        }
         const stopped = await tasks.settle();
         // Agents whose direction is open resume one at a time, each with a digest.
         lab.resumeAll();
@@ -855,6 +868,8 @@ async function serveDesk(
         // The coordinator pauses first, so no wakeup starts a task while the workers stop.
         const coordinatorSaved = await coordinator.close();
         await lab.close();
+        // Lease recovery after the lab's pod runs ends before the pods stop.
+        await leasesRecovered;
         if (!(await sessions.close()) || !coordinatorSaved)
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',

@@ -431,3 +431,52 @@ export function hideSecrets(
     if (value) hidden = hidden.replaceAll(value, `[${name}]`);
   return hidden;
 }
+
+/** The secrets of a lease, held for one run: they hide in its texts and keep its outputs clean. */
+export interface SecretGuard {
+  /**
+   * The text with each secret value replaced by its name. At an edge where
+   * the text was cut from a longer one, a part of a value is replaced too.
+   */
+  hide(
+    text: string,
+    cut?: { readonly start?: boolean; readonly end?: boolean },
+  ): string;
+  /** The content or the name holds a secret value. */
+  holds(content: Buffer | string): boolean;
+}
+
+/** A guard for these secret values. It keeps them for its whole life, also after the lease closes. */
+export function secretGuard(
+  secrets: Readonly<Record<string, string>>,
+): SecretGuard {
+  const values = Object.entries({ ...secrets }).filter(([, value]) => value);
+  return {
+    hide: (text, cut = {}) => {
+      let hidden = hideSecrets(text, Object.fromEntries(values));
+      for (const [name, value] of values) {
+        // The longest end of a value at the start, and the longest start of a value at the end.
+        for (
+          let size = Math.min(value.length - 1, hidden.length);
+          size > 0;
+          size--
+        )
+          if (cut.start && hidden.startsWith(value.slice(-size))) {
+            hidden = `[${name}]${hidden.slice(size)}`;
+            break;
+          }
+        for (
+          let size = Math.min(value.length - 1, hidden.length);
+          size > 0;
+          size--
+        )
+          if (cut.end && hidden.endsWith(value.slice(0, size))) {
+            hidden = `${hidden.slice(0, hidden.length - size)}[${name}]`;
+            break;
+          }
+      }
+      return hidden;
+    },
+    holds: (content) => values.some(([, value]) => content.includes(value)),
+  };
+}
