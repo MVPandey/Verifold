@@ -43,7 +43,7 @@ Run `verifold` in an empty folder, or in a folder that already holds your work. 
 
 1. Type your question. Your harness asks up to three quick questions.
 2. Accept the brief of about 120 words. Verifold creates the project and starts a lab on your question.
-3. The first agent posts a plan with 2 to 4 directions. Each direction gets its own agent. The agents post what they find on one board and check each other's claims.
+3. The first agent posts a plan that splits the question into directions. Each direction gets its own agent. The agents post what they find on one board and check each other's claims.
 4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick.
 
 You can close the terminal. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, Home lists what changed.

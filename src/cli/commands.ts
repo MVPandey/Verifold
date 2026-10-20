@@ -931,9 +931,9 @@ async function startLab(
     );
     return;
   }
+  let asked: string | undefined;
   try {
-    const workspace = await loadWorkspace(root);
-    const asked = research.topic ?? workspace.research?.topic;
+    asked = research.topic ?? (await loadWorkspace(root)).research?.topic;
     if (!asked) {
       io.progress?.(
         'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
@@ -951,6 +951,22 @@ async function startLab(
     io.progress?.(
       `Verifold started no lab: ${error instanceof Error ? error.message : 'unknown error'}`,
     );
+    // The setup question stays with the project anyway, so Home offers it with Start the lab.
+    const topic = asked?.trim();
+    if (topic)
+      await changeWorkspace(root, (current) => {
+        if (!current) throw new Error('Run init first.');
+        return current.research
+          ? current
+          : {
+              ...current,
+              research: {
+                topic,
+                autonomy: research.autonomy ?? 'autonomous',
+                phase: 'needs-plan',
+              },
+            };
+      }).catch(() => {});
   }
 }
 
@@ -973,10 +989,6 @@ function ownerStart(value: unknown): {
             research.autonomy === 'autonomous'
               ? { autonomy: research.autonomy }
               : {}),
-            ...(typeof research.feedback === 'string'
-              ? { feedback: research.feedback }
-              : {}),
-            ...(research.approve === true ? { approve: true } : {}),
           }
         : undefined,
     desk:
@@ -1683,6 +1695,8 @@ export async function runCli(
       setupOnly: values['setup-only'] ?? false,
       workspaceSpecified: values.workspace !== undefined,
       harnesses: await installedHarnesses(),
+      // A bare verifold starts a lab after setup, so setup offers no research stop.
+      ...(launch ? { lab: true } : {}),
     };
     // Bare verifold in a new folder sets up in the desk. init and --no-open stay the terminal path.
     // With a terminal, setup hands the project to a background owner.

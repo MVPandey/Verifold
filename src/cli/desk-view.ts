@@ -103,6 +103,8 @@ export interface DeskSession {
   readonly labAgent?: SessionView | null;
   /** What the direction of the diff panel changed. */
   readonly labDiff?: LabDiff | null;
+  /** The person came back to the lab after a while: Home lists what changed. */
+  readonly labAway?: Away | null;
 }
 
 export interface TaskView {
@@ -163,8 +165,6 @@ export interface DeskFrame {
   readonly hideFinished?: boolean;
   /** The words of a lab's search panel. */
   readonly q?: string;
-  /** A lab's two costs when the person left at `since`: Claude Code's estimate and the pods'. */
-  readonly spent?: Away['spent'];
 }
 
 /** The frame from the query of /api/view, or null when a value is unknown. No view means Home. */
@@ -178,7 +178,6 @@ export function parseFrame(
   agent: string | null = null,
   proof: string | null = null,
   q: string | null = null,
-  spent: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -191,9 +190,6 @@ export function parseFrame(
     direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
   // A search has at most 100 printable characters.
   const words = q === null || ([...q].length <= 100 && !/\p{Cc}/u.test(q));
-  const costs = spent?.match(
-    /^(\d{1,7}(?:\.\d{1,6})?),(\d{1,7}(?:\.\d{1,6})?)$/,
-  );
   return shown &&
     (panel === null || opened) &&
     (since === null || time) &&
@@ -202,8 +198,7 @@ export function parseFrame(
     (run === null || runId.test(run)) &&
     (agent === null || agentId.test(agent)) &&
     (proof === null || proofRef(proof) !== null) &&
-    words &&
-    (spent === null || costs)
+    words
     ? {
         view: shown,
         panel: opened,
@@ -214,9 +209,6 @@ export function parseFrame(
         ...(agent ? { agent } : {}),
         ...(proof ? { proof } : {}),
         ...(q ? { q } : {}),
-        ...(costs
-          ? { spent: { claude: Number(costs[1]), gpu: Number(costs[2]) } }
-          : {}),
       }
     : null;
 }
@@ -1645,7 +1637,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
  * What this lab's pods cost so far, and the project's limit. Pods of tasks,
  * and of earlier labs before Start over, are not this lab's.
  */
-function labGpu(
+export function labGpu(
   compute: ComputeView,
   startedAt: string,
 ): { spent: number; limit: number | null } {
@@ -3846,10 +3838,7 @@ export function renderDesk(
                           ? labGpu(live.compute, live.lab.state.startedAt)
                           : null,
                         extra: `${renderPodsLine(live.compute)}${renderPaused(live)}`,
-                        away:
-                          frame.since && frame.spent
-                            ? { since: frame.since, spent: frame.spent }
-                            : null,
+                        away: live.labAway ?? null,
                       })
                     : renderHome(
                         snapshot,

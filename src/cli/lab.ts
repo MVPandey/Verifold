@@ -1812,7 +1812,7 @@ export async function labOnDisk(root: string): Promise<boolean> {
 export const defaultLabHours = 8;
 
 /**
- * Start a lab on a question, from the desk or from `verifold --lab`, with a
+ * Start a lab on a question, from the desk or after setup, with a
  * time budget in hours. A project without a research question keeps this
  * one as its question, so Home offers it again after Start over. Research in
  * this project is autonomous unless the person chose otherwise. Returns

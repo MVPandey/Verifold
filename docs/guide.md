@@ -57,7 +57,7 @@ Your harness then asks up to three quick questions, one at a time. It uses your 
 
 The brief is about 120 words: the question, why it matters, what counts as an answer, constraints, and open points. Press Enter to accept it, enter feedback to revise it, or type `/cancel` to stop. In the desk, you can also edit the brief and accept your version.
 
-Research runs without a stop unless you ask for one, in the setup settings or with `--autonomy guided`. Relative paths resolve against the folder where you started Verifold, and the interactive path also accepts `~/`. Verifold creates missing folders and keeps what a folder already holds. It refuses conflicting files, an existing `.verifold.md`, and linked scaffold folders.
+Research runs without a stop unless you ask for one, in the settings of `verifold init` or with `--autonomy guided`. A bare `verifold` starts a lab after setup, and a lab has no stop before its work, so its settings do not offer one. Relative paths resolve against the folder where you started Verifold, and the interactive path also accepts `~/`. Verifold creates missing folders and keeps what a folder already holds. It refuses conflicting files, an existing `.verifold.md`, and linked scaffold folders.
 
 Every new project gets:
 
@@ -97,7 +97,7 @@ Later setups reuse this approved background. They do not ask the profile questio
 
 "Import a sample of my chats" looks at no more than 200 folder entries and ten files, with at most 256 KB for each file and 512 KB in total. It skips links, hidden subfolders, files that are too large, and native records that it does not support. Native JSONL imports keep the user messages that it recognizes, without model responses, tool results, or subagent folders. User messages can still include context that the harness added, so review what the profile infers. Plain text and JSON exports go in as you chose them. The harness option picks the relevant conversations in the source that you chose and reports what it covered. Its own permissions control what it can read. Both options show the full draft for review before Verifold saves `USER.md`. Local storage does not mean that the model runs offline.
 
-The coordinator proposes a search scope and personas. Research then searches without a stop. If you asked for a stop before the source search (in the setup settings, or with `--autonomy guided`), research waits for you to approve that plan:
+The coordinator proposes a search scope and personas. Research then searches without a stop. If you asked for a stop before the source search (in the settings of `verifold init`, or with `--autonomy guided`), research waits for you to approve that plan:
 
 - In the desk, approve the plan, or write your changes to research in the message box.
 - In the terminal that runs the desk, type `/approve`, or `/feedback` and your changes.
@@ -557,7 +557,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 - A lab's Home is one column. The header gives the question, the day of the lab, the deadline, and the money: Claude Code's cost estimates of the lab's sessions plus what the pods cost. The total is an estimate. Codex reports no cost, so its usage is not counted, and the header says so. The views and the team open from the menu at the top left.
 - **Pause** pauses every agent until you resume it. After the time budget ends, give the lab more time instead.
 - **Search** opens in the side panel, also with ⌘K, or Ctrl+K off a Mac. It finds posts by their ID, kind, author, and text, runs by their ID and command, and calls by their question and options. Each word must match, in upper or lower case. The newest hits come first, at most 50. A post on the board opens there, and an older post shows its whole text in the hit. A run opens in the panel, and an open call opens in Needs you. Escape closes the search, and its words stay for the next one.
-- When you come back after 30 minutes or more, Home starts with **While you were away**: a line for each direction with news, how many posts, runs, and calls came, and what the lab spent since your last look. These costs add up to what the header added since then. **Dismiss** hides it until your next time away. This browser keeps the time of its last look, also across its tabs.
+- When you come back after 30 minutes or more, Home starts with **While you were away**: a line for each direction with news, how many posts, runs, and calls came, and what the lab spent since your last look. These costs add up to what the header added since then. **Dismiss** hides it until your next time away. Verifold keeps the time of your last look in the lab's folder, so it counts across tabs, browsers, and restarts of Verifold. A page in a background tab is not a look. A computer that slept with the desk open counts as time away too.
 - One line says what needs you first: an open call, then an agent that stopped by itself, a missing pod secret, and a pod outside your limits. It opens in place and counts the rest, which Needs you lists. While a call is open, the number keys choose its options.
 - Each direction has one row: its verdict, its title with one line of evidence, its agent, and its check or its state. The row opens in place to its bar, its runs, and its controls:
   - **Message** puts the agent's handle in the message box.

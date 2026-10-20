@@ -34,6 +34,11 @@ export interface InitializationOptions {
   readonly workspaceSpecified?: boolean;
   /** The harness commands on PATH, which the CLI looks up. With both, a new team has a helper by default. */
   readonly harnesses?: readonly HarnessName[];
+  /**
+   * A lab starts on the question after setup. A lab has no stop before its
+   * work, so setup does not offer the research stop.
+   */
+  readonly lab?: boolean;
 }
 export interface Initialization {
   readonly root: string;
@@ -290,18 +295,19 @@ export async function initializeProject(
             ? resolve(homedir(), selected.slice(2))
             : resolve(cwd, selected);
       }
-      askFirst = /^(y|yes)$/i.test(
-        (
-          await io.ask(
-            'Ask you before the source search? Research then waits for your approval of its plan. [y/N]: ',
-            {
-              kind: 'confirm',
-              yes: 'Ask me before the source search',
-              no: 'Search without a stop',
-            },
-          )
-        ).trim(),
-      );
+      if (!options.lab)
+        askFirst = /^(y|yes)$/i.test(
+          (
+            await io.ask(
+              'Ask you before the source search? Research then waits for your approval of its plan. [y/N]: ',
+              {
+                kind: 'confirm',
+                yes: 'Ask me before the source search',
+                no: 'Search without a stop',
+              },
+            )
+          ).trim(),
+        );
     }
   }
   if (

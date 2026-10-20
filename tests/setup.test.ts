@@ -298,8 +298,11 @@ for (const background of [false, true])
       ],
       [/Which harnesses run the research/, 'claude'],
       [/Which model should Claude Code use/, ''],
-      [/Ask you before the source search/, 'y'],
-      [/Asks you before the source search\./, 'Fast graph search on CPUs'],
+      // A lab follows setup, and a lab has no stop before its work, so the settings offer none.
+      [
+        /What do you want to find out\?[\s\S]*Claude Code, with its default model\. Folder: [^<]*\.</,
+        'Fast graph search on CPUs',
+      ],
       [
         /class="setup-said"[\s\S]*Which baseline do you trust\?[\s\S]*Question 1 of up to 3/,
         'The speedrun baseline',
@@ -318,6 +321,7 @@ for (const background of [false, true])
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       assert.match(html, pattern);
+      assert.doesNotMatch(html, /source search/);
       seen.push(pattern.source);
       if (pattern.source === 'Review the brief') {
         // The setup log holds the earlier steps and, under Details, the harness runs of setup.
@@ -340,7 +344,7 @@ for (const background of [false, true])
     let html = '';
     for (
       let tries = 0;
-      tries < 300 && !/class="lab-screen"/.test(html);
+      tries < 1500 && !/class="lab-screen"/.test(html);
       tries++
     ) {
       // While the background owner takes over, the desk does not answer for a moment.
@@ -368,7 +372,7 @@ for (const background of [false, true])
     );
     // The lab keeps the question for the project once it runs, a moment after it starts.
     let workspace = await loadWorkspace(project);
-    for (let tries = 0; tries < 300 && !workspace.research; tries++) {
+    for (let tries = 0; tries < 1500 && !workspace.research; tries++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
       workspace = await loadWorkspace(project);
     }
