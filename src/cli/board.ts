@@ -109,6 +109,7 @@ export const postId = /^p-[1-9]\d{0,5}$/;
 const postFile = /^p-[1-9]\d{0,5}\.json$/;
 export const agentId = /^a-[1-9]\d{0,3}$/;
 export const directionId = /^d-[1-9]\d{0,3}$/;
+export const runId = /^r-[1-9]\d{0,5}$/;
 /** A commit: SHA-1, or SHA-256 in a repository that uses it. */
 export const commitId = commitPattern;
 const figure = /\.(png|jpe?g|gif|svg|webp|pdf)$/i;
@@ -182,7 +183,7 @@ function parseArtifact(value: unknown): Artifact | null {
   if (
     entry.type === 'run' &&
     typeof entry.run === 'string' &&
-    /^r-[1-9]\d{0,5}$/.test(entry.run)
+    runId.test(entry.run)
   )
     return { type: 'run', run: entry.run };
   return null;

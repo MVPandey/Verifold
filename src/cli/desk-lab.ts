@@ -1,5 +1,11 @@
 import { escapeHtml as e } from '../ui/dom.ts';
-import { number, type Artifact, type Post, type PostKind } from './board.ts';
+import {
+  clip,
+  number,
+  type Artifact,
+  type Post,
+  type PostKind,
+} from './board.ts';
 import {
   barSummary,
   budgetEnded,
@@ -8,14 +14,15 @@ import {
   type DirectionView,
   type LabView,
 } from './lab.ts';
+import { metricsText, runActive, runSummary, type RunRecord } from './runs.ts';
 import { hostName } from './session.ts';
 
 /**
  * The lab's view in the desk: the question, one row for each direction with
  * its agent and state, the board as threads by direction, and one message
  * box. Every agent text is escaped. The view keeps a few words on each row;
- * files and runs stay in the folders, and each agent's transcript opens from
- * its row.
+ * files stay in the folders, and each agent's transcript and each run's log
+ * open from its row.
  */
 
 /** A place for a transcript that the page fills: the desk view's slot. */
@@ -116,6 +123,20 @@ function proofText(artifact: Artifact): string {
   }
 }
 
+/** Runs that a direction's row shows: those that run now, then the newest. */
+const rowRuns = 3;
+
+/**
+ * One run: its ID, its state, and up to three metrics, with its log one click
+ * away. `place` keeps the log's ID apart where a run shows twice, on its row
+ * and in a post. The person cancels a run that runs from its row.
+ */
+function runHtml(run: RunRecord, place: string, cancel: boolean): string {
+  const active = runActive(run);
+  const metrics = metricsText(run);
+  return `<div class="lab-run"><span class="chip run-${e(run.status)}">${e(run.id)}</span> <span>${e(runSummary(run))}</span>${metrics ? ` <span class="fine">${e(metrics)}</span>` : ''}${cancel && active ? ` <button type="button" class="quiet" data-action="lab-run-cancel" data-run="${e(run.id)}" data-confirm="Click again to cancel this run">Cancel</button>` : ''}<details class="run-log" id="run-log-${e(place)}-${e(run.id)}"><summary>Log</summary><p class="fine">${e(run.why)} · <code>${e(clip(run.command, 300))}</code> at ${e(run.commit.slice(0, 7))}${run.note ? ` · ${e(run.note)}` : ''}</p><pre class="run-log-text" data-run-log="${e(run.id)}"></pre></details></div>`;
+}
+
 /**
  * The plan of record: how the lab reads the question, and each direction
  * with its bar and what it builds on. Before the plan, a line says that the
@@ -186,8 +207,17 @@ function directionRow(
   clock: (value: string) => string,
   slot: TranscriptSlot,
   runs: boolean,
+  ledger: readonly RunRecord[],
 ): string {
   const { direction, agent, status } = entry;
+  const own = ledger.filter((run) => run.direction === direction.id);
+  const shown = [
+    ...own.filter(runActive),
+    ...own.filter((run) => !runActive(run)).reverse(),
+  ].slice(0, rowRuns);
+  const experiments = shown.length
+    ? `<div class="lab-runs">${shown.map((run) => runHtml(run, direction.id, runs)).join('')}${own.length > shown.length ? `<p class="fine">${own.length} runs in all. Their records are in .verifold/lab/runs/.</p>` : ''}</div>`
+    : '';
   const active = status === 'working' || status === 'starting';
   const controls = (
     runs
@@ -204,7 +234,7 @@ function directionRow(
   const transcript = agent.session
     ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
     : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${transcript}</li>`;
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */
@@ -244,13 +274,20 @@ function postHtml(
   replies: readonly Post[],
   budget: { left: number },
   runs: boolean,
+  ledger: ReadonlyMap<string, RunRecord>,
 ): string {
+  const proof = (artifact: Artifact): string => {
+    const run = artifact.type === 'run' ? ledger.get(artifact.run) : undefined;
+    return run
+      ? `<li>${runHtml(run, post.id, false)}</li>`
+      : `<li>${e(proofText(artifact))}</li>`;
+  };
   const person = post.author === 'person';
   const kind =
     post.kind === 'status'
       ? ''
       : `<span class="chip kind-${post.kind}">${person && post.kind === 'question' ? 'Message' : kindWords[post.kind]}</span>`;
-  return `<article class="post${post.kind === 'status' ? ' note' : ''}" id="post-${e(post.id)}"><header class="feed-head"><strong>${e(name(post.author))}</strong>${kind}<time datetime="${e(post.at)}">${e(clock(post.at))}</time></header>${postText(post, budget)}${post.artifacts.length ? `<ul class="proof">${post.artifacts.map((artifact) => `<li>${e(proofText(artifact))}</li>`).join('')}</ul>` : ''}${post.kind === 'status' || !runs ? '' : `<button type="button" class="quiet" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`}${replies.length ? `<div class="replies">${replies.map((reply) => postHtml(reply, name, clock, [], budget, runs)).join('')}</div>` : ''}</article>`;
+  return `<article class="post${post.kind === 'status' ? ' note' : ''}" id="post-${e(post.id)}"><header class="feed-head"><strong>${e(name(post.author))}</strong>${kind}<time datetime="${e(post.at)}">${e(clock(post.at))}</time></header>${postText(post, budget)}${post.artifacts.length ? `<ul class="proof">${post.artifacts.map(proof).join('')}</ul>` : ''}${post.kind === 'status' || !runs ? '' : `<button type="button" class="quiet" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`}${replies.length ? `<div class="replies">${replies.map((reply) => postHtml(reply, name, clock, [], budget, runs, ledger)).join('')}</div>` : ''}</article>`;
 }
 
 /**
@@ -264,6 +301,7 @@ function board(
   clock: (value: string) => string,
 ): string {
   const budget = { left: textBytes };
+  const ledger = new Map(view.ledger.map((run) => [run.id, run]));
   const posts = view.posts.slice(-shownPosts);
   if (!posts.length)
     return '<p class="empty-note">No posts yet. Agents post what they find here, with proof.</p>';
@@ -316,7 +354,15 @@ function board(
         })
         .sort((a, b) => b.latest - a.latest)
         .map((thread) =>
-          postHtml(thread.root, name, clock, thread.list, budget, view.runs),
+          postHtml(
+            thread.root,
+            name,
+            clock,
+            thread.list,
+            budget,
+            view.runs,
+            ledger,
+          ),
         )
         .join('')}</section>`;
     })
@@ -373,7 +419,7 @@ export function renderLab(
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${needs}
   ${planCard(view, name, clock)}
   <section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Directions</h2><span class="actions">${pause}</span></div>
-  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, runs)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
+  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, runs, view.ledger)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
   ${runs ? addForm(view.directions.length > 0) : ''}</section>
   ${runs ? composeBox(state, handles) : ''}
   <section aria-labelledby="board-title"><div class="section-title"><h2 id="board-title">Board</h2><span class="count">${view.posts.length} ${view.posts.length === 1 ? 'post' : 'posts'}</span></div>${board(view, name, clock)}</section>

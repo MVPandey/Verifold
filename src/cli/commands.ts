@@ -725,11 +725,12 @@ async function serveDesk(
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;
-      // While an agent works or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
+      // While an agent works, a lab run runs, or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
       const awake = new KeepAwake();
       const working = setInterval(() => {
         awake.set(
           runner.running ||
+            lab.running ||
             [...sessions.views(), coordinator.view()?.session].some(
               (view) => view?.record.status === 'running',
             ) ||

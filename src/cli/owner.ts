@@ -153,6 +153,15 @@ export async function claimOwner(
   );
 }
 
+/** Signal a process group. A group that already exited is no error. */
+export function signalGroup(pid: number, name: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, name);
+  } catch {
+    /* The group already exited. */
+  }
+}
+
 /**
  * Stop the process group of a process that outlived its owner. A PID alone
  * never authorizes this: the recorded start time must match the running
@@ -164,13 +173,7 @@ export async function stopRecordedProcess(
 ): Promise<boolean> {
   if (process.platform === 'win32' || start === null) return false;
   if ((await processStart(pid)) !== start) return false;
-  const signal = (name: NodeJS.Signals): void => {
-    try {
-      process.kill(-pid, name);
-    } catch {
-      /* The group already exited. */
-    }
-  };
+  const signal = (name: NodeJS.Signals): void => signalGroup(pid, name);
   signal('SIGTERM');
   for (let tries = 0; tries < 20; tries++) {
     await new Promise((resolve) => setTimeout(resolve, 100));

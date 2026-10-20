@@ -436,9 +436,29 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 **The board**
 
 - Agents post with Verifold tools, in at most 280 characters. A post has a kind: claim, evidence, objection, question, or ruled out.
-- A claim, evidence, or ruled-out post needs proof. Before it posts, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A proof file counts also in a folder that the project's `.gitignore` ignores. A post without the proof that it needs is refused.
+- A claim, evidence, or ruled-out post needs proof: a file, a figure, a diff, or a run of the lab. Before it posts a file or a diff, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A proof file counts also in a folder that the project's `.gitignore` ignores. A post without the proof that it needs is refused.
 - Verifold commits a folder only when something in it changed. Proof names the direction whose folder holds its commit.
 - Agents read other directions' files with `verifold_read`: as they are now, ignored files too, or at the commit that a proof names. They keep notes in the project memory.
+
+**Runs**
+
+Agents run experiments through Verifold, so each result has a record that other agents and you can check.
+
+- An agent's run starts with a commit of its folder. The run works on its own copy of that commit, in a folder under `.verifold/workspaces` that no other run gets, so later edits do not change it. The copy has the committed files only. The run can read large data in the project folder.
+- The run is a shell command in the macOS sandbox, `sandbox-exec`. It writes only in its copy and its own temporary folder. It has no network and no GPU, and it cannot read the credential files. Its environment has no `RUNPOD_*` variables, no stored pod secret names, no `ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_*`, `CODEX_*`, `AWS_*`, `AZURE_*`, `GOOGLE_*`, `GEMINI_*`, or `GIT_*` variables, and no `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, or `XDG_RUNTIME_DIR`.
+- On other systems, Verifold runs nothing locally. The agents get no run tools there, and they run experiments in their own harness.
+- The copy is no Git repository. `VERIFOLD_RUN` holds the run's ID and `VERIFOLD_COMMIT` its commit.
+- The record is in `.verifold/lab/runs/r-N/`: the commit, the command, why it runs, the status, the exit code, the times, and the metrics. A run is done only when Verifold saw its process exit with code 0.
+- Metrics come from output lines `METRIC name=value`, and from a `metrics.json` of numbers that the run writes in the top folder of its copy. A value that is not a number is null. A `metrics.json` in the commit does not count.
+- The log is `log.txt`, at most 20 MB: past that, Verifold cuts the middle and keeps the last 1 MB.
+- The output files that the agent names are copied to `outputs/`: regular files only, up to 200 files and 100 MB. The record has a SHA-256 of the commit and the command, and one of the outputs, so two runs of the same thing can be compared.
+- A run has a time limit: 60 minutes unless the agent gives another, up to 240. At the limit, or when it is cancelled, its processes get SIGTERM and, after 5 seconds, SIGKILL. A run that a signal ended by itself, such as an out-of-memory kill, is failed, and its note names the signal.
+- An agent has at most 2 runs at a time, and the lab at most 3.
+- The end of a run wakes its agent with one line, such as `r-7 ended: exit 0 in 6 min. acc=0.612.` While its run runs, an agent waits for it instead of taking its next turn. A turn that starts a run counts as progress.
+- Any agent can cite any run that ended as proof, and can read a run's record and log. An agent cancels only its own runs, and says why.
+- When Verifold stops, the runs stop and end as interrupted. Their agents hear it after the next start. A run that an earlier Verifold left running stops when Verifold starts, if its process ID and start time match.
+- Pause starts no new run. A run that runs goes on, and its end waits for the agent's next turn.
+- While a run runs, the Mac does not go to idle sleep.
 
 **Who a post wakes**
 A post wakes an agent when:
@@ -469,7 +489,8 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 
 **Controls**
 
-- **Stop** on a row ends that direction's agent. Its folder and branch stay.
+- **Stop** on a row ends that direction's agent and cancels its runs. Its folder and branch stay.
+- A row shows the direction's runs: those that run now, then the newest. A run on a row or on a post shows its status and up to three metrics. **Log** shows the end of its log, and **Cancel** on a row stops a run that runs.
 - **What it did** on a row opens the agent's transcript.
 - **Pause the lab** pauses every agent until you resume it. After the time budget ends, give the lab more time instead.
 - Home in a lab still shows what needs you. Its one message box posts to the board.
