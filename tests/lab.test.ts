@@ -7786,7 +7786,20 @@ await test('a bring-in deletes a file that the direction deleted, and links and 
     /cannot come in\. Verifold's own records stay out\./,
   );
   assert.equal(existsSync(join(lab.root, 'hosts')), false);
-  assert.deepEqual(await lab.lab.bring('d-1', commit, ['README.md']), [
+  // A link in the project folder never leads a bring-in into Verifold's own folder.
+  await mkdir(join(folder, 'records'));
+  await writeFile(join(folder, 'records', 'lab.json'), '{}\n');
+  await symlink('.verifold', join(lab.root, 'records'));
+  const linked = await look(lab, 'd-1');
+  await assert.rejects(
+    lab.lab.bring('d-1', linked, ['records/lab.json']),
+    /records\/lab\.json cannot come in: a link in your project folder leads it into Verifold's or Git's own folder\./,
+  );
+  assert.notEqual(
+    await readFile(join(lab.root, '.verifold', 'lab.json'), 'utf8'),
+    '{}\n',
+  );
+  assert.deepEqual(await lab.lab.bring('d-1', linked, ['README.md']), [
     'README.md',
   ]);
   assert.equal(existsSync(join(lab.root, 'README.md')), false);

@@ -8,7 +8,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { WakeLoop, type QueuedEvent } from './agent-loop.ts';
 import {
   agentId,
@@ -2264,6 +2264,8 @@ export class Lab {
       await this.load();
       this.suspended = false;
       this.moving = false;
+      // A recovery in the load could not save while the lab was suspended.
+      if (this.state) await this.stateFile.save().catch(() => {});
       // A check that ran when the lab moved counts as stopped.
       if (this.runs)
         await this.recoverChecks().catch((error: unknown) =>
@@ -5317,6 +5319,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       if (!chosen.length) fail('Tick the files to bring in.');
       const out = chosen.find((file) => file.out);
       if (out) fail(`${out.path} cannot come in. ${out.out}`);
+      for (const file of chosen)
+        if (await this.intoRecords(file.path))
+          fail(
+            `${file.path} cannot come in: a link in your project folder leads it into Verifold's or Git's own folder.`,
+          );
       const bytes = chosen.reduce((sum, file) => sum + file.bytes, 0);
       if (bytes > workspaceLimits.bytes)
         fail(
@@ -5439,6 +5446,22 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     }
     await clearStaged(this.root, record.files).catch(() => {});
     return { done, left, error };
+  }
+
+  /**
+   * A project path whose real folder, through links in the project folder,
+   * is Verifold's or Git's own folder. Bring in never writes there.
+   */
+  private async intoRecords(path: string): Promise<boolean> {
+    const root = await realpath(this.root);
+    for (let at = dirname(join(this.root, path)); ; at = dirname(at)) {
+      const real = await realpath(at).catch(() => null);
+      if (real !== null) {
+        const first = relative(root, real).split(sep)[0]?.toLowerCase();
+        return first === '.verifold' || first === '.git';
+      }
+      if (at === this.root || dirname(at) === at) return false;
+    }
   }
 
   /** A project file: its content, null when it is not there, or undefined when it is no file. */
