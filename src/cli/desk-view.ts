@@ -105,8 +105,8 @@ export interface DeskSession {
   readonly labAgent?: SessionView | null;
   /** What the direction of the diff panel changed. */
   readonly labDiff?: LabDiff | null;
-  /** The files that the bring-in panel's direction can bring in, once Verifold took its commit. */
-  readonly labBring?: BringList | null;
+  /** The files that the bring-in panel's direction can bring in, once Verifold took its commit, or why Verifold cannot read them. */
+  readonly labBring?: BringList | string | null;
   /** The person came back to the lab after a while: Home lists what changed. */
   readonly labAway?: Away | null;
 }
