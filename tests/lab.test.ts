@@ -4123,7 +4123,7 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   assert.equal(check?.method, 'rerun');
 
   // The checker's folder holds the claim's commit, with no Git data of the project.
-  const folder = join(lab.root, '.verifold', 'workspaces', 'k-1');
+  const folder = join(lab.root, '.verifold', 'checks', 'k-1');
   assert.equal(
     await readFile(join(folder, 'train.sh'), 'utf8'),
     'echo "METRIC acc=0.7"\n',
@@ -4159,7 +4159,8 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
     join(lab.root, '.verifold', 'lab'),
     join(lab.root, '.verifold', 'sessions'),
     join(lab.root, '.verifold', 'lab.json'),
-    join(lab.root, '.verifold', 'workspaces', 'd-1-alpha'),
+    // Every direction's folder, also one that opens later, and every run's folder.
+    join(lab.root, '.verifold', 'workspaces'),
     join(lab.root, 'memory'),
     join(lab.root, '.git'),
     '~/.claude/projects',
@@ -4168,21 +4169,22 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   ])
     assert.equal(denied?.[path], 'deny', path);
   assert.equal(denied?.[folder], undefined);
+  assert.equal(denied?.[join(lab.root, '.verifold', 'checks')], undefined);
   // The checker has its own tools: no board, no plan, no direction.
   assert.deepEqual(
     threads[0]?.params.dynamicTools.map((tool) => tool.name),
     ['verifold_run', 'verifold_run_status', 'verifold_read', 'verifold_post'],
   );
   // The checker's run cannot read the lab's records either. The author's run could.
+  // Its sandbox keeps the run's own folder open inside the denied .verifold.
   assert.equal(specs.length, 2);
-  assert.ok(!specs[0]?.denied.includes(join(lab.root, '.verifold', 'board')));
+  assert.ok(!specs[0]?.denied.includes(join(lab.root, '.verifold')));
   for (const path of [
-    join(lab.root, '.verifold', 'board'),
-    join(lab.root, '.verifold', 'workspaces', 'd-1-alpha'),
+    join(lab.root, '.verifold'),
+    join(lab.root, 'memory'),
     join(lab.root, '.git'),
   ])
     assert.ok(specs[1]?.denied.includes(path), path);
-  assert.ok(!specs[1]?.denied.includes(folder));
   // The checker's read and run worked.
   const said = await answers(lab, 'k-1');
   assert.equal(said[0]?.text, 'echo "METRIC acc=0.7"\n');
@@ -4217,6 +4219,16 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
 await test('an ask for holds-up starts a check, and the direction holds up when the rerun holds', async (t) => {
   const lab = await fixture(t);
   await claimWithRun(lab, [
+    // Without its line of evidence the ask is refused, and no check queues.
+    {
+      name: 'verifold_direction',
+      arguments: {
+        action: 'update',
+        verdict: 'holds-up',
+        post: 'p-3',
+        why: 'It meets the bar.',
+      },
+    },
     {
       name: 'verifold_direction',
       arguments: {
@@ -4255,14 +4267,17 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   assert.equal(await claimPost(lab), 'p-3');
-  await until(async () =>
-    (await answers(lab, 'd-1-alpha')).some(
-      (entry) => entry.call === 'verifold_direction',
-    ),
+  await until(
+    async () =>
+      (await answers(lab, 'd-1-alpha')).filter(
+        (entry) => entry.call === 'verifold_direction',
+      ).length >= 2,
   );
-  const asked = (await answers(lab, 'd-1-alpha')).find(
+  const [refused, asked] = (await answers(lab, 'd-1-alpha')).filter(
     (entry) => entry.call === 'verifold_direction',
   );
+  assert.equal(refused?.ok, false);
+  assert.match(refused?.text ?? '', /one line of evidence/);
   assert.match(
     asked?.text ?? '',
     /^d-1 is leading now\. (Verifold queued check k-1|Check k-1 runs): codex-1 \(Codex\) reruns p-3 without your reasoning\. When it holds, d-1 holds up\.$/,
@@ -4286,6 +4301,7 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
         ),
       ),
   );
+  assert.equal(lab.lab.view()?.checks.length, 1);
   const html = renderLab(
     lab.lab.view()!,
     (value) => value,
@@ -4601,7 +4617,7 @@ await test('one check runs at a time, a second objection joins the open check, a
       ?.posts.some(
         (post) =>
           post.text ===
-          `${claim} had 2 checks already, so ${fifth.id} starts no check.`,
+          `${claim} had 2 checks already. ${fifth.id} starts no check.`,
       ),
   );
 });
@@ -4639,4 +4655,30 @@ await test('a check that ran when Verifold stopped starts again once with a fres
     lab.lab.view()?.checks[0]?.note ?? '',
     /claude-3 stopped 2 times before it posted\./,
   );
+});
+
+await test('an ask for holds-up that no longer stands drops its check: the person stops the direction while the check waits', async (t) => {
+  const lab = await fixture(t);
+  await claimWithRun(lab, [
+    {
+      name: 'verifold_direction',
+      arguments: {
+        action: 'update',
+        verdict: 'holds-up',
+        post: 'p-3',
+        evidence: 'acc 0.7',
+        why: 'It meets the bar.',
+      },
+    },
+  ]);
+  // The checker waits in its turn, so the check runs until the pause.
+  await lab.script('k-1', [{ calls: [{ name: 'WAIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => lab.lab.view()?.checks[0]?.state === 'running', 15_000);
+  // A pause ends the checker's session, and the check waits for the resume.
+  await lab.lab.pause();
+  assert.equal(lab.lab.view()?.checks[0]?.state, 'queued');
+  await lab.lab.stopDirection('d-1');
+  // The check served only the ask, so it goes.
+  assert.deepEqual(lab.lab.view()?.checks, []);
 });

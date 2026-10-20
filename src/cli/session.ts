@@ -142,7 +142,7 @@ export interface SessionRecord {
   readonly launches: readonly SessionLaunch[];
   /** A task session: the task and the claim that started it. */
   readonly task?: { readonly id: string; readonly claim: string };
-  /** The task folder that a task session runs in, relative to the project. */
+  /** The folder that a task session, a lab agent, or a checker runs in, relative to the project. */
   readonly cwd?: string;
   /** A task session: the domains that its shell commands may reach. */
   readonly network?: readonly string[];
@@ -615,7 +615,10 @@ function parseRecord(value: unknown): SessionRecord | null {
       ? { network: record.network as string[] }
       : {}),
     ...(typeof record.cwd === 'string' &&
-    /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(record.cwd)
+    // A task's or a direction's folder, or a lab check's.
+    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/k-[1-9]\d{0,5})$/.test(
+      record.cwd,
+    )
       ? { cwd: record.cwd }
       : {}),
     ...(typeof record.agent === 'string' &&

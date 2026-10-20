@@ -634,12 +634,19 @@ export async function allocate(
   return { kind, path, branch, start: commit };
 }
 
+/** The folder of a lab check under the project, from its ID. */
+export function checkPath(id: string): string {
+  return join('.verifold', 'checks', id);
+}
+
 /**
- * The folder of a lab check: the files of `commit` from the folder of
- * another workspace, and nothing else, with a Git directory of its own under
- * `.verifold/tasks/git/`. It holds no other commit of the project, so the
- * checker cannot read another direction's work through Git. Returns a folder
- * workspace whose start is that content.
+ * The folder of a lab check, `.verifold/checks/<name>`: the files of
+ * `commit` from the folder of another workspace, and nothing else, with a Git
+ * directory of its own under `.verifold/tasks/git/`. Its start commit holds
+ * every file of that commit, ignored, large, and many files too, so the
+ * checker's runs have what the claim's run had. It holds no other commit of
+ * the project, so the checker cannot read another direction's work through
+ * Git. Returns its start commit.
  */
 export async function checkFolder(
   root: string,
@@ -648,37 +655,65 @@ export async function checkFolder(
     readonly from: Workspace;
     readonly commit: string;
   },
-): Promise<Workspace> {
-  if (!/^[a-z0-9][a-z0-9-]{0,80}$/.test(options.name))
-    throw new WorkspaceError('Invalid workspace name.');
-  const path = join('.verifold', 'workspaces', options.name);
-  const target = join(root, path);
+): Promise<string> {
+  if (!/^k-[1-9]\d{0,5}$/.test(options.name))
+    throw new WorkspaceError('Invalid check name.');
+  const target = join(root, checkPath(options.name));
   const gitDir = join(root, '.verifold', 'tasks', 'git', options.name);
-  await mkdir(join(root, '.verifold', 'workspaces'), {
-    recursive: true,
-    mode: 0o700,
-  });
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
   if (
     (await lstat(target).catch(() => null)) !== null ||
     (await lstat(gitDir).catch(() => null)) !== null
   )
-    throw new WorkspaceError(`The workspace ${options.name} already exists.`);
+    throw new WorkspaceError(
+      `The check folder ${options.name} already exists.`,
+    );
   await mkdir(dirname(gitDir), { recursive: true, mode: 0o700 });
   await mkdir(target, { mode: 0o700 });
   try {
     await checkoutAt(root, options.from, options.commit, target);
     await git(target, ['init', '--quiet', `--separate-git-dir=${gitDir}`]);
-    const { commit } = await commitAll(
-      target,
-      ['.'],
+    // Git wrote each file new, so none has a second hard link.
+    await git(target, ['add', '--all', '--force', '--', '.']);
+    await git(target, [
+      'commit',
+      '--quiet',
+      '--no-verify',
+      '--allow-empty',
+      '-m',
       'Verifold: the start of a check',
-      { lab: true },
-    );
-    return { kind: 'folder', path, branch: null, start: commit };
+    ]);
+    return await head(target);
   } catch (error) {
     await rm(target, { recursive: true, force: true });
     await rm(gitDir, { recursive: true, force: true });
     throw error;
+  }
+}
+
+/**
+ * The real paths of a project's Git data: its Git directory and, in a
+ * worktree, the common one with every branch. None for a project without Git.
+ */
+export async function gitDirs(root: string): Promise<string[]> {
+  try {
+    const lines = (
+      await git(root, [
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-dir',
+        '--git-common-dir',
+      ])
+    )
+      .toString('utf8')
+      .split('\n')
+      .filter(Boolean);
+    const real = await Promise.all(
+      lines.map((line) => realpath(line).catch(() => line)),
+    );
+    return [...new Set(real)];
+  } catch {
+    return [];
   }
 }
 
