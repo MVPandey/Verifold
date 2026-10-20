@@ -13,6 +13,7 @@ import {
   labEnded,
   labLimits,
   nameList,
+  stands,
   verdictWords,
   type BringList,
   type Call,
@@ -1418,15 +1419,19 @@ export function answerPanel(
     const brought = state.brought.filter(
       (entry) => entry.direction === direction.id,
     );
-    const files = new Set(brought.flatMap((entry) => entry.files)).size;
-    const last = brought.at(-1);
+    const files = brought.length;
+    const last = brought.reduce<(typeof brought)[number] | undefined>(
+      (newest, entry) => (!newest || entry.at > newest.at ? entry : newest),
+      undefined,
+    );
     return `<li class="answer-row">${verdictChip(direction.verdict, dispute)}<span class="row-main"><strong>${e(direction.title)}</strong>${line ? `<span class="row-line">${e(line)}</span>` : ''}</span><span class="answer-side">${mark ? `<span class="fine">${e(mark)}</span>` : ''}${last ? `<span class="fine">${files} ${files === 1 ? 'file' : 'files'} brought in, last at ${e(clock(last.at))}</span>` : ''}${view.runs ? `<button type="button" class="link" data-panel="bring" data-lab-direction="${e(direction.id)}">Bring in files</button>` : ''}</span></li>`;
   });
   const ended = view.ledger.filter((run) => !runActive(run));
   const failed = ended.filter((run) => run.status !== 'done').length;
+  // An answer that Verifold did not finish applying does not stand.
   const calls = state.calls.flatMap((call) => {
     const option =
-      call.state === 'answered' && call.answer
+      stands(call) && call.answer
         ? call.options[call.answer.option]
         : undefined;
     return option ? [option.label] : [];
@@ -1503,25 +1508,50 @@ export function bringPanel(
     const why = file.since
       ? `Brought in at ${clock(file.since)}.`
       : (file.why ?? '');
-    return `<li><input type="checkbox" id="${box(index)}" data-bring-file="${e(file.path)}"${file.ticked ? ' checked' : ''}${file.since || !view.runs ? ' disabled' : ''}> <label for="${box(index)}"><code>${e(file.path)}</code></label> <span class="fine change-${file.change}">${file.change}</span> <button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" data-bring-commit="${e(shown.commit)}" aria-pressed="false" aria-label="Diff of ${e(file.path)}">Diff</button>${why ? ` <span class="fine bring-why">${e(why)}</span>` : ''}</li>`;
-  });
-  const history = view.state.brought
-    .filter((brought) => brought.direction === direction.id)
-    .map(
-      (brought) =>
-        `<li>${e(clock(brought.at))}: ${e(nameList(brought.files))} <span class="fine">at ${e(brought.commit.slice(0, 7))}</span></li>`,
-    );
-  const newer =
-    view.runs && direction.head !== shown.head
-      ? `<p class="fine">${e(agent.handle)} committed newer work since. <button type="button" class="link" data-action="lab-bring-look" data-lab-direction="${e(direction.id)}">Show the newer files</button></p>`
+    const warn = file.code
+      ? ` <span class="fine bring-code-warn" id="${box(index)}-code">This file can run code on your computer. Bring it in only if its diff looks right.</span>`
       : '';
-  return panel(`${
+    return `<li><input type="checkbox" id="${box(index)}" data-bring-file="${e(file.path)}"${file.code ? ` aria-describedby="${box(index)}-code"` : ''}${file.ticked ? ' checked' : ''}${file.since || !view.runs ? ' disabled' : ''}> <label for="${box(index)}"><code>${e(file.path)}</code></label> <span class="fine change-${file.change}">${file.change}</span> <button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" data-bring-commit="${e(shown.commit)}" aria-pressed="false" aria-label="Diff of ${e(file.path)}">Diff</button>${why ? ` <span class="fine bring-why">${e(why)}</span>` : ''}${warn}</li>`;
+  });
+  // Each bring-in of this direction: the files that keep it as their base, by its time.
+  const times = new Map<
+    string,
+    { at: string; commit: string; paths: string[] }
+  >();
+  for (const brought of view.state.brought)
+    if (brought.direction === direction.id) {
+      const key = `${brought.at}|${brought.commit}`;
+      const group = times.get(key) ?? {
+        at: brought.at,
+        commit: brought.commit,
+        paths: [],
+      };
+      group.paths.push(brought.path);
+      times.set(key, group);
+    }
+  const history = [...times.values()]
+    .sort((a, b) => (a.at < b.at ? -1 : 1))
+    .map(
+      (group) =>
+        `<li>${e(clock(group.at))}: ${e(nameList(group.paths))} <span class="fine">at ${e(group.commit.slice(0, 7))}</span></li>`,
+    );
+  const working = shown.working
+    ? `<p class="notice" role="status">${e(agent.handle)} is working, so these are its files as of its last turn. When its turn ends, its newer work shows here.</p>`
+    : '';
+  const newer =
+    view.runs && shown.newer
+      ? `<p class="fine">${e(agent.handle)} has newer work. <button type="button" class="link" data-action="lab-bring-look" data-lab-direction="${e(direction.id)}">Show the newer files</button></p>`
+      : '';
+  const left = shown.left.length
+    ? `<p class="fine">Left out of this commit, so they cannot come in:</p><ul class="bring-out">${shown.left.map((file) => `<li><code>${e(file.path)}</code> <span class="fine">${e(file.why)}</span></li>`).join('')}</ul>`
+    : '';
+  return panel(`${working}${
     shown.files.length
-      ? `<p class="fine">${shown.files.length} ${shown.files.length === 1 ? 'file' : 'files'} changed since this direction started. The ticked files come into your project folder. Nothing else changes, and nothing merges by itself.</p>`
-      : '<p class="empty-note">This direction changed no file since it started.</p>'
+      ? `<p class="fine">${shown.files.length} ${shown.files.length === 1 ? 'file' : 'files'} changed since this direction started or since they came in. The ticked files come into your project folder. Nothing else changes, and nothing merges by itself.</p>`
+      : '<p class="empty-note">This direction changed no file since it started or since its files came in.</p>'
   }${newer}
   ${can.length ? `<ul class="bring-files">${items.join('')}</ul>` : ''}
-  ${out.length ? `<p class="fine">Stays out:</p><ul class="bring-out">${out.map((file) => `<li><code>${e(file.path)}</code> <span class="fine">${e(file.out ?? '')}</span></li>`).join('')}</ul>` : ''}
+  ${out.length ? `<p class="fine">Stays out:</p><ul class="bring-out">${out.map((file) => `<li><code>${e(file.path)}</code> <span class="fine">${e(file.out ?? '')}</span></li>`).join('')}</ul>` : ''}${left}
   ${can.length ? `<div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}" data-diff-proof="" data-bring-commit="${e(shown.commit)}" data-lab-to="${e(shown.commit)}"><p class="fine">Choose Diff beside a file to see its changes.</p></div>` : ''}
   ${view.runs && can.length ? `<div class="actions"><button type="button" class="primary" data-action="lab-bring" data-lab-direction="${e(direction.id)}" data-commit="${e(shown.commit)}">Bring in the ticked files</button></div><p class="fine">When a file changed in your project folder since this direction started, or since it came in, nothing comes in, and Verifold names the file.</p>` : ''}
   ${history.length ? `<h3>Brought in</h3><ul class="bring-history">${history.join('')}</ul>` : ''}`);

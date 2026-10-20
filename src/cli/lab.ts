@@ -8,7 +8,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { join } from 'node:path';
 import { WakeLoop, type QueuedEvent } from './agent-loop.ts';
 import {
   agentId,
@@ -23,6 +23,7 @@ import {
   postLine,
   proofRef,
   runId,
+  safePath,
   type Artifact,
   type Post,
   type PostKind,
@@ -101,6 +102,7 @@ import {
   readCurrent,
   readFileAt,
   release,
+  sameTree,
   scratch,
   snapshot,
   treeAt,
@@ -170,9 +172,11 @@ export const labLimits = {
   quietTurns: 6,
   /** Characters of the person's note when they sign off. */
   signoff: boardLimits.text,
-  /** Bring-ins that the lab keeps on record, and the characters that they take in its record at most. */
-  brought: 500,
-  broughtText: 1_000_000,
+  /**
+   * Characters of the lab's record after a bring-in, at most. The record
+   * reads up to 4 MB, and the rest of it needs room too.
+   */
+  recordText: 2_500_000,
   /** Files of one bring-in. */
   bringFiles: 1000,
   /** Directions in a sign-off. */
@@ -282,21 +286,29 @@ export interface LabState {
   readonly signoff: Signoff | null;
 }
 
-/** Files of a direction that the person brought into the project folder, at one commit. */
+/**
+ * A file that the person brought in from a direction: the commit that it
+ * came from, and when. It is the file's base for the next bring-in from that
+ * direction, so a later bring-in of the same file replaces it.
+ */
 export interface Brought {
   readonly direction: string;
+  readonly path: string;
   readonly commit: string;
-  readonly files: readonly string[];
   readonly at: string;
 }
 
 /**
  * A bring-in that Verifold began. `checking`: Verifold compares the files
  * and writes temporary copies; the project has none of them yet. `copying`:
- * every file passed, and Verifold moves the copies into place. After a stop
- * in the middle, the next start finishes the copy.
+ * every file passed, and Verifold changes the project. After a stop in the
+ * middle, the next start finishes the copy.
  */
-export interface Bringing extends Brought {
+export interface Bringing {
+  readonly direction: string;
+  readonly commit: string;
+  readonly files: readonly string[];
+  readonly at: string;
   readonly phase: 'checking' | 'copying';
 }
 
@@ -325,6 +337,23 @@ export interface BringFile {
   readonly why: string | null;
   /** When it came in from this direction with this content, or null. */
   readonly since: string | null;
+  /** It can run code through the person's tools, such as a Git hook. */
+  readonly code: boolean;
+}
+
+/** A file of the folder that the commit of a look leaves out, and why. */
+export interface LeftOut {
+  readonly path: string;
+  readonly why: string;
+}
+
+/** What the person looks at to bring in: a commit, the direction's newest commit then, and whether its agent worked. */
+interface BringLook {
+  readonly commit: string;
+  readonly head: string;
+  /** A turn ran, so the commit is the agent's last commit, not its folder now. */
+  readonly working: boolean;
+  readonly left: readonly LeftOut[];
 }
 
 /** The files that a bring-in of a direction can copy, at the commit that the person looks at. */
@@ -334,6 +363,12 @@ export interface BringList {
   readonly commit: string;
   /** The direction's newest commit when the person looked. */
   readonly head: string;
+  /** The agent worked when the person looked: the files are those of its last commit. */
+  readonly working: boolean;
+  /** The direction has newer work than the commit that the person looks at. */
+  readonly newer: boolean;
+  /** Files of the folder that the commit leaves out. */
+  readonly left: readonly LeftOut[];
   readonly files: readonly BringFile[];
 }
 
@@ -878,8 +913,6 @@ function parseCheck(value: unknown): Check | null {
   } catch {
     return null;
   }
-  const time = (item: unknown): string | null =>
-    typeof item === 'string' && !Number.isNaN(Date.parse(item)) ? item : null;
   const count = (item: unknown): number =>
     Number.isSafeInteger(item) && (item as number) >= 0 ? (item as number) : 0;
   return {
@@ -911,8 +944,8 @@ function parseCheck(value: unknown): Check | null {
         : null,
     note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : null,
     queuedAt: entry.queuedAt,
-    startedAt: time(entry.startedAt),
-    endedAt: time(entry.endedAt),
+    startedAt: recordTime(entry.startedAt),
+    endedAt: recordTime(entry.endedAt),
     restarts: count(entry.restarts),
     session:
       typeof entry.session === 'string' &&
@@ -978,7 +1011,7 @@ function chosenEffect(call: Call): CallEffect | null {
 }
 
 /** The answer of a call stands: the person answered, and Verifold applied its effect, when it has one. */
-function stands(call: Call): boolean {
+export function stands(call: Call): boolean {
   return (
     call.state === 'answered' &&
     (call.applied !== null || chosenEffect(call) === null)
@@ -1260,8 +1293,6 @@ function parseCall(value: unknown): Call | null {
     typeof entry.why !== 'string'
   )
     return null;
-  const time = (item: unknown): string | null =>
-    typeof item === 'string' && !Number.isNaN(Date.parse(item)) ? item : null;
   let options: CallOption[];
   try {
     options = callOptions(entry.options, kind, storedEffect);
@@ -1270,7 +1301,7 @@ function parseCall(value: unknown): Call | null {
   }
   const answer = object(entry.answer);
   const option = answer?.option;
-  const at = time(answer?.at);
+  const at = recordTime(answer?.at);
   return {
     id: entry.id,
     at: entry.at,
@@ -1295,7 +1326,7 @@ function parseCall(value: unknown): Call | null {
           callLimits.undoMinutes,
         )
       : callLimits.defaultUndo,
-    deadline: time(entry.deadline),
+    deadline: recordTime(entry.deadline),
     state,
     answer:
       Number.isSafeInteger(option) &&
@@ -1304,7 +1335,7 @@ function parseCall(value: unknown): Call | null {
       at
         ? { option: option as number, at }
         : null,
-    undoUntil: time(entry.undoUntil),
+    undoUntil: recordTime(entry.undoUntil),
     applied: parseApplied(entry.applied),
     note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : null,
   };
@@ -1546,16 +1577,9 @@ function parseDirection(value: unknown): Direction | null {
   };
 }
 
-/** A path of a project file in a lab record, as Git lists it, or null. */
+/** A path of a project file in a lab record, by the board's rule for paths, or null. */
 function recordPath(value: unknown): string | null {
-  return typeof value === 'string' &&
-    value.length <= 4096 &&
-    !value.includes('\0') &&
-    value
-      .split('/')
-      .every((part) => part !== '' && part !== '.' && part !== '..')
-    ? value
-    : null;
+  return safePath(value) ? value : null;
 }
 
 /** A time in a lab record, or null. */
@@ -1566,39 +1590,43 @@ function recordTime(value: unknown): string | null {
 }
 
 /**
- * The newest bring-ins that the lab keeps: at most `labLimits.brought`, in
- * at most `labLimits.broughtText` characters, so the lab's record stays
- * small.
+ * The bring-ins with the files of `record` that came in: each file of a
+ * direction keeps only its newest base. Without files, the same list.
  */
-function keptBrought(list: readonly Brought[]): Brought[] {
-  const kept = list.slice(-labLimits.brought);
-  let size = JSON.stringify(kept).length;
-  while (kept.length > 1 && size > labLimits.broughtText)
-    size -= JSON.stringify(kept.shift()).length + 1;
-  return kept;
+function withBrought(
+  list: readonly Brought[],
+  record: { readonly direction: string; readonly commit: string },
+  done: readonly string[],
+): readonly Brought[] {
+  if (!done.length) return list;
+  const at = new Date().toISOString();
+  const now = new Set(done);
+  return [
+    ...list.filter(
+      (entry) => entry.direction !== record.direction || !now.has(entry.path),
+    ),
+    ...done.map((path) => ({
+      direction: record.direction,
+      path,
+      commit: record.commit,
+      at,
+    })),
+  ];
 }
 
 function parseBrought(value: unknown): Brought | null {
   const entry = object(value);
   const at = recordTime(entry?.at);
-  if (
-    !entry ||
-    !at ||
-    typeof entry.direction !== 'string' ||
-    !directionId.test(entry.direction) ||
-    typeof entry.commit !== 'string' ||
-    !commitId.test(entry.commit) ||
-    !Array.isArray(entry.files)
-  )
-    return null;
-  return {
-    direction: entry.direction,
-    commit: entry.commit,
-    files: entry.files
-      .flatMap((path) => recordPath(path) ?? [])
-      .slice(0, labLimits.bringFiles),
-    at,
-  };
+  const path = recordPath(entry?.path);
+  return entry &&
+    at &&
+    path &&
+    typeof entry.direction === 'string' &&
+    directionId.test(entry.direction) &&
+    typeof entry.commit === 'string' &&
+    commitId.test(entry.commit)
+    ? { direction: entry.direction, path, commit: entry.commit, at }
+    : null;
 }
 
 function parseSignoff(value: unknown): Signoff | null {
@@ -1732,15 +1760,39 @@ function parseState(value: Record<string, unknown> | null): LabState | null {
         )
       : [],
     // A lab from before bring-ins and sign-offs has none.
+    // A lab from before bring-ins has none. Each file keeps its newest base.
     brought: Array.isArray(value.brought)
-      ? keptBrought(value.brought.flatMap((entry) => parseBrought(entry) ?? []))
+      ? [
+          ...new Map(
+            value.brought.flatMap((item) => {
+              const entry = parseBrought(item);
+              return entry
+                ? [[`${entry.direction}\0${entry.path}`, entry] as const]
+                : [];
+            }),
+          ).values(),
+        ]
       : [],
     bringing: (() => {
       const entry = object(value.bringing);
-      const brought = parseBrought(entry);
-      return brought &&
-        (entry?.phase === 'checking' || entry?.phase === 'copying')
-        ? { ...brought, phase: entry.phase }
+      const at = recordTime(entry?.at);
+      return entry &&
+        at &&
+        typeof entry.direction === 'string' &&
+        directionId.test(entry.direction) &&
+        typeof entry.commit === 'string' &&
+        commitId.test(entry.commit) &&
+        Array.isArray(entry.files) &&
+        (entry.phase === 'checking' || entry.phase === 'copying')
+        ? {
+            direction: entry.direction,
+            commit: entry.commit,
+            files: entry.files
+              .flatMap((path) => recordPath(path) ?? [])
+              .slice(0, labLimits.bringFiles),
+            at,
+            phase: entry.phase,
+          }
         : null;
     })(),
     signoff: parseSignoff(value.signoff),
@@ -1873,55 +1925,115 @@ export function labEnded(
 }
 
 /**
- * Why a changed file cannot come into the project folder, or null. The
- * names compare in lowercase, because a Mac's folders do.
+ * Why a changed file cannot come into the project folder, or null. `after`
+ * is the file at the commit, when it has one. The names compare in
+ * lowercase, because a Mac's folders do.
  */
-function bringOut(file: ChangedFile, bytes: number): string | null {
-  const parts = file.path.toLowerCase().split('/');
+function bringOut(
+  path: string,
+  after: { readonly mode: string; readonly bytes: number } | undefined,
+  change: ChangedFile['change'],
+): string | null {
+  const parts = path.toLowerCase().split('/');
+  if (!safePath(path))
+    return 'Its name is too long, or has characters that Verifold does not copy.';
   if (parts[0] === '.verifold') return "Verifold's own records stay out.";
   if (parts.includes('.git')) return "Git's own data stays out.";
-  if (!file.regular) return 'It is a link or a submodule, not a file.';
-  if (bytes > workspaceLimits.fileBytes)
+  if (
+    change !== 'deleted' &&
+    after?.mode !== '100644' &&
+    after?.mode !== '100755'
+  )
+    return 'It is a link or a submodule, not a file.';
+  if ((after?.bytes ?? 0) > workspaceLimits.fileBytes)
     return `It is larger than ${workspaceLimits.fileBytes / 1024 / 1024} MB.`;
   return null;
 }
 
 /**
  * Why a file that can come in is not ticked first, or null. Project memory,
- * scratch output, and the settings of tools that run code wait for the
- * person to tick them.
+ * scratch output, and settings that run code wait for the person to tick
+ * them.
  */
 function untickReason(path: string): string | null {
-  const lower = path.toLowerCase();
-  const first = lower.split('/')[0] ?? '';
-  if (first === 'memory') return 'Project memory, so not ticked.';
+  if (path.split('/')[0]?.toLowerCase() === 'memory')
+    return 'Project memory, so not ticked.';
   if (scratch(path)) return 'Scratch output, so not ticked.';
-  if (
-    toolFolders.includes(first) ||
-    lower === '.envrc' ||
-    lower.startsWith('.github/workflows/')
-  )
-    return 'It changes how tools run code on your computer, so check it first.';
+  if (codeSetting(path))
+    return 'It can run code through your tools, such as a Git hook or an editor task. Check its diff first.';
   return null;
 }
 
-/** Folders of tool settings that can run code, such as Git hooks. */
-const toolFolders = [
+/**
+ * Folders, at any depth, of settings that tools run as code: Git hooks,
+ * agent and editor settings, and dev containers.
+ */
+const codeFolders = new Set([
   '.githooks',
+  '.git-hooks',
+  '.git_hooks',
   '.husky',
+  '.lefthook',
   '.claude',
   '.codex',
   '.cursor',
   '.vscode',
   '.idea',
-];
+  '.zed',
+  '.devcontainer',
+]);
 
-/** The ID that Git gives this content as a blob, in the hash of `like`: SHA-256 when it has 64 digits. */
+/** Files, at any depth, that tools run as code or use to start code. */
+const codeFiles = new Set([
+  '.mcp.json',
+  '.envrc',
+  '.pre-commit-config.yaml',
+  '.pre-commit-hooks.yaml',
+  'lefthook.yml',
+  'lefthook.yaml',
+  '.lefthook.yml',
+  '.gitlab-ci.yml',
+]);
+
+/**
+ * A path that tools run as code: a file in a folder of such settings, a
+ * file of such settings, or a GitHub workflow or action. Each part
+ * compares in lowercase.
+ */
+function codeSetting(path: string): boolean {
+  const parts = path.toLowerCase().split('/');
+  const name = parts.at(-1) ?? '';
+  return (
+    parts.slice(0, -1).some((part) => codeFolders.has(part)) ||
+    codeFiles.has(name) ||
+    parts.some(
+      (part, index) =>
+        part === '.github' &&
+        (parts[index + 1] === 'workflows' || parts[index + 1] === 'actions'),
+    )
+  );
+}
+
+/** The ID that Git gives this content as a blob, in the hash of `like`, an ID of the same repository: SHA-256 when it has 64 digits. */
 function blobId(content: Buffer, like: string): string {
   return createHash(like.length === 64 ? 'sha256' : 'sha1')
     .update(`blob ${content.length}\0`)
     .update(content)
     .digest('hex');
+}
+
+/**
+ * A project file is this file of a commit: both missing, or the same Git
+ * mode and blob ID. A project path that is no file matches nothing.
+ */
+function sameFile(
+  now: { readonly content: Buffer; readonly mode: string } | null | undefined,
+  entry: { readonly mode: string; readonly id: string } | undefined,
+  like: string,
+): boolean {
+  if (now === undefined) return false;
+  if (now === null || !entry) return now === null && !entry;
+  return now.mode === entry.mode && blobId(now.content, like) === entry.id;
 }
 
 /** File names for a message: the first 10, then how many more. */
@@ -2170,10 +2282,7 @@ export class Lab {
    * The commit of each direction that the person looks at to bring in, and
    * the direction's newest commit then. A restart forgets them.
    */
-  private readonly bringAt = new Map<
-    string,
-    { readonly commit: string; readonly head: string }
-  >();
+  private readonly bringAt = new Map<string, BringLook>();
 
   constructor(root: string, options: LabOptions) {
     this.root = root;
@@ -5269,20 +5378,41 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   }
 
   /**
-   * Take a direction's newest work before a bring-in: Verifold commits its
-   * folder, so the person sees exactly the files that come in. Bring in
-   * copies that commit, also after the agent commits again. The commit does
-   * not become the direction's newest for other agents: the agent's next
-   * turn ends with its own commit.
+   * Take a direction's newest work before a bring-in, so the person sees
+   * exactly the files that come in. Between the agent's turns, Verifold
+   * commits its folder. While a turn runs, or while the person holds its
+   * terminal, the files can be half written, so the person sees the commit
+   * of its last turn instead. The commit does not become the direction's
+   * newest for other agents. Bring in copies the commit that the person
+   * looked at, also after the agent commits again.
    */
   async lookToBring(id: unknown): Promise<void> {
-    const direction = await this.serial(() =>
-      this.direction(
+    const { direction, working } = await this.serial(() => {
+      const direction = this.direction(
         typeof id === 'string' && directionId.test(id)
           ? id
           : fail('Choose a direction of the lab.'),
-      ),
-    );
+      );
+      const agent = this.agents.get(direction.agent);
+      const status = agent ? this.status(direction, agent).status : null;
+      return {
+        direction,
+        working:
+          (agent ? this.rt(agent.id).turning : false) ||
+          status === 'working' ||
+          status === 'starting' ||
+          status === 'terminal',
+      };
+    });
+    if (working) {
+      this.bringAt.set(direction.id, {
+        commit: direction.head,
+        head: direction.head,
+        working: true,
+        left: [],
+      });
+      return;
+    }
     const folder = await lstat(join(this.root, direction.workspace.path)).catch(
       () => null,
     );
@@ -5302,6 +5432,17 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       this.bringAt.set(current.id, {
         commit: made.commit,
         head: current.head,
+        working: false,
+        left: [
+          ...made.skipped.map((path) => ({
+            path,
+            why: `It is larger than ${workspaceLimits.fileBytes / 1024 / 1024} MB, so Verifold does not commit it.`,
+          })),
+          ...made.linked.map((path) => ({
+            path,
+            why: "It is a file that Verifold can't copy safely. Ask the agent to write a separate copy.",
+          })),
+        ],
       });
     });
   }
@@ -5319,110 +5460,133 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       : null;
   }
 
+  /**
+   * The files of a bring-in. Each file compares with its base: the version
+   * that came in from this direction last time, or else the direction's
+   * start. So a file that came in and then went back to its start, or was
+   * deleted, shows its change too. A file whose earlier version Verifold
+   * cannot read has no base: it is not ticked, and a bring-in of it stops.
+   */
   private async bringList(
     direction: Direction,
-    look: { readonly commit: string; readonly head: string },
+    look: BringLook,
   ): Promise<BringList> {
     const { workspace } = direction;
-    const files = await changes(
-      this.root,
-      workspace,
-      workspace.start,
-      look.commit,
+    const fromStart = new Map(
+      (await changes(this.root, workspace, workspace.start, look.commit)).map(
+        (file) => [file.path, file],
+      ),
     );
-    const tree = await treeAt(
-      this.root,
-      workspace,
-      look.commit,
-      files
-        .filter((file) => file.change !== 'deleted')
-        .map((file) => file.path),
-    );
-    const since = await this.broughtSince(direction, look.commit, files);
+    const bases = this.bringBases(direction.id);
+    const paths = [...new Set([...fromStart.keys(), ...bases.keys()])];
+    const now = await treeAt(this.root, workspace, look.commit, paths);
+    const earlier = await this.baseTrees(direction, bases);
+    const newer =
+      direction.head !== look.head &&
+      !(await sameTree(this.root, workspace, direction.head, look.commit));
+    const files: BringFile[] = [];
+    for (const path of paths) {
+      const base = bases.get(path);
+      const after = now.get(path);
+      let change: ChangedFile['change'];
+      let since: string | null = null;
+      let unknown = false;
+      if (!base) {
+        const file = fromStart.get(path);
+        if (!file) continue;
+        change = file.change;
+      } else {
+        const tree = earlier.get(base.commit);
+        unknown = tree === undefined;
+        const before = tree?.get(path);
+        if (
+          !unknown &&
+          before?.id === after?.id &&
+          before?.mode === after?.mode
+        ) {
+          // The same content came in before. It shows only while it differs from the start.
+          if (!fromStart.has(path)) continue;
+          since = base.at;
+          change = fromStart.get(path)?.change ?? 'modified';
+        } else
+          change = !after
+            ? 'deleted'
+            : !before && !unknown
+              ? 'added'
+              : 'modified';
+      }
+      const out = bringOut(path, after, change);
+      const why =
+        out !== null
+          ? null
+          : unknown
+            ? "Verifold can't read the version that came in before, so it can't check your copy. Copy this file by hand."
+            : untickReason(path);
+      files.push({
+        path,
+        change,
+        bytes: after?.bytes ?? 0,
+        out,
+        why,
+        since,
+        code: codeSetting(path),
+        ticked: out === null && why === null && since === null,
+      });
+    }
     return {
       direction: direction.id,
       from: workspace.start,
       commit: look.commit,
       head: look.head,
-      files: files.map((file) => {
-        const bytes = tree.get(file.path)?.bytes ?? 0;
-        const out = bringOut(file, bytes);
-        const why = out === null ? untickReason(file.path) : null;
-        const at = since.get(file.path) ?? null;
-        return {
-          path: file.path,
-          change: file.change,
-          bytes,
-          out,
-          why,
-          since: at,
-          ticked: out === null && why === null && at === null,
-        };
-      }),
+      working: look.working,
+      newer,
+      left: look.left,
+      files: files.sort((a, b) =>
+        a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+      ),
     };
   }
 
-  /** The newest bring-in of each of these files from a direction. */
-  private lastBrought(
-    direction: string,
-    paths: readonly string[],
-  ): Map<string, Brought> {
-    const wanted = new Set(paths);
-    const last = new Map<string, Brought>();
-    for (const entry of this.state?.brought ?? [])
-      if (entry.direction === direction)
-        for (const path of entry.files)
-          if (wanted.has(path)) last.set(path, entry);
-    return last;
-  }
-
   /**
-   * The files of a direction that came in before with the content that they
-   * have at `commit`, and when.
+   * The files at each base commit of a direction's bring-ins. A commit that
+   * Verifold cannot read is not in the map, so its files have no base.
    */
-  private async broughtSince(
+  private async baseTrees(
     direction: Direction,
-    commit: string,
-    files: readonly ChangedFile[],
-  ): Promise<Map<string, string>> {
-    const last = this.lastBrought(
-      direction.id,
-      files.map((file) => file.path),
-    );
-    const since = new Map<string, string>();
-    for (const earlier of new Set(
-      [...last.values()].map((entry) => entry.commit),
-    )) {
-      const changed =
-        earlier === commit
-          ? new Set<string>()
-          : new Set(
-              (
-                await changes(this.root, direction.workspace, earlier, commit)
-              ).map((file) => file.path),
-            );
-      for (const [path, entry] of last)
-        if (entry.commit === earlier && !changed.has(path))
-          since.set(path, entry.at);
-    }
-    return since;
+    bases: ReadonlyMap<string, { readonly commit: string }>,
+  ): Promise<Map<string, Awaited<ReturnType<typeof treeAt>>>> {
+    const trees = new Map<string, Awaited<ReturnType<typeof treeAt>>>();
+    for (const commit of new Set(
+      [...bases.values()].map((base) => base.commit),
+    ))
+      try {
+        trees.set(
+          commit,
+          await treeAt(
+            this.root,
+            direction.workspace,
+            commit,
+            [...bases].flatMap(([path, base]) =>
+              base.commit === commit ? [path] : [],
+            ),
+          ),
+        );
+      } catch {
+        // The files of this commit have no base: each one stops a bring-in.
+      }
+    return trees;
   }
 
-  /**
-   * The commit whose content each project file must still have: the version
-   * that came in before from this direction, or else the direction's start.
-   * Directions never copy into each other: after one bring-in, a file that
-   * another direction changed too has changed since that direction started.
-   */
+  /** The newest bring-in of each file of a direction, by path. */
   private bringBases(
-    direction: Direction,
-    paths: readonly string[],
-  ): Map<string, string> {
+    direction: string,
+  ): Map<string, { readonly commit: string; readonly at: string }> {
     return new Map(
-      [...this.lastBrought(direction.id, paths)].map(([path, entry]) => [
-        path,
-        entry.commit,
-      ]),
+      (this.state?.brought ?? []).flatMap((entry) =>
+        entry.direction === direction
+          ? [[entry.path, { commit: entry.commit, at: entry.at }] as const]
+          : [],
+      ),
     );
   }
 
@@ -5431,59 +5595,93 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
    * looked at, into the project folder. When a project file changed since
    * it came from this direction, or since the direction started, nothing is
    * copied, and the error names the files. Returns the files that came in.
+   * The files are checked before the lab's queue; in it, only the record
+   * and the copy happen.
    */
-  bring(
+  async bring(
     id: unknown,
     commit: unknown,
     files: unknown,
   ): Promise<readonly string[]> {
-    return this.serial(async () => {
+    const { direction, look, brought } = await this.serial(() => {
       const state = this.current();
       const direction = this.direction(
         typeof id === 'string' && directionId.test(id)
           ? id
           : fail('Choose a direction of the lab.'),
       );
-      if (state.bringing)
-        fail('Verifold still brings in other files. Wait for it to end.');
       const look = this.bringAt.get(direction.id);
       if (typeof commit !== 'string' || look?.commit !== commit)
         fail(
           'The work of this direction changed since you looked. Look at its files again, then bring them in.',
         );
-      const known = new Map(
-        (await this.bringList(direction, look)).files.map((file) => [
-          file.path,
-          file,
-        ]),
+      return { direction, look, brought: state.brought };
+    });
+    const list = await this.bringList(direction, look);
+    const known = new Map(list.files.map((file) => [file.path, file]));
+    const chosen = (Array.isArray(files) ? [...new Set(files)] : []).map(
+      (path) =>
+        (typeof path === 'string' ? known.get(path) : undefined) ??
+        fail('Tick files that this direction changed.'),
+    );
+    if (!chosen.length) fail('Tick the files to bring in.');
+    if (chosen.length > labLimits.bringFiles)
+      fail(`Tick at most ${labLimits.bringFiles} files at once.`);
+    const out = chosen.find((file) => file.out);
+    if (out) fail(`${out.path} cannot come in. ${out.out}`);
+    const blind = chosen.filter((file) =>
+      file.why?.startsWith("Verifold can't read the version"),
+    );
+    if (blind.length)
+      fail(
+        `Nothing came in. Verifold can't read the version of ${nameList(blind.map((file) => file.path))} that came in before, so it can't check your copy. Untick ${blind.length === 1 ? 'it' : 'them'}, and copy ${blind.length === 1 ? 'it' : 'them'} by hand.`,
       );
-      const chosen = (Array.isArray(files) ? [...new Set(files)] : []).map(
-        (path) =>
-          (typeof path === 'string' ? known.get(path) : undefined) ??
-          fail('Tick files that this direction changed.'),
+    const bytes = chosen.reduce((sum, file) => sum + file.bytes, 0);
+    if (bytes > workspaceLimits.bytes)
+      fail(
+        `Tick fewer files: at most ${workspaceLimits.bytes / 1024 / 1024} MB comes in at once.`,
       );
-      if (!chosen.length) fail('Tick the files to bring in.');
-      if (chosen.length > labLimits.bringFiles)
-        fail(`Tick at most ${labLimits.bringFiles} files at once.`);
-      const out = chosen.find((file) => file.out);
-      if (out) fail(`${out.path} cannot come in. ${out.out}`);
-      for (const file of chosen)
-        if (await this.intoRecords(file.path))
-          fail(
-            `${file.path} cannot come in: a link in your project folder leads it into Verifold's or Git's own folder.`,
-          );
-      const bytes = chosen.reduce((sum, file) => sum + file.bytes, 0);
-      if (bytes > workspaceLimits.bytes)
+    const paths = chosen.map((file) => file.path);
+    const bases = new Map(
+      [...this.bringBases(direction.id)].flatMap(([path, base]) =>
+        paths.includes(path) ? [[path, base.commit] as const] : [],
+      ),
+    );
+    const looked = look.commit;
+    return this.serial(async () => {
+      const state = this.current();
+      if (state.bringing)
+        fail('Verifold still brings in other files. Wait for it to end.');
+      // The files were checked against these bring-ins and this look.
+      if (
+        state.brought !== brought ||
+        this.bringAt.get(direction.id)?.commit !== looked
+      )
         fail(
-          `Tick fewer files: at most ${workspaceLimits.bytes / 1024 / 1024} MB comes in at once.`,
+          'The lab changed while Verifold checked the files. Bring them in again.',
         );
       const record: Bringing = {
         direction: direction.id,
-        commit,
-        files: chosen.map((file) => file.path),
+        commit: looked,
+        files: paths,
         at: new Date().toISOString(),
         phase: 'checking',
       };
+      // The record must stay small enough to read: with this bring-in and its files.
+      if (
+        JSON.stringify(
+          {
+            ...state,
+            bringing: record,
+            brought: withBrought(state.brought, record, paths),
+          },
+          null,
+          2,
+        ).length > labLimits.recordText
+      )
+        fail(
+          'Verifold keeps a record of each file that comes in, and it has no room for this many. Tick fewer files.',
+        );
       // The record goes first, so a stop in the middle leaves no half copy.
       await this.saveState({ ...state, bringing: record });
       let copying = false;
@@ -5492,10 +5690,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         result = await integrate(
           this.root,
           direction.workspace,
-          commit,
-          record.files,
+          looked,
+          paths,
           {
-            bases: this.bringBases(direction, record.files),
+            bases,
             staged: async () => {
               await this.saveState({
                 ...this.current(),
@@ -5511,15 +5709,15 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           await this.endBring(record, [], null);
           fail(`Nothing came in: ${reason}`);
         }
-        // A move failed after others ended: the files that still have their earlier content get one more try.
+        // A change in the project failed after others ended: each file counts by what the project has now.
         const finished = await this.finishBring(record);
         await this.endBring(
           record,
           finished.done,
-          `The person brought ${finished.done.length} of ${record.files.length} files of ${direction.id} into the project folder, at ${commit.slice(0, 7)}. The others did not come in.`,
+          `The person brought ${finished.done.length} of ${paths.length} files of ${direction.id} into the project folder, at ${looked.slice(0, 7)}. The others did not come in.`,
         );
         fail(
-          `Only ${finished.done.length} of ${record.files.length} files came in${finished.done.length ? `: ${nameList(finished.done)}` : ''}. The copy failed: ${finished.error ?? reason} Bring in the others again.`,
+          `Only ${finished.done.length} of ${paths.length} files came in${finished.done.length ? `: ${nameList(finished.done)}` : ''}. The copy failed: ${finished.error ?? reason} Bring in the others again.`,
         );
       }
       if ('conflicts' in result) {
@@ -5531,7 +5729,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       await this.endBring(
         record,
         result.applied,
-        `The person brought ${result.applied.length} ${result.applied.length === 1 ? 'file' : 'files'} of ${direction.id} into the project folder, at ${commit.slice(0, 7)}: ${nameList(result.applied)}.`,
+        `The person brought ${result.applied.length} ${result.applied.length === 1 ? 'file' : 'files'} of ${direction.id} into the project folder, at ${looked.slice(0, 7)}: ${nameList(result.applied)}.`,
       );
       return result.applied;
     });
@@ -5539,10 +5737,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
 
   /**
    * Finish a bring-in whose copy began. A file with the commit's content
-   * came in already. A file with its earlier content gets the commit's
-   * content now. A file that changed in another way stays as it is. Files
-   * compare by their Git blob IDs. A Git read that fails leaves every file
-   * that did not come in, with the error.
+   * and mode came in already. A file with its earlier content gets the
+   * commit's content now. A file that changed in another way stays as it
+   * is. A Git read that fails leaves every file that did not come in, with
+   * the error.
    */
   private async finishBring(record: Bringing): Promise<{
     readonly done: string[];
@@ -5562,13 +5760,21 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         done = sorted.done;
         left = sorted.left;
         if (sorted.again.length) {
+          const bases = this.bringBases(direction.id);
           try {
             await integrate(
               this.root,
               direction.workspace,
               record.commit,
               sorted.again,
-              { bases: this.bringBases(direction, sorted.again) },
+              {
+                bases: new Map(
+                  sorted.again.flatMap((path) => {
+                    const base = bases.get(path);
+                    return base ? [[path, base.commit] as const] : [];
+                  }),
+                ),
+              },
             );
           } catch (failure) {
             error =
@@ -5586,46 +5792,44 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         error = failure instanceof Error ? failure.message : 'unknown error';
         left = record.files.filter((path) => !done.includes(path));
       }
-    await clearStaged(this.root, record.files).catch(() => {});
+    await clearStaged(this.root).catch(() => {});
     return { done, left, error };
   }
 
   /**
-   * Sort the files of a bring-in by what the project folder has: the
-   * commit's content (done), the earlier content (again), or other content
-   * (left).
+   * Sort the files of a bring-in by what the project folder has, by Git
+   * blob ID and mode: the commit's file (done), its base (again), or other
+   * content (left). A file whose base commit Verifold cannot read is left.
    */
   private async sortBrought(
     direction: Direction,
     record: Bringing,
   ): Promise<{ done: string[]; again: string[]; left: string[] }> {
     const { workspace } = direction;
+    const bases = this.bringBases(direction.id);
+    const base = (path: string): string =>
+      bases.get(path)?.commit ?? workspace.start;
     const target = await treeAt(
       this.root,
       workspace,
       record.commit,
       record.files,
     );
-    const bases = this.bringBases(direction, record.files);
     const trees = new Map<string, Awaited<ReturnType<typeof treeAt>>>();
-    for (const base of new Set([workspace.start, ...bases.values()]))
-      trees.set(
-        base,
-        await treeAt(
-          this.root,
-          workspace,
-          base,
-          record.files.filter(
-            (path) => (bases.get(path) ?? workspace.start) === base,
+    for (const commit of new Set(record.files.map(base)))
+      try {
+        trees.set(
+          commit,
+          await treeAt(
+            this.root,
+            workspace,
+            commit,
+            record.files.filter((path) => base(path) === commit),
           ),
-        ),
-      );
-    // The hash of this repository's IDs: SHA-1, or SHA-256 with 64 digits.
-    const like =
-      [
-        ...target.values(),
-        ...[...trees.values()].flatMap((tree) => [...tree.values()]),
-      ][0]?.id ?? '';
+        );
+      } catch {
+        // These files have no base to compare with.
+      }
     const sorted = {
       done: [] as string[],
       again: [] as string[],
@@ -5633,48 +5837,41 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     };
     for (const path of record.files) {
       const now = await this.projectFile(path);
-      const id =
-        now === undefined ? undefined : now === null ? null : blobId(now, like);
-      const want = target.get(path)?.id ?? null;
-      const before =
-        trees.get(bases.get(path) ?? workspace.start)?.get(path)?.id ?? null;
-      if (id === want) sorted.done.push(path);
-      else if (id === before) sorted.again.push(path);
+      const want = target.get(path);
+      const tree = trees.get(base(path));
+      const before = tree?.get(path);
+      if (sameFile(now, want, record.commit)) sorted.done.push(path);
+      else if (tree && sameFile(now, before, record.commit))
+        sorted.again.push(path);
       else sorted.left.push(path);
     }
     return sorted;
   }
 
   /**
-   * A project path whose real folder, through links in the project folder,
-   * is Verifold's own folder or a Git folder. Bring in never writes there.
+   * A project file: its content and its Git mode, null when it is not
+   * there, or undefined when it is no file.
    */
-  private async intoRecords(path: string): Promise<boolean> {
-    const root = await realpath(this.root);
-    for (let at = dirname(join(this.root, path)); ; at = dirname(at)) {
-      const real = await realpath(at).catch(() => null);
-      if (real !== null) {
-        const parts = relative(root, real).toLowerCase().split(sep);
-        return parts[0] === '.verifold' || parts.includes('.git');
-      }
-      if (at === this.root || dirname(at) === at) return false;
-    }
-  }
-
-  /** A project file: its content, null when it is not there, or undefined when it is no file. */
-  private async projectFile(path: string): Promise<Buffer | null | undefined> {
+  private async projectFile(
+    path: string,
+  ): Promise<
+    { readonly content: Buffer; readonly mode: string } | null | undefined
+  > {
     const stats = await lstat(join(this.root, path)).catch(() => null);
     if (!stats) return null;
-    return stats.isFile()
-      ? await readFile(join(this.root, path)).catch(() => undefined)
+    if (!stats.isFile()) return undefined;
+    const content = await readFile(join(this.root, path)).catch(() => null);
+    // Git keeps one executable bit: the owner's.
+    return content
+      ? { content, mode: stats.mode & 0o100 ? '100755' : '100644' }
       : undefined;
   }
 
   /**
-   * End a bring-in: the record keeps the files that came in, and the board
-   * says `line`, unless it is null. The files are in the project folder
-   * already, so a save that fails changes nothing in memory and is tried
-   * again with the next change.
+   * End a bring-in: the record keeps the base of each file that came in,
+   * and the board says `line`, unless it is null. The files are in the
+   * project folder already, so a save that fails changes nothing in memory
+   * and is tried again with the next change.
    */
   private async endBring(
     record: Bringing,
@@ -5686,17 +5883,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     this.state = {
       ...state,
       bringing: null,
-      brought: done.length
-        ? keptBrought([
-            ...state.brought,
-            {
-              direction: record.direction,
-              commit: record.commit,
-              files: [...done],
-              at: new Date().toISOString(),
-            },
-          ])
-        : state.brought,
+      brought: withBrought(state.brought, record, done),
     };
     await this.stateFile
       .save()
@@ -5725,7 +5912,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     const record = this.state?.bringing;
     if (!record) return;
     if (record.phase === 'checking') {
-      await clearStaged(this.root, record.files).catch(() => {});
+      await clearStaged(this.root).catch(() => {});
       await this.endBring(
         record,
         [],
@@ -7962,6 +8149,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     readonly commit: string;
     readonly order: number;
     readonly linked: readonly string[];
+    readonly skipped: readonly string[];
   }> {
     return this.inDirection(direction.id, async () => {
       const made = await snapshot(
