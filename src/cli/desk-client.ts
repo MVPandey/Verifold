@@ -40,12 +40,6 @@ let hiddenAt: number | undefined;
 /** The words of the lab's search panel. They last for this tab. */
 let searchQuery: string | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
-/**
- * The page came back from the background, and has not yet checked how long
- * the person was away. Until then a render keeps the old time of the last
- * look, so a refresh cannot hide the time away.
- */
-let returning = true;
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
@@ -456,7 +450,6 @@ async function render(html: string): Promise<void> {
     }
     lastHtml = html;
     showChanges(content, places, same);
-    noteSeen();
   };
   // Another view cross-fades in. The first view and live updates do not.
   if (
@@ -599,6 +592,9 @@ async function refresh(): Promise<void> {
   if (loading || stopped) return;
   clearTimeout(timer);
   loading = true;
+  // Only a refresh that the person can see from its start counts as a look at the lab.
+  const looking = !document.hidden;
+  if (looking) checkAway();
   const wanted = viewQuery();
   request = new AbortController();
   const deadline = setTimeout(() => request?.abort(), 5000);
@@ -644,6 +640,7 @@ async function refresh(): Promise<void> {
     if (wanted !== viewQuery() || stopped) return;
     if (reply.html !== lastHtml) await render(reply.html);
     focusPending();
+    if (looking) noteSeen();
     const title =
       'title' in reply && typeof reply.title === 'string' ? reply.title : '';
     const stage =
@@ -690,11 +687,54 @@ async function refresh(): Promise<void> {
 /** A person who comes back to a lab after this long sees on Home what changed. */
 const awayMs = 30 * 60_000;
 
-/** Keep when this browser last showed a lab while the person could see it, with the header's two costs then. */
+/** The last look of this browser at a lab, from any tab: when, and the header's two costs then. */
+function lastLook():
+  | { readonly at: number; readonly spent: string }
+  | undefined {
+  try {
+    const seen: unknown = JSON.parse(
+      localStorage.getItem('verifold-desk-lab-seen') ?? 'null',
+    );
+    if (
+      !seen ||
+      typeof seen !== 'object' ||
+      !('at' in seen) ||
+      typeof seen.at !== 'string' ||
+      !('spent' in seen) ||
+      typeof seen.spent !== 'string'
+    )
+      return undefined;
+    const at = Date.parse(seen.at);
+    return Number.isFinite(at) ? { at, spent: seen.spent } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Before a refresh that the person can see: a last look at a lab 30 minutes
+ * ago or more makes Home list what changed since then, until the person
+ * dismisses it. A gap in the looks counts too, such as a computer that slept
+ * with the page open.
+ */
+function checkAway(): void {
+  const seen = lastLook();
+  if (!seen || Date.now() - seen.at < awayMs) return;
+  since = new Date(seen.at).toISOString();
+  spent = seen.spent;
+  remember('since', since);
+  remember('spent', spent);
+}
+
+/**
+ * After a refresh that the person saw: this look at the lab is the last one,
+ * with the header's two costs. A last look that got old while the refresh
+ * ran, as when the computer slept, counts as time away first.
+ */
 function noteSeen(): void {
-  if (returning || document.hidden) return;
   const head = content.querySelector<HTMLElement>('.lab-head[data-spent]');
-  if (!head?.dataset.spent) return;
+  if (document.hidden || !head?.dataset.spent) return;
+  checkAway();
   try {
     localStorage.setItem(
       'verifold-desk-lab-seen',
@@ -706,35 +746,6 @@ function noteSeen(): void {
   } catch {
     /* Without browser storage, the next visit lists nothing. */
   }
-}
-
-/**
- * The last look of this browser at a lab, from any tab. After 30 minutes
- * or more, Home lists what changed since then, until the person dismisses it.
- */
-function checkAway(): void {
-  returning = false;
-  let seen: unknown;
-  try {
-    seen = JSON.parse(localStorage.getItem('verifold-desk-lab-seen') ?? 'null');
-  } catch {
-    return;
-  }
-  if (
-    !seen ||
-    typeof seen !== 'object' ||
-    !('at' in seen) ||
-    typeof seen.at !== 'string' ||
-    !('spent' in seen) ||
-    typeof seen.spent !== 'string'
-  )
-    return;
-  const at = Date.parse(seen.at);
-  if (!Number.isFinite(at) || Date.now() - at < awayMs) return;
-  since = new Date(at).toISOString();
-  spent = seen.spent;
-  remember('since', since);
-  remember('spent', spent);
 }
 
 function closeRail(): void {
@@ -2107,24 +2118,19 @@ content.addEventListener('keydown', (event) => {
     void act(send);
 });
 // A person who comes back after 5 minutes or more sees on Home what changed while they were away.
+// A lab counts from its last look instead, after 30 minutes or more away: the refresh checks it.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
-    returning = true;
     return;
   }
-  const before = since;
-  if (hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
+  const lab = content.querySelector('[data-panel="search"]') !== null;
+  if (!lab && hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
     since = new Date(hiddenAt).toISOString();
-    // The costs of an earlier return do not fit this time.
-    spent = undefined;
     remember('since', since);
-    remember('spent', undefined);
   }
   hiddenAt = undefined;
-  // A lab counts from its last look, after 30 minutes or more away.
-  checkAway();
-  if (since !== before) void refresh();
+  void refresh();
 });
 window.addEventListener('resize', drawMaps);
 // A toggle does not bubble either. An opened run log loads at once.
@@ -2191,5 +2197,4 @@ async function connect(): Promise<void> {
   }
   await refresh();
 }
-checkAway();
 void connect();
