@@ -13,7 +13,7 @@ import {
 } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { childEnvironment } from './harness.ts';
 
 /**
@@ -67,7 +67,7 @@ export interface ChangedFile {
 export class WorkspaceError extends Error {}
 
 /** Limits on what one workspace copies and keeps. */
-const limits = {
+export const limits = {
   files: 5000,
   bytes: 200 * 1024 * 1024,
   fileBytes: 50 * 1024 * 1024,
@@ -1048,12 +1048,15 @@ export async function copyAt(
  * Copy the selected files of a version into the project. Each file in the
  * project must still match its start content, or nothing is copied. New
  * content goes to temporary files first, then each one is renamed.
+ * `staged` runs after every check passed and every temporary file is
+ * written, before the first rename. When it throws, nothing is copied.
  */
 export async function integrate(
   root: string,
   workspace: Workspace,
   version: string,
   paths: readonly string[],
+  staged?: () => Promise<void>,
 ): Promise<
   | { readonly applied: readonly string[] }
   | { readonly conflicts: readonly string[] }
@@ -1085,7 +1088,7 @@ export async function integrate(
     else plan.push({ path, content: await fileAt(target, version, path) });
   }
   if (conflicts.length) return { conflicts };
-  const staged: { temporary: string; destination: string }[] = [];
+  const written: { temporary: string; destination: string }[] = [];
   try {
     for (const { path, content } of plan) {
       if (content === null) continue;
@@ -1095,17 +1098,61 @@ export async function integrate(
       const temporary = `${destination}.${randomBytes(4).toString('hex')}.verifold`;
       await writeFile(temporary, content, { flag: 'wx', mode: 0o644 });
       if (modes.get(path) === '100755') await chmod(temporary, 0o755);
-      staged.push({ temporary, destination });
+      written.push({ temporary, destination });
     }
+    await staged?.();
   } catch (error) {
-    for (const { temporary } of staged) await rm(temporary, { force: true });
+    for (const { temporary } of written) await rm(temporary, { force: true });
     throw error;
   }
-  for (const { temporary, destination } of staged)
+  for (const { temporary, destination } of written)
     await rename(temporary, destination);
   for (const { path, content } of plan)
     if (content === null) await rm(join(root, path), { force: true });
   return { applied: plan.map(({ path }) => path) };
+}
+
+/**
+ * Remove the temporary files that `integrate` wrote for these paths and did
+ * not rename, for example when Verifold stopped during a copy.
+ */
+export async function clearStaged(
+  root: string,
+  paths: readonly string[],
+): Promise<void> {
+  for (const path of paths) {
+    const folder = dirname(join(root, path));
+    const name = basename(path);
+    for (const entry of await readdir(folder).catch(() => []))
+      if (
+        entry.startsWith(name) &&
+        /^\.[0-9a-f]{8}\.verifold$/.test(entry.slice(name.length))
+      )
+        await rm(join(folder, entry), { force: true });
+  }
+}
+
+/** The mode and size of each file of a commit, by path. A submodule has no size. */
+export async function treeAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+): Promise<Map<string, { readonly mode: string; readonly bytes: number }>> {
+  const entries = await list(join(root, workspace.path), [
+    'ls-tree',
+    '-r',
+    '-l',
+    '-z',
+    commit,
+  ]);
+  // An entry is `<mode> <type> <id> <size>\t<path>`, with `-` as the size of a submodule.
+  return new Map(
+    entries.map((line) => {
+      const [meta = '', path = ''] = line.split('\t');
+      const [mode = '', , , size = ''] = meta.split(/ +/);
+      return [path, { mode, bytes: /^\d+$/.test(size) ? Number(size) : 0 }];
+    }),
+  );
 }
 
 /**

@@ -3730,22 +3730,28 @@ body:has(.lab-screen) .menu-button {
 }
 
 /* A verdict: a mark and a word. The word says it; the color helps. */
-.lab-screen .verdict {
+.lab-screen .verdict,
+.lab-panel .verdict {
   font-size: 12.5px;
   font-weight: 700;
   white-space: nowrap;
 }
-.lab-screen .v-holds-up {
+.lab-screen .v-holds-up,
+.lab-panel .v-holds-up {
   color: var(--green);
 }
-.lab-screen .v-leading {
+.lab-screen .v-leading,
+.lab-panel .v-leading {
   color: var(--tint-ink);
 }
 .lab-screen .v-open,
-.lab-screen .v-ruled-out {
+.lab-screen .v-ruled-out,
+.lab-panel .v-open,
+.lab-panel .v-ruled-out {
   color: var(--muted);
 }
-.lab-screen .v-disputed {
+.lab-screen .v-disputed,
+.lab-panel .v-disputed {
   color: var(--needs);
 }
 
@@ -4028,6 +4034,80 @@ body:has(.lab-screen) .menu-button {
 }
 .lab-panel .outputs {
   padding-left: 18px;
+}
+
+/* The answer: one line from the person, then a row for each direction. */
+.lab-panel .answer-line {
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.lab-panel .answer-rows {
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.lab-panel .answer-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.lab-panel .answer-row + .answer-row {
+  border-top: 1px solid var(--border);
+}
+.lab-panel .answer-row .row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lab-panel .answer-row .row-main strong {
+  overflow-wrap: anywhere;
+}
+.lab-panel .answer-row .row-line {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.lab-panel .answer-side {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.lab-panel .answer-signoff {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.lab-panel .answer-signoff > * + * {
+  margin-top: 6px;
+}
+.lab-panel .answer-signoff input {
+  width: 100%;
+}
+
+/* A bring-in: a box to tick for each file, with its change and its diff. */
+.lab-panel .bring-files,
+.lab-panel .bring-out,
+.lab-panel .bring-history {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.lab-panel .bring-files li,
+.lab-panel .bring-out li {
+  overflow-wrap: anywhere;
+}
+.lab-panel .bring-files input {
+  margin: 0 4px 0 0;
+  vertical-align: middle;
 }
 
 /* While you were away: a few lines on what changed, above Needs you. */

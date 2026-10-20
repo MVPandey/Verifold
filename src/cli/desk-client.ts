@@ -53,6 +53,8 @@ let shownLabDiff:
   | {
       readonly direction: string;
       readonly proof: string;
+      /** The commit of a bring-in that the person looks at, or empty. */
+      readonly bring: string;
       readonly to: string;
       readonly file: string;
       readonly text: string;
@@ -209,7 +211,10 @@ function viewQuery(): string {
   if (view === 'task' && selectedTask) query.set('task', selectedTask);
   // A worker that left its slot is not an error. The server shows another one.
   if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
-  if ((panel === 'direction' || panel === 'diff') && selectedDirection)
+  if (
+    (panel === 'direction' || panel === 'diff' || panel === 'bring') &&
+    selectedDirection
+  )
     query.set('direction', selectedDirection);
   if (panel === 'run' && selectedRun) query.set('run', selectedRun);
   if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
@@ -233,11 +238,13 @@ function panelKey(): string {
           ? selectedDirection
           : panel === 'diff'
             ? `${selectedDirection ?? ''}:${selectedProof ?? ''}`
-            : panel === 'run'
-              ? selectedRun
-              : panel === 'agent'
-                ? selectedAgent
-                : '';
+            : panel === 'bring'
+              ? `bring:${selectedDirection ?? ''}`
+              : panel === 'run'
+                ? selectedRun
+                : panel === 'agent'
+                  ? selectedAgent
+                  : '';
   return `${panel}:${item ?? ''}`;
 }
 
@@ -426,6 +433,7 @@ async function render(html: string): Promise<void> {
     rendered = { view: viewKey(), panel: panelKey() };
     showReview();
     showLabDiff();
+    lookToBring();
     showRunLogs();
     drawMaps();
     mountTranscripts(content, () => token);
@@ -895,7 +903,8 @@ function showLabDiff(): void {
   const shown =
     loaded &&
     loaded.direction === pane.dataset.labDirection &&
-    loaded.proof === (pane.dataset.diffProof ?? '')
+    loaded.proof === (pane.dataset.diffProof ?? '') &&
+    loaded.bring === (pane.dataset.bringCommit ?? '')
       ? loaded
       : undefined;
   for (const button of content.querySelectorAll<HTMLElement>('[data-lab-diff]'))
@@ -917,15 +926,35 @@ function showLabDiff(): void {
   pane.replaceChildren(...nodes);
 }
 
+/** The direction whose bring-in panel asked Verifold for its newest work since the panel opened. */
+let bringLooked: string | undefined;
+
+/**
+ * A bring-in panel without files asks Verifold once for the direction's
+ * newest work, so its files show. Its button tries again after a failure.
+ */
+function lookToBring(): void {
+  if (panel !== 'bring') bringLooked = undefined;
+  const id = content.querySelector<HTMLElement>('[data-lab-bring-look]')
+    ?.dataset.labBringLook;
+  if (!id || bringLooked === id) return;
+  bringLooked = id;
+  const button = content.querySelector<HTMLElement>(
+    `[data-action="lab-bring-look"][data-lab-direction="${CSS.escape(id)}"]`,
+  );
+  if (button) void act(button);
+}
+
 /** Load the diff of one file of a lab diff into its pane. A later click wins over an earlier answer. */
 async function loadLabDiff(button: HTMLElement): Promise<void> {
   const direction = button.dataset.labDirection ?? '';
   const file = button.dataset.labDiff ?? '';
   const proof = button.dataset.diffProof ?? '';
+  const bring = button.dataset.bringCommit ?? '';
   const load = ++labDiffLoads;
   try {
     const response = await fetch(
-      `/api/lab-diff?${new URLSearchParams({ direction, file, ...(proof ? { proof } : {}) }).toString()}`,
+      `/api/lab-diff?${new URLSearchParams({ direction, file, ...(proof ? { proof } : {}), ...(bring ? { bring } : {}) }).toString()}`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
@@ -944,6 +973,7 @@ async function loadLabDiff(button: HTMLElement): Promise<void> {
     shownLabDiff = {
       direction,
       proof,
+      bring,
       to: typeof reply.to === 'string' ? reply.to : '',
       file,
       text: reply.text,
@@ -1295,6 +1325,21 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
       };
     case 'lab-call-undo':
       return { action, call: button.dataset.call };
+    case 'lab-bring-look':
+      return { action, direction: button.dataset.labDirection };
+    case 'lab-bring':
+      return {
+        action,
+        direction: button.dataset.labDirection,
+        commit: button.dataset.commit,
+        files: [
+          ...content.querySelectorAll<HTMLInputElement>(
+            'input[data-bring-file]:checked',
+          ),
+        ].map((box) => box.dataset.bringFile),
+      };
+    case 'lab-signoff':
+      return { action, note: field('lab-signoff-note') };
     default:
       return { action };
   }
@@ -1717,10 +1762,14 @@ document.addEventListener('click', (event) => {
     if (target.dataset.run) remember('run', (selectedRun = target.dataset.run));
     if (target.dataset.agent)
       remember('agent', (selectedAgent = target.dataset.agent));
-    if (target.dataset.panel === 'diff' && target.dataset.labDirection) {
+    if (
+      (target.dataset.panel === 'diff' || target.dataset.panel === 'bring') &&
+      target.dataset.labDirection
+    ) {
       remember('direction', (selectedDirection = target.dataset.labDirection));
       // A post's proof opens the diff that the post cites; a row opens the direction's.
-      remember('proof', (selectedProof = target.dataset.proof));
+      if (target.dataset.panel === 'diff')
+        remember('proof', (selectedProof = target.dataset.proof));
     }
     if (target.dataset.openPane) choosePane(target.dataset.openPane);
     // A row's controls stay open, so the row keeps its place.
