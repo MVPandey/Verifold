@@ -855,9 +855,9 @@ await test('the person cannot open more directions than the limit, or post as an
   );
 });
 
-await test('the desk offers the lab, shows posts escaped, and takes lab actions only with its token', async (t) => {
-  const lab = await fixture(t);
-  const assets = join(lab.base, 'assets');
+/** Fixture assets for a desk server. Returns their folder. */
+async function deskAssets(base: string): Promise<string> {
+  const assets = join(base, 'assets');
   await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
   await mkdir(join(assets, 'ui'));
   for (const name of [
@@ -882,6 +882,12 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  return assets;
+}
+
+await test('the desk offers the lab, shows posts escaped, and takes lab actions only with its token', async (t) => {
+  const lab = await fixture(t);
+  const assets = await deskAssets(lab.base);
   const tasks = new TaskManager(lab.root, {
     ownerId: 'owner-1',
     sessions: lab.sessions,
@@ -2944,6 +2950,55 @@ await test('an agent runs an experiment, its end wakes the agent, and a claim ci
     /METRIC acc=0\.7/,
   );
   assert.equal(await lab.lab.runLog('r-7'), null);
+  // The desk serves a run's log with its token only, and refuses to cancel a run that ended.
+  const stop = new AbortController();
+  const desk = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${await deskAssets(lab.base)}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const log = (query: string, authorized = true): Promise<Response> =>
+    fetch(`${url.origin}/api/run-log?${query}`, {
+      headers: authorized ? headers : {},
+    });
+  assert.equal((await log('run=r-1', false)).status, 401);
+  assert.equal((await log('run=r-1&x=1')).status, 400);
+  assert.equal((await log('run=../r-1')).status, 400);
+  assert.equal((await log('run=r-7')).status, 404);
+  const served = (await (await log('run=r-1')).json()) as {
+    text: string;
+    partial: boolean;
+  };
+  assert.match(served.text, /METRIC acc=0\.7/);
+  assert.equal(served.partial, false);
+  const cancel = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'lab-run-cancel',
+      run: 'r-1',
+      key: 'c3'.repeat(16),
+    }),
+  });
+  assert.equal(cancel.status, 409);
+  assert.match(
+    ((await cancel.json()) as { error: string }).error,
+    /r-1 already ended: exit 0/,
+  );
 });
 
 await test('runs stop when the agent or the person cancels them, or the direction stops, and a restart tells the agent of a run that ended meanwhile', async (t) => {
