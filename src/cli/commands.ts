@@ -194,11 +194,17 @@ another folder (default: ~/.verifold/agency). --setup-only sets up without resea
 and offers a research memory that other projects can reuse. Without a terminal,
 research needs --host, --topic, and --autonomy autonomous.
 
-Research searches the web and proposes directions. After you choose one, the
-coordinator plans tasks, and task agents run the experiments on this computer, or
-on RunPod GPU pods within the limits that you set. Keeping PDFs is optional and
-comes after you choose a direction. Verifold keeps its records in .verifold/, and
-Claude Code or Codex keeps its own permissions and sessions.
+After setup, a bare verifold starts a lab on your question. Several agents each
+own a direction and post what they find, with proof, on one board in the desk.
+They check each other's claims, and they ask you only about money, scope,
+access, or more time. Runs go on this computer, or on RunPod GPU pods within the
+limits that you set.
+
+verifold init and verifold research run the research flow instead: research
+searches the web and proposes directions, and after you choose one, the
+coordinator plans tasks, and task agents run the experiments. Keeping PDFs is
+optional and comes after you choose a direction. Verifold keeps its records in
+.verifold/, and Claude Code or Codex keeps its own permissions and sessions.
 With a terminal, the team works in a background process, so closing the terminal
 or Ctrl+C does not stop it. Type /help in the terminal for its commands, and run
 verifold stop to stop the team. Session records are in .verifold/sessions/.
