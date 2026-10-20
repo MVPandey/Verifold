@@ -105,7 +105,9 @@ const args = process.argv.slice(2);
 const name = path.basename(process.cwd());
 const log = path.join(base, 'logs', name);
 fs.mkdirSync(log, { recursive: true });
-fs.writeFileSync(path.join(log, 'args.json'), JSON.stringify(args));
+// A test reads the arguments while a later launch writes them: a rename gives it the old file or the new one, never a part.
+fs.writeFileSync(path.join(log, 'args.json.tmp'), JSON.stringify(args));
+fs.renameSync(path.join(log, 'args.json.tmp'), path.join(log, 'args.json'));
 fs.writeFileSync(path.join(log, 'env.json'), JSON.stringify(process.env));
 fs.appendFileSync(path.join(log, 'launches.jsonl'), JSON.stringify(args.includes('--resume') ? 'resume' : 'start') + '\\n');
 if (args.includes('--resume') && fs.existsSync(path.join(base, 'resume-fails'))) process.exit(1);
@@ -208,7 +210,8 @@ const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
 const name = path.basename(process.cwd());
 const log = path.join(base, 'logs', name);
 fs.mkdirSync(log, { recursive: true });
-fs.writeFileSync(path.join(log, 'args.json'), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(log, 'args.json.tmp'), JSON.stringify(process.argv.slice(2)));
+fs.renameSync(path.join(log, 'args.json.tmp'), path.join(log, 'args.json'));
 fs.writeFileSync(path.join(log, 'env.json'), JSON.stringify(process.env));
 const usedFile = path.join(log, 'used.json');
 let calls = [];
@@ -5704,11 +5707,13 @@ await test("an access answer gives the agent's shell its domains while it stands
   };
   const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
   await lab.sessions.park(session);
-  await lab.lab.post({ text: 'Go on.', direction: 'd-1' });
+  // The lab can start the agent for its earlier events before this post: the post then waits behind the held start in the lab's queue.
+  const posted = lab.lab.post({ text: 'Go on.', direction: 'd-1' });
   await starting;
   // The start runs in the lab's queue, so the undo waits for it.
   const undone = lab.lab.undoCall(a);
   release();
+  await posted;
   await undone;
   // The start had pypi.org, so its process ends, and the next start has no domain.
   await until(() => networks.length === 2);
@@ -6905,6 +6910,63 @@ await test(
   },
 );
 
+await test('a session that a park ends counts as busy until its record is saved, so the lab resumes its conversation', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    { when: 'Zebrafish', calls: [] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const session = (): string =>
+    lab.lab.view()?.directions[0]?.agent.session ?? '';
+  await until(() => Boolean(session() && lab.sessions.idle(session())));
+  const first = session();
+  // The park's record waits at a gate, so the saved record is still the one before the park.
+  const slot = (
+    lab.sessions as unknown as {
+      slots: {
+        view(): SessionView | null;
+        writing: Promise<void> | null;
+        save(): void;
+      }[];
+    }
+  ).slots.find((entry) => entry.view()?.record.id === first);
+  assert.ok(slot);
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  slot.writing = gate.then(() => {
+    slot.writing = null;
+    slot.save();
+  });
+  t.after(release);
+  const parked = lab.sessions.park(first);
+  await until(() => lab.sessions.view(first)?.live === false);
+  assert.equal(lab.sessions.view(first)?.starting, true);
+  // A post waits for the agent, so a scheduler that saw no process would start a new conversation.
+  await lab.lab.post({ text: '@claude-1 Zebrafish.' });
+  const lab_ = lab.lab as unknown as { kick(): void };
+  for (let tries = 0; tries < 5; tries++) {
+    lab_.kick();
+    await delay(80);
+  }
+  assert.equal(session(), first);
+  assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), ['start']);
+  release();
+  await parked;
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('Zebrafish'),
+    ),
+  );
+  assert.equal(session(), first);
+  assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), [
+    'start',
+    'resume',
+  ]);
+});
+
 await test(
   'a Claude Code agent whose process starts again after its terminal keeps one session and one process',
   { skip: terminals },
@@ -7217,6 +7279,46 @@ await test('search finds posts, runs, and calls in any case, needs each word, ma
   assert.match(
     old,
     /<details id="hit-p-1"><summary>Show the whole post<\/summary><p class="pre">needle [\s\S]*end of the old post<\/p><\/details>/,
+  );
+  // Only the newest 50 hits render, and whole texts of old posts share a byte budget.
+  const aged = (index: number): LabView['posts'][number] =>
+    screenPost(
+      `p-${index + 1}`,
+      'a-1',
+      'evidence',
+      index < 200 ? `needle ${'<'.repeat(3990)}` : `Other ${index}`,
+      new Date(Date.UTC(2026, 9, 20, 8, 0, 0, index)).toISOString(),
+    );
+  const heavy: LabView = {
+    ...seeded,
+    ledger: [],
+    posts: Array.from({ length: 400 }, (_, index) => aged(index)),
+  };
+  const budgeted = searchPanel(heavy, 'needle', clock).body;
+  assert.equal(budgeted.match(/<li class="hit">/g)?.length, 50);
+  assert.ok(Buffer.byteLength(budgeted) < 400_000);
+  const whole = budgeted.match(/<details id="hit-/g)?.length ?? 0;
+  assert.ok(whole > 0 && whole < 50, String(whole));
+  assert.match(
+    budgeted,
+    /The whole post is on the board, in \.verifold\/board\/p-\d+\.json\./,
+  );
+  assert.match(budgeted, /The newest 50 of 200 hits\./);
+  // A question that no research step took stays in the Ask stage.
+  await changeWorkspace(lab.root, (current) => ({
+    ...current!,
+    research: {
+      topic: 'Do months lie on a circle?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+  }));
+  assert.equal(
+    renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+      session: null,
+      controllable: true,
+    }).stage,
+    'Ask: asked',
   );
   // A search has at most 100 printable characters.
   assert.equal(

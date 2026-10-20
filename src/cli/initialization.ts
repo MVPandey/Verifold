@@ -465,6 +465,7 @@ export async function initializeProject(
     topic,
     context,
     signal,
+    options.lab === true && research !== null,
   );
   return { root, workspace, research };
 }

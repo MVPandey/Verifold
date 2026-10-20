@@ -405,8 +405,9 @@ for (const background of [false, true])
       await done.catch(() => {});
     }
     assert.equal(existsSync(join(project, '.verifold', 'owner.json')), false);
-    assert.match(
-      await readFile(join(project, '.verifold.md'), 'utf8'),
-      /Edited by me/,
-    );
+    const guide = await readFile(join(project, '.verifold.md'), 'utf8');
+    assert.match(guide, /Edited by me/);
+    // The project's guide describes the lab that follows setup.
+    assert.match(guide, /## Continue in the lab/);
+    assert.doesNotMatch(guide, /research --approve/);
   });
