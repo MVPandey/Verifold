@@ -185,8 +185,14 @@ export interface SessionManagerOptions {
     /** The last agent text of the turn. A model claim. */
     reply?: string,
   ) => void;
-  /** A turn ended, a resumed session became ready, or the harness process exited. */
-  readonly onTurnEnd?: (record: SessionRecord) => void;
+  /**
+   * A turn ended, a resumed session became ready, or the harness process
+   * exited. `outcome` says how a turn ended, as the harness reported it.
+   */
+  readonly onTurnEnd?: (
+    record: SessionRecord,
+    outcome?: 'completed' | 'interrupted' | 'failed',
+  ) => void;
   /** The harness reported its plan's usage window. The window belongs to the account, not to this session. */
   readonly onLimit?: (host: HarnessName, signal: LimitSignal) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
@@ -1837,7 +1843,7 @@ export class SessionManager {
             undefined,
             lastReply(this.current ?? record),
           );
-        if (this.current) this.options.onTurnEnd?.(this.current);
+        if (this.current) this.options.onTurnEnd?.(this.current, event.status);
         break;
       case 'notice':
         this.event('notice', event.text);

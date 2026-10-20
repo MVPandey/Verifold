@@ -22,9 +22,13 @@ import {
   integrate,
   leftOut,
   overlaps,
+  parseWorkspace,
   projectPath,
+  readCurrent,
+  readFileAt,
   release,
   scratch,
+  snapshot,
 } from '../src/cli/workspaces.ts';
 
 function run(cwd: string, ...args: string[]): string {
@@ -431,5 +435,80 @@ await test('a rule from outside the writable paths keeps ignored output, up to t
   await assert.rejects(
     commitVersion(root, workspace, ['exp'], 'Version 2'),
     /more than 5000 files, so Verifold saved no version/,
+  );
+});
+
+await test('a lab folder reads through Git: a link to a file outside, or a path through a linked folder, never reads that file', async (t) => {
+  const root = await folder(t);
+  const outside = await folder(t);
+  await write(outside, 'secret.txt', 'SECRET\n');
+  await write(root, 'notes.md', 'notes\n');
+  const workspace = await allocate(root, {
+    name: 'd-1-alpha',
+    writable: ['.'],
+    inputs: [],
+    light: true,
+  });
+  const target = join(root, workspace.path);
+  // An ignored file reads as it is now.
+  await write(target, '.gitignore', 'out/\n');
+  await write(target, 'out/table.csv', 'x,y\n');
+  assert.equal(
+    (await readCurrent(root, workspace, 'out/table.csv'))?.toString('utf8'),
+    'x,y\n',
+  );
+  await symlink(join(outside, 'secret.txt'), join(target, 'link.txt'));
+  await symlink(outside, join(target, 'linked'));
+  assert.equal(await readCurrent(root, workspace, 'link.txt'), null);
+  assert.equal(await readCurrent(root, workspace, 'linked/secret.txt'), null);
+  // A commit keeps a link as a link, and a read at the commit does not follow it.
+  const commit = await snapshot(root, workspace, 'Snapshot', ['link.txt']);
+  assert.equal(await readFileAt(root, workspace, commit, 'link.txt'), null);
+  assert.equal(
+    await readFileAt(root, workspace, commit, 'linked/secret.txt'),
+    null,
+  );
+  assert.equal(
+    (await readFileAt(root, workspace, commit, 'notes.md'))?.toString('utf8'),
+    'notes\n',
+  );
+});
+
+await test('a light lab folder copies up to the file limit and leaves the rest in the project', async (t) => {
+  const root = await folder(t);
+  await Promise.all(
+    Array.from({ length: 5005 }, (_, index) =>
+      write(root, `data/${String(index).padStart(5, '0')}.csv`, 'x'),
+    ),
+  );
+  const workspace = await allocate(root, {
+    name: 'd-1-alpha',
+    writable: ['.'],
+    inputs: [],
+    light: true,
+  });
+  const target = join(root, workspace.path);
+  assert.ok(existsSync(join(target, 'data/00000.csv')));
+  assert.equal(existsSync(join(target, 'data/05004.csv')), false);
+  // A task folder still refuses so many files.
+  await assert.rejects(
+    allocate(root, { name: 'task-1-r1-a1', writable: ['.'], inputs: [] }),
+    /more than 5000 files/,
+  );
+});
+
+await test('a workspace record takes a SHA-1 or a SHA-256 commit', () => {
+  const record = (start: string): unknown => ({
+    kind: 'git',
+    path: '.verifold/workspaces/d-1-alpha',
+    branch: 'verifold/d-1-alpha',
+    start,
+  });
+  assert.ok(parseWorkspace(record('a'.repeat(40))));
+  assert.ok(parseWorkspace(record('b'.repeat(64))));
+  assert.equal(parseWorkspace(record('c'.repeat(50))), undefined);
+  assert.equal(
+    parseWorkspace({ ...(record('a'.repeat(40)) as object), path: '../x' }),
+    undefined,
   );
 });

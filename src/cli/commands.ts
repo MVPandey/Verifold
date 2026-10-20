@@ -595,8 +595,8 @@ async function serveDesk(
           owned.lab?.limited(host, signal);
         },
         // Lab agents' turns go to the lab. Task turns come through onTaskTurn.
-        onTurnEnd: (record) => owned.lab?.turnEnded(record),
-        // The person's session that finds every slot taken gets the slot of a lab agent that had its turn.
+        onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
+        // The person's own session that finds every slot taken gets the slot of a lab agent that had its turn. Tasks never do: a lab run has no tasks.
         makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
         onTaskTurn: (task, turn, detail, reply) =>
           void owned.tasks
