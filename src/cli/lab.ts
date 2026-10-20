@@ -284,6 +284,8 @@ export interface AgentRecord {
   readonly idleStreak: number;
   /** Turns in a row without a post of the agent. */
   readonly quietTurns: number;
+  /** The time that those turns ran, in milliseconds. Waits and pauses do not count. */
+  readonly quietWork: number;
   /** The agent got asked to post in this quiet stretch. Its next post ends the stretch. */
   readonly nudged: boolean;
   /** The fingerprint of the direction's folder after the last turn, ignored files too. */
@@ -443,6 +445,8 @@ interface AgentRuntime {
   posted: boolean;
   /** The agent posted to the board, or gave a verdict, in its current turn. */
   spoke: boolean;
+  /** When the current turn started. */
+  turnAt: number;
   /** What the current turn read. It is saved when the turn ends cleanly. */
   pending: ReadState | null;
   /** The harness's usage window ran out in the current turn, so it did no work. */
@@ -474,6 +478,7 @@ function runtime(): AgentRuntime {
     turn: 0,
     posted: false,
     spoke: false,
+    turnAt: 0,
     pending: null,
     usedUp: false,
     readBroken: false,
@@ -765,15 +770,18 @@ function verdictWord(direction: Direction): string {
     : verdictWords[direction.verdict].toLowerCase();
 }
 
+/** A direction's state in words: open, closed by its agent, or stopped by the person. */
+function stateWord(direction: Direction): string {
+  return direction.state === 'open'
+    ? 'open'
+    : direction.state === 'closed'
+      ? 'closed by its agent'
+      : 'stopped by the person';
+}
+
 /** A direction's state and verdict for a prompt or a digest, such as "open, leading: "61.2 vs 57.1" (p-14, r-6)". */
 function verdictLine(direction: Direction): string {
-  const state =
-    direction.state === 'open'
-      ? 'open'
-      : direction.state === 'closed'
-        ? 'closed'
-        : 'stopped by the person';
-  return `${state}, ${verdictWord(direction)}${direction.evidence ? `: ${evidenceText(direction.evidence)}` : ''}`;
+  return `${stateWord(direction)}, ${verdictWord(direction)}${direction.evidence ? `: ${evidenceText(direction.evidence)}` : ''}`;
 }
 
 /** What a direction builds on, from an agent's tool call. */
@@ -918,6 +926,9 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
     quietTurns: Number.isSafeInteger(value.quietTurns)
       ? (value.quietTurns as number)
       : 0,
+    quietWork: Number.isSafeInteger(value.quietWork)
+      ? (value.quietWork as number)
+      : 0,
     nudged: value.nudged === true,
     folder:
       typeof value.folder === 'string' && /^[0-9a-f]{64}$/.test(value.folder)
@@ -1043,7 +1054,7 @@ export class Lab {
   private parking: Promise<void> | null = null;
   /** A plan opens its directions now. A second plan waits for it. */
   private planning = false;
-  /** The directions that agents open now, by call. A repeated call waits for the first one. */
+  /** The directions that agents opened in the last minute, by call. A repeated call gets the first one's answer. */
   private readonly opening = new Map<string, Promise<string>>();
   /** The lab pauses at the end of its time budget now. */
   private reaching = false;
@@ -1226,25 +1237,26 @@ export class Lab {
     };
   }
 
-  /** The directions for the project memory, or null without a lab. */
+  /** The directions for the project memory, open ones first, or null without a lab. */
   progress(): LabProgress | null {
     const state = this.state;
     if (!state || this.suspended) return null;
-    return {
-      question: state.question,
-      directions: state.directions.map((direction) => {
+    const order = { open: 0, closed: 1, stopped: 2 };
+    return [...state.directions]
+      .sort((a, b) => order[a.state] - order[b.state])
+      .map((direction) => {
         const agent = this.agents.get(direction.agent);
         return {
           id: direction.id,
           title: direction.title,
-          state: direction.state,
+          open: direction.state === 'open',
+          state: stateWord(direction),
           agent: agent ? `${agent.handle} (${hostName(agent.host)})` : null,
           bar: direction.bar ? barSummary(direction) : null,
           verdict: verdictWord(direction),
           evidence: direction.evidence,
         };
-      }),
-    };
+      });
   }
 
   /** The handle of an author on the board. */
@@ -1527,6 +1539,7 @@ export class Lab {
       events: [],
       idleStreak: 0,
       quietTurns: 0,
+      quietWork: 0,
       nudged: false,
       folder,
       restarts: [],
@@ -1584,7 +1597,7 @@ export class Lab {
         kind: 'status',
         direction: id,
         text: clip(
-          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).${options.started ? ` Why: ${options.started.why}` : ''}`,
+          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).${options.started ? ` Why: ${JSON.stringify(options.started.why)}` : ''}`,
           boardLimits.text,
         ),
         mentions: [],
@@ -1655,7 +1668,13 @@ export class Lab {
           : entry,
       ),
     };
-    await this.stateFile.save();
+    try {
+      await this.stateFile.save();
+    } catch (error) {
+      // The direction stays open, with its runs and its agent.
+      this.state = state;
+      throw error;
+    }
     // A run that ends now needs no cancel. One run never stops the end.
     for (const run of this.ledger.list())
       if (run.direction === direction.id && runActive(run))
@@ -1785,6 +1804,11 @@ export class Lab {
         if (!session) continue;
         // The turn that the park stops, known before the park: a resume can
         // start a new turn meanwhile, and that one must keep its state.
+        // An agent that closed its direction in this turn ends instead.
+        if (this.agents.get(id)?.stopReason === 'closed') {
+          this.endClosed(session);
+          continue;
+        }
         const run = this.rt(id);
         const { turn, launch } = run;
         await this.options.sessions.park(session);
@@ -1984,9 +2008,10 @@ export class Lab {
     if (!agent) return;
     const run = this.rt(agent.id);
     if (record.status === 'idle' && agent.stopReason === 'closed') {
-      // The agent closed its direction in this turn: its session ends now.
+      // The agent closed its direction in this turn: its session ends now, and the branch keeps the turn's work.
       this.forget(agent.id);
       this.endClosed(record.id);
+      this.commitClosed(agent);
       return;
     }
     const loop = this.loop(agent.id);
@@ -1996,7 +2021,7 @@ export class Lab {
         loop.turnEnded();
         return;
       }
-      const { usedUp, readBroken, pending, posted, spoke, turn } = run;
+      const { usedUp, readBroken, pending, posted, spoke, turn, turnAt } = run;
       run.turning = false;
       run.usedUp = false;
       run.readBroken = false;
@@ -2020,7 +2045,12 @@ export class Lab {
         ]);
       if (run.launch) run.launch.turns += 1;
       run.settling = true;
-      const after = this.afterTurn(agent.id, { posted, spoke }, turn, !usedUp)
+      const after = this.afterTurn(
+        agent.id,
+        { posted, spoke, worked: Date.now() - turnAt },
+        turn,
+        !usedUp,
+      )
         .catch(() => {})
         .finally(() => {
           this.after.delete(after);
@@ -2133,6 +2163,7 @@ export class Lab {
     run.turn += 1;
     run.posted = false;
     run.spoke = false;
+    run.turnAt = Date.now();
     run.usedUp = false;
     run.readBroken = false;
     run.pending = read;
@@ -2299,11 +2330,12 @@ export class Lab {
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         send: (events, left) => {
           const agent = this.agent(id);
+          const ask = this.quiet(id);
           // The posts get the room that the rest of the message leaves, so a
           // post that is not shown stays unread.
           const room =
             labLimits.digestText -
-            this.digestText(agent, events, left, []).length;
+            this.digestText(agent, events, left, [], ask).length;
           const digest = this.board.digest(
             { id, direction: agent.direction },
             this.readState(agent),
@@ -2316,9 +2348,13 @@ export class Lab {
           const session = agent.session ?? fail('The agent has no session.');
           this.options.sessions.continueTask(
             session,
-            this.digestText(agent, events, left, digest.lines),
+            this.digestText(agent, events, left, digest.lines, ask),
           );
           this.begin(id, digest.read);
+          if (ask)
+            void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(
+              () => {},
+            );
         },
       },
       {
@@ -2337,6 +2373,7 @@ export class Lab {
     events: readonly QueuedEvent<LabEvent>[],
     left: number,
     posts: readonly string[],
+    ask: string | null,
   ): string {
     const direction = this.direction(agent.direction);
     const notes = events
@@ -2355,6 +2392,7 @@ export class Lab {
         ? "Your harness's usage window ran out in your last turn, so that turn did no work."
         : '',
       `Your direction: ${direction.id} ${JSON.stringify(direction.title)}, ${verdictLine(direction)}. Holds up if: ${barText(direction)}.`,
+      ask ?? '',
       'Continue your direction. Post what you find with proof. End your turn with one line on what you do next.',
     ]
       .filter(Boolean)
@@ -2423,7 +2461,7 @@ export class Lab {
     const role = planning
       ? `\n\n${await loadPrompt('lab-opener')}`
       : opener
-        ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and a bar changes before a result, never after it.'
+        ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.'
         : '';
     // Without a sandbox for runs, agents run experiments in their own harness.
     const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.podsOn() ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
@@ -2990,10 +3028,14 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       const call = `${id}:${key}`;
       const known = this.opening.get(call);
       if (known) return known;
-      const opened = this.openFor(id, generation, args, why).finally(() =>
-        this.opening.delete(call),
-      );
+      const opened = this.openFor(id, generation, args, why);
       this.opening.set(call, opened);
+      // The entry stays until the call's answer is recorded, and a minute more.
+      void opened
+        .catch(() => {})
+        .finally(() =>
+          setTimeout(() => this.opening.delete(call), 60_000).unref(),
+        );
       return opened;
     }
     if (args.action !== 'update' && args.action !== 'close')
@@ -3003,16 +3045,15 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       const direction = this.direction(agent.direction);
       if (args.action === 'update')
         return { text: await this.verdictFor(agent, direction, args, why) };
-      if (direction.verdict !== 'ruled-out' && direction.verdict !== 'holds-up')
+      if (direction.verdict !== 'ruled-out')
         fail(
-          'Close your direction only after its verdict is ruled-out or holds-up. Give it that verdict first.',
+          'Close your direction only after its verdict is ruled-out. Give it that verdict first.',
         );
       await this.endDirection(
         direction,
         'closed',
-        `${agent.handle} closed ${JSON.stringify(direction.title)}: ${verdictWords[direction.verdict].toLowerCase()}. Why: ${why}`,
+        `${agent.handle} closed ${JSON.stringify(direction.title)}: ${verdictWord(direction)}. Why: ${JSON.stringify(why)}`,
       );
-      this.rt(id).spoke = true;
       // A session that takes no turn now ends at once. Otherwise it ends after this turn.
       if (agent.session && !this.rt(id).turning) this.endClosed(agent.session);
       return {
@@ -3036,14 +3077,23 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     args: Record<string, unknown>,
     why: string,
   ): Promise<string> {
-    const draft = await this.serial(async () => {
+    const team = await this.team();
+    const draft = await this.serial(() => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       this.postLimit(agent);
+      if (
+        this.current().directions.filter(
+          (direction) => direction.state === 'open',
+        ).length >= labLimits.directions
+      )
+        fail(
+          `${labLimits.directions} directions are open, the most that a lab allows. Ask the person on the board to stop one.`,
+        );
       const host =
         args.harness === 'claude' || args.harness === 'codex'
           ? args.harness
           : fail('Give the harness of its agent: claude or codex.');
-      if (!(await this.team()).includes(host))
+      if (!team.includes(host))
         fail(
           `${hostName(host)} is not in this project's team, so no agent of it starts.`,
         );
@@ -3064,13 +3114,18 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       };
     });
     const opened = await this.addDirection(draft, id, { started: { why } });
-    const direction = this.direction(opened);
-    const agent = this.agent(direction.agent);
-    this.rt(id).spoke = true;
-    return `Opened ${opened} for ${agent.handle} (${hostName(agent.host)}). ${
+    this.progressed(id, generation);
+    // The direction is open, also if Start over begins now: the answer must say so.
+    const agent = this.agents.get(
+      this.state?.directions.find((entry) => entry.id === opened)?.agent ?? '',
+    );
+    const who = agent
+      ? `${agent.handle} (${hostName(agent.host)})`
+      : 'its agent';
+    return `Opened ${opened} for ${who}. ${
       this.options.sessions.full
-        ? `Every agent slot is in use, so ${agent.handle} starts when one is free.`
-        : `${agent.handle} starts now.`
+        ? 'Every agent slot is in use, so it starts when one is free.'
+        : 'It starts now.'
     }`;
   }
 
@@ -3137,18 +3192,54 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       direction: direction.id,
       text: clip(
         evidence
-          ? `${agent.handle}: ${JSON.stringify(direction.title)} is ${word}. Evidence: ${evidenceText(evidence)}. Why: ${why}`
-          : `${agent.handle} took back the verdict of ${JSON.stringify(direction.title)}. Why: ${why}`,
+          ? `${agent.handle}: ${JSON.stringify(direction.title)} is ${word}. Evidence: ${evidenceText(evidence)}. Why: ${JSON.stringify(why)}`
+          : `${agent.handle} took back the verdict of ${JSON.stringify(direction.title)}. Why: ${JSON.stringify(why)}`,
         boardLimits.text,
       ),
       mentions: [],
       artifacts: [],
     }).catch(() => {});
-    this.rt(agent.id).spoke = true;
+    this.progressed(agent.id, agent.generation);
     this.options.onChange?.();
     return verdict === 'open'
       ? `${direction.id} has no verdict now.`
       : `${direction.id} is ${word} now.`;
+  }
+
+  /**
+   * A verdict, an open, or a close in the agent's current turn: it counts as
+   * progress, and it ends the quiet stretch.
+   */
+  private progressed(id: string, generation: string): void {
+    if (this.agents.get(id)?.generation !== generation) return;
+    const run = this.rt(id);
+    run.posted = true;
+    run.spoke = true;
+  }
+
+  /** Commit the work of the turn that closed a direction, so its branch has it. Close and Start over wait for it. */
+  private commitClosed(agent: AgentRecord): void {
+    const direction = this.state?.directions.find(
+      (entry) => entry.id === agent.direction,
+    );
+    if (!direction) return;
+    const work = this.inDirection(direction.id, async () => {
+      const made = await snapshot(
+        this.root,
+        direction.workspace,
+        `Verifold: the last turn of ${agent.handle}`,
+      );
+      const order = ++this.commits;
+      await this.serial(() =>
+        this.setHead(direction, { commit: made.commit, order }),
+      );
+    }).catch((error: unknown) =>
+      this.options.progress?.(
+        `Verifold could not commit ${direction.id} after it closed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      ),
+    );
+    this.after.add(work);
+    void work.finally(() => this.after.delete(work));
   }
 
   /** End the session of an agent that closed its direction. */
@@ -3301,7 +3392,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       );
       if (missing.length)
         fail(
-          `List every open direction with its id: ${missing.map((direction) => direction.id).join(', ')}. Only the person stops a direction.`,
+          `List every open direction with its id: ${missing.map((direction) => direction.id).join(', ')}. Only the person stops a direction, and an agent closes only its own.`,
         );
       const reading = text(
         args.reading,
@@ -3322,6 +3413,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         previous: state.plan?.post ?? null,
         host: agent.host,
         own: own.id,
+        first,
       };
     });
     const made = new Map<number, string>();
@@ -3347,7 +3439,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
                 buildsOn: entry.buildsOn,
               },
               id,
-              { plan: true },
+              // The first plan opens the lab. A later plan's new directions are agents that an agent starts.
+              draft.first
+                ? { plan: true }
+                : { plan: true, started: { why: 'A change of the plan.' } },
             ),
           );
         } catch (error) {
@@ -3540,7 +3635,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         const direction = state.directions.find((entry) => entry.id === id);
         return direction
           ? [
-              `- ${direction.id} ${JSON.stringify(direction.title)}${direction.state === 'stopped' ? ' (the person stopped it)' : direction.state === 'closed' ? ' (closed)' : ''}: holds up if ${barText(direction)}.${direction.buildsOn.length ? ` Builds on: ${direction.buildsOn.map((work) => `${JSON.stringify(work.text)} (${work.known ? 'known' : 'new'})`).join(', ')}.` : ''}`,
+              `- ${direction.id} ${JSON.stringify(direction.title)}${direction.state === 'open' ? '' : ` (${stateWord(direction)})`}: holds up if ${barText(direction)}.${direction.buildsOn.length ? ` Builds on: ${direction.buildsOn.map((work) => `${JSON.stringify(work.text)} (${work.known ? 'known' : 'new'})`).join(', ')}.` : ''}`,
             ]
           : [];
       }),
@@ -3885,7 +3980,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
    */
   private async afterTurn(
     id: string,
-    did: { readonly posted: boolean; readonly spoke: boolean },
+    did: {
+      readonly posted: boolean;
+      readonly spoke: boolean;
+      readonly worked: number;
+    },
     turn: number,
     count: boolean,
   ): Promise<void> {
@@ -3935,9 +4034,16 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     }
     const note = (base: string): string => [...notes, base].join(' ');
     if (!count) {
-      // The reset wakes the agent. The notes wait for that turn.
+      // The reset wakes the agent. The notes wait for that turn. A post in it still ends the quiet stretch.
       if (notes.length)
         this.loop(id).add([{ kind: 'continue', text: notes.join(' ') }]);
+      if (did.spoke)
+        await this.update(id, (entry) => ({
+          ...entry,
+          quietTurns: 0,
+          quietWork: 0,
+          nudged: false,
+        }));
       return;
     }
     await this.serial(async () => {
@@ -3956,14 +4062,13 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           : failed
             ? latest.idleStreak
             : latest.idleStreak + 1;
-      const quietTurns = did.spoke ? 0 : latest.quietTurns + 1;
       // A post ends the quiet stretch, so the next stretch can get its own ask.
-      const nudged = !did.spoke && latest.nudged;
       await this.update(id, (entry) => ({
         ...entry,
         idleStreak,
-        quietTurns,
-        nudged,
+        quietTurns: did.spoke ? 0 : entry.quietTurns + 1,
+        quietWork: did.spoke ? 0 : entry.quietWork + Math.max(0, did.worked),
+        nudged: !did.spoke && entry.nudged,
       }));
       // While a run of the agent runs, the run's end wakes it instead.
       const state = this.state;
@@ -3982,25 +4087,14 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       clearTimeout(run.next);
       run.next = setTimeout(() => {
         run.next = undefined;
-        // The ask comes with this turn. A digest that goes out first cancels the timer, and the ask waits for the next one.
-        const ask = this.quiet(id);
-        if (ask)
-          void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(
-            () => {},
-          );
         this.loop(id).add(
           [
             {
               kind: 'continue',
               text: note(
-                [
-                  backoff
-                    ? `Your last ${idleStreak} turns changed no file and posted nothing, so this turn came after ${Math.round(backoff / 60_000)} minutes.`
-                    : 'Your last turn ended.',
-                  ask ?? '',
-                ]
-                  .filter(Boolean)
-                  .join(' '),
+                backoff
+                  ? `Your last ${idleStreak} turns changed no file and posted nothing, so this turn came after ${Math.round(backoff / 60_000)} minutes.`
+                  : 'Your last turn ended.',
               ),
             },
           ],
@@ -4014,10 +4108,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   /**
    * The ask to post, for an agent that took `quietTurns` turns in a row
    * without a post, or null. It comes after `labLimits.quietTurns` turns, or
-   * after `quietMs` of work since the agent's last post and 2 turns at least,
-   * once in each quiet stretch. Never while the lab is paused or past its time
-   * budget, while the agent's run runs, nor for a harness whose usage window
-   * is used up: the agent hears it with a turn that it takes anyway.
+   * after `quietMs` of turns and 2 turns at least, once in each quiet
+   * stretch. Never while the lab is paused or past its time budget, while the
+   * agent's run runs, nor for a harness whose usage window is used up. It
+   * goes with the agent's next digest, so it costs no turn of its own.
    */
   private quiet(id: string): string | null {
     const agent = this.agents.get(id);
@@ -4032,20 +4126,15 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       this.options.quota?.parked(agent.host)
     )
       return null;
-    const { quietTurns } = agent;
-    const last =
-      this.board.list().findLast((post) => post.author === agent.id)?.at ??
-      agent.startedAt;
-    const quietFor = Date.now() - Date.parse(last);
-    if (
-      quietTurns < labLimits.quietTurns &&
-      !(quietTurns >= 2 && quietFor >= this.timing.quietMs)
-    )
+    const { quietTurns, quietWork } = agent;
+    const turns = quietTurns >= labLimits.quietTurns;
+    if (!turns && !(quietTurns >= 2 && quietWork >= this.timing.quietMs))
       return null;
-    const since =
-      quietTurns >= labLimits.quietTurns
-        ? `your last ${quietTurns} turns`
-        : `${Math.floor(quietFor / 3_600_000)} hours of work`;
+    const since = turns
+      ? quietTurns === 1
+        ? 'your last turn'
+        : `your last ${quietTurns} turns`
+      : `${Math.floor(quietWork / 3_600_000)} hours of work`;
     return `You posted nothing in ${since}. Post what you found so far, with proof, or post what blocks you. A dead end is a result too: post it as ruled-out, with proof.`;
   }
 

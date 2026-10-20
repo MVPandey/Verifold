@@ -117,25 +117,24 @@ function line(text: string, max = 300): string {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
-/** What the memory keeps of a lab: each direction with its verdict and its evidence. */
-export interface LabProgress {
-  readonly question: string;
-  readonly directions: readonly {
-    readonly id: string;
-    readonly title: string;
-    readonly state: 'open' | 'stopped' | 'closed';
-    /** Its agent's handle and harness, such as "claude-1 (Claude Code)". */
-    readonly agent: string | null;
-    readonly bar: string | null;
-    /** In words, such as "leading" or "no verdict yet". */
-    readonly verdict: string;
-    readonly evidence: {
-      readonly text: string;
-      readonly post: string;
-      readonly run: string | null;
-    } | null;
-  }[];
-}
+/** What the memory keeps of a lab: each direction with its verdict and its evidence, open ones first. */
+export type LabProgress = readonly {
+  readonly id: string;
+  readonly title: string;
+  readonly open: boolean;
+  /** In words, such as "open" or "stopped by the person". */
+  readonly state: string;
+  /** Its agent's handle and harness, such as "claude-1 (Claude Code)". */
+  readonly agent: string | null;
+  readonly bar: string | null;
+  /** In words, such as "leading" or "no verdict yet". */
+  readonly verdict: string;
+  readonly evidence: {
+    readonly text: string;
+    readonly post: string;
+    readonly run: string | null;
+  } | null;
+}[];
 
 interface State {
   readonly workspace: Workspace;
@@ -145,15 +144,13 @@ interface State {
   readonly lab: LabProgress | null;
 }
 
-/** The lab's directions, the open ones first, with their verdicts and evidence. */
+/** The lab's directions with their verdicts and evidence. */
 function labProgress(lab: LabProgress): string {
-  const order = { open: 0, closed: 1, stopped: 2 };
   return `## Lab directions\n\n${
-    [...lab.directions]
-      .sort((a, b) => order[a.state] - order[b.state])
+    lab
       .map(
         (direction) =>
-          `- ${direction.id} ${line(direction.title, 120)}${direction.agent ? `, ${direction.agent}` : ''}: ${direction.state === 'open' ? '' : direction.state === 'closed' ? 'closed, ' : 'stopped by the person, '}${direction.verdict}.${direction.evidence ? ` Evidence: ${line(direction.evidence.text, 120)} (${direction.evidence.post}${direction.evidence.run ? `, ${direction.evidence.run}` : ''}).` : ''}${direction.bar ? ` Holds up if: ${line(direction.bar, 300)}.` : ''}`,
+          `- ${direction.id} ${line(direction.title, 120)}${direction.agent ? `, ${direction.agent}` : ''}: ${direction.open ? '' : `${direction.state}, `}${direction.verdict}.${direction.evidence ? ` Evidence: ${line(direction.evidence.text, 120)} (${direction.evidence.post}${direction.evidence.run ? `, ${direction.evidence.run}` : ''}).` : ''}${direction.bar ? ` Holds up if: ${line(direction.bar, 300)}.` : ''}`,
       )
       .join('\n') || 'No direction yet.'
   }\n`;
@@ -314,7 +311,7 @@ function readme(state: State, notes: readonly string[]): string {
   return [
     `Question: ${workspace.research?.topic ?? 'not asked yet'}`,
     idea ? `Direction: ${idea.title}` : 'Direction: not chosen yet',
-    `This run: ${lab ? `a lab with ${lab.directions.length} ${lab.directions.length === 1 ? 'direction' : 'directions'}, ${lab.directions.filter((direction) => direction.state === 'open').length} open; progress.md lists them with their verdicts.` : `${tasks.length} tasks, ${done} done.`}${archived ? ` ${archived} earlier ${archived === 1 ? 'run is' : 'runs are'} archived; their progress, decisions, and findings are in the files below.` : ''}`,
+    `This run: ${lab ? `a lab with ${lab.length} ${lab.length === 1 ? 'direction' : 'directions'}, ${lab.filter((direction) => direction.open).length} open; progress.md lists them with their verdicts.` : `${tasks.length} tasks, ${done} done.`}${archived ? ` ${archived} earlier ${archived === 1 ? 'run is' : 'runs are'} archived; their progress, decisions, and findings are in the files below.` : ''}`,
     '',
     '- direction.md: the chosen direction and its checks.',
     '- progress.md: what is done, what runs, and what comes next.',
