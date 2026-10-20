@@ -30,6 +30,7 @@ import {
   integrate,
   leftOut,
   overlaps,
+  parseWorkspace as workspaceRecord,
   projectPath,
   readAt,
   release,
@@ -2268,19 +2269,7 @@ export function replaced(
 }
 
 function parseWorkspace(value: unknown): Workspace | null | undefined {
-  if (value === null) return null;
-  const entry = object(value);
-  return entry &&
-    (entry.kind === 'git' || entry.kind === 'folder') &&
-    text(entry.path) &&
-    /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(entry.path) &&
-    (entry.branch === null ||
-      (text(entry.branch) &&
-        /^verifold\/[a-z0-9][a-z0-9-]{0,80}$/.test(entry.branch))) &&
-    text(entry.start) &&
-    /^[0-9a-f]{40,64}$/.test(entry.start)
-    ? (entry as unknown as Workspace)
-    : undefined;
+  return value === null ? null : workspaceRecord(value);
 }
 
 /**

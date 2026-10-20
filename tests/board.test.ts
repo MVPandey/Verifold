@@ -302,17 +302,17 @@ await test('a post wakes the agents that it is for, and the rest wait for the di
   );
   assert.deepEqual(store.targets(agentAll, agents), []);
 
-  // Posts come oldest first, and the ones that wake the agent say so. The agent's own posts are left out.
+  // The posts that wake the agent come first and say so, then the rest; each group oldest first. The agent's own posts are left out.
   const { lines } = store.digest(a1, { readThrough: 0, seen: [] });
   assert.deepEqual(
     lines.map((line) => line.slice(2, line.indexOf(']') + 1)),
     [
       'p-2 [question, for you]',
-      'p-3 [claim]',
       'p-4 [objection, for you]',
-      'p-5 [question]',
       'p-6 [question, for you]',
       'p-7 [question, for you]',
+      'p-3 [claim]',
+      'p-5 [question]',
     ],
   );
   assert.deepEqual(
@@ -324,7 +324,7 @@ await test('a post wakes the agents that it is for, and the rest wait for the di
     store
       .digest(a1, { readThrough: 3, seen: ['p-4', 'p-6'] })
       .lines.map((line) => line.slice(2, line.indexOf(' ', 2))),
-    ['p-5', 'p-7'],
+    ['p-7', 'p-5'],
   );
 });
 
@@ -374,7 +374,7 @@ await test('a digest quotes each post on one line and stops at 30 lines', async 
   assert.deepEqual(store.digest(agent, second.read).lines, []);
 });
 
-await test('a digest that overflows keeps the oldest unread first, so no post waits forever', async (t) => {
+await test('a digest that overflows shows the post for the agent first, and the rest come oldest first in the next reads', async (t) => {
   const { board: store } = await board(t);
   const agent = { id: 'a-1', direction: 'd-1' };
   for (let index = 0; index < 35; index += 1)
@@ -387,7 +387,7 @@ await test('a digest that overflows keeps the oldest unread first, so no post wa
         artifacts: [],
       }),
     );
-  // The newest post mentions the agent. It waits its turn and says that it is for the agent.
+  // The newest post mentions the agent: it comes first, so the agent sees why it woke.
   const mention = await store.add(
     post({
       author: 'a-2',
@@ -398,16 +398,18 @@ await test('a digest that overflows keeps the oldest unread first, so no post wa
     }),
   );
   const first = store.digest(agent, { readThrough: 0, seen: [] });
-  assert.match(first.lines[0] ?? '', /^- p-1 /);
-  assert.equal(first.read.readThrough, 29);
+  assert.match(
+    first.lines[0] ?? '',
+    new RegExp(`^- ${mention.id} \\[question, for you\\]`),
+  );
+  assert.match(first.lines[1] ?? '', /^- p-1 /);
+  // The read mark stops before the first post that did not fit, and the mention shown after it is in seen.
+  assert.equal(first.read.readThrough, 28);
+  assert.deepEqual(first.read.seen, [mention.id]);
   const second = store.digest(agent, first.read);
   assert.deepEqual(
     second.lines.map((line) => line.slice(2, line.indexOf(' ', 2))),
-    Array.from({ length: 7 }, (_, index) => `p-${index + 30}`),
-  );
-  assert.match(
-    second.lines.at(-1) ?? '',
-    new RegExp(`^- ${mention.id} \\[question, for you\\]`),
+    Array.from({ length: 7 }, (_, index) => `p-${index + 29}`),
   );
   assert.deepEqual(store.digest(agent, second.read).lines, []);
 });
