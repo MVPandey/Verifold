@@ -407,11 +407,26 @@ The lab starts in one of two ways:
 - In a run that no team owns yet, Home offers **Start the lab**, with your question, while no research step runs.
 - `verifold --lab` does the usual setup, then starts a lab on the question instead of research.
 
+You give the lab a time budget in hours: 8 unless you choose another.
+
+**The plan of record**
+
+- The lab's first agent runs on the project's main harness. It reads the question and the project, and posts the plan of record as the first post on the board. Nothing waits for your approval: work that costs nothing starts with the plan.
+- The plan says how the agent reads the question. For each of its 2 to 4 directions, it gives:
+  - a bar: what makes the direction hold up, in plain words
+  - the repeat runs that the bar needs, such as seeds
+  - the spread that counts as noise
+  - what it builds on, marked known or new
+  - a harness from the project's team
+- The first agent keeps its own folder for its own direction. Verifold opens the other directions, each with its own agent and folder. Each new agent starts with the plan in its first prompt.
+- The desk shows the plan above the directions. Reply to the plan to change it: your reply wakes the agent that wrote it. When it changes the plan, it lists every open direction. The new plan post answers the old one and wakes the agents whose directions changed. Only the first agent changes the plan, and only you stop a direction.
+- When the time budget ends, the lab pauses. No turn starts after that. Needs you asks for more time, and more time resumes the lab.
+
 One run has one team: the coordinator's team (research, the coordinator, and its tasks) or a lab. A coordinator or a task makes the run the coordinator's team's, so the lab does not start: Start over first, then start the lab on the new run. The lab also waits while a research step runs: let the step end, or cancel it in Research. The lab never stops research by itself. While a lab exists, no research step, coordinator, or task starts, from the desk or from `verifold research` and `verifold select`. After Start over of a lab run, research does not start by itself, and Home offers the lab again.
 
 **Directions and agents**
 
-- Open a direction with a title and a harness (Claude Code or Codex). You can say what makes it hold up.
+- You can open a direction yourself too, with a title and a harness (Claude Code or Codex). You can say what makes it hold up.
 - Each direction gets its own agent and its own copy of the project: a Git worktree on the branch `verifold/d-N-<title>`. Its number is new to the project, so a direction never takes the folder or branch of an earlier run.
 - The copy has the project's committed files and its uncommitted changes, except new files above 1 MB, tool folders such as `node_modules`, and anything past 50 MB. The agent reads large data in the project folder.
 - The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
@@ -456,7 +471,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 
 - **Stop** on a row ends that direction's agent. Its folder and branch stay.
 - **What it did** on a row opens the agent's transcript.
-- **Pause the lab** pauses every agent until you resume it.
+- **Pause the lab** pauses every agent until you resume it. After the time budget ends, give the lab more time instead.
 - Home in a lab still shows what needs you. Its one message box posts to the board.
 - A long post shows its start, and the rest folds under **Show the whole post**.
 - A desk of `verifold session` only shows the lab. Run `verifold` in the project folder to work in it.

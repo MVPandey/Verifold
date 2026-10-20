@@ -1010,7 +1010,13 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
   const action = button.dataset.action ?? '';
   switch (action) {
     case 'lab-start':
-      return { action, question: field('lab-question') };
+      return {
+        action,
+        question: field('lab-question'),
+        hours: field('lab-hours'),
+      };
+    case 'lab-budget':
+      return { action, hours: button.dataset.hours };
     case 'lab-post':
       return {
         action,
