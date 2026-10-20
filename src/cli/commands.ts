@@ -648,6 +648,7 @@ async function serveDesk(
       const memory = new ProjectMemory(
         root,
         () => owned.tasks?.list() ?? Promise.resolve([]),
+        () => owned.lab?.progress() ?? null,
       );
       const remember = (): void => memory.schedule();
       const tasks = new TaskManager(root, {
@@ -726,6 +727,7 @@ async function serveDesk(
         // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
         runs: session === undefined,
         compute,
+        onChange: remember,
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;
