@@ -32,8 +32,10 @@ const stopButton = requiredElement(document, '#stop-team', HTMLElement);
 /** The open view and panel. Like the selections, they last for this tab. */
 let view = 'home';
 let panel = '';
-/** When the page last went to the background for 5 minutes or more. Home lists what changed after it. */
+/** When the page last went to the background for 5 minutes or more. Home lists what changed after it. A lab's owner keeps the time away itself. */
 let since: string | undefined;
+/** The last view was of a project with a lab. */
+let labShown = false;
 let hiddenAt: number | undefined;
 /** The words of the lab's search panel. They last for this tab. */
 let searchQuery: string | undefined;
@@ -213,7 +215,7 @@ function viewQuery(): string {
   if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
   if (panel === 'diff' && selectedProof) query.set('proof', selectedProof);
   if (panel === 'search' && searchQuery) query.set('q', searchQuery);
-  if (since) query.set('since', since);
+  if (since && !labShown) query.set('since', since);
   // The lab's owner counts each refresh that the person can see as a look, so a return after a while lists what changed.
   if (!document.hidden) query.set('look', '1');
   if (finished === 'hidden') query.set('finished', 'hidden');
@@ -642,6 +644,7 @@ async function refresh(): Promise<void> {
     const stage =
       'stage' in reply && typeof reply.stage === 'string' ? reply.stage : '';
     const needs = needsFrom(reply);
+    labShown = 'lab' in reply && reply.lab === true;
     projectTitle.textContent = title || 'Research desk';
     stageLabel.textContent = stage;
     stageLabel.hidden = !stage;
@@ -1863,6 +1866,12 @@ document.addEventListener('keydown', (event) => {
 // Escape closes the phone menu, then the panel. In a text field it does nothing, so a draft stays.
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || event.defaultPrevented) return;
+  // A search field clears itself on Escape. Here Escape keeps the words and closes the search.
+  const searching =
+    event.target instanceof HTMLElement &&
+    event.target.id === 'lab-search' &&
+    !event.isComposing;
+  if (searching) event.preventDefault();
   if (document.body.classList.contains('rail-open')) {
     closeRail();
     menuButton.focus();
@@ -1876,10 +1885,6 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   // In the search, Escape closes it. Its words stay for the next search.
-  const searching =
-    event.target instanceof HTMLElement &&
-    event.target.id === 'lab-search' &&
-    !event.isComposing;
   if (
     !panel ||
     document.body.classList.contains('t-locked') ||
@@ -1888,8 +1893,6 @@ document.addEventListener('keydown', (event) => {
       event.target.closest('input, textarea, select'))
   )
     return;
-  // A search field clears itself on Escape. Here Escape closes the panel instead.
-  if (searching) event.preventDefault();
   navigate({ panel: '' }, opener ?? '#view-title');
   opener = undefined;
 });
@@ -1967,12 +1970,22 @@ content.addEventListener('input', (event) => {
   }, 250);
 });
 const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+/**
+ * The K of ⌘K by the letter that the layout gives, so Colemak and Dvorak keep
+ * their own shortcuts. A layout without Latin letters falls back to the key's
+ * place. Autofill can send a keydown without a key.
+ */
+function isSearchKey(event: KeyboardEvent): boolean {
+  const key = typeof event.key === 'string' ? event.key : '';
+  return /^[a-z]$/i.test(key)
+    ? key.toLowerCase() === 'k'
+    : key.length === 1 && event.code === 'KeyK';
+}
 document.documentElement.classList.toggle('mac', mac);
 // ⌘K, or Ctrl+K off a Mac, opens the lab's search from anywhere in the desk. In the search it selects the words.
 document.addEventListener('keydown', (event) => {
   if (
-    // The key's place, so the shortcut works with any keyboard layout.
-    (event.code !== 'KeyK' && event.key.toLowerCase() !== 'k') ||
+    !isSearchKey(event) ||
     event.altKey ||
     event.shiftKey ||
     (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey) ||
@@ -2045,13 +2058,17 @@ content.addEventListener('keydown', (event) => {
     void act(send);
 });
 // A person who comes back after 5 minutes or more sees on Home what changed while they were away.
-// A lab's owner keeps the person's last look itself, so this counts only without a lab.
+// In a lab, the owner keeps the last look and the page's look=1 counts it, so the page sets no since.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
     return;
   }
-  if (hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
+  if (
+    !labShown &&
+    hiddenAt !== undefined &&
+    Date.now() - hiddenAt >= 5 * 60_000
+  ) {
     since = new Date(hiddenAt).toISOString();
     remember('since', since);
   }

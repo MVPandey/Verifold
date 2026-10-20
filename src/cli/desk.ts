@@ -441,7 +441,9 @@ interface LabDesk {
   /** The lab actions that run in the background, and the ones that failed there. */
   works: LabWork[];
   /** The person's last look at the lab, loaded once for each lab. */
-  look?: { readonly lab: string; readonly loaded: Promise<LabLook> };
+  look?:
+    | { readonly lab: string; readonly loaded: Promise<LabLook> }
+    | undefined;
   /** Saves of the look, one after another. */
   saving: Promise<void>;
 }
@@ -910,6 +912,8 @@ async function act(
   }
   if (body.action === 'start-over' || body.action === 'restore') {
     if (!tasks) return 400;
+    // A save of the last look ends before the lab moves, so no look lands in the next run.
+    await labDesk.saving;
     await changeRun(
       root,
       sessions,
@@ -923,6 +927,7 @@ async function act(
     // The lab actions of the earlier run, and their answers, do not belong to this one.
     labDesk.works = [];
     labDesk.requests.clear();
+    labDesk.look = undefined;
     return 200;
   }
   if (typeof body.action === 'string' && body.action.startsWith('lab-'))
@@ -1777,82 +1782,76 @@ export async function startDesk(
             ? await noteLook(root, labDesk, labView, gpu)
             : (await lookOf(root, labDesk, labView.state.startedAt)).away
           : null;
-      const body = JSON.stringify(
-        renderDesk(
-          snapshot,
-          selected,
-          report,
-          {
-            workers,
-            session: worker,
-            // The lab's depth reads only for the panel that is open.
-            ...(labView && frame.panel === 'agent'
-              ? {
-                  labAgent: await labSession(
-                    root,
-                    sessions,
-                    labView,
-                    frame.agent,
-                    labReads,
-                  ),
-                }
-              : {}),
-            ...(labDesk.lab &&
-            labView &&
-            frame.panel === 'diff' &&
-            frame.direction
-              ? {
-                  labDiff: await labDiff(
-                    labDesk.lab,
-                    labView,
-                    frame.direction,
-                    frame.proof,
-                    labReads,
-                  ),
-                }
-              : {}),
-            // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
-            full:
-              (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
-            ...(sessions ? { agents: sessions.limit } : {}),
-            terminals: await terminalSupport(),
-            controllable: sessions !== undefined,
-            paused: sessions?.paused() ?? [],
-            ...(research ? { research: research.view() } : {}),
-            ...(coordinator ? { coordinator: coordinator.view() } : {}),
-            ...(compute ? { compute: compute.view() } : {}),
-            ...(labDesk.lab
-              ? {
-                  lab: labView,
-                  labAway,
-                  labWorks: labDesk.works,
-                  // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
-                  labCanStart:
-                    labDesk.lab.runs &&
-                    !labDesk.lab.exists &&
-                    !coordinator?.view()?.state &&
-                    !taskList.length &&
-                    !(research?.busy ?? false),
-                }
-              : {}),
-            ...(tasks ? { archives: await listArchives(root) } : {}),
-            ...(tasks
-              ? {
-                  tasks: {
-                    list: taskList,
-                    selected: task ?? null,
-                    idle: workers
-                      .filter((view) => sessions?.idle(view.record.id))
-                      .map((view) => view.record.id),
-                    resumable,
-                    messages: (await tasks.messageList()).slice(-300),
-                  },
-                }
-              : {}),
-          },
-          frame,
-        ),
-      );
+      const live: Parameters<typeof renderDesk>[3] = {
+        workers,
+        session: worker,
+        // The lab's depth reads only for the panel that is open.
+        ...(labView && frame.panel === 'agent'
+          ? {
+              labAgent: await labSession(
+                root,
+                sessions,
+                labView,
+                frame.agent,
+                labReads,
+              ),
+            }
+          : {}),
+        ...(labDesk.lab && labView && frame.panel === 'diff' && frame.direction
+          ? {
+              labDiff: await labDiff(
+                labDesk.lab,
+                labView,
+                frame.direction,
+                frame.proof,
+                labReads,
+              ),
+            }
+          : {}),
+        // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
+        full: (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
+        ...(sessions ? { agents: sessions.limit } : {}),
+        terminals: await terminalSupport(),
+        controllable: sessions !== undefined,
+        paused: sessions?.paused() ?? [],
+        ...(research ? { research: research.view() } : {}),
+        ...(coordinator ? { coordinator: coordinator.view() } : {}),
+        ...(compute ? { compute: compute.view() } : {}),
+        ...(labDesk.lab
+          ? {
+              lab: labView,
+              labAway,
+              labWorks: labDesk.works,
+              // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
+              labCanStart:
+                labDesk.lab.runs &&
+                !labDesk.lab.exists &&
+                !coordinator?.view()?.state &&
+                !taskList.length &&
+                !(research?.busy ?? false),
+            }
+          : {}),
+        ...(tasks ? { archives: await listArchives(root) } : {}),
+        ...(tasks
+          ? {
+              tasks: {
+                list: taskList,
+                selected: task ?? null,
+                idle: workers
+                  .filter((view) => sessions?.idle(view.record.id))
+                  .map((view) => view.record.id),
+                resumable,
+                messages: (await tasks.messageList()).slice(-300),
+              },
+            }
+          : {}),
+      };
+      const render = (shown: NonNullable<typeof frame>): string =>
+        JSON.stringify(renderDesk(snapshot, selected, report, live, shown));
+      let body = render(frame);
+      // A panel that would make the view too big closes, so the view still loads.
+      if (Buffer.byteLength(body) > 2_000_000 && frame.panel)
+        body = render({ ...frame, panel: null });
       if (Buffer.byteLength(body) > 2_000_000)
         throw new Error('Desk view exceeds its output limit.');
       response
@@ -1892,8 +1891,10 @@ export async function startDesk(
     server.closeAllConnections();
     server.close();
   };
-  const closed = once(server, 'close').then(() => {
+  // The desk closes after the last save of the person's look.
+  const closed = once(server, 'close').then(async () => {
     signal.removeEventListener('abort', stop);
+    await labDesk.saving;
   });
   signal.addEventListener('abort', stop, { once: true });
   if (signal.aborted) stop();

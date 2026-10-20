@@ -7334,19 +7334,19 @@ await test('while you were away: a line for each direction with news, the counts
     /Spent since then: ≈\$2\.50 \(Claude Code ≈\$1\.50, GPU \$1\.00\)\./,
   );
   assert.ok(!digest.includes('<i>'));
-  // An open dispute on a row's evidence comes first, with the row's mark.
+  // An open dispute on a row's evidence comes first, with the row's mark, also when its row is second.
   const check: Check = {
     id: 'k-1',
     claim: 'p-90',
     objections: ['p-91'],
     holdsUp: false,
-    direction: 'd-1',
+    direction: 'd-2',
     run: 'r-9',
     commit: 'a'.repeat(40),
-    harness: 'codex',
+    harness: 'claude',
     sameHarness: false,
     agent: 'a-9',
-    handle: 'codex-9',
+    handle: 'claude-9',
     model: null,
     state: 'queued',
     outcome: null,
@@ -7362,37 +7362,108 @@ await test('while you were away: a line for each direction with news, the counts
     start: null,
     blind: true,
   };
+  const contested = directions.map((direction) =>
+    direction.id === 'd-1'
+      ? {
+          ...direction,
+          verdict: 'holds-up' as const,
+          evidence: { text: 'acc 0.8', post: 'p-80', run: null },
+        }
+      : direction.id === 'd-2'
+        ? { ...direction, verdict: 'leading' as const, evidence }
+        : direction,
+  );
+  const disputedHtml = renderLab(
+    {
+      ...seeded,
+      checks: [check],
+      state: { ...seeded.state, directions: contested, checks: [check] },
+      directions: seeded.directions.map((entry, index) => ({
+        ...entry,
+        direction: contested[index] ?? entry.direction,
+      })),
+    },
+    clock,
+    { gpu, away: { since: left, spent: { claude: 1.11, gpu: 0.5 } } },
+  );
+  const disputedLines = [
+    ...disputedHtml.matchAll(/<li><span class="away-mark"[\s\S]*?<\/li>/g),
+  ].map((match) => match[0]);
+  assert.equal(
+    disputedLines[0],
+    '<li><span class="away-mark" aria-hidden="true">⚠</span><span><a href="#row-d-2">Helix</a>: Disputed (acc 0.7).</span></li>',
+  );
   assert.match(
-    renderLab({ ...seeded, checks: [check] }, clock, {
-      gpu,
-      away: { since: left, spent: { claude: 1.11, gpu: 0.5 } },
-    }),
-    /<ul class="away-lines"><li><span class="away-mark" aria-hidden="true">⚠<\/span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;\/i&gt;<\/a>: Disputed \(acc 0\.7\)\. 2 new posts\.<\/span><\/li>/,
+    disputedLines[1] ?? '',
+    /✓[\s\S]*Circles[\s\S]*Holds up \(acc 0\.8\)/,
   );
-  // A baseline above today's costs fits no cost line. A lab that started since then counts from its start.
-  assert.doesNotMatch(
-    renderLab(seeded, clock, {
-      gpu,
-      away: { since: left, spent: { claude: 9, gpu: 0.5 } },
-    }),
-    /Spent since then/,
+  // A note of Verifold alone, such as a verdict, gives its direction a line.
+  const noted = directions.map((direction) =>
+    direction.id === 'd-3'
+      ? { ...direction, state: 'open' as const, stoppedAt: null }
+      : direction,
   );
-  const fresh = renderLab(seeded, clock, {
+  assert.match(
+    renderLab(
+      {
+        ...seeded,
+        posts: [
+          screenPost(
+            'p-95',
+            'verifold',
+            'status',
+            'A verdict note.',
+            hours(1),
+            {
+              direction: 'd-3',
+            },
+          ),
+        ],
+        state: { ...seeded.state, directions: noted },
+        directions: seeded.directions.map((entry, index) => ({
+          ...entry,
+          direction: noted[index] ?? entry.direction,
+        })),
+      },
+      clock,
+      { gpu, away: { since: left, spent: { claude: 1.11, gpu: 0.5 } } },
+    ),
+    /<a href="#row-d-3">Frequency<\/a>: Not settled yet\.<\/span>/,
+  );
+  // At most 5 failed runs link to their panel. The rest are counted.
+  const failing = renderLab(
+    {
+      ...seeded,
+      ledger: Array.from({ length: 7 }, (_, index) =>
+        screenRun(`r-${index + 1}`, {
+          status: 'failed',
+          exitCode: 1,
+          endedAt: hours(1),
+        }),
+      ),
+    },
+    clock,
+    { gpu, away: { since: left, spent: { claude: 1.11, gpu: 0.5 } } },
+  );
+  assert.match(
+    failing,
+    /7 runs ended \(7 failed: (<button type="button" class="link" data-panel="run" data-run="r-\d">r-\d<\/button>, ){5}2 more\)/,
+  );
+  // Money spent always shows, also when nothing else changed.
+  const now = new Date().toISOString();
+  const spentOnly = renderLab(seeded, clock, {
     gpu,
-    away: { since: hours(7), spent: { claude: 9, gpu: 9 } },
+    away: { since: now, spent: { claude: 2.61, gpu: 0.5 } },
   });
-  assert.ok(fresh.includes(`. The lab started at ${seeded.state.startedAt}.`));
+  assert.match(spentOnly, /<p>No post, run, or call came\.<\/p>/);
   assert.match(
-    fresh,
-    /Spent since then: ≈\$4\.11 \(Claude Code ≈\$2\.61, GPU \$1\.50\)\./,
+    spentOnly,
+    /Spent since then: ≈\$1\.00 \(Claude Code ≈\$0\.00, GPU \$1\.00\)\./,
   );
-  // Nothing new: one quiet line.
+  // Nothing new and nothing spent: one quiet line.
   const quiet = renderLab(seeded, clock, {
     gpu,
-    away: {
-      since: new Date().toISOString(),
-      spent: { claude: 2.61, gpu: 1.5 },
-    },
+    away: { since: now, spent: { claude: 2.61, gpu: 1.5 } },
   });
   assert.match(quiet, /<p>Nothing changed\.<\/p>/);
   assert.doesNotMatch(quiet, /Spent since then/);
