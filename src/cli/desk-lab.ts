@@ -11,6 +11,7 @@ import {
   budgetEnded,
   defaultLabHours,
   labLimits,
+  verdictWords,
   type DirectionView,
   type LabView,
 } from './lab.ts';
@@ -109,6 +110,8 @@ export function stateOf(
       return { text: 'Paused', face: 'paused' };
     case 'stopped':
       return { text: 'Stopped', face: 'ended' };
+    case 'closed':
+      return { text: 'Closed by its agent', face: 'ended' };
     case 'crashed':
       return {
         text: `Stopped by itself ${labLimits.restartsPerHour + 1} times in an hour`,
@@ -161,7 +164,9 @@ function planCard(
     );
     if (!opener) return '';
     return `<section class="card lab-plan" aria-labelledby="plan-title"><h2 id="plan-title">Plan of record</h2><p>${
-      opener.status === 'stopped' || opener.status === 'crashed'
+      opener.status === 'stopped' ||
+      opener.status === 'closed' ||
+      opener.status === 'crashed'
         ? `${e(opener.agent.handle)} stopped before it posted a plan. Open directions yourself, or start it again.`
         : `${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.`
     }</p></section>`;
@@ -170,7 +175,7 @@ function planCard(
     const direction = state.directions.find((entry) => entry.id === id);
     return direction
       ? [
-          `<tr><th scope="row">${e(direction.title)}${direction.state === 'stopped' ? ' <span class="fine">(stopped)</span>' : ''}</th><td>${e(barSummary(direction))}</td><td>${direction.buildsOn.length ? direction.buildsOn.map((work) => `${e(work.text)} <span class="fine">(${work.known ? 'known' : 'new'})</span>`).join('<br>') : '<span class="fine">Nothing named</span>'}</td></tr>`,
+          `<tr><th scope="row">${e(direction.title)}${direction.state === 'open' ? '' : ` <span class="fine">(${direction.state})</span>`}</th><td>${e(barSummary(direction))}</td><td>${direction.buildsOn.length ? direction.buildsOn.map((work) => `${e(work.text)} <span class="fine">(${work.known ? 'known' : 'new'})</span>`).join('<br>') : '<span class="fine">Nothing named</span>'}</td></tr>`,
         ]
       : [];
   });
@@ -182,6 +187,7 @@ function planCard(
   const listening =
     writer !== undefined &&
     writer.status !== 'stopped' &&
+    writer.status !== 'closed' &&
     writer.status !== 'crashed';
   const reply = !view.runs
     ? ''
@@ -240,7 +246,15 @@ function directionRow(
   const transcript = agent.session
     ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
     : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
+  // The verdict that its agent gives, with its line of evidence and where the proof is.
+  const verdict =
+    direction.verdict === 'open'
+      ? ''
+      : ` <span class="chip verdict-${e(direction.verdict)}">${e(verdictWords[direction.verdict])}</span>`;
+  const evidence = direction.evidence
+    ? `<span class="fine">${e(direction.evidence.text)} · ${e(direction.evidence.post)}${direction.evidence.run ? ` · ${e(direction.evidence.run)}` : ''}</span>`
+    : '';
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}${verdict}</strong>${evidence}${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */

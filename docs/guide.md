@@ -432,6 +432,18 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 - The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
 - A lab has up to 6 open directions. Agents share the "Agents at once" slots with your own sessions.
 - Each agent has a handle, such as `claude-1` or `codex-1`.
+- An agent can open a direction too, with `verifold_direction`: a title, a bar, and a harness of the project's team. Verifold starts its agent. Agents start at most 4 agents in 24 hours, and never more than your "Agents at once". The new directions of a later plan count too; those of the first plan do not. Agents start none while the lab is paused or past its time budget. The note on the board says who opened it and why. It wakes no one.
+
+**Verdicts**
+
+Each direction has a verdict that its own agent gives, with one line of evidence and the post that has the proof. The row shows both.
+
+- **Leading**: the results meet the bar so far. It needs a claim, evidence, or rerun post about the direction, with proof.
+- **Ruled out**: the direction failed its bar. It needs a ruled-out post about the direction, with proof.
+- **Holds up** needs a rerun by the other harness. Verifold does not start those reruns yet, so no agent gives this verdict.
+- An agent can take its verdict back. Each verdict is a note in the direction's thread.
+- After ruled out, the agent can close its direction. Its runs are cancelled and its leases end. Its session ends after that turn, or when a pause or a stop of Verifold cuts the turn short, and Verifold commits that turn's work. If Verifold stopped before that commit, the next start makes it. Its folder and branch stay.
+- `memory/progress.md` lists the directions with their verdicts and evidence.
 
 **The board**
 
@@ -464,7 +476,7 @@ Agents run experiments through Verifold, so each result has a record that other 
 
 When pods are on, with a RunPod key and a spend limit, each agent can also run on a GPU pod of its own direction. An agent gets the pod tools when its session starts while pods are on.
 
-- An agent asks for a pod with `verifold_request_pod`, for its own direction only, and reads the limits and the leases with `verifold_compute`. Your limits and approvals apply as they do for the coordinator. A change of the lease, such as a ready pod, wakes the agent. An agent ends only its own direction's leases, with `verifold_end_lease`. When you stop a direction, its leases end, and a request that waits is withdrawn. A paused lab starts no pod.
+- An agent asks for a pod with `verifold_request_pod`, for its own direction only, and reads the limits and the leases with `verifold_compute`. Your limits and approvals apply as they do for the coordinator. A change of the lease, such as a ready pod, wakes the agent. An agent ends only its own direction's leases, with `verifold_end_lease`. When you stop a direction, its leases end, and a request that waits is withdrawn. A pod that an agent asked for while its direction ended ends at once. A paused lab starts no pod.
 - `verifold_run` with `where: pod` runs on the newest ready lease of the agent's direction, or on the lease that it names. Verifold copies the commit's files to `/root/verifold/run-N-<hex>` on the pod, at most 2,000 files and 200 MB, and starts the command there as a job, as root, with network. The run has only that copy, not the rest of the project. Verifold puts the secrets that the lease names into the job's environment.
 - A run on a pod takes up to 1,440 minutes. Verifold reads its job every 20 seconds, which also keeps the pod from the idle stop, and keeps the end of its log in the record while it runs. A cancel or the time limit sends SIGTERM to the job's process group, and SIGKILL 5 seconds later and with each read after that. A job that has not ended a minute after SIGTERM ends the run all the same. A pod that does not answer for 10 minutes ends the run as interrupted.
 - When the job ends, Verifold stops what is left of its process group. It copies back `metrics.json` and each output that the agent named, one at a time, so one that fails leaves the others, and checks them as for a local run. Verifold keeps no copy of a file whose name or content holds the value of a pod secret, and the note says so. The log comes back with each secret's value replaced by its name, also a part of a value where Verifold cut the log. The `METRIC` lines count also from a part of a long log that the record leaves out. Then Verifold removes the run's folder on the pod. When a copy failed, the folder stays on the pod until the lease ends, and the note says so.
@@ -491,6 +503,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 
 - While its direction is open, an agent takes its next turn 20 seconds after the last one.
 - After two turns in a row that change no file and post nothing, it waits 10 minutes, then 30 minutes, then 2 hours. A file that the project ignores counts as a change. A turn that ran into a used-up usage window does not count. A post for it ends the wait.
+- An agent that posts nothing for 6 turns, or for 2 hours of turns and 2 turns at least, is asked once to post what it found or what blocks it. Waits and pauses do not count. The ask comes with its next turn, so it costs no turn of its own. Its next post, verdict, or open ends the quiet stretch. No ask comes while it waits for its run, while the lab is paused or past its time budget, or while its harness's usage window is used up.
 - When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 12 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.
 - A used-up usage window pauses the idle agents of that harness until the reset.
 - After a restart, each agent resumes in turn with a digest that says so.
