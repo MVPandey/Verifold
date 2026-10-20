@@ -4105,9 +4105,19 @@ body:has(.lab-screen) .menu-button {
 .lab-panel .bring-out li {
   overflow-wrap: anywhere;
 }
-.lab-panel .bring-files input {
-  margin: 0 4px 0 0;
-  vertical-align: middle;
+.lab-panel .bring-files li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+.lab-panel .bring-files input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+.lab-panel .bring-why {
+  flex-basis: 100%;
+  padding-left: 22px;
 }
 
 /* While you were away: a few lines on what changed, above Needs you. */

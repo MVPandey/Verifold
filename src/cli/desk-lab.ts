@@ -1439,7 +1439,7 @@ export function answerPanel(
     : '';
   const body = `${state.signoff?.note ? `<p class="answer-line">${e(state.signoff.note)}</p>` : ''}
   ${rows.length ? `<ul class="answer-rows">${rows.join('')}</ul>` : '<p class="empty-note">No direction yet.</p>'}
-  <p>${open.length ? `<strong>Still open:</strong> ${e(open.map((entry) => entry.direction.title).join(', '))}. ` : ''}${view.ledger.length} ${view.ledger.length === 1 ? 'run' : 'runs'}, ${failed} failed or stopped. Verifold keeps every run.</p>
+  <p>${open.length ? `<strong>Still open:</strong> ${e(open.map((entry) => entry.direction.title).join(', '))}. ` : ''}${view.ledger.length ? `${view.ledger.length} ${view.ledger.length === 1 ? 'run' : 'runs'}, ${failed} failed or stopped. Verifold keeps every run.` : 'No run yet.'}</p>
   <p><strong>Your calls:</strong> ${calls.length ? `${e(calls.join(' · '))}. The agents made the rest, all on the board.` : 'none. The agents made every choice, all on the board.'}</p>
   ${signoff}`;
   return {
@@ -1477,7 +1477,7 @@ export function bringPanel(
   const panel = (body: string): Panel => ({
     kind: 'Bring in',
     title: direction.title,
-    sub: `<span class="fine">From ${e(branch)} into your project folder</span>`,
+    sub: `<span class="fine">From ${e(branch)}${shown ? ` at ${e(shown.commit.slice(0, 7))}` : ''} into your project folder</span>`,
     body: `<div class="lab-panel">${body}</div>`,
   });
   if (!shown)
@@ -1503,7 +1503,7 @@ export function bringPanel(
         : file.path.split('/')[0]?.toLowerCase() === 'memory'
           ? 'Project memory, so not ticked.'
           : 'Scratch output, so not ticked.';
-    return `<li><input type="checkbox" id="${box(index)}" data-bring-file="${e(file.path)}"${file.ticked && !at ? ' checked' : ''}${at || !view.runs ? ' disabled' : ''}> <label for="${box(index)}"><code>${e(file.path)}</code></label> <span class="fine change-${file.change}">${file.change}</span> <button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" data-bring-commit="${e(shown.commit)}" aria-pressed="false" aria-label="Diff of ${e(file.path)}">Diff</button>${why ? ` <span class="fine">${e(why)}</span>` : ''}</li>`;
+    return `<li><input type="checkbox" id="${box(index)}" data-bring-file="${e(file.path)}"${file.ticked && !at ? ' checked' : ''}${at || !view.runs ? ' disabled' : ''}> <label for="${box(index)}"><code>${e(file.path)}</code></label> <span class="fine change-${file.change}">${file.change}</span> <button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" data-bring-commit="${e(shown.commit)}" aria-pressed="false" aria-label="Diff of ${e(file.path)}">Diff</button>${why ? ` <span class="fine bring-why">${e(why)}</span>` : ''}</li>`;
   });
   const history = view.state.brought
     .filter((brought) => brought.direction === direction.id)
@@ -1517,7 +1517,7 @@ export function bringPanel(
       : '';
   return panel(`${
     shown.files.length
-      ? `<p class="fine">${shown.files.length} ${shown.files.length === 1 ? 'file' : 'files'} changed from ${e(shown.from.slice(0, 7))} to ${e(shown.commit.slice(0, 7))}. The ticked files come into your project folder. Nothing else changes, and nothing merges by itself.</p>`
+      ? `<p class="fine">${shown.files.length} ${shown.files.length === 1 ? 'file' : 'files'} changed since this direction started. The ticked files come into your project folder. Nothing else changes, and nothing merges by itself.</p>`
       : '<p class="empty-note">This direction changed no file since it started.</p>'
   }${newer}
   ${can.length ? `<ul class="bring-files">${items.join('')}</ul>` : ''}

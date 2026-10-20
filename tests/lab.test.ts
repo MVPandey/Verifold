@@ -7729,7 +7729,7 @@ await test('a bring-in copies nothing when a project file changed since the dire
   const first = await look(lab, 'd-1');
   await assert.rejects(
     lab.lab.bring('d-1', first, ['README.md', 'new.md']),
-    /Nothing came in\. This file changed in the project folder since d-1 started: README\.md\. Keep your version, or copy the agent's version yourself from verifold\/d-1-alpha\./,
+    /Nothing came in\. This file changed in your project folder since d-1 started: README\.md\. Untick it to bring in the others\. To keep both changes, copy the agent's change by hand: Diff shows it\./,
   );
   assert.equal(await readFile(join(lab.root, 'README.md'), 'utf8'), '# Mine\n');
   assert.equal(existsSync(join(lab.root, 'new.md')), false);
@@ -7748,7 +7748,7 @@ await test('a bring-in copies nothing when a project file changed since the dire
   const second = await look(lab, 'd-2');
   await assert.rejects(
     lab.lab.bring('d-2', second, ['shared.md']),
-    /changed in the project folder since d-2 started: shared\.md/,
+    /changed in your project folder since d-2 started: shared\.md/,
   );
   assert.equal(await readFile(join(lab.root, 'shared.md'), 'utf8'), 'alpha\n');
 });
