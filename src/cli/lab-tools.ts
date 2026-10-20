@@ -2,10 +2,23 @@ import type { AgentTool } from './session-hosts.ts';
 
 /**
  * The tools of a lab agent. Codex keeps the tools of a thread for its life, so
- * a change here raises `labToolsVersion`, and a Codex agent with an older
- * thread starts a new one.
+ * a change of a tool that a thread has raises `labToolsVersion`, and a Codex
+ * agent with an older thread starts a new one. Version 3 added
+ * `verifold_plan` for the agent that opens a lab.
  */
-export const labToolsVersion = 2;
+export const labToolsVersion = 3;
+
+/** The limits of a plan of record. The tool schema and the lab's checks use the same ones. */
+export const planLimits = {
+  reading: 600,
+  cost: 200,
+  title: 120,
+  bar: 280,
+  runs: 20,
+  noise: 120,
+  buildsOn: 4,
+  buildsOnText: 120,
+};
 
 /** The kinds of post that an agent can write. A rerun comes from a checker that Verifold starts. */
 export const agentPostKinds = [
@@ -112,13 +125,13 @@ export const labToolSpecs: readonly AgentTool[] = [
 export const planToolSpec: AgentTool = {
   name: 'verifold_plan',
   description:
-    'Post the plan of record: how you read the question, and the directions that attack it. Each direction has a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. Later, call it again to change the plan: list every open direction with its id, and new ones without an id.',
+    'Post the plan of record: how you read the question, and the directions that attack it. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id.',
   inputSchema: {
     type: 'object',
     properties: {
       reading: {
         type: 'string',
-        maxLength: 600,
+        maxLength: planLimits.reading,
         description: 'How you read the question, in plain words.',
       },
       directions: {
@@ -130,35 +143,36 @@ export const planToolSpec: AgentTool = {
           properties: {
             id: {
               ...directionId,
-              description: 'An open direction that this entry changes.',
+              description:
+                'An open direction. Leave it out for a new direction.',
             },
-            title: { type: 'string', maxLength: 80 },
+            title: { type: 'string', maxLength: planLimits.title },
             bar: {
               type: 'string',
-              maxLength: 240,
+              maxLength: planLimits.bar,
               description:
                 'What makes the direction hold up, in plain words, with its number.',
             },
             runs: {
               type: 'integer',
               minimum: 1,
-              maximum: 20,
+              maximum: planLimits.runs,
               description:
                 'The repeat runs, such as seeds, that the bar needs.',
             },
             noise: {
               type: 'string',
-              maxLength: 120,
+              maxLength: planLimits.noise,
               description:
                 'The spread between repeat runs that counts as noise, such as ±0.02.',
             },
             buildsOn: {
               type: 'array',
-              maxItems: 4,
+              maxItems: planLimits.buildsOn,
               items: {
                 type: 'object',
                 properties: {
-                  text: { type: 'string', maxLength: 120 },
+                  text: { type: 'string', maxLength: planLimits.buildsOnText },
                   known: {
                     type: 'boolean',
                     description:
@@ -169,9 +183,13 @@ export const planToolSpec: AgentTool = {
                 additionalProperties: false,
               },
             },
-            harness: { type: 'string', enum: ['claude', 'codex'] },
+            harness: {
+              type: 'string',
+              enum: ['claude', 'codex'],
+              description:
+                "The harness of a new direction's agent. An open direction keeps its harness.",
+            },
           },
-          required: ['title', 'bar', 'runs', 'noise', 'harness'],
           additionalProperties: false,
         },
       },
@@ -179,11 +197,12 @@ export const planToolSpec: AgentTool = {
         type: 'integer',
         minimum: 0,
         maximum: 5,
-        description: 'The index of your own direction. Default: 0.',
+        description:
+          'The index of your own direction in the first plan. Default: 0.',
       },
       cost: {
         type: 'string',
-        maxLength: 200,
+        maxLength: planLimits.cost,
         description: 'What in the plan costs money, or that nothing does yet.',
       },
     },

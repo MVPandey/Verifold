@@ -922,9 +922,11 @@ async function startLab(
       return;
     }
     // The same start as the desk's: the setup question stays with the project.
-    await startLabOn(root, lab, asked, research?.autonomy);
+    const planned = await startLabOn(root, lab, asked, research?.autonomy);
     io.progress?.(
-      'The lab started. Its first agent reads the question and posts a plan on the board in the desk.',
+      planned
+        ? 'The lab started. Its first agent reads the question and posts a plan on the board in the desk.'
+        : 'The lab started without an agent that plans it. Open a direction in the desk: each one gets its own agent.',
     );
   } catch (error) {
     io.progress?.(

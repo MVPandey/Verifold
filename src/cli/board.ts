@@ -268,6 +268,14 @@ function check(entry: Record<string, unknown>): Post | string {
   };
 }
 
+/** A text of at most `max` characters: cut with an ellipsis, never between the halves of a surrogate pair. */
+export function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
 /** The number in an ID such as p-12, d-3, or a-2. */
 export function number(id: string): number {
   return Number(id.slice(2));

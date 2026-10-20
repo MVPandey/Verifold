@@ -155,19 +155,38 @@ function planCard(
       : [];
   });
   const author = state.opener ? name(state.opener) : 'The first agent';
+  // A reply wakes the plan's author only while it works for the lab.
+  const writer = view.directions.find(
+    (entry) => entry.agent.id === state.opener,
+  );
+  const listening =
+    writer !== undefined &&
+    writer.status !== 'stopped' &&
+    writer.status !== 'crashed';
+  const reply = !view.runs
+    ? ''
+    : listening
+      ? `<div class="actions"><button type="button" data-action="lab-reply" data-post="${e(plan.post)}">Reply to the plan</button></div><p class="fine">A reply wakes ${e(author)}, who can change the plan.</p>`
+      : `<p class="fine">${e(author)} no longer works, so the plan stays as it is.</p>`;
   return `<section class="card lab-plan" aria-labelledby="plan-title"><div class="section-title"><h2 id="plan-title">Plan of record</h2><span class="count">${e(author)}, ${e(clock(plan.at))}</span></div>
   <p class="pre">${e(plan.reading)}</p>
   <div class="table"><table><thead><tr><th scope="col">Direction</th><th scope="col">Holds up if</th><th scope="col">Builds on</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
   <p class="fine">What costs money, says ${e(author)}: ${e(plan.cost)}</p>
-  ${view.runs ? `<div class="actions"><button type="button" data-action="lab-reply" data-post="${e(plan.post)}">Reply to the plan</button></div><p class="fine">A reply wakes ${e(author)}, who can change the plan.</p>` : ''}</section>`;
+  ${reply}</section>`;
 }
 
-/** The time left in the lab's budget, such as "3 h 20 min left". */
-function timeLeft(deadline: string): string {
-  const minutes = Math.ceil((Date.parse(deadline) - Date.now()) / 60_000);
-  if (minutes <= 0) return 'The time budget ended';
-  const hours = Math.floor(minutes / 60);
-  return `${hours ? `${hours} h ` : ''}${minutes % 60 || !hours ? `${minutes % 60} min ` : ''}left`;
+/** A span of minutes, such as "45 min" or "3 h 20 min". */
+export function minutesText(minutes: number): string {
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+}
+
+/** The time budget ended. */
+function ended(state: LabView['state']): boolean {
+  return (
+    state.budget !== null && Date.parse(state.budget.deadline) <= Date.now()
+  );
 }
 
 /**
@@ -343,22 +362,26 @@ export function renderLab(
   const handles = open.map((entry) => `@${entry.agent.handle}`);
   const { runs } = view;
   const working = renderLabWork(works, clock);
-  // A lab that its time budget paused resumes with more time, from Needs you.
+  // After the time budget, the lab goes on with more time, from Needs you: no plain Resume.
+  const over = ended(state);
   const pause = !runs
     ? ''
-    : state.pausedFor === 'deadline'
-      ? ''
-      : state.pausedAt
-        ? '<button type="button" data-action="lab-resume">Resume the lab</button>'
-        : '<button type="button" class="quiet" data-action="lab-pause">Pause the lab</button>';
+    : state.pausedAt
+      ? over
+        ? ''
+        : '<button type="button" data-action="lab-resume">Resume the lab</button>'
+      : '<button type="button" class="quiet" data-action="lab-pause">Pause the lab</button>';
+  const minutes = state.budget
+    ? Math.ceil((Date.parse(state.budget.deadline) - Date.now()) / 60_000)
+    : 0;
   const time = state.budget
-    ? `<p class="fine lab-time">Time budget: ${state.budget.hours} h, due ${e(clock(state.budget.deadline))} · ${e(timeLeft(state.budget.deadline))}</p>`
+    ? `<p class="fine lab-time">Due ${e(clock(state.budget.deadline))} · ${over ? 'the time budget ended' : `${e(minutesText(minutes))} left`}</p>`
     : '';
   const paused = !state.pausedAt
     ? ''
     : state.pausedFor === 'deadline'
       ? `<p class="notice">The time budget ended at ${e(clock(state.budget?.deadline ?? state.pausedAt))}, so the lab paused. Give it more time to go on.</p>`
-      : `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.</p>`;
+      : `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.${over ? ' Its time budget ended too: give it more time first.' : ''}</p>`;
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Lab</h1><p class="question">${e(state.question)}</p>${time}</div>
   <div class="view lab">
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${needs}
@@ -411,14 +434,18 @@ export function labBudgetNeed(view: LabView): {
   readonly body: string;
 } | null {
   const { state } = view;
-  if (!view.runs || state.pausedFor !== 'deadline') return null;
-  const deadline = state.budget?.deadline ?? state.pausedAt;
+  // Also a lab that the person paused: more time keeps it paused until they resume it.
+  if (!view.runs || !state.budget || !ended(state)) return null;
+  const deadline = state.budget.deadline;
   const button = (count: number, primary: boolean): string =>
     `<button type="button"${primary ? ' class="primary"' : ''} data-action="lab-budget" data-hours="${count}">Give ${count} more ${count === 1 ? 'hour' : 'hours'}</button>`;
   return {
-    key: `lab-budget:${deadline ?? ''}`,
+    key: `lab-budget:${deadline}`,
     title: 'The time budget ended',
-    why: 'The lab paused at the end of its time budget. Only you give it more time.',
+    why:
+      state.pausedFor === 'person'
+        ? 'You paused the lab, and its time budget ended too. Give it more time, then resume it.'
+        : 'No turn starts after the end of the time budget. Only you give the lab more time.',
     since: deadline,
     body: `<div class="actions">${button(2, true)}${button(defaultLabHours, false)}</div>`,
   };

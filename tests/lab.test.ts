@@ -2491,7 +2491,7 @@ await test('the first agent posts the plan of record, and the lab opens its dire
   );
   assert.match(html, /Engels 2024 <span class="fine">\(known\)<\/span>/);
   assert.match(html, /data-action="lab-reply" data-post="p-1"/);
-  assert.match(html, /Time budget: 8 h, due/);
+  assert.match(html, /<p class="fine lab-time">Due .* left<\/p>/);
   assert.ok(
     html.indexOf('id="plan-title"') < html.indexOf('id="directions-title"'),
   );
@@ -2582,6 +2582,15 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
     (await lab.inputs('d-2-helix')).at(-1) ?? '',
     /Holds up if: "it beats a circle for years by 0\.05"/,
   );
+  // When the plan's author stops, the plan stays as it is, and the desk says so.
+  await lab.lab.stopDirection('d-1');
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /claude-1 no longer works, so the plan stays as it is\./);
+  assert.doesNotMatch(html, /Reply to the plan/);
 });
 
 await test('when the time budget ends the lab pauses, Needs you asks for more time, and more time resumes it', async (t) => {
@@ -2616,15 +2625,16 @@ await test('when the time budget ends the lab pauses, Needs you asks for more ti
   // A lab that its budget paused offers no plain Resume: more time resumes it.
   assert.doesNotMatch(html, /data-action="lab-resume"/);
 
-  await lab.lab.extend('2');
+  // Ten more hours: long enough that the test ends before the next deadline.
+  await lab.lab.extend('10');
   const state = lab.lab.view()?.state;
   assert.equal(state?.pausedAt, null);
   assert.equal(state?.pausedFor, null);
-  assert.equal(state?.budget?.hours, 3);
+  assert.equal(state?.budget?.hours, 11);
   assert.ok(Date.parse(state?.budget?.deadline ?? '') > Date.now());
   await until(async () =>
     (await lab.inputs('d-1-alpha')).some((input) =>
-      input.includes('The person gave the lab 2 more hours.'),
+      input.includes('The person gave the lab 10 more hours.'),
     ),
   );
 });
@@ -2659,4 +2669,111 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
   assert.deepEqual(state?.directions[0]?.buildsOn, []);
   await reloaded.resume();
   assert.equal(reloaded.view()?.state.pausedAt, null);
+});
+
+await test('a plan keeps the directions that the person opened, also many and outside the team, and counts toward the post limit', async (t) => {
+  const posts = labLimits.postsPerHour;
+  labLimits.postsPerHour = 2;
+  t.after(() => {
+    labLimits.postsPerHour = posts;
+  });
+  // The project's team is Claude Code only.
+  const lab = await fixture(t, { harnesses: ['claude'], agents: 6 });
+  const all = ['d-2', 'd-3', 'd-4', 'd-5'].map((id) => ({ id }));
+  const again = { ...firstPlan, directions: [{ id: 'd-1' }, ...all] };
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'Plan now',
+      calls: [
+        // Five open directions: the first plan lists them all. The person's keep what the plan leaves out.
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...firstPlan,
+            directions: [{ ...firstPlan.directions[0] }, ...all],
+          },
+        },
+        // A new direction needs a harness of the team.
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...again,
+            directions: [
+              ...again.directions,
+              { ...firstPlan.directions[1], harness: 'codex' },
+            ],
+          },
+        },
+        { name: 'verifold_plan', arguments: again },
+        // A plan is a post: the hourly limit counts it.
+        { name: 'verifold_plan', arguments: again },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(() => lab.lab.view()?.state.opener === 'a-1');
+  for (const [title, harness] of [
+    ['Two', 'codex'],
+    ['Three', 'claude'],
+    ['Four', 'claude'],
+    ['Five', 'claude'],
+  ] as const)
+    await lab.lab.addDirection({ title, harness, bar: `${title} holds` });
+  await lab.lab.post({ text: '@claude-1 Plan now.' });
+  await until(
+    async () =>
+      (await lab.lines('d-1-plan-the-lab', 'results.jsonl')).length >= 4,
+    20_000,
+  );
+  const results = (
+    (await lab.lines('d-1-plan-the-lab', 'results.jsonl')) as {
+      result: { content: { text: string }[] };
+    }[]
+  ).map((entry) => entry.result.content[0]?.text ?? '');
+  assert.match(results[0] ?? '', /Posted the plan/);
+  assert.match(
+    results[1] ?? '',
+    /Codex is not in this project's team\. Use Claude Code/,
+  );
+  assert.match(results[2] ?? '', /Posted the plan/);
+  assert.match(
+    results[3] ?? '',
+    /You posted 2 times in the last hour, the limit/,
+  );
+  const view = lab.lab.view();
+  assert.deepEqual(view?.state.plan?.directions, [
+    'd-1',
+    'd-2',
+    'd-3',
+    'd-4',
+    'd-5',
+  ]);
+  // The person's Codex direction keeps its harness, title, and bar.
+  const two = view?.directions.find((entry) => entry.direction.id === 'd-2');
+  assert.equal(two?.agent.host, 'codex');
+  assert.equal(two?.direction.title, 'Two');
+  assert.equal(two?.direction.bar, 'Two holds');
+  assert.equal(two?.direction.runs, null);
+});
+
+await test('when the time budget ends while the person paused the lab, more time keeps it paused', async (t) => {
+  const lab = await fixture(t, { hourMs: 300 });
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
+  await lab.lab.pause();
+  await delay(400);
+  // The person's pause stays the person's.
+  assert.equal(lab.lab.view()?.state.pausedFor, 'person');
+  await assert.rejects(lab.lab.resume(), /The time budget ended/);
+  const html = renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+    session: null,
+    controllable: true,
+    lab: lab.lab.view(),
+  }).html;
+  assert.match(html, /You paused the lab, and its time budget ended too/);
+  assert.match(html, /data-action="lab-budget" data-hours="2"/);
+  assert.doesNotMatch(html, /data-action="lab-resume"/);
+  await lab.lab.extend(100);
+  assert.ok(lab.lab.view()?.state.pausedAt);
+  await lab.lab.resume();
+  assert.equal(lab.lab.view()?.state.pausedAt, null);
 });
