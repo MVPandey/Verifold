@@ -247,11 +247,14 @@ function directionRow(
     ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
     : '';
   // The verdict that its agent gives, with its line of evidence and where the proof is.
-  const verdict = `<span class="chip verdict-${e(direction.verdict)}">${e(verdictWords[direction.verdict])}</span>`;
+  const verdict =
+    direction.verdict === 'open'
+      ? ''
+      : ` <span class="chip verdict-${e(direction.verdict)}">${e(verdictWords[direction.verdict])}</span>`;
   const evidence = direction.evidence
     ? `<span class="fine">${e(direction.evidence.text)} · ${e(direction.evidence.post)}${direction.evidence.run ? ` · ${e(direction.evidence.run)}` : ''}</span>`
     : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)} ${verdict}</strong>${evidence}${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}${verdict}</strong>${evidence}${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */

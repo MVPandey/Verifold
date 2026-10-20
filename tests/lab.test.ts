@@ -3480,6 +3480,7 @@ await test('an agent gives its own direction a verdict with proof, and closes it
           evidence: '3 seeds spread 0.2',
         }),
         direction({ action: 'close', why: 'Ruled out on 3 seeds.' }),
+        { name: 'WRITE', arguments: { path: 'last.txt', text: 'done\n' } },
         {
           name: 'verifold_post',
           arguments: { kind: 'question', text: 'Still here?' },
@@ -3516,10 +3517,7 @@ await test('an agent gives its own direction a verdict with proof, and closes it
     said[4]?.text ?? '',
     /Holds up needs a rerun by the other harness/,
   );
-  assert.match(
-    said[5]?.text ?? '',
-    /only after its verdict is ruled-out or holds-up/,
-  );
+  assert.match(said[5]?.text ?? '', /only after its verdict is ruled-out\./);
   assert.equal(said[6]?.text, 'd-1 is leading now.');
   assert.match(said[8]?.text ?? '', /Ruled out needs a ruled-out post/);
   assert.match(said[10]?.text ?? '', /Closed your direction/);
@@ -3541,18 +3539,27 @@ await test('an agent gives its own direction a verdict with proof, and closes it
   const texts = view?.posts.map((post) => post.text) ?? [];
   assert.ok(
     texts.includes(
-      'claude-1: "Alpha" is leading. Evidence: "0.78 on 1 seed" (p-2). Why: Checked.',
+      'claude-1: "Alpha" is leading. Evidence: "0.78 on 1 seed" (p-2). Why: "Checked."',
     ),
   );
   assert.ok(
     texts.includes(
-      'claude-1 closed "Alpha": ruled out. Why: Ruled out on 3 seeds.',
+      'claude-1 closed "Alpha": ruled out. Why: "Ruled out on 3 seeds."',
     ),
   );
   // The session ends after the turn that closed the direction. The folder stays.
   const session = view?.directions[0]?.agent.session ?? '';
   await until(() => lab.sessions.view(session)?.record.status === 'ended');
   assert.match(git(lab.root, 'worktree', 'list'), /d-1-alpha/);
+  // The branch keeps the work of the turn that closed it.
+  await until(() => {
+    const head = lab.lab.view()?.state.directions[0]?.head ?? '';
+    try {
+      return git(lab.root, 'show', `${head}:last.txt`) === 'done\n';
+    } catch {
+      return false;
+    }
+  });
   await assert.rejects(
     lab.lab.stopDirection('d-1'),
     /Its agent closed that direction already/,
@@ -3580,7 +3587,7 @@ await test('an agent gives its own direction a verdict with proof, and closes it
   );
   assert.match(
     progress,
-    /- d-1 Alpha, claude-1 \(Claude Code\): closed, ruled out\. Evidence: 3 seeds spread 0\.2 \(p-5\)\./,
+    /- d-1 Alpha, claude-1 \(Claude Code\): closed by its agent, ruled out\. Evidence: 3 seeds spread 0\.2 \(p-5\)\./,
   );
   assert.match(
     await readFile(join(lab.root, 'memory', 'README.md'), 'utf8'),
@@ -3629,7 +3636,7 @@ await test('an agent opens a direction with its own agent, inside the team and t
   // The opener holds the only slot, so the new agent waits for it.
   assert.equal(
     said[1]?.text,
-    'Opened d-2 for claude-2 (Claude Code). Every agent slot is in use, so claude-2 starts when one is free.',
+    'Opened d-2 for claude-2 (Claude Code). Every agent slot is in use, so it starts when one is free.',
   );
   // "Agents at once" is 1, so agents start 1 agent in 24 hours.
   assert.match(
@@ -3650,7 +3657,7 @@ await test('an agent opens a direction with its own agent, inside the team and t
     ?.posts.find((post) => post.direction === 'd-2' && post.kind === 'status');
   assert.equal(
     note?.text,
-    'claude-1 opened "Helix" for claude-2 (Claude Code). Why: No direction tests a helix.',
+    'claude-1 opened "Helix" for claude-2 (Claude Code). Why: "No direction tests a helix."',
   );
   // The new agent starts once the opener gives its slot.
   await until(async () => (await lab.inputs('d-2-helix')).length >= 1);
@@ -3720,10 +3727,66 @@ await test('an agent that waits for its run is not asked to post until a turn co
   assert.equal((await lab.inputs('d-1-alpha')).length, 1);
   assert.equal(lab.lab.view()?.directions[0]?.agent.nudged, false);
   await lab.lab.cancelRun('r-1');
+  // The digest of the run's end asks, once.
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
   const inputs = await lab.inputs('d-1-alpha');
   assert.match(inputs[1] ?? '', /r-1 ended: cancelled/);
-  assert.doesNotMatch(inputs[1] ?? '', /You posted nothing/);
-  // The next turn after that one asks.
-  assert.match(inputs[2] ?? '', /You posted nothing in your last 2 turns\./);
+  assert.match(inputs[1] ?? '', /You posted nothing in your last turn\./);
+  assert.doesNotMatch(inputs[2] ?? '', /You posted nothing/);
+});
+
+await test("a later plan's new directions count as agents that an agent starts", async (t) => {
+  // "Agents at once" is 1, so agents start 1 agent in 24 hours.
+  const lab = await fixture(t, { harnesses: ['claude'], agents: 1 });
+  const plan = {
+    reading: 'We read the question as: do months sit on a circle?',
+    cost: 'Nothing costs money yet.',
+  };
+  const direction = (title: string): Record<string, unknown> => ({
+    title,
+    bar: 'it beats the baseline',
+    runs: 3,
+    noise: '±0.02',
+    harness: 'claude',
+  });
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      calls: [
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...plan,
+            directions: [direction('Circles'), direction('Helix')],
+            mine: 0,
+          },
+        },
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...plan,
+            directions: [
+              { id: 'd-1' },
+              { id: 'd-2' },
+              direction('Torus'),
+              direction('Control'),
+            ],
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(async () => (await results(lab, 'd-1-plan-the-lab')).length >= 2);
+  const said = await results(lab, 'd-1-plan-the-lab');
+  assert.ok(said[0]?.ok && said[1]?.ok);
+  // The first plan opens the lab: its directions do not count.
+  assert.match(said[0]?.text ?? '', /Opened d-2/);
+  // The change opens one more, then the limit refuses the next.
+  assert.match(said[1]?.text ?? '', /Opened d-3/);
+  assert.match(
+    said[1]?.text ?? '',
+    /"Control": Agents started 1 agent in the last 24 hours/,
+  );
+  assert.equal(lab.lab.view()?.state.agentStarts.length, 1);
 });

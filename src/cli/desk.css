@@ -3495,11 +3495,6 @@ body:not(:has(.rail)) .menu-button {
   background: var(--lavender);
   color: var(--tint-ink);
 }
-.chip.verdict-holds-up {
-  border-color: var(--green);
-  background: var(--ok-bg);
-  color: var(--green);
-}
 /* On a phone the title takes the first line, the agent and its state the next, then the controls. A long state wraps. */
 @media (max-width: 600px) {
   .lab-direction {
