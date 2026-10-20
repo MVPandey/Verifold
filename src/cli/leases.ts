@@ -15,7 +15,7 @@ import { SessionActionError } from './session.ts';
 import { validSecretName } from './credentials.ts';
 
 /**
- * A lease is one RunPod pod for named tasks: one GPU type, one image, a
+ * A lease is one RunPod pod for named tasks, or for lab directions: one GPU type, one image, a
  * maximum number of hours, and the rate that its cost is counted at.
  * `requested` waits for the person. `starting`, `ready`, and `stopped` are
  * open: the pod exists. `denied`, `ended`, and `failed` are closed.
@@ -33,6 +33,8 @@ export type LeaseState =
 export type Cause =
   | 'person'
   | 'coordinator'
+  /** A lab agent. */
+  | 'agent'
   | 'deadline'
   | 'idle'
   | 'limit'
@@ -54,10 +56,13 @@ export interface Lease {
   /** `lease-1`, `lease-2`, … */
   readonly id: string;
   readonly state: LeaseState;
-  readonly requestedBy: 'person' | 'coordinator';
-  /** Why the pod is needed. A model claim when the coordinator wrote it. */
+  readonly requestedBy: 'person' | 'coordinator' | 'agent';
+  /** Why the pod is needed. A model claim when the coordinator or an agent wrote it. */
   readonly reason: string;
+  /** The tasks of the pod. Empty for a lease of lab directions. */
   readonly tasks: readonly string[];
+  /** The lab directions of the pod, such as `d-1`. A lease names tasks or directions, never both. */
+  readonly directions?: readonly string[];
   /** The names of the pod secrets that the pod gets as environment variables. Never their values. */
   readonly secrets?: readonly string[];
   /** A RunPod GPU type ID. */
@@ -118,6 +123,15 @@ export const leaseLimits = {
 
 function fail(message: string): never {
   throw new SessionActionError(message);
+}
+
+/** Who asked for a lease: You, The coordinator, or the agent of its directions. */
+export function asker(lease: Lease): string {
+  return lease.requestedBy === 'person'
+    ? 'You'
+    : lease.requestedBy === 'agent'
+      ? `The agent of ${(lease.directions ?? []).join(' and ')}`
+      : 'The coordinator';
 }
 
 export function isOpen(lease: Lease): boolean {
@@ -366,10 +380,12 @@ export class Leases {
    * Verifold refuses a request that does not fit the person's limits.
    */
   request(input: {
-    readonly by: 'person' | 'coordinator';
+    readonly by: 'person' | 'coordinator' | 'agent';
     readonly gpu: unknown;
     readonly hours: unknown;
-    readonly tasks: unknown;
+    /** The tasks of the pod, or, with `directions`, none. */
+    readonly tasks?: unknown;
+    readonly directions?: unknown;
     readonly reason: unknown;
     readonly image?: unknown;
     readonly secrets?: unknown;
@@ -395,15 +411,22 @@ export class Leases {
         hours > settings.maxHoursPerLease
       )
         fail(`Ask for 1 to ${settings.maxHoursPerLease} hours.`);
-      const tasks = Array.isArray(input.tasks) ? input.tasks : [];
+      const lab = input.directions !== undefined;
+      const tasks = Array.isArray(lab ? input.directions : input.tasks)
+        ? ((lab ? input.directions : input.tasks) as unknown[])
+        : [];
       if (
         !tasks.length ||
         tasks.length > leaseLimits.tasks ||
         !tasks.every(
-          (task) => typeof task === 'string' && /^task-\d{1,6}$/.test(task),
+          (task) =>
+            typeof task === 'string' &&
+            (lab ? /^d-[1-9]\d{0,3}$/ : /^task-\d{1,6}$/).test(task),
         )
       )
-        fail(`Name 1 to ${leaseLimits.tasks} tasks that need the pod.`);
+        fail(
+          `Name 1 to ${leaseLimits.tasks} ${lab ? 'directions' : 'tasks'} that need the pod.`,
+        );
       const image =
         input.image === undefined ? settings.images[0] : input.image;
       if (typeof image !== 'string' || !settings.images.includes(image))
@@ -456,7 +479,8 @@ export class Leases {
         state: 'requested',
         requestedBy: input.by,
         reason,
-        tasks: [...new Set(tasks as string[])],
+        tasks: lab ? [] : [...new Set(tasks as string[])],
+        ...(lab ? { directions: [...new Set(tasks as string[])] } : {}),
         ...(secrets.length ? { secrets: [...new Set(secrets)] } : {}),
         gpu: input.gpu,
         image,
@@ -482,7 +506,7 @@ export class Leases {
         lease,
         {},
         input.by,
-        `${input.by === 'person' ? 'You' : 'The coordinator'} asked for a ${input.gpu} pod for ${hours} ${hours === 1 ? 'hour' : 'hours'} at ${usd(offer.price)} per hour, at most ${usd(cost)}.`,
+        `${asker(lease)} asked for a ${input.gpu} pod for ${hours} ${hours === 1 ? 'hour' : 'hours'} at ${usd(offer.price)} per hour, at most ${usd(cost)}.`,
       );
     });
   }

@@ -45,10 +45,29 @@ function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/** The remote folder of a task. Task IDs are `task-N`, so the path needs no quoting. */
-function remoteFolder(task: string): string {
-  if (!/^task-\d{1,6}$/.test(task)) fail('Unknown task.');
-  return `/root/verifold/${task}`;
+/** The remote folder of a task (`task-N`) or of a lab run (`run-N-<hex>`). The names need no quoting. */
+function remoteFolder(name: string): string {
+  if (!/^(task-\d{1,6}|run-[1-9]\d{0,5}-[0-9a-f]{8})$/.test(name))
+    fail('Unknown task or run.');
+  return `/root/verifold/${name}`;
+}
+
+/** The files of each lab run's job on the pod, outside the run's folder: its script, log, PIDs, and exit code. */
+const runsFolder = '/root/verifold/.runs';
+
+/** The path of a lab run's job files on the pod, without their extension. */
+function runFiles(run: string): string {
+  if (!/^run-[1-9]\d{0,5}-[0-9a-f]{8}$/.test(run)) fail('Unknown run.');
+  return `${runsFolder}/${run}`;
+}
+
+/** What a lab run's job on the pod does now. */
+export interface PodRunState {
+  /** `gone`: its process ended without an exit code, such as when the pod restarted. */
+  readonly state: 'running' | 'done' | 'gone';
+  readonly exit: number | null;
+  /** The end of its log, up to the output limit. */
+  readonly tail: string;
 }
 
 interface Run {
@@ -80,7 +99,9 @@ function program(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const keep = options.keep ?? podLimits.output;
-    let stdout = Buffer.alloc(0);
+    // The chunks of the tail, oldest first. Only the last `keep` bytes stay.
+    const chunks: Buffer[] = [];
+    let kept = 0;
     let stderr = '';
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -88,8 +109,10 @@ function program(
       child.kill('SIGKILL');
     }, options.timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout = Buffer.concat([stdout, chunk]);
-      if (stdout.length > keep) stdout = stdout.subarray(stdout.length - keep);
+      chunks.push(chunk);
+      kept += chunk.length;
+      while (chunks.length > 1 && kept - (chunks[0]?.length ?? 0) >= keep)
+        kept -= chunks.shift()?.length ?? 0;
     });
     child.stderr.on('data', (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString('utf8')}`.slice(-4000);
@@ -103,7 +126,14 @@ function program(
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout, stderr, timedOut });
+      const stdout = Buffer.concat(chunks);
+      resolve({
+        code: code ?? -1,
+        stdout:
+          stdout.length > keep ? stdout.subarray(stdout.length - keep) : stdout,
+        stderr,
+        timedOut,
+      });
     });
     if (typeof options.input === 'string' || options.input === undefined)
       child.stdin.end(options.input ?? '');
@@ -361,14 +391,174 @@ echo watching
     };
   }
 
+  /**
+   * Start a lab run's job in its folder on the pod. The script goes on stdin.
+   * A wrapper waits for the job and writes its exit code. The job runs in its
+   * own process group, so a stop reaches every process that it started.
+   */
+  async startRun(
+    target: PodTarget,
+    run: string,
+    script: string,
+  ): Promise<void> {
+    const folder = remoteFolder(run);
+    const at = runFiles(run);
+    const result = await program(
+      this.ssh,
+      [
+        ...this.args(target),
+        `mkdir -p ${runsFolder} && cd ${folder} && cat > ${at}.sh && (nohup bash -c 'echo $$ > ${at}.wrap; set -m; bash ${at}.sh > ${at}.log 2>&1 < /dev/null & echo $! > ${at}.pid; wait $!; echo $? > ${at}.exit' > /dev/null 2>&1 < /dev/null &) && i=0 && while { [ ! -s ${at}.wrap ] || [ ! -s ${at}.pid ]; } && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done && echo started`,
+      ],
+      { input: script, timeoutMs: 60_000, keep: 1024 },
+    );
+    if (result.code !== 0 || !result.stdout.toString().includes('started'))
+      fail(
+        `The pod did not start the run. ${result.stderr.trim().slice(0, 300)}`,
+      );
+  }
+
+  /** The state, the exit code, and the end of the log of a lab run's job. */
+  async runState(target: PodTarget, run: string): Promise<PodRunState> {
+    const at = runFiles(run);
+    // The wrapper writes the exit code before it ends, so a wrapper that is gone without one ended another way.
+    const result = await program(
+      this.ssh,
+      [
+        ...this.args(target),
+        `if [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif kill -0 "$(cat ${at}.wrap 2>/dev/null)" 2>/dev/null; then echo running; elif [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; else echo gone; fi; tail -c ${podLimits.output} ${at}.log 2>/dev/null; true`,
+      ],
+      { timeoutMs: 60_000 },
+    );
+    if (result.code !== 0)
+      fail(
+        `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
+      );
+    const text = result.stdout.toString('utf8');
+    const [first = '', ...rest] = text.split('\n');
+    const exit = /^exit (-?\d+)$/.exec(first.trim());
+    return {
+      state: exit ? 'done' : first.trim() === 'running' ? 'running' : 'gone',
+      exit: exit ? Number(exit[1]) : null,
+      tail: rest.join('\n'),
+    };
+  }
+
+  /** Send a signal to the process group of a lab run's job. */
+  async stopRun(
+    target: PodTarget,
+    run: string,
+    signal: 'TERM' | 'KILL',
+  ): Promise<void> {
+    const at = runFiles(run);
+    await program(
+      this.ssh,
+      [
+        ...this.args(target),
+        `pid=$(cat ${at}.pid 2>/dev/null) && [ -n "$pid" ] && kill -${signal} -- -"$pid" 2>/dev/null; true`,
+      ],
+      { timeoutMs: 60_000, keep: 1024 },
+    );
+  }
+
+  /**
+   * A lab run's log: all of it up to `head + tail` bytes in `head`, or else
+   * its first `head` bytes and its last `tail` bytes. `bytes` is the size on
+   * the pod.
+   */
+  async runLog(
+    target: PodTarget,
+    run: string,
+    head: number,
+    tail: number,
+  ): Promise<{
+    readonly bytes: number;
+    readonly head: Buffer;
+    readonly tail: Buffer | null;
+  }> {
+    const at = runFiles(run);
+    const result = await program(
+      this.ssh,
+      [
+        ...this.args(target),
+        `size=$(( $(wc -c 2>/dev/null < ${at}.log) + 0 )); echo $size; if [ $size -le ${head + tail} ]; then cat ${at}.log 2>/dev/null; else head -c ${head} ${at}.log; tail -c ${tail} ${at}.log; fi; true`,
+      ],
+      { timeoutMs: 600_000, keep: head + tail + 64 },
+    );
+    if (result.code !== 0)
+      fail(
+        `Verifold could not read the run's log on the pod. ${result.stderr.trim().slice(0, 300)}`,
+      );
+    const end = result.stdout.indexOf(10);
+    const size = Number(result.stdout.subarray(0, end).toString().trim());
+    const bytes = Number.isSafeInteger(size) ? size : 0;
+    const text = end < 0 ? Buffer.alloc(0) : result.stdout.subarray(end + 1);
+    return bytes > head + tail
+      ? { bytes, head: text.subarray(0, head), tail: text.subarray(head) }
+      : { bytes, head: text, tail: null };
+  }
+
+  /** The last `METRIC name=value` lines of a lab run's log, also from the part that a long log leaves out. */
+  async runMetrics(target: PodTarget, run: string): Promise<string> {
+    const at = runFiles(run);
+    const result = await program(
+      this.ssh,
+      [
+        ...this.args(target),
+        `grep -a '^METRIC ' ${at}.log 2>/dev/null | tail -c ${podLimits.output}; true`,
+      ],
+      { timeoutMs: 120_000 },
+    );
+    return result.code === 0 ? result.stdout.toString('utf8') : '';
+  }
+
+  /** The paths among `paths` that exist in a lab run's folder on the pod, links too. */
+  async existing(
+    target: PodTarget,
+    run: string,
+    paths: readonly string[],
+  ): Promise<string[]> {
+    const chosen = this.paths(paths);
+    const result = await program(
+      this.ssh,
+      [
+        ...this.args(target),
+        `cd ${remoteFolder(run)} && for path in ${chosen.map(quote).join(' ')}; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\\n' "$path"; fi; done`,
+      ],
+      { timeoutMs: 60_000 },
+    );
+    if (result.code !== 0)
+      fail(
+        `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
+      );
+    const found = new Set(result.stdout.toString('utf8').split('\n'));
+    return chosen.filter((path) => found.has(path));
+  }
+
   /** Copy files and folders from the task folder to the task's folder on the pod. */
-  async copyTo(
+  copyTo(
     target: PodTarget,
     task: string,
     folder: string,
     paths: readonly unknown[],
   ): Promise<{ readonly files: number; readonly bytes: number }> {
-    const chosen = this.paths(paths);
+    return this.send(target, remoteFolder(task), folder, this.paths(paths));
+  }
+
+  /** Copy a lab run's whole folder to its folder on the pod, inside the same limits as a copy. */
+  sendRun(
+    target: PodTarget,
+    run: string,
+    folder: string,
+  ): Promise<{ readonly files: number; readonly bytes: number }> {
+    return this.send(target, remoteFolder(run), folder, ['.']);
+  }
+
+  private async send(
+    target: PodTarget,
+    remote: string,
+    folder: string,
+    chosen: readonly string[],
+  ): Promise<{ readonly files: number; readonly bytes: number }> {
     let files = 0;
     let bytes = 0;
     const walk = async (path: string): Promise<void> => {
@@ -395,7 +585,6 @@ echo watching
       env: { ...childEnvironment(), COPYFILE_DISABLE: '1' },
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const remote = remoteFolder(task);
     const result = await program(
       this.ssh,
       [

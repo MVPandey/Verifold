@@ -16,6 +16,7 @@ import {
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { number, object, runId } from './board.ts';
 import { childEnvironment, type HarnessName } from './harness.ts';
 import { processStart, signalGroup, stopRecordedProcess } from './owner.ts';
@@ -23,6 +24,7 @@ import { SessionActionError } from './session.ts';
 import { credentialPaths } from './session-hosts.ts';
 import { writePrivateFile } from './storage.ts';
 import { checkoutAt, commitPattern, type Workspace } from './workspaces.ts';
+import type { PodRunState } from './pod-shell.ts';
 
 /**
  * The lab's run ledger. An agent runs a command on a commit of its folder,
@@ -40,6 +42,12 @@ import { checkoutAt, commitPattern, type Workspace } from './workspaces.ts';
  * the run cannot change a file into a link meanwhile. Every change of a record
  * runs in the lab's queue. The checkout, the process, and the copies run
  * outside it.
+ *
+ * A run can also run on the GPU pod of a lease of its direction. Verifold
+ * copies the commit to the pod, starts the command there as a job, and reads
+ * its state until it ends. Then it copies the named outputs and metrics.json
+ * back into the run's empty folder, and takes them with the same checks as a
+ * local run's.
  */
 
 export const runLimits = {
@@ -47,6 +55,8 @@ export const runLimits = {
   perAgent: 2,
   perLab: 3,
   minutes: 240,
+  /** A run on a pod can take a day. */
+  podMinutes: 1440,
   defaultMinutes: 60,
   command: 2000,
   why: 280,
@@ -95,6 +105,61 @@ export function runActive(run: RunRecord): boolean {
 
 export const noSandboxText =
   'Local runs need the macOS sandbox, and this computer has none, so Verifold runs nothing here. Use a pod.';
+
+export const noPodsText =
+  'This Verifold runs nothing on pods. Run on this computer instead.';
+
+/** Where a run runs: this computer, or the pod of a lease with its GPU type. */
+export type RunPlace = 'local' | { readonly pod: string; readonly gpu: string };
+
+/** A run's place in a few words, such as "local" or "on lease-2 (NVIDIA A40)". */
+export function placeText(run: RunRecord): string {
+  return run.where === 'local'
+    ? 'local'
+    : `on ${run.where.pod} (${run.where.gpu})`;
+}
+
+/** The pod of a lease does not run now, so a pod run there cannot go on. */
+export class PodGoneError extends SessionActionError {}
+
+/**
+ * The pod work of runs, by lease and by the run's folder name. Each call
+ * needs the lease's pod ready, and throws a PodGoneError otherwise. No text
+ * that it returns or throws holds the value of a pod secret.
+ */
+export interface PodRuns {
+  /** The lease of a direction's run: `lease` when it is one of the direction's, or its newest ready lease. */
+  pick(
+    direction: string,
+    lease?: unknown,
+  ): { readonly lease: string; readonly gpu: string };
+  /** Copy the run's folder to the pod. */
+  send(lease: string, run: string, folder: string): Promise<void>;
+  /** Start the run's script as a job in its folder on the pod. */
+  start(lease: string, run: string, script: string): Promise<void>;
+  state(lease: string, run: string): Promise<PodRunState>;
+  stop(lease: string, run: string, signal: 'TERM' | 'KILL'): Promise<void>;
+  /** The job's log: its first `head` and last `tail` bytes, and its size on the pod. */
+  log(
+    lease: string,
+    run: string,
+    head: number,
+    tail: number,
+  ): Promise<{
+    readonly bytes: number;
+    readonly head: string;
+    readonly tail: string | null;
+  }>;
+  /** The `METRIC` lines of the job's log. */
+  metrics(lease: string, run: string): Promise<string>;
+  /** Copy the paths that exist back into `folder`. Returns a note about what stayed out, or null. */
+  fetch(
+    lease: string,
+    run: string,
+    paths: readonly string[],
+    folder: string,
+  ): Promise<string | null>;
+}
 
 export interface RunOutput {
   /** The path in the run's folder, and in `outputs/`. */
@@ -148,6 +213,7 @@ export interface RunRecord {
    * process that outlived an earlier run cannot write in a later one.
    */
   readonly folder: string;
+  readonly where: RunPlace;
 }
 
 /** One run for the sandbox to start. */
@@ -280,6 +346,15 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
+/** Add the metric of a `METRIC name=value` line, up to the limit of names. */
+function addMetric(metrics: Map<string, number | null>, line: string): void {
+  const match = metricLine.exec(line.replace(/\r$/, ''));
+  if (!match?.[1] || !match[2]) return;
+  if (!metrics.has(match[1]) && metrics.size >= runLimits.metrics) return;
+  const value = Number(match[2]);
+  metrics.set(match[1], Number.isFinite(value) ? value : null);
+}
+
 /** A saved run record, or null when it is not valid. */
 function parseRun(value: Record<string, unknown> | null): RunRecord | null {
   if (!value) return null;
@@ -290,7 +365,20 @@ function parseRun(value: Record<string, unknown> | null): RunRecord | null {
   const leader = value.process === null ? null : object(value.process);
   const metrics = object(value.metrics);
   const outputs = Array.isArray(value.outputs) ? value.outputs : null;
+  // Records from before pod runs ran locally.
+  const pod = value.where === undefined ? null : object(value.where);
+  const where: RunPlace | null =
+    value.where === undefined || value.where === 'local'
+      ? 'local'
+      : pod &&
+          text(pod.pod) &&
+          /^lease-\d{1,6}$/.test(pod.pod) &&
+          text(pod.gpu) &&
+          pod.gpu.length <= 100
+        ? { pod: pod.pod, gpu: pod.gpu }
+        : null;
   if (
+    !where ||
     value.schemaVersion !== 1 ||
     !text(value.id) ||
     !runId.test(value.id) ||
@@ -380,6 +468,7 @@ function parseRun(value: Record<string, unknown> | null): RunRecord | null {
     note: value.note,
     told: value.told,
     folder: value.folder,
+    where,
   };
 }
 
@@ -484,12 +573,7 @@ class RunLog {
   }
 
   private metric(line: string): void {
-    const match = metricLine.exec(line.replace(/\r$/, ''));
-    if (!match?.[1] || !match[2]) return;
-    if (!this.metrics.has(match[1]) && this.metrics.size >= runLimits.metrics)
-      return;
-    const value = Number(match[2]);
-    this.metrics.set(match[1], Number.isFinite(value) ? value : null);
+    addMetric(this.metrics, line);
   }
 
   /** Write the end of the log and close it. Returns whether a part was cut. */
@@ -551,16 +635,32 @@ async function readKept(
 
 /** A run's process while it runs. */
 interface Live {
-  readonly pid: number;
+  /** The local process group's leader. Null for a job on a pod. */
+  readonly pid: number | null;
   /** Why Verifold stopped it, when it did. */
   stop: 'timed-out' | 'cancelled' | 'interrupted' | null;
   timer: NodeJS.Timeout | undefined;
   kill: NodeJS.Timeout | undefined;
+  /** A pod run's wait for its next read of the job. A stop ends the wait. */
+  wake: (() => void) | undefined;
 }
+
+/** The log of a run that ended: its size, whether a part was cut, and its metrics. */
+interface LogResult {
+  readonly bytes: number;
+  readonly cut: boolean;
+  readonly metrics: ReadonlyMap<string, number | null>;
+}
+
+const noLog: LogResult = { bytes: 0, cut: false, metrics: new Map() };
 
 export interface RunLedgerOptions {
   /** Null: this computer has no sandbox, so local runs are refused. */
   readonly sandbox: Sandbox | null;
+  /** The pods of the project's leases. Without it, pod runs are refused. */
+  readonly pods?: PodRuns;
+  /** The time between two reads of a pod run's job. */
+  readonly pollMs?: number;
   /** The lab's queue. Every change of a record runs in it. */
   readonly serial: <T>(work: () => T | Promise<T>) => Promise<T>;
   /** A run ended. In the lab's queue. Returns true when its agent heard it. */
@@ -578,8 +678,8 @@ export class RunLedger {
   private readonly live = new Map<string, Live>();
   /** Runs whose folder is made now. A stop that comes meanwhile waits here. */
   private readonly starting = new Map<string, Live['stop']>();
-  /** The work of each run from its start to its end. Close waits for it. */
-  private readonly work = new Set<Promise<void>>();
+  /** The work of each run from its start to its end, by run ID. Close waits for it. */
+  private readonly work = new Map<string, Promise<void>>();
   private last = 0;
   /** Who cancelled each run that stops now, and why. */
   private readonly cancelled = new Map<string, string>();
@@ -595,6 +695,11 @@ export class RunLedger {
   /** This computer can run commands in a sandbox. */
   get sandboxed(): boolean {
     return this.options.sandbox !== null;
+  }
+
+  /** Runs can run on the pods of the project's leases. */
+  get pods(): boolean {
+    return this.options.pods !== undefined;
   }
 
   list(): readonly RunRecord[] {
@@ -639,8 +744,10 @@ export class RunLedger {
 
   /**
    * Read the records. With `recover`, in the project's owner: a run that an
-   * earlier owner left starting or running ends as interrupted, its process
-   * group stops when its PID and start time match, and its folder goes.
+   * earlier owner left starting or running ends. A local one ends as
+   * interrupted, and its process group stops when its PID and start time
+   * match. A pod run's job is read: a job that ended gives its result, and
+   * one that runs stops. Its outputs come back, and its folder goes.
    */
   async load(recover: boolean): Promise<void> {
     this.records.clear();
@@ -670,19 +777,70 @@ export class RunLedger {
     for (const run of this.records.values()) {
       if (!runActive(run) || this.live.has(run.id) || this.starting.has(run.id))
         continue;
-      if (run.process)
-        await stopRecordedProcess(run.process.pid, run.process.processStart);
+      let next: RunRecord;
+      if (run.where === 'local') {
+        if (run.process)
+          await stopRecordedProcess(run.process.pid, run.process.processStart);
+        next = {
+          ...run,
+          status: 'interrupted',
+          endedAt: new Date().toISOString(),
+          note: 'Verifold stopped while the run ran.',
+        };
+      } else next = await this.recoverPod(run, run.where.pod);
       // A folder that cannot go stays. The record ends all the same.
       await this.clear(run).catch(() => {});
-      const next: RunRecord = {
-        ...run,
-        status: 'interrupted',
-        endedAt: new Date().toISOString(),
-        note: 'Verifold stopped while the run ran.',
-      };
       this.records.set(run.id, next);
       await this.save(next).catch(() => {});
     }
+  }
+
+  /**
+   * A pod run that an earlier owner left: a job that ended gives its exit
+   * code, and a job that runs stops as interrupted. Then its outputs and log
+   * come back, as far as the pod still answers.
+   */
+  private async recoverPod(run: RunRecord, lease: string): Promise<RunRecord> {
+    const pods = this.options.pods;
+    let exit: Exit = { code: null, signal: null, error: null };
+    let stop: Live['stop'] = 'interrupted';
+    let note = 'Verifold stopped while the run ran.';
+    if (pods)
+      try {
+        const state = await pods.state(lease, run.folder);
+        if (state.state === 'done') {
+          stop = null;
+          exit = { code: state.exit, signal: null, error: null };
+        } else if (state.state === 'running') {
+          await pods.stop(lease, run.folder, 'TERM');
+          // The job gets the grace time to end, then SIGKILL.
+          for (
+            let waited = 0;
+            waited < runLimits.graceMs &&
+            (await pods.state(lease, run.folder)).state === 'running';
+            waited += 500
+          )
+            await delay(500);
+          await pods.stop(lease, run.folder, 'KILL');
+        }
+      } catch (error) {
+        note = `Verifold stopped while the run ran, and could not read its job on the pod after: ${error instanceof Error ? error.message : 'unknown error'}`;
+      }
+    const collected = pods
+      ? await this.collectPod(run, pods, lease)
+      : { kept: { metrics: new Map(), outputs: [], note: null }, log: noLog };
+    return this.result(run, {
+      exit,
+      stop,
+      kept: {
+        ...collected.kept,
+        note:
+          [stop ? note : '', collected.kept.note ?? '']
+            .filter(Boolean)
+            .join(' ') || null,
+      },
+      log: collected.log,
+    });
   }
 
   /** Refuse a start past the limits. */
@@ -698,10 +856,11 @@ export class RunLedger {
   }
 
   /**
-   * Start a run of `command` on `commit` of the agent's folder. The record
-   * comes first, in the lab's queue. Then the run's folder and its process,
-   * outside it. Returns once the process started, or the run failed to
-   * start. A repeated call with the same key gets the first run.
+   * Start a run of `command` on `commit` of the agent's folder, on this
+   * computer or on a pod of the direction's leases. The record comes first,
+   * in the lab's queue. Then the run's folder and its process or its job,
+   * outside it. Returns once the process or the job started, or the run
+   * failed to start. A repeated call with the same key gets the first run.
    */
   async start(input: {
     readonly agent: string;
@@ -714,8 +873,17 @@ export class RunLedger {
     readonly why: string;
     readonly minutes: number;
     readonly want: readonly string[];
+    /** Default: local. */
+    readonly where?: 'local' | 'pod';
+    /** On a pod: the lease to use. Default: the direction's newest ready lease. */
+    readonly lease?: unknown;
   }): Promise<RunRecord> {
-    const sandbox = this.options.sandbox ?? fail(noSandboxText);
+    const sandbox =
+      input.where === 'pod'
+        ? null
+        : (this.options.sandbox ?? fail(noSandboxText));
+    const pods =
+      input.where === 'pod' ? (this.options.pods ?? fail(noPodsText)) : null;
     const made = await this.options.serial(async () => {
       const known = [...this.records.values()].find(
         (run) => run.agent === input.agent && run.key === input.key,
@@ -724,6 +892,7 @@ export class RunLedger {
       if (this.closed)
         fail('Verifold stops or moves the lab now, so no run starts.');
       this.room(input.agent);
+      const place = pods?.pick(input.direction, input.lease);
       const id = `r-${++this.last}`;
       const run: RunRecord = {
         schemaVersion: 1,
@@ -754,6 +923,7 @@ export class RunLedger {
         note: null,
         told: false,
         folder: `run-${number(id)}-${randomBytes(4).toString('hex')}`,
+        where: place ? { pod: place.lease, gpu: place.gpu } : 'local',
       };
       await mkdir(this.record(id), { recursive: true, mode: 0o700 });
       await this.save(run);
@@ -766,17 +936,51 @@ export class RunLedger {
     const ready = new Promise<RunRecord>((resolve) => {
       started = resolve;
     });
-    const work = this.execute(made.run, sandbox, input.workspace, started)
+    const where = made.run.where;
+    const work = (
+      where === 'local'
+        ? this.execute(
+            made.run,
+            sandbox ?? fail(noSandboxText),
+            input.workspace,
+            started,
+          )
+        : this.executePod(
+            made.run,
+            pods ?? fail(noPodsText),
+            where.pod,
+            input.workspace,
+            started,
+          )
+    )
       .catch(() => {
         /* The run's end records what failed. */
       })
       .finally(() => {
-        this.work.delete(work);
+        this.work.delete(made.run.id);
         // The caller never waits for good, also when the end's record failed.
         started(this.records.get(made.run.id) ?? made.run);
       });
-    this.work.add(work);
+    this.work.set(made.run.id, work);
     return ready;
+  }
+
+  /** The run's state as running, once its process or its job started. In the lab's queue. */
+  private markRunning(
+    run: RunRecord,
+    process: RunRecord['process'],
+  ): Promise<RunRecord> {
+    return this.options.serial(async () => {
+      const next: RunRecord = {
+        ...(this.records.get(run.id) ?? run),
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        process,
+      };
+      this.records.set(run.id, next);
+      await this.save(next).catch(() => {});
+      return next;
+    });
   }
 
   /** The run from its folder to its end. `started` gets the record once the process runs, or once the run ended. */
@@ -858,29 +1062,19 @@ export class RunLedger {
           stop: null,
           timer: undefined,
           kill: undefined,
+          wake: undefined,
         };
         this.live.set(run.id, live);
-        // A stop that came while the folder was made.
-        const late = this.starting.get(run.id);
         this.starting.delete(run.id);
-        if (late) this.halt(run.id, late);
         live.timer = setTimeout(
           () => this.halt(run.id, 'timed-out'),
           run.minutes * (this.options.minuteMs ?? 60_000),
         );
         live.timer.unref();
-        const begun = await processStart(pid);
         started(
-          await this.options.serial(async () => {
-            const next: RunRecord = {
-              ...(this.records.get(run.id) ?? run),
-              status: 'running',
-              startedAt: new Date().toISOString(),
-              process: { pid, processStart: begun },
-            };
-            this.records.set(run.id, next);
-            await this.save(next).catch(() => {});
-            return next;
+          await this.markRunning(run, {
+            pid,
+            processStart: await processStart(pid),
           }),
         );
         exit = await exited;
@@ -918,58 +1112,311 @@ export class RunLedger {
         : { metrics: new Map(), outputs: [], note: null };
       await this.clear(run).catch(() => {});
       started(
-        await this.options.serial(async () => {
-          const metrics = [
-            ...new Map([...(log?.metrics ?? []), ...kept.metrics]),
-          ].slice(0, runLimits.metrics);
-          const next: RunRecord = {
-            ...(this.records.get(run.id) ?? run),
-            status:
-              stop ??
-              (exit.error === null && exit.code === 0 ? 'done' : 'failed'),
-            exitCode: stop ? null : exit.code,
-            endedAt: new Date().toISOString(),
-            metrics: Object.fromEntries(metrics),
-            outputs: kept.outputs,
-            output: kept.outputs.length
-              ? createHash('sha256')
-                  .update(
-                    kept.outputs
-                      .map((entry) => `${entry.path}\0${entry.sha256}\n`)
-                      .join(''),
-                  )
-                  .digest('hex')
-              : null,
-            log: { bytes: log?.bytes ?? 0, cut },
-            cancelledBy:
-              stop === 'cancelled'
-                ? (this.cancelled.get(run.id) ?? null)
-                : null,
-            note:
-              [
-                exit.error ? `The run did not start: ${exit.error}` : '',
-                // Such as an out-of-memory kill or a crash: no exit code.
-                exit.signal && !stop ? `Killed by ${exit.signal}.` : '',
-                stop === 'cancelled' && this.reasons.get(run.id)
-                  ? `Cancelled: ${this.reasons.get(run.id)}`
-                  : '',
-                kept.note ?? '',
-              ]
-                .filter(Boolean)
-                .join(' ') || null,
-          };
-          this.cancelled.delete(run.id);
-          this.reasons.delete(run.id);
-          this.records.set(run.id, next);
-          const saved = this.options.ended(next)
-            ? { ...next, told: true }
-            : next;
-          this.records.set(run.id, saved);
-          await this.save(saved).catch(() => {});
-          return saved;
+        await this.end(run, {
+          exit,
+          stop,
+          kept,
+          log: {
+            bytes: log?.bytes ?? 0,
+            cut,
+            metrics: log?.metrics ?? new Map(),
+          },
         }),
       );
     }
+  }
+
+  /**
+   * A pod run from its folder to its end: copy the commit to the pod, start
+   * the job, and read its state until it ends. A stop sends SIGTERM to the
+   * job's process group, then SIGKILL after the grace time. At the end, the
+   * outputs and the log come back. `started` gets the record once the job
+   * runs, or once the run ended.
+   */
+  private async executePod(
+    run: RunRecord,
+    pods: PodRuns,
+    lease: string,
+    workspace: Workspace,
+    started: (run: RunRecord) => void,
+  ): Promise<void> {
+    const tree = join(this.trees(run).folder, 'tree');
+    let stop: Live['stop'] = null;
+    let exit: Exit = { code: null, signal: null, error: null };
+    let note: string | null = null;
+    // The job started, so the pod holds its work.
+    let ran = false;
+    let live: Live | undefined;
+    try {
+      await mkdir(tree, { recursive: true, mode: 0o700 });
+      await checkoutAt(this.root, workspace, run.commit, tree);
+      // A committed metrics.json is not this run's result. The run writes its own.
+      await rm(join(tree, 'metrics.json'), { force: true }).catch(() => {});
+      stop = this.starting.get(run.id) ?? null;
+      if (stop) return;
+      await pods.send(lease, run.folder, tree);
+      // The outputs come back into an empty folder.
+      await rm(tree, { recursive: true, force: true });
+      await mkdir(tree, { mode: 0o700 });
+      stop = this.starting.get(run.id) ?? null;
+      if (stop) return;
+      await pods.start(
+        lease,
+        run.folder,
+        `export VERIFOLD_RUN=${run.id} VERIFOLD_COMMIT=${run.commit}\n${run.command}\n`,
+      );
+      ran = true;
+      live = {
+        pid: null,
+        stop: null,
+        timer: undefined,
+        kill: undefined,
+        wake: undefined,
+      };
+      this.live.set(run.id, live);
+      this.starting.delete(run.id);
+      live.timer = setTimeout(
+        () => this.halt(run.id, 'timed-out'),
+        run.minutes * (this.options.minuteMs ?? 60_000),
+      );
+      live.timer.unref();
+      started(await this.markRunning(run, null));
+      ({ exit, note } = await this.watch(run, pods, lease, live));
+      stop = live.stop;
+    } catch (error) {
+      exit = {
+        code: null,
+        signal: null,
+        error: error instanceof Error ? error.message : 'unknown error',
+      };
+    } finally {
+      this.live.delete(run.id);
+      this.starting.delete(run.id);
+      clearTimeout(live?.timer);
+      const collected = ran
+        ? await this.collectPod(run, pods, lease)
+        : {
+            kept: { metrics: new Map(), outputs: [], note: null },
+            log: noLog,
+          };
+      await this.clear(run).catch(() => {});
+      started(
+        await this.end(run, {
+          exit,
+          stop,
+          kept: {
+            ...collected.kept,
+            note:
+              [note ?? '', collected.kept.note ?? '']
+                .filter(Boolean)
+                .join(' ') || null,
+          },
+          log: collected.log,
+        }),
+      );
+    }
+  }
+
+  /**
+   * Read a pod run's job until it ends. Each read keeps the end of its log
+   * in log.txt. A stop sends SIGTERM, then SIGKILL after the grace time. A
+   * pod that stops, or 5 reads in a row that fail, end the run as
+   * interrupted.
+   */
+  private async watch(
+    run: RunRecord,
+    pods: PodRuns,
+    lease: string,
+    live: Live,
+  ): Promise<{ readonly exit: Exit; readonly note: string | null }> {
+    const none: Exit = { code: null, signal: null, error: null };
+    let failures = 0;
+    let termAt: number | null = null;
+    let killed = false;
+    for (;;) {
+      if (live.stop && termAt === null) {
+        termAt = Date.now();
+        await pods.stop(lease, run.folder, 'TERM').catch(() => {});
+      }
+      if (
+        termAt !== null &&
+        !killed &&
+        Date.now() - termAt >= runLimits.graceMs
+      ) {
+        killed = true;
+        await pods.stop(lease, run.folder, 'KILL').catch(() => {});
+      }
+      try {
+        const state = await pods.state(lease, run.folder);
+        failures = 0;
+        await writePrivateFile(
+          join(this.record(run.id), 'log.txt'),
+          state.tail,
+        ).catch(() => {});
+        if (state.state === 'done')
+          return {
+            exit: { code: state.exit, signal: null, error: null },
+            note: null,
+          };
+        if (state.state === 'gone')
+          return {
+            exit: none,
+            note: 'The job on the pod ended without an exit code, for example when the pod ran out of memory or started again.',
+          };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'unknown error';
+        if (error instanceof PodGoneError || ++failures >= 5) {
+          live.stop ??= 'interrupted';
+          return {
+            exit: none,
+            note:
+              error instanceof PodGoneError
+                ? message
+                : `Verifold could not reach the pod: ${message}`,
+          };
+        }
+      }
+      // The next read, sooner while a stop waits for the job. A stop ends the wait.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(
+          resolve,
+          termAt === null ? (this.options.pollMs ?? 20_000) : 1_000,
+        );
+        timer.unref();
+        live.wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      live.wake = undefined;
+    }
+  }
+
+  /**
+   * After a pod run: copy its named outputs and its metrics.json back into
+   * its empty folder and take them as a local run's, then copy its log and
+   * its metric lines. What the pod no longer gives goes into the note.
+   */
+  private async collectPod(
+    run: RunRecord,
+    pods: PodRuns,
+    lease: string,
+  ): Promise<{ readonly kept: Collected; readonly log: LogResult }> {
+    const notes: string[] = [];
+    const tree = join(this.trees(run).folder, 'tree');
+    try {
+      await mkdir(tree, { recursive: true, mode: 0o700 });
+      const held = await pods.fetch(
+        lease,
+        run.folder,
+        [...run.want, 'metrics.json'],
+        tree,
+      );
+      if (held) notes.push(held);
+    } catch (error) {
+      notes.push(
+        `Verifold could not copy the outputs back: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+    const kept = await this.keep(run).catch((error: unknown) => ({
+      metrics: new Map<string, number | null>(),
+      outputs: [],
+      note: `Verifold could not read the copied outputs: ${error instanceof Error ? error.message : 'unknown error'}`,
+    }));
+    let log: LogResult = noLog;
+    try {
+      const head = runLimits.logBytes - runLimits.logTail;
+      const got = await pods.log(lease, run.folder, head, runLimits.logTail);
+      const metrics = new Map<string, number | null>();
+      for (const line of (await pods.metrics(lease, run.folder)).split('\n'))
+        addMetric(metrics, line);
+      await writePrivateFile(
+        join(this.record(run.id), 'log.txt'),
+        got.tail === null
+          ? got.head
+          : `${got.head}\n[Verifold cut ${got.bytes - head - runLimits.logTail} bytes of the log here. The last ${runLimits.logTail} bytes follow.]\n${got.tail}`,
+      );
+      log = { bytes: got.bytes, cut: got.tail !== null, metrics };
+    } catch (error) {
+      notes.push(
+        `Verifold could not copy the log back: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+    return {
+      kept: {
+        ...kept,
+        note: [...notes, kept.note ?? ''].filter(Boolean).join(' ') || null,
+      },
+      log,
+    };
+  }
+
+  /** The record of a run that ended. */
+  private result(
+    run: RunRecord,
+    outcome: {
+      readonly exit: Exit;
+      readonly stop: Live['stop'];
+      readonly kept: Collected;
+      readonly log: LogResult;
+    },
+  ): RunRecord {
+    const { exit, stop, kept, log } = outcome;
+    const metrics = [...new Map([...log.metrics, ...kept.metrics])].slice(
+      0,
+      runLimits.metrics,
+    );
+    return {
+      ...run,
+      status:
+        stop ?? (exit.error === null && exit.code === 0 ? 'done' : 'failed'),
+      exitCode: stop ? null : exit.code,
+      endedAt: new Date().toISOString(),
+      metrics: Object.fromEntries(metrics),
+      outputs: kept.outputs,
+      output: kept.outputs.length
+        ? createHash('sha256')
+            .update(
+              kept.outputs
+                .map((entry) => `${entry.path}\0${entry.sha256}\n`)
+                .join(''),
+            )
+            .digest('hex')
+        : null,
+      log: { bytes: log.bytes, cut: log.cut },
+      cancelledBy:
+        stop === 'cancelled' ? (this.cancelled.get(run.id) ?? null) : null,
+      note:
+        [
+          exit.error ? `The run did not start: ${exit.error}` : '',
+          // Such as an out-of-memory kill or a crash: no exit code.
+          exit.signal && !stop ? `Killed by ${exit.signal}.` : '',
+          stop === 'cancelled' && this.reasons.get(run.id)
+            ? `Cancelled: ${this.reasons.get(run.id)}`
+            : '',
+          kept.note ?? '',
+        ]
+          .filter(Boolean)
+          .join(' ') || null,
+    };
+  }
+
+  /** Record a run's end in the lab's queue, and tell its agent. */
+  private end(
+    run: RunRecord,
+    outcome: Parameters<RunLedger['result']>[1],
+  ): Promise<RunRecord> {
+    return this.options.serial(async () => {
+      const next = this.result(this.records.get(run.id) ?? run, outcome);
+      this.cancelled.delete(run.id);
+      this.reasons.delete(run.id);
+      this.records.set(run.id, next);
+      const saved = this.options.ended(next) ? { ...next, told: true } : next;
+      this.records.set(run.id, saved);
+      await this.save(saved).catch(() => {});
+      return saved;
+    });
   }
 
   /**
@@ -1119,7 +1566,8 @@ export class RunLedger {
 
   /**
    * Stop a run: SIGTERM to its process group, then SIGKILL after the grace
-   * time. A run whose folder is made now stops before its process starts.
+   * time. A run whose folder is made now stops before its process starts. A
+   * pod run's reads of its job send the signals.
    */
   private halt(id: string, why: NonNullable<Live['stop']>): void {
     if (this.starting.has(id)) {
@@ -1129,9 +1577,14 @@ export class RunLedger {
     const live = this.live.get(id);
     if (!live || live.stop) return;
     live.stop = why;
-    signalGroup(live.pid, 'SIGTERM');
+    if (live.pid === null) {
+      live.wake?.();
+      return;
+    }
+    const pid = live.pid;
+    signalGroup(pid, 'SIGTERM');
     live.kill = setTimeout(
-      () => signalGroup(live.pid, 'SIGKILL'),
+      () => signalGroup(pid, 'SIGKILL'),
       runLimits.graceMs,
     );
     live.kill.unref();
@@ -1161,7 +1614,25 @@ export class RunLedger {
     this.closed = true;
     for (const id of [...this.starting.keys(), ...this.live.keys()])
       this.halt(id, 'interrupted');
-    await Promise.all(this.work);
+    await Promise.all(this.work.values());
+  }
+
+  /**
+   * The pod of a lease stops: its runs end as interrupted, and wait until
+   * their outputs and logs came back and each record is final.
+   */
+  async podStops(lease: string): Promise<void> {
+    const runs = [...this.records.values()].filter(
+      (run) =>
+        runActive(run) && run.where !== 'local' && run.where.pod === lease,
+    );
+    for (const run of runs) this.halt(run.id, 'interrupted');
+    await Promise.all(
+      runs.flatMap((run) => {
+        const work = this.work.get(run.id);
+        return work ? [work] : [];
+      }),
+    );
   }
 
   /** The agent heard that the run ended. Call it in the lab's queue. */
