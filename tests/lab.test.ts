@@ -4643,6 +4643,12 @@ await test('a rerun that does not hold takes back the verdict, and the claim can
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   const claim = await claimPost(lab);
   await until(() => lab.lab.view()?.state.directions[0]?.verdict === 'leading');
+  // The person's post would go into a turn that still runs, so it waits for the turn's last answer.
+  await until(async () =>
+    (await answers(lab, 'd-1-alpha')).some(
+      (entry) => entry.call === 'verifold_direction',
+    ),
+  );
   await lab.lab.post({
     kind: 'objection',
     replyTo: claim,
