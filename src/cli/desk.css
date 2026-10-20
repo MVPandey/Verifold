@@ -3489,7 +3489,22 @@ body:not(:has(.rail)) .menu-button {
   background: var(--caution-bg);
   color: var(--caution);
 }
+/* Open disputes: one line each, with where its check is. */
+.lab-disputes ul {
+  display: grid;
+  gap: 10px;
+  padding-left: 0;
+  list-style: none;
+}
+.lab-disputes .pre {
+  margin: 2px 0;
+}
 /* A direction's verdict: what its agent says of it now. */
+.chip.verdict-holds-up {
+  border-color: var(--green);
+  background: var(--ok-bg);
+  color: var(--green);
+}
 .chip.verdict-leading {
   border-color: var(--tint-line);
   background: var(--lavender);

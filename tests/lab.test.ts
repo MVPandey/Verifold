@@ -26,7 +26,7 @@ import {
   type LabSessions,
 } from '../src/cli/lab.ts';
 import { RunTeam } from '../src/cli/team.ts';
-import type { PodRuns, Sandbox } from '../src/cli/runs.ts';
+import type { PodRuns, Sandbox, SandboxSpec } from '../src/cli/runs.ts';
 import type { Lease } from '../src/cli/leases.ts';
 import { secretGuard } from '../src/cli/runpod.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
@@ -268,6 +268,8 @@ async function fixture(
     readonly harnesses?: readonly ('claude' | 'codex')[];
     /** One hour of a time budget, short in a test. */
     readonly hourMs?: number;
+    /** One minute of a run's or a check's time limit, short in a test. */
+    readonly minuteMs?: number;
     /** The sandbox of runs. Default: none at all, so a run's command runs as it is. Null: no runs. */
     readonly sandbox?: Sandbox | null;
     readonly compute?: LabCompute;
@@ -334,7 +336,11 @@ async function fixture(
         options.sandbox === undefined
           ? (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] })
           : options.sandbox,
-      timing: options.hourMs ? { ...timing, hourMs: options.hourMs } : timing,
+      timing: {
+        ...timing,
+        ...(options.hourMs ? { hourMs: options.hourMs } : {}),
+        ...(options.minuteMs ? { minuteMs: options.minuteMs } : {}),
+      },
       ...(options.compute ? { compute: options.compute } : {}),
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
@@ -2935,7 +2941,14 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
     string,
     unknown
   > & { directions: Record<string, unknown>[] };
-  for (const key of ['opener', 'plan', 'budget', 'pausedFor', 'agentStarts'])
+  for (const key of [
+    'opener',
+    'plan',
+    'budget',
+    'pausedFor',
+    'agentStarts',
+    'checks',
+  ])
     delete old[key];
   for (const direction of old.directions)
     for (const key of ['runs', 'noise', 'buildsOn', 'verdict', 'evidence'])
@@ -2964,6 +2977,7 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
   assert.equal(state?.directions[0]?.verdict, 'open');
   assert.equal(state?.directions[0]?.evidence, null);
   assert.deepEqual(state?.agentStarts, []);
+  assert.deepEqual(state?.checks, []);
   assert.equal(reloaded.view()?.directions[0]?.agent.quietTurns, 0);
   assert.equal(reloaded.view()?.directions[0]?.agent.nudged, false);
   await reloaded.resume();
@@ -3514,9 +3528,10 @@ await test('an agent gives its own direction a verdict with proof, and closes it
     said[3]?.text ?? '',
     /Leading needs a claim, evidence, or rerun post with proof, and p-3 is not one/,
   );
+  // Holds up starts a check, and a check needs a run to rerun.
   assert.match(
     said[4]?.text ?? '',
-    /Holds up needs a rerun by the other harness/,
+    /Holds up needs a post that cites a run, so the other harness can rerun it, and p-2 cites none\./,
   );
   assert.match(said[5]?.text ?? '', /only after its verdict is ruled-out\./);
   assert.equal(said[6]?.text, 'd-1 is leading now.');
@@ -3961,4 +3976,667 @@ await test("a person's stop stays a stop when the lab cannot save it", async (t)
     await readFile(join(folder, 'lab.json'), 'utf8'),
   ) as { directions: { state: string }[] };
   assert.equal(saved.directions[0]?.state, 'stopped');
+});
+
+/** The answers of a fake harness's tool calls, from Claude Code or Codex. */
+async function answers(
+  lab: Fixture,
+  folder: string,
+): Promise<{ call: string; ok: boolean; text: string }[]> {
+  return (
+    (await lab.lines(folder, 'results.jsonl')) as {
+      call: string;
+      result: {
+        isError?: boolean;
+        success?: boolean;
+        content?: { text: string }[];
+        contentItems?: { text: string }[];
+      };
+    }[]
+  ).map((entry) => ({
+    call: entry.call,
+    ok: entry.result.isError !== true && entry.result.success !== false,
+    text:
+      entry.result.content?.[0]?.text ??
+      entry.result.contentItems?.[0]?.text ??
+      '',
+  }));
+}
+
+/**
+ * Direction Alpha runs `sh train.sh` as r-1, then posts a question with a
+ * marker and a claim that cites r-1. `then` runs after the claim. A lab with
+ * a team plans first, so Alpha is d-2 there.
+ */
+async function claimWithRun(
+  lab: Fixture,
+  then: Call[] = [],
+  folder = 'd-1-alpha',
+): Promise<void> {
+  await lab.script(folder, [
+    {
+      calls: [
+        {
+          name: 'WRITE',
+          arguments: { path: 'train.sh', text: 'echo "METRIC acc=0.7"\n' },
+        },
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sh train.sh', why: 'AUTHOR_WHY_MARKER' },
+        },
+      ],
+    },
+    {
+      when: 'r-1 ended',
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'question',
+            text: 'AUTHOR_REASONING_MARKER: I think the old mix wins.',
+          },
+        },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'Accuracy is 0.7.',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
+        },
+        ...then,
+      ],
+    },
+  ]);
+}
+
+/** The claim post of a lab, once it is on the board. */
+async function claimPost(lab: Fixture): Promise<string> {
+  await until(() =>
+    Boolean(lab.lab.view()?.posts.some((post) => post.kind === 'claim')),
+  );
+  return lab.lab.view()?.posts.find((post) => post.kind === 'claim')?.id ?? '';
+}
+
+await test("an objection to a claim with a run starts a fresh checker of the other harness that cannot read the author's reasoning, and its rerun settles the dispute", async (t) => {
+  // Without a team option the team has both harnesses, and no agent plans the lab.
+  const specs: SandboxSpec[] = [];
+  const lab = await fixture(t, {
+    sandbox: (spec) => {
+      specs.push(spec);
+      return { file: '/bin/sh', args: ['-c', spec.command] };
+    },
+    memory: () => ({
+      note: () => Promise.resolve('Noted.'),
+      digest: () => Promise.resolve('MEMORY_MARKER: an earlier run.'),
+    }),
+  });
+  await claimWithRun(lab);
+  await lab.script('k-1', [
+    {
+      calls: [
+        { name: 'verifold_read', arguments: { path: 'train.sh' } },
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sh train.sh', why: 'Rerun.' },
+        },
+      ],
+    },
+    {
+      when: 'r-2 ended',
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'rerun',
+            text: 'Holds: acc 0.7 on my rerun.',
+            outcome: 'holds',
+            method: 'rerun',
+            artifacts: [{ type: 'run', run: 'r-2' }],
+          },
+        },
+      ],
+    },
+  ]);
+  // The lab plans nothing here: the person opens the direction.
+  await lab.lab.start('Does the old mix win?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await lab.lab.resume();
+  const claim = await claimPost(lab);
+  const objection = await lab.lab.post({
+    kind: 'objection',
+    replyTo: claim,
+    text: 'Is the test set clean?',
+  });
+  // The check queues, and it is an open dispute on the desk.
+  await until(() => (lab.lab.view()?.checks.length ?? 0) === 1);
+  const queued = lab.lab.view()?.checks[0];
+  assert.equal(queued?.claim, claim);
+  assert.deepEqual(queued?.objections, [objection.id]);
+  assert.equal(queued?.harness, 'codex');
+  assert.equal(queued?.sameHarness, false);
+  assert.equal(queued?.run, 'r-1');
+  await until(() => lab.lab.view()?.checks[0]?.state === 'done', 15_000);
+  const check = lab.lab.view()?.checks[0];
+  assert.equal(check?.outcome, 'holds');
+  assert.equal(check?.method, 'rerun');
+
+  // The checker's folder holds the claim's commit, with no Git data of the project.
+  const folder = join(lab.root, '.verifold', 'workspaces', 'k-1');
+  assert.equal(
+    await readFile(join(folder, 'train.sh'), 'utf8'),
+    'echo "METRIC acc=0.7"\n',
+  );
+  const log = git(folder, 'log', '--all', '--format=%s');
+  assert.match(log, /Verifold: the start of a check/);
+  assert.doesNotMatch(log, /^start$/m);
+  // Its prompt has the claim, the command, and the objection, and nothing of the author's reasoning.
+  const prompt = (await lab.inputs('k-1'))[0] ?? '';
+  assert.match(prompt, /Accuracy is 0\.7\./);
+  assert.match(prompt, /"sh train\.sh"/);
+  assert.match(prompt, /acc=0\.7/);
+  assert.match(prompt, /Is the test set clean\?/);
+  assert.doesNotMatch(prompt, /AUTHOR_REASONING_MARKER/);
+  assert.doesNotMatch(prompt, /AUTHOR_WHY_MARKER/);
+  assert.doesNotMatch(prompt, /MEMORY_MARKER/);
+  assert.doesNotMatch(prompt, /Turn 1\./);
+  // The author's own prompt had the memory: only the checker goes without it.
+  assert.match((await lab.inputs('d-1-alpha'))[0] ?? '', /MEMORY_MARKER/);
+  // Codex denies the lab's records, the other folders, and both harnesses' transcripts.
+  const threads = (await lab.lines('k-1', 'threads.jsonl')) as {
+    params: {
+      config: {
+        permissions: Record<string, { filesystem: Record<string, string> }>;
+      };
+      dynamicTools: { name: string }[];
+    };
+  }[];
+  const denied =
+    threads[0]?.params.config.permissions['verifold-strict']?.filesystem;
+  for (const path of [
+    join(lab.root, '.verifold', 'board'),
+    join(lab.root, '.verifold', 'lab'),
+    join(lab.root, '.verifold', 'sessions'),
+    join(lab.root, '.verifold', 'lab.json'),
+    join(lab.root, '.verifold', 'workspaces', 'd-1-alpha'),
+    join(lab.root, 'memory'),
+    join(lab.root, '.git'),
+    '~/.claude/projects',
+    '~/.codex/sessions',
+    '~/.ssh',
+  ])
+    assert.equal(denied?.[path], 'deny', path);
+  assert.equal(denied?.[folder], undefined);
+  // The checker has its own tools: no board, no plan, no direction.
+  assert.deepEqual(
+    threads[0]?.params.dynamicTools.map((tool) => tool.name),
+    ['verifold_run', 'verifold_run_status', 'verifold_read', 'verifold_post'],
+  );
+  // The checker's run cannot read the lab's records either. The author's run could.
+  assert.equal(specs.length, 2);
+  assert.ok(!specs[0]?.denied.includes(join(lab.root, '.verifold', 'board')));
+  for (const path of [
+    join(lab.root, '.verifold', 'board'),
+    join(lab.root, '.verifold', 'workspaces', 'd-1-alpha'),
+    join(lab.root, '.git'),
+  ])
+    assert.ok(specs[1]?.denied.includes(path), path);
+  assert.ok(!specs[1]?.denied.includes(folder));
+  // The checker's read and run worked.
+  const said = await answers(lab, 'k-1');
+  assert.equal(said[0]?.text, 'echo "METRIC acc=0.7"\n');
+  assert.match(said[1]?.text ?? '', /^Started r-2 at [0-9a-f]{7}/);
+
+  // The rerun replies to the claim, mentions the author, and settles the dispute.
+  const view = lab.lab.view();
+  const rerun = view?.posts.find((post) => post.kind === 'rerun');
+  assert.equal(rerun?.author, check?.agent);
+  assert.equal(rerun?.replyTo, claim);
+  assert.deepEqual(rerun?.mentions, ['a-1']);
+  assert.deepEqual(rerun?.artifacts, [{ type: 'run', run: 'r-2' }]);
+  assert.equal(view?.handles[check?.agent ?? ''], 'codex-1');
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('Holds: acc 0.7 on my rerun.'),
+    ),
+  );
+  const html = renderLab(
+    view,
+    (value) => value,
+    () => '',
+  );
+  assert.doesNotMatch(html, /Open disputes/);
+  assert.match(html, /reran r-2 \(Codex\): acc=0\.7/);
+  // The checker's session ended after its post.
+  await until(
+    () => lab.sessions.view(check?.session ?? '')?.record.status === 'ended',
+  );
+});
+
+await test('an ask for holds-up starts a check, and the direction holds up when the rerun holds', async (t) => {
+  const lab = await fixture(t);
+  await claimWithRun(lab, [
+    {
+      name: 'verifold_direction',
+      arguments: {
+        action: 'update',
+        verdict: 'holds-up',
+        post: 'p-3',
+        evidence: 'acc 0.7',
+        why: 'It meets the bar.',
+      },
+    },
+  ]);
+  await lab.script('k-1', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sh train.sh', why: 'Rerun.' },
+        },
+      ],
+    },
+    {
+      when: 'r-2 ended',
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'rerun',
+            text: 'Holds.',
+            outcome: 'holds',
+            method: 'rerun',
+            artifacts: [{ type: 'run', run: 'r-2' }],
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  assert.equal(await claimPost(lab), 'p-3');
+  await until(async () =>
+    (await answers(lab, 'd-1-alpha')).some(
+      (entry) => entry.call === 'verifold_direction',
+    ),
+  );
+  const asked = (await answers(lab, 'd-1-alpha')).find(
+    (entry) => entry.call === 'verifold_direction',
+  );
+  assert.match(
+    asked?.text ?? '',
+    /^d-1 is leading now\. (Verifold queued check k-1|Check k-1 runs): codex-1 \(Codex\) reruns p-3 without your reasoning\. When it holds, d-1 holds up\.$/,
+  );
+  await until(
+    () => lab.lab.view()?.state.directions[0]?.verdict === 'holds-up',
+    15_000,
+  );
+  const direction = lab.lab.view()?.state.directions[0];
+  assert.deepEqual(direction?.evidence, {
+    text: 'acc 0.7',
+    post: 'p-3',
+    run: 'r-1',
+  });
+  assert.ok(
+    lab.lab
+      .view()
+      ?.posts.some((post) =>
+        /"Alpha" holds up: codex-1 \(Codex\) reran p-3 in p-\d+\./.test(
+          post.text,
+        ),
+      ),
+  );
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /chip verdict-holds-up">Holds up</);
+  assert.match(html, /acc 0\.7 · p-3 · r-1 · reran r-2 \(Codex\): acc=0\.7/);
+});
+
+await test('a rerun that does not hold takes back the verdict, and the claim can no longer hold up', async (t) => {
+  const lab = await fixture(t);
+  const update = (verdict: string): Call => ({
+    name: 'verifold_direction',
+    arguments: {
+      action: 'update',
+      verdict,
+      post: 'p-3',
+      evidence: 'acc 0.7',
+      why: 'Checked.',
+    },
+  });
+  await claimWithRun(lab, [update('leading')]);
+  await lab.script('d-1-alpha', [
+    ...(JSON.parse(
+      await readFile(join(lab.base, 'scripts', 'd-1-alpha.json'), 'utf8'),
+    ) as { when?: string; calls: Call[] }[]),
+    { when: 'Leaks.', calls: [update('holds-up'), update('leading')] },
+  ]);
+  await lab.script('k-1', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'echo "METRIC acc=0.5"', why: 'My metric.' },
+        },
+      ],
+    },
+    {
+      when: 'r-2 ended',
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'rerun',
+            text: 'Leaks. My own metric gives 0.5.',
+            outcome: 'fails',
+            method: 'rerun',
+            artifacts: [{ type: 'run', run: 'r-2' }],
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await until(() => lab.lab.view()?.state.directions[0]?.verdict === 'leading');
+  await lab.lab.post({
+    kind: 'objection',
+    replyTo: claim,
+    text: 'The test set leaks.',
+  });
+  await until(() => lab.lab.view()?.checks[0]?.state === 'done', 15_000);
+  assert.equal(lab.lab.view()?.checks[0]?.outcome, 'fails');
+  // The verdict rested on the claim, so it goes back to open.
+  await until(() => lab.lab.view()?.state.directions[0]?.verdict === 'open');
+  assert.equal(lab.lab.view()?.state.directions[0]?.evidence, null);
+  // The rerun woke the author, and neither holds-up nor leading takes the claim again.
+  await until(
+    async () =>
+      (await answers(lab, 'd-1-alpha')).filter(
+        (entry) => entry.call === 'verifold_direction',
+      ).length >= 3,
+  );
+  const said = (await answers(lab, 'd-1-alpha')).filter(
+    (entry) => entry.call === 'verifold_direction',
+  );
+  for (const entry of said.slice(1)) {
+    assert.equal(entry.ok, false);
+    assert.match(entry.text, /p-3 did not hold on its check k-1\./);
+  }
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /did not hold on r-2 \(Codex\)/);
+  assert.doesNotMatch(html, /Open disputes/);
+});
+
+await test('with one harness a fresh session of the same harness checks, and a check that runs out of time fails and keeps the dispute open', async (t) => {
+  // With a team, the lab's first agent plans it (claude-1), so Alpha is d-2 (claude-2).
+  const lab = await fixture(t, { harnesses: ['claude'], minuteMs: 10 });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  // The checker never posts: its turn waits until its time ends.
+  await lab.script('k-1', [{ calls: [{ name: 'WAIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  await until(() => lab.lab.view()?.checks[0]?.state === 'running');
+  const check = lab.lab.view()?.checks[0];
+  assert.equal(check?.harness, 'claude');
+  assert.equal(check?.sameHarness, true);
+  assert.equal(check?.handle, 'claude-3');
+  // Claude Code's settings deny the lab's records to the checker, also to its Read tool.
+  await until(async () =>
+    Boolean(
+      await readFile(join(lab.base, 'logs', 'k-1', 'args.json'), 'utf8').catch(
+        () => '',
+      ),
+    ),
+  );
+  const args = JSON.parse(
+    await readFile(join(lab.base, 'logs', 'k-1', 'args.json'), 'utf8'),
+  ) as string[];
+  const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}') as {
+    sandbox: { filesystem: { denyRead: string[] } };
+    permissions: { deny: string[] };
+  };
+  const board = join(lab.root, '.verifold', 'board');
+  assert.ok(settings.sandbox.filesystem.denyRead.includes(board));
+  assert.ok(
+    settings.sandbox.filesystem.denyRead.includes('~/.claude/projects'),
+  );
+  assert.ok(settings.permissions.deny.includes(`Read(/${board}/**)`));
+  // The desk pins the dispute while the check runs.
+  let html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /Open disputes/);
+  assert.match(html, /claude-3 \(Claude Code\) checks it now/);
+  // 60 short minutes later the check fails, and the dispute stays open.
+  await until(() => lab.lab.view()?.checks[0]?.state === 'failed', 15_000);
+  assert.match(
+    lab.lab.view()?.checks[0]?.note ?? '',
+    /claude-3 posted no rerun in 60 minutes\./,
+  );
+  // The note follows the failed state.
+  await until(() =>
+    Boolean(
+      lab.lab
+        .view()
+        ?.posts.some((post) =>
+          /^Check k-1 of p-\d+ failed: .* The dispute stays open\.$/.test(
+            post.text,
+          ),
+        ),
+    ),
+  );
+  html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /Open disputes/);
+  assert.match(html, /Check k-1 failed: claude-3 posted no rerun/);
+  await until(
+    () => lab.sessions.view(check?.session ?? '')?.record.status === 'ended',
+  );
+});
+
+await test("a checker posts one rerun only, reads only the claim's commit, and reads only its own runs", async (t) => {
+  const lab = await fixture(t);
+  await claimWithRun(lab);
+  await lab.script('k-1', [
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'x',
+            outcome: 'holds',
+            method: 'rerun',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
+        },
+        { name: 'verifold_run_status', arguments: { run: 'r-1' } },
+        { name: 'verifold_read', arguments: { path: 'missing.txt' } },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'rerun',
+            text: 'Holds, I only ran it.',
+            outcome: 'holds',
+            method: 'rerun',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
+        },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'rerun',
+            text: 'The code is right.',
+            outcome: 'holds',
+            method: 'code-read',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
+        },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'rerun',
+            text: 'Again.',
+            outcome: 'holds',
+            method: 'code-read',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  await until(async () => (await answers(lab, 'k-1')).length >= 6, 15_000);
+  const said = await answers(lab, 'k-1');
+  assert.deepEqual(
+    said.map((entry) => entry.ok),
+    [false, false, false, false, true, false],
+  );
+  assert.match(said[0]?.text ?? '', /posts one rerun post, and nothing else/);
+  assert.match(said[1]?.text ?? '', /Name one of your runs/);
+  assert.match(said[2]?.text ?? '', /missing\.txt is not a file of the claim/);
+  assert.match(said[3]?.text ?? '', /A rerun cites a run that you made/);
+  assert.match(said[4]?.text ?? '', /^Posted p-\d+\. Your check is done/);
+  assert.match(said[5]?.text ?? '', /no longer works for the lab|already/);
+  const check = lab.lab.view()?.checks[0];
+  assert.equal(check?.state, 'done');
+  assert.equal(check?.method, 'code-read');
+  // A code-read settles the dispute, and its mark says how it checked.
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /read the code only \(Codex\)/);
+  assert.equal(
+    lab.lab.view()?.posts.filter((post) => post.kind === 'rerun').length,
+    1,
+  );
+});
+
+await test('one check runs at a time, a second objection joins the open check, and a claim gets at most two checks', async (t) => {
+  const lab = await fixture(t);
+  await claimWithRun(lab, [
+    {
+      name: 'verifold_post',
+      arguments: {
+        kind: 'evidence',
+        text: 'Seed 2 too.',
+        artifacts: [{ type: 'run', run: 'r-1' }],
+      },
+    },
+  ]);
+  // Each checker ends its turns without a post, so its check fails after 3 turns.
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await until(() =>
+    Boolean(lab.lab.view()?.posts.some((post) => post.kind === 'evidence')),
+  );
+  const evidence =
+    lab.lab.view()?.posts.find((post) => post.kind === 'evidence')?.id ?? '';
+  await lab.lab.pause();
+  const first = await lab.lab.post({
+    kind: 'objection',
+    replyTo: claim,
+    text: 'One.',
+  });
+  const second = await lab.lab.post({
+    kind: 'objection',
+    replyTo: claim,
+    text: 'Two.',
+  });
+  await lab.lab.post({ kind: 'objection', replyTo: evidence, text: 'Three.' });
+  let checks = lab.lab.view()?.checks ?? [];
+  assert.equal(checks.length, 2);
+  assert.deepEqual(checks[0]?.objections, [first.id, second.id]);
+  assert.equal(checks[1]?.claim, evidence);
+  // While paused, no check starts.
+  await delay(200);
+  assert.ok(checks.every((check) => check.state === 'queued'));
+  await lab.lab.resume();
+  // One check runs at a time: the second waits while the first runs.
+  await until(() =>
+    Boolean(lab.lab.view()?.checks.some((check) => check.state !== 'queued')),
+  );
+  checks = lab.lab.view()?.checks ?? [];
+  assert.ok(checks.filter((check) => check.state === 'running').length <= 1);
+  await until(
+    () =>
+      (lab.lab.view()?.checks ?? []).every((check) => check.state === 'failed'),
+    15_000,
+  );
+  assert.match(
+    lab.lab.view()?.checks[0]?.note ?? '',
+    /posted no rerun in 3 turns\./,
+  );
+  // A second check of the claim, then no third.
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Four.' });
+  await until(() => (lab.lab.view()?.checks.length ?? 0) === 3);
+  await until(() => lab.lab.view()?.checks[2]?.state === 'failed', 15_000);
+  const fifth = await lab.lab.post({
+    kind: 'objection',
+    replyTo: claim,
+    text: 'Five.',
+  });
+  assert.equal(lab.lab.view()?.checks.length, 3);
+  assert.ok(
+    lab.lab
+      .view()
+      ?.posts.some(
+        (post) =>
+          post.text ===
+          `${claim} had 2 checks already, so ${fifth.id} starts no check.`,
+      ),
+  );
+});
+
+await test('a check that ran when Verifold stopped starts again once with a fresh session, and fails after a second stop', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude'] });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  await lab.script('k-1', [
+    { calls: [{ name: 'WAIT' }] },
+    { calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  await until(
+    () =>
+      lab.lab.view()?.checks[0]?.session !== null &&
+      lab.lab.view()?.checks[0]?.state === 'running',
+  );
+  await until(async () => (await lab.inputs('k-1')).length === 1);
+  const before = lab.lab.view()?.checks[0]?.session;
+  await lab.restart();
+  // The new owner starts it again with a fresh session.
+  await until(
+    () =>
+      lab.lab.view()?.checks[0]?.state === 'running' &&
+      Boolean(lab.lab.view()?.checks[0]?.session) &&
+      lab.lab.view()?.checks[0]?.session !== before,
+  );
+  assert.equal(lab.lab.view()?.checks[0]?.restarts, 1);
+  await until(async () => (await lab.inputs('k-1')).length === 2);
+  await lab.restart();
+  await until(() => lab.lab.view()?.checks[0]?.state === 'failed');
+  assert.match(
+    lab.lab.view()?.checks[0]?.note ?? '',
+    /claude-3 stopped 2 times before it posted\./,
+  );
 });

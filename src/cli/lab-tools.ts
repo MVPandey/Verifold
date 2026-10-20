@@ -11,7 +11,8 @@ import type { AgentTool } from './session-hosts.ts';
  * tools. `where` and `lease` of `verifold_run` are optional, so every call of
  * its older schema stays valid. None of them raises a version: a Codex agent
  * whose thread is older keeps its conversation, and gets them with its next
- * new thread.
+ * new thread. `verifold_direction` now accepts holds-up, which starts a
+ * check; its schema did not change, so no version either.
  */
 export const labToolsVersion = 2;
 
@@ -272,7 +273,124 @@ export const labPodToolSpecs: readonly AgentTool[] = [
   },
 ];
 
-/** The verdicts of a direction. `holds-up` needs a rerun by the other harness. */
+/** The limits of a check: a fresh session of the other harness that reruns a claim. */
+export const checkLimits = {
+  /** Turns of one start of a check. */
+  turns: 3,
+  /** Minutes of one start of a check. */
+  minutes: 60,
+  /** Checks of one claim. */
+  perClaim: 2,
+  /** Checks that run at once, and when "Agents at once" is at least `widerAt`. */
+  atOnce: 1,
+  wider: 2,
+  widerAt: 5,
+  /** A check that Verifold or its process stopped starts again once, then fails. */
+  restarts: 1,
+};
+
+/** The outcome of a check, and how the checker got it. */
+export const checkOutcomes = ['holds', 'fails', 'differs'] as const;
+export const checkMethods = ['rerun', 'code-read'] as const;
+
+/**
+ * The tools of a checker. It gets no board read, no plan, and no direction
+ * tool: it sees only what its prompt gives. It runs commands on its own
+ * folder, reads the claim's files at the claim's commit, and posts its
+ * rerun once. A checker's thread is always new, so these need no version.
+ */
+export const checkToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_run',
+    description:
+      'Run a command on your folder, on this computer, in a sandbox. Verifold commits your folder first, and the run works on its own copy of that commit. The run writes only in its copy and its temporary folder, and has no network and no GPU. Verifold records the command, the log, the exit code, the time, and the metrics: `METRIC name=value` lines in the output, and a metrics.json of numbers that the run writes in the top folder of its copy. Verifold tells you when the run ends. Cite it in your rerun post as {type: run, run: r-N}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          maxLength: runLimits.command,
+          description: 'A shell command, run with sh in the copy.',
+        },
+        why: {
+          type: 'string',
+          maxLength: runLimits.why,
+          description: 'What the run tests.',
+        },
+        minutes: {
+          type: 'integer',
+          minimum: 1,
+          maximum: checkLimits.minutes,
+          description: `The time limit, up to ${checkLimits.minutes} minutes. Default: ${runLimits.defaultMinutes}.`,
+        },
+        outputs: {
+          type: 'array',
+          maxItems: runLimits.outputPaths,
+          items: { type: 'string', maxLength: 300 },
+          description: 'Files or folders of the copy to keep after the run.',
+        },
+      },
+      required: ['command', 'why'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_run_status',
+    description: `Read one of your runs: its state, exit code, metrics, kept outputs, and up to ${runLimits.statusLog / 1024} KB of its log. log: tail (the default), head, or none.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run: runId,
+        log: { type: 'string', enum: ['tail', 'head', 'none'] },
+      },
+      required: ['run'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_read',
+    description:
+      "Read a file of the claim at the claim's commit. Your folder starts with the same files. A binary file gives its size only.",
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string', maxLength: 300 } },
+      required: ['path'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_post',
+    description:
+      "Post your rerun once, in at most 280 characters, as a reply to the claim. outcome: holds (you got the claim's result within its noise), fails (you did not), or differs (you got a different result that the claim does not cover). method: rerun (you ran it) or code-read (you only read the code; it never makes a direction hold up). Cite the runs that you made as proof. A code-read cites the claim's run. Your check ends with this post.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['rerun'] },
+        text: { type: 'string', maxLength: 280 },
+        outcome: { type: 'string', enum: checkOutcomes },
+        method: { type: 'string', enum: checkMethods },
+        artifacts: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['run'] },
+              run: runId,
+            },
+            required: ['type', 'run'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['kind', 'text', 'outcome', 'method', 'artifacts'],
+      additionalProperties: false,
+    },
+  },
+];
+
+/** The verdicts of a direction. `holds-up` needs a check that reruns its claim. */
 export const verdicts = ['open', 'leading', 'holds-up', 'ruled-out'] as const;
 
 /** The limits of `verifold_direction`. The tool schema and the lab's checks use the same ones. */
@@ -287,7 +405,7 @@ export const directionLimits = {
 export const directionToolSpec: AgentTool = {
   name: 'verifold_direction',
   description:
-    "Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, and the harness of its agent. Verifold makes its folder and starts its agent when a slot is free. A lab has at most 6 open directions. Agents start at most 4 agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs `post`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs `post`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs a rerun by the other harness. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.",
+    "Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, and the harness of its agent. Verifold makes its folder and starts its agent when a slot is free. A lab has at most 6 open directions. Agents start at most 4 agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs `post`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs `post`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs `post`: a claim, evidence, or rerun post about your direction that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.",
   inputSchema: {
     type: 'object',
     properties: {

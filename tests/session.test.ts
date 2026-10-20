@@ -25,7 +25,11 @@ import {
 } from '../src/cli/session.ts';
 import { startDesk } from '../src/cli/desk.ts';
 import { TranscriptFile } from '../src/cli/transcript.ts';
-import { codexCommand } from '../src/cli/session-hosts.ts';
+import {
+  codexCommand,
+  credentialPaths,
+  strictClaudeSettings,
+} from '../src/cli/session-hosts.ts';
 import { SessionPool } from '../src/cli/workers.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
@@ -1723,4 +1727,26 @@ await test('a task with domains opens only those to its shell commands', async (
     assert.equal(readOnly?.network, undefined);
     await coordinator.close();
   });
+});
+
+await test("a strict session's extra read denials close the sandbox and the Read tool, absolute and home paths alike", () => {
+  const settings = JSON.parse(
+    strictClaudeSettings([], ['/project/.verifold/board', '~/.codex/sessions']),
+  ) as {
+    sandbox: { filesystem: { denyRead: string[] } };
+    permissions: { deny: string[] };
+  };
+  assert.deepEqual(settings.sandbox.filesystem.denyRead, [
+    ...credentialPaths,
+    '/project/.verifold/board',
+    '~/.codex/sessions',
+  ]);
+  // A rule path that starts with // is absolute. A home path keeps its ~.
+  for (const rule of [
+    'Read(//project/.verifold/board)',
+    'Read(//project/.verifold/board/**)',
+    'Read(~/.codex/sessions/**)',
+    'Read(~/.ssh/**)',
+  ])
+    assert.ok(settings.permissions.deny.includes(rule), rule);
 });
