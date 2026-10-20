@@ -459,3 +459,33 @@ await test('a digest of one line still shows one post, and the next read shows t
   const second = store.digest(agent, first.read, { limit: 1 });
   assert.match(second.lines[0] ?? '', /^- p-2 .*"Two\."$/);
 });
+
+await test('a digest stays within its character budget, and the posts that did not fit stay unread', async (t) => {
+  const { board: store } = await board(t);
+  const agent = { id: 'a-1', direction: 'd-1' };
+  for (let index = 0; index < 5; index += 1)
+    await store.add(
+      post({
+        author: 'a-2',
+        kind: 'question',
+        text: `${index}`.repeat(200),
+        artifacts: [],
+      }),
+    );
+  const budget = 600;
+  const first = store.digest(agent, { readThrough: 0, seen: [] }, { budget });
+  const size = first.lines.reduce((sum, line) => sum + line.length + 1, 0);
+  assert.ok(size <= budget, `${size} characters`);
+  assert.equal(first.lines.length, 3);
+  assert.equal(
+    first.lines.at(-1),
+    '- 3 more unread posts. Read them with verifold_board.',
+  );
+  // Only the shown posts count as read.
+  assert.equal(first.read.readThrough, 2);
+  const second = store.digest(agent, first.read, { budget });
+  assert.match(second.lines[0] ?? '', /^- p-3 /);
+  // One post always shows, even when it alone passes the budget.
+  const one = store.digest(agent, { readThrough: 0, seen: [] }, { budget: 10 });
+  assert.match(one.lines[0] ?? '', /^- p-1 /);
+});
