@@ -6,7 +6,7 @@ Run `verifold` to connect the Claude Code or Codex that you have installed. You 
 
 We're building toward a research **meta-harness**: one workspace where several harness instances work together, from the first idea to a paper, a repository, a figure, a proof, or another result. Each harness keeps its own models, credentials, tools, and permissions. Verifold connects their tasks, messages, memory, and evidence across sessions. The [development plan](#development-plan) says what is done and what comes next.
 
-Contents: [Install](#install-the-cli) · [Start a research project](#start-a-research-project) · [The desk](#local-research-desk) · [Sessions](#controlled-harness-session) · [Tasks](#scoped-tasks) · [Coordinator](#coordinator) · [GPU pods](#gpu-pods-on-runpod) · [Privacy](#privacy-and-website) · [Project status](#project-status) · [Development plan](#development-plan) · [Contribute](#help-build-verifold) · [Build from source](#build-from-source) · [Engineering](#engineering)
+Contents: [Install](#install-the-cli) · [Start a research project](#start-a-research-project) · [The desk](#local-research-desk) · [Sessions](#controlled-harness-session) · [Tasks](#scoped-tasks) · [Coordinator](#coordinator) · [The lab](#the-lab-preview) · [GPU pods](#gpu-pods-on-runpod) · [Privacy](#privacy-and-website) · [Project status](#project-status) · [Development plan](#development-plan) · [Contribute](#help-build-verifold) · [Build from source](#build-from-source) · [Engineering](#engineering)
 
 ## Install the CLI
 
@@ -397,6 +397,72 @@ Events wake the coordinator: a version ready for review, a message for it, a blo
 Claude Code and Codex report the usage window of your plan. When the window of the coordinator's harness is used up, a turn would fail, so the coordinator does not wake. Its events wait until the reset time plus 30 seconds. When the harness gives no reset time, the wait is 15 minutes, then 30, 60, and 120 minutes while the window stays used up. The events of a turn that ran into the limit come again after the reset, marked "again". The window belongs to the harness account, so every session of that harness reports to the same record, `.verifold/quota.json`, and a restart keeps the wait. Home, the coordinator panel, and messages that wait for the coordinator say "waits for Claude Code's usage window until 19:00". A Codex account with credits keeps working past a full window, so only a failed turn starts its wait.
 
 Stop the coordinator ends its session. Running agents finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the agents. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.
+
+### The lab (preview)
+
+The lab is a second way to run a question. Several agents work on it at the same time, and each one owns one direction. They talk on one board instead of through a coordinator.
+
+The lab starts in one of two ways:
+
+- In a run that no team owns yet, Home offers **Start the lab**, with your question, while no research step runs.
+- `verifold --lab` does the usual setup, then starts a lab on the question instead of research.
+
+One run has one team: the coordinator's team (research, the coordinator, and its tasks) or a lab. A coordinator or a task makes the run the coordinator's team's, so the lab does not start: Start over first, then start the lab on the new run. The lab also waits while a research step runs: let the step end, or cancel it in Research. The lab never stops research by itself. While a lab exists, no research step, coordinator, or task starts, from the desk or from `verifold research` and `verifold select`. After Start over of a lab run, research does not start by itself, and Home offers the lab again.
+
+**Directions and agents**
+
+- Open a direction with a title and a harness (Claude Code or Codex). You can say what makes it hold up.
+- Each direction gets its own agent and its own copy of the project: a Git worktree on the branch `verifold/d-N-<title>`. Its number is new to the project, so a direction never takes the folder or branch of an earlier run.
+- The copy has the project's committed files and its uncommitted changes, except new files above 1 MB, tool folders such as `node_modules`, and anything past 50 MB. The agent reads large data in the project folder.
+- The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
+- A lab has up to 6 open directions. Agents share the "Agents at once" slots with your own sessions.
+- Each agent has a handle, such as `claude-1` or `codex-1`.
+
+**The board**
+
+- Agents post with Verifold tools, in at most 280 characters. A post has a kind: claim, evidence, objection, question, or ruled out.
+- A claim, evidence, or ruled-out post needs proof. Before it posts, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A proof file counts also in a folder that the project's `.gitignore` ignores. A post without the proof that it needs is refused.
+- Verifold commits a folder only when something in it changed. Proof names the direction whose folder holds its commit.
+- Agents read other directions' files with `verifold_read`: as they are now, ignored files too, or at the commit that a proof names. They keep notes in the project memory.
+
+**Who a post wakes**
+A post wakes an agent when:
+
+- it replies to that agent's post
+- it mentions the agent
+- it objects in the agent's direction
+- it comes from you in the agent's direction
+
+Your post with no direction, no reply, and no mention wakes every agent. Other posts wait for the agent's next turn. Each turn starts with the posts that the agent has not read, oldest first, up to 30 lines; a post for the agent says so. Posts that do not fit stay unread for the next turn. Quoted text in them is marked as information, not instructions. When an agent is in a turn, your post goes into that turn if the harness takes it. What a turn read counts only when the turn ends cleanly. The posts of a turn that did not finish come again in the next turn: the usage window ran out, the agent's process stopped, a Verifold read failed, or the lab paused.
+
+**Writing to the lab**
+
+- Write in the lab's message box.
+- `@claude-1` in your text mentions that agent, and `@all` mentions every agent. Agents mention one agent or you, never all.
+- Reply under a post to answer it. The message box says which post you answer, and × stops the reply.
+- Choose a direction to write about it.
+
+**Keeping going**
+
+- While its direction is open, an agent takes its next turn 20 seconds after the last one.
+- After two turns in a row that change no file and post nothing, it waits 10 minutes, then 30 minutes, then 2 hours. A file that the project ignores counts as a change. A turn that ran into a used-up usage window does not count. A post for it ends the wait.
+- When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 12 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.
+- A used-up usage window pauses the idle agents of that harness until the reset.
+- After a restart, each agent resumes in turn with a digest that says so.
+- An agent whose process stops by itself, or whose start fails, starts again after a wait: 30 seconds, then twice as long each time. It starts again at most twice an hour. After the third stop, its row offers Start again.
+- If an agent's conversation cannot resume, its next start begins a new conversation with the board summary. The posts that it has not read come in its next turn.
+
+**Controls**
+
+- **Stop** on a row ends that direction's agent. Its folder and branch stay.
+- **What it did** on a row opens the agent's transcript.
+- **Pause the lab** pauses every agent until you resume it.
+- Home in a lab still shows what needs you. Its one message box posts to the board.
+- A long post shows its start, and the rest folds under **Show the whole post**.
+- A desk of `verifold session` only shows the lab. Run `verifold` in the project folder to work in it.
+- Start over pauses the lab and archives it and its board with the rest of the run. A restored lab comes back paused. **Resume the lab** continues it.
+- Lab agents have no terminal, and the terminal's commands leave them alone. Write to them on the board.
+- A lab action that takes longer than two seconds, such as opening a direction, goes on in the background. The lab shows it while it runs, and why it failed if it did. One such action runs at a time.
 
 ### GPU pods on RunPod
 

@@ -236,10 +236,11 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.match(lines.at(-1) ?? '', /^Detached\. The team keeps working\./);
   assert.ok(await liveOwner(root));
   // A second terminal attaches to the same owner, without a second owner.
+  // --lab starts nothing in an owner that runs, and says where to start it.
   const again: string[] = [];
   const againUrls: string[] = [];
   const second = runCli(
-    ['ui', '--no-open'],
+    ['ui', '--no-open', '--lab'],
     root,
     terminal(again, againUrls, []),
   );
@@ -250,6 +251,12 @@ await test('a terminal starts the team in the background, detaches, attaches aga
       line.startsWith('Verifold already works in the background'),
     ),
   );
+  assert.ok(
+    again.includes(
+      'Verifold already works in the background, so --lab started nothing. Start the lab from Home in the desk.',
+    ),
+  );
+  assert.equal(existsSync(join(root, '.verifold', 'lab.json')), false);
   assert.equal(opened.length, 1);
   // verifold stop stops the owner. The attached terminal says so and ends.
   const said: string[] = [];
@@ -378,4 +385,167 @@ await test('verifold owner runs only with the control that Verifold gives it', a
     /runs only when Verifold starts it/,
   );
   assert.equal(existsSync(join(root, '.verifold', 'owner.json')), false);
+});
+
+await test('an owner started with --lab starts a lab on the question of setup', async (t) => {
+  const { root, keys, assets } = await project(t);
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  const owner = new AbortController();
+  const done = runCli(
+    ['owner'],
+    root,
+    {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      browse: () => Promise.resolve(true),
+      deskAssets: assets,
+      background: {
+        keys,
+        start: () => Promise.reject(new Error('The owner starts no owner.')),
+        input: () =>
+          Promise.resolve(
+            JSON.stringify({
+              ...control,
+              research: { topic: 'Do months lie on a circle?' },
+              lab: true,
+            }),
+          ),
+      },
+    },
+    owner.signal,
+  );
+  // A check that fails still stops the owner. Hooks run after the test's own end, which stops it first.
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
+  // The question comes from setup: the project has no research record yet.
+  await until(() => existsSync(join(root, '.verifold', 'lab.json')));
+  const lab = JSON.parse(
+    await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
+  ) as { question: string };
+  assert.equal(lab.question, 'Do months lie on a circle?');
+  // The question stays with the project too, so Home offers it again after
+  // Start over. It is saved once the lab runs, so it can come a moment later.
+  const read = async (): Promise<{
+    research?: { topic: string; autonomy: string };
+  }> =>
+    JSON.parse(
+      await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
+    ) as { research?: { topic: string; autonomy: string } };
+  await until(async () => (await read()).research !== undefined);
+  const workspace = await read();
+  assert.equal(workspace.research?.topic, 'Do months lie on a circle?');
+  // Research is autonomous unless the person chose otherwise, as everywhere in the project.
+  assert.equal(workspace.research?.autonomy, 'autonomous');
+  owner.abort();
+  await done.catch(() => {});
+});
+
+await test('a lab that cannot start leaves the owner running and says why', async (t) => {
+  const { root, keys, assets } = await project(t);
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  const owner = new AbortController();
+  const done = runCli(
+    ['owner'],
+    root,
+    {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      browse: () => Promise.resolve(true),
+      deskAssets: assets,
+      background: {
+        keys,
+        start: () => Promise.reject(new Error('The owner starts no owner.')),
+        input: () =>
+          Promise.resolve(
+            JSON.stringify({
+              ...control,
+              research: { topic: 'x'.repeat(5000) },
+              lab: true,
+            }),
+          ),
+      },
+    },
+    owner.signal,
+  );
+  // A check that fails still stops the owner. Hooks run after the test's own end, which stops it first.
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
+  const log = join(root, '.verifold', 'owner.log');
+  await until(
+    async () =>
+      existsSync(log) &&
+      (await readFile(log, 'utf8')).includes('Verifold started no lab'),
+  );
+  assert.ok(await liveOwner(root));
+  assert.equal(existsSync(join(root, '.verifold', 'lab.json')), false);
+  owner.abort();
+  await done.catch(() => {});
+});
+
+await test('--lab in a project that has a lab starts nothing new and says so', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await mkdir(join(root, '.verifold', 'lab', 'agents'), { recursive: true });
+  await writeFile(
+    join(root, '.verifold', 'lab.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      question: 'The first question.',
+      startedAt: '2026-10-19T12:00:00.000Z',
+      pausedAt: null,
+      handles: { claude: 0, codex: 0 },
+      directions: [],
+    }),
+  );
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  const owner = new AbortController();
+  const done = runCli(
+    ['owner'],
+    root,
+    {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      browse: () => Promise.resolve(true),
+      deskAssets: assets,
+      background: {
+        keys,
+        start: () => Promise.reject(new Error('The owner starts no owner.')),
+        input: () =>
+          Promise.resolve(
+            JSON.stringify({
+              ...control,
+              research: { topic: 'Another question.' },
+              lab: true,
+            }),
+          ),
+      },
+    },
+    owner.signal,
+  );
+  // A check that fails still stops the owner. Hooks run after the test's own end, which stops it first.
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
+  const log = join(root, '.verifold', 'owner.log');
+  await until(
+    async () =>
+      existsSync(log) &&
+      (await readFile(log, 'utf8')).includes('This project has a lab already'),
+  );
+  const lab = JSON.parse(
+    await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
+  ) as { question: string };
+  assert.equal(lab.question, 'The first question.');
+  owner.abort();
+  await done.catch(() => {});
 });

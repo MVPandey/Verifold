@@ -30,7 +30,8 @@ import {
   type SessionView,
 } from './session.ts';
 import type { AgentTools } from './session-hosts.ts';
-import { writePrivateFile } from './storage.ts';
+import { changeWorkspace, writePrivateFile } from './storage.ts';
+import type { RunTeam } from './team.ts';
 import { memoryText, noteToolSpec, restrictions } from './tasks.ts';
 import {
   allocate,
@@ -221,6 +222,10 @@ export interface LabView {
   readonly state: LabState;
   readonly directions: readonly DirectionView[];
   readonly posts: readonly Post[];
+  /** The handle of each agent, such as claude-1, by agent ID. */
+  readonly handles: Readonly<Record<string, string>>;
+  /** Agents work in this process. False: it only shows the lab, and the person works in it with the project's owner. */
+  readonly runs: boolean;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -245,6 +250,8 @@ export interface LabSessions {
 
 export interface LabOptions {
   readonly sessions: LabSessions;
+  /** One run has one team. A lab starts only when the guard gives it the run. */
+  readonly team?: RunTeam;
   readonly memory?: {
     note(who: string, text: unknown): Promise<string>;
     digest(): Promise<string>;
@@ -576,6 +583,44 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
   };
 }
 
+/**
+ * Whether the project's current run has a lab, read the way the owner reads
+ * it: an unreadable `lab.json` counts as no lab in both. For CLI commands
+ * that run without the owner.
+ */
+export async function labOnDisk(root: string): Promise<boolean> {
+  return (
+    parseState(await readObject(join(root, '.verifold', 'lab.json'))) !== null
+  );
+}
+
+/**
+ * Start a lab on a question, from the desk or from `verifold --lab`. A
+ * project without a research question keeps this one as its question, so
+ * Home offers it again after Start over. Research in this project is
+ * autonomous unless the person chose otherwise.
+ */
+export async function startLabOn(
+  root: string,
+  lab: Lab,
+  question: unknown,
+  autonomy: 'guided' | 'autonomous' = 'autonomous',
+): Promise<void> {
+  await lab.start(question);
+  // The question becomes the research topic only once the lab runs, so a
+  // refused start leaves the project as it was.
+  const asked = typeof question === 'string' ? question.trim() : '';
+  await changeWorkspace(root, (current) => {
+    if (!current) throw new Error('Run init first.');
+    return current.research
+      ? current
+      : {
+          ...current,
+          research: { topic: asked, autonomy, phase: 'needs-plan' },
+        };
+  });
+}
+
 /** The folder name of a direction: its ID and a short form of its title. */
 function slug(id: string, title: string): string {
   const words = title
@@ -642,6 +687,11 @@ export class Lab {
   /** The project has a lab. */
   get exists(): boolean {
     return this.state !== null;
+  }
+
+  /** Agents work in this process, the project's owner. */
+  get runs(): boolean {
+    return this.options.runs !== false;
   }
 
   /** Read the lab, its agents, and the board. A project without `lab.json` has no lab. */
@@ -746,6 +796,10 @@ export class Lab {
     return {
       state,
       posts: this.board.list(),
+      handles: Object.fromEntries(
+        [...this.agents.values()].map((agent) => [agent.id, agent.handle]),
+      ),
+      runs: this.runs,
       directions: state.directions.flatMap((direction) => {
         const agent = this.agents.get(direction.agent);
         return agent
@@ -762,25 +816,40 @@ export class Lab {
     return this.agents.get(author)?.handle ?? author;
   }
 
-  /** Start the lab on a question. The caller makes sure that no coordinator or task runs. */
+  /**
+   * Start the lab on a question. The run's guard checks that no research
+   * works and that the coordinator's team does not own the run, and the lab
+   * takes the run under the same lock. A start that fails leaves nothing.
+   */
   start(question: unknown): Promise<void> {
     return this.serial(async () => {
       if (this.suspended || this.moving) fail(movingText);
       if (this.state) fail('The lab already runs.');
       const asked = text(question, labLimits.question, 'the question');
-      this.state = {
-        schemaVersion: 1,
-        question: asked,
-        startedAt: new Date().toISOString(),
-        pausedAt: null,
-        handles: { claude: 0, codex: 0 },
-        directions: [],
+      const take = async (): Promise<void> => {
+        this.state = {
+          schemaVersion: 1,
+          question: asked,
+          startedAt: new Date().toISOString(),
+          pausedAt: null,
+          handles: { claude: 0, codex: 0 },
+          directions: [],
+        };
+        try {
+          await mkdir(join(this.folder, 'agents'), {
+            recursive: true,
+            mode: 0o700,
+          });
+          await this.stateFile.save();
+        } catch (error) {
+          // The lab did not start: nothing of it stays in memory, so the run is free again.
+          this.state = null;
+          throw error;
+        }
       };
-      await mkdir(join(this.folder, 'agents'), {
-        recursive: true,
-        mode: 0o700,
-      });
-      await this.stateFile.save();
+      await (this.options.team
+        ? this.options.team.exclusive('lab', take)
+        : take());
       this.watch();
     });
   }

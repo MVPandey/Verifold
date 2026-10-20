@@ -36,6 +36,15 @@ import {
   type CoordinatorView,
 } from './coordinator.ts';
 import { defaultAgents } from './workers.ts';
+import type { LabView } from './lab.ts';
+import { labWorks } from './team.ts';
+import {
+  stateOf,
+  renderLab,
+  renderLabStart,
+  renderLabWork,
+  type LabWork,
+} from './desk-lab.ts';
 import { scratch } from './workspaces.ts';
 import {
   decisionLabel,
@@ -74,6 +83,12 @@ export interface DeskSession {
   readonly compute?: ComputeView;
   /** The runs that Start over moved to the archive, newest first. Only a project owner has them. */
   readonly archives?: readonly ArchivedRun[];
+  /** The lab of a project owner. Null: the project has none yet. */
+  readonly lab?: LabView | null;
+  /** The lab actions that run in the background, and the ones that failed there. */
+  readonly labWorks?: readonly LabWork[];
+  /** The person can start a lab on this run now: the run's guard allows it, and this desk runs the lab. */
+  readonly labCanStart?: boolean;
 }
 
 export interface TaskView {
@@ -384,7 +399,8 @@ function renderDecision(
   place: 'home' | 'research',
 ): string {
   const research = live.research;
-  if (!research || workspace.selectedId) return '';
+  // A lab run has no research steps.
+  if (!research || workspace.selectedId || live.lab) return '';
   const home = place === 'home';
   if (research.running)
     return home
@@ -1227,7 +1243,13 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   const record = snapshot.attempts.find((entry) => entry.id === latest)?.record;
   const since = record?.finishedAt ?? record?.startedAt ?? null;
   const phase = workspace.research?.phase;
-  if (live.research && !live.research.running && !workspace.selectedId) {
+  // A lab run has no research to continue.
+  if (
+    live.research &&
+    !live.research.running &&
+    !workspace.selectedId &&
+    !live.lab
+  ) {
     if (phase === 'awaiting-plan-review')
       items.push({
         key: `research-plan:${latest ?? ''}`,
@@ -2901,6 +2923,7 @@ function renderPlanCard(workspace: Workspace, live: DeskSession): string {
 function choosable(workspace: Workspace, live: DeskSession): boolean {
   return (
     live.research !== undefined &&
+    !live.lab &&
     !live.research.running &&
     !workspace.selectedId &&
     workspace.research?.phase === 'directions'
@@ -2937,6 +2960,7 @@ function renderResearchView(
   const research = workspace.research;
   return `<div class="view"><div class="view-head"><h1 id="view-title" tabindex="-1">Plan</h1><p>${e(workspace.selectedId ? 'Direction chosen' : phaseLabel(research?.phase))}</p></div>
   ${research?.topic ? `<p class="question">${e(research.topic)}</p>` : ''}
+  ${live.lab ? `<p class="notice">${e(labWorks)}</p>` : ''}
   ${renderDecision(workspace, live, 'research')}
   ${renderPlanCard(workspace, live)}
   ${workspace.candidates.length ? `<section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Compare the directions</h2><span class="count">${workspace.candidates.length} proposed</span></div><div class="table"><table class="compare"><thead><tr><th scope="col">Direction</th><th scope="col">Why</th><th scope="col">Checks</th><th scope="col">Sources</th></tr></thead><tbody>${workspace.candidates.map((idea) => `<tr${workspace.selectedId === idea.id ? ' class="chosen"' : ''}><th scope="row"><button type="button" class="row-button" data-direction="${e(idea.id)}" aria-pressed="${shown === idea.id}">${e(idea.title)}</button><span class="selected-label">${e(directionRole(idea, workspace, live))}</span></th><td data-label="Why">${e(lead(plain(idea.recommendation), 150))}</td><td data-label="Checks">${idea.gates.length}</td><td data-label="Sources">${idea.sources?.length ?? 0}</td></tr>`).join('')}</tbody></table></div><p class="fine">${choosable(workspace, live) ? 'Open a direction to read its case and its checks, and to choose it.' : 'Open a direction to read its case and its checks.'}</p></section>` : ''}
@@ -3222,6 +3246,20 @@ function renderRail(
       ),
     );
   }
+  // Each lab agent with its direction. Its row opens the lab.
+  for (const entry of live.lab?.directions ?? [])
+    if (entry.direction.state === 'open') {
+      const { face, text: line } = stateOf(entry, clock);
+      team.push(
+        member(
+          'session',
+          face,
+          `${entry.agent.handle}: ${entry.direction.title}`,
+          e(line),
+          'data-view="home"',
+        ),
+      );
+    }
   const listed = new Set<string>();
   const add = (worker: SessionView): void => {
     const { record } = worker;
@@ -3362,6 +3400,13 @@ function renderHomeAnswer(workspace: Workspace, live: DeskSession): string {
   return `<section class="card answer-home" aria-labelledby="home-answer-title"><div class="section-title"><h2 id="home-answer-title">The answer</h2><span class="tag reading">Proposed by the coordinator</span></div><p class="statement">${e(answer.statement)}</p>${answer.decision?.kind === 'accepted' ? `<p class="notice-ok">You accepted the answer at ${e(since(answer.decision.at))}.</p>` : '<div class="actions"><button type="button" class="primary" data-view="results" data-focus="answer-title">Read the answer</button></div><p class="fine">Read it with its checks and evidence. Then accept it, or ask for more work.</p>'}</section>`;
 }
 
+/** Home's card of what waits for the person, or nothing. */
+function needsCard(needs: readonly Need[]): string {
+  return needs.length
+    ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>`
+    : '';
+}
+
 /** The work on Home after the person started it: the task map, and the results of the checks. */
 function renderHomeWork(
   workspace: Workspace,
@@ -3410,8 +3455,13 @@ function renderHome(
     const next = nextResearchAction(workspace);
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk starts nothing. To start an agent, pick A new agent in the message box.' : 'This desk shows saved work. It starts nothing.'}</p></section>`;
   }
+  // A run that no team owns yet can start a lab instead, while no research step runs.
+  // A lab start that runs or failed in the background shows here, also when the offer does not.
+  const labStart = `${renderLabWork(live.labWorks ?? [], clock)}${
+    live.labCanStart ? renderLabStart(workspace.research?.topic) : ''
+  }`;
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
-  <div class="view">${renderNow(workspace, live, needs)}${needs.length ? `<section class="card needs" aria-labelledby="needs-title"><h2 id="needs-title">Needs you</h2>${renderNeedList(needs)}</section>` : ''}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
+  <div class="view">${labStart}${renderNow(workspace, live, needs)}${needsCard(needs)}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
 }
 
 /** The side panel for one item, or a form for a new one, or why the item is gone. */
@@ -3452,13 +3502,16 @@ function renderPanel(
           'Research proposes directions after it searches the sources.',
         );
   } else if (panel === 'coordinator')
-    shown = coordinatorPanel(
-      live.coordinator ?? null,
-      workspace,
-      workspace.host,
-      tasks,
-      messages,
-    );
+    shown =
+      live.lab && !live.coordinator?.state
+        ? gone('Agent', 'Coordinator', labWorks)
+        : coordinatorPanel(
+            live.coordinator ?? null,
+            workspace,
+            workspace.host,
+            tasks,
+            messages,
+          );
   else if (panel === 'attempt')
     shown = chosen
       ? attemptPanel(chosen, workspace, live, report)
@@ -3555,8 +3608,9 @@ export function renderDesk(
                     )?.title ??
                       live.coordinator?.state?.objective ??
                       'Your tasks',
-                    // Before a direction and a coordinator, Tasks offers to start one with your own objective.
+                    // Before a direction and a coordinator, Tasks offers to start one with your own objective. A lab run has no coordinator.
                     live.coordinator !== undefined &&
+                      !live.lab &&
                       !workspace.selectedId &&
                       !live.coordinator?.state,
                     needs,
@@ -3571,17 +3625,26 @@ export function renderDesk(
                       frame.panel === 'attempt' ? chosen?.id : undefined,
                       live.archives,
                     )
-                  : renderHome(
-                      snapshot,
-                      live,
-                      at,
-                      active.length > 0,
-                      needs,
-                      frame.since,
-                      frame.hideFinished === true,
-                    );
+                  : view === 'home' && live.lab
+                    ? renderLab(
+                        live.lab,
+                        clock,
+                        (source, label) => transcriptSlot(source, label, ''),
+                        `${needsCard(needs)}${renderPodsLine(live.compute)}${renderPaused(live)}`,
+                        live.labWorks ?? [],
+                      )
+                    : renderHome(
+                        snapshot,
+                        live,
+                        at,
+                        active.length > 0,
+                        needs,
+                        frame.since,
+                        frame.hideFinished === true,
+                      );
+  // In a lab, Home has its own box: posts go to the board.
   const dock =
-    view === 'home' ||
+    (view === 'home' && !live.lab) ||
     view === 'research' ||
     view === 'tasks' ||
     view === 'task' ||

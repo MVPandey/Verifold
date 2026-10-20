@@ -1,6 +1,7 @@
 import type { CliIO } from './commands.ts';
 import { HarnessTimeoutError, runHarness } from './harness.ts';
 import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
+import type { RunTeam } from './team.ts';
 import { mainDirection } from './contracts.ts';
 import { SessionActionError } from './session.ts';
 import { loadWorkspace } from './storage.ts';
@@ -45,6 +46,8 @@ export interface ResearchRunnerOptions {
   readonly onSelect?: () => Promise<void>;
   /** A step ended, or a direction was chosen. The project memory follows. */
   readonly onChange?: () => void;
+  /** The run's team guard: research does not start or choose a direction while a lab works on the run. */
+  readonly team?: RunTeam;
   /** The person's messages to research: `post` keeps one until a step takes it, and `take` gives the waiting ones to a step. */
   readonly inbox?: {
     readonly post: (text: unknown) => Promise<unknown>;
@@ -82,6 +85,11 @@ export class ResearchRunner {
     return this.work !== null;
   }
 
+  /** A research step runs, or one is checking its input before it starts. */
+  get busy(): boolean {
+    return this.running || this.starting;
+  }
+
   view(): ResearchView {
     return {
       running: this.running,
@@ -94,9 +102,7 @@ export class ResearchRunner {
 
   /** Start one research step in the background. Fails before the harness starts when the step is not possible. */
   async start(input: ResearchOptions): Promise<void> {
-    if (this.running || this.starting)
-      fail('Research is already running. Wait for it, or cancel it.');
-    this.starting = true;
+    await this.begin('Research is already running. Wait for it, or cancel it.');
     let phase: string | undefined;
     try {
       const workspace = await loadWorkspace(this.root);
@@ -216,7 +222,7 @@ export class ResearchRunner {
 
   /** Forget the events and the sources of the last step, after Start over or a restore. */
   clear(): void {
-    if (this.running || this.starting) fail('Research is running.');
+    if (this.busy) fail('Research is running.');
     this.step = null;
     this.startedAt = null;
     this.events = [];
@@ -236,9 +242,11 @@ export class ResearchRunner {
       );
     const inbox =
       this.options.inbox ?? fail('Research takes no messages here.');
+    // A message that no step can take is not saved.
+    const blocked = await this.options.team?.refusal('research');
+    if (blocked) fail(blocked);
     await inbox.post(text);
-    if (!this.running && !this.starting && workspace.research?.phase)
-      await this.start({});
+    if (!this.busy && workspace.research?.phase) await this.start({});
   }
 
   /**
@@ -247,18 +255,36 @@ export class ResearchRunner {
    * person has not started the work.
    */
   async select(id: unknown, replace = false): Promise<void> {
-    if (this.running || this.starting)
-      fail('Wait for research to end before you choose a direction.');
-    this.starting = true;
+    await this.begin('Wait for research to end before you choose a direction.');
+    // Research stays busy until the coordinator has the direction, so no lab starts in between.
     try {
-      await selectIdea(this.root, id, undefined, replace);
-    } catch (error) {
-      fail(error instanceof Error ? error.message : 'The choice failed.');
+      try {
+        await selectIdea(this.root, id, undefined, replace);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : 'The choice failed.');
+      }
+      this.options.onChange?.();
+      await this.draft();
     } finally {
       this.starting = false;
     }
-    this.options.onChange?.();
-    await this.draft();
+  }
+
+  /**
+   * Mark research as starting before anything waits, so a second message
+   * that arrives meanwhile sees research busy and starts no step. Then the
+   * run's guard checks that no lab works on the run. A lab start that comes
+   * between sees research busy and refuses.
+   */
+  private async begin(busy: string): Promise<void> {
+    if (this.busy) fail(busy);
+    this.starting = true;
+    try {
+      await this.options.team?.exclusive('research', () => {});
+    } catch (error) {
+      this.starting = false;
+      throw error;
+    }
   }
 
   /** The coordinator drafts the tasks for the chosen direction. No task starts before the person approves the plan. */

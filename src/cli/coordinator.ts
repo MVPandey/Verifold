@@ -16,6 +16,7 @@ import {
   type SessionView,
 } from './session.ts';
 import type { AgentTool, AgentTools } from './session-hosts.ts';
+import type { RunTeam } from './team.ts';
 import {
   isDraft,
   isQuestion,
@@ -178,6 +179,7 @@ export class Coordinator {
     | undefined;
   /** "Agents at once" of the project. */
   private readonly agents: () => number;
+  private readonly team: RunTeam | undefined;
 
   /** `sessions` is the coordinator's own session manager, outside the worker slots. */
   constructor(
@@ -195,8 +197,11 @@ export class Coordinator {
       readonly onChange?: () => void;
       readonly quota?: { parked(host: HarnessName): string | null };
       readonly agents?: () => number;
+      /** One run has one team. The coordinator starts only when the guard gives its team the run. */
+      readonly team?: RunTeam;
     },
   ) {
+    this.team = options.team;
     this.quota = options.quota;
     this.agents = options.agents ?? (() => defaultAgents);
     this.memory = options.memory;
@@ -335,22 +340,30 @@ export class Coordinator {
         input.helper !== host
           ? input.helper
           : null;
-      await this.save({
-        schemaVersion: 1,
-        objective,
-        host,
-        model,
-        helper,
-        startedAt: new Date().toISOString(),
-        stoppedAt: null,
-        session: null,
-        created: 0,
-        planApproved: !input.guided,
-        cursor: 0,
-        wakeups: [],
-        events: [],
-        actions: [],
-      });
+      // The check and the record that takes the run are one step under the run's lock: a lab cannot start in between.
+      const before = this.state;
+      const take = (): Promise<void> =>
+        this.save({
+          schemaVersion: 1,
+          objective,
+          host,
+          model,
+          helper,
+          startedAt: new Date().toISOString(),
+          stoppedAt: null,
+          session: null,
+          created: 0,
+          planApproved: !input.guided,
+          cursor: 0,
+          wakeups: [],
+          events: [],
+          actions: [],
+        }).catch((error: unknown) => {
+          // No coordinator record was written, so the run is free again.
+          this.state = before;
+          throw error;
+        });
+      await (this.team ? this.team.exclusive('coordinator', take) : take());
       let session: string;
       // The first turn carries no events, but it can still run into a used-up usage window.
       this.loop.started();
@@ -390,7 +403,11 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       );
   }
 
-  /** Start the coordinator for the chosen direction, unless one already runs. */
+  /**
+   * Start the coordinator for the chosen direction, unless one already runs.
+   * The run's guard refuses the start, and this throws its reason, when a lab
+   * owns the run.
+   */
   async startForDirection(workspace: Workspace): Promise<void> {
     if (this.state && !this.state.stoppedAt) return;
     const objective = directionObjective(workspace);

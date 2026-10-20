@@ -1318,7 +1318,8 @@ details.more > * + * {
   font-weight: 650;
 }
 .chip.blocker,
-.chip.objection {
+.chip.objection,
+.chip.kind-objection {
   border-color: var(--caution-line);
   background: var(--caution-bg);
   color: var(--caution);
@@ -3419,4 +3420,117 @@ body:not(:has(.rail)) .menu-button {
 }
 .host-why {
   display: block;
+}
+
+/* ---------- The lab ---------- */
+/* One row for each direction: its title, agent, state, and controls. Its transcript opens below it. */
+.lab-directions {
+  list-style: none;
+  padding: 0;
+}
+.lab-direction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.lab-direction:first-child {
+  border-top: 0;
+}
+.lab-direction-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.lab-agent {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.lab-controls {
+  display: flex;
+  gap: 6px;
+}
+.lab-controls:empty {
+  display: none;
+}
+.lab-direction .lab-activity {
+  grid-column: 1 / -1;
+}
+/* On a phone the title takes the first line, the agent and its state the next, then the controls. A long state wraps. */
+@media (max-width: 600px) {
+  .lab-direction {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .lab-direction-text,
+  .lab-direction .lab-controls {
+    grid-column: 1 / -1;
+  }
+  .lab-direction .status {
+    white-space: normal;
+  }
+}
+.lab-replying {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lab-replying[hidden] {
+  display: none;
+}
+
+/* The board: threads by direction, each post one point with its proof. */
+.lab-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+.lab-thread > h3 {
+  font-size: 13px;
+  color: var(--muted);
+}
+.post {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.post > * + * {
+  margin-top: 6px;
+}
+.post.note {
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+.post .proof {
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.replies {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--tint-line);
+}
+.chip.kind-claim,
+.chip.kind-evidence,
+.chip.kind-rerun {
+  border-color: var(--tint-line);
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+.chip.kind-ruled-out {
+  color: var(--muted);
+}
+.lab-compose textarea {
+  min-height: 72px;
 }
