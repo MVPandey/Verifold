@@ -3098,8 +3098,11 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
       input.includes(`[plan, for you] from claude-1, reply to p-1`),
     ),
   );
+  // The turn with the new plan has the new bar. A later turn can follow it.
   assert.match(
-    (await lab.inputs('d-2-helix')).at(-1) ?? '',
+    (await lab.inputs('d-2-helix')).find((input) =>
+      input.includes(`[plan, for you] from claude-1, reply to p-1`),
+    ) ?? '',
     /Holds up if: "it beats a circle for years by 0\.05 · 3 runs/,
   );
   // When the plan's author stops, the plan stays as it is, and the desk says so.
