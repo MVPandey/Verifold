@@ -119,6 +119,8 @@ export interface SessionLaunch {
   /** The harness process and its start time, so a later owner can stop it safely. */
   readonly pid: number | null;
   readonly processStart: string | null;
+  /** Claude Code's cost estimate in this process. It grows with each turn. */
+  readonly costUsd?: number;
 }
 
 export interface SessionRecord {
@@ -133,8 +135,10 @@ export interface SessionRecord {
   readonly status: SessionStatus;
   readonly startedAt: string;
   readonly endedAt: string | null;
-  /** Claude Code's own estimate. It is not a bill. */
+  /** Claude Code's own estimate in its current or latest process. It is not a bill. */
   readonly costUsd: number | null;
+  /** Claude Code's estimates of all the session's processes, added up. */
+  readonly spentUsd?: number;
   readonly events: readonly SessionEvent[];
   readonly commands: readonly CommandEntry[];
   readonly requests: readonly PendingRequest[];
@@ -533,9 +537,35 @@ function parseLaunch(value: unknown): SessionLaunch[] {
             typeof launch.processStart === 'string'
               ? launch.processStart
               : null,
+          ...(usdValue(launch.costUsd) ? { costUsd: launch.costUsd } : {}),
         },
       ]
     : [];
+}
+
+/** A dollar estimate: a finite number, zero or more. */
+function usdValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * A new cost estimate of Claude Code. It counts from zero in each process,
+ * so the session adds the growth in its current process to what its
+ * earlier processes spent.
+ */
+function spend(
+  record: SessionRecord,
+  costUsd: number,
+): Pick<SessionRecord, 'costUsd' | 'spentUsd' | 'launches'> {
+  const launch = record.launches.at(-1);
+  return {
+    costUsd,
+    spentUsd:
+      (record.spentUsd ?? 0) + Math.max(0, costUsd - (launch?.costUsd ?? 0)),
+    launches: launch
+      ? [...record.launches.slice(0, -1), { ...launch, costUsd }]
+      : record.launches,
+  };
 }
 
 /** A saved record. Harness processes can write in the project folder, so each field is checked. */
@@ -596,6 +626,7 @@ function parseRecord(value: unknown): SessionRecord | null {
       typeof record.costUsd === 'number' && Number.isFinite(record.costUsd)
         ? record.costUsd
         : null,
+    ...(usdValue(record.spentUsd) ? { spentUsd: record.spentUsd } : {}),
     events: list(record.events).flatMap(parseEvent).slice(-400),
     commands: list(record.commands).flatMap(parseCommand).slice(-1000),
     requests: [],
@@ -965,6 +996,8 @@ export class SessionManager {
   /** The transcript file of the current launch. */
   /** The harness's own terminal while the person holds it. */
   private native: Terminal | null = null;
+  /** A turn that the person started in the Codex terminal runs in the app-server. */
+  private nativeTurn = false;
   private transcript: {
     readonly writer: TranscriptWriter;
     readonly apply: (update: TranscriptUpdate) => void;
@@ -1129,6 +1162,9 @@ export class SessionManager {
     if (record.task) this.options.onTaskTurn?.(record.task, 'terminal');
     // Claude Code's process starts again, and its start tells the lab that the session is ready.
     if (record.host === 'claude') void this.resumeAfterTerminal();
+    // A turn that the person started in the Codex terminal goes on. Its end makes the session ready.
+    else if (this.host && this.nativeTurn)
+      this.patch((current) => ({ ...current, status: 'running' }));
     else if (this.host) {
       this.patch((current) => ({ ...current, status: 'idle' }));
       if (record.agent && this.current) this.options.onTurnEnd?.(this.current);
@@ -1885,7 +1921,11 @@ export class SessionManager {
           `The Codex reviewer ${event.approved ? 'approved' : 'denied'} ${event.action ?? 'a command'}.${event.risk ? ` Risk: ${event.risk}.` : ''}${event.rationale ? ` ${event.rationale}` : ''}`,
         );
         break;
+      case 'turn-start':
+        if (this.native) this.nativeTurn = true;
+        break;
       case 'turn-end':
+        this.nativeTurn = false;
         // A turn that the person started in the Codex terminal is not a task turn.
         if (this.native) {
           this.patch((current) => unanswered(current));
@@ -1898,7 +1938,7 @@ export class SessionManager {
         this.patch((current) => ({
           ...unanswered(current),
           status: 'idle',
-          ...(event.costUsd === undefined ? {} : { costUsd: event.costUsd }),
+          ...(event.costUsd === undefined ? {} : spend(current, event.costUsd)),
         }));
         this.event(
           'status',

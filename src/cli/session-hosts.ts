@@ -183,6 +183,8 @@ export type HostEvent =
       readonly risk?: string;
       readonly rationale?: string;
     }
+  /** Codex started a turn, also one that a terminal on the same app-server started. */
+  | { readonly type: 'turn-start' }
   | {
       readonly type: 'turn-end';
       readonly status: 'completed' | 'interrupted' | 'failed';
@@ -1183,6 +1185,8 @@ function codex(options: HostOptions): HostSession {
     } else if (method === 'account/rateLimits/updated') {
       const signal = codexLimit(params.rateLimits);
       if (signal) emit({ type: 'limit', ...signal });
+    } else if (method === 'turn/started') {
+      emit({ type: 'turn-start' });
     } else if (method === 'turn/completed') {
       turn = undefined;
       const value = record(params.turn) ? str(params.turn.status) : undefined;

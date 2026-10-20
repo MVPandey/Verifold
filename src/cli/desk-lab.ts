@@ -11,12 +11,14 @@ import {
   budgetEnded,
   defaultLabHours,
   labLimits,
+  verdictWords,
   type Call,
   type CallEffect,
   type CallOption,
   type Check,
   type DirectionView,
   type LabView,
+  type Verdict,
 } from './lab.ts';
 import { usd } from './leases.ts';
 import { checkableKinds, checkLimits } from './lab-tools.ts';
@@ -50,14 +52,13 @@ export interface LabWork {
 /** One thing that waits for the person, in the order of the Needs-you line. `body` is HTML. */
 export interface LabNeed {
   readonly key: string;
-  readonly kind: string;
   readonly title: string;
   readonly why: string;
   readonly body: string;
 }
 
 /** What the side panel shows. `sub` and `body` are HTML, already escaped. */
-export interface LabPanel {
+export interface Panel {
   readonly kind: string;
   readonly title: string;
   readonly sub: string;
@@ -93,14 +94,23 @@ const kindWords: Record<PostKind, string> = {
   status: 'Note',
 };
 
-/** The verdict words of a row, with a mark. The mark is decoration: the word says it. */
-const verdictMarks = {
-  open: ['○', 'Not settled'],
-  leading: ['↗', 'Leading'],
-  'holds-up': ['✓', 'Holds up'],
-  'ruled-out': ['×', 'Ruled out'],
-  disputed: ['⚠', 'Disputed'],
-} as const;
+/** The mark of a row's verdict. It is decoration: the word beside it says the verdict. */
+const verdictMarks: Record<Verdict | 'disputed', string> = {
+  open: '○',
+  leading: '↗',
+  'holds-up': '✓',
+  'ruled-out': '×',
+  disputed: '⚠',
+};
+
+/** A row's verdict in words. A direction with no verdict is not settled yet. */
+function verdictText(verdict: Verdict, disputed: boolean): string {
+  return disputed
+    ? 'Disputed'
+    : verdict === 'open'
+      ? 'Not settled'
+      : verdictWords[verdict];
+}
 
 /** The posts that the view shows. Older ones stay on the board and in the agents' digests. */
 const shownPosts = 120;
@@ -292,7 +302,7 @@ function pinnedDisputes(
       const runs = check
         ? view.ledger.filter((run) => run.agent === check.agent)
         : [];
-      return `<li><span class="verdict v-disputed"><span aria-hidden="true">⚠</span> Disputed</span><div class="pinned-text"><p><a href="#post-${e(target.id)}">${e(target.id)}</a> by ${e(name(target.author))}${row ? `, the evidence of <a href="#row-${e(row.id)}">${e(row.title)}</a>` : ''}: ${e(clip(target.text, 140))}</p>${doubt ? `<p class="fine">${e(name(doubt.author))} objects: ${e(clip(doubt.text, 140))}${objections.length > 1 ? ` (and ${objections.length - 1} more)` : ''}</p>` : ''}<p class="fine">${e(checkWhere(check))}${runs.map((run) => ` ${runButton(run)}`).join('')}${check?.session && check.state !== 'queued' ? ` <button type="button" class="link" data-panel="agent" data-agent="${e(check.agent)}">What ${e(check.handle)} did</button>` : ''}</p></div></li>`;
+      return `<li><span class="verdict v-disputed"><span aria-hidden="true">⚠</span> Disputed</span><div class="pinned-text"><p><a href="#post-${e(target.id)}">${e(target.id)}</a> by ${e(name(target.author))}${row ? `, the evidence of <a href="#row-${e(row.id)}">${e(row.title)}</a>` : ''}: ${e(clip(target.text, 140))}</p>${doubt ? `<p class="fine">${e(name(doubt.author))} objects: ${e(clip(doubt.text, 140))}${objections.length > 1 ? ` (and ${objections.length - 1} more)` : ''}</p>` : ''}<p class="fine">${e(checkWhere(check))}${runs.map((run) => ` ${runButton(run)}`).join('')}${check?.session && check.state !== 'queued' ? ` <button type="button" class="link" data-panel="agent" data-agent="${e(check.agent)}" data-open-pane="summary">What ${e(check.handle)} did</button>` : ''}</p></div></li>`;
     })
     .join('')}</ul>`;
 }
@@ -303,11 +313,14 @@ function runButton(run: RunRecord): string {
   return `<button type="button" class="proof run-${e(run.status)}" data-panel="run" data-run="${e(run.id)}">${e(run.id)}${runActive(run) ? ' · running' : metric ? ` · ${e(metric)}` : ` · ${e(runSummary(run))}`}</button>`;
 }
 
-/** The proof of a post: a run or a diff opens in the panel, and a file or a figure names its path. */
+/**
+ * The proof of a post: a run, or the diff that the post cites, opens in the
+ * panel, and a file or a figure names its path.
+ */
 function proofHtml(
   artifact: Artifact,
   ledger: ReadonlyMap<string, RunRecord>,
-  direction: string | undefined,
+  post: Post,
 ): string {
   switch (artifact.type) {
     case 'run': {
@@ -317,10 +330,10 @@ function proofHtml(
         : `<span class="proof">${e(artifact.run)}</span>`;
     }
     case 'diff': {
-      const where = artifact.direction ?? direction;
+      const where = artifact.direction ?? post.direction;
       const label = `diff · ${clip(artifact.paths.join(', '), 60)}`;
       return where
-        ? `<button type="button" class="proof" data-panel="diff" data-lab-direction="${e(where)}">${e(label)}</button>`
+        ? `<button type="button" class="proof" data-panel="diff" data-lab-direction="${e(where)}" data-post="${e(post.id)}">${e(label)}</button>`
         : `<span class="proof">${e(label)}</span>`;
     }
     case 'file':
@@ -372,7 +385,8 @@ function directionRow(
       : null;
   const dispute =
     direction.evidence !== null && disputed.has(direction.evidence.post);
-  const [glyph, word] = verdictMarks[dispute ? 'disputed' : direction.verdict];
+  const glyph = verdictMarks[dispute ? 'disputed' : direction.verdict];
+  const word = verdictText(direction.verdict, dispute);
   const state = stateOf(entry, clock);
   // A state that needs attention comes before the check.
   const loud =
@@ -392,10 +406,10 @@ function directionRow(
     runs && open
       ? `<button type="button" data-lab-mention="@${e(agent.handle)}">Message</button>`
       : '',
-    `<button type="button" data-panel="agent" data-agent="${e(agent.id)}">What ${e(agent.handle)} did</button>`,
+    `<button type="button" data-panel="agent" data-agent="${e(agent.id)}" data-open-pane="summary">What ${e(agent.handle)} did</button>`,
     `<button type="button" data-panel="diff" data-lab-direction="${e(direction.id)}">Diff</button>`,
     runs && open && agent.session
-      ? `<button type="button" data-panel="agent" data-agent="${e(agent.id)}" data-pane="terminal">Terminal</button>`
+      ? `<button type="button" data-panel="agent" data-agent="${e(agent.id)}" data-open-pane="terminal">Terminal</button>`
       : '',
     runs && status === 'crashed'
       ? `<button type="button" class="primary" data-action="lab-agent-restart" data-agent="${e(agent.id)}">Start again</button>`
@@ -495,7 +509,7 @@ function postHtml(
       ? planTable(view, name)
       : '';
   const proofs = post.artifacts.length
-    ? `<p class="proofs">${post.artifacts.map((artifact) => proofHtml(artifact, ledger, post.direction)).join(' ')}</p>`
+    ? `<p class="proofs">${post.artifacts.map((artifact) => proofHtml(artifact, ledger, post)).join(' ')}</p>`
     : '';
   const reply =
     note || !runs
@@ -517,12 +531,19 @@ function board(
 ): string {
   const budget = { left: textBytes };
   const ledger = new Map(view.ledger.map((run) => [run.id, run]));
-  const posts = view.posts.slice(-shownPosts);
+  const newest = view.posts.slice(-shownPosts);
+  // The plan of record stays on the board after newer posts push it out.
+  const plan = view.posts.find((post) => post.id === view.state.plan?.post);
+  const posts = plan && !newest.includes(plan) ? [plan, ...newest] : newest;
   if (!posts.length) {
     const opener = view.directions.find(
       (entry) => entry.agent.id === view.state.opener,
     );
-    return `<p class="empty-note">${opener ? `${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.` : 'No posts yet. Agents post what they find here, with proof.'}</p>`;
+    const ended =
+      opener?.status === 'stopped' ||
+      opener?.status === 'closed' ||
+      opener?.status === 'crashed';
+    return `<p class="empty-note">${!opener ? 'No posts yet. Agents post what they find here, with proof.' : ended ? `${e(opener.agent.handle)} stopped before it posted a plan. Open a direction yourself, or start it again.` : `${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.`}</p>`;
   }
   const shown = new Set(posts.map((post) => post.id));
   const replies = new Map<string, Post[]>();
@@ -612,11 +633,16 @@ export function costLine(view: LabView, gpu: LabGpu | null): string {
   return `≈${usd(claude + pods)} spent (${parts.join(', ')}) · Codex usage not counted`;
 }
 
-/** The day of the lab: day 1 is the day that it started. */
+/** The day of the lab by the calendar of this computer: day 1 is the day that it started. */
 function labDay(startedAt: string): number {
+  const start = new Date(startedAt);
+  start.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  // Round: a day with a clock change has 23 or 25 hours.
   return Math.max(
     1,
-    Math.floor((Date.now() - Date.parse(startedAt)) / 86_400_000) + 1,
+    Math.round((today.getTime() - start.getTime()) / 86_400_000) + 1,
   );
 }
 
@@ -706,7 +732,7 @@ export function renderLab(
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${renderLabWork(options.works ?? [], clock)}
   ${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
   <section class="lab-section" aria-labelledby="directions-title"><h2 id="directions-title" class="lab-label">Directions</h2>
-  ${view.directions.length ? `<ul class="lab-rows">${view.directions.map((entry) => directionRow(entry, clock, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. The first agent opens them with its plan.</p>'}
+  ${view.directions.length ? `<ul class="lab-rows">${view.directions.map((entry) => directionRow(entry, clock, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. The plan opens them, or you open one yourself.</p>'}
   ${runs ? addForm() : ''}</section>
   <section class="lab-section" aria-labelledby="board-title"><h2 id="board-title" class="lab-label">Board</h2>${pinnedDisputes(view, disputes, name)}${board(view, name, host, clock)}</section>
   ${runs ? composeBox(view, open) : ''}
@@ -907,7 +933,7 @@ export function runPanel(
   view: LabView,
   id: string | undefined,
   clock: (value: string) => string,
-): LabPanel {
+): Panel {
   const run = view.ledger.find((entry) => entry.id === id);
   if (!run)
     return {
@@ -953,20 +979,28 @@ export function runPanel(
   };
 }
 
-/** What a direction's branch changed since its start, from the lab, or null before the desk read it. */
+/**
+ * What a direction's branch changed since its start, or, with `post`, the
+ * diff that a post cites: its commits and its paths.
+ */
 export interface LabDiff {
   readonly direction: string;
+  readonly post: string | null;
   readonly from: string;
   readonly to: string;
   readonly files: readonly ChangedFile[];
 }
 
-/** A direction's diff in the panel: the files that its branch changed. A click shows one file's changes. */
+/**
+ * A diff in the panel: the files that a direction's branch changed, or the
+ * files of the diff that a post cites. A click shows one file's changes.
+ */
 export function diffPanel(
   view: LabView,
   id: string | undefined,
+  post: string | undefined,
   diff: LabDiff | null,
-): LabPanel {
+): Panel {
   const direction = view.state.directions.find((entry) => entry.id === id);
   if (!direction)
     return {
@@ -975,16 +1009,24 @@ export function diffPanel(
       sub: '',
       body: '<p class="empty-note">This direction is not in the lab, for example after Start over.</p>',
     };
-  const files = diff?.direction === direction.id ? diff.files : null;
-  const body = !files
-    ? '<p class="empty-note">Verifold could not read this direction\'s branch.</p>'
-    : !files.length
-      ? '<p class="empty-note">No file changed since the direction started.</p>'
-      : `<p class="fine">${files.length} ${files.length === 1 ? 'file' : 'files'} changed from ${e(diff?.from.slice(0, 7) ?? '')} to ${e(diff?.to.slice(0, 7) ?? '')}.</p><ul class="review-files">${files.map((file) => `<li><button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" aria-pressed="false"><code>${e(file.path)}</code></button> <span class="fine change-${file.change}">${file.change}</span></li>`).join('')}</ul><div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}"><p class="fine">Choose a file to see its changes.</p></div>`;
+  const shown =
+    diff?.direction === direction.id && diff.post === (post ?? null)
+      ? diff
+      : null;
+  const files = shown?.files ?? null;
+  const range = shown
+    ? `from ${e(shown.from.slice(0, 7))} to ${e(shown.to.slice(0, 7))}`
+    : '';
+  const body =
+    !shown || !files
+      ? `<p class="empty-note">${post ? 'Verifold could not read the diff of this post.' : "Verifold could not read this direction's branch."}</p>`
+      : !files.length
+        ? `<p class="empty-note">${post ? 'The diff of this post changes no file.' : 'No file changed since the direction started.'}</p>`
+        : `<p class="fine">${files.length} ${files.length === 1 ? 'file' : 'files'} changed ${range}.</p><ul class="review-files">${files.map((file) => `<li><button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}"${post ? ` data-diff-post="${e(post)}"` : ''} aria-pressed="false"><code>${e(file.path)}</code></button> <span class="fine change-${file.change}">${file.change}</span></li>`).join('')}</ul><div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}" data-diff-post="${e(post ?? '')}" data-lab-to="${e(shown.to)}"><p class="fine">Choose a file to see its changes.</p></div>`;
   return {
     kind: 'Diff',
     title: direction.title,
-    sub: `<span class="fine">${e(direction.workspace.branch ?? direction.workspace.path)}</span>`,
+    sub: `<span class="fine">${post ? `The diff that ${e(post)} cites` : `${e(direction.workspace.branch ?? direction.workspace.path)}, since the direction started`}</span>`,
     body,
   };
 }

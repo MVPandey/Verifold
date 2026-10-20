@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { copyFile, readFile, realpath } from 'node:fs/promises';
+import { copyFile, readFile, realpath, stat } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -29,6 +29,7 @@ import {
   readRecord,
   sessionTranscript,
   validSessionId,
+  type SessionRecord,
   type SessionView,
 } from './session.ts';
 import type { SessionPool } from './workers.ts';
@@ -522,23 +523,68 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
-/** What a direction changed, for the diff panel, or null when Verifold cannot read its branch. */
-async function labDiff(lab: Lab, direction: string): Promise<LabDiff | null> {
-  const shown = await lab.directionDiff(direction).catch(() => null);
-  return shown
-    ? { direction, from: shown.from, to: shown.to, files: shown.files }
-    : null;
+/**
+ * What the lab's panels read, kept between the page's polls: a session
+ * record by the time its file changed, and a diff by its commits.
+ */
+interface LabReads {
+  readonly records: Map<
+    string,
+    { readonly mtime: number; readonly record: SessionRecord }
+  >;
+  readonly diffs: Map<string, LabDiff>;
+}
+
+/** Keep a cache to its newest 20 entries. */
+function keep<T>(cache: Map<string, T>, key: string, value: T): T {
+  cache.delete(key);
+  cache.set(key, value);
+  for (const old of [...cache.keys()].slice(0, -20)) cache.delete(old);
+  return value;
+}
+
+/**
+ * What a direction changed, or the diff that a post cites, for the diff
+ * panel. Null when Verifold cannot read it. It reads Git again only when
+ * the direction's newest commit moved.
+ */
+async function labDiff(
+  lab: Lab,
+  view: LabView,
+  direction: string,
+  post: string | undefined,
+  reads: LabReads,
+): Promise<LabDiff | null> {
+  const head =
+    view.state.directions.find((entry) => entry.id === direction)?.head ?? '';
+  const key = `${direction}|${post ?? ''}|${head}`;
+  const known = reads.diffs.get(key);
+  if (known !== undefined) return known;
+  const shown = await lab
+    .directionDiff(direction, undefined, post)
+    .catch(() => null);
+  // A read that failed tries again at the next poll.
+  if (!shown) return null;
+  return keep(reads.diffs, key, {
+    direction,
+    post: post ?? null,
+    from: shown.from,
+    to: shown.to,
+    files: shown.files,
+  });
 }
 
 /**
  * The session of a lab agent or checker for the agent panel: its slot's
- * view, or its saved record when no slot holds it now. Null before it starts.
+ * view, or its saved record when no slot holds it now. The record is read
+ * again only when its file changed. Null before it starts.
  */
 async function labSession(
   root: string,
   sessions: SessionPool | undefined,
   view: LabView,
   agent: string | undefined,
+  reads: LabReads,
 ): Promise<SessionView | null> {
   const id =
     view.directions.find((entry) => entry.agent.id === agent)?.agent.session ??
@@ -547,8 +593,16 @@ async function labSession(
   if (!id) return null;
   const known = sessions?.view(id);
   if (known) return known;
-  const record = await readRecord(root, id);
-  return record ? { record, live: false, saveFailed: false } : null;
+  const file = await stat(
+    join(root, '.verifold', 'sessions', `${id}.json`),
+  ).catch(() => null);
+  if (!file) return null;
+  const cached = reads.records.get(id);
+  const record =
+    cached?.mtime === file.mtimeMs ? cached.record : await readRecord(root, id);
+  if (!record) return null;
+  keep(reads.records, id, { mtime: file.mtimeMs, record });
+  return { record, live: false, saveFailed: false };
 }
 
 /**
@@ -918,6 +972,7 @@ export async function startDesk(
     requests: new Map(),
     works: [],
   };
+  const labReads: LabReads = { records: new Map(), diffs: new Map() };
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -1399,20 +1454,28 @@ export async function startDesk(
       }
       const direction = url.searchParams.get('direction') ?? '';
       const file = url.searchParams.get('file') ?? '';
+      const post = url.searchParams.get('post');
       if (
         !/^d-[1-9]\d{0,3}$/.test(direction) ||
         !file ||
         file.length > 300 ||
+        (post !== null && !/^p-[1-9]\d{0,5}$/.test(post)) ||
         [...url.searchParams.keys()].some(
-          (key) => key !== 'direction' && key !== 'file',
+          (key) => !['direction', 'file', 'post'].includes(key),
         ) ||
-        url.searchParams.getAll('file').length > 1
+        ['direction', 'file', 'post'].some(
+          (key) => url.searchParams.getAll(key).length > 1,
+        )
       ) {
         response.writeHead(400).end();
         return;
       }
       try {
-        const shown = await labDesk.lab?.directionDiff(direction, file);
+        const shown = await labDesk.lab?.directionDiff(
+          direction,
+          file,
+          post ?? undefined,
+        );
         if (!shown?.diff) {
           response.writeHead(404).end();
           return;
@@ -1421,7 +1484,7 @@ export async function startDesk(
           .writeHead(200, {
             'Content-Type': 'application/json; charset=utf-8',
           })
-          .end(JSON.stringify(shown.diff));
+          .end(JSON.stringify({ ...shown.diff, to: shown.to }));
       } catch (error) {
         if (!(error instanceof SessionActionError)) throw error;
         response
@@ -1451,6 +1514,7 @@ export async function startDesk(
       url.searchParams.get('finished'),
       url.searchParams.get('run'),
       url.searchParams.get('agent'),
+      url.searchParams.get('post'),
     );
     const keys = [
       'attempt',
@@ -1463,6 +1527,7 @@ export async function startDesk(
       'finished',
       'run',
       'agent',
+      'post',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
@@ -1561,11 +1626,23 @@ export async function startDesk(
                     sessions,
                     labView,
                     frame.agent,
+                    labReads,
                   ),
                 }
               : {}),
-            ...(labDesk.lab && frame.panel === 'diff' && frame.direction
-              ? { labDiff: await labDiff(labDesk.lab, frame.direction) }
+            ...(labDesk.lab &&
+            labView &&
+            frame.panel === 'diff' &&
+            frame.direction
+              ? {
+                  labDiff: await labDiff(
+                    labDesk.lab,
+                    labView,
+                    frame.direction,
+                    frame.post,
+                    labReads,
+                  ),
+                }
               : {}),
             // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
             full:
