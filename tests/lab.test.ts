@@ -3118,12 +3118,11 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
 });
 
 await test('when the time budget ends the lab pauses, a go call asks for more time, its answer resumes the lab, and its undo takes the hours back', async (t) => {
-  // An hour of 8 seconds: the 4 more hours of the answer outlast the steps up to its undo, also on a slow computer.
-  const lab = await fixture(t, { hourMs: 8000 });
+  const lab = await fixture(t, { hourMs: 4000 });
   await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
   await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
-  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 20_000);
+  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 10_000);
   // No continuation starts after the deadline.
   const count = (await lab.inputs('d-1-alpha')).length;
   await delay(300);
@@ -3175,7 +3174,34 @@ await test('when the time budget ends the lab pauses, a go call asks for more ti
   await delay(200);
   assert.equal(lab.lab.view()?.state.calls.length, 1);
 
-  await lab.lab.answerCall('c-1', '0');
+  // The answer is saved before its hours apply. Ticks meanwhile ask no second time for the same deadline.
+  const inside = lab.lab as unknown as {
+    apply: (...args: unknown[]) => Promise<unknown>;
+    kick(): void;
+  };
+  const apply = inside.apply.bind(lab.lab);
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  inside.apply = async (...args) => {
+    await gate;
+    return apply(...args);
+  };
+  t.after(() => {
+    inside.apply = apply;
+    release();
+  });
+  const answering = lab.lab.answerCall('c-1', '0');
+  await until(() => lab.lab.view()?.state.calls[0]?.state === 'answered');
+  for (let tries = 0; tries < 5; tries++) {
+    inside.kick();
+    await delay(60);
+  }
+  assert.equal(lab.lab.view()?.state.calls.length, 1);
+  inside.apply = apply;
+  release();
+  await answering;
   let state = lab.lab.view()?.state;
   assert.equal(state?.pausedAt, null);
   assert.equal(state?.budget?.hours, 5);
