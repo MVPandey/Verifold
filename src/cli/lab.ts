@@ -5364,7 +5364,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       if ('conflicts' in result) {
         await this.saveBringing(null).catch(() => {});
         fail(
-          `Nothing came in. ${result.conflicts.length === 1 ? 'This file' : 'These files'} changed in the project folder since ${direction.id} started: ${nameList(result.conflicts)}. Keep your version, or copy the agent's version yourself from ${direction.workspace.branch ?? direction.workspace.path}.`,
+          `Nothing came in. ${result.conflicts.length === 1 ? 'This file' : 'These files'} changed in your project folder since ${direction.id} started: ${nameList(result.conflicts)}. Untick ${result.conflicts.length === 1 ? 'it' : 'them'} to bring in the others. To keep both changes, copy the agent's change by hand: Diff shows it.`,
         );
       }
       await this.endBring(

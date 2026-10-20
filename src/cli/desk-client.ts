@@ -1658,6 +1658,7 @@ async function act(button: HTMLElement): Promise<void> {
           ...(body.action === 'lab-direction-add'
             ? ['lab-title', 'lab-bar']
             : []),
+          ...(body.action === 'lab-signoff' ? ['lab-signoff-note'] : []),
         ]) {
       const element = document.getElementById(id);
       if (
