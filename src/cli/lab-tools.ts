@@ -7,8 +7,8 @@ import type { AgentTool } from './session-hosts.ts';
  * agent with an older thread starts a new one. A tool that only new threads
  * get needs no new version: `verifold_plan` goes only to the agent that opens
  * a lab, and that agent's thread is new. The run tools, the pod tools,
- * `verifold_direction`, and the run proof of `verifold_post` add to the
- * tools. `where` and `lease` of `verifold_run` are optional, so every call of
+ * `verifold_direction`, `verifold_ask_person`, and the run proof of
+ * `verifold_post` add to the tools. `where` and `lease` of `verifold_run` are optional, so every call of
  * its older schema stays valid. None of them raises a version: a Codex agent
  * whose thread is older keeps its conversation, and gets them with its next
  * new thread. `verifold_direction` now accepts holds-up, which starts a
@@ -231,7 +231,7 @@ export const labPodToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_request_pod',
     description:
-      "Ask for a GPU pod lease for your direction: one GPU of an allowed type, for a number of hours. Pods cost the person money, so ask only when your next runs need a GPU. Verifold refuses a request that does not fit the person's limits. A request inside the limits starts at once, unless the person approves each pod. The reply says which. Verifold wakes you when the pod is ready.",
+      "Ask for a GPU pod lease for your direction: one GPU of an allowed type, for a number of hours. Pods cost the person money, so ask only when your next runs need a GPU. Verifold refuses a request that does not fit the person's limits. The lab's first pod is a call to the person: Verifold asks them and wakes you with the answer. After they approve one, a request inside the limits starts at once, unless the person approves each pod. The reply says which. Verifold wakes you when the pod is ready.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -479,6 +479,142 @@ export const directionToolSpec: AgentTool = {
       },
     },
     required: ['action', 'why'],
+    additionalProperties: false,
+  },
+};
+
+/** The kinds of call for the person. A technical question goes on the board, and a check settles it. */
+export const callKinds = ['cost', 'scope', 'access', 'go'] as const;
+
+/** The limits of a call. The tool schema and the lab's checks use the same ones. */
+export const callLimits = {
+  /** Calls that wait for the person at once. Verifold's own deadline call does not count. */
+  open: 3,
+  question: 160,
+  label: 80,
+  why: 280,
+  options: { min: 2, max: 3 },
+  usd: 10_000,
+  minutes: 100_000,
+  domains: 20,
+  /** More lab hours that one option gives. */
+  hours: 72,
+  /** Pod hours of one option. */
+  podHours: 24,
+  undoMinutes: 60,
+  defaultUndo: 10,
+  /** The hours of Verifold's own call at the end of a time budget. */
+  deadlineHours: 4,
+};
+
+/** A call for the person: cost, scope, access, or go, with options, a pick, and an undo window. */
+export const askPersonToolSpec: AgentTool = {
+  name: 'verifold_ask_person',
+  description:
+    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction), access (network for your shell, or a key in Compute), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 or 3 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, hours with cost or go, direction with scope, and domains with access. pick is the option that you advise, and why says why. The person's answer applies at once, and they can undo it within undoMinutes (default 10). Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      kind: { type: 'string', enum: callKinds },
+      question: { type: 'string', maxLength: callLimits.question },
+      options: {
+        type: 'array',
+        minItems: callLimits.options.min,
+        maxItems: callLimits.options.max,
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', maxLength: callLimits.label },
+            usd: { type: 'number', minimum: 0, maximum: callLimits.usd },
+            minutes: {
+              type: 'integer',
+              minimum: 0,
+              maximum: callLimits.minutes,
+            },
+            effect: {
+              type: 'object',
+              properties: {
+                pod: {
+                  type: 'object',
+                  properties: {
+                    gpuType: {
+                      type: 'string',
+                      description:
+                        'An allowed GPU type ID from verifold_compute',
+                    },
+                    hours: {
+                      type: 'integer',
+                      minimum: 1,
+                      maximum: callLimits.podHours,
+                    },
+                    secrets: {
+                      type: 'array',
+                      maxItems: 8,
+                      items: {
+                        type: 'string',
+                        pattern: '^[A-Z][A-Z0-9_]{0,63}$',
+                      },
+                    },
+                  },
+                  required: ['gpuType', 'hours'],
+                  additionalProperties: false,
+                },
+                domains: {
+                  type: 'array',
+                  minItems: 1,
+                  maxItems: callLimits.domains,
+                  items: { type: 'string', maxLength: 253 },
+                  description:
+                    "Domains that your shell's commands may reach, such as pypi.org.",
+                },
+                hours: {
+                  type: 'integer',
+                  minimum: 1,
+                  maximum: callLimits.hours,
+                  description: "More hours for the lab's time budget.",
+                },
+                direction: {
+                  type: 'object',
+                  properties: {
+                    open: {
+                      type: 'string',
+                      maxLength: planLimits.title,
+                      description: 'The title of a new direction.',
+                    },
+                    harness: {
+                      type: 'string',
+                      enum: ['claude', 'codex'],
+                      description: 'open: the harness of its agent.',
+                    },
+                    bar: {
+                      type: 'string',
+                      maxLength: planLimits.bar,
+                      description: 'open: what makes it hold up.',
+                    },
+                    stop: {
+                      ...directionId,
+                      description: 'A direction to stop.',
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          required: ['label'],
+          additionalProperties: false,
+        },
+      },
+      pick: { type: 'integer', minimum: 0, maximum: 2 },
+      why: { type: 'string', maxLength: callLimits.why },
+      undoMinutes: {
+        type: 'integer',
+        minimum: 0,
+        maximum: callLimits.undoMinutes,
+      },
+    },
+    required: ['kind', 'question', 'options', 'pick', 'why'],
     additionalProperties: false,
   },
 };

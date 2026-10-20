@@ -165,9 +165,13 @@ export class SessionPool {
     return this.use((slot) => slot.startAgent(input));
   }
 
-  /** Continue a lab agent's paused session in a free slot, with its tools. */
-  resumeAgent(id: string, tools: AgentTools): Promise<void> {
-    return this.use((slot) => slot.resume(id, tools), id);
+  /** Continue a lab agent's paused session in a free slot, with its tools and the domains of its shell. */
+  resumeAgent(
+    id: string,
+    tools: AgentTools,
+    network?: readonly string[],
+  ): Promise<void> {
+    return this.use((slot) => slot.resume(id, tools, network), id);
   }
 
   /**

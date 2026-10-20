@@ -13,6 +13,7 @@ import { RunPod, hideSecrets, secretGuard, type GpuOffer } from './runpod.ts';
 import {
   Leases,
   isOpen,
+  maxCost,
   spent,
   usd,
   type Budget,
@@ -74,6 +75,17 @@ export interface ComputeView {
   readonly budget: Budget;
   /** The last problem that a check of the pods met. */
   readonly problem: { readonly at: string; readonly text: string } | null;
+}
+
+/** A pod for lab directions that a person's call starts. */
+export interface LabPod {
+  readonly gpu: unknown;
+  readonly hours: unknown;
+  readonly directions: readonly string[];
+  readonly reason: string;
+  readonly secrets?: unknown;
+  /** USD: the most that the person approved. A lease that can cost more does not start. */
+  readonly most?: number;
 }
 
 function fail(message: string): never {
@@ -463,6 +475,40 @@ export class Compute {
         return `RunPod did not create the pod of ${lease.id}: ${started.end?.reason ?? 'no reason given'}.`;
     }
     return `Asked the person for ${lease.id}: ${what}. Nothing is created until the person approves it. An event tells you the decision.`;
+  }
+
+  /** What a lab lease for `input` can cost at most, after the checks of a request. It records nothing. */
+  podCost(input: LabPod): Promise<number> {
+    return this.leases.quote({ by: 'agent', ...input });
+  }
+
+  /**
+   * The person picked a pod in a lab's call: the lease starts as one that the
+   * person approved, when it can cost at most `most`. A start that fails
+   * withdraws the request, so nothing waits, and the error says why.
+   */
+  async startPod(input: LabPod): Promise<Lease> {
+    const { most, ...pod } = input;
+    const lease = await this.leases.request({ by: 'agent', ...pod });
+    let started: Lease;
+    try {
+      const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
+      if (most !== undefined && cost > most + 0.005)
+        fail(
+          `The pod can now cost up to ${usd(cost)}, more than the ${usd(most)} that you approved.`,
+        );
+      started = await this.leases.approve(lease.id, 'person');
+    } catch (error) {
+      await this.leases
+        .end(lease.id, 'person', 'its pod could not start.')
+        .catch(() => {});
+      throw error;
+    }
+    if (started.state === 'failed')
+      fail(
+        `RunPod did not create the pod of ${started.id}: ${started.end?.reason ?? 'no reason given'}.`,
+      );
+    return started;
   }
 
   /** The worker tools for pods. */
