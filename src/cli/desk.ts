@@ -51,7 +51,7 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
-import { runId } from './board.ts';
+import { directionId, proofRef, runId } from './board.ts';
 import { startLabOn, type Lab, type LabView } from './lab.ts';
 import type { LabDiff, LabWork } from './desk-lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
@@ -552,22 +552,22 @@ async function labDiff(
   lab: Lab,
   view: LabView,
   direction: string,
-  post: string | undefined,
+  proof: string | undefined,
   reads: LabReads,
 ): Promise<LabDiff | null> {
   const head =
     view.state.directions.find((entry) => entry.id === direction)?.head ?? '';
-  const key = `${direction}|${post ?? ''}|${head}`;
+  const key = `${direction}|${proof ?? ''}|${head}`;
   const known = reads.diffs.get(key);
   if (known !== undefined) return known;
   const shown = await lab
-    .directionDiff(direction, undefined, post)
+    .directionDiff(direction, undefined, proof)
     .catch(() => null);
   // A read that failed tries again at the next poll.
   if (!shown) return null;
   return keep(reads.diffs, key, {
     direction,
-    post: post ?? null,
+    proof: proof ?? null,
     from: shown.from,
     to: shown.to,
     files: shown.files,
@@ -1454,16 +1454,16 @@ export async function startDesk(
       }
       const direction = url.searchParams.get('direction') ?? '';
       const file = url.searchParams.get('file') ?? '';
-      const post = url.searchParams.get('post');
+      const proof = url.searchParams.get('proof');
       if (
-        !/^d-[1-9]\d{0,3}$/.test(direction) ||
+        !directionId.test(direction) ||
         !file ||
         file.length > 300 ||
-        (post !== null && !/^p-[1-9]\d{0,5}$/.test(post)) ||
+        (proof !== null && !proofRef(proof)) ||
         [...url.searchParams.keys()].some(
-          (key) => !['direction', 'file', 'post'].includes(key),
+          (key) => !['direction', 'file', 'proof'].includes(key),
         ) ||
-        ['direction', 'file', 'post'].some(
+        ['direction', 'file', 'proof'].some(
           (key) => url.searchParams.getAll(key).length > 1,
         )
       ) {
@@ -1474,7 +1474,7 @@ export async function startDesk(
         const shown = await labDesk.lab?.directionDiff(
           direction,
           file,
-          post ?? undefined,
+          proof ?? undefined,
         );
         if (!shown?.diff) {
           response.writeHead(404).end();
@@ -1514,7 +1514,7 @@ export async function startDesk(
       url.searchParams.get('finished'),
       url.searchParams.get('run'),
       url.searchParams.get('agent'),
-      url.searchParams.get('post'),
+      url.searchParams.get('proof'),
     );
     const keys = [
       'attempt',
@@ -1527,7 +1527,7 @@ export async function startDesk(
       'finished',
       'run',
       'agent',
-      'post',
+      'proof',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
@@ -1639,7 +1639,7 @@ export async function startDesk(
                     labDesk.lab,
                     labView,
                     frame.direction,
-                    frame.post,
+                    frame.proof,
                     labReads,
                   ),
                 }

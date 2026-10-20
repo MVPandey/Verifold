@@ -39,15 +39,15 @@ let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
 let selectedDirection: string | undefined;
-/** The run, the agent, and the post with a cited diff, of the lab's panels. */
+/** The run, the agent, and the cited diff of a post (such as p-12.0), of the lab's panels. */
 let selectedRun: string | undefined;
 let selectedAgent: string | undefined;
-let selectedPost: string | undefined;
-/** The file of a lab diff that the diff pane shows, kept across page renders, with the diff's direction, post, and newest commit. */
+let selectedProof: string | undefined;
+/** The file of a lab diff that the diff pane shows, kept across page renders, with the diff's direction, proof, and newest commit. */
 let shownLabDiff:
   | {
       readonly direction: string;
-      readonly post: string;
+      readonly proof: string;
       readonly to: string;
       readonly file: string;
       readonly text: string;
@@ -98,7 +98,7 @@ try {
     sessionStorage.getItem('verifold-desk-direction') ?? undefined;
   selectedRun = sessionStorage.getItem('verifold-desk-run') ?? undefined;
   selectedAgent = sessionStorage.getItem('verifold-desk-agent') ?? undefined;
-  selectedPost = sessionStorage.getItem('verifold-desk-post') ?? undefined;
+  selectedProof = sessionStorage.getItem('verifold-desk-proof') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
   records = localStorage.getItem('verifold-desk-records') ?? 'all';
@@ -207,7 +207,7 @@ function viewQuery(): string {
     query.set('direction', selectedDirection);
   if (panel === 'run' && selectedRun) query.set('run', selectedRun);
   if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
-  if (panel === 'diff' && selectedPost) query.set('post', selectedPost);
+  if (panel === 'diff' && selectedProof) query.set('proof', selectedProof);
   if (since) query.set('since', since);
   if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
@@ -223,7 +223,7 @@ function panelKey(): string {
         : panel === 'direction'
           ? selectedDirection
           : panel === 'diff'
-            ? `${selectedDirection ?? ''}:${selectedPost ?? ''}`
+            ? `${selectedDirection ?? ''}:${selectedProof ?? ''}`
             : panel === 'run'
               ? selectedRun
               : panel === 'agent'
@@ -287,7 +287,7 @@ const morphing = {
           (node.matches('.lab-diff-pane[data-file]') &&
             next instanceof HTMLElement &&
             next.dataset.labDirection === node.dataset.labDirection &&
-            next.dataset.diffPost === node.dataset.diffPost &&
+            next.dataset.diffProof === node.dataset.diffProof &&
             next.dataset.labTo === node.dataset.labTo))
       ),
     beforeNodeRemoved: (node: Node) =>
@@ -878,13 +878,12 @@ function diffNodes(file: string, text: string, cut: boolean): HTMLElement[] {
 function showLabDiff(): void {
   const pane = content.querySelector<HTMLElement>('.lab-diff-pane');
   if (!pane) return;
-  // A diff from another direction, post, or commit does not show.
+  // A diff of another direction or post does not show.
   const loaded = shownLabDiff;
   const shown =
     loaded &&
     loaded.direction === pane.dataset.labDirection &&
-    loaded.post === (pane.dataset.diffPost ?? '') &&
-    loaded.to === pane.dataset.labTo
+    loaded.proof === (pane.dataset.diffProof ?? '')
       ? loaded
       : undefined;
   for (const button of content.querySelectorAll<HTMLElement>('[data-lab-diff]'))
@@ -892,20 +891,29 @@ function showLabDiff(): void {
       'aria-pressed',
       String(button.dataset.labDiff === shown?.file),
     );
-  if (!shown || pane.dataset.file === shown.file) return;
-  pane.dataset.file = shown.file;
-  pane.replaceChildren(...diffNodes(shown.file, shown.text, shown.cut));
+  const key = shown ? `${shown.file}@${shown.to}` : '';
+  if (!shown || pane.dataset.file === key) return;
+  pane.dataset.file = key;
+  const nodes = diffNodes(shown.file, shown.text, shown.cut);
+  // The branch moved after the list beside it was made. The list catches up at the next refresh.
+  if (shown.to !== pane.dataset.labTo) {
+    const note = document.createElement('p');
+    note.className = 'fine';
+    note.textContent = `This diff is at ${shown.to.slice(0, 7)}, newer than the list beside it. The list catches up in a moment.`;
+    nodes.splice(1, 0, note);
+  }
+  pane.replaceChildren(...nodes);
 }
 
 /** Load the diff of one file of a lab diff into its pane. A later click wins over an earlier answer. */
 async function loadLabDiff(button: HTMLElement): Promise<void> {
   const direction = button.dataset.labDirection ?? '';
   const file = button.dataset.labDiff ?? '';
-  const post = button.dataset.diffPost ?? '';
+  const proof = button.dataset.diffProof ?? '';
   const load = ++labDiffLoads;
   try {
     const response = await fetch(
-      `/api/lab-diff?${new URLSearchParams({ direction, file, ...(post ? { post } : {}) }).toString()}`,
+      `/api/lab-diff?${new URLSearchParams({ direction, file, ...(proof ? { proof } : {}) }).toString()}`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
@@ -923,7 +931,7 @@ async function loadLabDiff(button: HTMLElement): Promise<void> {
     if (load !== labDiffLoads) return;
     shownLabDiff = {
       direction,
-      post,
+      proof,
       to: typeof reply.to === 'string' ? reply.to : '',
       file,
       text: reply.text,
@@ -1683,7 +1691,7 @@ document.addEventListener('click', (event) => {
     if (target.dataset.panel === 'diff' && target.dataset.labDirection) {
       remember('direction', (selectedDirection = target.dataset.labDirection));
       // A post's proof opens the diff that the post cites; a row opens the direction's.
-      remember('post', (selectedPost = target.dataset.post));
+      remember('proof', (selectedProof = target.dataset.proof));
     }
     if (target.dataset.openPane) choosePane(target.dataset.openPane);
     // A row's controls stay open, so the row keeps its place.

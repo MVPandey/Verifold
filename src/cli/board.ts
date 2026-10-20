@@ -110,6 +110,23 @@ const postFile = /^p-[1-9]\d{0,5}\.json$/;
 export const agentId = /^a-[1-9]\d{0,3}$/;
 export const directionId = /^d-[1-9]\d{0,3}$/;
 export const runId = /^r-[1-9]\d{0,5}$/;
+
+/**
+ * A post's proof by its place, such as p-12.0: the post and the index of
+ * the artifact in it. Null for anything else.
+ */
+export function proofRef(
+  value: unknown,
+): { readonly post: string; readonly index: number } | null {
+  if (typeof value !== 'string') return null;
+  const [post = '', index = '', ...rest] = value.split('.');
+  return postId.test(post) &&
+    /^\d$/.test(index) &&
+    Number(index) < boardLimits.artifacts &&
+    !rest.length
+    ? { post, index: Number(index) }
+    : null;
+}
 /** A commit: SHA-1, or SHA-256 in a repository that uses it. */
 export const commitId = commitPattern;
 const figure = /\.(png|jpe?g|gif|svg|webp|pdf)$/i;

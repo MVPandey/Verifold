@@ -21,6 +21,7 @@ import {
   object,
   postId,
   postLine,
+  proofRef,
   runId,
   type Artifact,
   type Post,
@@ -77,6 +78,8 @@ import {
   hostName,
   readRecord,
   SessionActionError,
+  usdValue,
+  validSessionId,
   type SessionRecord,
   type SessionView,
 } from './session.ts';
@@ -854,29 +857,27 @@ function parseCheck(value: unknown): Check | null {
 /** A saved cost estimate, or nothing for a record from before it or one that is not valid. */
 function spendOf(value: unknown): { readonly spend?: Spend } {
   const entry = object(value);
-  const usd = (item: unknown): item is number =>
-    typeof item === 'number' && Number.isFinite(item) && item >= 0;
   return entry &&
-    usd(entry.usd) &&
-    usd(entry.seen) &&
+    usdValue(entry.usd) &&
+    usdValue(entry.seen) &&
     typeof entry.session === 'string' &&
-    /^\d{8}T\d{9}Z-[a-f0-9]{8}$/.test(entry.session)
+    validSessionId(entry.session)
     ? { spend: { usd: entry.usd, session: entry.session, seen: entry.seen } }
     : {};
 }
 
 /**
  * Add what a session spent since the agent last looked to what the agent
- * spent. The session adds up Claude Code's estimates of its processes, so
- * its sum only grows. An agent's new session starts from zero. Returns
- * `prior` itself when nothing changed.
+ * spent. Claude Code's estimate covers the whole session, also after a
+ * resume, so it only grows. An agent's new session starts from zero.
+ * Returns `prior` itself when nothing changed.
  */
 export function addSpend(
   prior: Spend | undefined,
   record: SessionRecord,
 ): Spend | undefined {
-  const total = record.spentUsd;
-  if (total === undefined) return prior;
+  const total = record.costUsd;
+  if (total === null || !usdValue(total)) return prior;
   const same = prior?.session === record.id;
   if (same && total <= prior.seen) return prior;
   return {
@@ -887,6 +888,12 @@ export function addSpend(
 }
 
 const callPattern = /^c-[1-9]\d{0,5}$/;
+
+/** `@d-2` in the person's post: the direction's ID, from its own pattern. */
+const mentionedDirection = new RegExp(
+  `(?:^|\\s)@(${directionId.source.slice(1, -1)})\\b`,
+  'g',
+);
 
 /** The effect of the option that the person chose, or null. */
 function chosenEffect(call: Call): CallEffect | null {
@@ -2776,8 +2783,7 @@ export class Lab {
         const run = this.rt(agent.id);
         clearTimeout(run.next);
         run.next = undefined;
-        if (agent.session && this.options.sessions.view(agent.session)?.live)
-          ids.push(agent.id);
+        if (this.alive(agent.session)) ids.push(agent.id);
       }
       return ids;
     });
@@ -2960,7 +2966,7 @@ export class Lab {
       );
       const direction =
         this.directionArg(input.direction) ??
-        [...body.matchAll(/(?:^|\s)@(d-[1-9]\d{0,3})\b/g)]
+        [...body.matchAll(mentionedDirection)]
           .map((match) => match[1] ?? '')
           .find((id) => open.has(id));
       const replyTo =
@@ -3001,6 +3007,7 @@ export class Lab {
     record: SessionRecord,
     outcome?: 'completed' | 'interrupted' | 'failed',
   ): void {
+    this.recordSpend(record);
     // A checker's session: its agent ID is the check's, known before its start returns.
     const check = record.agent
       ? this.state?.checks.find((entry) => entry.agent === record.agent)
@@ -3013,13 +3020,6 @@ export class Lab {
       (entry) => entry.session === record.id,
     );
     if (!agent) return;
-    if (record.spentUsd !== undefined)
-      void this.serial(async () => {
-        const latest = this.agents.get(agent.id);
-        const spend = latest && addSpend(latest.spend, record);
-        if (spend && spend !== latest.spend)
-          await this.update(agent.id, (current) => ({ ...current, spend }));
-      }).catch(() => {});
     // The person gave the terminal back: the agent's next turn follows.
     const held = this.runtimes.get(agent.id);
     if (held?.terminal && record.status !== 'terminal') {
@@ -3252,17 +3252,53 @@ export class Lab {
   }
 
   /**
+   * The session has a process, or starts one now, such as after its
+   * terminal. Every path that starts or parks agents counts both, so no
+   * second process starts for an agent.
+   */
+  private alive(session: string | null | undefined): boolean {
+    const view = session ? this.options.sessions.view(session) : null;
+    return Boolean(view?.live || view?.starting);
+  }
+
+  /**
+   * Add what a session spent to its agent or its checker, in the lab's
+   * queue. Only a change is saved.
+   */
+  private recordSpend(record: SessionRecord): void {
+    if (record.costUsd === null) return;
+    void this.serial(async () => {
+      const check = this.state?.checks.find(
+        (entry) => entry.session === record.id,
+      );
+      const agent = check
+        ? undefined
+        : [...this.agents.values()].find(
+            (entry) => entry.session === record.id,
+          );
+      const spend = addSpend((check ?? agent)?.spend, record);
+      if (!spend || spend === (check ?? agent)?.spend) return;
+      if (check)
+        await this.changeCheck(check.id, (entry) => ({ ...entry, spend }));
+      else if (agent)
+        await this.update(agent.id, (current) => ({ ...current, spend }));
+    }).catch(() => {});
+  }
+
+  /**
    * The person holds the agent's harness terminal, or Verifold hands it
    * over now. The agent gets no turn, gives no slot, and its process
    * ends for nothing but a domain that it lost.
    */
   private holdsTerminal(id: string): boolean {
     const session = this.agents.get(id)?.session;
+    const view = session ? this.options.sessions.view(session) : null;
+    if (view?.record.status === 'terminal') return true;
+    // The hand-over or the return runs while the session runs or starts. A
+    // session that stopped meanwhile is not held: the lab starts it again.
     return (
-      Boolean(this.runtimes.get(id)?.terminal) ||
-      (session !== null &&
-        session !== undefined &&
-        this.options.sessions.view(session)?.record.status === 'terminal')
+      Boolean(this.runtimes.get(id)?.terminal) &&
+      Boolean(view?.live || view?.starting)
     );
   }
 
@@ -4877,15 +4913,15 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
 
   /**
    * For the desk: what a direction's branch changed since its start, at its
-   * newest commit, or with `post`, the diff that the post cites: its commits
-   * and its paths. With `path`, also the diff of that file, which must be
-   * one of those files. Null for a direction that the lab does not have, or
-   * a post that cites no diff of it.
+   * newest commit, or with `proof` (such as p-12.0), the diff that a post
+   * cites: its commits and its paths. With `path`, also the diff of that
+   * file, which must be one of those files. Null for a direction that the
+   * lab does not have, or a proof that is no diff of it.
    */
   async directionDiff(
     id: unknown,
     path?: unknown,
-    post?: unknown,
+    proof?: unknown,
   ): Promise<{
     readonly from: string;
     readonly to: string;
@@ -4898,15 +4934,16 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     let from = workspace.start;
     let to = direction.head;
     let paths: readonly string[] | null = null;
-    if (post !== undefined) {
-      const cited = (
-        typeof post === 'string' ? this.board.get(post) : undefined
-      )?.artifacts.find(
-        (artifact) =>
-          artifact.type === 'diff' &&
-          (artifact.direction ?? direction.id) === direction.id,
-      );
-      if (cited?.type !== 'diff') return null;
+    if (proof !== undefined) {
+      const place = proofRef(proof);
+      const cited = place
+        ? this.board.get(place.post)?.artifacts[place.index]
+        : undefined;
+      if (
+        cited?.type !== 'diff' ||
+        (cited.direction ?? direction.id) !== direction.id
+      )
+        return null;
       ({ from, to } = cited);
       paths = cited.paths;
     }
@@ -5781,13 +5818,6 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
    */
   private checkTurnEnded(id: string, record: SessionRecord): void {
     const run = this.ck(id);
-    if (record.spentUsd !== undefined)
-      void this.serial(async () => {
-        const check = this.checkById(id);
-        const spend = check && addSpend(check.spend, record);
-        if (spend && spend !== check.spend)
-          await this.changeCheck(id, (entry) => ({ ...entry, spend }));
-      }).catch(() => {});
     if (record.status === 'idle') {
       if (!run.turning) return;
       run.turning = false;
@@ -7406,9 +7436,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       ? this.options.sessions.view(agent.session)
       : null;
     const status = view?.record.status;
-    if (view?.live && status === 'terminal')
+    const alive = this.alive(agent.session);
+    if (alive && status === 'terminal')
       return { status: 'terminal', until: null };
-    if (view?.live && (status === 'running' || status === 'starting'))
+    if (alive && (status === 'running' || status === 'starting'))
       return {
         status: status === 'running' ? 'working' : 'starting',
         until: null,
@@ -7418,7 +7449,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     const limited = this.loops.get(agent.id)?.limitedUntil ?? null;
     if (limited) return { status: 'turns', until: limited };
     if (
-      !view?.live &&
+      !alive &&
       (agent.session === null || this.waiting(agent)) &&
       this.options.sessions.full
     )
@@ -7501,9 +7532,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         this.runtimes.get(agent.id)?.parking
       )
         continue;
-      const live = agent.session
-        ? (sessions.view(agent.session)?.live ?? false)
-        : false;
+      const live = this.alive(agent.session);
       const parked = this.options.quota?.parked(agent.host) ?? null;
       if (live) {
         if (
@@ -7610,6 +7639,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    */
   private async launch(id: string): Promise<void> {
     const agent = this.agent(id);
+    // The session runs, starts, or is in the person's hands: it needs no start.
+    if (this.holdsTerminal(id) || this.alive(agent.session)) return;
     const generation = randomBytes(4).toString('hex');
     const pods = this.podsOn();
     const tools = this.tools(id, generation, pods);

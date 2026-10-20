@@ -183,7 +183,10 @@ export type HostEvent =
       readonly risk?: string;
       readonly rationale?: string;
     }
-  /** Codex started a turn, also one that a terminal on the same app-server started. */
+  /**
+   * Codex started a turn, also one that a terminal on the same app-server
+   * started. Codex named it, so a cancel can stop it.
+   */
   | { readonly type: 'turn-start' }
   | {
       readonly type: 'turn-end';
@@ -1186,7 +1189,12 @@ function codex(options: HostOptions): HostSession {
       const signal = codexLimit(params.rateLimits);
       if (signal) emit({ type: 'limit', ...signal });
     } else if (method === 'turn/started') {
-      emit({ type: 'turn-start' });
+      // A turn without its ID could not be cancelled, so it does not count as one.
+      const id = record(params.turn) ? str(params.turn.id) : undefined;
+      if (id) {
+        turn = id;
+        emit({ type: 'turn-start' });
+      }
     } else if (method === 'turn/completed') {
       turn = undefined;
       const value = record(params.turn) ? str(params.turn.status) : undefined;
