@@ -5474,7 +5474,7 @@ await test("an access call gives the agent's shell its domains from its next tur
   );
 });
 
-await test("the lab's first GPU pod asks the person: the answer starts the lease, its undo ends it, and later pods follow the limits", async (t) => {
+await test("the lab's first GPU pod asks the person: the answer starts the lease, its undo ends it and asks again, and later pods follow the limits", async (t) => {
   const asked: unknown[] = [];
   const started: unknown[] = [];
   const ended: unknown[] = [];
@@ -5521,7 +5521,8 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   };
   await lab.script('d-1-alpha', [
     { calls: [request, request] },
-    { when: 'The person undid', calls: [request] },
+    { when: 'undid their answer to c-1', calls: [request] },
+    { when: 'on c-2.', calls: [request] },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   await until(
@@ -5567,7 +5568,13 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   assert.deepEqual(ended, [
     { id: 'lease-1', by: 'person', reason: 'you undid c-1.' },
   ]);
-  // After the first approved pod, a request follows the Compute limits.
+  // The undo takes the approval back: the next pod asks again.
+  assert.equal(lab.lab.view()?.state.firstGpuApproved, false);
+  await until(() => lab.lab.view()?.state.calls[1]?.state === 'open');
+  assert.deepEqual(asked, []);
+  await lab.lab.answerCall('c-2', 0);
+  assert.equal(started.length, 2);
+  // After an approved pod, a request follows the Compute limits.
   await until(() => asked.length === 1);
   assert.deepEqual(asked, [
     {
