@@ -3204,7 +3204,24 @@ await test('when the time budget ends the lab pauses, a go call asks for more ti
   assert.deepEqual(state?.budget, { hours: 1, deadline: asked?.deadline });
   assert.equal(state?.calls[0]?.state, 'open');
   await delay(200);
-  assert.equal(lab.lab.view()?.state.calls.length, 1);
+  // A failure names each call, so a slow run says what asked.
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.equal(
+    calls.length,
+    1,
+    JSON.stringify({
+      calls: calls.map(({ id, by, state, deadline, note, at }) => ({
+        id,
+        by,
+        state,
+        deadline,
+        note,
+        at,
+      })),
+      budget: lab.lab.view()?.state.budget,
+      now: new Date().toISOString(),
+    }),
+  );
   assert.ok(
     lab.lab
       .view()
