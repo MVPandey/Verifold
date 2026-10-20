@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -3789,4 +3790,175 @@ await test("a later plan's new directions count as agents that an agent starts",
     /"Control": Agents started 1 agent in the last 24 hours/,
   );
   assert.equal(lab.lab.view()?.state.agentStarts.length, 1);
+});
+
+/** A turn that rules its direction out, closes it, writes one more file, and keeps running. */
+const closingTurn: Call[] = [
+  { name: 'WRITE', arguments: { path: 'result.txt', text: 'no\n' } },
+  {
+    name: 'verifold_post',
+    arguments: {
+      kind: 'ruled-out',
+      text: 'It fails on 3 seeds.',
+      artifacts: [{ type: 'file', path: 'result.txt' }],
+    },
+  },
+  {
+    name: 'verifold_direction',
+    arguments: {
+      action: 'update',
+      verdict: 'ruled-out',
+      post: 'p-2',
+      evidence: 'fails on 3 seeds',
+      why: 'Checked.',
+    },
+  },
+  { name: 'verifold_direction', arguments: { action: 'close', why: 'Done.' } },
+  { name: 'WRITE', arguments: { path: 'last.txt', text: 'done\n' } },
+  { name: 'WAIT' },
+];
+
+/** The newest commit of the first direction has this file with this text. */
+function committed(lab: Fixture, path: string, text: string): () => boolean {
+  return () => {
+    const head = lab.lab.view()?.state.directions[0]?.head ?? '';
+    try {
+      return git(lab.root, 'show', `${head}:${path}`) === text;
+    } catch {
+      return false;
+    }
+  };
+}
+
+await test('a pause during the turn that closed a direction ends its session and commits its work', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: closingTurn }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await results(lab, 'd-1-alpha')).length >= 3);
+  assert.ok((await results(lab, 'd-1-alpha')).every((entry) => entry.ok));
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  await lab.lab.pause();
+  await until(() => lab.sessions.view(session)?.record.status === 'ended');
+  await until(committed(lab, 'last.txt', 'done\n'));
+  await until(() => lab.lab.view()?.directions[0]?.agent.finished === true);
+});
+
+await test('a restart during the turn that closed a direction commits its work, and a later start finishes a close that was left', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: closingTurn }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await results(lab, 'd-1-alpha')).length >= 3);
+  await lab.restart();
+  await until(committed(lab, 'last.txt', 'done\n'));
+  assert.equal(lab.lab.view()?.directions[0]?.agent.finished, true);
+  // As if an owner stopped before the close was done: the next start commits the folder.
+  await lab.lab.close();
+  const path = join(lab.root, '.verifold', 'lab', 'agents', 'a-1.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      ...(JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>),
+      finished: false,
+    }),
+  );
+  await writeFile(
+    join(lab.root, '.verifold', 'workspaces', 'd-1-alpha', 'later.txt'),
+    'done\n',
+  );
+  const reloaded = new Lab(lab.root, { sessions: lab.sessions, timing });
+  await reloaded.load();
+  t.after(() => reloaded.close());
+  await until(() => {
+    const head = reloaded.view()?.state.directions[0]?.head ?? '';
+    try {
+      return git(lab.root, 'show', `${head}:later.txt`) === 'done\n';
+    } catch {
+      return false;
+    }
+  });
+  await until(() => reloaded.view()?.directions[0]?.agent.finished === true);
+});
+
+await test("a pod that a direction's agent asks for while its direction stops ends at once", async (t) => {
+  const ended: { id: unknown; by: unknown }[] = [];
+  const leases = new Map<string, Lease>();
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = false;
+  const compute: LabCompute = {
+    describe: () => Promise.resolve('{}'),
+    requestPod: async () => {
+      asked = true;
+      await gate;
+      leases.set('lease-1', {
+        id: 'lease-1',
+        state: 'starting',
+        tasks: [],
+        directions: ['d-1'],
+        history: [{ at: new Date().toISOString(), by: 'agent', text: '' }],
+      } as unknown as Lease);
+      return 'Started lease-1.';
+    },
+    podsOn: () => true,
+    leases: {
+      list: () => [...leases.values()],
+      get: (id) => leases.get(String(id)) as Lease,
+      end: (id, by) => {
+        ended.push({ id, by });
+        return Promise.resolve(leases.get(String(id)) as Lease);
+      },
+    },
+    podRuns: () => ({}) as PodRuns,
+  };
+  const lab = await fixture(t, { compute });
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_request_pod',
+          arguments: { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => asked);
+  // The stop ends the direction's leases before the new one exists.
+  await lab.lab.stopDirection('d-1');
+  assert.deepEqual(ended, []);
+  release();
+  await until(() => ended.length === 1);
+  assert.deepEqual(ended, [{ id: 'lease-1', by: 'person' }]);
+});
+
+await test("a person's stop stays a stop when the lab cannot save it", async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  const folder = join(lab.root, '.verifold');
+  // lab.json cannot be written: the folder takes no new file.
+  await chmod(folder, 0o500);
+  try {
+    await assert.rejects(
+      lab.lab.stopDirection('d-1'),
+      /Verifold stopped d-1, but could not save the lab/,
+    );
+    assert.equal(lab.lab.view()?.state.directions[0]?.state, 'stopped');
+    const inputs = (await lab.inputs('d-1-alpha')).length;
+    await delay(400);
+    // No tick starts the agent that the person stopped.
+    assert.equal((await lab.inputs('d-1-alpha')).length, inputs);
+    assert.equal(lab.lab.view()?.directions[0]?.status, 'stopped');
+  } finally {
+    await chmod(folder, 0o700);
+  }
+  // The next save writes the stop.
+  await lab.lab.post({ text: 'Noted.' });
+  await lab.lab.pause();
+  const saved = JSON.parse(
+    await readFile(join(folder, 'lab.json'), 'utf8'),
+  ) as { directions: { state: string }[] };
+  assert.equal(saved.directions[0]?.state, 'stopped');
 });
