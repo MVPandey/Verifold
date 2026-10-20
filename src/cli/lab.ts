@@ -36,9 +36,10 @@ import {
   allocate,
   changes,
   folderState,
+  parseWorkspace,
   projectPath,
-  readAt,
-  readWorking,
+  readCurrent,
+  readFileAt,
   release,
   snapshot,
   workspaceNames,
@@ -322,7 +323,10 @@ function text(value: unknown, limit: number, what: string): string {
     : fail(`Write ${what}, up to ${limit} characters.`);
 }
 
-async function readJson(path: string): Promise<Record<string, unknown> | null> {
+/** A lab record: a JSON object of at most 4 MB, or null for anything else. */
+async function readObject(
+  path: string,
+): Promise<Record<string, unknown> | null> {
   try {
     const stats = await lstat(path);
     if (!stats.isFile() || stats.size > 4_000_000) return null;
@@ -364,47 +368,32 @@ class RecordFile {
         const value = this.value();
         // The record is gone, for example after Start over.
         if (value === null || value === undefined) continue;
-        await writePrivateFile(
-          this.path,
-          `${JSON.stringify(value, null, 2)}\n`,
-        );
+        try {
+          await writePrivateFile(
+            this.path,
+            `${JSON.stringify(value, null, 2)}\n`,
+          );
+        } catch (error) {
+          // The newest value is not on disk: the next save or a flush writes it.
+          this.dirty = true;
+          throw error;
+        }
       }
     } finally {
       this.writing = null;
     }
   }
 
-  /** Wait until the newest value is on disk. */
+  /** Wait until the newest value is on disk. A write that failed is tried once more. */
   async flush(): Promise<void> {
     await this.writing?.catch(() => {});
+    if (this.dirty) await this.save().catch(() => {});
   }
-}
-
-function parseWorkspaceRecord(value: unknown): Workspace | null {
-  const entry = object(value);
-  return entry &&
-    (entry.kind === 'git' || entry.kind === 'folder') &&
-    typeof entry.path === 'string' &&
-    /^\.verifold\/workspaces\/d-[1-9]\d{0,3}(-[a-z0-9-]{1,40})?$/.test(
-      entry.path,
-    ) &&
-    (entry.branch === null ||
-      (typeof entry.branch === 'string' &&
-        /^verifold\/d-[1-9]\d{0,3}(-[a-z0-9-]{1,40})?$/.test(entry.branch))) &&
-    typeof entry.start === 'string' &&
-    commitId.test(entry.start)
-    ? {
-        kind: entry.kind,
-        path: entry.path,
-        branch: entry.branch,
-        start: entry.start,
-      }
-    : null;
 }
 
 function parseDirection(value: unknown): Direction | null {
   const entry = object(value);
-  const workspace = parseWorkspaceRecord(entry?.workspace);
+  const workspace = parseWorkspace(entry?.workspace);
   if (
     !entry ||
     !workspace ||
@@ -610,6 +599,13 @@ export class Lab {
   /** The order of the commits of each direction, so an older one never becomes its newest. */
   private commits = 0;
   private readonly applied = new Map<string, number>();
+  /** The work after each turn that has not ended. Close and suspend wait for it. */
+  private readonly after = new Set<Promise<void>>();
+  /**
+   * Start over or a restore waits for the work in progress. Meanwhile no new
+   * work starts, and the work in progress still saves its records.
+   */
+  private moving = false;
 
   constructor(root: string, options: LabOptions) {
     this.root = root;
@@ -633,7 +629,7 @@ export class Lab {
   /** Read the lab, its agents, and the board. A project without `lab.json` has no lab. */
   async load(): Promise<void> {
     this.state = parseState(
-      await readJson(join(this.root, '.verifold', 'lab.json')),
+      await readObject(join(this.root, '.verifold', 'lab.json')),
     );
     this.agents.clear();
     this.files.clear();
@@ -651,7 +647,7 @@ export class Lab {
       /^a-[1-9]\d{0,3}\.json$/.test(entry),
     )) {
       const agent = parseAgent(
-        await readJson(join(this.folder, 'agents', name)),
+        await readObject(join(this.folder, 'agents', name)),
       );
       if (agent && `${agent.id}.json` === name) this.track(agent);
     }
@@ -666,6 +662,9 @@ export class Lab {
   async suspend(): Promise<boolean> {
     const pausing = Boolean(this.state && !this.state.pausedAt);
     if (pausing) await this.pause();
+    // No new work starts. The work in progress ends and saves first.
+    this.moving = true;
+    await this.settle();
     await this.serial(async () => {
       for (const loop of this.loops.values()) await loop.close();
       await Promise.all(
@@ -686,6 +685,7 @@ export class Lab {
       this.applied.clear();
       await this.load();
       this.suspended = false;
+      this.moving = false;
     });
     if (this.state) this.watch();
   }
@@ -737,7 +737,7 @@ export class Lab {
   /** Start the lab on a question. The caller makes sure that no coordinator or task runs. */
   start(question: unknown): Promise<void> {
     return this.serial(async () => {
-      if (this.suspended) fail(movingText);
+      if (this.suspended || this.moving) fail(movingText);
       if (this.state) fail('The lab already runs.');
       const asked = text(question, labLimits.question, 'the question');
       this.state = {
@@ -993,6 +993,7 @@ export class Lab {
   /** Start again an agent whose process stopped too often by itself. */
   restartAgent(id: unknown): Promise<void> {
     return this.serial(async () => {
+      this.current();
       const agent = typeof id === 'string' ? this.agents.get(id) : undefined;
       if (!agent || agent.stopReason !== 'crashed')
         fail('Only an agent that stopped by itself can start again.');
@@ -1010,25 +1011,39 @@ export class Lab {
     });
   }
 
-  /** Pause the lab. Every agent's session pauses; posts wait. */
-  pause(): Promise<void> {
-    return this.serial(async () => {
+  /**
+   * Pause the lab. Every agent's session pauses; posts wait. Each park waits
+   * for the harness, so the lab's queue stays free between parks: a post or a
+   * stop does not wait behind a long pause. A resume that comes meanwhile
+   * ends the parks.
+   */
+  async pause(): Promise<void> {
+    const live = await this.serial(async () => {
       const state = this.current();
       if (state.pausedAt) fail('The lab is already paused.');
       this.state = { ...state, pausedAt: new Date().toISOString() };
       await this.stateFile.save();
+      const ids: string[] = [];
       for (const agent of this.agents.values()) {
         this.loops.get(agent.id)?.cancel();
         const run = this.rt(agent.id);
         clearTimeout(run.next);
         run.next = undefined;
-        if (agent.session && this.options.sessions.view(agent.session)?.live) {
-          await this.options.sessions.park(agent.session);
-          // A turn that the pause stopped did not finish, so its digest comes again.
-          if (run.turning) this.interrupt(agent.id);
-        }
+        if (agent.session && this.options.sessions.view(agent.session)?.live)
+          ids.push(agent.id);
       }
+      return ids;
     });
+    for (const id of live) {
+      const session = this.agents.get(id)?.session;
+      if (!this.state?.pausedAt) break;
+      if (!session) continue;
+      await this.options.sessions.park(session);
+      // A turn that the pause stopped did not finish, so its digest comes again.
+      await this.serial(() => {
+        if (this.rt(id).turning) this.interrupt(id);
+      });
+    }
   }
 
   /** Resume a paused lab. Each agent continues with a digest. */
@@ -1096,9 +1111,17 @@ export class Lab {
 
   /**
    * A session's turn ended, a resumed session is ready, or its process
-   * stopped. Only lab agents' sessions count.
+   * stopped. Only lab agents' sessions count. `outcome` is how the harness
+   * says the turn ended. Only a completed turn is clean: it keeps what it
+   * read. A failed or interrupted turn, or one with a broken Verifold read,
+   * brings its events once more, and the posts that it did not keep stay
+   * unread. A turn that ran into a used-up usage window brings its events
+   * after the reset.
    */
-  turnEnded(record: SessionRecord): void {
+  turnEnded(
+    record: SessionRecord,
+    outcome?: 'completed' | 'interrupted' | 'failed',
+  ): void {
     const agent = [...this.agents.values()].find(
       (entry) => entry.session === record.id,
     );
@@ -1117,29 +1140,31 @@ export class Lab {
       run.readBroken = false;
       run.pending = null;
       run.endedAt = Date.now();
-      // A clean turn keeps what it read. Any other turn's posts come again with the next digest.
-      if (pending && !usedUp && !readBroken)
+      const clean = outcome === 'completed' && !usedUp && !readBroken;
+      if (pending && clean)
         void this.update(agent.id, (current) => ({
           ...current,
           readThrough: pending.readThrough,
           seen: pending.seen,
         })).catch(() => {});
-      if (loop.turnEnded(readBroken))
+      // Once more only: a read that keeps failing does not bring the same digest every turn.
+      if (!clean && !usedUp) loop.readFailed();
+      if (loop.turnEnded())
         loop.add([
           {
             kind: 'quota',
             text: "Your harness's usage window ran out in your last turn, so that turn did no work. Continue now.",
           },
         ]);
-      // A turn that ran into a used-up usage window did no work. It does not count toward the backoff.
-      if (usedUp) return;
       if (run.launch) run.launch.turns += 1;
       run.settling = true;
-      void this.afterTurn(agent.id, posted, turn)
+      const after = this.afterTurn(agent.id, posted, turn, !usedUp)
         .catch(() => {})
         .finally(() => {
+          this.after.delete(after);
           if (this.runtimes.get(agent.id) === run) run.settling = false;
         });
+      this.after.add(after);
       return;
     }
     // A turn that stopped or paused did not finish: its digest comes again.
@@ -1281,18 +1306,27 @@ export class Lab {
       }
   }
 
-  /** Stop the wakeups, and wait for the Git work and the records. The owner pauses the sessions after this. */
+  /**
+   * Stop the wakeups, and wait for the work after each turn, the Git work,
+   * and the records. The owner pauses the sessions after this.
+   */
   async close(): Promise<void> {
     this.closing = true;
     clearInterval(this.ticker);
     this.ticker = undefined;
     for (const run of this.runtimes.values()) clearTimeout(run.next);
     await Promise.all([...this.loops.values()].map((loop) => loop.close()));
-    await Promise.all(this.git.values());
+    await this.settle();
     await this.queue;
     await Promise.all(
       [this.stateFile, ...this.files.values()].map((file) => file.flush()),
     );
+  }
+
+  /** Wait for the work after each turn and for every direction's Git work, new folders too. */
+  private async settle(): Promise<void> {
+    await Promise.all(this.after);
+    await Promise.all(this.git.values());
   }
 
   private serial<T>(work: () => T | Promise<T>): Promise<T> {
@@ -1312,7 +1346,7 @@ export class Lab {
   }
 
   private current(): LabState {
-    if (this.suspended) fail(movingText);
+    if (this.suspended || this.moving) fail(movingText);
     return this.state ?? fail('Start the lab first.');
   }
 
@@ -1532,16 +1566,18 @@ Start now: plan the next step of your direction, do it, and post what you find.`
   ): Promise<{ readonly ok: boolean; readonly text: string }> {
     const refused = { ok: false, text: stoppedText };
     const args = object(input) ?? {};
+    // A harness can number its calls again in a new process, so a call is known by its launch too.
+    const key = `${generation}:${callId}`;
     const known = await this.serial(() => {
       const agent = this.usable(id, generation);
       if (!agent) return refused;
       if (
         name === 'verifold_board' &&
         args.view === 'unread' &&
-        agent.lastRead?.key === callId
+        agent.lastRead?.key === key
       )
         return { ok: true, text: agent.lastRead.text };
-      const action = agent.actions.find((entry) => entry.key === callId);
+      const action = agent.actions.find((entry) => entry.key === key);
       return action ? { ok: action.ok, text: action.result } : null;
     });
     if (known) return known;
@@ -1551,7 +1587,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     try {
       result = {
         ok: true,
-        text: await this.act(id, generation, name, args, callId),
+        text: await this.act(id, generation, name, args, key),
       };
     } catch (error) {
       broken = !(
@@ -1576,7 +1612,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
           actions: [
             ...agent.actions,
             {
-              key: callId,
+              key,
               at: new Date().toISOString(),
               tool: name.slice(0, 80),
               ok: result.ok,
@@ -1593,7 +1629,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     generation: string,
     name: string,
     args: Record<string, unknown>,
-    callId: string,
+    key: string,
   ): Promise<string> {
     switch (name) {
       case 'verifold_board':
@@ -1601,44 +1637,43 @@ Start now: plan the next step of your direction, do it, and post what you find.`
           this.read(
             this.usable(id, generation) ?? fail(stoppedText),
             args,
-            callId,
+            key,
           ),
         );
       case 'verifold_post':
-        return this.postFor(id, generation, args, callId);
+        return this.postFor(id, generation, args, key);
       case 'verifold_read': {
         const direction = this.direction(
           this.directionArg(args.direction) ??
             fail('Name the direction, such as d-1.'),
         );
         const path = projectPath(args.path);
-        // Without a commit, the file as it is now, also when the project ignores it.
-        let file: { readonly content: Buffer; readonly size: number } | null;
+        // Without a commit, the file as it is now, also when the project ignores it. Both read through Git, never through a link.
+        let content: Buffer | null;
         if (args.commit === undefined) {
-          file = await readWorking(
-            this.root,
-            direction.workspace,
-            path,
-            labLimits.readBytes,
-          );
-          if (!file) fail(`${path} is not in ${direction.id}'s folder now.`);
+          content = await readCurrent(this.root, direction.workspace, path);
+          if (!content)
+            fail(
+              `${path} is not a file in ${direction.id}'s folder now, or it is larger than Verifold reads.`,
+            );
         } else {
           const commit =
             typeof args.commit === 'string' &&
             /^[0-9a-f]{7,64}$/.test(args.commit)
               ? args.commit
               : fail('Give a commit as hexadecimal digits.');
-          const content = await readAt(
+          content = await readFileAt(
             this.root,
             direction.workspace,
             commit,
             path,
           );
-          if (content === null)
-            fail(`${path} is not in ${direction.id} at ${commit.slice(0, 7)}.`);
-          file = { content, size: content.length };
+          if (!content)
+            fail(
+              `${path} is not a file in ${direction.id} at ${commit.slice(0, 7)}.`,
+            );
         }
-        const { content, size } = file;
+        const size = content.length;
         if (content.subarray(0, 8000).includes(0))
           return `${path} is a binary file of ${size} bytes.`;
         return size > labLimits.readBytes
@@ -1663,7 +1698,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     id: string,
     generation: string,
     args: Record<string, unknown>,
-    callId: string,
+    key: string,
   ): Promise<string> {
     const draft = await this.serial(() => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
@@ -1726,7 +1761,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
         ...(typeof args.replyTo === 'string' ? { replyTo: args.replyTo } : {}),
         mentions: draft.mentions,
         artifacts,
-        key: `${id}:${generation}:${callId}`,
+        key: `${id}:${key}`,
       });
       this.rt(id).posted = true;
       return `Posted ${post.id}.`;
@@ -1737,7 +1772,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
   private async read(
     agent: AgentRecord,
     args: Record<string, unknown>,
-    callId: string,
+    key: string,
   ): Promise<string> {
     const name = (author: string): string => this.name(author);
     const limit =
@@ -1769,7 +1804,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
         await this.update(agent.id, (current) => ({
           ...current,
           ...(run.turning ? {} : digest.read),
-          lastRead: { key: callId, text: answer },
+          lastRead: { key, text: answer },
         }));
         return answer;
       }
@@ -1907,7 +1942,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
         });
         continue;
       }
-      const content = await readAt(
+      const content = await readFileAt(
         this.root,
         direction.workspace,
         commit,
@@ -1991,7 +2026,11 @@ Start now: plan the next step of your direction, do it, and post what you find.`
         continue;
       const line = postLine(post, name);
       const person = post.author === 'person';
-      await this.update(agent.id, (current) => ({ ...current, idleStreak: 0 }));
+      // A record that cannot be saved still gets the post: its wake event keeps it in memory.
+      await this.update(agent.id, (current) => ({
+        ...current,
+        idleStreak: 0,
+      })).catch(() => {});
       // The person's post goes into a running turn at once. It counts as read
       // only when the harness takes it; otherwise it comes with the next digest.
       if (
@@ -2028,12 +2067,15 @@ Start now: plan the next step of your direction, do it, and post what you find.`
    * when it posted or changed the folder, ignored files too. After two turns
    * in a row that changed nothing, the next one waits longer. The commit runs
    * in the direction's Git queue. A turn that started meanwhile owns the
-   * folder: then this one commits nothing and sets no timer.
+   * folder: then this one commits nothing and sets no timer. A turn that ran
+   * into a used-up usage window (`count` false) commits its work but neither
+   * counts nor sets a timer: the reset wakes the agent.
    */
   private async afterTurn(
     id: string,
     posted: boolean,
     turn: number,
+    count: boolean,
   ): Promise<void> {
     const agent = this.agents.get(id);
     if (!agent || !this.active(agent) || this.closing) return;
@@ -2065,12 +2107,14 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     } catch {
       /* A failed commit counts as no change. The next turn commits again. */
     }
+    if (!count) return;
     await this.serial(async () => {
       const latest = this.agents.get(id);
       if (
         latest?.generation !== generation ||
         !this.active(latest) ||
         this.closing ||
+        this.moving ||
         !current()
       )
         return;
@@ -2180,7 +2224,14 @@ Start now: plan the next step of your direction, do it, and post what you find.`
    */
   private async tick(): Promise<void> {
     const state = this.state;
-    if (!state || state.pausedAt || this.closing || this.suspended) return;
+    if (
+      !state ||
+      state.pausedAt ||
+      this.closing ||
+      this.suspended ||
+      this.moving
+    )
+      return;
     const sessions = this.options.sessions;
     const waiting: AgentRecord[] = [];
     for (const agent of this.agents.values()) {
@@ -2252,7 +2303,9 @@ Start now: plan the next step of your direction, do it, and post what you find.`
    */
   yieldSlot(): Promise<boolean> {
     return this.serial(() =>
-      this.state && !this.suspended && !this.closing ? this.free() : false,
+      this.state && !this.suspended && !this.moving && !this.closing
+        ? this.free()
+        : false,
     );
   }
 
@@ -2271,15 +2324,26 @@ Start now: plan the next step of your direction, do it, and post what you find.`
     const tools = this.tools(id, generation);
     const direction = this.direction(agent.direction);
     const sessions = this.options.sessions;
-    const saved =
-      agent.session &&
-      !(agent.host === 'codex' && agent.toolsVersion < labToolsVersion)
-        ? await readRecord(this.root, agent.session)
-        : null;
-    const resume = saved !== null && resumable(saved);
-    const prompt = resume ? null : await this.firstPrompt(agent);
+    let saved: SessionRecord | null;
+    let prompt: string | null;
+    try {
+      saved =
+        agent.session &&
+        !(agent.host === 'codex' && agent.toolsVersion < labToolsVersion)
+          ? await readRecord(this.root, agent.session)
+          : null;
+      prompt = saved && resumable(saved) ? null : await this.firstPrompt(agent);
+    } catch (error) {
+      // The agent waits before its next try, so the agents after it start meanwhile.
+      this.options.progress?.(
+        `${agent.handle} did not start: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+      await this.countStop(id);
+      return;
+    }
+    const resume = saved !== null && prompt === null;
     // From here on nothing awaits before the start takes its slot.
-    if (sessions.full || this.closing || this.suspended) return;
+    if (sessions.full || this.closing || this.suspended || this.moving) return;
     const loop = this.loop(id);
     const run = this.rt(id);
     // The new generation is known before the first tool call can come.
@@ -2294,7 +2358,7 @@ Start now: plan the next step of your direction, do it, and post what you find.`
       this.begin(id, null);
     }
     try {
-      if (resume) await sessions.resumeAgent(saved.id, tools);
+      if (resume && saved) await sessions.resumeAgent(saved.id, tools);
       else {
         const session = await sessions.startAgent({
           host: agent.host,
