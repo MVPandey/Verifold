@@ -3456,8 +3456,38 @@ body:not(:has(.rail)) .menu-button {
 .lab-controls:empty {
   display: none;
 }
-.lab-direction .lab-activity {
+.lab-direction .lab-activity,
+.lab-direction .lab-runs {
   grid-column: 1 / -1;
+}
+/* A run: its ID and state on one line, its log folded under it. */
+.lab-run {
+  font-size: 13px;
+}
+.lab-run + .lab-run {
+  margin-top: 4px;
+}
+.run-log-text {
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chip.run-running,
+.chip.run-queued {
+  border-color: var(--tint-line);
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+.chip.run-failed,
+.chip.run-timed-out {
+  border-color: var(--caution-line);
+  background: var(--caution-bg);
+  color: var(--caution);
 }
 /* On a phone the title takes the first line, the agent and its state the next, then the controls. A long state wraps. */
 @media (max-width: 600px) {

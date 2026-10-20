@@ -488,6 +488,9 @@ async function labAction(
     case 'lab-agent-restart':
       await lab.restartAgent(body.agent);
       return 200;
+    case 'lab-run-cancel':
+      await lab.cancelRun(body.run);
+      return 200;
     case 'lab-pause':
       await lab.pause();
       return 200;
@@ -1319,6 +1322,29 @@ export async function startDesk(
           })
           .end(JSON.stringify({ error: error.message }));
       }
+      return;
+    }
+    if (url.pathname === '/api/run-log') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const run = url.searchParams.get('run') ?? '';
+      if (
+        !/^r-[1-9]\d{0,5}$/.test(run) ||
+        [...url.searchParams.keys()].some((key) => key !== 'run')
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      const log = await labDesk.lab?.runLog(run);
+      if (!log) {
+        response.writeHead(404).end();
+        return;
+      }
+      response
+        .writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        .end(JSON.stringify(log));
       return;
     }
     if (url.pathname !== '/api/view') {
