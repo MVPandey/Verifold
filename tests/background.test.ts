@@ -30,7 +30,8 @@ const wait = (ms: number): Promise<void> =>
 
 // An owner in these tests starts harness processes from PATH, such as the
 // agent that plans a lab. Fake claude and codex commands that stop at once
-// come first, so no test reaches a real harness.
+// come first for the whole file, so no test reaches a real harness and no
+// test depends on the harnesses that this computer has.
 const fakeBin = await mkdtemp(join(tmpdir(), 'verifold-fake-bin-'));
 for (const name of ['claude', 'codex'])
   await writeFile(join(fakeBin, name), '#!/bin/sh\nexit 1\n', {

@@ -2380,6 +2380,17 @@ await test('the first agent posts the plan of record, and the lab opens its dire
           name: 'verifold_plan',
           arguments: { ...firstPlan, directions: [firstPlan.directions[0]] },
         },
+        // Your own direction has no bar yet: the first plan gives it all.
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...firstPlan,
+            directions: [
+              { harness: 'claude' },
+              ...firstPlan.directions.slice(1),
+            ],
+          },
+        },
         // Five are too many for a first plan.
         {
           name: 'verifold_plan',
@@ -2441,9 +2452,13 @@ await test('the first agent posts the plan of record, and the lab opens its dire
     result: { isError?: boolean; content: { text: string }[] };
   }[];
   assert.match(results[0]?.result.content[0]?.text ?? '', /2 to 4 directions/);
-  assert.match(results[1]?.result.content[0]?.text ?? '', /2 to 4 directions/);
   assert.match(
-    results[2]?.result.content[0]?.text ?? '',
+    results[1]?.result.content[0]?.text ?? '',
+    /Write a short title for each direction/,
+  );
+  assert.match(results[2]?.result.content[0]?.text ?? '', /2 to 4 directions/);
+  assert.match(
+    results[3]?.result.content[0]?.text ?? '',
     /Posted the plan p-1\. Your direction is d-1\. Opened d-2, d-3/,
   );
 
@@ -2457,7 +2472,7 @@ await test('the first agent posts the plan of record, and the lab opens its dire
   assert.match(helix, /The plan of record \(p-1\), from claude-1:/);
   assert.match(
     helix,
-    /Holds up if: "it beats a circle for years", over 3 runs; noise: "±0\.02"/,
+    /Holds up if: "it beats a circle for years · 3 runs · noise ±0\.02"/,
   );
   assert.match(helix, /"Engels 2024" \(known\), "The SAE test" \(new\)/);
   // The plan's opener prompt goes to the first agent only.
@@ -2580,7 +2595,7 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
   );
   assert.match(
     (await lab.inputs('d-2-helix')).at(-1) ?? '',
-    /Holds up if: "it beats a circle for years by 0\.05"/,
+    /Holds up if: "it beats a circle for years by 0\.05 · 3 runs/,
   );
   // When the plan's author stops, the plan stays as it is, and the desk says so.
   await lab.lab.stopDirection('d-1');
@@ -2591,6 +2606,11 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
   );
   assert.match(html, /claude-1 no longer works, so the plan stays as it is\./);
   assert.doesNotMatch(html, /Reply to the plan/);
+  // The plan's table marks the stopped direction.
+  assert.match(
+    html,
+    /<th scope="row">Circles <span class="fine">\(stopped\)<\/span><\/th>/,
+  );
 });
 
 await test('when the time budget ends the lab pauses, Needs you asks for more time, and more time resumes it', async (t) => {
@@ -2776,4 +2796,26 @@ await test('when the time budget ends while the person paused the lab, more time
   assert.ok(lab.lab.view()?.state.pausedAt);
   await lab.lab.resume();
   assert.equal(lab.lab.view()?.state.pausedAt, null);
+});
+
+await test('an agent whose plan Verifold stopped before it was kept starts after a restart, and the board says why', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await lab.lab.close();
+  // As if the owner stopped while a plan opened this direction.
+  const path = join(lab.root, '.verifold', 'lab', 'agents', 'a-1.json');
+  const record = JSON.parse(await readFile(path, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  await writeFile(path, JSON.stringify({ ...record, held: true }));
+  await lab.restart();
+  const view = lab.lab.view();
+  assert.equal(view?.directions[0]?.agent.held, false);
+  assert.match(
+    view?.posts.at(-1)?.text ?? '',
+    /The person opened "Alpha" for claude-1 \(Claude Code\) in a plan that was not kept\./,
+  );
 });
