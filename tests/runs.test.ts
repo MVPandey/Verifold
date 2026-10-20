@@ -545,3 +545,70 @@ await test('only macOS runs locally', () => {
     process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec'),
   );
 });
+
+await test('a run starts only while its caller says it may, in the step that records it', async (t) => {
+  const fx = await fixture(t);
+  const { ledger } = fx.ledger();
+  t.after(() => ledger.close());
+  await assert.rejects(
+    ledger.start({
+      agent: 'a-1',
+      key: 'refused',
+      direction: 'd-1',
+      harness: 'claude',
+      workspace: fx.workspace,
+      commit: await fx.commit(),
+      command: 'true',
+      why: 'A test.',
+      minutes: 5,
+      want: [],
+      may: () => {
+        throw new Error('The check ended.');
+      },
+    }),
+    /The check ended\./,
+  );
+  assert.deepEqual(ledger.list(), []);
+});
+
+await test(
+  'a run whose denied paths hold its own folder still reads and writes its own folder, and nothing else there',
+  { skip: process.platform !== 'darwin' },
+  async (t) => {
+    const fx = await fixture(t);
+    const other = join(fx.root, '.verifold', 'workspaces', 'd-1-alpha');
+    await writeFile(join(other, 'notes.md'), 'OTHER_FOLDER_MARKER\n');
+    const { ledger, ended } = fx.ledger({ sandbox: seatbelt });
+    t.after(() => ledger.close());
+    await ledger.start({
+      agent: 'a-1',
+      key: 'own',
+      direction: 'd-1',
+      harness: 'claude',
+      workspace: fx.workspace,
+      commit: await fx.commit(),
+      command: [
+        'cat README.md',
+        'echo own > own.txt && cat own.txt',
+        `cat ${other}/notes.md`,
+        `ls ${fx.root}/.verifold/workspaces`,
+        'echo DONE',
+      ].join('; '),
+      why: 'A test.',
+      minutes: 5,
+      want: [],
+      deny: [join(fx.root, '.verifold')],
+    });
+    await until(() => ended.length === 1, 30_000);
+    const log = await readFile(
+      join(fx.root, '.verifold', 'lab', 'runs', 'r-1', 'log.txt'),
+      'utf8',
+    );
+    assert.match(log, /# Project/);
+    assert.match(log, /^own$/m);
+    assert.match(log, /DONE/);
+    assert.doesNotMatch(log, /OTHER_FOLDER_MARKER/);
+    assert.match(log, /notes\.md: Operation not permitted/);
+    assert.match(log, /workspaces: Operation not permitted/);
+  },
+);

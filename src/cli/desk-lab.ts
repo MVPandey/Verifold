@@ -16,7 +16,7 @@ import {
   type DirectionView,
   type LabView,
 } from './lab.ts';
-import { checkableKinds } from './lab-tools.ts';
+import { checkableKinds, checkLimits } from './lab-tools.ts';
 import {
   metricsText,
   placeText,
@@ -138,17 +138,26 @@ function proofText(artifact: Artifact): string {
 const checkable: ReadonlySet<PostKind> = new Set(checkableKinds);
 
 /**
- * How a check tested a post, in a few words, or null when no check did:
- * "reran r-9 (Codex): acc=0.7", "did not hold on r-9", "read the code only",
- * a check that waits or runs, or one that failed. The newest done check
- * counts first.
+ * How a check tested a post, in a few words, or null when no check did: a
+ * check that waits or runs first, then the newest that ended: "reran r-9
+ * (Codex): acc=0.7", "did not hold on r-9", "read the code only", or one
+ * that failed. A checker that could read the lab's records says so.
  */
 export function checkMark(
   post: Post,
   view: LabView,
   ledger: ReadonlyMap<string, RunRecord>,
 ): string | null {
-  const checks = view.checks.filter((check) => check.claim === post.id);
+  const checks = view.checks.filter(
+    (check) => check.claim === post.id && check.state !== 'dropped',
+  );
+  const open = checks.find(
+    (check) => check.state === 'queued' || check.state === 'running',
+  );
+  if (open)
+    return open.state === 'running'
+      ? `${open.handle} checks it`
+      : `check ${open.id} waits`;
   const done = checks.filter((check) => check.state === 'done').at(-1);
   if (done) {
     const result = view.posts.find((entry) => entry.id === done.result);
@@ -158,7 +167,7 @@ export function checkMark(
       return run?.agent === done.agent ? [run] : [];
     });
     const ids = runs.map((run) => run.id).join(', ') || done.run;
-    const who = `${hostName(done.harness)}${done.sameHarness ? ', same harness' : ''}`;
+    const who = `${hostName(done.harness)}${done.sameHarness ? ', same harness' : ''}${done.blind ? '' : ', the checker could read project records'}`;
     const missed =
       done.outcome === 'differs'
         ? 'differs'
@@ -173,21 +182,16 @@ export function checkMark(
     }
     return `${done.outcome === 'differs' ? 'differs on' : 'did not hold on'} ${ids} (${who})`;
   }
-  const open = checks.find(
-    (check) => check.state === 'queued' || check.state === 'running',
-  );
-  if (open)
-    return open.state === 'running'
-      ? `${open.handle} checks it`
-      : `check ${open.id} waits`;
   if (checks.some((check) => check.state === 'failed')) return 'check failed';
   return null;
 }
 
 /**
- * An objection to a claim, evidence, or rerun post is a dispute until a
- * check of that post ends after it. The disputed posts, oldest first, each
- * with its open objections and its newest check.
+ * The disputes that a check answers or can answer: each post with the
+ * objections that a check took and no check answered yet, and its newest
+ * check. The objections of a failed check count while the post can get one
+ * more check, which takes them. An objection that no check took, because
+ * its post cites no run or had its checks, stays a reply in its thread.
  */
 export function openDisputes(view: LabView): {
   readonly target: Post;
@@ -195,22 +199,27 @@ export function openDisputes(view: LabView): {
   readonly check: Check | null;
 }[] {
   const posts = new Map(view.posts.map((post) => [post.id, post]));
+  const checks = view.checks.filter((check) => check.state !== 'dropped');
+  const answered = new Set(
+    checks
+      .filter((check) => check.state === 'done')
+      .flatMap((check) => check.objections),
+  );
   const open = new Map<string, Post[]>();
-  for (const objection of view.posts) {
-    const target =
-      objection.kind === 'objection' && objection.replyTo
-        ? posts.get(objection.replyTo)
-        : undefined;
-    if (!target || !checkable.has(target.kind)) continue;
-    const settled = view.checks.some(
-      (check) =>
-        check.claim === target.id &&
-        check.state === 'done' &&
-        (check.objections.includes(objection.id) ||
-          Date.parse(check.endedAt ?? '') > Date.parse(objection.at)),
-    );
-    if (!settled)
-      open.set(target.id, [...(open.get(target.id) ?? []), objection]);
+  for (const check of checks) {
+    if (
+      check.state === 'failed' &&
+      checks.filter((entry) => entry.claim === check.claim).length >=
+        checkLimits.perClaim
+    )
+      continue;
+    for (const id of check.objections) {
+      const objection = posts.get(id);
+      if (!objection || answered.has(id)) continue;
+      const list = open.get(check.claim) ?? [];
+      if (!list.includes(objection))
+        open.set(check.claim, [...list, objection]);
+    }
   }
   return [...open].flatMap(([id, objections]) => {
     const target = posts.get(id);
@@ -219,8 +228,7 @@ export function openDisputes(view: LabView): {
           {
             target,
             objections,
-            check:
-              view.checks.filter((check) => check.claim === id).at(-1) ?? null,
+            check: checks.filter((check) => check.claim === id).at(-1) ?? null,
           },
         ]
       : [];
@@ -236,17 +244,13 @@ function disputesCard(
 ): string {
   if (!open.length) return '';
   const items = open.map(({ objections, target, check }) => {
-    const where = !target.artifacts.some((artifact) => artifact.type === 'run')
-      ? `${target.id} cites no run, so no check can rerun it.`
-      : !check
-        ? 'No check yet.'
-        : check.state === 'done'
-          ? `${target.id} had its checks. The last one, ${check.id}, ended before these objections, so no check answers them.`
-          : check.state === 'failed'
-            ? `Check ${check.id} failed: ${check.note ?? 'no reason'}`
-            : check.state === 'running'
-              ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
-              : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
+    const where = !check
+      ? 'No check yet.'
+      : check.state === 'failed'
+        ? `Check ${check.id} failed: ${check.note ?? 'no reason'} Another objection starts a new check, which takes these too.`
+        : check.state === 'running'
+          ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
+          : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
     const runs = check
       ? view.ledger
           .filter((run) => run.agent === check.agent)
