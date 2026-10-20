@@ -142,12 +142,14 @@ export interface SessionRecord {
   readonly launches: readonly SessionLaunch[];
   /** A task session: the task and the claim that started it. */
   readonly task?: { readonly id: string; readonly claim: string };
-  /** The task folder that a task session runs in, relative to the project. */
+  /** The folder that a task session, a lab agent, or a checker runs in, relative to the project. */
   readonly cwd?: string;
   /** A task session: the domains that its shell commands may reach. */
   readonly network?: readonly string[];
   /** A lab agent's session: the agent ID. The agent works in the folder of its direction. */
   readonly agent?: string;
+  /** A lab checker's session: more paths that it cannot read, absolute or under `~/`. */
+  readonly denyRead?: readonly string[];
 }
 
 export interface SessionView {
@@ -613,14 +615,33 @@ function parseRecord(value: unknown): SessionRecord | null {
       ? { network: record.network as string[] }
       : {}),
     ...(typeof record.cwd === 'string' &&
-    /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(record.cwd)
+    // A task's or a direction's folder, or a lab check's.
+    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/k-[1-9]\d{0,5})$/.test(
+      record.cwd,
+    )
       ? { cwd: record.cwd }
       : {}),
     ...(typeof record.agent === 'string' &&
     /^a-[1-9]\d{0,3}$/.test(record.agent)
       ? { agent: record.agent }
       : {}),
+    ...(Array.isArray(record.denyRead) &&
+    record.denyRead.length <= 200 &&
+    record.denyRead.every(denyPath)
+      ? { denyRead: record.denyRead }
+      : {}),
   };
+}
+
+/** A path that a session cannot read: absolute or under `~/`, one line, no `..` part. */
+function denyPath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 4096 &&
+    (value.startsWith('/') || value.startsWith('~/')) &&
+    !/[\p{Cc}]/u.test(value) &&
+    !value.split('/').includes('..')
+  );
 }
 
 export async function readRecord(
@@ -1027,7 +1048,12 @@ export class SessionManager {
         '--strict-mcp-config',
         '--permission-mode',
         record.mode === 'auto' ? 'auto' : strict ? 'dontAsk' : 'default',
-        ...(strict ? ['--settings', strictClaudeSettings(record.network)] : []),
+        ...(strict
+          ? [
+              '--settings',
+              strictClaudeSettings(record.network, record.denyRead),
+            ]
+          : []),
       ];
     else {
       const socket =
@@ -1173,12 +1199,17 @@ export class SessionManager {
     readonly cwd: string;
     readonly agent: string;
     readonly tools: AgentTools;
+    /** A checker: more paths that it cannot read. */
+    readonly denyRead?: readonly string[];
   }): Promise<string> {
     this.ready();
+    if (input.denyRead && !input.denyRead.every(denyPath))
+      fail('A path that a session cannot read is not valid.');
     const record: SessionRecord = {
       ...fresh(input.host, input.model ?? null, 'strict'),
       agent: input.agent,
       cwd: relative(this.root, input.cwd).split('\\').join('/'),
+      ...(input.denyRead?.length ? { denyRead: input.denyRead } : {}),
     };
     const parsed = parseRecord(record);
     if (!parsed?.cwd || !parsed.agent)
@@ -1555,6 +1586,7 @@ export class SessionManager {
         ...(executable ? { executable } : {}),
         ...(this.tools ? { tools: this.tools } : {}),
         ...(record.network?.length ? { network: record.network } : {}),
+        ...(record.denyRead?.length ? { denyRead: record.denyRead } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
       const pid = this.host.pid;
