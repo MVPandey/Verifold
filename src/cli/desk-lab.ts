@@ -10,8 +10,10 @@ import {
   barSummary,
   budgetEnded,
   defaultLabHours,
+  labEnded,
   labLimits,
   verdictWords,
+  type BringList,
   type Call,
   type CallEffect,
   type CallOption,
@@ -399,18 +401,9 @@ function directionRow(
     ...own.filter(runActive),
     ...own.filter((run) => !runActive(run)).reverse(),
   ].slice(0, rowRuns);
-  const proof = direction.evidence
-    ? view.posts.find((post) => post.id === direction.evidence?.post)
-    : undefined;
-  // A ruled-out verdict needs no check.
-  const mark =
-    proof && checkable.has(proof.kind)
-      ? (checkMark(proof, view, byId) ?? 'not checked')
-      : null;
+  const mark = evidenceMark(direction, view, byId);
   const dispute =
     direction.evidence !== null && disputed.has(direction.evidence.post);
-  const glyph = verdictMarks[dispute ? 'disputed' : direction.verdict];
-  const word = verdictText(direction.verdict, dispute);
   const state = stateOf(entry, clock);
   // A state that needs attention comes before the check.
   const loud =
@@ -420,11 +413,7 @@ function directionRow(
     status === 'stopped' ||
     status === 'closed';
   const right = loud || !mark ? state.text : mark;
-  const line = direction.evidence
-    ? `${direction.evidence.text} · ${direction.evidence.post}${direction.evidence.run ? ` · ${direction.evidence.run}` : ''}`
-    : direction.bar
-      ? `Holds up if ${barSummary(direction)}`
-      : '';
+  const line = evidenceLine(direction);
   const open = direction.state === 'open';
   const controls = [
     runs && open
@@ -437,6 +426,9 @@ function directionRow(
       : '',
     runs && status === 'crashed'
       ? `<button type="button" class="primary" data-action="lab-agent-restart" data-agent="${e(agent.id)}">Start again</button>`
+      : '',
+    runs
+      ? `<button type="button" data-panel="bring" data-lab-direction="${e(direction.id)}">Bring in</button>`
       : '',
     runs && open
       ? `<button type="button" class="quiet" data-action="lab-direction-stop" data-lab-direction="${e(direction.id)}" data-confirm="Click again to stop this direction">Stop</button>`
@@ -451,7 +443,38 @@ function directionRow(
       ? `<p class="row-runs">${shown.map(runButton).join(' ')}${own.length > shown.length ? ` <span class="fine">${own.length} runs in all</span>` : ''}</p>`
       : '',
   ].join('');
-  return `<li class="lab-row${dispute ? ' disputed' : ''}" id="row-${e(direction.id)}"><details id="row-open-${e(direction.id)}"><summary><span class="verdict v-${dispute ? 'disputed' : e(direction.verdict)}"><span aria-hidden="true">${glyph}</span> ${word}</span><span class="row-main"><strong>${e(direction.title)}</strong>${line ? `<span class="row-line">${e(line)}</span>` : ''}</span><span class="row-who">${who(agent.host)}<span class="row-handle">${e(agent.handle)}</span></span><span class="row-state${status === 'crashed' ? ' failed' : status === 'working' || status === 'starting' ? ' active' : ''}">${e(right)}</span></summary><div class="row-more">${facts}<div class="actions">${controls}</div></div></details></li>`;
+  return `<li class="lab-row${dispute ? ' disputed' : ''}" id="row-${e(direction.id)}"><details id="row-open-${e(direction.id)}"><summary>${verdictChip(direction.verdict, dispute)}<span class="row-main"><strong>${e(direction.title)}</strong>${line ? `<span class="row-line">${e(line)}</span>` : ''}</span><span class="row-who">${who(agent.host)}<span class="row-handle">${e(agent.handle)}</span></span><span class="row-state${status === 'crashed' ? ' failed' : status === 'working' || status === 'starting' ? ' active' : ''}">${e(right)}</span></summary><div class="row-more">${facts}<div class="actions">${controls}</div></div></details></li>`;
+}
+
+/** A direction's verdict as a chip: a mark and its word. */
+function verdictChip(verdict: Verdict, disputed: boolean): string {
+  return `<span class="verdict v-${disputed ? 'disputed' : e(verdict)}"><span aria-hidden="true">${verdictMarks[disputed ? 'disputed' : verdict]}</span> ${verdictText(verdict, disputed)}</span>`;
+}
+
+/** A direction's one line under its title: its evidence with the post and run, or its bar. */
+function evidenceLine(direction: DirectionView['direction']): string {
+  return direction.evidence
+    ? `${direction.evidence.text} · ${direction.evidence.post}${direction.evidence.run ? ` · ${direction.evidence.run}` : ''}`
+    : direction.bar
+      ? `Holds up if ${barSummary(direction)}`
+      : '';
+}
+
+/**
+ * How a check tested a direction's evidence, "not checked", or null when
+ * the verdict needs no check, as a ruled-out verdict.
+ */
+function evidenceMark(
+  direction: DirectionView['direction'],
+  view: LabView,
+  byId: ReadonlyMap<string, RunRecord>,
+): string | null {
+  const proof = direction.evidence
+    ? view.posts.find((post) => post.id === direction.evidence?.post)
+    : undefined;
+  return proof && checkable.has(proof.kind)
+    ? (checkMark(proof, view, byId) ?? 'not checked')
+    : null;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */
@@ -746,8 +769,8 @@ export function renderLab(
   );
   const gpu = options.gpu ?? null;
   return `<div class="lab-screen">
-  <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, gpu))}</p></div><span class="actions">${searchButton}${pause}</span></header>
-  ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${renderLabWork(options.works ?? [], clock)}
+  <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, gpu))}</p></div><span class="actions">${searchButton}<button type="button" class="quiet" data-panel="answer">Answer</button>${pause}</span></header>
+  ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${endedLine(view, clock)}${paused}${renderLabWork(options.works ?? [], clock)}
   ${options.away ? awayDigest(view, options.away, gpu, disputed, clock) : ''}${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
   <section class="lab-section" aria-labelledby="directions-title"><h2 id="directions-title" class="lab-label">Directions</h2>
   ${view.directions.length ? `<ul class="lab-rows">${view.directions.map((entry) => directionRow(entry, clock, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. The plan opens them, or you open one yourself.</p>'}
@@ -1351,4 +1374,155 @@ function awayDigest(
           )}</ul>${changed.length > awayLines ? `<p class="fine">${counted(changed.length - awayLines, 'more direction')} changed too. Their rows are below.</p>` : ''}`
       : ''
   }${counts.length ? `<p class="fine">${counts.join(', ')}.</p>` : ''}${cost ? `<p class="fine">${e(cost)}</p>` : ''}</section>`;
+}
+
+/**
+ * The line that says that the lab ended, with its answer: every direction
+ * closed or stopped, or the person chose to stop at the end of the time
+ * budget.
+ */
+function endedLine(view: LabView, clock: (value: string) => string): string {
+  const { state } = view;
+  if (!labEnded(state)) return '';
+  const why = state.directions.every((direction) => direction.state !== 'open')
+    ? 'every direction closed or stopped'
+    : 'you chose to stop at the end of the time budget';
+  const signed = state.signoff
+    ? ` You signed off at ${e(clock(state.signoff.at))}.`
+    : '';
+  return `<p class="notice" role="status">The lab ended: ${why}.${signed} <button type="button" class="primary" data-panel="answer">See the answer</button></p>`;
+}
+
+/**
+ * The lab's answer in the panel: each direction's verdict and evidence
+ * against its bar, how it was checked, what the person brought in, the
+ * person's calls, and the sign-off. Every agent text is escaped.
+ */
+export function answerPanel(
+  view: LabView,
+  clock: (value: string) => string,
+): Panel {
+  const { state } = view;
+  const byId = new Map(view.ledger.map((run) => [run.id, run]));
+  const disputed = new Set(
+    openDisputes(view).map((dispute) => dispute.target.id),
+  );
+  const rows = view.directions.map(({ direction }) => {
+    const dispute =
+      direction.evidence !== null && disputed.has(direction.evidence.post);
+    const mark = evidenceMark(direction, view, byId);
+    const line = evidenceLine(direction);
+    const brought = state.brought.filter(
+      (entry) => entry.direction === direction.id,
+    );
+    const files = brought.reduce((sum, entry) => sum + entry.files.length, 0);
+    const last = brought.at(-1);
+    return `<li class="answer-row">${verdictChip(direction.verdict, dispute)}<span class="row-main"><strong>${e(direction.title)}</strong>${line ? `<span class="row-line">${e(line)}</span>` : ''}</span><span class="answer-side">${mark ? `<span class="fine">${e(mark)}</span>` : ''}${last ? `<span class="fine">${files} ${files === 1 ? 'file' : 'files'} brought in, last at ${e(clock(last.at))}</span>` : ''}${view.runs ? `<button type="button" class="link" data-panel="bring" data-lab-direction="${e(direction.id)}">Bring in files</button>` : ''}</span></li>`;
+  });
+  const ended = view.ledger.filter((run) => !runActive(run));
+  const failed = ended.filter((run) => run.status !== 'done').length;
+  const calls = state.calls.flatMap((call) => {
+    const option =
+      call.state === 'answered' && call.answer
+        ? call.options[call.answer.option]
+        : undefined;
+    return option ? [option.label] : [];
+  });
+  const open = view.directions.filter(
+    (entry) => entry.direction.state === 'open',
+  );
+  const signoff = view.runs
+    ? `<section class="answer-signoff" aria-labelledby="signoff-title"><h3 id="signoff-title">Sign off</h3>
+  <p class="fine">${state.signoff ? `You signed off at ${e(clock(state.signoff.at))}. A new sign-off replaces it.` : "Sign off when you agree with the answer. Verifold keeps each direction's verdict, its newest commit, and the check behind it."} A sign-off stops no agent: pause the lab or stop the directions for that.</p>
+  <label class="field" for="lab-signoff-note">The answer in one line (optional)</label><input id="lab-signoff-note" type="text" maxlength="${labLimits.signoff}">
+  <div class="actions"><button type="button" class="primary" data-action="lab-signoff">Sign off</button></div></section>`
+    : '';
+  const body = `${state.signoff?.note ? `<p class="answer-line">${e(state.signoff.note)}</p>` : ''}
+  ${rows.length ? `<ul class="answer-rows">${rows.join('')}</ul>` : '<p class="empty-note">No direction yet.</p>'}
+  <p>${open.length ? `<strong>Still open:</strong> ${e(open.map((entry) => entry.direction.title).join(', '))}. ` : ''}${view.ledger.length} ${view.ledger.length === 1 ? 'run' : 'runs'}, ${failed} failed or stopped. Verifold keeps every run.</p>
+  <p><strong>Your calls:</strong> ${calls.length ? `${e(calls.join(' · '))}. The agents made the rest, all on the board.` : 'none. The agents made every choice, all on the board.'}</p>
+  ${signoff}`;
+  return {
+    kind: 'Answer',
+    title: clip(state.question, 200),
+    sub: `<span class="fine">${state.signoff ? `Signed off ${e(clock(state.signoff.at))}` : labEnded(state) ? 'The lab ended' : 'The answer so far. The lab still works.'}</span>`,
+    // A root of its own scopes the lab panel's styles.
+    body: `<div class="lab-panel">${body}</div>`,
+  };
+}
+
+/**
+ * Bring in, in the panel: the files that a direction changed, at the commit
+ * that the person looks at, with a box to tick each one and its diff. Files
+ * that cannot come in say why. Before Verifold took the commit, the panel
+ * asks for it.
+ */
+export function bringPanel(
+  view: LabView,
+  id: string | undefined,
+  list: BringList | null,
+  clock: (value: string) => string,
+): Panel {
+  const entry = view.directions.find((item) => item.direction.id === id);
+  if (!entry)
+    return {
+      kind: 'Bring in',
+      title: 'No such direction',
+      sub: '',
+      body: '<p class="empty-note">This direction is not in the lab, for example after Start over.</p>',
+    };
+  const { direction, agent } = entry;
+  const branch = direction.workspace.branch ?? direction.workspace.path;
+  const shown = list?.direction === direction.id ? list : null;
+  const panel = (body: string): Panel => ({
+    kind: 'Bring in',
+    title: direction.title,
+    sub: `<span class="fine">From ${e(branch)} into your project folder</span>`,
+    body: `<div class="lab-panel">${body}</div>`,
+  });
+  if (!shown)
+    return panel(
+      view.runs
+        ? `<p class="fine" data-lab-bring-look="${e(direction.id)}">Verifold commits the newest work of this direction first, so you see exactly the files that come in.</p><div class="actions"><button type="button" class="primary" data-action="lab-bring-look" data-lab-direction="${e(direction.id)}">Show its files</button></div>`
+        : '<p class="empty-note">Run verifold in the project folder to bring in files.</p>',
+    );
+  const here = new Map<string, string>();
+  for (const brought of view.state.brought)
+    if (brought.direction === direction.id && brought.commit === shown.commit)
+      for (const path of brought.files) here.set(path, brought.at);
+  const can = shown.files.filter((file) => file.out === null);
+  const out = shown.files.filter((file) => file.out !== null);
+  const box = (index: number): string =>
+    `bring-${shown.commit.slice(0, 8)}-${index}`;
+  const items = can.map((file, index) => {
+    const at = here.get(file.path);
+    const why = at
+      ? `In your project folder since ${clock(at)}.`
+      : file.ticked
+        ? ''
+        : file.path.split('/')[0]?.toLowerCase() === 'memory'
+          ? 'Project memory, so not ticked.'
+          : 'Scratch output, so not ticked.';
+    return `<li><input type="checkbox" id="${box(index)}" data-bring-file="${e(file.path)}"${file.ticked && !at ? ' checked' : ''}${at || !view.runs ? ' disabled' : ''}> <label for="${box(index)}"><code>${e(file.path)}</code></label> <span class="fine change-${file.change}">${file.change}</span> <button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" data-bring-commit="${e(shown.commit)}" aria-pressed="false" aria-label="Diff of ${e(file.path)}">Diff</button>${why ? ` <span class="fine">${e(why)}</span>` : ''}</li>`;
+  });
+  const history = view.state.brought
+    .filter((brought) => brought.direction === direction.id)
+    .map(
+      (brought) =>
+        `<li>${e(clock(brought.at))}: ${e(brought.files.slice(0, 10).join(', '))}${brought.files.length > 10 ? ` and ${brought.files.length - 10} more` : ''} <span class="fine">at ${e(brought.commit.slice(0, 7))}</span></li>`,
+    );
+  const newer =
+    view.runs && direction.head !== shown.commit
+      ? `<p class="fine">${e(agent.handle)} committed newer work since. <button type="button" class="link" data-action="lab-bring-look" data-lab-direction="${e(direction.id)}">Show the newer files</button></p>`
+      : '';
+  return panel(`${
+    shown.files.length
+      ? `<p class="fine">${shown.files.length} ${shown.files.length === 1 ? 'file' : 'files'} changed from ${e(shown.from.slice(0, 7))} to ${e(shown.commit.slice(0, 7))}. The ticked files come into your project folder. Nothing else changes, and nothing merges by itself.</p>`
+      : '<p class="empty-note">This direction changed no file since it started.</p>'
+  }${newer}
+  ${can.length ? `<ul class="bring-files">${items.join('')}</ul>` : ''}
+  ${out.length ? `<p class="fine">Stays out:</p><ul class="bring-out">${out.map((file) => `<li><code>${e(file.path)}</code> <span class="fine">${e(file.out ?? '')}</span></li>`).join('')}</ul>` : ''}
+  ${can.length ? `<div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}" data-diff-proof="" data-bring-commit="${e(shown.commit)}" data-lab-to="${e(shown.commit)}"><p class="fine">Choose Diff beside a file to see its changes.</p></div>` : ''}
+  ${view.runs && can.length ? `<div class="actions"><button type="button" class="primary" data-action="lab-bring" data-lab-direction="${e(direction.id)}" data-commit="${e(shown.commit)}">Bring in the ticked files</button></div><p class="fine">When a file changed in your project folder since this direction started, nothing comes in, and Verifold names the file.</p>` : ''}
+  ${history.length ? `<h3>Brought in</h3><ul class="bring-history">${history.join('')}</ul>` : ''}`);
 }

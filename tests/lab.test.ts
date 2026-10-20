@@ -10,6 +10,7 @@ import {
   readdir,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -49,6 +50,7 @@ import { checkToolSpecs } from '../src/cli/lab-tools.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
 import { parseFrame, renderDesk } from '../src/cli/desk-view.ts';
 import {
+  answerPanel,
   costLine,
   labCallNeeds,
   renderLab,
@@ -3306,6 +3308,9 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
     'pausedFor',
     'agentStarts',
     'checks',
+    'brought',
+    'bringing',
+    'signoff',
   ])
     delete old[key];
   for (const direction of old.directions)
@@ -3336,6 +3341,9 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
   assert.equal(state?.directions[0]?.evidence, null);
   assert.deepEqual(state?.agentStarts, []);
   assert.deepEqual(state?.checks, []);
+  assert.deepEqual(state?.brought, []);
+  assert.equal(state?.bringing, null);
+  assert.equal(state?.signoff, null);
   assert.equal(reloaded.view()?.directions[0]?.agent.quietTurns, 0);
   assert.equal(reloaded.view()?.directions[0]?.agent.nudged, false);
   await reloaded.resume();
@@ -7595,4 +7603,477 @@ await test('while you were away: a line for each direction with news, the counts
     }).html,
     /While you were away/,
   );
+});
+
+/**
+ * A lab with its directions open while it is paused, so no agent works. The
+ * test writes in the directions' folders itself.
+ */
+async function bringLab(
+  t: test.TestContext,
+  titles: readonly string[] = ['Alpha'],
+): Promise<Fixture> {
+  const lab = await fixture(t);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  for (const title of titles)
+    await lab.lab.addDirection({ title, harness: 'claude' });
+  return lab;
+}
+
+/** The folder of a lab's direction. */
+function folderOf(lab: Fixture, id: string): string {
+  const direction = lab.lab
+    .view()
+    ?.state.directions.find((entry) => entry.id === id);
+  assert.ok(direction);
+  return join(lab.root, direction.workspace.path);
+}
+
+/** Take a direction's newest work to bring in, and return its commit. */
+async function look(lab: Fixture, id: string): Promise<string> {
+  await lab.lab.lookToBring(id);
+  const commit = lab.lab.bringCommit(id);
+  assert.match(commit ?? '', /^[0-9a-f]{40}$/);
+  return commit ?? '';
+}
+
+await test('a bring-in copies the ticked files at the commit that the person looked at, and records it', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a.md'), 'a\n');
+  await writeFile(join(folder, 'b.md'), 'b\n');
+  await mkdir(join(folder, 'memory'));
+  await writeFile(join(folder, 'memory', 'note.md'), 'm\n');
+  await mkdir(join(folder, 'tmp'));
+  await writeFile(join(folder, 'tmp', 'x.txt'), 'x\n');
+  // Nothing shows before Verifold took the commit.
+  assert.equal(await lab.lab.bringFiles('d-1'), null);
+  const commit = await look(lab, 'd-1');
+  assert.equal(lab.lab.view()?.state.directions[0]?.head, commit);
+  // Project memory and scratch output are not ticked first.
+  assert.deepEqual(
+    (await lab.lab.bringFiles('d-1'))?.files.map((file) => [
+      file.path,
+      file.change,
+      file.ticked,
+      file.out,
+    ]),
+    [
+      ['a.md', 'added', true, null],
+      ['b.md', 'added', true, null],
+      ['memory/note.md', 'added', false, null],
+      ['tmp/x.txt', 'added', false, null],
+    ],
+  );
+  // The agent commits newer work after the person looked: it does not come in.
+  await writeFile(join(folder, 'a.md'), 'newer\n');
+  await writeFile(join(folder, 'c.md'), 'c\n');
+  git(folder, 'add', '--all');
+  git(folder, 'commit', '--quiet', '-m', 'later');
+  assert.deepEqual(await lab.lab.bring('d-1', commit, ['a.md']), ['a.md']);
+  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'a\n');
+  assert.equal(existsSync(join(lab.root, 'b.md')), false);
+  assert.equal(existsSync(join(lab.root, 'c.md')), false);
+  const state = lab.lab.view()?.state;
+  assert.deepEqual(
+    state?.brought.map((entry) => [entry.direction, entry.commit, entry.files]),
+    [['d-1', commit, ['a.md']]],
+  );
+  assert.equal(state?.bringing, null);
+  assert.match(
+    lab.lab.view()?.posts.at(-1)?.text ?? '',
+    /^The person brought 1 file of d-1 into the project folder, at [0-9a-f]{7}: a\.md\.$/,
+  );
+  // Only the commit that the person looked at, and only files that it changed, come in.
+  await assert.rejects(
+    lab.lab.bring('d-1', 'f'.repeat(40), ['b.md']),
+    /changed since you looked/,
+  );
+  await assert.rejects(
+    lab.lab.bring('d-1', commit, ['README.md']),
+    /Tick files that this direction changed/,
+  );
+  await assert.rejects(lab.lab.bring('d-1', commit, []), /Tick the files/);
+  await assert.rejects(
+    lab.lab.bring('x', commit, ['b.md']),
+    /Choose a direction/,
+  );
+  // A file ticked off first can still come in, together with others.
+  assert.deepEqual(
+    await lab.lab.bring('d-1', commit, ['b.md', 'memory/note.md']),
+    ['b.md', 'memory/note.md'],
+  );
+  assert.equal(
+    await readFile(join(lab.root, 'memory', 'note.md'), 'utf8'),
+    'm\n',
+  );
+  // The record lasts across a restart.
+  await lab.restart();
+  assert.deepEqual(
+    lab.lab.view()?.state.brought.map((entry) => entry.files),
+    [['a.md'], ['b.md', 'memory/note.md']],
+  );
+});
+
+await test('a bring-in copies nothing when a project file changed since the direction started, also after another direction brought it in', async (t) => {
+  const lab = await bringLab(t, ['Alpha', 'Beta']);
+  const alpha = folderOf(lab, 'd-1');
+  const beta = folderOf(lab, 'd-2');
+  await writeFile(join(alpha, 'README.md'), '# Alpha\n');
+  await writeFile(join(alpha, 'new.md'), 'new\n');
+  await writeFile(join(beta, 'shared.md'), 'beta\n');
+  await writeFile(join(alpha, 'shared.md'), 'alpha\n');
+  // The person changed the README in the project folder meanwhile.
+  await writeFile(join(lab.root, 'README.md'), '# Mine\n');
+  const first = await look(lab, 'd-1');
+  await assert.rejects(
+    lab.lab.bring('d-1', first, ['README.md', 'new.md']),
+    /Nothing came in\. This file changed in the project folder since d-1 started: README\.md\. Keep your version, or copy the agent's version yourself from verifold\/d-1-alpha\./,
+  );
+  assert.equal(await readFile(join(lab.root, 'README.md'), 'utf8'), '# Mine\n');
+  assert.equal(existsSync(join(lab.root, 'new.md')), false);
+  assert.deepEqual(lab.lab.view()?.state.brought, []);
+  assert.equal(lab.lab.view()?.state.bringing, null);
+  assert.deepEqual(
+    await readdir(lab.root).then((names) =>
+      names.filter((name) => /\.[0-9a-f]{8}\.verifold$/.test(name)),
+    ),
+    [],
+  );
+  // One direction's file comes in, so the other's change of it is a conflict: directions never merge into each other.
+  assert.deepEqual(await lab.lab.bring('d-1', first, ['shared.md']), [
+    'shared.md',
+  ]);
+  const second = await look(lab, 'd-2');
+  await assert.rejects(
+    lab.lab.bring('d-2', second, ['shared.md']),
+    /changed in the project folder since d-2 started: shared\.md/,
+  );
+  assert.equal(await readFile(join(lab.root, 'shared.md'), 'utf8'), 'alpha\n');
+});
+
+await test('a bring-in deletes a file that the direction deleted, and links and Verifold records stay out', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await rm(join(folder, 'README.md'));
+  await symlink('/etc/hosts', join(folder, 'hosts'));
+  // A commit of the direction's branch holds a file under Verifold's own folder, by another case.
+  await mkdir(join(folder, '.Verifold'));
+  await writeFile(join(folder, '.Verifold', 'lab.json'), '{}\n');
+  git(folder, 'add', '--all', '--force');
+  git(folder, 'commit', '--quiet', '-m', 'records');
+  const commit = await look(lab, 'd-1');
+  const files = (await lab.lab.bringFiles('d-1'))?.files ?? [];
+  const reason = (path: string): string | null | undefined =>
+    files.find((file) => file.path === path)?.out;
+  assert.equal(reason('README.md'), null);
+  assert.equal(reason('hosts'), 'It is a link or a submodule, not a file.');
+  assert.equal(
+    files.find((file) => file.path === '.Verifold/lab.json')?.ticked,
+    false,
+  );
+  assert.equal(
+    reason('.Verifold/lab.json'),
+    "Verifold's own records stay out.",
+  );
+  await assert.rejects(
+    lab.lab.bring('d-1', commit, ['hosts']),
+    /hosts cannot come in\. It is a link or a submodule, not a file\./,
+  );
+  await assert.rejects(
+    lab.lab.bring('d-1', commit, ['.Verifold/lab.json']),
+    /cannot come in\. Verifold's own records stay out\./,
+  );
+  assert.equal(existsSync(join(lab.root, 'hosts')), false);
+  assert.deepEqual(await lab.lab.bring('d-1', commit, ['README.md']), [
+    'README.md',
+  ]);
+  assert.equal(existsSync(join(lab.root, 'README.md')), false);
+});
+
+await test('a bring-in that Verifold stopped in the middle finishes at the next start, and one that it stopped while it checked leaves nothing', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a.md'), 'a\n');
+  await writeFile(join(folder, 'b.md'), 'b\n');
+  await writeFile(join(folder, 'c.md'), 'c\n');
+  const commit = await look(lab, 'd-1');
+  const path = join(lab.root, '.verifold', 'lab.json');
+  const leave = async (bringing: unknown): Promise<void> => {
+    const value = JSON.parse(await readFile(path, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(path, JSON.stringify({ ...value, bringing }));
+  };
+  // Every file passed its check, and the copy stopped after a.md: b.md has only its temporary copy.
+  await lab.restart(async () => {
+    await leave({
+      direction: 'd-1',
+      commit,
+      files: ['a.md', 'b.md'],
+      at: new Date().toISOString(),
+      phase: 'copying',
+    });
+    await writeFile(join(lab.root, 'a.md'), 'a\n');
+    await writeFile(join(lab.root, 'b.md.0123abcd.verifold'), 'b\n');
+  });
+  assert.equal(await readFile(join(lab.root, 'b.md'), 'utf8'), 'b\n');
+  assert.equal(existsSync(join(lab.root, 'b.md.0123abcd.verifold')), false);
+  let state = lab.lab.view()?.state;
+  assert.equal(state?.bringing, null);
+  assert.deepEqual(
+    state?.brought.map((entry) => entry.files),
+    [['a.md', 'b.md']],
+  );
+  assert.match(
+    lab.lab.view()?.posts.at(-1)?.text ?? '',
+    /^Verifold stopped while it brought files of d-1 into the project folder, and finished the copy now: 2 of 2 files came in\.$/,
+  );
+  // A stop while Verifold checked the files: nothing came in, and its temporary copy goes.
+  await lab.restart(async () => {
+    await leave({
+      direction: 'd-1',
+      commit,
+      files: ['c.md'],
+      at: new Date().toISOString(),
+      phase: 'checking',
+    });
+    await writeFile(join(lab.root, 'c.md.89abcdef.verifold'), 'c\n');
+  });
+  assert.equal(existsSync(join(lab.root, 'c.md')), false);
+  assert.equal(existsSync(join(lab.root, 'c.md.89abcdef.verifold')), false);
+  state = lab.lab.view()?.state;
+  assert.equal(state?.bringing, null);
+  assert.equal(state?.brought.length, 1);
+  assert.match(
+    lab.lab.view()?.posts.at(-1)?.text ?? '',
+    /^Verifold stopped while it checked files of d-1 to bring in, so nothing came in\./,
+  );
+});
+
+await test('a sign-off records each verdict, newest commit, and check, stops no agent, and replaces the last one', async (t) => {
+  const lab = await bringLab(t, ['Alpha', 'Beta']);
+  await lab.lab.resume();
+  const held = lab.lab as unknown as { state: LabState };
+  const at = new Date().toISOString();
+  const [alpha, beta] = held.state.directions;
+  assert.ok(alpha && beta);
+  const check: Check = {
+    id: 'k-1',
+    claim: 'p-9',
+    objections: [],
+    holdsUp: true,
+    direction: 'd-1',
+    run: 'r-1',
+    commit: alpha.head,
+    harness: 'codex',
+    sameHarness: false,
+    agent: 'a-9',
+    handle: 'codex-9',
+    model: null,
+    state: 'done',
+    outcome: 'holds',
+    method: 'rerun',
+    result: 'p-10',
+    note: null,
+    queuedAt: at,
+    startedAt: at,
+    endedAt: at,
+    restarts: 0,
+    session: null,
+    generation: 'g',
+    start: null,
+    blind: true,
+  };
+  held.state = {
+    ...held.state,
+    directions: [
+      {
+        ...alpha,
+        verdict: 'holds-up',
+        evidence: { text: '78% right', post: 'p-9', run: 'r-1' },
+      },
+      beta,
+    ],
+    checks: [check],
+  };
+  await assert.rejects(
+    lab.lab.signOff('x'.repeat(labLimits.signoff + 1)),
+    /up to 280 characters/,
+  );
+  await lab.lab.signOff('Yes: months <b>lie</b> on circles.');
+  const signoff = lab.lab.view()?.state.signoff;
+  assert.equal(signoff?.note, 'Yes: months <b>lie</b> on circles.');
+  assert.deepEqual(signoff?.directions, [
+    { id: 'd-1', verdict: 'holds-up', commit: alpha.head, check: 'k-1' },
+    { id: 'd-2', verdict: 'open', commit: beta.head, check: null },
+  ]);
+  // A sign-off stops no agent.
+  assert.equal(lab.lab.view()?.state.pausedAt, null);
+  assert.equal(
+    lab.lab.view()?.state.directions.every((entry) => entry.state === 'open'),
+    true,
+  );
+  assert.match(
+    lab.lab.view()?.posts.at(-1)?.text ?? '',
+    /^The person signed off the answer: Yes: months <b>lie<\/b> on circles\.$/,
+  );
+  // The answer escapes the note and every agent text.
+  const panel = answerPanel(lab.lab.view() as LabView, (value) =>
+    value.slice(11, 16),
+  );
+  assert.match(
+    panel.body,
+    /<p class="answer-line">Yes: months &lt;b&gt;lie&lt;\/b&gt; on circles\.<\/p>/,
+  );
+  assert.match(panel.body, /<strong>Your calls:<\/strong> none\./);
+  // A new sign-off with no note replaces the last one, and it lasts across a restart.
+  await lab.lab.signOff('  ');
+  await lab.restart();
+  assert.equal(lab.lab.view()?.state.signoff?.note, null);
+});
+
+await test('the desk brings files in and signs off only with its token, and escapes every file name', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a<b>.md'), '<i>a</i>\n');
+  await writeFile(join(folder, 'z.md'), 'z\n');
+  const stop = new AbortController();
+  const desk = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${await deskAssets(lab.base)}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const token = url.hash.slice(1);
+  const get = (path: string, authorized = true): Promise<Response> =>
+    fetch(
+      `${url.origin}${path}`,
+      authorized ? { headers: { Authorization: `Bearer ${token}` } } : {},
+    );
+  const act = (
+    body: Record<string, unknown>,
+    authorized = true,
+  ): Promise<Response> =>
+    fetch(`${url.origin}/api/action`, {
+      method: 'POST',
+      headers: {
+        ...(authorized ? { Authorization: `Bearer ${token}` } : {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  const html = async (path: string): Promise<string> =>
+    ((await (await get(path)).json()) as { html: string }).html;
+  for (const path of [
+    '/api/view?panel=bring&direction=d-1',
+    '/api/view?panel=answer',
+    `/api/lab-diff?direction=d-1&file=z.md&bring=${'a'.repeat(40)}`,
+  ])
+    assert.equal((await get(path, false)).status, 401, path);
+  for (const body of [
+    { action: 'lab-bring-look', direction: 'd-1' },
+    {
+      action: 'lab-bring',
+      direction: 'd-1',
+      commit: 'a'.repeat(40),
+      files: ['z.md'],
+    },
+    { action: 'lab-signoff', note: 'No.' },
+  ])
+    assert.equal((await act(body, false)).status, 401, body.action);
+  // Before Verifold took the commit, the panel asks for it.
+  assert.match(
+    await html('/api/view?panel=bring&direction=d-1'),
+    /data-lab-bring-look="d-1"[^]*data-action="lab-bring-look" data-lab-direction="d-1">Show its files</,
+  );
+  assert.equal(
+    (await act({ action: 'lab-bring-look', direction: 'd-1' })).status,
+    200,
+  );
+  const commit = lab.lab.bringCommit('d-1') ?? '';
+  const panel = await html('/api/view?panel=bring&direction=d-1');
+  assert.match(panel, /data-bring-file="a&lt;b&gt;\.md" checked>/);
+  assert.match(panel, /<code>a&lt;b&gt;\.md<\/code>/);
+  assert.doesNotMatch(panel, /<b>\.md|<i>a/);
+  assert.match(
+    panel,
+    new RegExp(
+      `data-action="lab-bring" data-lab-direction="d-1" data-commit="${commit}"`,
+    ),
+  );
+  // A file's diff comes at that commit only.
+  const shown = (await (
+    await get(
+      `/api/lab-diff?direction=d-1&file=${encodeURIComponent('a<b>.md')}&bring=${commit}`,
+    )
+  ).json()) as { text: string; to: string };
+  assert.match(shown.text, /\+<i>a<\/i>/);
+  assert.equal(shown.to, commit);
+  assert.equal(
+    (await get(`/api/lab-diff?direction=d-1&file=z.md&bring=${'f'.repeat(40)}`))
+      .status,
+    404,
+  );
+  for (const path of [
+    '/api/lab-diff?direction=d-1&file=z.md&bring=x',
+    `/api/lab-diff?direction=d-1&file=z.md&bring=${commit}&proof=p-1.0`,
+    `/api/lab-diff?direction=d-1&file=z.md&bring=${commit}&bring=${commit}`,
+  ])
+    assert.equal((await get(path)).status, 400, path);
+  assert.equal(
+    (
+      await act({
+        action: 'lab-bring',
+        direction: 'd-1',
+        commit,
+        files: ['a<b>.md'],
+      })
+    ).status,
+    200,
+  );
+  assert.equal(await readFile(join(lab.root, 'a<b>.md'), 'utf8'), '<i>a</i>\n');
+  // The brought file shows as in the project, and its box is off.
+  assert.match(
+    await html('/api/view?panel=bring&direction=d-1'),
+    /data-bring-file="a&lt;b&gt;\.md" disabled>[^]*In your project folder since/,
+  );
+  const refused = await act({
+    action: 'lab-bring',
+    direction: 'd-1',
+    commit,
+    files: ['a<b>.md'],
+  });
+  assert.equal(refused.status, 409);
+  assert.match(
+    ((await refused.json()) as { error: string }).error,
+    /Nothing came in/,
+  );
+  assert.equal(
+    (await act({ action: 'lab-signoff', note: 'Yes <b>.' })).status,
+    200,
+  );
+  const answer = await html('/api/view?panel=answer');
+  assert.match(answer, /<p class="answer-line">Yes &lt;b&gt;\.<\/p>/);
+  assert.match(
+    answer,
+    /data-panel="bring" data-lab-direction="d-1">Bring in files</,
+  );
+  assert.match(answer, /1 file brought in, last at/);
+  // Home's header opens the answer.
+  assert.match(await html('/api/view'), /data-panel="answer">Answer</);
 });
