@@ -1,6 +1,7 @@
 import { lstat, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writePrivateFile } from './storage.ts';
+import { commitPattern } from './workspaces.ts';
 
 /**
  * The lab's board: posts from the agents, the person, and Verifold. Each post
@@ -108,7 +109,8 @@ export const postId = /^p-[1-9]\d{0,5}$/;
 const postFile = /^p-[1-9]\d{0,5}\.json$/;
 export const agentId = /^a-[1-9]\d{0,3}$/;
 export const directionId = /^d-[1-9]\d{0,3}$/;
-export const commitId = /^[0-9a-f]{40}$/;
+/** A commit: SHA-1, or SHA-256 in a repository that uses it. */
+export const commitId = commitPattern;
 const figure = /\.(png|jpe?g|gif|svg|webp|pdf)$/i;
 
 /** A JSON object, or null for anything else. */
@@ -335,8 +337,9 @@ export class Board {
     const numbers = names
       .map((name) => Number(name.slice(2, -5)))
       .sort((a, b) => a - b);
-    this.posts = [];
-    this.byId.clear();
+    // Readers outside a queue see the old posts until all new ones loaded.
+    const posts: Post[] = [];
+    const byId = new Map<string, Post>();
     for (const value of numbers.slice(0, boardLimits.posts)) {
       try {
         const path = join(this.directory, `p-${value}.json`);
@@ -347,11 +350,16 @@ export class Board {
         if (!post || typeof post === 'string' || post.id !== `p-${value}`)
           continue;
         const { replyTo, ...rest } = post;
-        this.index(replyTo && !this.byId.has(replyTo) ? rest : post);
+        const kept = replyTo && !byId.has(replyTo) ? rest : post;
+        posts.push(kept);
+        byId.set(kept.id, kept);
       } catch {
         /* Skip an unreadable post. */
       }
     }
+    this.posts = posts;
+    this.byId.clear();
+    for (const [id, post] of byId) this.byId.set(id, post);
     this.last = numbers.at(-1) ?? 0;
   }
 
@@ -443,10 +451,13 @@ export class Board {
   /**
    * The digest of an agent's unread posts, and the read state after it.
    * Unread posts are the posts after `readThrough` that others wrote and that
-   * are not in `seen`. They come oldest first, in at most `limit` lines; a
-   * post that wakes the agent says so. When they do not fit, the last line
-   * says how many more wait, and `readThrough` stops at the last post shown,
-   * so the next read starts with the first one that did not fit.
+   * are not in `seen`. The posts that wake the agent come first, then the
+   * others, each oldest first, in at most `limit` lines; a post that wakes the
+   * agent says so. When they do not fit, the last line says how many more
+   * wait: `readThrough` stops before the oldest post that did not fit, and the
+   * posts shown after it go into `seen`. If `seen` would pass its limit, the
+   * read mark moves past the oldest posts that did not fit instead, so no post
+   * that was shown comes again.
    */
   digest(
     agent: BoardAgent,
@@ -465,24 +476,35 @@ export class Board {
     );
     const limit = options.limit ?? boardLimits.digest;
     // It never takes the only line.
-    const shown =
-      unread.length <= limit ? unread : unread.slice(0, Math.max(1, limit - 1));
-    const hidden = unread.length - shown.length;
-    const through = hidden
-      ? number(shown.at(-1)?.id ?? 'p-0')
+    const room =
+      unread.length <= limit ? unread.length : Math.max(1, limit - 1);
+    const waking = new Set(unread.filter((post) => this.wakes(post, agent)));
+    const shown = [
+      ...waking,
+      ...unread.filter((post) => !waking.has(post)),
+    ].slice(0, room);
+    const shownIds = new Set(shown.map((post) => post.id));
+    const left = unread.filter((post) => !shownIds.has(post.id));
+    let through = left.length
+      ? number(left[0]?.id ?? 'p-1') - 1
       : Math.max(read.readThrough, this.latest());
+    let after = [...seen, ...shownIds].filter((id) => number(id) > through);
+    if (after.length > boardLimits.seen) {
+      through = Math.max(...shown.map((post) => number(post.id)));
+      after = [];
+    }
     return {
       lines: [
-        ...shown.map((post) =>
-          postLine(post, options.name, this.wakes(post, agent)),
-        ),
-        ...(hidden
-          ? [`- ${hidden} more unread posts. Read them with verifold_board.`]
+        ...shown.map((post) => postLine(post, options.name, waking.has(post))),
+        ...(left.length
+          ? [
+              `- ${left.length} more unread posts. Read them with verifold_board.`,
+            ]
           : []),
       ],
       read: {
         readThrough: Math.max(read.readThrough, through),
-        seen: [...seen].filter((id) => number(id) > through),
+        seen: after,
       },
     };
   }

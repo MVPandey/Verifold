@@ -39,7 +39,8 @@ import { TaskManager } from '../src/cli/tasks.ts';
  * request takes the first unused turn whose `when` text it contains, or that
  * has no `when`. A call runs Verifold's tool over the SDK MCP channel. Calls
  * named WRITE write a file, WAIT keep the turn running until a steered message
- * arrives, and EXIT stop the process.
+ * arrives, EXIT stop the process, and FAIL end the turn as failed. A call with
+ * an `id` uses it as its tool-use ID.
  */
 const claudeHost = `const fs = require('node:fs');
 const path = require('node:path');
@@ -78,7 +79,8 @@ const call = () => {
   }
   if (entry.name === 'WAIT') return;
   if (entry.name === 'EXIT') process.exit(1);
-  out({ type: 'control_request', request_id: 'mcp-' + turn + '-' + next, request: { subtype: 'mcp_message', server_name: 'verifold', message: { jsonrpc: '2.0', id: 100 + next, method: 'tools/call', params: { name: entry.name, arguments: entry.arguments, _meta: { 'claudecode/toolUseId': 'toolu-' + process.pid + '-' + turn + '-' + next } } } } });
+  if (entry.name === 'FAIL') { running = false; return out({ type: 'result', subtype: 'error_during_execution', is_error: true }); }
+  out({ type: 'control_request', request_id: 'mcp-' + turn + '-' + next, request: { subtype: 'mcp_message', server_name: 'verifold', message: { jsonrpc: '2.0', id: 100 + next, method: 'tools/call', params: { name: entry.name, arguments: entry.arguments, _meta: { 'claudecode/toolUseId': entry.id ?? ('toolu-' + process.pid + '-' + turn + '-' + next) } } } } });
 };
 require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
@@ -190,6 +192,8 @@ onLine((line) => {
 interface Call {
   readonly name: string;
   readonly arguments?: Record<string, unknown>;
+  /** The tool-use ID, when a test needs the same one in two processes. */
+  readonly id?: string;
 }
 
 interface Fixture {
@@ -290,7 +294,7 @@ async function fixture(
         claude: join(base, 'fake-claude'),
         codex: join(base, 'fake-codex'),
       },
-      onTurnEnd: (record) => owned.lab?.turnEnded(record),
+      onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
       onLimit: (host, signal) => {
         quota.record(host, signal);
         owned.lab?.limited(host, signal);
@@ -513,10 +517,10 @@ await test('an agent keeps going, backs off after turns that change nothing, and
       (await lab.inputs('d-1-alpha')).length >= 4 &&
       (await lab.inputs('d-2-beta')).length >= 3,
   );
-  // The mention reached claude-2 too, as an unread post in its next digest. Posts come oldest first.
+  // The mention reached claude-2 too, as an unread post in its next digest, after the post that woke it.
   assert.match(
     (await lab.inputs('d-2-beta'))[2] ?? '',
-    /look at layer 12[\s\S]*\[question, for you\] from the person: "Everyone: write down your bar/,
+    /\[question, for you\] from the person: "Everyone: write down your bar[\s\S]*look at layer 12/,
   );
 });
 
@@ -570,6 +574,9 @@ await test('with no free slot, an idle agent parks for a new one, and resumes wh
       'resume',
     ),
   );
+  // It resumed in the slot that held its record, so no session shows twice.
+  const ids = lab.sessions.views().map((view) => view.record.id);
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 await test('after a restart each agent resumes its session with a digest, and no post comes twice', async (t) => {
@@ -1646,6 +1653,7 @@ await test('a suspended lab does not start, and a process for one session runs n
   // Suspend pauses the running lab and says so. A suspended lab takes no new start.
   assert.equal(await quiet.suspend(), true);
   await assert.rejects(quiet.start('Another question.'), /moving the lab/);
+  await assert.rejects(quiet.restartAgent('a-1'), /moving the lab/);
   await quiet.close();
 });
 
@@ -1821,4 +1829,78 @@ await test('a lab that only shows offers no controls, long posts fold, and resea
     }),
     /A lab works on this run/,
   );
+});
+
+await test('a failed turn keeps nothing that it read, so its post comes again, once', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    { when: 'Check layer 12', calls: [{ name: 'FAIL' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.post({ text: '@claude-1 Check layer 12.' });
+  const shown = async (): Promise<number> =>
+    (await lab.inputs('d-1-alpha')).filter((input) =>
+      input.includes('Check layer 12'),
+    ).length;
+  // Only a completed turn keeps what it read: the post comes in the next digest again.
+  await until(async () => (await shown()) === 2);
+  // The turn after it completes and keeps the post, so it does not come a third time.
+  await delay(400);
+  assert.equal(await shown(), 2);
+});
+
+await test('a call from a new process is new, even when the harness gives it an ID used before', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          id: 'toolu-same',
+          arguments: { kind: 'question', text: 'First.' },
+        },
+        { name: 'EXIT' },
+      ],
+    },
+    {
+      when: 'started it again',
+      calls: [
+        {
+          name: 'verifold_post',
+          id: 'toolu-same',
+          arguments: { kind: 'question', text: 'Second.' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(
+    () =>
+      lab.lab.view()?.posts.some((post) => post.text === 'Second.') ?? false,
+  );
+  assert.ok(lab.lab.view()?.posts.some((post) => post.text === 'First.'));
+});
+
+await test('an agent whose first prompt fails waits, and the agent after it starts meanwhile', async (t) => {
+  let calls = 0;
+  const lab = await fixture(t, {
+    memory: () => ({
+      note: () => Promise.resolve('Noted.'),
+      digest: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new Error('The memory folder is unreadable.'))
+          : Promise.resolve('');
+      },
+    }),
+  });
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  await until(async () => (await lab.inputs('d-2-beta')).length >= 1);
+  assert.equal((await lab.inputs('d-1-alpha')).length, 0);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
 });

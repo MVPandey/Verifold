@@ -4,7 +4,6 @@ import {
   copyFile,
   lstat,
   mkdir,
-  open,
   readdir,
   readFile,
   realpath,
@@ -13,6 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { childEnvironment } from './harness.ts';
 
@@ -30,6 +30,31 @@ export interface Workspace {
   readonly branch: string | null;
   /** The start state: the commit that each version is compared with. */
   readonly start: string;
+}
+
+/** A commit ID: SHA-1 or SHA-256. */
+export const commitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** A saved workspace record, or undefined when it is not valid. Tasks and the lab read the same shape. */
+export function parseWorkspace(value: unknown): Workspace | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return undefined;
+  const entry = value as Record<string, unknown>;
+  return (entry.kind === 'git' || entry.kind === 'folder') &&
+    typeof entry.path === 'string' &&
+    /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(entry.path) &&
+    (entry.branch === null ||
+      (typeof entry.branch === 'string' &&
+        /^verifold\/[a-z0-9][a-z0-9-]{0,80}$/.test(entry.branch))) &&
+    typeof entry.start === 'string' &&
+    commitPattern.test(entry.start)
+    ? {
+        kind: entry.kind,
+        path: entry.path,
+        branch: entry.branch,
+        start: entry.start,
+      }
+    : undefined;
 }
 
 export interface ChangedFile {
@@ -79,6 +104,7 @@ function git(
   cwd: string,
   args: readonly string[],
   input?: string,
+  env: NodeJS.ProcessEnv = {},
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -104,7 +130,7 @@ function git(
         encoding: 'buffer',
         maxBuffer: 64 * 1024 * 1024,
         timeout: 60_000,
-        env: gitEnvironment(),
+        env: { ...gitEnvironment(), ...env },
       },
       (error, stdout, stderr) => {
         // check-ignore exits with 1 when no path matches.
@@ -208,7 +234,8 @@ async function contained(root: string, path: string): Promise<void> {
 /**
  * Regular files under `path` in a folder, within the limits. Symbolic links
  * are skipped. A `light` walk leaves out tool folders, files above
- * `lightFileBytes`, and every file after `lightBytes`, instead of failing.
+ * `lightFileBytes`, and every file after `lightBytes` or after `files`
+ * files, instead of failing. What it leaves out stays in the project folder.
  */
 async function walk(
   root: string,
@@ -218,6 +245,7 @@ async function walk(
   const found: string[] = [];
   let bytes = 0;
   const visit = async (rel: string): Promise<void> => {
+    if (light && found.length >= limits.files) return;
     const stats = await lstat(join(root, rel)).catch(() => null);
     if (!stats || stats.isSymbolicLink()) return;
     if (stats.isFile()) {
@@ -271,16 +299,17 @@ async function startFiles(
     '--',
     ...writable,
   ]);
-  if (changed.length > limits.files)
+  if (changed.length > limits.files && !light)
     throw new WorkspaceError(
       `The writable paths have more than ${limits.files} uncommitted changes.`,
     );
   const paths = changed.map((entry) => entry.slice(3));
   if (!light) return paths;
-  // New files above the size limit stay in the project folder. A deletion or a changed tracked file is copied.
+  // New files above the size limit stay in the project folder. A deletion or a changed tracked file is copied. After `files` files, the rest stays too.
   const kept: string[] = [];
   let bytes = 0;
   for (const [index, path] of paths.entries()) {
+    if (kept.length >= limits.files) break;
     const stats = await lstat(join(root, path)).catch(() => null);
     const size = stats?.isFile() ? stats.size : 0;
     const tracked = !changed[index]?.startsWith('??');
@@ -757,32 +786,81 @@ export async function folderState(
 }
 
 /**
- * A file as it is now in a workspace folder, read up to `bytes`, or null when
- * it is not a regular file inside the folder. A symbolic link, or a path that
- * leads outside the folder, reads as null.
+ * A lab direction's file as it is now, ignored files too, read through Git:
+ * Verifold never opens the path itself. Git adds it to a private index that
+ * is not the folder's own. Git does not follow a symbolic link: a link is
+ * stored as a link, and a path through a linked folder is refused. So an
+ * agent cannot make Verifold read a file outside its folder by a link. Null
+ * when the path is not a regular file in the folder, or it is larger than
+ * Verifold commits.
  */
-export async function readWorking(
+export async function readCurrent(
   root: string,
   workspace: Workspace,
   path: string,
-  bytes: number,
-): Promise<{ readonly content: Buffer; readonly size: number } | null> {
-  const folder = await realpath(join(root, workspace.path)).catch(() => null);
-  if (!folder) return null;
-  const file = join(folder, path);
-  const stats = await lstat(file).catch(() => null);
-  if (!stats?.isFile()) return null;
-  const real = await realpath(file).catch(() => null);
-  const rel = real ? relative(folder, real) : '..';
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
-  const handle = await open(real ?? file, 'r').catch(() => null);
-  if (!handle) return null;
+): Promise<Buffer | null> {
+  const target = join(root, workspace.path);
+  // A size check only: the content comes from Git, never from this path.
+  const stats = await lstat(join(target, path)).catch(() => null);
+  if (!stats?.isFile() || stats.size > limits.fileBytes) return null;
+  const index = join(
+    tmpdir(),
+    `verifold-index-${randomBytes(8).toString('hex')}`,
+  );
   try {
-    const content = Buffer.alloc(Math.min(stats.size, bytes));
-    const { bytesRead } = await handle.read(content, 0, content.length, 0);
-    return { content: content.subarray(0, bytesRead), size: stats.size };
+    const env = { GIT_INDEX_FILE: index };
+    await git(
+      target,
+      ['add', '--force', '--', `:(literal)${path}`],
+      undefined,
+      env,
+    );
+    const entry = (
+      await git(
+        target,
+        ['ls-files', '--stage', '-z', '--', `:(literal)${path}`],
+        undefined,
+        env,
+      )
+    )
+      .toString('utf8')
+      .split('\0')
+      .find((line) => line.endsWith(`\t${path}`));
+    // An index entry is `<mode> <id> <stage>\t<path>`. A link has mode 120000.
+    const [mode, id] = entry?.split('\t')[0]?.split(' ') ?? [];
+    return (mode === '100644' || mode === '100755') && id
+      ? await git(target, ['cat-file', 'blob', id])
+      : null;
+  } catch {
+    return null;
   } finally {
-    await handle.close();
+    await rm(index, { force: true });
+  }
+}
+
+/**
+ * The content of a file at a commit when it is a regular file there, or
+ * null. A symbolic link at that path reads as null, not as its target.
+ */
+export async function readFileAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+  path: string,
+): Promise<Buffer | null> {
+  const target = join(root, workspace.path);
+  try {
+    const entry = (await git(target, ['ls-tree', '-z', commit, '--', path]))
+      .toString('utf8')
+      .split('\0')
+      .find((line) => line.endsWith(`\t${path}`));
+    // A tree entry is `<mode> <type> <id>\t<path>`.
+    const [mode, , id] = entry?.split('\t')[0]?.split(' ') ?? [];
+    return (mode === '100644' || mode === '100755') && id
+      ? await git(target, ['cat-file', 'blob', id])
+      : null;
+  } catch {
+    return null;
   }
 }
 

@@ -129,6 +129,7 @@ export class SessionPool {
     await this.withRoom(
       () => this.check(id, 'resume'),
       (slot) => slot.resume(id),
+      id,
     );
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
   }
@@ -166,7 +167,7 @@ export class SessionPool {
 
   /** Continue a lab agent's paused session in a free slot, with its tools. */
   resumeAgent(id: string, tools: AgentTools): Promise<void> {
-    return this.use((slot) => slot.resume(id, tools));
+    return this.use((slot) => slot.resume(id, tools), id);
   }
 
   /**
@@ -181,6 +182,7 @@ export class SessionPool {
     await this.withRoom(
       () => this.check(id, 'restart'),
       (slot) => slot.restart(id),
+      id,
     );
     this.pausedList = this.pausedList.filter((entry) => entry.id !== id);
   }
@@ -252,10 +254,9 @@ export class SessionPool {
     return saved.every(Boolean);
   }
 
-  /** The slot of a session. A session that resumed in another slot is found in its live one. */
+  /** The slot of a session. A session resumes in the slot that holds its record, so it is in one slot only. */
   private slot(id: unknown): SessionManager | undefined {
-    const slots = this.slots.filter((slot) => slot.view()?.record.id === id);
-    return slots.find((slot) => slot.view()?.live) ?? slots[0];
+    return this.slots.find((slot) => slot.view()?.record.id === id);
   }
 
   private live(id: unknown): SessionManager {
@@ -282,23 +283,26 @@ export class SessionPool {
   private async withRoom<T>(
     check: () => Promise<void>,
     start: (slot: SessionManager) => Promise<T>,
+    session?: unknown,
   ): Promise<T> {
     if (this.full && this.options.makeRoom) {
       await check();
       if (!this.closing) await this.options.makeRoom();
     }
-    return this.use(start);
+    return this.use(start, session);
   }
 
   /**
    * Take a free slot at once, before any await, and run a start in it. The
-   * slot counts as taken until the start ends.
+   * slot counts as taken until the start ends. A resume of `session` takes
+   * the slot that holds its record when that slot is free.
    */
   private async use<T>(
     start: (slot: SessionManager) => Promise<T>,
+    session?: unknown,
   ): Promise<T> {
     if (this.closing) fail('Verifold is stopping. Start it again first.');
-    const slot = this.free();
+    const slot = this.free(session);
     this.taken.add(slot);
     try {
       return await start(slot);
@@ -307,15 +311,20 @@ export class SessionPool {
     }
   }
 
-  /** A slot for one more worker: a slot whose worker ended, or a new one. */
-  private free(): SessionManager {
+  /** A slot for one more worker: the free slot that holds `session`, a slot whose worker ended, or a new one. */
+  private free(session?: unknown): SessionManager {
     if (this.full)
       throw new PoolFullError(
         `${this.limit} ${this.limit === 1 ? 'agent runs' : 'agents run'}, the most that "Agents at once" allows. Wait for one to end, or raise the setting in Compute.`,
       );
-    const idle = this.slots.find(
-      (slot) => !slot.active && !this.taken.has(slot),
-    );
+    const open = (slot: SessionManager): boolean =>
+      !slot.active && !this.taken.has(slot);
+    const idle =
+      (session === undefined
+        ? undefined
+        : this.slots.find(
+            (slot) => open(slot) && slot.view()?.record.id === session,
+          )) ?? this.slots.find(open);
     if (idle) return idle;
     const slot: SessionManager = new SessionManager(this.root, {
       ...this.options,
