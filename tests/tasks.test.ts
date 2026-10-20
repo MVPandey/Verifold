@@ -416,6 +416,37 @@ await test('stale claims, dependencies, overlapping paths, and conflicts are ref
   assert.equal((await tasks.get(second))?.state, 'running');
 });
 
+await test("Accept never writes through a project link into a Git folder, and a task cannot write in Verifold's folder by another case", async (t) => {
+  const root = await project(t);
+  const sessions = new FakeSessions();
+  const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
+  await assert.rejects(
+    tasks.create({ ...fields, writable: '.Verifold/state' }),
+    /Git or Verifold data/,
+  );
+  await assert.rejects(
+    tasks.create({ ...fields, writable: '.GIT/hooks' }),
+    /Git or Verifold data/,
+  );
+  const id = await tasks.create(fields);
+  await tasks.start(id);
+  await turn(tasks, sessions, {
+    'results/hooks/post-checkout': 'echo hi\n',
+    'results/baseline.md': 'v1\n',
+  });
+  // After the start, the person's project has a link from results/hooks into Git's hooks.
+  await symlink(join('..', '.git', 'hooks'), join(root, 'results', 'hooks'));
+  await assert.rejects(
+    tasks.accept(id, 1, ['results/hooks/post-checkout', 'results/baseline.md']),
+    /results\/hooks\/post-checkout leads into Verifold's own folder or a Git folder\./,
+  );
+  assert.equal(existsSync(join(root, '.git', 'hooks', 'post-checkout')), false);
+  assert.equal(existsSync(join(root, 'results', 'baseline.md')), false);
+  assert.deepEqual(await tasks.accept(id, 1, ['results/baseline.md']), {
+    applied: ['results/baseline.md'],
+  });
+});
+
 await test('an accepted version reaches the tasks that wait for it, and a replaced one blocks their acceptance', async (t) => {
   const root = await project(t);
   const sessions = new FakeSessions();

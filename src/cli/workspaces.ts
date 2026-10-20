@@ -9,11 +9,12 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   writeFile,
 } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { childEnvironment } from './harness.ts';
 
 /**
@@ -67,7 +68,7 @@ export interface ChangedFile {
 export class WorkspaceError extends Error {}
 
 /** Limits on what one workspace copies and keeps. */
-const limits = {
+export const limits = {
   files: 5000,
   bytes: 200 * 1024 * 1024,
   fileBytes: 50 * 1024 * 1024,
@@ -181,7 +182,8 @@ export function projectPath(value: unknown): string {
       `Use a path inside the project, without wildcards: ${trimmed.slice(0, 80) || '(empty)'}.`,
     );
   const path = parts.join('/') || '.';
-  if (['.git', '.verifold'].includes(parts[0] ?? ''))
+  // A Mac's folders compare in lowercase.
+  if (['.git', '.verifold'].includes((parts[0] ?? '').toLowerCase()))
     throw new WorkspaceError(`${path} holds Git or Verifold data.`);
   return path;
 }
@@ -216,7 +218,11 @@ async function gitProject(root: string): Promise<boolean> {
   }
 }
 
-/** Fail when a path, or its nearest existing parent, resolves outside the project. */
+/**
+ * Fail when a path, or its nearest existing parent, resolves outside the
+ * project, or into Verifold's own folder or a Git folder. The names compare
+ * in lowercase, because a Mac's folders do.
+ */
 async function contained(root: string, path: string): Promise<void> {
   const base = await realpath(root);
   for (let current = path; ; current = dirname(current)) {
@@ -226,6 +232,12 @@ async function contained(root: string, path: string): Promise<void> {
       if (rel === '..' || rel.startsWith('../') || isAbsolute(rel))
         throw new WorkspaceError(
           `${relative(root, path)} leads outside the project.`,
+        );
+      // The rest of the path does not exist yet: it comes under `real`.
+      const parts = join(rel, relative(current, path)).toLowerCase().split(sep);
+      if (parts[0] === '.verifold' || parts.includes('.git'))
+        throw new WorkspaceError(
+          `${relative(root, path)} leads into Verifold's own folder or a Git folder.`,
         );
       return;
     }
@@ -739,14 +751,18 @@ export async function snapshot(
   workspace: Workspace,
   message: string,
   named: readonly string[] = [],
-): Promise<{ readonly commit: string; readonly linked: readonly string[] }> {
-  const { commit, linked } = await commitAll(
+): Promise<{
+  readonly commit: string;
+  readonly linked: readonly string[];
+  readonly skipped: readonly string[];
+}> {
+  const { commit, linked, skipped } = await commitAll(
     join(root, workspace.path),
     ['.'],
     message,
     { named, empty: false, lab: true },
   );
-  return { commit, linked };
+  return { commit, linked, skipped };
 }
 
 /**
@@ -972,14 +988,17 @@ export async function readFileAt(
   }
 }
 
-/** The content of a file at a commit, or null when it does not exist there. */
+/** The content of a file at a commit, or null when the commit has no file there, such as a folder. */
 async function fileAt(
   target: string,
   commit: string,
   path: string,
 ): Promise<Buffer | null> {
   try {
-    await git(target, ['cat-file', '-e', `${commit}:${path}`]);
+    const type = (await git(target, ['cat-file', '-t', `${commit}:${path}`]))
+      .toString('utf8')
+      .trim();
+    if (type !== 'blob') return null;
   } catch {
     return null;
   }
@@ -1046,25 +1065,33 @@ export async function copyAt(
 
 /**
  * Copy the selected files of a version into the project. Each file in the
- * project must still match its start content, or nothing is copied. New
- * content goes to temporary files first, then each one is renamed.
+ * project must still match its start content, or nothing is copied. A
+ * folder that the version replaces with a file counts as missing when the
+ * copy deletes every file in it. New content goes to temporary files in
+ * `.verifold/staging` first. Then the deletions come, so a file can take
+ * the place of a folder and a folder the place of a file, and each new
+ * file is renamed into place. `bases` names another commit whose content a
+ * file must match instead of the start, such as the version that came in
+ * before. `staged` runs after every check passed and every temporary file
+ * is written, before the first change in the project. When it throws,
+ * nothing is copied.
  */
 export async function integrate(
   root: string,
   workspace: Workspace,
   version: string,
   paths: readonly string[],
+  options: {
+    readonly bases?: ReadonlyMap<string, string>;
+    readonly staged?: () => Promise<void>;
+  } = {},
 ): Promise<
   | { readonly applied: readonly string[] }
   | { readonly conflicts: readonly string[] }
 > {
   const target = join(root, workspace.path);
-  const modes = new Map(
-    (await list(target, ['ls-tree', '-r', '-z', version])).map((line) => {
-      const [meta = '', path = ''] = line.split('\t');
-      return [path, meta.split(' ')[0] ?? ''];
-    }),
-  );
+  const tree = await treeAt(root, workspace, version, paths);
+  const deleted = new Set(paths.filter((path) => !tree.has(path)));
   const conflicts: string[] = [];
   const plan: { path: string; content: Buffer | null }[] = [];
   for (const path of paths) {
@@ -1075,37 +1102,176 @@ export async function integrate(
       ? null
       : stats.isFile()
         ? await readFile(destination)
-        : undefined;
-    const start = await fileAt(target, workspace.start, path);
+        : stats.isDirectory() && (await emptied(root, path, deleted))
+          ? null
+          : undefined;
+    const start = await fileAt(
+      target,
+      options.bases?.get(path) ?? workspace.start,
+      path,
+    );
     const unchanged =
       current === null
         ? start === null
         : current !== undefined && start !== null && current.equals(start);
     if (!unchanged) conflicts.push(path);
-    else plan.push({ path, content: await fileAt(target, version, path) });
+    else
+      plan.push({
+        path,
+        content: deleted.has(path)
+          ? null
+          : await git(target, ['cat-file', 'blob', tree.get(path)?.id ?? '']),
+      });
   }
   if (conflicts.length) return { conflicts };
-  const staged: { temporary: string; destination: string }[] = [];
+  const staging = join(
+    root,
+    '.verifold',
+    'staging',
+    randomBytes(8).toString('hex'),
+  );
+  const written: { temporary: string; destination: string }[] = [];
   try {
-    for (const { path, content } of plan) {
+    await mkdir(staging, { recursive: true, mode: 0o700 });
+    for (const [index, { path, content }] of plan.entries()) {
       if (content === null) continue;
-      const destination = join(root, path);
+      const temporary = join(staging, String(index));
+      await writeFile(temporary, content, { flag: 'wx', mode: 0o644 });
+      if (tree.get(path)?.mode === '100755') await chmod(temporary, 0o755);
+      written.push({ temporary, destination: join(root, path) });
+    }
+    await options.staged?.();
+    for (const { path, content } of plan)
+      if (content === null) {
+        await rm(join(root, path), { force: true });
+        await removeEmpty(root, dirname(join(root, path)));
+      }
+    for (const { temporary, destination } of written) {
       await mkdir(dirname(destination), { recursive: true });
       await contained(root, destination);
-      const temporary = `${destination}.${randomBytes(4).toString('hex')}.verifold`;
-      await writeFile(temporary, content, { flag: 'wx', mode: 0o644 });
-      if (modes.get(path) === '100755') await chmod(temporary, 0o755);
-      staged.push({ temporary, destination });
+      await rename(temporary, destination);
     }
-  } catch (error) {
-    for (const { temporary } of staged) await rm(temporary, { force: true });
-    throw error;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
   }
-  for (const { temporary, destination } of staged)
-    await rename(temporary, destination);
-  for (const { path, content } of plan)
-    if (content === null) await rm(join(root, path), { force: true });
   return { applied: plan.map(({ path }) => path) };
+}
+
+/**
+ * The folder at `path` holds only files that this copy deletes, so a file
+ * can take its place.
+ */
+async function emptied(
+  root: string,
+  path: string,
+  deleted: ReadonlySet<string>,
+): Promise<boolean> {
+  const entries = await readdir(join(root, path), {
+    recursive: true,
+    withFileTypes: true,
+  }).catch(() => null);
+  return (
+    entries !== null &&
+    entries.length <= limits.files &&
+    entries.every(
+      (entry) =>
+        entry.isDirectory() ||
+        deleted.has(
+          relative(root, join(entry.parentPath, entry.name))
+            .split(sep)
+            .join('/'),
+        ),
+    )
+  );
+}
+
+/** Remove the empty folders from `folder` up to the project folder, as Git does after a deletion. */
+async function removeEmpty(root: string, folder: string): Promise<void> {
+  for (
+    let at = folder;
+    at !== root && at.startsWith(`${root}${sep}`);
+    at = dirname(at)
+  )
+    try {
+      await rmdir(at);
+    } catch {
+      return;
+    }
+}
+
+/**
+ * Remove the temporary files that `integrate` wrote and did not move into
+ * place, for example when Verifold stopped during a copy. Only while no
+ * copy runs, such as at a start.
+ */
+export async function clearStaged(root: string): Promise<void> {
+  await rm(join(root, '.verifold', 'staging'), {
+    recursive: true,
+    force: true,
+  });
+}
+
+/**
+ * The mode, blob ID, and size of these files at a commit, by path. A path
+ * that the commit does not have is not in the map. A submodule has no size.
+ */
+export async function treeAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+  paths: readonly string[],
+): Promise<
+  Map<
+    string,
+    { readonly mode: string; readonly id: string; readonly bytes: number }
+  >
+> {
+  const found = new Map<
+    string,
+    { readonly mode: string; readonly id: string; readonly bytes: number }
+  >();
+  // A few hundred paths at a time keep the command line short.
+  for (let at = 0; at < paths.length; at += 200)
+    for (const line of await list(join(root, workspace.path), [
+      '--literal-pathspecs',
+      'ls-tree',
+      '-l',
+      '-z',
+      commit,
+      '--',
+      ...paths.slice(at, at + 200),
+    ])) {
+      // An entry is `<mode> <type> <id> <size>\t<path>`, and the path can hold a tab itself.
+      const tab = line.indexOf('\t');
+      const [mode = '', , id = '', size = ''] = line.slice(0, tab).split(/ +/);
+      found.set(line.slice(tab + 1), {
+        mode,
+        id,
+        bytes: /^\d+$/.test(size) ? Number(size) : 0,
+      });
+    }
+  return found;
+}
+
+/** Two commits of a workspace have the same files. */
+export async function sameTree(
+  root: string,
+  workspace: Workspace,
+  a: string,
+  b: string,
+): Promise<boolean> {
+  if (a === b) return true;
+  const [left, right] = (
+    await git(join(root, workspace.path), [
+      'rev-parse',
+      `${a}^{tree}`,
+      `${b}^{tree}`,
+    ])
+  )
+    .toString('utf8')
+    .trim()
+    .split('\n');
+  return left !== undefined && left === right;
 }
 
 /**

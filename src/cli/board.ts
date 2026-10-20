@@ -139,7 +139,7 @@ export function object(value: unknown): Record<string, unknown> | null {
 }
 
 /** A relative path inside the project: no root, no `..` part, and one line. */
-function safePath(value: unknown): value is string {
+export function safePath(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     value.length > 0 &&

@@ -524,6 +524,20 @@ Agents settle technical questions among themselves with checks. You get only pla
 - When an agent's direction ends, its open calls are withdrawn, and so are calls to stop that direction. A call that no longer makes sense when you answer it is withdrawn too. The board says why.
 - Calls, answers, and undo windows survive a restart. When Verifold stopped while it applied an answer or an undo, the board says so, and the agent that asked wakes with it. Such an answer does not stand, so the deadline asks again.
 
+**Bring in and sign off**
+
+Agents work on their own branches. Nothing reaches your project folder by itself.
+
+- **Bring in**, on a direction's row or in the answer, opens the direction's files in the side panel. Between the agent's turns, Verifold first commits the direction's folder, so you see exactly the files that come in. While the agent works, or while you hold its terminal, its files can be half written, so the panel shows its files as of its last turn and says so. Each file has a box to tick and its diff. Bring in copies the commit that you looked at, also when the agent commits again; **Show the newer files** takes the newer work.
+- Each file compares with its base: the version that came in from this direction last time, or else the direction's start. So a file that went back to its start, or that the agent deleted after it came in, shows its change too. A file that came in before with the same content shows when it came in. A deleted file is deleted in the project folder, and a file can take the place of a folder, and a folder the place of a file.
+- Not ticked at first: changes in `memory/`, scratch output such as files under `tmp/`, and settings that run code through your tools, at any depth: Git hooks (`.githooks/`, `.husky/`, lefthook), `.claude/`, `.codex/`, `.mcp.json`, editor settings such as `.vscode/` (tasks and launch files) and `.idea/`, `.envrc`, `.pre-commit-config.yaml`, and GitHub workflows and actions. When you tick one, the panel says that it can run code. Check its diff first.
+- Stays out, and the panel says why: links, submodules, files under `.verifold/` or a `.git` folder in any case, names that are too long or have control characters or backslashes, and files above 50 MB. Files that the direction's commit left out, such as files that Verifold can't copy safely, show as left out. Verifold never writes into `.verifold/` or a `.git` folder, also through a link in your project folder; Accept of a task does the same.
+- Each project file must still have the content of its base. When one changed, nothing comes in, and Verifold names the files. Untick them to bring in the others, or copy the agent's change by hand from its diff. So after one direction's file came in, another direction's change of the same file is such a change: directions never merge into each other. A file whose earlier version Verifold can't read is not ticked, and stops a bring-in until you copy it by hand. At most 1000 files and 200 MB come in at once.
+- Verifold writes the new files in `.verifold/staging` first. Then it deletes what the direction deleted and moves each new file into place. When Verifold stops while it changes the project folder, the next start finishes the copy by the content and mode of each file, and the board says so. A file that you changed meanwhile stays as it is. When it stops while it checks the files, nothing came in.
+- The lab keeps the base of each file that came in: its direction, commit, and time. The board says what came in, and the panel lists what you brought in before. When that record has no room for more files, Verifold refuses the bring-in and says so.
+- **Answer**, in the header, opens the lab's answer in the side panel: each direction's verdict, its evidence, how a check tested it, and what you brought in; the directions that are still open and the runs; and the calls that you answered. When every direction is closed or stopped, or you chose to stop at the end of the time budget, Home says that the lab ended, with **See the answer**.
+- **Sign off** keeps each direction's verdict, its newest commit, and the check behind its evidence, with the answer in one line if you write one. The board says so. A new sign-off replaces the last one. Signing off stops no agent: pause the lab or stop the directions for that.
+
 **Who a post wakes**
 A post wakes an agent when:
 
@@ -564,6 +578,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
   - **What it did** opens the agent in the side panel: its events, its transcript, and its commands.
   - **Diff** opens what the direction's branch changed since it started. Choose a file to see its changes.
   - **Terminal** opens the agent's own harness in a terminal, between its turns. The agent gets no turn while you hold it. When you return, its next turn follows.
+  - **Bring in** opens the direction's files to bring into your project folder.
   - **Stop** ends that direction's agent and cancels its runs. Its folder and branch stay.
 - The board shows the threads by direction. Each post shows its kind and its proof. A run or a diff opens in the side panel: a run with its command, commit, place, state, metrics, outputs, and the end of its log. **Cancel the run** stops a run that runs. A long post shows its start, and the rest folds under **Show the whole post**.
 - The one message box posts to the board. It completes `@claude-1`, `@d-2`, and `@all` as you type. `@d-2` puts your post in that direction, so it wakes that direction's agent. Enter sends, and Shift+Enter starts a new line.
