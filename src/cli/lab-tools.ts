@@ -107,3 +107,87 @@ export const labToolSpecs: readonly AgentTool[] = [
     },
   },
 ];
+
+/** The plan of record. Only the agent that opened the lab gets this tool. */
+export const planToolSpec: AgentTool = {
+  name: 'verifold_plan',
+  description:
+    'Post the plan of record: how you read the question, and the directions that attack it. Each direction has a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. Later, call it again to change the plan: list every open direction with its id, and new ones without an id.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      reading: {
+        type: 'string',
+        maxLength: 600,
+        description: 'How you read the question, in plain words.',
+      },
+      directions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 6,
+        items: {
+          type: 'object',
+          properties: {
+            id: {
+              ...directionId,
+              description: 'An open direction that this entry changes.',
+            },
+            title: { type: 'string', maxLength: 80 },
+            bar: {
+              type: 'string',
+              maxLength: 240,
+              description:
+                'What makes the direction hold up, in plain words, with its number.',
+            },
+            runs: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 20,
+              description:
+                'The repeat runs, such as seeds, that the bar needs.',
+            },
+            noise: {
+              type: 'string',
+              maxLength: 120,
+              description:
+                'The spread between repeat runs that counts as noise, such as ±0.02.',
+            },
+            buildsOn: {
+              type: 'array',
+              maxItems: 4,
+              items: {
+                type: 'object',
+                properties: {
+                  text: { type: 'string', maxLength: 120 },
+                  known: {
+                    type: 'boolean',
+                    description:
+                      'True: published or known work. False: new in this lab.',
+                  },
+                },
+                required: ['text', 'known'],
+                additionalProperties: false,
+              },
+            },
+            harness: { type: 'string', enum: ['claude', 'codex'] },
+          },
+          required: ['title', 'bar', 'runs', 'noise', 'harness'],
+          additionalProperties: false,
+        },
+      },
+      mine: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 5,
+        description: 'The index of your own direction. Default: 0.',
+      },
+      cost: {
+        type: 'string',
+        maxLength: 200,
+        description: 'What in the plan costs money, or that nothing does yet.',
+      },
+    },
+    required: ['reading', 'directions', 'cost'],
+    additionalProperties: false,
+  },
+};

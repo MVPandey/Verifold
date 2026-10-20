@@ -258,6 +258,10 @@ async function fixture(
       digest(): Promise<string>;
     };
     readonly gitignore?: string;
+    /** The project's team, the main harness first: the lab's first agent plans it. */
+    readonly harnesses?: readonly ('claude' | 'codex')[];
+    /** One hour of a time budget, short in a test. */
+    readonly hourMs?: number;
   } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
@@ -312,11 +316,13 @@ async function fixture(
       },
       makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
     });
+    const team = options.harnesses;
     const lab = new Lab(root, {
       sessions,
       quota,
-      timing,
+      timing: options.hourMs ? { ...timing, hourMs: options.hourMs } : timing,
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
+      ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
     });
     owned.lab = lab;
     return { sessions, lab };
@@ -2326,4 +2332,331 @@ await test('the question becomes the research topic only when the lab starts', a
     (await loadWorkspace(fx.root)).research?.topic,
     'Do LLMs store months on circles?',
   );
+});
+
+/** The plan of the first agent: three directions, its own first. */
+const firstPlan = {
+  reading:
+    'We read the question as: do cyclic words sit on curves that an SAE misses?',
+  directions: [
+    {
+      title: 'Circles',
+      bar: 'a probe places 60% of months right, beating the SAE',
+      runs: 3,
+      noise: '±0.02',
+      buildsOn: [
+        { text: 'Engels 2024', known: true },
+        { text: 'The SAE test', known: false },
+      ],
+      harness: 'claude',
+    },
+    {
+      title: 'Helix',
+      bar: 'it beats a circle for years',
+      runs: 3,
+      noise: '±0.02',
+      harness: 'codex',
+    },
+    {
+      title: 'Control',
+      bar: 'shuffled data still shows a circle',
+      runs: 2,
+      noise: '±0.05',
+      harness: 'claude',
+    },
+  ],
+  mine: 0,
+  cost: 'Nothing costs money yet.',
+};
+
+await test('the first agent posts the plan of record, and the lab opens its directions without a gate', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      calls: [
+        // One direction is not a plan.
+        {
+          name: 'verifold_plan',
+          arguments: { ...firstPlan, directions: [firstPlan.directions[0]] },
+        },
+        // Five are too many for a first plan.
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...firstPlan,
+            directions: [
+              ...firstPlan.directions,
+              { ...firstPlan.directions[1], title: 'Four' },
+              { ...firstPlan.directions[1], title: 'Five' },
+            ],
+          },
+        },
+        { name: 'verifold_plan', arguments: firstPlan },
+      ],
+    },
+  ]);
+  // Another agent cannot change the plan.
+  await lab.script('d-3-control', [
+    {
+      calls: [{ name: 'verifold_plan', arguments: firstPlan }],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 8 });
+
+  // The first agent works at once. No person action opens a direction.
+  await until(() => (lab.lab.view()?.directions.length ?? 0) === 3, 20_000);
+  await until(() => lab.lab.view()?.state.plan !== null);
+  const view = lab.lab.view();
+  assert.equal(view?.state.opener, 'a-1');
+  assert.equal(view?.state.budget?.hours, 8);
+  const plan = view?.state.plan;
+  assert.equal(plan?.post, 'p-1');
+  assert.deepEqual(plan?.directions, ['d-1', 'd-2', 'd-3']);
+  assert.equal(plan?.cost, 'Nothing costs money yet.');
+  const post = view?.posts.find((entry) => entry.id === 'p-1');
+  assert.equal(post?.kind, 'plan');
+  assert.equal(post?.author, 'a-1');
+  // The first agent keeps its folder: its direction becomes the first of the plan.
+  assert.deepEqual(
+    view?.directions.map((entry) => [
+      entry.direction.id,
+      entry.direction.title,
+      entry.direction.runs,
+      entry.direction.noise,
+      entry.agent.host,
+      entry.direction.workspace.path.split('/').at(-1),
+    ]),
+    [
+      ['d-1', 'Circles', 3, '±0.02', 'claude', 'd-1-plan-the-lab'],
+      ['d-2', 'Helix', 3, '±0.02', 'codex', 'd-2-helix'],
+      ['d-3', 'Control', 2, '±0.05', 'claude', 'd-3-control'],
+    ],
+  );
+  assert.deepEqual(view?.directions[0]?.direction.buildsOn, [
+    { text: 'Engels 2024', known: true },
+    { text: 'The SAE test', known: false },
+  ]);
+  const results = (await lab.lines('d-1-plan-the-lab', 'results.jsonl')) as {
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  assert.match(results[0]?.result.content[0]?.text ?? '', /2 to 4 directions/);
+  assert.match(results[1]?.result.content[0]?.text ?? '', /2 to 4 directions/);
+  assert.match(
+    results[2]?.result.content[0]?.text ?? '',
+    /Posted the plan p-1\. Your direction is d-1\. Opened d-2, d-3/,
+  );
+
+  // The new agents start with the plan in their first prompt, Codex too.
+  await until(
+    async () =>
+      (await lab.inputs('d-2-helix')).length > 0 &&
+      (await lab.inputs('d-3-control')).length > 0,
+  );
+  const helix = (await lab.inputs('d-2-helix'))[0] ?? '';
+  assert.match(helix, /The plan of record \(p-1\), from claude-1:/);
+  assert.match(
+    helix,
+    /Holds up if: "it beats a circle for years", over 3 runs; noise: "±0\.02"/,
+  );
+  assert.match(helix, /"Engels 2024" \(known\), "The SAE test" \(new\)/);
+  // The plan's opener prompt goes to the first agent only.
+  assert.match(
+    (await lab.inputs('d-1-plan-the-lab'))[0] ?? '',
+    /You also open the lab/,
+  );
+  assert.doesNotMatch(helix, /You also open the lab/);
+  await until(
+    async () => (await lab.lines('d-3-control', 'results.jsonl')).length > 0,
+  );
+  const refused = (await lab.lines('d-3-control', 'results.jsonl')) as {
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  assert.equal(refused[0]?.result.isError, true);
+  assert.match(
+    refused[0]?.result.content[0]?.text ?? '',
+    /Only the agent that opened the lab changes its plan/,
+  );
+
+  // The desk shows the plan first, with each bar.
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /<h2 id="plan-title">Plan of record<\/h2>/);
+  assert.match(
+    html,
+    /<th scope="row">Helix<\/th><td>it beats a circle for years · 3 runs · noise ±0\.02<\/td>/,
+  );
+  assert.match(html, /Engels 2024 <span class="fine">\(known\)<\/span>/);
+  assert.match(html, /data-action="lab-reply" data-post="p-1"/);
+  assert.match(html, /Time budget: 8 h, due/);
+  assert.ok(
+    html.indexOf('id="plan-title"') < html.indexOf('id="directions-title"'),
+  );
+});
+
+await test('a reply to the plan wakes its author, and a change of the plan wakes the agents whose directions it changed', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  const amended = {
+    ...firstPlan,
+    reading: 'Years need their own bar.',
+    directions: [
+      { ...firstPlan.directions[0], id: 'd-1' },
+      {
+        ...firstPlan.directions[1],
+        id: 'd-2',
+        bar: 'it beats a circle for years by 0.05',
+      },
+      { ...firstPlan.directions[2], id: 'd-3' },
+    ],
+  };
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      calls: [{ name: 'verifold_plan', arguments: firstPlan }],
+    },
+    {
+      when: 'Tighten the helix bar',
+      calls: [
+        // A change that leaves out an open direction is refused: only the person stops one.
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...amended,
+            directions: amended.directions.slice(0, 2),
+          },
+        },
+        // A direction keeps its harness.
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...amended,
+            directions: [
+              amended.directions[0],
+              { ...amended.directions[1], harness: 'claude' },
+              amended.directions[2],
+            ],
+          },
+        },
+        { name: 'verifold_plan', arguments: amended },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(() => lab.lab.view()?.state.plan !== null, 20_000);
+  // The first agent's turns end; then the person replies to the plan.
+  await until(async () => (await lab.inputs('d-1-plan-the-lab')).length >= 3);
+  await lab.lab.post({ text: 'Tighten the helix bar.', replyTo: 'p-1' });
+  await until(() => lab.lab.view()?.state.plan?.post !== 'p-1');
+  const view = lab.lab.view();
+  const plan = view?.state.plan;
+  const post = view?.posts.find((entry) => entry.id === plan?.post);
+  assert.equal(post?.kind, 'plan');
+  assert.equal(post?.replyTo, 'p-1');
+  assert.equal(post?.text, 'Years need their own bar.');
+  assert.deepEqual(post?.mentions, ['a-2']);
+  assert.equal(
+    view?.directions[1]?.direction.bar,
+    'it beats a circle for years by 0.05',
+  );
+  const results = (await lab.lines('d-1-plan-the-lab', 'results.jsonl')) as {
+    result: { content: { text: string }[] };
+  }[];
+  assert.match(
+    results[1]?.result.content[0]?.text ?? '',
+    /List every open direction with its id: d-3/,
+  );
+  assert.match(
+    results[2]?.result.content[0]?.text ?? '',
+    /d-2 runs on Codex\. A direction keeps its harness/,
+  );
+  // The changed direction's agent wakes with the new plan.
+  await until(async () =>
+    (await lab.inputs('d-2-helix')).some((input) =>
+      input.includes(`[plan, for you] from claude-1, reply to p-1`),
+    ),
+  );
+  assert.match(
+    (await lab.inputs('d-2-helix')).at(-1) ?? '',
+    /Holds up if: "it beats a circle for years by 0\.05"/,
+  );
+});
+
+await test('when the time budget ends the lab pauses, Needs you asks for more time, and more time resumes it', async (t) => {
+  const lab = await fixture(t, { hourMs: 1500 });
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 5_000);
+  // No continuation starts after the deadline.
+  const count = (await lab.inputs('d-1-alpha')).length;
+  await delay(300);
+  assert.equal((await lab.inputs('d-1-alpha')).length, count);
+  await until(
+    () =>
+      lab.lab
+        .view()
+        ?.posts.some((post) =>
+          /The time budget of 1 hour ended, so the lab paused\./.test(
+            post.text,
+          ),
+        ) ?? false,
+  );
+  await assert.rejects(lab.lab.resume(), /The time budget ended/);
+  await assert.rejects(lab.lab.extend('0'), /whole hours, from 1 to 168/);
+  const html = renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+    session: null,
+    controllable: true,
+    lab: lab.lab.view(),
+  }).html;
+  assert.match(html, /The time budget ended/);
+  assert.match(html, /data-action="lab-budget" data-hours="2"/);
+  // A lab that its budget paused offers no plain Resume: more time resumes it.
+  assert.doesNotMatch(html, /data-action="lab-resume"/);
+
+  await lab.lab.extend('2');
+  const state = lab.lab.view()?.state;
+  assert.equal(state?.pausedAt, null);
+  assert.equal(state?.pausedFor, null);
+  assert.equal(state?.budget?.hours, 3);
+  assert.ok(Date.parse(state?.budget?.deadline ?? '') > Date.now());
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('The person gave the lab 2 more hours.'),
+    ),
+  );
+});
+
+await test('a lab from before plans and time budgets still loads', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude', bar: 'x' });
+  await lab.lab.close();
+  // Leave out every field that plans and time budgets added.
+  const path = join(lab.root, '.verifold', 'lab.json');
+  const old = JSON.parse(await readFile(path, 'utf8')) as Record<
+    string,
+    unknown
+  > & { directions: Record<string, unknown>[] };
+  for (const key of ['opener', 'plan', 'budget', 'pausedFor']) delete old[key];
+  for (const direction of old.directions)
+    for (const key of ['runs', 'noise', 'buildsOn']) delete direction[key];
+  await writeFile(path, JSON.stringify(old));
+  const reloaded = new Lab(lab.root, { sessions: lab.sessions, timing });
+  await reloaded.load();
+  t.after(() => reloaded.close());
+  const state = reloaded.view()?.state;
+  assert.equal(state?.plan, null);
+  assert.equal(state?.opener, null);
+  assert.equal(state?.budget, null);
+  // A paused lab from before was paused by the person.
+  assert.equal(state?.pausedFor, 'person');
+  assert.equal(state?.directions[0]?.bar, 'x');
+  assert.equal(state?.directions[0]?.runs, null);
+  assert.deepEqual(state?.directions[0]?.buildsOn, []);
+  await reloaded.resume();
+  assert.equal(reloaded.view()?.state.pausedAt, null);
 });
