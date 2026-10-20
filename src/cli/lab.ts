@@ -567,6 +567,17 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
   };
 }
 
+/**
+ * Whether the project's current run has a lab, read the way the owner reads
+ * it: an unreadable `lab.json` counts as no lab in both. For CLI commands
+ * that run without the owner.
+ */
+export async function labOnDisk(root: string): Promise<boolean> {
+  return (
+    parseState(await readObject(join(root, '.verifold', 'lab.json'))) !== null
+  );
+}
+
 /** The folder name of a direction: its ID and a short form of its title. */
 function slug(id: string, title: string): string {
   const words = title
@@ -751,36 +762,39 @@ export class Lab {
   }
 
   /**
-   * Start the lab on a question. The run's guard gives the lab the run in
-   * the same step in which it checks that no research step runs and that
-   * the coordinator's team does not own it. A start that fails gives it back.
+   * Start the lab on a question. The run's guard checks that no research
+   * works and that the coordinator's team does not own the run, and the lab
+   * takes the run under the same lock. A start that fails leaves nothing.
    */
   start(question: unknown): Promise<void> {
     return this.serial(async () => {
       if (this.suspended || this.moving) fail(movingText);
       if (this.state) fail('The lab already runs.');
       const asked = text(question, labLimits.question, 'the question');
-      const release = this.options.team?.claim('lab') ?? (() => {});
-      this.state = {
-        schemaVersion: 1,
-        question: asked,
-        startedAt: new Date().toISOString(),
-        pausedAt: null,
-        handles: { claude: 0, codex: 0 },
-        directions: [],
+      const take = async (): Promise<void> => {
+        this.state = {
+          schemaVersion: 1,
+          question: asked,
+          startedAt: new Date().toISOString(),
+          pausedAt: null,
+          handles: { claude: 0, codex: 0 },
+          directions: [],
+        };
+        try {
+          await mkdir(join(this.folder, 'agents'), {
+            recursive: true,
+            mode: 0o700,
+          });
+          await this.stateFile.save();
+        } catch (error) {
+          // The lab did not start: nothing of it stays in memory, so the run is free again.
+          this.state = null;
+          throw error;
+        }
       };
-      try {
-        await mkdir(join(this.folder, 'agents'), {
-          recursive: true,
-          mode: 0o700,
-        });
-        await this.stateFile.save();
-      } catch (error) {
-        // The lab did not start: nothing of it stays in memory, and the run is free again.
-        this.state = null;
-        release();
-        throw error;
-      }
+      await (this.options.team
+        ? this.options.team.exclusive('lab', take)
+        : take());
       this.watch();
     });
   }

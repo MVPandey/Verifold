@@ -326,7 +326,6 @@ async function changeRun(
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
   labRun: Lab | undefined,
-  team: RunTeam | undefined,
   restore?: unknown,
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
@@ -365,16 +364,14 @@ async function changeRun(
     // The records moved in part or not at all. The lab reads them again and works as before.
     await labRun?.reload();
     if (paused) await labRun?.resume().catch(() => {});
-    await team?.reload();
     throw error;
   }
   memory?.schedule();
   try {
     await coordinator?.reload();
   } finally {
-    // The records moved, so the lab and the run's team are read again even when the coordinator's reload fails.
+    // The records moved, so the lab is read again even when the coordinator's reload fails.
     await labRun?.reload();
-    await team?.reload();
   }
   research?.clear();
   await sessions.forget();
@@ -554,8 +551,8 @@ async function act(
   compute: Compute | undefined,
   root: string,
   body: Record<string, unknown>,
-  memory?: ProjectMemory,
-  labDesk?: LabDesk,
+  memory: ProjectMemory | undefined,
+  labDesk: LabDesk,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -607,14 +604,13 @@ async function act(
       tasks,
       coordinator,
       memory,
-      labDesk?.lab,
-      labDesk?.team,
+      labDesk.lab,
       body.action === 'restore' ? body.archive : undefined,
     );
     return 200;
   }
   if (typeof body.action === 'string' && body.action.startsWith('lab-'))
-    return labDesk ? labRequest(labDesk, body) : 400;
+    return labRequest(labDesk, body);
   // The message box: to research, the coordinator, a task agent, or a session that the person started.
   // The words can also start a new coordinator or a new agent.
   if (body.action === 'message') {
@@ -1016,7 +1012,14 @@ export async function startDesk(
           'Content-Type': 'application/json; charset=utf-8',
         })
         .end(
-          JSON.stringify(status === 200 ? { ok: true } : { error: message }),
+          JSON.stringify(
+            status === 200
+              ? { ok: true }
+              : // A slow lab action goes on in the background, and the lab view shows how it ends.
+                status === 202
+                ? { ok: true, pending: true }
+                : { error: message },
+          ),
         );
       return;
     }
@@ -1381,9 +1384,16 @@ export async function startDesk(
             ...(coordinator ? { coordinator: coordinator.view() } : {}),
             ...(compute ? { compute: compute.view() } : {}),
             ...(labDesk.lab
-              ? { lab: labDesk.lab.view(), labWork: labDesk.work }
+              ? {
+                  lab: labDesk.lab.view(),
+                  labWork: labDesk.work,
+                  // The offer shows exactly when the run's guard would let a lab start here.
+                  labCanStart:
+                    labDesk.lab.runs &&
+                    !labDesk.lab.exists &&
+                    !(await labDesk.team?.refusal('lab')),
+                }
               : {}),
-            ...(labDesk.team ? { team: labDesk.team.team } : {}),
             ...(tasks ? { archives: await listArchives(root) } : {}),
             ...(tasks
               ? {

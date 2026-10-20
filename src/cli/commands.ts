@@ -38,8 +38,8 @@ import { TaskManager, type TaskPlace } from './tasks.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
-import { Lab } from './lab.ts';
-import { labOnDisk, labWorks, RunTeam } from './team.ts';
+import { Lab, labOnDisk } from './lab.ts';
+import { labWorks, RunTeam } from './team.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -572,14 +572,13 @@ async function serveDesk(
       } = {};
       // One run has one team: the coordinator's team or a lab. Every start of either one asks this guard.
       const team = new RunTeam({
+        lab: () => owned.lab?.exists ?? false,
+        coordinator: async () =>
+          Boolean(
+            owned.coordinator?.view()?.state ||
+              (await owned.tasks?.list())?.length,
+          ),
         researchBusy: () => owned.runner?.busy ?? false,
-        read: async () =>
-          owned.lab?.exists
-            ? 'lab'
-            : (await owned.tasks?.list())?.length ||
-                owned.coordinator?.view()?.state
-              ? 'coordinator'
-              : null,
       });
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);
@@ -673,7 +672,7 @@ async function serveDesk(
           // The messages that waited for research wait for the coordinator now, also one that the person starts later.
           await tasks.passToCoordinator();
         },
-        blocked: () => team.refusal('coordinator'),
+        team,
         inbox: {
           post: (text) => tasks.post('research', text),
           take: () => tasks.takeResearch(),
@@ -738,7 +737,6 @@ async function serveDesk(
         await sessions.load();
         await coordinator.load();
         await lab.load();
-        await team.reload();
         await compute.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
@@ -794,7 +792,7 @@ async function serveDesk(
           io.progress?.(
             'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
-        if (run.lab) await startLab(root, lab, research?.topic, io);
+        if (run.lab) await startLab(root, lab, research, io);
         else if (research) await runner.start(research);
         io.listen?.(
           (line) =>
@@ -897,7 +895,7 @@ function ownerLog(root: string): (line: string) => void {
 async function startLab(
   root: string,
   lab: Lab,
-  question: string | undefined,
+  research: ResearchOptions | undefined,
   io: CliIO,
 ): Promise<void> {
   if (lab.exists) {
@@ -907,14 +905,29 @@ async function startLab(
     return;
   }
   try {
-    const asked =
-      question ?? (await loadWorkspace(root)).research?.topic ?? undefined;
+    const workspace = await loadWorkspace(root);
+    const asked = research?.topic ?? workspace.research?.topic;
     if (!asked) {
       io.progress?.(
         'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
       );
       return;
     }
+    // The setup question stays with the project, so Home offers it again after Start over.
+    if (!workspace.research)
+      await changeWorkspace(root, (current) => {
+        if (!current) throw new Error('Run init first.');
+        return current.research
+          ? current
+          : {
+              ...current,
+              research: {
+                topic: asked,
+                autonomy: research?.autonomy ?? 'guided',
+                phase: 'needs-plan',
+              },
+            };
+      });
     await lab.start(asked);
     io.progress?.(
       'The lab started. Open a direction in the desk: each one gets its own agent.',

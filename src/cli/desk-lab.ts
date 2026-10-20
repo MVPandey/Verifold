@@ -39,7 +39,7 @@ const shownPosts = 120;
  * What a direction's state says, on its row and in the rail, and the face of
  * the rail. One table, read when the view renders.
  */
-function stateOf(
+export function stateOf(
   entry: DirectionView,
   clock: (value: string) => string,
 ): { readonly text: string; readonly face: string } {
@@ -123,19 +123,30 @@ function directionRow(
 const foldAt = 600;
 
 /**
- * The text of a post. A long one shows its start, and the rest folds. The
- * folded rest counts against `budget`, the characters that the whole view
- * still has for it; a post past the budget keeps only its start.
+ * UTF-8 bytes of escaped post text that one board view shows in full. The
+ * desk view stays under its 2 MB limit, also with long multibyte posts.
+ */
+const textBytes = 1_000_000;
+
+/**
+ * The text of a post. A short one shows whole and a long one shows its
+ * start, with the rest folded. Every post's text counts against `budget`;
+ * a post past the budget shows its start and says where the whole post is.
  */
 function postText(post: Post, budget: { left: number }): string {
-  if (post.text.length <= foldAt * 2)
-    return `<p class="pre">${e(post.text)}</p>`;
-  const start = `<p class="pre">${e(post.text.slice(0, foldAt))}…</p>`;
   const whole = e(post.text);
-  if (whole.length > budget.left)
-    return `${start}<p class="fine">The whole post is on the board, in .verifold/board/${e(post.id)}.json.</p>`;
-  budget.left -= whole.length;
-  return `${start}<details><summary>Show the whole post</summary><p class="pre">${whole}</p></details>`;
+  const bytes = Buffer.byteLength(whole);
+  if (post.text.length <= foldAt * 2 && bytes <= budget.left) {
+    budget.left -= bytes;
+    return `<p class="pre">${whole}</p>`;
+  }
+  const start = e(post.text.slice(0, foldAt));
+  budget.left -= Buffer.byteLength(start);
+  const head = `<p class="pre">${start}…</p>`;
+  if (bytes > budget.left)
+    return `${head}<p class="fine">The whole post is on the board, in .verifold/board/${e(post.id)}.json.</p>`;
+  budget.left -= bytes;
+  return `${head}<details><summary>Show the whole post</summary><p class="pre">${whole}</p></details>`;
 }
 
 function postHtml(
@@ -164,8 +175,7 @@ function board(
   name: (author: string) => string,
   clock: (value: string) => string,
 ): string {
-  // Folded text of long posts, newest first, stays well under the desk view's limit.
-  const budget = { left: 600_000 };
+  const budget = { left: textBytes };
   const posts = view.posts.slice(-shownPosts);
   if (!posts.length)
     return '<p class="empty-note">No posts yet. Agents post what they find here, with proof.</p>';
@@ -291,15 +301,6 @@ function composeBox(
   <div class="fields"><label class="field" for="lab-direction">About<select id="lab-direction"><option value="">Any direction</option>${state.directions.map((direction) => `<option value="${e(direction.id)}">${e(direction.title)}</option>`).join('')}</select></label></div>
   <div class="actions"><button type="button" class="primary" data-action="lab-post">Post</button></div>
   <p class="fine">${handles.length ? `Mention ${e(handles.join(', '))}, or @all. A post to nobody wakes every agent.` : 'Agents read your posts once their directions open.'}</p></section>`;
-}
-
-/** A lab agent in the rail's team: the face of its state and its line. */
-export function labMember(
-  entry: DirectionView,
-  clock: (value: string) => string,
-): { readonly face: string; readonly line: string } {
-  const { text, face } = stateOf(entry, clock);
-  return { face, line: text };
 }
 
 /** Home's offer to start a lab, for a project with no team at work. */
