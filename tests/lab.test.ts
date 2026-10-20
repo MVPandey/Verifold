@@ -2448,6 +2448,11 @@ await test('the first agent posts the plan of record, and the lab opens its dire
     { text: 'Engels 2024', known: true },
     { text: 'The SAE test', known: false },
   ]);
+  // The plan is kept before the harness gets its answer.
+  await until(
+    async () =>
+      (await lab.lines('d-1-plan-the-lab', 'results.jsonl')).length >= 4,
+  );
   const results = (await lab.lines('d-1-plan-the-lab', 'results.jsonl')) as {
     result: { isError?: boolean; content: { text: string }[] };
   }[];
