@@ -2827,6 +2827,28 @@ await test('when the time budget ends while the person paused the lab, more time
   assert.equal(lab.lab.view()?.state.pausedAt, null);
 });
 
+await test('a run event that waits in an agent record stays there after a restart', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await lab.lab.close();
+  const path = join(lab.root, '.verifold', 'lab', 'agents', 'a-1.json');
+  const record = JSON.parse(await readFile(path, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  const event = {
+    kind: 'run',
+    text: 'r-1 ended: exit 0 in 1 min.',
+    seq: 1,
+    at: new Date().toISOString(),
+  };
+  await writeFile(path, JSON.stringify({ ...record, events: [event] }));
+  await lab.restart();
+  assert.deepEqual(lab.lab.view()?.directions[0]?.agent.events, [event]);
+});
+
 await test('an agent whose plan Verifold stopped before it was kept starts after a restart, and the board says why', async (t) => {
   const lab = await fixture(t);
   await lab.lab.start('Do LLMs store months on circles?');
@@ -3008,7 +3030,19 @@ await test('runs stop when the agent or the person cancels them, or the directio
       calls: [
         {
           name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'One.', outputs: ['.'] },
+        },
+        {
+          name: 'verifold_run',
           arguments: { command: 'sleep 30', why: 'One.' },
+        },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'evidence',
+            text: 'Too early.',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
         },
       ],
     },
@@ -3051,6 +3085,15 @@ await test('runs stop when the agent or the person cancels them, or the directio
   // While its run runs, the agent waits for the run's end instead of its next turn.
   await delay(300);
   assert.equal((await lab.inputs('d-1-alpha')).length, 1);
+  const first = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  assert.match(first[0]?.result.content[0]?.text ?? '', /not the whole copy/);
+  // A run that still runs is no proof yet.
+  assert.match(
+    first[2]?.result.content[0]?.text ?? '',
+    /r-1 still runs\. Cite it once it ends\./,
+  );
   await lab.lab.cancelRun('r-1');
   await until(() => status('r-2') === 'cancelled');
   const ledger = lab.lab.view()?.ledger ?? [];

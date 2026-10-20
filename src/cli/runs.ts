@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import {
+  chmod,
   lstat,
   mkdir,
   open,
@@ -16,9 +17,9 @@ import {
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { number, object } from './board.ts';
+import { number, object, runId } from './board.ts';
 import { childEnvironment, type HarnessName } from './harness.ts';
-import { processStart, stopRecordedProcess } from './owner.ts';
+import { processStart, signalGroup, stopRecordedProcess } from './owner.ts';
 import { SessionActionError } from './session.ts';
 import { credentialPaths } from './session-hosts.ts';
 import { writePrivateFile } from './storage.ts';
@@ -53,6 +54,8 @@ export const runLimits = {
   outputPaths: 10,
   outputFiles: 200,
   outputBytes: 100 * 1024 * 1024,
+  /** Files and folders that Verifold looks at for the outputs of one run. */
+  outputEntries: 10_000,
   /** The log keeps its start up to this size. Past it, a cut line and the last `logTail` bytes. */
   logBytes: 20 * 1024 * 1024,
   logTail: 1024 * 1024,
@@ -84,6 +87,14 @@ const statuses: readonly RunStatus[] = [
   'cancelled',
   'interrupted',
 ];
+
+/** The run starts now or runs now. */
+export function runActive(run: RunRecord): boolean {
+  return run.status === 'queued' || run.status === 'running';
+}
+
+export const noSandboxText =
+  'This computer has no sandbox for runs: sandbox-exec on macOS, or bubblewrap on Linux. Verifold runs nothing here.';
 
 export interface RunOutput {
   /** The path in the run's folder, and in `outputs/`. */
@@ -158,9 +169,9 @@ export type Sandbox = (spec: SandboxSpec) => {
 /**
  * The macOS sandbox profile of a run. Everything is denied first. The run can
  * start programs, read files except the denied paths, and write only in its
- * folder. It has no network, no local sockets, and none of the system
- * services that start programs outside the sandbox, such as launchd or
- * LaunchServices. Probed on macOS 26.6.
+ * folder. It has no network, no local sockets, no GPU, and none of the
+ * system services that start programs outside the sandbox, such as launchd
+ * or LaunchServices. Probed on macOS 26.6.
  */
 function seatbeltProfile(denied: number): string {
   return [
@@ -182,7 +193,8 @@ function seatbeltProfile(denied: number): string {
           `(deny file-read* ${Array.from({ length: denied }, (_, index) => `(subpath (param "DENY_${index}"))`).join(' ')})`,
         ]
       : []),
-    '(allow file-write* (subpath (param "RUN")) (literal "/dev/null"))',
+    // The standard streams by path, such as `echo x > /dev/stderr`. A run has only its pipes open.
+    '(allow file-write* (subpath (param "RUN")) (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))',
     '(allow file-ioctl (literal "/dev/null"))',
   ].join('\n');
 }
@@ -268,18 +280,31 @@ export async function deniedPaths(home = homedir()): Promise<DeniedPath[]> {
 
 /**
  * The environment of a run: a child's environment without the keys of the
- * harnesses, which a run does not need, with its own temporary folder.
+ * harnesses and the cloud accounts, which a run without network cannot use,
+ * and without Git's variables. Git in the run finds no repository above its
+ * folder, so a script that records the commit reads `VERIFOLD_COMMIT`.
  */
-function runEnvironment(id: string, tmp: string): NodeJS.ProcessEnv {
+function runEnvironment(run: RunRecord, folder: string): NodeJS.ProcessEnv {
   const environment = childEnvironment();
   for (const name of Object.keys(environment))
-    if (/^(ANTHROPIC|OPENAI|CLAUDE|CODEX)_/.test(name))
+    if (
+      /^(ANTHROPIC|OPENAI|CLAUDE|CODEX|AWS|AZURE|GOOGLE|GEMINI|GIT)_/.test(name)
+    )
       delete environment[name];
-  return { ...environment, TMPDIR: tmp, VERIFOLD_RUN: id };
+  return {
+    ...environment,
+    TMPDIR: join(folder, 'tmp'),
+    GIT_CEILING_DIRECTORIES: folder,
+    VERIFOLD_RUN: run.id,
+    VERIFOLD_COMMIT: run.commit,
+  };
 }
 
-const runId = /^r-[1-9]\d{0,5}$/;
 const metricName = /^[A-Za-z0-9_.-]{1,64}$/;
+/** A metric line. A value that is no finite number, such as nan, counts as null. */
+const metricLine = new RegExp(
+  `^METRIC (${metricName.source.slice(1, -1)})=(\\S{1,64})$`,
+);
 
 function fail(message: string): never {
   throw new SessionActionError(message);
@@ -464,9 +489,13 @@ class RunLog {
     }
     if (head.length) {
       this.written += head.length;
-      this.writing = this.writing.then(async () => {
-        await this.handle.write(head);
-      });
+      this.writing = this.writing
+        .then(async () => {
+          await this.handle.write(head);
+        })
+        .catch(() => {
+          /* A write that failed, such as on a full disk, leaves a gap. The run goes on. */
+        });
     }
     return this.writing;
   }
@@ -482,10 +511,7 @@ class RunLog {
   }
 
   private metric(line: string): void {
-    // A value that is no finite number, such as nan, counts as null.
-    const match = /^METRIC ([A-Za-z0-9_.-]{1,64})=(\S{1,64})$/.exec(
-      line.replace(/\r$/, ''),
-    );
+    const match = metricLine.exec(line.replace(/\r$/, ''));
     if (!match?.[1] || !match[2]) return;
     if (!this.metrics.has(match[1]) && this.metrics.size >= runLimits.metrics)
       return;
@@ -582,8 +608,11 @@ export class RunLedger {
   /** The work of each run from its start to its end. Close waits for it. */
   private readonly work = new Set<Promise<void>>();
   private last = 0;
-  /** Who cancelled each run that stops now: `person` or an agent. */
+  /** Who cancelled each run that stops now, and why. */
   private readonly cancelled = new Map<string, string>();
+  private readonly reasons = new Map<string, string>();
+  /** The owner stops, or the lab moves: no run starts until the next load. */
+  private closed = false;
 
   constructor(root: string, options: RunLedgerOptions) {
     this.root = root;
@@ -608,9 +637,7 @@ export class RunLedger {
   /** The runs of an agent, or of the lab, that run now or start now. */
   running(agent?: string): number {
     return [...this.records.values()].filter(
-      (run) =>
-        (run.status === 'queued' || run.status === 'running') &&
-        (agent === undefined || run.agent === agent),
+      (run) => runActive(run) && (agent === undefined || run.agent === agent),
     ).length;
   }
 
@@ -640,6 +667,7 @@ export class RunLedger {
   async load(recover: boolean): Promise<void> {
     this.records.clear();
     this.last = 0;
+    this.closed = false;
     let names: string[] = [];
     try {
       names = await readdir(this.folder);
@@ -662,11 +690,12 @@ export class RunLedger {
     }
     if (!recover) return;
     for (const run of this.records.values()) {
-      if (run.status !== 'queued' && run.status !== 'running') continue;
-      if (this.live.has(run.id) || this.starting.has(run.id)) continue;
+      if (!runActive(run) || this.live.has(run.id) || this.starting.has(run.id))
+        continue;
       if (run.process)
         await stopRecordedProcess(run.process.pid, run.process.processStart);
-      await this.clear(run.id);
+      // A folder that cannot go stays. The record ends all the same.
+      await this.clear(run.id).catch(() => {});
       const next: RunRecord = {
         ...run,
         status: 'interrupted',
@@ -708,16 +737,14 @@ export class RunLedger {
     readonly minutes: number;
     readonly want: readonly string[];
   }): Promise<RunRecord> {
-    const sandbox = this.options.sandbox;
-    if (!sandbox)
-      fail(
-        'This computer has no sandbox for runs: sandbox-exec on macOS, or bubblewrap on Linux. Verifold runs nothing here.',
-      );
+    const sandbox = this.options.sandbox ?? fail(noSandboxText);
     const made = await this.options.serial(async () => {
       const known = [...this.records.values()].find(
         (run) => run.agent === input.agent && run.key === input.key,
       );
       if (known) return { run: known, known: true };
+      if (this.closed)
+        fail('Verifold stops or moves the lab now, so no run starts.');
       this.room(input.agent);
       const id = `r-${++this.last}`;
       const run: RunRecord = {
@@ -812,7 +839,7 @@ export class RunLedger {
         cwd: join(folder, 'tree'),
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: runEnvironment(run.id, join(folder, 'tmp')),
+        env: runEnvironment(run, folder),
       });
       const exited = new Promise<{ code: number | null; error: string | null }>(
         (resolve) => {
@@ -880,11 +907,13 @@ export class RunLedger {
           }),
         );
         exit = await exited;
+        // A cancel from here on comes too late: the run ended.
+        this.live.delete(run.id);
         clearTimeout(live.timer);
         clearTimeout(live.kill);
         stop = live.stop;
         // What is left of the group, such as a child in the background, stops with the run.
-        signal(pid, 'SIGKILL');
+        signalGroup(pid, 'SIGKILL');
       } else exit = await exited;
       // A process outside the group can keep the pipes open: the log waits a few seconds at most.
       await Promise.race([
@@ -941,12 +970,16 @@ export class RunLedger {
             note:
               [
                 exit.error ? `The run did not start: ${exit.error}` : '',
+                stop === 'cancelled' && this.reasons.get(run.id)
+                  ? `Cancelled: ${this.reasons.get(run.id)}`
+                  : '',
                 kept.note ?? '',
               ]
                 .filter(Boolean)
                 .join(' ') || null,
           };
           this.cancelled.delete(run.id);
+          this.reasons.delete(run.id);
           this.records.set(run.id, next);
           const saved = this.options.ended(next)
             ? { ...next, told: true }
@@ -1008,16 +1041,29 @@ export class RunLedger {
           );
     }
     const missing: string[] = [];
+    const failed: string[] = [];
+    const copied = new Set<string>();
     let bytes = 0;
+    let entries = 0;
     let full = false;
+    // One output that cannot be copied leaves the others and the metrics as they are.
     const copy = async (rel: string): Promise<void> => {
-      if (full) return;
+      if (full || copied.has(rel)) return;
+      if (++entries > runLimits.outputEntries) {
+        full = true;
+        return;
+      }
       const path = join(base, rel);
       const stats = await lstat(path).catch(() => null);
       if (!stats || stats.isSymbolicLink()) return;
       if (stats.isDirectory()) {
-        for (const name of (await readdir(path)).sort())
-          await copy(`${rel}/${name}`);
+        let names: string[] = [];
+        try {
+          names = (await readdir(path)).sort();
+        } catch {
+          failed.push(rel);
+        }
+        for (const name of names) await copy(`${rel}/${name}`);
         return;
       }
       if (!stats.isFile()) return;
@@ -1028,21 +1074,26 @@ export class RunLedger {
         full = true;
         return;
       }
-      const content = await readKept(
-        path,
-        top.dev,
-        runLimits.outputBytes - bytes,
-      );
-      if (!content) return;
-      const target = join(paths.record, 'outputs', rel);
-      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-      await writeFile(target, content, { flag: 'wx', mode: 0o600 });
-      bytes += content.length;
-      collected.outputs.push({
-        path: rel,
-        bytes: content.length,
-        sha256: createHash('sha256').update(content).digest('hex'),
-      });
+      try {
+        const content = await readKept(
+          path,
+          top.dev,
+          runLimits.outputBytes - bytes,
+        );
+        if (!content) return;
+        const target = join(paths.record, 'outputs', rel);
+        await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+        await writeFile(target, content, { flag: 'wx', mode: 0o600 });
+        copied.add(rel);
+        bytes += content.length;
+        collected.outputs.push({
+          path: rel,
+          bytes: content.length,
+          sha256: createHash('sha256').update(content).digest('hex'),
+        });
+      } catch {
+        failed.push(rel);
+      }
     };
     for (const rel of run.want) {
       // Each folder on the way is a real folder, not a link.
@@ -1056,23 +1107,34 @@ export class RunLedger {
       }
       const before = collected.outputs.length;
       if (inside) await copy(rel);
-      if (collected.outputs.length === before && !full) missing.push(rel);
+      if (collected.outputs.length === before && !full && !copied.has(rel))
+        missing.push(rel);
     }
     const notes = [
       collected.note ?? '',
       missing.length ? `No output file at ${missing.join(', ')}.` : '',
+      failed.length
+        ? `Verifold could not copy ${failed.slice(0, 5).join(', ')}.`
+        : '',
       full
-        ? `The outputs stop at ${runLimits.outputFiles} files or ${runLimits.outputBytes / 1024 / 1024} MB.`
+        ? `The outputs stop at ${runLimits.outputFiles} files, ${runLimits.outputBytes / 1024 / 1024} MB, or ${runLimits.outputEntries} entries.`
         : '',
     ].filter(Boolean);
     return { ...collected, note: notes.length ? notes.join(' ') : null };
   }
 
-  /** Remove a run's folder and its kept copy. Neither removal follows a link. */
+  /**
+   * Remove a run's folder and its kept copy. Neither removal follows a link.
+   * A run can leave folders without write permission, so a removal that
+   * fails makes the folders writable for their owner and tries once more.
+   */
   private async clear(id: string): Promise<void> {
     const paths = this.paths(id);
-    await rm(paths.folder, { recursive: true, force: true });
-    await rm(paths.kept, { recursive: true, force: true });
+    for (const path of [paths.folder, paths.kept])
+      await rm(path, { recursive: true, force: true }).catch(async () => {
+        await writable(path);
+        await rm(path, { recursive: true, force: true });
+      });
   }
 
   /**
@@ -1087,25 +1149,36 @@ export class RunLedger {
     const live = this.live.get(id);
     if (!live || live.stop) return;
     live.stop = why;
-    signal(live.pid, 'SIGTERM');
+    signalGroup(live.pid, 'SIGTERM');
     live.kill = setTimeout(
-      () => signal(live.pid, 'SIGKILL'),
+      () => signalGroup(live.pid, 'SIGKILL'),
       runLimits.graceMs,
     );
     live.kill.unref();
   }
 
-  /** Cancel a run that runs now. `by` is `person` or the agent that asked. Call it in the lab's queue. */
-  cancel(id: string, by: string): void {
+  /**
+   * Cancel a run that runs now. `by` is `person` or the agent that asked, and
+   * `why` goes into the record's note. Call it in the lab's queue.
+   */
+  cancel(id: string, by: string, why = ''): void {
     const run = this.records.get(id) ?? fail(`No run ${id} is in the lab.`);
-    if (run.status !== 'queued' && run.status !== 'running')
-      fail(`${id} already ended: ${runSummary(run)}.`);
-    if (!this.cancelled.has(id)) this.cancelled.set(id, by);
+    if (!runActive(run)) fail(`${id} already ended: ${runSummary(run)}.`);
+    if (!this.live.has(id) && !this.starting.has(id))
+      fail(`${id} ends now. Read it again in a moment.`);
+    if (!this.cancelled.has(id)) {
+      this.cancelled.set(id, by);
+      if (why) this.reasons.set(id, why);
+    }
     this.halt(id, 'cancelled');
   }
 
-  /** Stop every run of this process as interrupted, and wait until each record is final. */
+  /**
+   * Stop every run of this process as interrupted, and wait until each
+   * record is final. No run starts until the next load.
+   */
   async close(): Promise<void> {
+    this.closed = true;
     for (const id of [...this.starting.keys(), ...this.live.keys()])
       this.halt(id, 'interrupted');
     await Promise.all(this.work);
@@ -1177,11 +1250,10 @@ interface Collected {
   note: string | null;
 }
 
-/** Signal a run's process group. A group that already ended is no error. */
-function signal(pid: number, name: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, name);
-  } catch {
-    /* The group already exited. */
-  }
+/** Give the owner write and search permission on each folder under `path`, without following a link. */
+async function writable(path: string): Promise<void> {
+  const stats = await lstat(path).catch(() => null);
+  if (!stats?.isDirectory()) return;
+  await chmod(path, 0o700);
+  for (const name of await readdir(path)) await writable(join(path, name));
 }

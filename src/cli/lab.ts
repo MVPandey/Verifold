@@ -31,7 +31,9 @@ import type { LimitSignal } from './quota.ts';
 import {
   localSandbox,
   metricsText,
+  noSandboxText,
   RunLedger,
+  runActive,
   runLimits,
   runSummary,
   type RunLogPart,
@@ -727,7 +729,7 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
         typeof event.seq === 'number' &&
         typeof event.at === 'string' &&
         typeof event.text === 'string' &&
-        ['post', 'person', 'restart', 'quota', 'continue'].includes(
+        ['post', 'person', 'restart', 'quota', 'continue', 'run'].includes(
           event.kind as string,
         )
         ? [event as unknown as QueuedEvent<LabEvent>]
@@ -975,6 +977,7 @@ export class Lab {
       await this.load();
       this.suspended = false;
       this.moving = false;
+      if (this.runs) await this.tellRuns();
     });
     if (this.state) this.watch();
   }
@@ -985,17 +988,7 @@ export class Lab {
    */
   resumeAll(): void {
     if (!this.state || this.options.runs === false) return;
-    // A run that ended while Verifold stopped, or that a stop interrupted, wakes its agent now.
-    void this.serial(async () => {
-      for (const run of this.ledger.list())
-        if (
-          !run.told &&
-          run.status !== 'queued' &&
-          run.status !== 'running' &&
-          this.runEnded(run)
-        )
-          await this.ledger.told(run.id);
-    }).catch(() => {});
+    void this.serial(() => this.tellRuns()).catch(() => {});
     // A paused lab gets its note when the person resumes it. An agent without a session gets its first prompt.
     if (!this.state.pausedAt)
       for (const agent of this.agents.values())
@@ -1010,6 +1003,22 @@ export class Lab {
             0,
           );
     this.watch();
+  }
+
+  /**
+   * Each run that ended while its agent could not hear it, such as while
+   * Verifold stopped or the lab moved, wakes its agent now. In the lab's
+   * queue.
+   */
+  private async tellRuns(): Promise<void> {
+    for (const run of this.ledger.list())
+      if (!run.told && !runActive(run) && this.runEnded(run))
+        await this.ledger.told(run.id);
+  }
+
+  /** A run of the lab runs now, so the computer must stay awake. */
+  get running(): boolean {
+    return this.ledger.running() > 0;
   }
 
   view(): LabView | null {
@@ -1373,10 +1382,7 @@ export class Lab {
       };
       await this.stateFile.save();
       for (const run of this.ledger.list())
-        if (
-          run.direction === direction.id &&
-          (run.status === 'queued' || run.status === 'running')
-        )
+        if (run.direction === direction.id && runActive(run))
           this.ledger.cancel(run.id, 'person');
       if (agent) {
         this.loops.get(agent.id)?.cancel();
@@ -1421,6 +1427,7 @@ export class Lab {
         [{ kind: 'restart', text: 'The person started you again.' }],
         0,
       );
+      await this.tellRuns();
       this.kick();
     });
   }
@@ -2300,8 +2307,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             fail(
               `${run.id} is not your run. Ask its agent on the board instead.`,
             );
-          text(args.why, runLimits.why, 'why you cancel it');
-          this.ledger.cancel(run.id, id);
+          this.ledger.cancel(
+            run.id,
+            id,
+            text(args.why, runLimits.why, 'why you cancel it'),
+          );
           return `Verifold cancels ${run.id}. Its log and its outputs so far stay, and Verifold wakes you when it ends.`;
         });
       default:
@@ -2339,27 +2349,31 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       const outputs = Array.isArray(args.outputs) ? args.outputs : [];
       if (outputs.length > runLimits.outputPaths)
         fail(`Name up to ${runLimits.outputPaths} outputs.`);
+      const want = [...new Set(outputs.map((path) => projectPath(path)))];
+      if (want.includes('.'))
+        fail('Name files or folders in the copy, not the whole copy.');
       const draft = {
         agent,
         direction: this.direction(agent.direction),
         command: text(args.command, runLimits.command, 'the command'),
         why: text(args.why, runLimits.why, 'what the run tests'),
         minutes,
-        want: [...new Set(outputs.map((path) => projectPath(path)))],
+        want,
       };
       this.ledger.room(id);
       return draft;
     });
-    if (!this.ledger.sandboxed)
-      fail(
-        'This computer has no sandbox for runs: sandbox-exec on macOS, or bubblewrap on Linux. Verifold runs nothing here.',
-      );
+    if (!this.ledger.sandboxed) fail(noSandboxText);
     const made = await this.commit(
       draft.direction,
       `Verifold: commit for a run of ${draft.agent.handle}`,
     );
     await this.serial(async () => {
       if (!this.usable(id, generation)) fail(stoppedText);
+      // A pause, the deadline, or Start over that came during the commit wins.
+      const state = this.current();
+      if (state.pausedAt || this.ended(state))
+        fail('The lab is paused, so no run starts now.');
       await this.setHead(draft.direction, made);
     });
     const run = await this.ledger.start({
@@ -2374,11 +2388,12 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       minutes: draft.minutes,
       want: draft.want,
     });
-    if (this.usable(id, generation)) this.rt(id).posted = true;
+    if (runActive(run) && this.usable(id, generation))
+      this.rt(id).posted = true;
     const left = made.linked.length
       ? ` Files with more than one hard link stayed out of the commit, so the run does not have them: ${made.linked.slice(0, 5).join(', ')}.`
       : '';
-    return run.status === 'queued' || run.status === 'running'
+    return runActive(run)
       ? `Started ${run.id} at ${run.commit.slice(0, 7)} (local, up to ${run.minutes} min). Verifold wakes you when it ends.${left}`
       : `${run.id} ended at once: ${this.runLine(run)}${left}`;
   }
@@ -3060,7 +3075,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     const list = Array.isArray(value) ? value : [];
     if (list.length > boardLimits.artifacts)
       fail(`Give up to ${boardLimits.artifacts} artifacts.`);
-    return list.map((entry) => {
+    const request = list.map((entry): ProofRequest[number] => {
       const item = object(entry) ?? fail('An artifact is not valid.');
       if (item.type === 'file' || item.type === 'figure') {
         const path = projectPath(item.path);
@@ -3085,10 +3100,19 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         const run =
           this.ledger.get(item.run) ??
           fail(`No run ${String(item.run).slice(0, 20)} is in the lab.`);
+        if (runActive(run)) fail(`${run.id} still runs. Cite it once it ends.`);
         return { type: 'run', run: run.id };
       }
       return fail('An artifact is a file, a figure, a diff, or a run.');
     });
+    // A run cited twice counts once.
+    return request.filter(
+      (entry, index) =>
+        entry.type !== 'run' ||
+        request.findIndex(
+          (other) => other.type === 'run' && other.run === entry.run,
+        ) === index,
+    );
   }
 
   /**

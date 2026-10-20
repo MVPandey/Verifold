@@ -240,6 +240,10 @@ const morphing = {
       !(
         node instanceof HTMLElement &&
         (node.matches('svg.map-links') ||
+          // A run's log keeps the text that the page loaded into it.
+          (node.matches('pre[data-run-log]') &&
+            next instanceof HTMLElement &&
+            next.dataset.runLog === node.dataset.runLog) ||
           (node.matches('.diff-pane[data-page]') &&
             next instanceof HTMLElement &&
             next.dataset.task === node.dataset.task &&
@@ -1043,24 +1047,31 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
-/** The logs of runs that the person opened, by run ID, with the time that each one came. */
+/** The logs of runs that the person opened, by run ID, with the time that each one came. The newest 20 stay. */
 const runLogs = new Map<
   string,
   { readonly text: string; readonly at: number }
 >();
 const loadingLogs = new Set<string>();
+let logTimer: number | undefined;
 
-/** Fill each open run log from the ones loaded. A log older than 5 seconds loads again. */
+/**
+ * Fill each open run log from the ones loaded. A log older than 5 seconds
+ * loads again, also while the view does not change.
+ */
 function showRunLogs(): void {
-  for (const pre of content.querySelectorAll<HTMLElement>(
+  clearTimeout(logTimer);
+  const open = content.querySelectorAll<HTMLElement>(
     'details.run-log[open] [data-run-log]',
-  )) {
+  );
+  for (const pre of open) {
     const run = pre.dataset.runLog ?? '';
     const known = runLogs.get(run);
     if (known && pre.textContent !== known.text) pre.textContent = known.text;
     if ((!known || Date.now() - known.at > 5000) && !loadingLogs.has(run))
       void loadRunLog(run);
   }
+  if (open.length) logTimer = window.setTimeout(showRunLogs, 5000);
 }
 
 /** Load the end of one run's log. */
@@ -1089,7 +1100,9 @@ async function loadRunLog(run: string): Promise<void> {
   } finally {
     loadingLogs.delete(run);
   }
+  runLogs.delete(run);
   runLogs.set(run, { text, at: Date.now() });
+  for (const old of [...runLogs.keys()].slice(0, -20)) runLogs.delete(old);
   showRunLogs();
 }
 

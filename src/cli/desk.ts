@@ -48,6 +48,7 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
+import { runId } from './board.ts';
 import { startLabOn, type Lab } from './lab.ts';
 import type { LabWork } from './desk-lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
@@ -1331,7 +1332,7 @@ export async function startDesk(
       }
       const run = url.searchParams.get('run') ?? '';
       if (
-        !/^r-[1-9]\d{0,5}$/.test(run) ||
+        !runId.test(run) ||
         [...url.searchParams.keys()].some((key) => key !== 'run')
       ) {
         response.writeHead(400).end();
