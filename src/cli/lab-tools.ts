@@ -2,10 +2,26 @@ import type { AgentTool } from './session-hosts.ts';
 
 /**
  * The tools of a lab agent. Codex keeps the tools of a thread for its life, so
- * a change here raises `labToolsVersion`, and a Codex agent with an older
- * thread starts a new one.
+ * a change of a tool that a thread has raises `labToolsVersion`, and a Codex
+ * agent with an older thread starts a new one. A tool that only new threads
+ * get needs no new version: `verifold_plan` goes only to the agent that opens
+ * a lab, and that agent's thread is new.
  */
 export const labToolsVersion = 2;
+
+/** The limits of a plan of record. The tool schema and the lab's checks use the same ones. */
+export const planLimits = {
+  /** Open directions of a lab, and so entries of a plan. */
+  directions: 6,
+  reading: 600,
+  cost: 200,
+  title: 120,
+  bar: 280,
+  runs: 20,
+  noise: 120,
+  buildsOn: 4,
+  buildsOnText: 120,
+};
 
 /** The kinds of post that an agent can write. A rerun comes from a checker that Verifold starts. */
 export const agentPostKinds = [
@@ -107,3 +123,93 @@ export const labToolSpecs: readonly AgentTool[] = [
     },
   },
 ];
+
+/** The plan of record. Only the agent that opened the lab gets this tool. */
+export const planToolSpec: AgentTool = {
+  name: 'verifold_plan',
+  description:
+    'Post the plan of record: how you read the question, and the directions that attack it. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      reading: {
+        type: 'string',
+        maxLength: planLimits.reading,
+        description: 'How you read the question, in plain words.',
+      },
+      directions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: planLimits.directions,
+        items: {
+          type: 'object',
+          properties: {
+            id: {
+              ...directionId,
+              description:
+                'An open direction. Leave it out for a new direction.',
+            },
+            title: { type: 'string', maxLength: planLimits.title },
+            bar: {
+              type: 'string',
+              maxLength: planLimits.bar,
+              description:
+                'What makes the direction hold up, in plain words, with its number.',
+            },
+            runs: {
+              type: 'integer',
+              minimum: 1,
+              maximum: planLimits.runs,
+              description:
+                'The repeat runs, such as seeds, that the bar needs.',
+            },
+            noise: {
+              type: 'string',
+              maxLength: planLimits.noise,
+              description:
+                'The spread between repeat runs that counts as noise, such as ±0.02.',
+            },
+            buildsOn: {
+              type: 'array',
+              maxItems: planLimits.buildsOn,
+              items: {
+                type: 'object',
+                properties: {
+                  text: { type: 'string', maxLength: planLimits.buildsOnText },
+                  known: {
+                    type: 'boolean',
+                    description:
+                      'True: published or known work. False: new in this lab.',
+                  },
+                },
+                required: ['text', 'known'],
+                additionalProperties: false,
+              },
+            },
+            harness: {
+              type: 'string',
+              enum: ['claude', 'codex'],
+              description:
+                "The harness of a new direction's agent. An open direction keeps its harness.",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      mine: {
+        type: 'integer',
+        minimum: 0,
+        maximum: planLimits.directions - 1,
+        description:
+          'The index of your own direction in the first plan. Default: 0.',
+      },
+      cost: {
+        type: 'string',
+        maxLength: planLimits.cost,
+        description: 'What in the plan costs money, or that nothing does yet.',
+      },
+    },
+    required: ['reading', 'directions', 'cost'],
+    additionalProperties: false,
+  },
+};

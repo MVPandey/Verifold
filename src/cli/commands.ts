@@ -712,6 +712,14 @@ async function serveDesk(
           const workspace = await loadWorkspace(root).catch(() => null);
           return workspace?.host === host ? (workspace.model ?? null) : null;
         },
+        // The project's team: its main harness plans the lab.
+        harnesses: async () => {
+          const workspace = await loadWorkspace(root);
+          return [workspace.host, workspace.helper].filter(
+            (host): host is 'claude' | 'codex' =>
+              host === 'claude' || host === 'codex',
+          );
+        },
         // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
         runs: session === undefined,
         ...(io.progress ? { progress: io.progress } : {}),
@@ -914,9 +922,11 @@ async function startLab(
       return;
     }
     // The same start as the desk's: the setup question stays with the project.
-    await startLabOn(root, lab, asked, research?.autonomy);
+    const planned = await startLabOn(root, lab, asked, research?.autonomy);
     io.progress?.(
-      'The lab started. Open a direction in the desk: each one gets its own agent.',
+      planned
+        ? 'The lab started. Its first agent reads the question and posts a plan on the board in the desk.'
+        : 'The lab started without an agent that plans it. Open a direction in the desk: each one gets its own agent.',
     );
   } catch (error) {
     io.progress?.(

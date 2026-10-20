@@ -40,6 +40,8 @@ import type { LabView } from './lab.ts';
 import { labWorks } from './team.ts';
 import {
   stateOf,
+  labBudgetNeed,
+  minutesText,
   renderLab,
   renderLabStart,
   renderLabWork,
@@ -278,13 +280,9 @@ function elapsed(since: string): string {
 
 /** The time since a moment, in whole minutes or hours and minutes. */
 function duration(since: string): string {
-  const minutes = Math.max(
-    0,
-    Math.floor((Date.now() - Date.parse(since)) / 60_000),
+  return minutesText(
+    Math.max(0, Math.floor((Date.now() - Date.parse(since)) / 60_000)),
   );
-  if (minutes < 1) return 'under a minute';
-  if (minutes < 60) return `${minutes} min`;
-  return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 }
 
 /** The first sentence of a text, or its start, as a lead of at most `max` characters. */
@@ -1243,6 +1241,8 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   const record = snapshot.attempts.find((entry) => entry.id === latest)?.record;
   const since = record?.finishedAt ?? record?.startedAt ?? null;
   const phase = workspace.research?.phase;
+  const budget = live.lab ? labBudgetNeed(live.lab) : null;
+  if (budget) items.push({ ...budget, view: 'home', kind: 'Time budget' });
   // A lab run has no research to continue.
   if (
     live.research &&

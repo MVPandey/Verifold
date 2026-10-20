@@ -8,7 +8,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { once } from 'node:events';
@@ -27,6 +27,20 @@ import { changeWorkspace } from '../src/cli/storage.ts';
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+// An owner in these tests starts harness processes from PATH, such as the
+// agent that plans a lab. Fake claude and codex commands that stop at once
+// come first for the whole file, so no test reaches a real harness and no
+// test depends on the harnesses that this computer has.
+const fakeBin = await mkdtemp(join(tmpdir(), 'verifold-fake-bin-'));
+for (const name of ['claude', 'codex'])
+  await writeFile(join(fakeBin, name), '#!/bin/sh\nexit 1\n', {
+    mode: 0o700,
+  });
+process.env.PATH = `${fakeBin}:${process.env.PATH ?? ''}`;
+process.on('exit', () => {
+  rmSync(fakeBin, { recursive: true, force: true });
+});
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   for (let tries = 0; tries < 500; tries++) {
@@ -440,6 +454,18 @@ await test('an owner started with --lab starts a lab on the question of setup', 
   assert.equal(workspace.research?.topic, 'Do months lie on a circle?');
   // Research is autonomous unless the person chose otherwise, as everywhere in the project.
   assert.equal(workspace.research?.autonomy, 'autonomous');
+  // The lab's first agent, on the project's harness, plans it. No research step starts, and the lab has a time budget.
+  const started = JSON.parse(
+    await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
+  ) as {
+    opener: string | null;
+    budget: { hours: number } | null;
+    directions: { title: string; agent: string }[];
+  };
+  assert.equal(started.directions[0]?.title, 'Plan the lab');
+  assert.equal(started.opener, started.directions[0]?.agent);
+  assert.equal(started.budget?.hours, 8);
+  assert.equal(existsSync(join(root, '.verifold', 'runs')), false);
   owner.abort();
   await done.catch(() => {});
 });
