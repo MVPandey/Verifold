@@ -319,6 +319,7 @@ function runButton(run: RunRecord): string {
  */
 function proofHtml(
   artifact: Artifact,
+  index: number,
   ledger: ReadonlyMap<string, RunRecord>,
   post: Post,
 ): string {
@@ -333,7 +334,7 @@ function proofHtml(
       const where = artifact.direction ?? post.direction;
       const label = `diff · ${clip(artifact.paths.join(', '), 60)}`;
       return where
-        ? `<button type="button" class="proof" data-panel="diff" data-lab-direction="${e(where)}" data-post="${e(post.id)}">${e(label)}</button>`
+        ? `<button type="button" class="proof" data-panel="diff" data-lab-direction="${e(where)}" data-proof="${e(post.id)}.${index}">${e(label)}</button>`
         : `<span class="proof">${e(label)}</span>`;
     }
     case 'file':
@@ -509,7 +510,7 @@ function postHtml(
       ? planTable(view, name)
       : '';
   const proofs = post.artifacts.length
-    ? `<p class="proofs">${post.artifacts.map((artifact) => proofHtml(artifact, ledger, post)).join(' ')}</p>`
+    ? `<p class="proofs">${post.artifacts.map((artifact, index) => proofHtml(artifact, index, ledger, post)).join(' ')}</p>`
     : '';
   const reply =
     note || !runs
@@ -975,17 +976,18 @@ export function runPanel(
     kind: 'Run',
     title: `Run ${run.id}`,
     sub: `<span class="status${runActive(run) ? ' active' : run.status === 'failed' ? ' failed' : ''}">${e(runSummary(run))}</span>`,
-    body,
+    // A root of its own scopes the lab panel's styles.
+    body: `<div class="lab-panel">${body}</div>`,
   };
 }
 
 /**
- * What a direction's branch changed since its start, or, with `post`, the
- * diff that a post cites: its commits and its paths.
+ * What a direction's branch changed since its start, or, with `proof`, the
+ * diff that a proof cites (such as p-12.0): its commits and its paths.
  */
 export interface LabDiff {
   readonly direction: string;
-  readonly post: string | null;
+  readonly proof: string | null;
   readonly from: string;
   readonly to: string;
   readonly files: readonly ChangedFile[];
@@ -998,7 +1000,7 @@ export interface LabDiff {
 export function diffPanel(
   view: LabView,
   id: string | undefined,
-  post: string | undefined,
+  proof: string | undefined,
   diff: LabDiff | null,
 ): Panel {
   const direction = view.state.directions.find((entry) => entry.id === id);
@@ -1010,7 +1012,7 @@ export function diffPanel(
       body: '<p class="empty-note">This direction is not in the lab, for example after Start over.</p>',
     };
   const shown =
-    diff?.direction === direction.id && diff.post === (post ?? null)
+    diff?.direction === direction.id && diff.proof === (proof ?? null)
       ? diff
       : null;
   const files = shown?.files ?? null;
@@ -1019,14 +1021,15 @@ export function diffPanel(
     : '';
   const body =
     !shown || !files
-      ? `<p class="empty-note">${post ? 'Verifold could not read the diff of this post.' : "Verifold could not read this direction's branch."}</p>`
+      ? `<p class="empty-note">${proof ? 'Verifold could not read the diff of this post.' : "Verifold could not read this direction's branch."}</p>`
       : !files.length
-        ? `<p class="empty-note">${post ? 'The diff of this post changes no file.' : 'No file changed since the direction started.'}</p>`
-        : `<p class="fine">${files.length} ${files.length === 1 ? 'file' : 'files'} changed ${range}.</p><ul class="review-files">${files.map((file) => `<li><button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}"${post ? ` data-diff-post="${e(post)}"` : ''} aria-pressed="false"><code>${e(file.path)}</code></button> <span class="fine change-${file.change}">${file.change}</span></li>`).join('')}</ul><div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}" data-diff-post="${e(post ?? '')}" data-lab-to="${e(shown.to)}"><p class="fine">Choose a file to see its changes.</p></div>`;
+        ? `<p class="empty-note">${proof ? 'The diff of this post changes no file.' : 'No file changed since the direction started.'}</p>`
+        : `<p class="fine">${files.length} ${files.length === 1 ? 'file' : 'files'} changed ${range}.</p><ul class="review-files">${files.map((file) => `<li><button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}"${proof ? ` data-diff-proof="${e(proof)}"` : ''} aria-pressed="false"><code>${e(file.path)}</code></button> <span class="fine change-${file.change}">${file.change}</span></li>`).join('')}</ul><div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}" data-diff-proof="${e(proof ?? '')}" data-lab-to="${e(shown.to)}"><p class="fine">Choose a file to see its changes.</p></div>`;
   return {
     kind: 'Diff',
     title: direction.title,
-    sub: `<span class="fine">${post ? `The diff that ${e(post)} cites` : `${e(direction.workspace.branch ?? direction.workspace.path)}, since the direction started`}</span>`,
-    body,
+    sub: `<span class="fine">${proof ? `The diff that ${e(proof.split('.')[0] ?? proof)} cites` : `${e(direction.workspace.branch ?? direction.workspace.path)}, since the direction started`}</span>`,
+    // A root of its own scopes the lab panel's styles.
+    body: `<div class="lab-panel">${body}</div>`,
   };
 }

@@ -119,8 +119,6 @@ export interface SessionLaunch {
   /** The harness process and its start time, so a later owner can stop it safely. */
   readonly pid: number | null;
   readonly processStart: string | null;
-  /** Claude Code's cost estimate in this process. It grows with each turn. */
-  readonly costUsd?: number;
 }
 
 export interface SessionRecord {
@@ -135,10 +133,12 @@ export interface SessionRecord {
   readonly status: SessionStatus;
   readonly startedAt: string;
   readonly endedAt: string | null;
-  /** Claude Code's own estimate in its current or latest process. It is not a bill. */
+  /**
+   * Claude Code's own estimate. It is not a bill. A resumed conversation
+   * starts from what the earlier processes spent, so it covers the whole
+   * session (probed on Claude Code 2.1.304).
+   */
   readonly costUsd: number | null;
-  /** Claude Code's estimates of all the session's processes, added up. */
-  readonly spentUsd?: number;
   readonly events: readonly SessionEvent[];
   readonly commands: readonly CommandEntry[];
   readonly requests: readonly PendingRequest[];
@@ -159,6 +159,11 @@ export interface SessionRecord {
 export interface SessionView {
   readonly record: SessionRecord;
   readonly live: boolean;
+  /**
+   * A launch saves its record or starts the harness now, such as after a
+   * terminal. The session is busy, though it has no process yet.
+   */
+  readonly starting?: boolean;
   readonly saveFailed: boolean;
 }
 
@@ -537,35 +542,14 @@ function parseLaunch(value: unknown): SessionLaunch[] {
             typeof launch.processStart === 'string'
               ? launch.processStart
               : null,
-          ...(usdValue(launch.costUsd) ? { costUsd: launch.costUsd } : {}),
         },
       ]
     : [];
 }
 
 /** A dollar estimate: a finite number, zero or more. */
-function usdValue(value: unknown): value is number {
+export function usdValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-}
-
-/**
- * A new cost estimate of Claude Code. It counts from zero in each process,
- * so the session adds the growth in its current process to what its
- * earlier processes spent.
- */
-function spend(
-  record: SessionRecord,
-  costUsd: number,
-): Pick<SessionRecord, 'costUsd' | 'spentUsd' | 'launches'> {
-  const launch = record.launches.at(-1);
-  return {
-    costUsd,
-    spentUsd:
-      (record.spentUsd ?? 0) + Math.max(0, costUsd - (launch?.costUsd ?? 0)),
-    launches: launch
-      ? [...record.launches.slice(0, -1), { ...launch, costUsd }]
-      : record.launches,
-  };
 }
 
 /** A saved record. Harness processes can write in the project folder, so each field is checked. */
@@ -626,7 +610,6 @@ function parseRecord(value: unknown): SessionRecord | null {
       typeof record.costUsd === 'number' && Number.isFinite(record.costUsd)
         ? record.costUsd
         : null,
-    ...(usdValue(record.spentUsd) ? { spentUsd: record.spentUsd } : {}),
     events: list(record.events).flatMap(parseEvent).slice(-400),
     commands: list(record.commands).flatMap(parseCommand).slice(-1000),
     requests: [],
@@ -981,6 +964,8 @@ export class SessionManager {
   private readonly requests: { next: number };
   /** A launch is saving its record. No second start can begin. */
   private launching = false;
+  /** The session moves to its terminal now: Claude Code's process ended, and the terminal opens. */
+  private handing = false;
   /** Each close adds one. A start that began before a close starts no harness after it. */
   private generation = 0;
   /** The launch in progress, so close can wait for it. */
@@ -996,7 +981,10 @@ export class SessionManager {
   /** The transcript file of the current launch. */
   /** The harness's own terminal while the person holds it. */
   private native: Terminal | null = null;
-  /** A turn that the person started in the Codex terminal runs in the app-server. */
+  /**
+   * A turn that the person started in the Codex terminal runs in the
+   * app-server. Each new, ended, or paused process clears it.
+   */
   private nativeTurn = false;
   private transcript: {
     readonly writer: TranscriptWriter;
@@ -1022,6 +1010,7 @@ export class SessionManager {
           record: this.current,
           // A Claude Code session in its terminal has no structured process, but it is live.
           live: this.host !== null || this.native !== null,
+          ...(this.launching || this.handing ? { starting: true } : {}),
           saveFailed: this.saveFailed,
         }
       : null;
@@ -1119,6 +1108,7 @@ export class SessionManager {
       }));
     }
     let terminal: Terminal | undefined;
+    this.handing = true;
     try {
       terminal = await openTerminal({
         command: this.options.executables?.[record.host] ?? record.host,
@@ -1133,9 +1123,11 @@ export class SessionManager {
         },
       });
     } catch (error) {
+      this.handing = false;
       if (record.host === 'claude') await this.resumeAfterTerminal();
       throw error;
     }
+    this.handing = false;
     this.native = terminal;
     this.patch((current) => ({ ...current, status: 'terminal' }));
     this.event(
@@ -1177,7 +1169,16 @@ export class SessionManager {
     try {
       await this.launch();
     } catch {
-      /* The launch records its failure in the session. */
+      // A start that failed before its process leaves the conversation to resume later.
+      if (!this.host && this.current?.status === 'starting')
+        this.patch((current) => ({
+          ...current,
+          status: current.nativeSessionId !== null ? 'paused' : 'failed',
+          launches: ended(current.launches),
+        }));
+      // A lab agent's owner hears of it, so it can start the agent again.
+      if (!this.host && this.current?.agent)
+        this.options.onTurnEnd?.(this.current);
     }
   }
 
@@ -1484,6 +1485,7 @@ export class SessionManager {
     if (!this.host) fail('No session is running.');
     this.host.close();
     this.host = null;
+    this.nativeTurn = false;
     this.dropSteers();
     this.patch((record) => ({
       ...unanswered(record),
@@ -1551,6 +1553,7 @@ export class SessionManager {
     native?.close();
     this.host?.close();
     this.host = null;
+    this.nativeTurn = false;
     this.dropSteers();
     // A task keeps the stopped turn as a version. Its next turn resumes the session.
     const resumable = record.nativeSessionId !== null;
@@ -1632,6 +1635,8 @@ export class SessionManager {
       const executable = this.options.executables?.[record.host];
       const native = record.nativeSessionId;
       this.prompted = prompt !== undefined;
+      // A new process runs no turn of a terminal.
+      this.nativeTurn = false;
       this.host = startHostSession({
         host: record.host,
         cwd: this.folder(record),
@@ -1749,6 +1754,7 @@ export class SessionManager {
     if (event.type === 'exit') {
       if (!this.host) return;
       this.host = null;
+      this.nativeTurn = false;
       this.dropSteers();
       this.patch((current) => ({
         ...unanswered(current),
@@ -1938,7 +1944,7 @@ export class SessionManager {
         this.patch((current) => ({
           ...unanswered(current),
           status: 'idle',
-          ...(event.costUsd === undefined ? {} : spend(current, event.costUsd)),
+          ...(event.costUsd === undefined ? {} : { costUsd: event.costUsd }),
         }));
         this.event(
           'status',

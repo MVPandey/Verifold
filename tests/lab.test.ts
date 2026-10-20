@@ -41,6 +41,7 @@ import type {
 import type { Lease } from '../src/cli/leases.ts';
 import type { ComputeView } from '../src/cli/compute.ts';
 import { ptyLibrary } from '../src/cli/terminals.ts';
+import { TranscriptWriter } from '../src/cli/transcript.ts';
 import { secretGuard } from '../src/cli/runpod.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
@@ -6137,10 +6138,8 @@ await test('answers of pods survive the cut of old calls, and a Continue that Ve
 });
 
 await test("an agent's cost adds up what each of its sessions spent", () => {
-  const record = (id: string, spentUsd?: number) =>
-    ({ id, ...(spentUsd === undefined ? {} : { spentUsd }) }) as Parameters<
-      typeof addSpend
-    >[1];
+  const record = (id: string, costUsd: number | null) =>
+    ({ id, costUsd }) as Parameters<typeof addSpend>[1];
   const first = addSpend(
     undefined,
     record('20261020T100000000Z-aaaaaaaa', 0.5),
@@ -6150,14 +6149,17 @@ await test("an agent's cost adds up what each of its sessions spent", () => {
     session: '20261020T100000000Z-aaaaaaaa',
     seen: 0.5,
   });
-  // A session's sum grows: only the growth is new.
+  // Claude Code's estimate covers the whole session: only its growth is new.
   const grown = addSpend(first, record('20261020T100000000Z-aaaaaaaa', 0.8));
   assert.equal(grown?.usd, 0.8);
   // A new session starts from zero.
   const fresh = addSpend(grown, record('20261020T100000000Z-bbbbbbbb', 0.3));
   assert.ok(Math.abs((fresh?.usd ?? 0) - 1.1) < 1e-9);
-  // No sum, or the same one again, changes nothing.
-  assert.equal(addSpend(fresh, record('20261020T100000000Z-bbbbbbbb')), fresh);
+  // No estimate, or the same one again, changes nothing.
+  assert.equal(
+    addSpend(fresh, record('20261020T100000000Z-bbbbbbbb', null)),
+    fresh,
+  );
   assert.equal(
     addSpend(fresh, record('20261020T100000000Z-bbbbbbbb', 0.3)),
     fresh,
@@ -6168,8 +6170,8 @@ await test('the lab adds up the cost estimates of its Claude Code agents for the
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [
     { calls: [{ name: 'COST', arguments: { usd: 0.4 } }] },
-    // Claude Code counts from zero in each process.
-    { when: 'once more', calls: [{ name: 'COST', arguments: { usd: 0.6 } }] },
+    // A resumed Claude Code reports the estimate of the whole session.
+    { when: 'once more', calls: [{ name: 'COST', arguments: { usd: 1 } }] },
   ]);
   await lab.script('d-2-beta', [
     { calls: [{ name: 'COST', arguments: { usd: 0.25 } }] },
@@ -6188,17 +6190,14 @@ await test('the lab adds up the cost estimates of its Claude Code agents for the
     costLine(view, null),
     '≈$0.65 spent (Claude Code ≈$0.65) · Codex usage not counted',
   );
-  // The estimate lasts across a restart of Verifold, and a new process adds all that it spends.
+  // The estimate lasts across a restart of Verifold, and a resumed process adds only its growth.
   await lab.restart();
   assert.ok(Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 0.65) < 1e-9);
   await lab.lab.post({ text: '@claude-1 once more.' });
   await until(() => Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 1.25) < 1e-9);
-  // The session's record adds up both processes, and it is saved.
-  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
-  await until(
-    async () => (await readRecord(lab.root, session))?.spentUsd === 1,
-  );
-  assert.equal((await readRecord(lab.root, session))?.costUsd, 0.6);
+  // The agent's spend is saved with it.
+  await lab.restart();
+  assert.ok(Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 1.25) < 1e-9);
 });
 
 await test('the main screen: one header, a Needs-you line in its order, a disputed row, and every agent text escaped', async (t) => {
@@ -6383,8 +6382,13 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
     settings: { limitUsd: 20, askBeforePod: true, idleMinutes: 10 },
     gpus: null,
     gpusAt: null,
-    // The lab's pods count in its header, and a pod of a task does not.
+    // This lab's pods count in its header. A pod of a task does not, nor one of a lab before Start over.
     leases: [
+      lease('lease-0', [], {
+        state: 'ended',
+        billedUsd: 5,
+        requestedAt: '2020-01-01T00:00:00.000Z',
+      }),
       lease('lease-1', []),
       lease('lease-2', ['HF_TOKEN']),
       lease('lease-3', [], { state: 'ended', billedUsd: 0.65 }),
@@ -6509,12 +6513,16 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
           name: 'WRITE',
           arguments: { path: 'notes.md', text: '<b>hello</b>\n' },
         },
+        { name: 'WRITE', arguments: { path: 'data.md', text: 'data\n' } },
         {
           name: 'verifold_post',
           arguments: {
             kind: 'evidence',
             text: 'Notes.',
-            artifacts: [{ type: 'diff', paths: ['notes.md'] }],
+            artifacts: [
+              { type: 'diff', paths: ['notes.md'] },
+              { type: 'diff', paths: ['data.md'] },
+            ],
           },
         },
       ],
@@ -6606,31 +6614,49 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
   assert.match(panel, /data-lab-diff="later\.md"/);
   const cited = (
     (await (
-      await get(`/api/view?panel=diff&direction=d-1&post=${evidence}`)
+      await get(`/api/view?panel=diff&direction=d-1&proof=${evidence}.0`)
     ).json()) as { html: string }
   ).html;
   assert.match(cited, new RegExp(`The diff that ${evidence} cites`));
   assert.match(cited, /data-lab-diff="notes\.md"/);
   assert.doesNotMatch(cited, /data-lab-diff="later\.md"/);
+  assert.doesNotMatch(cited, /data-lab-diff="data\.md"/);
+  // Each diff of a post opens its own.
+  const second = (
+    (await (
+      await get(`/api/view?panel=diff&direction=d-1&proof=${evidence}.1`)
+    ).json()) as { html: string }
+  ).html;
+  assert.match(second, /data-lab-diff="data\.md"/);
+  assert.doesNotMatch(second, /data-lab-diff="notes\.md"/);
   assert.equal(
-    (await get(`/api/lab-diff?direction=d-1&file=later.md&post=${evidence}`))
+    (await get(`/api/lab-diff?direction=d-1&file=later.md&proof=${evidence}.0`))
       .status,
     404,
   );
   assert.match(
     (
       (await (
-        await get(`/api/lab-diff?direction=d-1&file=notes.md&post=${evidence}`)
+        await get(
+          `/api/lab-diff?direction=d-1&file=notes.md&proof=${evidence}.0`,
+        )
       ).json()) as { text: string }
     ).text,
     /\+<b>hello<\/b>/,
   );
-  // The post's proof chip names the post, so the page opens its cited diff.
+  // Each proof chip names its place in the post, so the page opens that diff.
+  const home = ((await (await get('/api/view')).json()) as { html: string })
+    .html;
   assert.match(
-    await (async () =>
-      ((await (await get('/api/view')).json()) as { html: string }).html)(),
+    home,
     new RegExp(
-      `data-panel="diff" data-lab-direction="d-1" data-post="${evidence}">diff · notes\\.md<`,
+      `data-panel="diff" data-lab-direction="d-1" data-proof="${evidence}\\.0">diff · notes\\.md<`,
+    ),
+  );
+  assert.match(
+    home,
+    new RegExp(
+      `data-panel="diff" data-lab-direction="d-1" data-proof="${evidence}\\.1">diff · data\\.md<`,
     ),
   );
   for (const path of [
@@ -6638,8 +6664,9 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     '/api/lab-diff?direction=d-1',
     '/api/lab-diff?direction=d-1&file=a&file=b',
     '/api/lab-diff?direction=d-1&file=notes.md&more=1',
-    '/api/lab-diff?direction=d-1&file=notes.md&post=x',
-    '/api/view?panel=diff&direction=d-1&post=x',
+    '/api/lab-diff?direction=d-1&file=notes.md&proof=x',
+    '/api/lab-diff?direction=d-1&file=notes.md&proof=p-1.4',
+    '/api/view?panel=diff&direction=d-1&proof=x',
     '/api/view?panel=run&run=x',
     '/api/view?panel=agent&agent=a-1&agent=a-2',
   ])
@@ -6771,5 +6798,121 @@ await test(
         input.includes('worked in your harness terminal'),
       ),
     );
+  },
+);
+
+await test(
+  'a Claude Code agent whose process starts again after its terminal keeps one session and one process',
+  { skip: terminals },
+  async (t) => {
+    const lab = await fixture(t);
+    const lease = 'c'.repeat(16);
+    await lab.script('d-1-alpha', [
+      { calls: [] },
+      { when: 'worked in your harness terminal', calls: [] },
+    ]);
+    await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+    const session = (): string =>
+      lab.lab.view()?.directions[0]?.agent.session ?? '';
+    await until(() => Boolean(session() && lab.sessions.idle(session())));
+    const first = session();
+    await until(() =>
+      lab.lab.openTerminal('a-1', lease).then(
+        () => true,
+        () => false,
+      ),
+    );
+    await until(() => lab.lab.view()?.directions[0]?.status === 'terminal');
+    // A post waits for the agent, so a scheduler that sees no process would start one.
+    await lab.lab.post({ text: '@claude-1 Look.' });
+    // The start after the terminal waits at its transcript, before its process.
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const opening = TranscriptWriter.open.bind(TranscriptWriter);
+    TranscriptWriter.open = async (file) => {
+      await gate;
+      return opening(file);
+    };
+    t.after(() => {
+      TranscriptWriter.open = opening;
+      release();
+    });
+    lab.sessions.terminal(first)?.write(lease, '/exit\r');
+    await until(() => lab.sessions.view(first)?.starting === true);
+    const lab_ = lab.lab as unknown as { kick(): void };
+    for (let tries = 0; tries < 5; tries++) {
+      lab_.kick();
+      await delay(80);
+    }
+    assert.equal(session(), first);
+    assert.equal(
+      lab.sessions.views().filter((view) => view.record.agent === 'a-1').length,
+      1,
+    );
+    assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), ['start']);
+    TranscriptWriter.open = opening;
+    release();
+    await until(async () =>
+      (await lab.inputs('d-1-alpha')).some((input) =>
+        input.includes('worked in your harness terminal'),
+      ),
+    );
+    assert.equal(session(), first);
+    assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), [
+      'start',
+      'resume',
+    ]);
+  },
+);
+
+await test(
+  'a Codex terminal after a pause starts with no turn of an earlier terminal',
+  { skip: terminals },
+  async (t) => {
+    const lab = await fixture(t);
+    const lease = 'c'.repeat(16);
+    await lab.script('d-1-gamma', [
+      { calls: [] },
+      { when: 'worked in your harness terminal', calls: [] },
+    ]);
+    await open(lab, [{ title: 'Gamma', harness: 'codex' }]);
+    const session = (): string =>
+      lab.lab.view()?.directions[0]?.agent.session ?? '';
+    const take = (): Promise<void> =>
+      until(() =>
+        lab.lab.openTerminal('a-1', lease).then(
+          () => true,
+          () => false,
+        ),
+      );
+    await until(() => Boolean(session() && lab.sessions.idle(session())));
+    await take();
+    // A turn that the person started in the terminal runs when the lab pauses.
+    const slot = (
+      lab.sessions as unknown as {
+        slots: { view(): SessionView | null; nativeTurn: boolean }[];
+      }
+    ).slots.find((entry) => entry.view()?.record.id === session());
+    assert.ok(slot);
+    slot.nativeTurn = true;
+    // The pause ends the process, so that turn does not carry into a later terminal.
+    await lab.lab.pause();
+    assert.equal(slot.nativeTurn, false);
+    // Nor into a new process of the same slot.
+    slot.nativeTurn = true;
+    await lab.lab.resume();
+    await until(() => Boolean(lab.sessions.idle(session())));
+    assert.equal(slot.nativeTurn, false);
+    // The next terminal ends with the session ready, and the agent's next turn follows.
+    await take();
+    lab.sessions.returnFromTerminal(session());
+    await until(async () =>
+      (await lab.inputs('d-1-gamma')).some((input) =>
+        input.includes('worked in your harness terminal'),
+      ),
+    );
+    assert.notEqual(lab.lab.view()?.directions[0]?.status, 'terminal');
   },
 );

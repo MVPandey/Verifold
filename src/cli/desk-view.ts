@@ -30,6 +30,7 @@ import {
   usd,
   type Lease,
 } from './leases.ts';
+import { agentId, proofRef, runId } from './board.ts';
 import {
   coordinatorLimits,
   directionObjective,
@@ -151,8 +152,8 @@ export interface DeskFrame {
   readonly direction?: string;
   /** The run of a lab's run panel, such as r-3. */
   readonly run?: string;
-  /** The post whose cited diff a lab's diff panel shows, such as p-12. */
-  readonly post?: string;
+  /** The diff that a post cites, which a lab's diff panel shows, by its place, such as p-12.0. */
+  readonly proof?: string;
   /** The agent or checker of a lab's agent panel, such as a-2. */
   readonly agent?: string;
   /** The person cleared finished tasks: done and cancelled tasks leave the map and the rail. */
@@ -168,7 +169,7 @@ export function parseFrame(
   finished: string | null = null,
   run: string | null = null,
   agent: string | null = null,
-  post: string | null = null,
+  proof: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -184,9 +185,9 @@ export function parseFrame(
     (since === null || time) &&
     idea &&
     (finished === null || finished === 'hidden') &&
-    (run === null || /^r-[1-9]\d{0,5}$/.test(run)) &&
-    (agent === null || /^a-[1-9]\d{0,3}$/.test(agent)) &&
-    (post === null || /^p-[1-9]\d{0,5}$/.test(post))
+    (run === null || runId.test(run)) &&
+    (agent === null || agentId.test(agent)) &&
+    (proof === null || proofRef(proof) !== null)
     ? {
         view: shown,
         panel: opened,
@@ -195,7 +196,7 @@ export function parseFrame(
         ...(finished ? { hideFinished: true } : {}),
         ...(run ? { run } : {}),
         ...(agent ? { agent } : {}),
-        ...(post ? { post } : {}),
+        ...(proof ? { proof } : {}),
       }
     : null;
 }
@@ -673,9 +674,7 @@ function workerPanel(
     : record.status === 'failed'
       ? ['Stopped with an error', 'failed']
       : ['Ended', 'muted'];
-  // Claude Code counts from zero in each process. The record adds up its processes.
-  const cost = record.spentUsd ?? record.costUsd;
-  const body = `<p class="session-meta"><span>${e(hostName(record.host))}</span><span>Mode: ${e(modeLabel(record))}</span><span>Model request: ${e(record.model ?? 'harness default')}</span>${cost === null ? '' : `<span>Cost estimate from Claude Code: $${e(cost.toFixed(2))}</span>`}</p>
+  const body = `<p class="session-meta"><span>${e(hostName(record.host))}</span><span>Mode: ${e(modeLabel(record))}</span><span>Model request: ${e(record.model ?? 'harness default')}</span>${record.costUsd === null ? '' : `<span>Cost estimate from Claude Code: $${e(record.costUsd.toFixed(2))}</span>`}</p>
   ${view.saveFailed ? '<p class="notice">Verifold could not save the latest session record. The next change tries again.</p>' : ''}
   ${record.requests.length > 10 ? `<p class="notice">${record.requests.length} requests are open. The first 10 are shown.</p>` : ''}
   ${record.requests
@@ -1622,12 +1621,22 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   return live.lab ? labOrder(items) : items;
 }
 
-/** What the lab's pods cost so far, and the project's limit. Pods of tasks are not the lab's. */
-function labGpu(compute: ComputeView): { spent: number; limit: number | null } {
+/**
+ * What this lab's pods cost so far, and the project's limit. Pods of tasks,
+ * and of earlier labs before Start over, are not this lab's.
+ */
+function labGpu(
+  compute: ComputeView,
+  startedAt: string,
+): { spent: number; limit: number | null } {
   const now = Date.now();
   return {
     spent: compute.leases
-      .filter((lease) => lease.directions?.length)
+      .filter(
+        (lease) =>
+          lease.directions?.length &&
+          Date.parse(lease.requestedAt) >= Date.parse(startedAt),
+      )
       .reduce((sum, lease) => sum + spent(lease, now), 0),
     limit: compute.settings.limitUsd,
   };
@@ -3655,7 +3664,7 @@ function renderPanel(
       : panel === 'run'
         ? runPanel(lab, frame.run, clock)
         : panel === 'diff'
-          ? diffPanel(lab, direction, frame.post, live.labDiff ?? null)
+          ? diffPanel(lab, direction, frame.proof, live.labDiff ?? null)
           : labAgentPanel(lab, frame.agent, live, tasks);
   else if (panel === 'worker')
     shown = live.session
@@ -3804,7 +3813,9 @@ export function renderDesk(
                     ? renderLab(live.lab, clock, {
                         needs,
                         works: live.labWorks ?? [],
-                        gpu: live.compute ? labGpu(live.compute) : null,
+                        gpu: live.compute
+                          ? labGpu(live.compute, live.lab.state.startedAt)
+                          : null,
                         extra: `${renderPodsLine(live.compute)}${renderPaused(live)}`,
                       })
                     : renderHome(
