@@ -260,10 +260,13 @@ function seatbeltProfile(denied: number): string {
     '(allow iokit-open (iokit-registry-entry-class "RootDomainUserClient"))',
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo") (global-name "com.apple.PowerManagement.control"))',
     '(allow file-read*)',
-    // A later rule wins, so the denied paths stay closed.
+    // A later rule wins, so the denied paths stay closed. The run's own
+    // folder stays open also inside a denied folder, such as `.verifold` for
+    // a checker's run.
     ...(denied
       ? [
           `(deny file-read* ${Array.from({ length: denied }, (_, index) => `(subpath (param "DENY_${index}"))`).join(' ')})`,
+          '(allow file-read* (subpath (param "RUN")))',
         ]
       : []),
     // The standard streams by path, such as `echo x > /dev/stderr`. A run has only its pipes open.

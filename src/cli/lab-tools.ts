@@ -289,6 +289,9 @@ export const checkLimits = {
   restarts: 1,
 };
 
+/** The kinds of post that a check tests, when they cite a run. */
+export const checkableKinds = ['claim', 'evidence', 'rerun'] as const;
+
 /** The outcome of a check, and how the checker got it. */
 export const checkOutcomes = ['holds', 'fails', 'differs'] as const;
 export const checkMethods = ['rerun', 'code-read'] as const;

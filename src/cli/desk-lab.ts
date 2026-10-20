@@ -16,6 +16,7 @@ import {
   type DirectionView,
   type LabView,
 } from './lab.ts';
+import { checkableKinds } from './lab-tools.ts';
 import {
   metricsText,
   placeText,
@@ -134,11 +135,7 @@ function proofText(artifact: Artifact): string {
 }
 
 /** The kinds of post that a check can test, when they cite a run. */
-const checkable: ReadonlySet<PostKind> = new Set([
-  'claim',
-  'evidence',
-  'rerun',
-]);
+const checkable: ReadonlySet<PostKind> = new Set(checkableKinds);
 
 /**
  * How a check tested a post, in a few words, or null when no check did:
@@ -162,7 +159,14 @@ export function checkMark(
     });
     const ids = runs.map((run) => run.id).join(', ') || done.run;
     const who = `${hostName(done.harness)}${done.sameHarness ? ', same harness' : ''}`;
-    if (done.method === 'code-read') return `read the code only (${who})`;
+    const missed =
+      done.outcome === 'differs'
+        ? 'differs'
+        : done.outcome === 'fails'
+          ? 'did not hold'
+          : '';
+    if (done.method === 'code-read')
+      return `read the code only (${who})${missed ? `: ${missed}` : ''}`;
     if (done.outcome === 'holds') {
       const metrics = runs[0] ? metricsText(runs[0]) : '';
       return `reran ${ids} (${who})${metrics ? `: ${metrics}` : ''}`;
@@ -182,50 +186,67 @@ export function checkMark(
 
 /**
  * An objection to a claim, evidence, or rerun post is a dispute until a
- * check of that post ends after it. The open ones, oldest first, with the
- * newest check of each target.
+ * check of that post ends after it. The disputed posts, oldest first, each
+ * with its open objections and its newest check.
  */
 export function openDisputes(view: LabView): {
-  readonly objection: Post;
   readonly target: Post;
+  readonly objections: readonly Post[];
   readonly check: Check | null;
 }[] {
   const posts = new Map(view.posts.map((post) => [post.id, post]));
-  return view.posts.flatMap((objection) => {
+  const open = new Map<string, Post[]>();
+  for (const objection of view.posts) {
     const target =
       objection.kind === 'objection' && objection.replyTo
         ? posts.get(objection.replyTo)
         : undefined;
-    if (!target || !checkable.has(target.kind)) return [];
-    const checks = view.checks.filter((check) => check.claim === target.id);
-    const settled = checks.some(
+    if (!target || !checkable.has(target.kind)) continue;
+    const settled = view.checks.some(
       (check) =>
+        check.claim === target.id &&
         check.state === 'done' &&
         (check.objections.includes(objection.id) ||
           Date.parse(check.endedAt ?? '') > Date.parse(objection.at)),
     );
-    return settled ? [] : [{ objection, target, check: checks.at(-1) ?? null }];
+    if (!settled)
+      open.set(target.id, [...(open.get(target.id) ?? []), objection]);
+  }
+  return [...open].flatMap(([id, objections]) => {
+    const target = posts.get(id);
+    return target
+      ? [
+          {
+            target,
+            objections,
+            check:
+              view.checks.filter((check) => check.claim === id).at(-1) ?? null,
+          },
+        ]
+      : [];
   });
 }
 
-/** Open disputes, pinned above the directions. Each says where its check is. */
+/** Open disputes, pinned above the directions: one item for each disputed post, with where its check is. */
 function disputesCard(
   view: LabView,
+  open: ReturnType<typeof openDisputes>,
   name: (author: string) => string,
   slot: TranscriptSlot,
 ): string {
-  const open = openDisputes(view);
   if (!open.length) return '';
-  const items = open.map(({ objection, target, check }) => {
+  const items = open.map(({ objections, target, check }) => {
     const where = !target.artifacts.some((artifact) => artifact.type === 'run')
       ? `${target.id} cites no run, so no check can rerun it.`
       : !check
         ? 'No check yet.'
-        : check.state === 'failed'
-          ? `Check ${check.id} failed: ${check.note ?? 'no reason'}`
-          : check.state === 'running'
-            ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
-            : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
+        : check.state === 'done'
+          ? `${target.id} had its checks. The last one, ${check.id}, ended before these objections, so no check answers them.`
+          : check.state === 'failed'
+            ? `Check ${check.id} failed: ${check.note ?? 'no reason'}`
+            : check.state === 'running'
+              ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
+              : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
     const runs = check
       ? view.ledger
           .filter((run) => run.agent === check.agent)
@@ -236,7 +257,13 @@ function disputesCard(
       check?.session && check.state !== 'queued'
         ? `<details class="lab-activity"><summary>What ${e(check.handle)} did</summary>${slot(`session:${check.session}`, `${check.handle} transcript`)}</details>`
         : '';
-    return `<li><a href="#post-${e(objection.id)}">${e(name(objection.author))} objects to ${e(target.id)}</a>${target.direction ? ` <span class="fine">in ${e(view.state.directions.find((entry) => entry.id === target.direction)?.title ?? target.direction)}</span>` : ''}<p class="pre">${e(clip(objection.text, 280))}</p><p class="fine">${e(where)}</p>${runs ? `<div class="lab-runs">${runs}</div>` : ''}${transcript}</li>`;
+    const doubts = objections
+      .map(
+        (objection) =>
+          `<p class="pre"><a href="#post-${e(objection.id)}">${e(name(objection.author))}</a>: ${e(clip(objection.text, 280))}</p>`,
+      )
+      .join('');
+    return `<li><a href="#post-${e(target.id)}">${e(target.id)} is in dispute</a>${target.direction ? ` <span class="fine">in ${e(view.state.directions.find((entry) => entry.id === target.direction)?.title ?? target.direction)}</span>` : ''}${doubts}<p class="fine">${e(where)}</p>${runs ? `<div class="lab-runs">${runs}</div>` : ''}${transcript}</li>`;
   });
   return `<section class="card lab-disputes" aria-labelledby="disputes-title"><h2 id="disputes-title">Open disputes</h2><ul>${items.join('')}</ul><p class="fine">A fresh agent of the other harness reruns the disputed post. Its rerun settles the dispute.</p></section>`;
 }
@@ -329,6 +356,7 @@ function directionRow(
   slot: TranscriptSlot,
   view: LabView,
   disputed: ReadonlySet<string>,
+  byId: ReadonlyMap<string, RunRecord>,
 ): string {
   const { runs, ledger } = view;
   const { direction, agent, status } = entry;
@@ -371,8 +399,7 @@ function directionRow(
   // A ruled-out verdict needs no check.
   const mark =
     proof && checkable.has(proof.kind)
-      ? (checkMark(proof, view, new Map(ledger.map((run) => [run.id, run]))) ??
-        'not checked')
+      ? (checkMark(proof, view, byId) ?? 'not checked')
       : null;
   const evidence = direction.evidence
     ? `<span class="fine">${e(direction.evidence.text)} · ${e(direction.evidence.post)}${direction.evidence.run ? ` · ${e(direction.evidence.run)}` : ''}${mark ? ` · ${e(mark)}` : ''}</span>`
@@ -534,9 +561,9 @@ export function renderLab(
   );
   const handles = open.map((entry) => `@${entry.agent.handle}`);
   const { runs } = view;
-  const disputed = new Set(
-    openDisputes(view).map((dispute) => dispute.target.id),
-  );
+  const disputes = openDisputes(view);
+  const disputed = new Set(disputes.map((dispute) => dispute.target.id));
+  const byId = new Map(view.ledger.map((run) => [run.id, run]));
   const working = renderLabWork(works, clock);
   // After the time budget, the lab goes on with more time, from Needs you: no plain Resume.
   const over = budgetEnded(state);
@@ -561,10 +588,10 @@ export function renderLab(
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Lab</h1><p class="question">${e(state.question)}</p>${time}</div>
   <div class="view lab">
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${needs}
-  ${disputesCard(view, name, slot)}
+  ${disputesCard(view, disputes, name, slot)}
   ${planCard(view, name, clock)}
   <section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Directions</h2><span class="actions">${pause}</span></div>
-  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, view, disputed)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
+  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
   ${runs ? addForm(view.directions.length > 0) : ''}</section>
   ${runs ? composeBox(state, handles) : ''}
   <section aria-labelledby="board-title"><div class="section-title"><h2 id="board-title">Board</h2><span class="count">${view.posts.length} ${view.posts.length === 1 ? 'post' : 'posts'}</span></div>${board(view, name, clock)}</section>

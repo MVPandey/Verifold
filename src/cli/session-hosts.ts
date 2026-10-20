@@ -89,8 +89,9 @@ export function strictClaudeSettings(
  * task session extends the built-in workspace profile (writes only in the
  * working folder and temporary folders), and the coordinator extends the
  * read-only profile. Neither can read the credential paths. A task with domains
- * gets the network, because Codex cannot limit it to domains. `denyRead`
- * closes more paths, absolute or under `~/`. Probed on Codex 0.160.0.
+ * gets the network, because Codex cannot limit it to domains. Probed on Codex
+ * 0.160.0. `denyRead` closes more paths, absolute or under `~/`: both kinds
+ * were probed with `codex sandbox` on Codex 0.160.0.
  */
 function codexProfile(
   mode: 'strict' | 'coordinator',
