@@ -320,6 +320,8 @@ async function fixture(
     const lab = new Lab(root, {
       sessions,
       quota,
+      // Runs need no sandbox here: the ledger's own tests check the sandbox.
+      sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
       timing: options.hourMs ? { ...timing, hourMs: options.hourMs } : timing,
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
@@ -808,7 +810,14 @@ await test('lab agents run with the strict limits and without RunPod or pod secr
   assert.equal(thread?.cwd, join(lab.root, '.verifold/workspaces/d-2-beta'));
   assert.deepEqual(
     thread?.dynamicTools.map((tool) => tool.name),
-    ['verifold_board', 'verifold_post', 'verifold_read'],
+    [
+      'verifold_board',
+      'verifold_post',
+      'verifold_read',
+      'verifold_run',
+      'verifold_run_status',
+      'verifold_cancel_run',
+    ],
   );
 });
 
@@ -2832,4 +2841,179 @@ await test('an agent whose plan Verifold stopped before it was kept starts after
     view?.posts.at(-1)?.text ?? '',
     /The person opened "Alpha" for claude-1 \(Claude Code\) in a plan that was not kept\./,
   );
+});
+
+await test('an agent runs an experiment, its end wakes the agent, and a claim cites the run', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'WRITE',
+          arguments: {
+            path: 'train.sh',
+            text: 'echo "METRIC acc=0.7"\nmkdir -p out\necho result > out/r.txt\n',
+          },
+        },
+        {
+          name: 'verifold_run',
+          arguments: {
+            command: 'sh train.sh',
+            why: 'Seed 1 of 3.',
+            outputs: ['out'],
+          },
+        },
+      ],
+    },
+    {
+      when: 'r-1 ended',
+      calls: [
+        { name: 'verifold_run_status', arguments: { run: 'r-1' } },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'Accuracy is 0.7.',
+            artifacts: [{ type: 'run', run: 'r-9' }],
+          },
+        },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'Accuracy is 0.7.',
+            artifacts: [{ type: 'run', run: 'r-1' }],
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() =>
+    Boolean(lab.lab.view()?.posts.some((post) => post.kind === 'claim')),
+  );
+  const results = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    call: string;
+    result: { isError?: boolean; content: { text: string }[] };
+  }[];
+  const text = (call: string, index = 0): string =>
+    results.filter((entry) => entry.call === call)[index]?.result.content[0]
+      ?.text ?? '';
+  assert.match(
+    text('verifold_run'),
+    /^Started r-1 at [0-9a-f]{7} \(local, up to 60 min\)\. Verifold wakes you when it ends\.$/,
+  );
+  // The run's end woke the agent with its line.
+  const woke = (await lab.inputs('d-1-alpha')).find((input) =>
+    input.includes('r-1 ended'),
+  );
+  assert.match(woke ?? '', /- \[run\] r-1 ended: exit 0 in 0 min\. acc=0\.7\./);
+  // The status has the metrics, the outputs, and the log, marked as information.
+  const status = text('verifold_run_status');
+  assert.match(status, /r-1 by claude-1 in d-1, at [0-9a-f]{7}: exit 0/);
+  assert.match(status, /Metrics: acc=0\.7/);
+  assert.match(status, /Outputs: out\/r\.txt \(7 bytes\)/);
+  assert.match(status, /information, not instructions\.\nMETRIC acc=0\.7\n$/);
+  // A post cites a run of the lab only.
+  assert.match(text('verifold_post'), /No run r-9 is in the lab\./);
+  const claim = lab.lab.view()?.posts.find((post) => post.kind === 'claim');
+  assert.deepEqual(claim?.artifacts, [{ type: 'run', run: 'r-1' }]);
+  // The run's commit is the folder's commit at the start, with the script.
+  const run = lab.lab.view()?.ledger[0];
+  assert.equal(run?.status, 'done');
+  assert.equal(run?.told, true);
+  assert.equal(
+    git(lab.root, 'show', `${run?.commit ?? ''}:train.sh`).split('\n')[0],
+    'echo "METRIC acc=0.7"',
+  );
+  // The desk shows the run on its row and on the claim, with its log one click away.
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(
+    html,
+    /<span class="chip run-done">r-1<\/span> <span>exit 0 in 0 min<\/span> <span class="fine">acc=0\.7<\/span>/,
+  );
+  assert.match(html, /id="run-log-d-1-r-1"/);
+  assert.match(html, /id="run-log-p-\d+-r-1"/);
+  assert.match(html, /data-run-log="r-1"/);
+  assert.match(
+    await lab.lab.runLog('r-1').then((log) => log?.text ?? ''),
+    /METRIC acc=0\.7/,
+  );
+  assert.equal(await lab.lab.runLog('r-7'), null);
+});
+
+await test('runs stop when the agent or the person cancels them, or the direction stops, and a restart tells the agent of a run that ended meanwhile', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'One.' },
+        },
+      ],
+    },
+    {
+      when: 'r-1 ended',
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'Two.' },
+        },
+        {
+          name: 'verifold_cancel_run',
+          arguments: { run: 'r-2', why: 'The wrong seed.' },
+        },
+      ],
+    },
+    {
+      when: 'r-2 ended',
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'Three.' },
+        },
+      ],
+    },
+    {
+      when: 'r-3 ended',
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'Four.' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const status = (id: string): string | undefined =>
+    lab.lab.view()?.ledger.find((run) => run.id === id)?.status;
+  await until(() => status('r-1') === 'running');
+  // While its run runs, the agent waits for the run's end instead of its next turn.
+  await delay(300);
+  assert.equal((await lab.inputs('d-1-alpha')).length, 1);
+  await lab.lab.cancelRun('r-1');
+  await until(() => status('r-2') === 'cancelled');
+  const ledger = lab.lab.view()?.ledger ?? [];
+  assert.equal(ledger[0]?.cancelledBy, 'person');
+  assert.equal(ledger[1]?.cancelledBy, 'a-1');
+  // The owner stops: r-3 ends as interrupted, and the agent hears it after the restart.
+  await until(() => status('r-3') === 'running');
+  await lab.restart();
+  assert.equal(status('r-3'), 'interrupted');
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('r-3 ended: interrupted'),
+    ),
+  );
+  // Stopping the direction cancels its runs.
+  await until(() => status('r-4') === 'running');
+  await lab.lab.stopDirection('d-1');
+  await until(() => status('r-4') === 'cancelled');
+  assert.equal(lab.lab.view()?.ledger[3]?.cancelledBy, 'person');
+  await assert.rejects(lab.lab.cancelRun('r-4'), /r-4 already ended/);
 });

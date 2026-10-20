@@ -904,6 +904,37 @@ async function fileAt(
 }
 
 /**
+ * Write the files of a commit into the empty folder `target`, with a
+ * temporary index, so the workspace's own index and folder stay as they are.
+ * Git writes each file itself and never through a symbolic link in the
+ * folder. The folder gets no Git data.
+ */
+export async function checkoutAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+  target: string,
+): Promise<void> {
+  const index = join(
+    tmpdir(),
+    `verifold-index-${randomBytes(8).toString('hex')}`,
+  );
+  try {
+    const env = { GIT_INDEX_FILE: index };
+    const folder = join(root, workspace.path);
+    await git(folder, ['read-tree', commit], undefined, env);
+    await git(
+      folder,
+      ['checkout-index', '--all', '--force', `--prefix=${target}/`],
+      undefined,
+      env,
+    );
+  } finally {
+    await rm(index, { force: true });
+  }
+}
+
+/**
  * Copy files of a commit into an empty record folder. A file that the commit
  * deletes is skipped. Returns each copied file with its size and SHA-256.
  */

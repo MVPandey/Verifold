@@ -1,3 +1,4 @@
+import { runLimits } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
 
 /**
@@ -5,7 +6,10 @@ import type { AgentTool } from './session-hosts.ts';
  * a change of a tool that a thread has raises `labToolsVersion`, and a Codex
  * agent with an older thread starts a new one. A tool that only new threads
  * get needs no new version: `verifold_plan` goes only to the agent that opens
- * a lab, and that agent's thread is new.
+ * a lab, and that agent's thread is new. The run tools and the run proof of
+ * `verifold_post` add to the tools and change none that a thread uses, so they
+ * raise no version either: a Codex agent whose thread is older keeps its
+ * conversation, and gets them with its next new thread.
  */
 export const labToolsVersion = 2;
 
@@ -34,6 +38,7 @@ export const agentPostKinds = [
 
 const postId = { type: 'string', pattern: '^p-[1-9][0-9]{0,5}$' };
 const directionId = { type: 'string', pattern: '^d-[1-9][0-9]{0,3}$' };
+const runId = { type: 'string', pattern: '^r-[1-9][0-9]{0,5}$' };
 
 export const labToolSpecs: readonly AgentTool[] = [
   {
@@ -59,7 +64,7 @@ export const labToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_post',
     description:
-      "Post to the lab board, in at most 280 characters. A claim, evidence, or ruled-out post needs proof: a file or a figure in your folder, or a diff of paths that you changed. Verifold commits your folder first and pins the proof to that commit. Reply to a post with replyTo. Mention agents by handle (such as claude-1) or the person. A reply, a mention, or an objection in a direction wakes the agent that it is for. A post without one waits for each agent's next read.",
+      "Post to the lab board, in at most 280 characters. A claim, evidence, or ruled-out post needs proof: a file or a figure in your folder, a diff of paths that you changed, or a run of the lab. Verifold commits your folder first and pins a file, a figure, or a diff to that commit. Reply to a post with replyTo. Mention agents by handle (such as claude-1) or the person. A reply, a mention, or an objection in a direction wakes the agent that it is for. A post without one waits for each agent's next read.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -75,7 +80,10 @@ export const labToolSpecs: readonly AgentTool[] = [
           items: {
             type: 'object',
             properties: {
-              type: { type: 'string', enum: ['file', 'figure', 'diff'] },
+              type: {
+                type: 'string',
+                enum: ['file', 'figure', 'diff', 'run'],
+              },
               path: {
                 type: 'string',
                 maxLength: 300,
@@ -87,6 +95,10 @@ export const labToolSpecs: readonly AgentTool[] = [
                 maxItems: 10,
                 description:
                   'A diff: the paths that you changed since your direction started.',
+              },
+              run: {
+                ...runId,
+                description: 'A run: its ID, such as r-7. Any run of the lab.',
               },
             },
             required: ['type'],
@@ -119,6 +131,67 @@ export const labToolSpecs: readonly AgentTool[] = [
         path: { type: 'string', maxLength: 300 },
       },
       required: ['direction', 'path'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_run',
+    description:
+      'Run a command on your folder in a sandbox. Verifold commits your folder first. The run works on its own copy of that commit, so your later edits do not change it. The run writes only in its copy and its temporary folder, has no network, and cannot read credential files. It can read the project folder. Verifold records the commit, the command, the log, the exit code, the time, and the metrics: `METRIC name=value` lines in the output, and a metrics.json of numbers that the run writes in the top folder of its copy. `outputs` names the files or folders of the copy that Verifold keeps. Verifold wakes you when the run ends. Cite the run as proof with the artifact {type: run, run: r-N}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          maxLength: runLimits.command,
+          description: 'A shell command, run with /bin/sh in the copy.',
+        },
+        why: {
+          type: 'string',
+          maxLength: runLimits.why,
+          description: 'What the run tests, such as "seed 1 of 3 for the bar".',
+        },
+        minutes: {
+          type: 'integer',
+          minimum: 1,
+          maximum: runLimits.minutes,
+          description: `The time limit. Default: ${runLimits.defaultMinutes}.`,
+        },
+        outputs: {
+          type: 'array',
+          maxItems: runLimits.outputPaths,
+          items: { type: 'string', maxLength: 300 },
+          description: 'Files or folders of the copy to keep after the run.',
+        },
+      },
+      required: ['command', 'why'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_run_status',
+    description: `Read a run of the lab: its state, exit code, metrics, kept outputs, and up to ${runLimits.statusLog / 1024} KB of its log. log: tail (the default), head, or none.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run: runId,
+        log: { type: 'string', enum: ['tail', 'head', 'none'] },
+      },
+      required: ['run'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_cancel_run',
+    description:
+      'Cancel one of your runs that runs now. Its log and its outputs so far stay.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        run: runId,
+        why: { type: 'string', maxLength: 280 },
+      },
+      required: ['run', 'why'],
       additionalProperties: false,
     },
   },
