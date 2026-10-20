@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -146,6 +147,8 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
       'echo deep > out/sub/b.txt',
       'echo "$VERIFOLD_RUN $TMPDIR" > out/env.txt',
       'echo "${RUNPOD_API_KEY:-none} ${ANTHROPIC_API_KEY:-none}" >> out/env.txt',
+      'echo "$VERIFOLD_COMMIT" >> out/env.txt',
+      'git rev-parse --show-toplevel >/dev/null 2>&1 || echo "no repository" >> out/env.txt',
     ].join('\n'),
   );
   // A metrics.json in the commit is not the run's: the run replaces it, or it is gone.
@@ -204,7 +207,11 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
   );
   // The run has its own ID and temporary folder, and no RunPod or harness keys.
   const env = await readFile(join(record, 'outputs', 'out', 'env.txt'), 'utf8');
-  assert.match(env, /^r-1 .*run-1\/tmp\nnone none\n$/);
+  assert.match(
+    env,
+    /^r-1 .*run-1\/tmp\nnone none\n[0-9a-f]{40}\nno repository\n$/,
+  );
+  assert.equal(env.split('\n')[2], run?.commit);
   const log = await readFile(join(record, 'log.txt'), 'utf8');
   // Both streams reach the log. Their lines can interleave in any order.
   assert.match(log, /^training$/m);
@@ -294,9 +301,12 @@ await test('runs are cancelled, limited, and refused without a sandbox, and a re
   assert.equal(ledger.get('r-1')?.cancelledBy, 'person');
   assert.throws(() => ledger.cancel('r-1', 'person'), /r-1 already ended/);
   assert.throws(() => ledger.cancel('r-9', 'person'), /No run r-9/);
-  // The owner stops: the run that runs ends as interrupted.
+  // The owner stops: the run that runs ends as interrupted, and no run starts until the next load.
   await ledger.close();
   assert.equal(ledger.get('r-2')?.status, 'interrupted');
+  await assert.rejects(fx.start(ledger, 'true'), /stops or moves the lab/);
+  await ledger.load(true);
+  assert.equal((await fx.start(ledger, 'true')).id, 'r-3');
   const closed = fx.ledger({ sandbox: null }).ledger;
   await assert.rejects(fx.start(closed, 'true'), /no sandbox for runs/);
 });
@@ -307,7 +317,18 @@ await test('a new owner ends a run that an earlier owner left running, with its 
   await fx.start(earlier.ledger, 'sleep 30');
   const pid = earlier.ledger.get('r-1')?.process?.pid ?? 0;
   assert.ok(pid > 0);
-  // As if the earlier owner stopped without closing its ledger.
+  // As if the earlier owner stopped without closing its ledger. Its run made a folder without write permission.
+  const locked = join(
+    fx.root,
+    '.verifold',
+    'workspaces',
+    'run-1',
+    'tree',
+    'locked',
+  );
+  await mkdir(locked);
+  await writeFile(join(locked, 'f'), 'x');
+  await chmod(locked, 0o500);
   const next = fx.ledger();
   await next.ledger.load(true);
   const run = next.ledger.get('r-1');
@@ -422,6 +443,7 @@ await test(
         `echo x > ${fx.root}/x && echo WROTE-PROJECT`,
         `cat ${fx.root}/README.md`,
         'echo inside > inside.txt && echo WROTE-INSIDE',
+        'echo to-stderr > /dev/stderr && echo WROTE-STDERR',
         'echo tmp > "$TMPDIR/t" && echo WROTE-TMP',
         `/usr/bin/nc -z -w 2 127.0.0.1 ${port} && echo REACHED-NETWORK`,
         'launchctl list >/dev/null && echo REACHED-LAUNCHD',
@@ -437,6 +459,7 @@ await test(
     assert.match(log, /# Project/);
     assert.match(log, /WROTE-INSIDE/);
     assert.match(log, /WROTE-TMP/);
+    assert.match(log, /WROTE-STDERR/);
     assert.match(log, /DONE/);
     for (const word of [
       'READ-SECRET',
@@ -475,4 +498,37 @@ await test('a hard link to a file outside the run is no output', async (t) => {
   );
   // The outside file keeps its content: removing the run's folder only removed the link.
   assert.equal(await readFile(outside, 'utf8'), 'private\n');
+});
+
+await test('one output that cannot be copied leaves the other outputs and the metrics', async (t) => {
+  const fx = await fixture(t);
+  const { ledger, ended } = fx.ledger();
+  t.after(() => ledger.close());
+  await fx.start(
+    ledger,
+    [
+      'echo "METRIC acc=0.5"',
+      'printf \'{"f1": 0.25}\' > metrics.json',
+      'mkdir -p out/locked',
+      'echo a > out/a.txt',
+      'echo b > out/locked/b.txt',
+      'chmod 000 out/locked',
+    ].join('; '),
+    { want: ['out', 'out/a.txt'] },
+  );
+  await until(() => ended.length === 1);
+  const run = ledger.get('r-1');
+  assert.equal(run?.status, 'done');
+  assert.deepEqual(run?.metrics, { acc: 0.5, f1: 0.25 });
+  // A path named twice is copied once.
+  assert.deepEqual(
+    run?.outputs.map((output) => output.path),
+    ['out/a.txt'],
+  );
+  assert.match(run?.note ?? '', /Verifold could not copy out\/locked\./);
+  // The folder without permissions goes too.
+  assert.equal(
+    existsSync(join(fx.root, '.verifold', 'workspaces', 'run-1.done')),
+    false,
+  );
 });

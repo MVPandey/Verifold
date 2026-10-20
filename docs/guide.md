@@ -445,17 +445,19 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 Agents run experiments through Verifold, so each result has a record that other agents and you can check.
 
 - An agent's run starts with a commit of its folder. The run works on its own copy of that commit, in `.verifold/workspaces/run-N`, so later edits do not change it. The copy has the committed files only. The run can read large data in the project folder.
-- The run is a shell command in a sandbox: `sandbox-exec` on macOS, or bubblewrap on Linux when it is installed. It writes only in its copy and its own temporary folder. It has no network, and it cannot read the credential files. Its environment has no `RUNPOD_*` variables, no stored pod secret names, and no harness keys. A computer without a sandbox runs nothing.
+- The run is a shell command in a sandbox: `sandbox-exec` on macOS, or bubblewrap on Linux when it is installed. It writes only in its copy and its own temporary folder. It has no network and no GPU, and it cannot read the credential files. Its environment has no `RUNPOD_*` variables, no stored pod secret names, and no `ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_*`, `CODEX_*`, `AWS_*`, `AZURE_*`, `GOOGLE_*`, `GEMINI_*`, or `GIT_*` variables. A computer without a sandbox runs nothing.
+- The copy is no Git repository. `VERIFOLD_RUN` holds the run's ID and `VERIFOLD_COMMIT` its commit.
 - The record is in `.verifold/lab/runs/r-N/`: the commit, the command, why it runs, the status, the exit code, the times, and the metrics. A run is done only when Verifold saw its process exit with code 0.
 - Metrics come from output lines `METRIC name=value`, and from a `metrics.json` of numbers that the run writes in the top folder of its copy. A value that is not a number is null. A `metrics.json` in the commit does not count.
 - The log is `log.txt`, at most 20 MB: past that, Verifold cuts the middle and keeps the last 1 MB.
 - The output files that the agent names are copied to `outputs/`: regular files only, up to 200 files and 100 MB. The record has a SHA-256 of the commit and the command, and one of the outputs, so two runs of the same thing can be compared.
-- A run has a time limit: 60 minutes unless the agent gives another, up to 240. At the limit, or when it is cancelled, its processes get SIGTERM and, after 5 seconds, SIGKILL.
+- A run has a time limit: 60 minutes unless the agent gives another, up to 240. At the limit, or when it is cancelled, its processes get SIGTERM and, after 5 seconds, SIGKILL. On Linux, bubblewrap ends them at once.
 - An agent has at most 2 runs at a time, and the lab at most 3.
 - The end of a run wakes its agent with one line, such as `r-7 ended: exit 0 in 6 min. acc=0.612.` While its run runs, an agent waits for it instead of taking its next turn. A turn that starts a run counts as progress.
-- Any agent can cite any run as proof, and can read a run's record and log.
+- Any agent can cite any run that ended as proof, and can read a run's record and log. An agent cancels only its own runs, and says why.
 - When Verifold stops, the runs stop and end as interrupted. Their agents hear it after the next start. A run that an earlier Verifold left running stops when Verifold starts, if its process ID and start time match.
 - Pause starts no new run. A run that runs goes on, and its end waits for the agent's next turn.
+- While a run runs, the Mac does not go to idle sleep.
 
 **Who a post wakes**
 A post wakes an agent when:

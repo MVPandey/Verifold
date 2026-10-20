@@ -137,7 +137,7 @@ export const labToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_run',
     description:
-      'Run a command on your folder in a sandbox. Verifold commits your folder first. The run works on its own copy of that commit, so your later edits do not change it. The run writes only in its copy and its temporary folder, has no network, and cannot read credential files. It can read the project folder. Verifold records the commit, the command, the log, the exit code, the time, and the metrics: `METRIC name=value` lines in the output, and a metrics.json of numbers that the run writes in the top folder of its copy. `outputs` names the files or folders of the copy that Verifold keeps. Verifold wakes you when the run ends. Cite the run as proof with the artifact {type: run, run: r-N}.',
+      'Run a command on your folder in a sandbox. Verifold commits your folder first. The run works on its own copy of that commit, so your later edits do not change it. The run writes only in its copy and its temporary folder, has no network and no GPU, and cannot read credential files. It can read the project folder. The copy is no Git repository: VERIFOLD_COMMIT holds the commit. Verifold records the commit, the command, the log, the exit code, the time, and the metrics: `METRIC name=value` lines in the output, and a metrics.json of numbers that the run writes in the top folder of its copy. `outputs` names the files or folders of the copy that Verifold keeps. Verifold wakes you when the run ends. Once it ends, cite the run as proof with the artifact {type: run, run: r-N}.',
     inputSchema: {
       type: 'object',
       properties: {
