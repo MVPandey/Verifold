@@ -30,6 +30,7 @@ import {
   usd,
   type Lease,
 } from './leases.ts';
+import { agentId, proofRef, runId } from './board.ts';
 import {
   coordinatorLimits,
   directionObjective,
@@ -40,13 +41,17 @@ import { defaultAgents } from './workers.ts';
 import type { LabView } from './lab.ts';
 import { labWorks } from './team.ts';
 import {
+  diffPanel,
   stateOf,
   labCallNeeds,
   minutesText,
   renderLab,
   renderLabStart,
   renderLabWork,
+  runPanel,
+  type LabDiff,
   type LabWork,
+  type Panel,
 } from './desk-lab.ts';
 import { scratch } from './workspaces.ts';
 import {
@@ -92,6 +97,10 @@ export interface DeskSession {
   readonly labWorks?: readonly LabWork[];
   /** The person can start a lab on this run now: the run's guard allows it, and this desk runs the lab. */
   readonly labCanStart?: boolean;
+  /** The session of the lab agent or checker that the agent panel shows. */
+  readonly labAgent?: SessionView | null;
+  /** What the direction of the diff panel changed. */
+  readonly labDiff?: LabDiff | null;
 }
 
 export interface TaskView {
@@ -126,6 +135,10 @@ export const deskPanels = [
   'direction',
   'coordinator',
   'new-task',
+  // A lab's depth: a run, a direction's diff, and an agent.
+  'run',
+  'diff',
+  'agent',
 ] as const;
 export type DeskPanel = (typeof deskPanels)[number];
 
@@ -135,8 +148,14 @@ export interface DeskFrame {
   readonly panel: DeskPanel | null;
   /** When the page went to the background for a while. Home lists what changed after it. */
   readonly since?: string;
-  /** The direction that the direction panel shows. */
+  /** The direction that the direction panel or a lab's diff panel shows. */
   readonly direction?: string;
+  /** The run of a lab's run panel, such as r-3. */
+  readonly run?: string;
+  /** The diff that a post cites, which a lab's diff panel shows, by its place, such as p-12.0. */
+  readonly proof?: string;
+  /** The agent or checker of a lab's agent panel, such as a-2. */
+  readonly agent?: string;
   /** The person cleared finished tasks: done and cancelled tasks leave the map and the rail. */
   readonly hideFinished?: boolean;
 }
@@ -148,6 +167,9 @@ export function parseFrame(
   since: string | null = null,
   direction: string | null = null,
   finished: string | null = null,
+  run: string | null = null,
+  agent: string | null = null,
+  proof: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -162,13 +184,19 @@ export function parseFrame(
     (panel === null || opened) &&
     (since === null || time) &&
     idea &&
-    (finished === null || finished === 'hidden')
+    (finished === null || finished === 'hidden') &&
+    (run === null || runId.test(run)) &&
+    (agent === null || agentId.test(agent)) &&
+    (proof === null || proofRef(proof) !== null)
     ? {
         view: shown,
         panel: opened,
         ...(since ? { since } : {}),
         ...(direction ? { direction } : {}),
         ...(finished ? { hideFinished: true } : {}),
+        ...(run ? { run } : {}),
+        ...(agent ? { agent } : {}),
+        ...(proof ? { proof } : {}),
       }
     : null;
 }
@@ -502,15 +530,42 @@ const sessionStatus: Record<string, [string, string]> = {
 const paneSwitch =
   '<div class="seg pane-switch" role="group" aria-label="Agent view"><button type="button" data-pane="summary">Summary</button><button type="button" data-pane="details">Details</button><button type="button" data-pane="terminal">Terminal</button><button type="button" data-pane="commands">Commands</button></div>';
 
+/** A lab agent or checker in the agent panel. `terminal`: its direction is open, so the person can take its terminal. */
+interface LabAgentPane {
+  readonly agent: string;
+  readonly handle: string;
+  readonly about: string;
+  readonly checker: boolean;
+  readonly terminal: boolean;
+  /** This desk only shows the lab. */
+  readonly readOnly: boolean;
+}
+
 /**
  * The worker's own terminal. While the person holds it, a framed terminal page
  * fills the slot. Otherwise the pane says what opening it does, or why it cannot open.
+ * A lab agent's terminal opens through the lab, which gives it no turn meanwhile.
  */
-function renderTerminal(view: SessionView, live: DeskSession): string {
+function renderTerminal(
+  view: SessionView,
+  live: DeskSession,
+  lab?: LabAgentPane,
+): string {
   const { record } = view;
   const name = hostName(record.host);
   if (typeof live.terminals === 'string')
     return `<p class="notice">${e(live.terminals)}</p>`;
+  if (lab && !lab.terminal && record.status !== 'terminal')
+    return `<p class="fine">${lab.checker ? 'A checker has no terminal here: it works without the author.' : lab.readOnly ? 'This desk runs one session, so it opens no lab terminal. Run verifold in the project folder.' : 'Its direction ended, so its terminal does not open here.'}</p>`;
+  if (lab && record.status !== 'terminal') {
+    if (!view.live)
+      return '<p class="fine">The agent has no process now. Its terminal opens between its turns, while its process runs.</p>';
+    const busy =
+      record.status === 'idle'
+        ? ''
+        : 'Open the terminal between turns. Wait for its turn to end.';
+    return `<p class="fine">${record.host === 'claude' ? "Verifold stops its Claude Code process and opens Claude Code in a terminal on this conversation, with the lab's limits. While you work there, Verifold records no tool calls." : "Codex opens in a terminal for this session, with the lab's limits. Codex keeps reporting its events while you type."} The agent gets no turn while you hold it. When you return, its next turn follows.</p>${busy ? `<p class="notice" id="terminal-off">${busy}</p>` : ''}<div class="actions"><button type="button" class="primary" data-action="lab-terminal-open" data-agent="${e(lab.agent)}"${busy ? ' disabled aria-describedby="terminal-off"' : ''}>Open the terminal</button></div>`;
+  }
   if (record.status === 'terminal')
     return `<p class="fine">${record.host === 'claude' ? 'You work in the Claude Code terminal. Verifold records no tool calls until you return.' : 'You work in the Codex terminal. Codex keeps reporting its events to Verifold.'}</p><div class="terminal-slot" data-session="${e(record.id)}" data-label="${e(name)} terminal"></div><div class="actions"><button type="button" class="primary" data-action="terminal-return" data-session="${e(record.id)}">Return to Verifold</button><button type="button" data-terminal-tab="${e(record.id)}">Open in new tab</button></div>`;
   if (!view.live)
@@ -565,12 +620,44 @@ function requestItem(
   return `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type"><span class="mark you" aria-hidden="true"></span>${e(workerName(record, tasks))} asks to use ${e(toolName(request.tool))}<span class="ref">${e(request.id)}</span></p>${requestBody(request)}</article>`;
 }
 
-/** What the side panel shows. `sub` is HTML, already escaped. */
-interface Panel {
-  readonly kind: string;
-  readonly title: string;
-  readonly sub: string;
-  readonly body: string;
+/**
+ * A lab agent or a checker in the panel: the worker panel of its session,
+ * with the lab's terminal and a Message button that writes on the board.
+ */
+function labAgentPanel(
+  lab: LabView,
+  id: string | undefined,
+  live: DeskSession,
+  tasks: readonly TaskRecord[],
+): Panel {
+  const entry = lab.directions.find((item) => item.agent.id === id);
+  const check = lab.checks.find((item) => item.agent === id);
+  const handle = entry?.agent.handle ?? check?.handle;
+  if (!id || !handle)
+    return {
+      kind: 'Agent',
+      title: 'No such agent',
+      sub: '',
+      body: '<p class="empty-note">This agent is not in the lab, for example after Start over.</p>',
+    };
+  const pane: LabAgentPane = {
+    agent: id,
+    handle,
+    about: entry
+      ? entry.direction.title
+      : `Checks ${check?.claim ?? ''} without the author's reasoning`,
+    checker: !entry,
+    terminal: lab.runs && entry?.direction.state === 'open',
+    readOnly: !lab.runs,
+  };
+  return live.labAgent
+    ? workerPanel(live.labAgent, live, tasks, pane)
+    : {
+        kind: pane.checker ? 'Checker' : 'Lab agent',
+        title: handle,
+        sub: `<span class="fine">${e(pane.about)}</span>`,
+        body: '<p class="empty-note">It has no session yet. What it does shows here once it starts.</p>',
+      };
 }
 
 /** One worker in full: its requests, its events, its transcript and terminal, and its controls. All harness text is escaped. */
@@ -578,6 +665,7 @@ function workerPanel(
   view: SessionView,
   live: DeskSession,
   tasks: readonly TaskRecord[],
+  lab?: LabAgentPane,
 ): Panel {
   const { record } = view;
   const running = view.live;
@@ -615,20 +703,30 @@ function workerPanel(
     })
     .join('')}</ol></div>
   ${transcriptSlot(`session:${record.id}`, `${hostName(record.host)} transcript`, 'pane-details')}
-  <div class="pane-terminal">${renderTerminal(view, live)}</div>
+  <div class="pane-terminal">${renderTerminal(view, live, lab)}</div>
   <div class="pane-commands">${record.commands.length ? auditTable([view], tasks, false) : '<p class="empty-note">This agent has run no commands yet.</p>'}</div>
   ${
-    record.task
-      ? `<p class="fine">It works in the folder of its task, in Strict mode.</p><div class="actions"><button type="button" data-task-select="${e(record.task.id)}">Open the task</button></div>`
-      : running && record.status !== 'terminal'
-        ? `<div class="actions"><button type="button" class="primary" data-message-to="session:${e(record.id)}">Write to it</button>${record.status === 'idle' ? '' : `<button type="button" data-action="cancel" data-session="${e(record.id)}">Cancel this turn</button>`}<button type="button" data-action="end" data-session="${e(record.id)}">End session</button></div><p class="fine">Your message reaches it during its turn, or starts its next turn.</p>`
+    lab
+      ? lab.terminal
+        ? `<div class="actions"><button type="button" class="primary" data-lab-mention="@${e(lab.handle)}">Message</button></div><p class="fine">Your message goes on the board and wakes ${e(lab.handle)}.</p>`
         : ''
+      : record.task
+        ? `<p class="fine">It works in the folder of its task, in Strict mode.</p><div class="actions"><button type="button" data-task-select="${e(record.task.id)}">Open the task</button></div>`
+        : running && record.status !== 'terminal'
+          ? `<div class="actions"><button type="button" class="primary" data-message-to="session:${e(record.id)}">Write to it</button>${record.status === 'idle' ? '' : `<button type="button" data-action="cancel" data-session="${e(record.id)}">Cancel this turn</button>`}<button type="button" data-action="end" data-session="${e(record.id)}">End session</button></div><p class="fine">Your message reaches it during its turn, or starts its next turn.</p>`
+          : ''
   }
   ${!running && record.nativeSessionId ? `<p class="fine">Native session: ${e(record.nativeSessionId)}. The record is in .verifold/sessions/${e(record.id)}.json.</p>` : ''}`;
   return {
-    kind: record.task ? 'Task agent' : 'Session',
-    title: workerName(record, tasks),
-    sub: `<span class="status ${tone}">${e(label)}</span>`,
+    kind: lab
+      ? lab.checker
+        ? 'Checker'
+        : 'Lab agent'
+      : record.task
+        ? 'Task agent'
+        : 'Session',
+    title: lab ? lab.handle : workerName(record, tasks),
+    sub: `<span class="status ${tone}">${e(label)}</span>${lab ? ` <span class="fine">${e(lab.about)}</span>` : ''}`,
     body,
   };
 }
@@ -1249,6 +1347,30 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
       )
     : [])
     items.push({ ...call, view: 'home' });
+  // A lab agent whose process kept stopping waits for the person.
+  for (const entry of live.lab?.runs ? live.lab.directions : [])
+    if (entry.status === 'crashed')
+      items.push({
+        key: `lab-agent:${entry.agent.id}`,
+        view: 'home',
+        kind: 'Stopped agent',
+        title: `${entry.agent.handle} stopped by itself`,
+        why: `${stateOf(entry, clock).text}, so the lab does not start it again by itself.`,
+        since: entry.agent.restarts.at(-1) ?? null,
+        body: `<div class="actions"><button type="button" class="primary" data-action="lab-agent-restart" data-agent="${e(entry.agent.id)}">Start it again</button><button type="button" data-panel="agent" data-agent="${e(entry.agent.id)}" data-open-pane="summary">What it did</button></div>`,
+      });
+  // A terminal that the person holds keeps its agent from working.
+  for (const entry of live.lab?.runs ? live.lab.directions : [])
+    if (entry.status === 'terminal' && entry.agent.session)
+      items.push({
+        key: `lab-terminal:${entry.agent.id}`,
+        view: 'home',
+        kind: 'Terminal',
+        title: `You hold ${entry.agent.handle}'s terminal`,
+        why: 'The agent gets no turn until you return the terminal to Verifold.',
+        since: null,
+        body: `<div class="actions"><button type="button" class="primary" data-action="terminal-return" data-session="${e(entry.agent.session)}">Return it to Verifold</button><button type="button" data-panel="agent" data-agent="${e(entry.agent.id)}" data-open-pane="terminal">Open the terminal</button></div>`,
+      });
   // A lab run has no research to continue.
   if (
     live.research &&
@@ -1495,7 +1617,46 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
     const stalled = stalledTeam(live, tasks, messages);
     if (stalled) items.push(stalled);
   }
-  return items;
+  // A lab's Needs-you line shows the first: a call, a stopped agent, a missing secret, then a pod outside the limits.
+  return live.lab ? labOrder(items) : items;
+}
+
+/**
+ * What this lab's pods cost so far, and the project's limit. Pods of tasks,
+ * and of earlier labs before Start over, are not this lab's.
+ */
+function labGpu(
+  compute: ComputeView,
+  startedAt: string,
+): { spent: number; limit: number | null } {
+  const now = Date.now();
+  return {
+    spent: compute.leases
+      .filter(
+        (lease) =>
+          lease.directions?.length &&
+          Date.parse(lease.requestedAt) >= Date.parse(startedAt),
+      )
+      .reduce((sum, lease) => sum + spent(lease, now), 0),
+    limit: compute.settings.limitUsd,
+  };
+}
+
+/** The order of a lab's needs. The sort is stable, so each kind keeps its own order. */
+function labOrder(items: readonly Need[]): Need[] {
+  const order = [
+    'lab-call:',
+    'lab-agent:',
+    'lease-secret:',
+    'lease:',
+    'request:',
+    'lab-terminal:',
+  ];
+  const rank = (key: string): number => {
+    const index = order.findIndex((prefix) => key.startsWith(prefix));
+    return index < 0 ? order.length : index;
+  };
+  return [...items].sort((a, b) => rank(a.key) - rank(b.key));
 }
 
 /** The secrets that a lease names and this computer does not store. */
@@ -3485,8 +3646,9 @@ function renderPanel(
   chosen: DeskAttempt | undefined,
   report: ResearchReport | null,
   messages: readonly Message[],
-  direction: string | undefined,
+  frame: DeskFrame,
 ): string {
+  const { direction } = frame;
   const tasks = live.tasks?.list ?? [];
   const gone = (kind: string, title: string, text: string): Panel => ({
     kind,
@@ -3495,7 +3657,16 @@ function renderPanel(
     body: `<p class="empty-note">${text}</p>`,
   });
   let shown: Panel;
-  if (panel === 'worker')
+  const lab = live.lab;
+  if (panel === 'run' || panel === 'diff' || panel === 'agent')
+    shown = !lab
+      ? gone('Lab', 'No lab', 'This project has no lab.')
+      : panel === 'run'
+        ? runPanel(lab, frame.run, clock)
+        : panel === 'diff'
+          ? diffPanel(lab, direction, frame.proof, live.labDiff ?? null)
+          : labAgentPanel(lab, frame.agent, live, tasks);
+  else if (panel === 'worker')
     shown = live.session
       ? workerPanel(live.session, live, tasks)
       : gone(
@@ -3639,13 +3810,14 @@ export function renderDesk(
                       live.archives,
                     )
                   : view === 'home' && live.lab
-                    ? renderLab(
-                        live.lab,
-                        clock,
-                        (source, label) => transcriptSlot(source, label, ''),
-                        `${needsCard(needs)}${renderPodsLine(live.compute)}${renderPaused(live)}`,
-                        live.labWorks ?? [],
-                      )
+                    ? renderLab(live.lab, clock, {
+                        needs,
+                        works: live.labWorks ?? [],
+                        gpu: live.compute
+                          ? labGpu(live.compute, live.lab.state.startedAt)
+                          : null,
+                        extra: `${renderPodsLine(live.compute)}${renderPaused(live)}`,
+                      })
                     : renderHome(
                         snapshot,
                         live,
@@ -3671,12 +3843,13 @@ export function renderDesk(
           view === 'home',
         )
       : '';
-  const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${dock}${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame.direction) : ''}`;
+  const html = `${renderRail({ view, panel: frame.panel, ...(frame.hideFinished ? { hideFinished: true } : {}) }, live, tasks, needs)}<main id="view" tabindex="-1">${main}</main>${dock}${frame.panel ? renderPanel(frame.panel, workspace, live, chosen, report, messages, frame) : ''}`;
   return {
     html,
     observation: '',
     title: snapshot.project,
-    stage: stageText(at),
+    // A lab's header says where it stands. The research arc does not apply to it.
+    stage: live.lab ? '' : stageText(at),
     needs: needs.map(({ key, title }) => ({ key, title })),
     work: at.work ?? null,
     stoppable: live.archives !== undefined,

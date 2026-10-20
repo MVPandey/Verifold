@@ -419,7 +419,7 @@ You give the lab a time budget in hours: 8 unless you choose another.
   - what it builds on, marked known or new
   - a harness from the project's team
 - The first agent keeps its own folder for its own direction. Verifold opens the other directions, each with its own agent and folder. Each new agent starts with the plan in its first prompt.
-- The desk shows the plan above the directions. Reply to the plan to change it: your reply wakes the agent that wrote it. When it changes the plan, it lists every open direction. The new plan post answers the old one and wakes the agents whose directions changed. Only the first agent changes the plan, and only you stop a direction.
+- The plan is a post on the board, with a table of the directions, their bars, and what they build on. Reply to the plan to change it: your reply wakes the agent that wrote it. When it changes the plan, it lists every open direction. The new plan post answers the old one and wakes the agents whose directions changed. Only the first agent changes the plan, and only you stop a direction.
 - When the time budget ends, the lab pauses, also when the computer slept past the end. No turn starts after that. Needs you asks with a go call: continue 4 more hours, or stop here. An agent's open call for more hours asks instead. After "Stop here", the paused lab offers more time itself. More time resumes a lab that the time budget paused. A lab that you paused stays paused until you resume it.
 
 One run has one team: the coordinator's team (research, the coordinator, and its tasks) or a lab. A coordinator or a task makes the run the coordinator's team's, so the lab does not start: Start over first, then start the lab on the new run. The lab also waits while a research step runs: let the step end, or cancel it in Research. The lab never stops research by itself. While a lab exists, no research step, coordinator, or task starts, from the desk or from `verifold research` and `verifold select`. After Start over of a lab run, research does not start by itself, and Home offers the lab again.
@@ -502,7 +502,7 @@ A check settles a dispute without you: a fresh agent of the other harness tests 
 - A check has 3 turns and 60 minutes. A run that ends after its last turn gives it one more turn to post. A check that does not post in that time fails, with a note on the board that wakes the objectors, and the direction's agent when it asked for holds up. A post gets at most 2 checks.
 - A checker's handle can be mentioned, but it reads no board, so the mention does not reach it.
 - A pause or Start over ends a check's session; a fresh one starts after the resume, with a list of its earlier runs. When Verifold or the checker's process stops, or its start or its folder fails, the check starts again once the same way. After a second stop it fails, with its note.
-- The desk pins open disputes above the directions: each post with objections that a check took and no check answered yet, with where its check is and the check's runs. An objection that no check can answer, because its post cites no run or had its checks, stays a reply in its thread. A post that a check tested shows how, with a check that waits or runs first: `reran r-9 (Codex): acc=0.7`, `did not hold on r-9`, `read the code only`, or `(same harness)`. A row's evidence line says the same, or `not checked`, and a row whose evidence is in dispute says so.
+- The board pins open disputes at its top: each post with objections that a check took and no check answered yet, with where its check is, the check's runs, and a link to the row whose evidence it is. An objection that no check can answer, because its post cites no run or had its checks, stays a reply in its thread. A post that a check tested shows how, with a check that waits or runs first: `reran r-9 (Codex): acc=0.7`, `did not hold on r-9`, `read the code only`, or `(same harness)`. A row's evidence line says the same, or `not checked`, and a row whose evidence is in dispute says so.
 
 **Calls**
 
@@ -547,20 +547,25 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 - When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 12 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.
 - A used-up usage window pauses the idle agents of that harness until the reset.
 - After a restart, each agent resumes in turn with a digest that says so.
-- An agent whose process stops by itself, or whose start fails, starts again after a wait: 30 seconds, then twice as long each time. It starts again at most twice an hour. After the third stop, its row offers Start again.
+- An agent whose process stops by itself, or whose start fails, starts again after a wait: 30 seconds, then twice as long each time. It starts again at most twice an hour. After the third stop, Needs you and its row offer Start again.
 - If an agent's conversation cannot resume, its next start begins a new conversation with the board summary. The posts that it has not read come in its next turn.
 
-**Controls**
+**The screen**
 
-- **Stop** on a row ends that direction's agent and cancels its runs. Its folder and branch stay.
-- A row shows the direction's runs: those that run now, then the newest. A run on a row or on a post shows its status and up to three metrics. **Log** shows the end of its log, and **Cancel** on a row stops a run that runs.
-- **What it did** on a row opens the agent's transcript.
-- **Pause the lab** pauses every agent until you resume it. After the time budget ends, give the lab more time instead.
-- Home in a lab still shows what needs you. Its one message box posts to the board.
-- A long post shows its start, and the rest folds under **Show the whole post**.
+- A lab's Home is one column. The header gives the question, the day of the lab, the deadline, and the money: Claude Code's cost estimates of the lab's sessions plus what the pods cost. The total is an estimate. Codex reports no cost, so its usage is not counted, and the header says so. The views and the team open from the menu at the top left.
+- **Pause** pauses every agent until you resume it. After the time budget ends, give the lab more time instead.
+- One line says what needs you first: an open call, then an agent that stopped by itself, a missing pod secret, and a pod outside your limits. It opens in place and counts the rest, which Needs you lists. While a call is open, the number keys choose its options.
+- Each direction has one row: its verdict, its title with one line of evidence, its agent, and its check or its state. The row opens in place to its bar, its runs, and its controls:
+  - **Message** puts the agent's handle in the message box.
+  - **What it did** opens the agent in the side panel: its events, its transcript, and its commands.
+  - **Diff** opens what the direction's branch changed since it started. Choose a file to see its changes.
+  - **Terminal** opens the agent's own harness in a terminal, between its turns. The agent gets no turn while you hold it. When you return, its next turn follows.
+  - **Stop** ends that direction's agent and cancels its runs. Its folder and branch stay.
+- The board shows the threads by direction. Each post shows its kind and its proof. A run or a diff opens in the side panel: a run with its command, commit, place, state, metrics, outputs, and the end of its log. **Cancel the run** stops a run that runs. A long post shows its start, and the rest folds under **Show the whole post**.
+- The one message box posts to the board. It completes `@claude-1`, `@d-2`, and `@all` as you type. `@d-2` puts your post in that direction, so it wakes that direction's agent. Enter sends, and Shift+Enter starts a new line.
 - A desk of `verifold session` only shows the lab. Run `verifold` in the project folder to work in it.
-- Start over pauses the lab and archives it and its board with the rest of the run. A restored lab comes back paused. **Resume the lab** continues it.
-- Lab agents have no terminal, and the terminal's commands leave them alone. Write to them on the board.
+- Start over pauses the lab and archives it and its board with the rest of the run. A restored lab comes back paused. **Resume** continues it.
+- The terminal's commands leave lab agents alone. Write to them on the board.
 - A lab action that takes longer than two seconds, such as opening a direction, goes on in the background. The lab shows it while it runs, and why it failed if it did. One such action runs at a time.
 
 ### GPU pods on RunPod

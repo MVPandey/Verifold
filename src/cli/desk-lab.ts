@@ -18,6 +18,7 @@ import {
   type Check,
   type DirectionView,
   type LabView,
+  type Verdict,
 } from './lab.ts';
 import { usd } from './leases.ts';
 import { checkableKinds, checkLimits } from './lab-tools.ts';
@@ -28,18 +29,16 @@ import {
   runSummary,
   type RunRecord,
 } from './runs.ts';
+import type { HarnessName } from './harness.ts';
 import { hostName } from './session.ts';
+import type { ChangedFile } from './workspaces.ts';
 
 /**
- * The lab's view in the desk: the question, one row for each direction with
- * its agent and state, the board as threads by direction, and one message
- * box. Every agent text is escaped. The view keeps a few words on each row;
- * files stay in the folders, and each agent's transcript and each run's log
- * open from its row.
+ * The lab's screen in the desk. One header line, one Needs-you line, one row
+ * for each direction, and the board as threads by direction, with one
+ * message box. Depth opens in the side panel from a row or a post: a run, a
+ * direction's diff, or an agent. Every agent text is escaped.
  */
-
-/** A place for a transcript that the page fills: the desk view's slot. */
-type TranscriptSlot = (source: string, label: string) => string;
 
 /** A lab action that runs in the background, or why it failed. The lab view shows it. */
 export interface LabWork {
@@ -48,6 +47,22 @@ export interface LabWork {
   readonly label: string;
   readonly at: string;
   readonly error: string | null;
+}
+
+/** One thing that waits for the person, in the order of the Needs-you line. `body` is HTML. */
+export interface LabNeed {
+  readonly key: string;
+  readonly title: string;
+  readonly why: string;
+  readonly body: string;
+}
+
+/** What the side panel shows. `sub` and `body` are HTML, already escaped. */
+export interface Panel {
+  readonly kind: string;
+  readonly title: string;
+  readonly sub: string;
+  readonly body: string;
 }
 
 /**
@@ -69,7 +84,7 @@ export function renderLabWork(
 }
 
 const kindWords: Record<PostKind, string> = {
-  plan: 'Plan',
+  plan: 'Plan of record',
   claim: 'Claim',
   evidence: 'Evidence',
   objection: 'Objection',
@@ -78,6 +93,24 @@ const kindWords: Record<PostKind, string> = {
   'ruled-out': 'Ruled out',
   status: 'Note',
 };
+
+/** The mark of a row's verdict. It is decoration: the word beside it says the verdict. */
+const verdictMarks: Record<Verdict | 'disputed', string> = {
+  open: '○',
+  leading: '↗',
+  'holds-up': '✓',
+  'ruled-out': '×',
+  disputed: '⚠',
+};
+
+/** A row's verdict in words. A direction with no verdict is not settled yet. */
+function verdictText(verdict: Verdict, disputed: boolean): string {
+  return disputed
+    ? 'Disputed'
+    : verdict === 'open'
+      ? 'Not settled'
+      : verdictWords[verdict];
+}
 
 /** The posts that the view shows. Older ones stay on the board and in the agents' digests. */
 const shownPosts = 120;
@@ -98,6 +131,8 @@ export function stateOf(
       return { text: 'Starting', face: 'working' };
     case 'working':
       return { text: 'Working', face: 'working' };
+    case 'terminal':
+      return { text: 'You hold its terminal', face: 'working' };
     case 'idle':
       return { text: 'Between turns', face: 'idle' };
     case 'slot':
@@ -126,16 +161,15 @@ export function stateOf(
   }
 }
 
-function proofText(artifact: Artifact): string {
-  switch (artifact.type) {
-    case 'file':
-    case 'figure':
-      return `${artifact.type} ${artifact.path}${artifact.direction ? ` in ${artifact.direction}` : ''} at ${artifact.commit.slice(0, 7)}`;
-    case 'diff':
-      return `diff of ${artifact.paths.join(', ')}${artifact.direction ? ` in ${artifact.direction}` : ''} at ${artifact.to.slice(0, 7)}`;
-    case 'run':
-      return `run ${artifact.run}`;
-  }
+/**
+ * A round mark with the initials of an agent's harness, which names the
+ * harness to a screen reader. The person's and Verifold's marks are
+ * decoration: the name beside them says who it is.
+ */
+function who(host: HarnessName | 'person' | 'verifold'): string {
+  if (host === 'claude' || host === 'codex')
+    return `<span class="who who-${host}" role="img" aria-label="${hostName(host)}" title="${hostName(host)}">${host === 'claude' ? 'Cl' : 'Cx'}</span>`;
+  return `<span class="who who-${host}" aria-hidden="true">${host === 'person' ? 'You' : 'V'}</span>`;
 }
 
 /** The kinds of post that a check can test, when they cite a run. */
@@ -239,110 +273,74 @@ export function openDisputes(view: LabView): {
   });
 }
 
-/** Open disputes, pinned above the directions: one item for each disputed post, with where its check is. */
-function disputesCard(
+/** Where a dispute's check is, in a few words. */
+function checkWhere(check: Check | null): string {
+  if (!check) return 'No check yet.';
+  if (check.state === 'failed')
+    return `Check ${check.id} failed: ${check.note ?? 'no reason'} Another objection starts a new check.`;
+  return check.state === 'running'
+    ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
+    : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
+}
+
+/**
+ * Open disputes, pinned at the top of the board: each disputed post, its
+ * doubts, where its check is, and a link to the row that rests on it.
+ */
+function pinnedDisputes(
   view: LabView,
   open: ReturnType<typeof openDisputes>,
   name: (author: string) => string,
-  slot: TranscriptSlot,
 ): string {
   if (!open.length) return '';
-  const items = open.map(({ objections, target, check }) => {
-    const where = !check
-      ? 'No check yet.'
-      : check.state === 'failed'
-        ? `Check ${check.id} failed: ${check.note ?? 'no reason'} Another objection starts a new check, which takes these too.`
-        : check.state === 'running'
-          ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
-          : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
-    const runs = check
-      ? view.ledger
-          .filter((run) => run.agent === check.agent)
-          .map((run) => runHtml(run, check.id, view.runs))
-          .join('')
-      : '';
-    const transcript =
-      check?.session && check.state !== 'queued'
-        ? `<details class="lab-activity"><summary>What ${e(check.handle)} did</summary>${slot(`session:${check.session}`, `${check.handle} transcript`)}</details>`
-        : '';
-    const doubts = objections
-      .map(
-        (objection) =>
-          `<p class="pre"><a href="#post-${e(objection.id)}">${e(name(objection.author))}</a>: ${e(clip(objection.text, 280))}</p>`,
-      )
-      .join('');
-    return `<li><a href="#post-${e(target.id)}">${e(target.id)} is in dispute</a>${target.direction ? ` <span class="fine">in ${e(view.state.directions.find((entry) => entry.id === target.direction)?.title ?? target.direction)}</span>` : ''}${doubts}<p class="fine">${e(where)}</p>${runs ? `<div class="lab-runs">${runs}</div>` : ''}${transcript}</li>`;
-  });
-  return `<section class="card lab-disputes" aria-labelledby="disputes-title"><h2 id="disputes-title">Open disputes</h2><ul>${items.join('')}</ul><p class="fine">A fresh agent of the other harness reruns the disputed post. Its rerun settles the dispute.</p></section>`;
+  return `<ul class="lab-pinned" aria-label="Open disputes">${open
+    .map(({ objections, target, check }) => {
+      const row = view.state.directions.find(
+        (entry) => entry.evidence?.post === target.id,
+      );
+      const doubt = objections[0];
+      const runs = check
+        ? view.ledger.filter((run) => run.agent === check.agent)
+        : [];
+      return `<li><span class="verdict v-disputed"><span aria-hidden="true">⚠</span> Disputed</span><div class="pinned-text"><p><a href="#post-${e(target.id)}">${e(target.id)}</a> by ${e(name(target.author))}${row ? `, the evidence of <a href="#row-${e(row.id)}">${e(row.title)}</a>` : ''}: ${e(clip(target.text, 140))}</p>${doubt ? `<p class="fine">${e(name(doubt.author))} objects: ${e(clip(doubt.text, 140))}${objections.length > 1 ? ` (and ${objections.length - 1} more)` : ''}</p>` : ''}<p class="fine">${e(checkWhere(check))}${runs.map((run) => ` ${runButton(run)}`).join('')}${check?.session && check.state !== 'queued' ? ` <button type="button" class="link" data-panel="agent" data-agent="${e(check.agent)}" data-open-pane="summary">What ${e(check.handle)} did</button>` : ''}</p></div></li>`;
+    })
+    .join('')}</ul>`;
 }
 
-/** Runs that a direction's row shows: those that run now, then the newest. */
-const rowRuns = 3;
-
-/**
- * One run: its ID, its state, its pod, and up to three metrics, with its log one click
- * away. `place` keeps the log's ID apart where a run shows twice, on its row
- * and in a post. The person cancels a run that runs from its row.
- */
-function runHtml(run: RunRecord, place: string, cancel: boolean): string {
-  const active = runActive(run);
-  const metrics = metricsText(run);
-  return `<div class="lab-run"><span class="chip run-${e(run.status)}">${e(run.id)}</span> <span>${e(runSummary(run))}</span>${run.where === 'local' ? '' : ` <span class="fine">${e(placeText(run))}</span>`}${metrics ? ` <span class="fine">${e(metrics)}</span>` : ''}${cancel && active ? ` <button type="button" class="quiet" data-action="lab-run-cancel" data-run="${e(run.id)}" data-confirm="Click again to cancel this run">Cancel</button>` : ''}<details class="run-log" id="run-log-${e(place)}-${e(run.id)}"><summary>Log</summary><p class="fine">${e(run.why)} · <code>${e(clip(run.command, 300))}</code> at ${e(run.commit.slice(0, 7))}${run.note ? ` · ${e(run.note)}` : ''}</p><pre class="run-log-text" data-run-log="${e(run.id)}"></pre></details></div>`;
+/** A run as a small button that opens it in the panel: its ID, state, and first metric. */
+function runButton(run: RunRecord): string {
+  const metric = metricsText(run, 1);
+  return `<button type="button" class="proof run-${e(run.status)}" data-panel="run" data-run="${e(run.id)}">${e(run.id)}${runActive(run) ? ' · running' : metric ? ` · ${e(metric)}` : ` · ${e(runSummary(run))}`}</button>`;
 }
 
 /**
- * The plan of record: how the lab reads the question, and each direction
- * with its bar and what it builds on. Before the plan, a line says that the
- * first agent writes it.
+ * The proof of a post: a run, or the diff that the post cites, opens in the
+ * panel, and a file or a figure names its path.
  */
-function planCard(
-  view: LabView,
-  name: (author: string) => string,
-  clock: (value: string) => string,
+function proofHtml(
+  artifact: Artifact,
+  index: number,
+  ledger: ReadonlyMap<string, RunRecord>,
+  post: Post,
 ): string {
-  const { state } = view;
-  const plan = state.plan;
-  if (!plan) {
-    const opener = view.directions.find(
-      (entry) => entry.agent.id === state.opener,
-    );
-    if (!opener) return '';
-    return `<section class="card lab-plan" aria-labelledby="plan-title"><h2 id="plan-title">Plan of record</h2><p>${
-      opener.status === 'stopped' ||
-      opener.status === 'closed' ||
-      opener.status === 'crashed'
-        ? `${e(opener.agent.handle)} stopped before it posted a plan. Open directions yourself, or start it again.`
-        : `${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.`
-    }</p></section>`;
+  switch (artifact.type) {
+    case 'run': {
+      const run = ledger.get(artifact.run);
+      return run
+        ? runButton(run)
+        : `<span class="proof">${e(artifact.run)}</span>`;
+    }
+    case 'diff': {
+      const where = artifact.direction ?? post.direction;
+      const label = `diff · ${clip(artifact.paths.join(', '), 60)}`;
+      return where
+        ? `<button type="button" class="proof" data-panel="diff" data-lab-direction="${e(where)}" data-proof="${e(post.id)}.${index}">${e(label)}</button>`
+        : `<span class="proof">${e(label)}</span>`;
+    }
+    case 'file':
+    case 'figure':
+      return `<span class="proof" title="${e(`${artifact.path} at ${artifact.commit.slice(0, 7)}${artifact.direction ? ` in ${artifact.direction}` : ''}`)}">${e(artifact.type)} · ${e(clip(artifact.path, 60))}</span>`;
   }
-  const rows = plan.directions.flatMap((id) => {
-    const direction = state.directions.find((entry) => entry.id === id);
-    return direction
-      ? [
-          `<tr><th scope="row">${e(direction.title)}${direction.state === 'open' ? '' : ` <span class="fine">(${direction.state})</span>`}</th><td>${e(barSummary(direction))}</td><td>${direction.buildsOn.length ? direction.buildsOn.map((work) => `${e(work.text)} <span class="fine">(${work.known ? 'known' : 'new'})</span>`).join('<br>') : '<span class="fine">Nothing named</span>'}</td></tr>`,
-        ]
-      : [];
-  });
-  const author = state.opener ? name(state.opener) : 'The first agent';
-  // A reply wakes the plan's author only while it works for the lab.
-  const writer = view.directions.find(
-    (entry) => entry.agent.id === state.opener,
-  );
-  const listening =
-    writer !== undefined &&
-    writer.status !== 'stopped' &&
-    writer.status !== 'closed' &&
-    writer.status !== 'crashed';
-  const reply = !view.runs
-    ? ''
-    : listening
-      ? `<div class="actions"><button type="button" data-action="lab-reply" data-post="${e(plan.post)}">Reply to the plan</button></div><p class="fine">A reply wakes ${e(author)}, who can change the plan.</p>`
-      : `<p class="fine">${e(author)} no longer works, so the plan stays as it is.</p>`;
-  return `<section class="card lab-plan" aria-labelledby="plan-title"><div class="section-title"><h2 id="plan-title">Plan of record</h2><span class="count">${e(author)}, ${e(clock(plan.at))}</span></div>
-  <p class="pre">${e(plan.reading)}</p>
-  <div class="table"><table><thead><tr><th scope="col">Direction</th><th scope="col">Holds up if</th><th scope="col">Builds on</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
-  <p class="fine">What costs money, says ${e(author)}: ${e(plan.cost)}</p>
-  ${reply}</section>`;
 }
 
 /** A span of minutes, such as "45 min" or "3 h 20 min". */
@@ -352,16 +350,17 @@ export function minutesText(minutes: number): string {
   return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 }
 
+/** Runs that a direction's open row shows: those that run now, then the newest. */
+const rowRuns = 3;
+
 /**
- * One direction: its title and bar, its agent, its state, its controls, and
- * the agent's transcript under them. A control keeps its direction in
- * `data-lab-direction`: the page opens a research direction on a click of an
- * element with `data-direction`.
+ * One direction's row: its verdict, its title with one line of evidence, its
+ * agent, and its check or state. The row opens in place to its runs and its
+ * controls. Its depth (the agent, the diff, a run) opens in the panel.
  */
 function directionRow(
   entry: DirectionView,
   clock: (value: string) => string,
-  slot: TranscriptSlot,
   view: LabView,
   disputed: ReadonlySet<string>,
   byId: ReadonlyMap<string, RunRecord>,
@@ -377,30 +376,6 @@ function directionRow(
     ...own.filter(runActive),
     ...own.filter((run) => !runActive(run)).reverse(),
   ].slice(0, rowRuns);
-  const experiments = shown.length
-    ? `<div class="lab-runs">${shown.map((run) => runHtml(run, direction.id, runs)).join('')}${own.length > shown.length ? `<p class="fine">${own.length} runs in all. Their records are in .verifold/lab/runs/.</p>` : ''}</div>`
-    : '';
-  const active = status === 'working' || status === 'starting';
-  const controls = (
-    runs
-      ? [
-          status === 'crashed'
-            ? `<button type="button" data-action="lab-agent-restart" data-agent="${e(agent.id)}">Start again</button>`
-            : '',
-          direction.state === 'open'
-            ? `<button type="button" class="quiet" data-action="lab-direction-stop" data-lab-direction="${e(direction.id)}" data-confirm="Click again to stop this direction">Stop</button>`
-            : '',
-        ]
-      : []
-  ).join('');
-  const transcript = agent.session
-    ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
-    : '';
-  // The verdict that its agent gives, with its line of evidence and where the proof is.
-  const verdict =
-    direction.verdict === 'open'
-      ? ''
-      : ` <span class="chip verdict-${e(direction.verdict)}">${e(verdictWords[direction.verdict])}</span>`;
   const proof = direction.evidence
     ? view.posts.find((post) => post.id === direction.evidence?.post)
     : undefined;
@@ -409,14 +384,51 @@ function directionRow(
     proof && checkable.has(proof.kind)
       ? (checkMark(proof, view, byId) ?? 'not checked')
       : null;
-  const evidence = direction.evidence
-    ? `<span class="fine">${e(direction.evidence.text)} · ${e(direction.evidence.post)}${direction.evidence.run ? ` · ${e(direction.evidence.run)}` : ''}${mark ? ` · ${e(mark)}` : ''}</span>`
-    : '';
   const dispute =
-    direction.evidence && disputed.has(direction.evidence.post)
-      ? ' <span class="chip kind-objection">Disputed</span>'
+    direction.evidence !== null && disputed.has(direction.evidence.post);
+  const glyph = verdictMarks[dispute ? 'disputed' : direction.verdict];
+  const word = verdictText(direction.verdict, dispute);
+  const state = stateOf(entry, clock);
+  // A state that needs attention comes before the check.
+  const loud =
+    status === 'crashed' ||
+    status === 'usage' ||
+    status === 'terminal' ||
+    status === 'stopped' ||
+    status === 'closed';
+  const right = loud || !mark ? state.text : mark;
+  const line = direction.evidence
+    ? `${direction.evidence.text} · ${direction.evidence.post}${direction.evidence.run ? ` · ${direction.evidence.run}` : ''}`
+    : direction.bar
+      ? `Holds up if ${barSummary(direction)}`
       : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}${verdict}${dispute}</strong>${evidence}${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
+  const open = direction.state === 'open';
+  const controls = [
+    runs && open
+      ? `<button type="button" data-lab-mention="@${e(agent.handle)}">Message</button>`
+      : '',
+    `<button type="button" data-panel="agent" data-agent="${e(agent.id)}" data-open-pane="summary">What ${e(agent.handle)} did</button>`,
+    `<button type="button" data-panel="diff" data-lab-direction="${e(direction.id)}">Diff</button>`,
+    runs && open && agent.session
+      ? `<button type="button" data-panel="agent" data-agent="${e(agent.id)}" data-open-pane="terminal">Terminal</button>`
+      : '',
+    runs && status === 'crashed'
+      ? `<button type="button" class="primary" data-action="lab-agent-restart" data-agent="${e(agent.id)}">Start again</button>`
+      : '',
+    runs && open
+      ? `<button type="button" class="quiet" data-action="lab-direction-stop" data-lab-direction="${e(direction.id)}" data-confirm="Click again to stop this direction">Stop</button>`
+      : '',
+  ].join('');
+  const facts = [
+    direction.evidence && direction.bar
+      ? `<p class="fine">Holds up if ${e(barSummary(direction))}</p>`
+      : '',
+    mark && right !== mark ? `<p class="fine">Check: ${e(mark)}</p>` : '',
+    shown.length
+      ? `<p class="row-runs">${shown.map(runButton).join(' ')}${own.length > shown.length ? ` <span class="fine">${own.length} runs in all</span>` : ''}</p>`
+      : '',
+  ].join('');
+  return `<li class="lab-row${dispute ? ' disputed' : ''}" id="row-${e(direction.id)}"><details id="row-open-${e(direction.id)}"><summary><span class="verdict v-${dispute ? 'disputed' : e(direction.verdict)}"><span aria-hidden="true">${glyph}</span> ${word}</span><span class="row-main"><strong>${e(direction.title)}</strong>${line ? `<span class="row-line">${e(line)}</span>` : ''}</span><span class="row-who">${who(agent.host)}<span class="row-handle">${e(agent.handle)}</span></span><span class="row-state${status === 'crashed' ? ' failed' : status === 'working' || status === 'starting' ? ' active' : ''}">${e(right)}</span></summary><div class="row-more">${facts}<div class="actions">${controls}</div></div></details></li>`;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */
@@ -446,12 +458,40 @@ function postText(post: Post, budget: { left: number }): string {
   if (bytes > budget.left)
     return `${head}<p class="fine">The whole post is on the board, in .verifold/board/${e(post.id)}.json.</p>`;
   budget.left -= bytes;
-  return `${head}<details><summary>Show the whole post</summary><p class="pre">${whole}</p></details>`;
+  return `${head}<details id="whole-${e(post.id)}"><summary>Show the whole post</summary><p class="pre">${whole}</p></details>`;
+}
+
+/** The plan of record under its post: each direction with its bar and what it builds on. */
+function planTable(view: LabView, name: (author: string) => string): string {
+  const plan = view.state.plan;
+  if (!plan) return '';
+  const rows = plan.directions.flatMap((id) => {
+    const direction = view.state.directions.find((entry) => entry.id === id);
+    return direction
+      ? [
+          `<tr><th scope="row">${e(direction.title)}${direction.state === 'open' ? '' : ` <span class="fine">(${direction.state})</span>`}</th><td>${e(barSummary(direction)) || '<span class="fine">No bar</span>'}</td><td>${direction.buildsOn.length ? direction.buildsOn.map((work) => `${e(work.text)} <span class="fine">(${work.known ? 'known' : 'new'})</span>`).join('<br>') : '<span class="fine">Nothing named</span>'}</td></tr>`,
+        ]
+      : [];
+  });
+  const author = view.state.opener
+    ? name(view.state.opener)
+    : 'The first agent';
+  // A reply wakes the plan's author only while it works for the lab.
+  const writer = view.directions.find(
+    (entry) => entry.agent.id === view.state.opener,
+  );
+  const listening =
+    writer !== undefined &&
+    writer.status !== 'stopped' &&
+    writer.status !== 'closed' &&
+    writer.status !== 'crashed';
+  return `<div class="table plan-table"><table><thead><tr><th scope="col">Direction</th><th scope="col">Holds up if</th><th scope="col">Builds on</th></tr></thead><tbody>${rows.join('')}</tbody></table></div><p class="fine">What costs money, says ${e(author)}: ${e(plan.cost)} ${listening ? `Reply to change the plan. A reply wakes ${e(author)}.` : `${e(author)} no longer works, so the plan stays as it is.`}</p>`;
 }
 
 function postHtml(
   post: Post,
   name: (author: string) => string,
+  host: (author: string) => HarnessName | 'person' | 'verifold',
   clock: (value: string) => string,
   replies: readonly Post[],
   budget: { left: number },
@@ -460,18 +500,23 @@ function postHtml(
 ): string {
   const { runs } = view;
   const mark = checkable.has(post.kind) ? checkMark(post, view, ledger) : null;
-  const proof = (artifact: Artifact): string => {
-    const run = artifact.type === 'run' ? ledger.get(artifact.run) : undefined;
-    return run
-      ? `<li>${runHtml(run, post.id, false)}</li>`
-      : `<li>${e(proofText(artifact))}</li>`;
-  };
   const person = post.author === 'person';
-  const kind =
-    post.kind === 'status'
+  const note = post.kind === 'status';
+  const kind = note
+    ? ''
+    : ` <span class="chip kind-${post.kind}">${person && post.kind === 'question' ? 'Message' : kindWords[post.kind]}</span>`;
+  const plan =
+    post.kind === 'plan' && view.state.plan?.post === post.id
+      ? planTable(view, name)
+      : '';
+  const proofs = post.artifacts.length
+    ? `<p class="proofs">${post.artifacts.map((artifact, index) => proofHtml(artifact, index, ledger, post)).join(' ')}</p>`
+    : '';
+  const reply =
+    note || !runs
       ? ''
-      : `<span class="chip kind-${post.kind}">${person && post.kind === 'question' ? 'Message' : kindWords[post.kind]}</span>`;
-  return `<article class="post${post.kind === 'status' ? ' note' : ''}" id="post-${e(post.id)}"><header class="feed-head"><strong>${e(name(post.author))}</strong>${kind}<time datetime="${e(post.at)}">${e(clock(post.at))}</time>${mark ? `<span class="fine">${e(mark)}</span>` : ''}</header>${postText(post, budget)}${post.artifacts.length ? `<ul class="proof">${post.artifacts.map(proof).join('')}</ul>` : ''}${post.kind === 'status' || !runs ? '' : `<button type="button" class="quiet" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`}${replies.length ? `<div class="replies">${replies.map((reply) => postHtml(reply, name, clock, [], budget, view, ledger)).join('')}</div>` : ''}</article>`;
+      : `<button type="button" class="link reply" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`;
+  return `<article class="post${note ? ' note' : ''}" id="post-${e(post.id)}">${who(host(post.author))}<div class="post-body"><header class="post-head"><strong>${e(name(post.author))}</strong>${kind} <time datetime="${e(post.at)}">${e(clock(post.at))}</time>${mark ? ` <span class="post-mark">${e(mark)}</span>` : ''}</header>${postText(post, budget)}${plan}${proofs}${reply}${replies.length ? `<div class="replies">${replies.map((entry) => postHtml(entry, name, host, clock, [], budget, view, ledger)).join('')}</div>` : ''}</div></article>`;
 }
 
 /**
@@ -482,13 +527,25 @@ function postHtml(
 function board(
   view: LabView,
   name: (author: string) => string,
+  host: (author: string) => HarnessName | 'person' | 'verifold',
   clock: (value: string) => string,
 ): string {
   const budget = { left: textBytes };
   const ledger = new Map(view.ledger.map((run) => [run.id, run]));
-  const posts = view.posts.slice(-shownPosts);
-  if (!posts.length)
-    return '<p class="empty-note">No posts yet. Agents post what they find here, with proof.</p>';
+  const newest = view.posts.slice(-shownPosts);
+  // The plan of record stays on the board after newer posts push it out.
+  const plan = view.posts.find((post) => post.id === view.state.plan?.post);
+  const posts = plan && !newest.includes(plan) ? [plan, ...newest] : newest;
+  if (!posts.length) {
+    const opener = view.directions.find(
+      (entry) => entry.agent.id === view.state.opener,
+    );
+    const ended =
+      opener?.status === 'stopped' ||
+      opener?.status === 'closed' ||
+      opener?.status === 'crashed';
+    return `<p class="empty-note">${!opener ? 'No posts yet. Agents post what they find here, with proof.' : ended ? `${e(opener.agent.handle)} stopped before it posted a plan. Open a direction yourself, or start it again.` : `${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.`}</p>`;
+  }
   const shown = new Set(posts.map((post) => post.id));
   const replies = new Map<string, Post[]>();
   const roots: Post[] = [];
@@ -530,49 +587,117 @@ function board(
       const title = key
         ? (view.state.directions.find((entry) => entry.id === key)?.title ??
           key)
-        : 'Not about one direction';
-      return `<section class="lab-thread" aria-label="${e(title)}"><h3>${e(title)}</h3>${group.ids
+        : 'The whole lab';
+      return `<section class="lab-thread" aria-label="${e(title)}"><h3>${key ? `<a href="#row-${e(key)}">${e(title)}</a>` : e(title)}</h3>${group.ids
         .flatMap((id) => {
           const thread = threads.get(id);
           return thread ? [thread] : [];
         })
         .sort((a, b) => b.latest - a.latest)
         .map((thread) =>
-          postHtml(thread.root, name, clock, thread.list, budget, view, ledger),
+          postHtml(
+            thread.root,
+            name,
+            host,
+            clock,
+            thread.list,
+            budget,
+            view,
+            ledger,
+          ),
         )
         .join('')}</section>`;
     })
     .join('');
 }
 
+/** GPU dollars from Compute: spent so far, and the limit when the person set one. */
+export interface LabGpu {
+  readonly spent: number;
+  readonly limit: number | null;
+}
+
 /**
- * Home for a lab. `clock` formats a time, and `slot` places a transcript.
- * `needs` is Home's HTML for what waits for the person, such as a permission
- * request of their own session. It shows above the directions.
+ * The header's money line. Claude Code reports its own cost estimate, and
+ * the pods' cost is what the leases billed; the total adds both. Codex
+ * reports no cost.
+ */
+export function costLine(view: LabView, gpu: LabGpu | null): string {
+  const claude = view.claudeUsd;
+  const pods = gpu?.spent ?? 0;
+  const parts = [
+    `Claude Code ≈${usd(claude)}`,
+    gpu
+      ? `GPU ${usd(pods)}${gpu.limit === null ? '' : ` of ${usd(gpu.limit)}`}`
+      : '',
+  ].filter(Boolean);
+  return `≈${usd(claude + pods)} spent (${parts.join(', ')}) · Codex usage not counted`;
+}
+
+/** The day of the lab by the calendar of this computer: day 1 is the day that it started. */
+function labDay(startedAt: string): number {
+  const start = new Date(startedAt);
+  start.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  // Round: a day with a clock change has 23 or 25 hours.
+  return Math.max(
+    1,
+    Math.round((today.getTime() - start.getTime()) / 86_400_000) + 1,
+  );
+}
+
+/** An ID for an element from a key, such as lab-call:c-3. */
+function idOf(key: string): string {
+  return key.replace(/[^a-zA-Z0-9-]/g, '-');
+}
+
+/**
+ * The Needs-you line: the first thing that waits for the person, which
+ * opens in place, and how many more wait. Without any, one quiet line says so.
+ */
+function needsLine(needs: readonly LabNeed[]): string {
+  const [first, ...rest] = needs;
+  if (!first)
+    return '<p class="lab-needs none" role="status"><span aria-hidden="true">✓</span> Nothing needs you.</p>';
+  const call = first.key.startsWith('lab-call:');
+  return `<section class="lab-needs" aria-label="Needs you"><details id="need-${e(idOf(first.key))}"${call ? ' data-lab-call' : ''}><summary><span class="needs-label">Needs you</span><span class="needs-title">${e(first.title)}</span><span class="decide" aria-hidden="true">Decide</span></summary><div class="needs-body"><p class="fine">${e(first.why)}</p>${first.body}${call ? '<p class="fine">Or press the number of an option.</p>' : ''}</div></details>${rest.length ? `<p class="needs-more"><button type="button" class="link" data-view="needs">${rest.length} more ${rest.length === 1 ? 'thing needs' : 'things need'} you</button></p>` : ''}</section>`;
+}
+
+/**
+ * Home for a lab. `clock` formats a time. `needs` waits for the person, in
+ * the order of the Needs-you line. `gpu` is the pods' spend from Compute.
  */
 export function renderLab(
   view: LabView,
   clock: (value: string) => string,
-  slot: TranscriptSlot,
-  needs = '',
-  works: readonly LabWork[] = [],
+  options: {
+    readonly needs?: readonly LabNeed[];
+    readonly works?: readonly LabWork[];
+    readonly gpu?: LabGpu | null;
+    /** More of Home, such as sessions that an earlier owner paused. */
+    readonly extra?: string;
+  } = {},
 ): string {
   const { state } = view;
+  const hosts = new Map<string, HarnessName>([
+    ...view.directions.map(
+      (entry) => [entry.agent.id, entry.agent.host] as const,
+    ),
+    ...view.checks.map((check) => [check.agent, check.harness] as const),
+  ]);
   const name = (author: string): string =>
     author === 'person'
       ? 'You'
       : author === 'verifold'
         ? 'Verifold'
         : (view.handles[author] ?? author);
-  const open = view.directions.filter(
-    (entry) => entry.direction.state === 'open',
-  );
-  const handles = open.map((entry) => `@${entry.agent.handle}`);
+  const host = (author: string): HarnessName | 'person' | 'verifold' =>
+    author === 'person' ? 'person' : (hosts.get(author) ?? 'verifold');
   const { runs } = view;
   const disputes = openDisputes(view);
   const disputed = new Set(disputes.map((dispute) => dispute.target.id));
   const byId = new Map(view.ledger.map((run) => [run.id, run]));
-  const working = renderLabWork(works, clock);
   // After the time budget, the lab goes on with more time, from Needs you: no plain Resume.
   const over = budgetEnded(state);
   const pause = !runs
@@ -580,13 +705,10 @@ export function renderLab(
     : state.pausedAt
       ? over
         ? ''
-        : '<button type="button" data-action="lab-resume">Resume the lab</button>'
-      : '<button type="button" class="quiet" data-action="lab-pause">Pause the lab</button>';
-  const minutes = state.budget
-    ? Math.ceil((Date.parse(state.budget.deadline) - Date.now()) / 60_000)
-    : 0;
-  const time = state.budget
-    ? `<p class="fine lab-time">Due ${e(clock(state.budget.deadline))} · ${over ? 'the time budget ended' : `${e(minutesText(minutes))} left`}</p>`
+        : '<button type="button" data-action="lab-resume">Resume</button>'
+      : '<button type="button" data-action="lab-pause">Pause</button>';
+  const due = state.budget
+    ? ` · Due <strong>${e(clock(state.budget.deadline))}</strong>${over ? ', the time budget ended' : ''}`
     : '';
   // Needs you asks for more time with a call. Without one, as after "Stop here", the notice gives more time.
   const asked = state.calls.some(
@@ -601,42 +723,55 @@ export function renderLab(
   const paused = !state.pausedAt
     ? ''
     : state.pausedFor === 'deadline'
-      ? `<p class="notice">The time budget ended at ${e(clock(state.budget?.deadline ?? state.pausedAt))}, so the lab paused. Give it more time to go on.${more}</p>`
+      ? `<p class="notice">The time budget ended at ${e(clock(state.budget?.deadline ?? state.pausedAt))}, so the lab paused.${more}</p>`
       : `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.${over ? ` Its time budget ended too: give it more time first.${more}` : ''}</p>`;
-  return `<div class="masthead"><h1 id="view-title" tabindex="-1">Lab</h1><p class="question">${e(state.question)}</p>${time}</div>
-  <div class="view lab">
-  ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${undoLines(view)}${needs}
-  ${disputesCard(view, disputes, name, slot)}
-  ${planCard(view, name, clock)}
-  <section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Directions</h2><span class="actions">${pause}</span></div>
-  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
-  ${runs ? addForm(view.directions.length > 0) : ''}</section>
-  ${runs ? composeBox(state, handles) : ''}
-  <section aria-labelledby="board-title"><div class="section-title"><h2 id="board-title">Board</h2><span class="count">${view.posts.length} ${view.posts.length === 1 ? 'post' : 'posts'}</span></div>${board(view, name, clock)}</section>
+  const open = view.directions.filter(
+    (entry) => entry.direction.state === 'open',
+  );
+  return `<div class="lab-screen">
+  <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, options.gpu ?? null))}</p></div>${pause ? `<span class="actions">${pause}</span>` : ''}</header>
+  ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${renderLabWork(options.works ?? [], clock)}
+  ${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
+  <section class="lab-section" aria-labelledby="directions-title"><h2 id="directions-title" class="lab-label">Directions</h2>
+  ${view.directions.length ? `<ul class="lab-rows">${view.directions.map((entry) => directionRow(entry, clock, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. The plan opens them, or you open one yourself.</p>'}
+  ${runs ? addForm() : ''}</section>
+  <section class="lab-section" aria-labelledby="board-title"><h2 id="board-title" class="lab-label">Board</h2>${pinnedDisputes(view, disputes, name)}${board(view, name, host, clock)}</section>
+  ${runs ? composeBox(view, open) : ''}
   </div>`;
 }
 
-/** The form that opens a direction. */
-function addForm(folded: boolean): string {
-  return `<details id="lab-add"${folded ? '' : ' open'}><summary>Open a direction</summary>
+/** The form that opens a direction, folded: agents open most directions with the plan. */
+function addForm(): string {
+  return `<details id="lab-add" class="lab-add"><summary>Open a direction yourself</summary>
   <label class="field" for="lab-title">Title</label><input id="lab-title" type="text" maxlength="120" placeholder="Years wind on a helix">
   <label class="field" for="lab-harness">Agent</label><select id="lab-harness"><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
   <label class="field" for="lab-bar">Holds up if (optional)</label><input id="lab-bar" type="text" maxlength="280" placeholder="it beats a circle for years on 3 seeds">
   <div class="actions"><button type="button" class="primary" data-action="lab-direction-add">Open the direction</button></div></details>`;
 }
 
-/** The box that posts to the board. */
-function composeBox(
-  state: LabView['state'],
-  handles: readonly string[],
-): string {
-  return `<section class="card lab-compose" aria-labelledby="compose-title"><h2 id="compose-title">Write to the lab</h2>
-  <textarea id="lab-text" rows="3" maxlength="4000" aria-labelledby="compose-title" placeholder="Write to the lab. ${e(handles[0] ?? '@claude-1')} wakes that agent."></textarea>
+/**
+ * The one message box. `@claude-1` wakes that agent, `@d-2` writes in that
+ * direction, and `@all` wakes every agent. The list under it completes the
+ * names.
+ */
+function composeBox(view: LabView, open: readonly DirectionView[]): string {
+  const names = [
+    ...open.map((entry) => ({
+      value: `@${entry.agent.handle}`,
+      note: `${hostName(entry.agent.host)}, ${entry.direction.title}`,
+    })),
+    ...open.map((entry) => ({
+      value: `@${entry.direction.id}`,
+      note: entry.direction.title,
+    })),
+    { value: '@all', note: 'Every agent' },
+  ];
+  return `<section class="lab-compose" aria-label="Write to the lab">
+  <p class="lab-replying" id="lab-replying" hidden><span id="lab-reply-note"></span><button type="button" class="link" data-action="lab-reply-clear" aria-label="Stop replying">×</button></p>
+  <div class="compose-row"><textarea id="lab-text" rows="1" maxlength="4000" aria-label="Message to the lab" placeholder="Reply or @mention" aria-autocomplete="list" aria-controls="lab-mentions" aria-describedby="lab-compose-note"></textarea><button type="button" class="primary" data-action="lab-post">Send</button></div>
   <input id="lab-reply" type="hidden" value="">
-  <p class="lab-replying" id="lab-replying" hidden><span id="lab-reply-note"></span><button type="button" class="quiet" data-action="lab-reply-clear" aria-label="Stop replying">×</button></p>
-  <div class="fields"><label class="field" for="lab-direction">About<select id="lab-direction"><option value="">Any direction</option>${state.directions.map((direction) => `<option value="${e(direction.id)}">${e(direction.title)}</option>`).join('')}</select></label></div>
-  <div class="actions"><button type="button" class="primary" data-action="lab-post">Post</button></div>
-  <p class="fine">${handles.length ? `Mention ${e(handles.join(', '))}, or @all. A post to nobody wakes every agent.` : 'Agents read your posts once their directions open.'}</p></section>`;
+  <ul id="lab-mentions" class="mentions" role="listbox" aria-label="Names" hidden>${names.map((entry, index) => `<li role="option" id="mention-${index}" data-value="${e(entry.value)}" aria-selected="false"><strong>${e(entry.value)}</strong> <span class="fine">${e(clip(entry.note, 60))}</span></li>`).join('')}</ul>
+  <p class="fine" id="lab-compose-note">${view.directions.length ? 'A message to nobody wakes every agent.' : 'Agents read your messages once their directions open.'}</p></section>`;
 }
 
 /** Home's offer to start a lab, for a project with no team at work. */
@@ -704,7 +839,7 @@ function effectLines(
   }
 }
 
-/** One option of a call: its button, its dollars and minutes, and what it does. */
+/** One option of a call: a large button with its dollars and minutes, and a line on what it does. */
 function optionHtml(
   call: Call,
   option: CallOption,
@@ -723,10 +858,11 @@ function optionHtml(
       ? ''
       : option.usd === 0
         ? 'No cost'
-        : `${usd(option.usd)}`,
+        : `About ${usd(option.usd)}`,
     option.minutes === null ? '' : minutesText(option.minutes),
   ].filter(Boolean);
-  return `<li><button type="button"${call.pick === index ? ' class="primary"' : ''} data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}">${e(option.label)}</button>${facts.length ? ` <span class="fine">${e(facts.join(' · '))}</span>` : ''}${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
+  const pick = call.pick === index;
+  return `<li><button type="button" class="call-option${pick ? ' picked' : ''}" data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}"><span class="option-label"><span class="key" aria-hidden="true">${index + 1}</span> ${e(option.label)}</span>${facts.length ? `<span class="option-facts">${e(facts.join(' · '))}</span>` : ''}${pick ? '<span class="pick">The agents\' pick</span>' : ''}</button>${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
 }
 
 /**
@@ -754,16 +890,18 @@ export function labCallNeeds(
         call.by === 'verifold'
           ? 'Verifold'
           : (view.handles[call.by] ?? call.by);
-      const pick = call.pick === null ? null : call.options[call.pick];
+      const about = view.state.directions.find(
+        (entry) => entry.id === call.direction,
+      );
       return {
         key: `lab-call:${call.id}`,
         kind: callWords[call.kind],
         title: call.question,
-        why: `${asker} asks${call.direction ? ` for ${call.direction}` : ''} (${call.id}).`,
+        why: `${asker} asks${about ? `, for ${about.title}` : ''} (${call.id}).`,
         since: call.at,
-        body: `<div class="why"><span class="tag reading">${pick ? `${e(asker)} advises "${e(pick.label)}"` : `${e(asker)} says`}</span> ${e(call.why)}</div>
+        body: `<p class="call-why">${call.pick === null ? `${e(asker)} says: ` : `Why ${e(asker)} picks it: `}${e(call.why)}</p>
   <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view, stored)).join('')}</ul>
-  <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}.` : 'Your answer applies at once, and it has no undo.'}</p>`,
+  <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}. If you do not answer, nothing happens.` : 'Your answer applies at once, and it has no undo. If you do not answer, nothing happens.'}</p>`,
       };
     });
 }
@@ -785,8 +923,113 @@ function undoLines(view: LabView): string {
       const left = Math.ceil((Date.parse(call.undoUntil) - now) / 60_000);
       const undo = `${option.effect ? `${effectLines(option.effect, call, view).undo} ` : ''}Then the call asks again.`;
       return [
-        `<p class="notice" role="status">You chose "${e(option.label)}" on ${e(call.id)}. <button type="button" class="quiet" data-action="lab-call-undo" data-call="${e(call.id)}">Undo</button> <span class="fine">${e(minutesText(left))} left. ${e(undo)}</span></p>`,
+        `<p class="lab-undo" role="status">You chose "${e(option.label)}" on ${e(call.id)}. <button type="button" class="link" data-action="lab-call-undo" data-call="${e(call.id)}">Undo</button> <span class="fine">${e(minutesText(left))} left. ${e(undo)}</span></p>`,
       ];
     })
     .join('');
+}
+
+/** A run in full, in the panel: its command, commit, place, state, metrics, outputs, and its log. */
+export function runPanel(
+  view: LabView,
+  id: string | undefined,
+  clock: (value: string) => string,
+): Panel {
+  const run = view.ledger.find((entry) => entry.id === id);
+  if (!run)
+    return {
+      kind: 'Run',
+      title: 'No such run',
+      sub: '',
+      body: '<p class="empty-note">This run is not in the lab, for example after Start over.</p>',
+    };
+  const by = view.handles[run.agent] ?? run.agent;
+  const direction = view.state.directions.find(
+    (entry) => entry.id === run.direction,
+  );
+  const metrics = Object.entries(run.metrics);
+  const facts: [string, string][] = [
+    ['Command', `<code>${e(run.command)}</code>`],
+    ['Why', e(run.why)],
+    ['Commit', `<code>${e(run.commit.slice(0, 12))}</code>`],
+    ['Where', e(placeText(run))],
+    ['Ran by', `${e(by)} (${e(hostName(run.harness))})`],
+    [
+      'Direction',
+      direction
+        ? `<a href="#row-${e(direction.id)}">${e(direction.title)}</a>`
+        : e(run.direction),
+    ],
+    ['State', e(runSummary(run))],
+    [
+      'Time',
+      `${run.startedAt ? `Started ${e(clock(run.startedAt))}` : `Queued ${e(clock(run.queuedAt))}`}${run.endedAt ? `, ended ${e(clock(run.endedAt))}` : ''}. At most ${run.minutes} min.`,
+    ],
+  ];
+  const body = `<dl class="facts">${facts.map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`).join('')}</dl>
+  ${run.note ? `<p class="notice">${e(run.note)}</p>` : ''}
+  ${metrics.length ? `<h3>Metrics</h3><div class="table"><table class="metrics"><thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead><tbody>${metrics.map(([metric, value]) => `<tr><th scope="row">${e(metric)}</th><td>${value === null ? 'Not a number' : e(String(value))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="fine">No metrics. A run reports them with METRIC name=value lines or metrics.json.</p>'}
+  ${run.outputs.length ? `<h3>Outputs</h3><ul class="outputs">${run.outputs.map((output) => `<li><code>${e(output.path)}</code> <span class="fine">${output.bytes} bytes</span></li>`).join('')}</ul><p class="fine">They are in .verifold/lab/runs/${e(run.id)}/outputs/.</p>` : ''}
+  <details class="run-log" id="panel-log-${e(run.id)}" open><summary>The end of its log</summary><pre class="run-log-text" data-run-log="${e(run.id)}"></pre></details>
+  ${view.runs && runActive(run) ? `<div class="actions"><button type="button" class="quiet" data-action="lab-run-cancel" data-run="${e(run.id)}" data-confirm="Click again to cancel this run">Cancel the run</button></div>` : ''}`;
+  return {
+    kind: 'Run',
+    title: `Run ${run.id}`,
+    sub: `<span class="status${runActive(run) ? ' active' : run.status === 'failed' ? ' failed' : ''}">${e(runSummary(run))}</span>`,
+    // A root of its own scopes the lab panel's styles.
+    body: `<div class="lab-panel">${body}</div>`,
+  };
+}
+
+/**
+ * What a direction's branch changed since its start, or, with `proof`, the
+ * diff that a proof cites (such as p-12.0): its commits and its paths.
+ */
+export interface LabDiff {
+  readonly direction: string;
+  readonly proof: string | null;
+  readonly from: string;
+  readonly to: string;
+  readonly files: readonly ChangedFile[];
+}
+
+/**
+ * A diff in the panel: the files that a direction's branch changed, or the
+ * files of the diff that a post cites. A click shows one file's changes.
+ */
+export function diffPanel(
+  view: LabView,
+  id: string | undefined,
+  proof: string | undefined,
+  diff: LabDiff | null,
+): Panel {
+  const direction = view.state.directions.find((entry) => entry.id === id);
+  if (!direction)
+    return {
+      kind: 'Diff',
+      title: 'No such direction',
+      sub: '',
+      body: '<p class="empty-note">This direction is not in the lab, for example after Start over.</p>',
+    };
+  const shown =
+    diff?.direction === direction.id && diff.proof === (proof ?? null)
+      ? diff
+      : null;
+  const files = shown?.files ?? null;
+  const range = shown
+    ? `from ${e(shown.from.slice(0, 7))} to ${e(shown.to.slice(0, 7))}`
+    : '';
+  const body =
+    !shown || !files
+      ? `<p class="empty-note">${proof ? 'Verifold could not read the diff of this post.' : "Verifold could not read this direction's branch."}</p>`
+      : !files.length
+        ? `<p class="empty-note">${proof ? 'The diff of this post changes no file.' : 'No file changed since the direction started.'}</p>`
+        : `<p class="fine">${files.length} ${files.length === 1 ? 'file' : 'files'} changed ${range}.</p><ul class="review-files">${files.map((file) => `<li><button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}"${proof ? ` data-diff-proof="${e(proof)}"` : ''} aria-pressed="false"><code>${e(file.path)}</code></button> <span class="fine change-${file.change}">${file.change}</span></li>`).join('')}</ul><div class="diff-pane lab-diff-pane" data-lab-direction="${e(direction.id)}" data-diff-proof="${e(proof ?? '')}" data-lab-to="${e(shown.to)}"><p class="fine">Choose a file to see its changes.</p></div>`;
+  return {
+    kind: 'Diff',
+    title: direction.title,
+    sub: `<span class="fine">${proof ? `The diff that ${e(proof.split('.')[0] ?? proof)} cites` : `${e(direction.workspace.branch ?? direction.workspace.path)}, since the direction started`}</span>`,
+    // A root of its own scopes the lab panel's styles.
+    body: `<div class="lab-panel">${body}</div>`,
+  };
 }

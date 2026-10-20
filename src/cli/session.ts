@@ -133,7 +133,11 @@ export interface SessionRecord {
   readonly status: SessionStatus;
   readonly startedAt: string;
   readonly endedAt: string | null;
-  /** Claude Code's own estimate. It is not a bill. */
+  /**
+   * Claude Code's own estimate. It is not a bill. A resumed conversation
+   * starts from what the earlier processes spent, so it covers the whole
+   * session (probed on Claude Code 2.1.304).
+   */
   readonly costUsd: number | null;
   readonly events: readonly SessionEvent[];
   readonly commands: readonly CommandEntry[];
@@ -155,6 +159,11 @@ export interface SessionRecord {
 export interface SessionView {
   readonly record: SessionRecord;
   readonly live: boolean;
+  /**
+   * A launch saves its record or starts the harness now, such as after a
+   * terminal. The session is busy, though it has no process yet.
+   */
+  readonly starting?: boolean;
   readonly saveFailed: boolean;
 }
 
@@ -536,6 +545,11 @@ function parseLaunch(value: unknown): SessionLaunch[] {
         },
       ]
     : [];
+}
+
+/** A dollar estimate: a finite number, zero or more. */
+export function usdValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 /** A saved record. Harness processes can write in the project folder, so each field is checked. */
@@ -950,6 +964,8 @@ export class SessionManager {
   private readonly requests: { next: number };
   /** A launch is saving its record. No second start can begin. */
   private launching = false;
+  /** The session moves to its terminal now: Claude Code's process ended, and the terminal opens. */
+  private handing = false;
   /** Each close adds one. A start that began before a close starts no harness after it. */
   private generation = 0;
   /** The launch in progress, so close can wait for it. */
@@ -965,6 +981,11 @@ export class SessionManager {
   /** The transcript file of the current launch. */
   /** The harness's own terminal while the person holds it. */
   private native: Terminal | null = null;
+  /**
+   * A turn that the person started in the Codex terminal runs in the
+   * app-server. Each new, ended, or paused process clears it.
+   */
+  private nativeTurn = false;
   private transcript: {
     readonly writer: TranscriptWriter;
     readonly apply: (update: TranscriptUpdate) => void;
@@ -989,6 +1010,7 @@ export class SessionManager {
           record: this.current,
           // A Claude Code session in its terminal has no structured process, but it is live.
           live: this.host !== null || this.native !== null,
+          ...(this.launching || this.handing ? { starting: true } : {}),
           saveFailed: this.saveFailed,
         }
       : null;
@@ -1022,9 +1044,11 @@ export class SessionManager {
    * Hand the session to the harness's own terminal, between turns. Claude Code
    * allows one process for a conversation, so its structured process stops
    * first and starts again when the terminal ends. A Codex terminal attaches to
-   * the same app-server, which keeps reporting its events.
+   * the same app-server, which keeps reporting its events. A lab agent's
+   * session opens only through the lab (`agent`), which gives the agent no
+   * turn meanwhile.
    */
-  async takeTerminal(lease: string): Promise<void> {
+  async takeTerminal(lease: string, agent = false): Promise<void> {
     const record = this.current;
     const host = this.host;
     if (this.native) fail('The terminal is open. Take input in it.');
@@ -1034,7 +1058,7 @@ export class SessionManager {
         'Open the terminal between turns. Wait for the turn to end, or cancel it.',
       );
     if (record.mode === 'coordinator') fail('The coordinator has no terminal.');
-    if (record.agent) fail(agentSession);
+    if (record.agent && !agent) fail(agentSession);
     const native =
       record.nativeSessionId ??
       fail('The harness has not reported its session yet.');
@@ -1084,6 +1108,7 @@ export class SessionManager {
       }));
     }
     let terminal: Terminal | undefined;
+    this.handing = true;
     try {
       terminal = await openTerminal({
         command: this.options.executables?.[record.host] ?? record.host,
@@ -1098,9 +1123,11 @@ export class SessionManager {
         },
       });
     } catch (error) {
+      this.handing = false;
       if (record.host === 'claude') await this.resumeAfterTerminal();
       throw error;
     }
+    this.handing = false;
     this.native = terminal;
     this.patch((current) => ({ ...current, status: 'terminal' }));
     this.event(
@@ -1125,9 +1152,15 @@ export class SessionManager {
     if (!record) return;
     this.event('status', 'You returned to Verifold.');
     if (record.task) this.options.onTaskTurn?.(record.task, 'terminal');
+    // Claude Code's process starts again, and its start tells the lab that the session is ready.
     if (record.host === 'claude') void this.resumeAfterTerminal();
-    else if (this.host)
+    // A turn that the person started in the Codex terminal goes on. Its end makes the session ready.
+    else if (this.host && this.nativeTurn)
+      this.patch((current) => ({ ...current, status: 'running' }));
+    else if (this.host) {
       this.patch((current) => ({ ...current, status: 'idle' }));
+      if (record.agent && this.current) this.options.onTurnEnd?.(this.current);
+    }
   }
 
   /** Start the structured Claude Code process again on the same conversation. */
@@ -1136,7 +1169,16 @@ export class SessionManager {
     try {
       await this.launch();
     } catch {
-      /* The launch records its failure in the session. */
+      // A start that failed before its process leaves the conversation to resume later.
+      if (!this.host && this.current?.status === 'starting')
+        this.patch((current) => ({
+          ...current,
+          status: current.nativeSessionId !== null ? 'paused' : 'failed',
+          launches: ended(current.launches),
+        }));
+      // A lab agent's owner hears of it, so it can start the agent again.
+      if (!this.host && this.current?.agent)
+        this.options.onTurnEnd?.(this.current);
     }
   }
 
@@ -1443,6 +1485,7 @@ export class SessionManager {
     if (!this.host) fail('No session is running.');
     this.host.close();
     this.host = null;
+    this.nativeTurn = false;
     this.dropSteers();
     this.patch((record) => ({
       ...unanswered(record),
@@ -1510,6 +1553,7 @@ export class SessionManager {
     native?.close();
     this.host?.close();
     this.host = null;
+    this.nativeTurn = false;
     this.dropSteers();
     // A task keeps the stopped turn as a version. Its next turn resumes the session.
     const resumable = record.nativeSessionId !== null;
@@ -1591,6 +1635,8 @@ export class SessionManager {
       const executable = this.options.executables?.[record.host];
       const native = record.nativeSessionId;
       this.prompted = prompt !== undefined;
+      // A new process runs no turn of a terminal.
+      this.nativeTurn = false;
       this.host = startHostSession({
         host: record.host,
         cwd: this.folder(record),
@@ -1708,6 +1754,7 @@ export class SessionManager {
     if (event.type === 'exit') {
       if (!this.host) return;
       this.host = null;
+      this.nativeTurn = false;
       this.dropSteers();
       this.patch((current) => ({
         ...unanswered(current),
@@ -1880,7 +1927,11 @@ export class SessionManager {
           `The Codex reviewer ${event.approved ? 'approved' : 'denied'} ${event.action ?? 'a command'}.${event.risk ? ` Risk: ${event.risk}.` : ''}${event.rationale ? ` ${event.rationale}` : ''}`,
         );
         break;
+      case 'turn-start':
+        if (this.native) this.nativeTurn = true;
+        break;
       case 'turn-end':
+        this.nativeTurn = false;
         // A turn that the person started in the Codex terminal is not a task turn.
         if (this.native) {
           this.patch((current) => unanswered(current));

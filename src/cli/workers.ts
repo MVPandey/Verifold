@@ -234,6 +234,11 @@ export class SessionPool {
     return this.live(id).takeTerminal(lease);
   }
 
+  /** The lab hands its agent's session to the harness's own terminal. */
+  takeAgentTerminal(id: string, lease: string): Promise<void> {
+    return this.live(id).takeTerminal(lease, true);
+  }
+
   returnFromTerminal(id: unknown): void {
     this.live(id).returnFromTerminal();
   }
