@@ -39,18 +39,29 @@ let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
 let selectedDirection: string | undefined;
-/** The run and the agent of the lab's panels. */
+/** The run, the agent, and the post with a cited diff, of the lab's panels. */
 let selectedRun: string | undefined;
 let selectedAgent: string | undefined;
-/** The file of a direction's diff that the lab's diff pane shows, kept across page renders. */
+let selectedPost: string | undefined;
+/** The file of a lab diff that the diff pane shows, kept across page renders, with the diff's direction, post, and newest commit. */
 let shownLabDiff:
   | {
       readonly direction: string;
+      readonly post: string;
+      readonly to: string;
       readonly file: string;
       readonly text: string;
       readonly cut: boolean;
     }
   | undefined;
+/** Each load of a lab file's diff gets the next number. Only the newest one shows. */
+let labDiffLoads = 0;
+/** The name that the person chose in the mention list, kept across refreshes. */
+let mentionChoice: string | undefined;
+/** The @name whose list the person closed with Escape. It stays closed until the name changes. */
+let mentionClosed: string | undefined;
+/** A name for the lab's message box from a view without it. It goes in once Home shows. */
+let pendingMention: string | undefined;
 /** The diff that the review pane shows, kept across page renders. */
 let shownDiff:
   | {
@@ -87,6 +98,7 @@ try {
     sessionStorage.getItem('verifold-desk-direction') ?? undefined;
   selectedRun = sessionStorage.getItem('verifold-desk-run') ?? undefined;
   selectedAgent = sessionStorage.getItem('verifold-desk-agent') ?? undefined;
+  selectedPost = sessionStorage.getItem('verifold-desk-post') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
   records = localStorage.getItem('verifold-desk-records') ?? 'all';
@@ -195,6 +207,7 @@ function viewQuery(): string {
     query.set('direction', selectedDirection);
   if (panel === 'run' && selectedRun) query.set('run', selectedRun);
   if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
+  if (panel === 'diff' && selectedPost) query.set('post', selectedPost);
   if (since) query.set('since', since);
   if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
@@ -207,13 +220,15 @@ function panelKey(): string {
       ? selectedWorker
       : panel === 'attempt'
         ? selected
-        : panel === 'direction' || panel === 'diff'
+        : panel === 'direction'
           ? selectedDirection
-          : panel === 'run'
-            ? selectedRun
-            : panel === 'agent'
-              ? selectedAgent
-              : '';
+          : panel === 'diff'
+            ? `${selectedDirection ?? ''}:${selectedPost ?? ''}`
+            : panel === 'run'
+              ? selectedRun
+              : panel === 'agent'
+                ? selectedAgent
+                : '';
   return `${panel}:${item ?? ''}`;
 }
 
@@ -268,10 +283,12 @@ const morphing = {
             next instanceof HTMLElement &&
             next.dataset.task === node.dataset.task &&
             next.dataset.version === node.dataset.version) ||
-          // A direction's diff keeps the file that the page loaded into it.
+          // A lab diff keeps the file that the page loaded into it while the diff is the same.
           (node.matches('.lab-diff-pane[data-file]') &&
             next instanceof HTMLElement &&
-            next.dataset.labDirection === node.dataset.labDirection))
+            next.dataset.labDirection === node.dataset.labDirection &&
+            next.dataset.diffPost === node.dataset.diffPost &&
+            next.dataset.labTo === node.dataset.labTo))
       ),
     beforeNodeRemoved: (node: Node) =>
       !(
@@ -417,6 +434,11 @@ async function render(html: string): Promise<void> {
       target.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
     // After focus returns: the names list follows the text at the cursor.
     showMentions();
+    if (pendingMention && document.getElementById('lab-text')) {
+      const name = pendingMention;
+      pendingMention = undefined;
+      mention(name);
+    }
     lastHtml = html;
     showChanges(content, places, same);
   };
@@ -856,9 +878,14 @@ function diffNodes(file: string, text: string, cut: boolean): HTMLElement[] {
 function showLabDiff(): void {
   const pane = content.querySelector<HTMLElement>('.lab-diff-pane');
   if (!pane) return;
+  // A diff from another direction, post, or commit does not show.
+  const loaded = shownLabDiff;
   const shown =
-    shownLabDiff?.direction === pane.dataset.labDirection
-      ? shownLabDiff
+    loaded &&
+    loaded.direction === pane.dataset.labDirection &&
+    loaded.post === (pane.dataset.diffPost ?? '') &&
+    loaded.to === pane.dataset.labTo
+      ? loaded
       : undefined;
   for (const button of content.querySelectorAll<HTMLElement>('[data-lab-diff]'))
     button.setAttribute(
@@ -870,13 +897,15 @@ function showLabDiff(): void {
   pane.replaceChildren(...diffNodes(shown.file, shown.text, shown.cut));
 }
 
-/** Load the diff of one file of a lab direction into its pane. */
+/** Load the diff of one file of a lab diff into its pane. A later click wins over an earlier answer. */
 async function loadLabDiff(button: HTMLElement): Promise<void> {
   const direction = button.dataset.labDirection ?? '';
   const file = button.dataset.labDiff ?? '';
+  const post = button.dataset.diffPost ?? '';
+  const load = ++labDiffLoads;
   try {
     const response = await fetch(
-      `/api/lab-diff?${new URLSearchParams({ direction, file }).toString()}`,
+      `/api/lab-diff?${new URLSearchParams({ direction, file, ...(post ? { post } : {}) }).toString()}`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
@@ -891,8 +920,11 @@ async function loadLabDiff(button: HTMLElement): Promise<void> {
       throw new Error(
         typeof reply.error === 'string' ? reply.error : 'No diff.',
       );
+    if (load !== labDiffLoads) return;
     shownLabDiff = {
       direction,
+      post,
+      to: typeof reply.to === 'string' ? reply.to : '',
       file,
       text: reply.text,
       cut: reply.cut === true,
@@ -921,10 +953,17 @@ function choosePane(value: string): void {
   }
 }
 
-/** Put a name, such as @claude-1, at the start of the lab's message box, and the cursor after the text. */
+/**
+ * Put a name, such as @claude-1, at the start of the lab's message box, and
+ * the cursor after the text. From a view without the box, Home opens first.
+ */
 function mention(name: string): void {
   const text = document.getElementById('lab-text');
-  if (!(text instanceof HTMLTextAreaElement)) return;
+  if (!(text instanceof HTMLTextAreaElement)) {
+    pendingMention = name;
+    navigate({ view: 'home', panel: '' }, '#lab-text');
+    return;
+  }
   if (!text.value.split(/\s+/).includes(name))
     text.value = `${name} ${text.value}`.trimEnd() + ' ';
   text.focus();
@@ -950,22 +989,28 @@ function showMentions(move = 0): void {
     document.activeElement === text
       ? mentionWord(text)?.toLowerCase()
       : undefined;
+  if (word !== mentionClosed) mentionClosed = undefined;
   const items = Array.from(
     list.querySelectorAll<HTMLElement>('[role="option"]'),
   );
+  // A whole name is done, also when a longer name starts with it.
+  const done = items.some((item) => item.dataset.value === word);
   const shown = items.filter((item) => {
     const value = item.dataset.value ?? '';
-    item.hidden = !word || !value.startsWith(word) || value === word;
+    item.hidden =
+      !word || done || word === mentionClosed || !value.startsWith(word);
     return !item.hidden;
   });
   list.hidden = !shown.length;
   text.setAttribute('aria-expanded', String(shown.length > 0));
+  // The choice is kept by its name, so a refresh does not move it.
   const current = shown.findIndex(
-    (item) => item.getAttribute('aria-selected') === 'true',
+    (item) => item.dataset.value === mentionChoice,
   );
   const next = shown.length
     ? (Math.max(current, 0) + move + shown.length) % shown.length
     : -1;
+  mentionChoice = shown[next]?.dataset.value;
   for (const item of items)
     item.setAttribute('aria-selected', String(item === shown[next]));
   if (shown[next]) text.setAttribute('aria-activedescendant', shown[next].id);
@@ -1635,9 +1680,12 @@ document.addEventListener('click', (event) => {
     if (target.dataset.run) remember('run', (selectedRun = target.dataset.run));
     if (target.dataset.agent)
       remember('agent', (selectedAgent = target.dataset.agent));
-    if (target.dataset.panel === 'diff' && target.dataset.labDirection)
+    if (target.dataset.panel === 'diff' && target.dataset.labDirection) {
       remember('direction', (selectedDirection = target.dataset.labDirection));
-    if (target.dataset.pane) choosePane(target.dataset.pane);
+      // A post's proof opens the diff that the post cites; a row opens the direction's.
+      remember('post', (selectedPost = target.dataset.post));
+    }
+    if (target.dataset.openPane) choosePane(target.dataset.openPane);
     // A row's controls stay open, so the row keeps its place.
     if (!target.closest('.lab-row'))
       target.closest('details')?.removeAttribute('open');
@@ -1843,8 +1891,8 @@ content.addEventListener('keydown', (event) => {
     }
     if (event.key === 'Escape') {
       event.preventDefault();
-      list.hidden = true;
-      event.target.setAttribute('aria-expanded', 'false');
+      mentionClosed = mentionWord(event.target)?.toLowerCase();
+      showMentions();
       return;
     }
   }

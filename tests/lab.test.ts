@@ -1830,7 +1830,10 @@ await test('Home in a lab still shows what needs the person, and the transcript 
   assert.doesNotMatch(html, /id="message-text"/);
   assert.match(html, /data-action="answer" data-request="R1"/);
   // Each agent's row opens its panel, which holds its transcript.
-  assert.match(html, /data-panel="agent" data-agent="a-1">What claude-1 did/);
+  assert.match(
+    html,
+    /data-panel="agent" data-agent="a-1" data-open-pane="summary">What claude-1 did/,
+  );
   const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
   const panel = renderDesk(
     await readDeskSnapshot(lab.root),
@@ -6133,9 +6136,11 @@ await test('answers of pods survive the cut of old calls, and a Continue that Ve
   );
 });
 
-await test("Claude Code's cost estimate adds up across an agent's processes and sessions", () => {
-  const record = (id: string, costUsd: number | null) =>
-    ({ id, costUsd }) as Parameters<typeof addSpend>[1];
+await test("an agent's cost adds up what each of its sessions spent", () => {
+  const record = (id: string, spentUsd?: number) =>
+    ({ id, ...(spentUsd === undefined ? {} : { spentUsd }) }) as Parameters<
+      typeof addSpend
+    >[1];
   const first = addSpend(
     undefined,
     record('20261020T100000000Z-aaaaaaaa', 0.5),
@@ -6145,30 +6150,26 @@ await test("Claude Code's cost estimate adds up across an agent's processes and 
     session: '20261020T100000000Z-aaaaaaaa',
     seen: 0.5,
   });
-  // In one process the estimate grows: only the growth is new.
+  // A session's sum grows: only the growth is new.
   const grown = addSpend(first, record('20261020T100000000Z-aaaaaaaa', 0.8));
   assert.equal(grown?.usd, 0.8);
-  // A lower estimate of the same session started from zero in a new process: all of it is new.
-  const resumed = addSpend(grown, record('20261020T100000000Z-aaaaaaaa', 0.2));
-  assert.equal(resumed?.usd, 1);
   // A new session starts from zero.
-  const fresh = addSpend(resumed, record('20261020T100000000Z-bbbbbbbb', 0.3));
-  assert.ok(Math.abs((fresh?.usd ?? 0) - 1.3) < 1e-9);
-  // No estimate, or the same one again, changes nothing.
-  assert.equal(
-    addSpend(fresh, record('20261020T100000000Z-bbbbbbbb', null)),
-    fresh,
-  );
+  const fresh = addSpend(grown, record('20261020T100000000Z-bbbbbbbb', 0.3));
+  assert.ok(Math.abs((fresh?.usd ?? 0) - 1.1) < 1e-9);
+  // No sum, or the same one again, changes nothing.
+  assert.equal(addSpend(fresh, record('20261020T100000000Z-bbbbbbbb')), fresh);
   assert.equal(
     addSpend(fresh, record('20261020T100000000Z-bbbbbbbb', 0.3)),
     fresh,
   );
 });
 
-await test('the lab adds up the cost estimates of its Claude Code agents for the header', async (t) => {
+await test('the lab adds up the cost estimates of its Claude Code agents for the header, across processes', async (t) => {
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [
     { calls: [{ name: 'COST', arguments: { usd: 0.4 } }] },
+    // Claude Code counts from zero in each process.
+    { when: 'once more', calls: [{ name: 'COST', arguments: { usd: 0.6 } }] },
   ]);
   await lab.script('d-2-beta', [
     { calls: [{ name: 'COST', arguments: { usd: 0.25 } }] },
@@ -6187,9 +6188,15 @@ await test('the lab adds up the cost estimates of its Claude Code agents for the
     costLine(view, null),
     '≈$0.65 spent (Claude Code ≈$0.65) · Codex usage not counted',
   );
-  // The estimate lasts across a restart of Verifold.
+  // The estimate lasts across a restart of Verifold, and a new process adds all that it spends.
   await lab.restart();
   assert.ok(Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 0.65) < 1e-9);
+  await lab.lab.post({ text: '@claude-1 once more.' });
+  await until(() => Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 1.25) < 1e-9);
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  const record = await readRecord(lab.root, session);
+  assert.equal(record?.spentUsd, 1);
+  assert.equal(record?.costUsd, 0.6);
 });
 
 await test('the main screen: one header, a Needs-you line in its order, a disputed row, and every agent text escaped', async (t) => {
@@ -6202,6 +6209,11 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
     bar: 'it beats <i>the SAE</i>',
   });
   await lab.lab.addDirection({ title: 'Helix', harness: 'codex' });
+  // The first @d-N of an open direction puts the person's post in it.
+  assert.equal(
+    (await lab.lab.post({ text: '@d-9 and @d-2, then @d-1' })).direction,
+    'd-2',
+  );
   const view = lab.lab.view();
   assert.ok(view);
   const at = new Date().toISOString();
@@ -6336,7 +6348,11 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
       status: index === 1 ? ('crashed' as const) : entry.status,
     })),
   };
-  const lease = (id: string, secrets: string[]): Lease =>
+  const lease = (
+    id: string,
+    secrets: string[],
+    more: Record<string, unknown> = {},
+  ): Lease =>
     ({
       schemaVersion: 1,
       id,
@@ -6345,6 +6361,8 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
       reason: 'Train.',
       tasks: [],
       directions: ['d-1'],
+      intervals: [],
+      billedUsd: null,
       secrets,
       gpu: 'NVIDIA A40',
       image: 'runpod/pytorch',
@@ -6354,6 +6372,7 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
       requestedAt: at,
       history: [],
       notice: null,
+      ...more,
     }) as unknown as Lease;
   const compute = {
     key: null,
@@ -6362,7 +6381,18 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
     settings: { limitUsd: 20, askBeforePod: true, idleMinutes: 10 },
     gpus: null,
     gpusAt: null,
-    leases: [lease('lease-1', []), lease('lease-2', ['HF_TOKEN'])],
+    // The lab's pods count in its header, and a pod of a task does not.
+    leases: [
+      lease('lease-1', []),
+      lease('lease-2', ['HF_TOKEN']),
+      lease('lease-3', [], { state: 'ended', billedUsd: 0.65 }),
+      lease('lease-4', [], {
+        state: 'ended',
+        billedUsd: 30,
+        directions: undefined,
+        tasks: ['task-1'],
+      }),
+    ],
     budget: { limit: 20, spent: 0.65, reserved: 0, left: 19.35, rate: 0 },
     problem: null,
   } as unknown as ComputeView;
@@ -6477,14 +6507,39 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
           name: 'WRITE',
           arguments: { path: 'notes.md', text: '<b>hello</b>\n' },
         },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'evidence',
+            text: 'Notes.',
+            artifacts: [{ type: 'diff', paths: ['notes.md'] }],
+          },
+        },
+      ],
+    },
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'later.md', text: 'later\n' } },
       ],
     },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
-  await until(() => {
-    const direction = lab.lab.view()?.state.directions[0];
-    return Boolean(direction && direction.head !== direction.workspace.start);
-  });
+  // The second turn commits a file after the post's diff.
+  await until(() =>
+    Boolean(
+      lab.lab.view()?.state.directions[0] &&
+        git(
+          lab.root,
+          'show',
+          '--name-only',
+          '--format=',
+          lab.lab.view()?.state.directions[0]?.head ?? '',
+        ).includes('later.md'),
+    ),
+  );
+  const evidence =
+    lab.lab.view()?.posts.find((post) => post.kind === 'evidence')?.id ?? '';
+  assert.match(evidence, /^p-\d+$/);
   const stop = new AbortController();
   const desk = await startDesk(
     lab.root,
@@ -6545,11 +6600,44 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     (await get('/api/lab-diff?direction=d-1&file=README.md')).status,
     404,
   );
+  // A post's proof opens the diff that it cites: its commits and its paths, not the branch's newest work.
+  assert.match(panel, /data-lab-diff="later\.md"/);
+  const cited = (
+    (await (
+      await get(`/api/view?panel=diff&direction=d-1&post=${evidence}`)
+    ).json()) as { html: string }
+  ).html;
+  assert.match(cited, new RegExp(`The diff that ${evidence} cites`));
+  assert.match(cited, /data-lab-diff="notes\.md"/);
+  assert.doesNotMatch(cited, /data-lab-diff="later\.md"/);
+  assert.equal(
+    (await get(`/api/lab-diff?direction=d-1&file=later.md&post=${evidence}`))
+      .status,
+    404,
+  );
+  assert.match(
+    (
+      (await (
+        await get(`/api/lab-diff?direction=d-1&file=notes.md&post=${evidence}`)
+      ).json()) as { text: string }
+    ).text,
+    /\+<b>hello<\/b>/,
+  );
+  // The post's proof chip names the post, so the page opens its cited diff.
+  assert.match(
+    await (async () =>
+      ((await (await get('/api/view')).json()) as { html: string }).html)(),
+    new RegExp(
+      `data-panel="diff" data-lab-direction="d-1" data-post="${evidence}">diff · notes\\.md<`,
+    ),
+  );
   for (const path of [
     '/api/lab-diff?direction=x&file=notes.md',
     '/api/lab-diff?direction=d-1',
     '/api/lab-diff?direction=d-1&file=a&file=b',
     '/api/lab-diff?direction=d-1&file=notes.md&more=1',
+    '/api/lab-diff?direction=d-1&file=notes.md&post=x',
+    '/api/view?panel=diff&direction=d-1&post=x',
     '/api/view?panel=run&run=x',
     '/api/view?panel=agent&agent=a-1&agent=a-2',
   ])
@@ -6626,6 +6714,22 @@ await test(
       ),
     );
     await until(() => lab.lab.view()?.directions[0]?.status === 'terminal');
+    // Needs you says that the person holds the terminal, with a way to return it.
+    const needs = renderDesk(
+      await readDeskSnapshot(lab.root),
+      undefined,
+      null,
+      {
+        session: null,
+        controllable: true,
+        lab: lab.lab.view(),
+      },
+    ).html;
+    assert.match(needs, /You hold claude-1&#39;s terminal/);
+    assert.match(
+      needs,
+      new RegExp(`data-action="terminal-return" data-session="${session}"`),
+    );
     let text = '';
     let next = 0;
     await until(async () => {

@@ -50,6 +50,7 @@ import {
   runPanel,
   type LabDiff,
   type LabWork,
+  type Panel,
 } from './desk-lab.ts';
 import { scratch } from './workspaces.ts';
 import {
@@ -150,6 +151,8 @@ export interface DeskFrame {
   readonly direction?: string;
   /** The run of a lab's run panel, such as r-3. */
   readonly run?: string;
+  /** The post whose cited diff a lab's diff panel shows, such as p-12. */
+  readonly post?: string;
   /** The agent or checker of a lab's agent panel, such as a-2. */
   readonly agent?: string;
   /** The person cleared finished tasks: done and cancelled tasks leave the map and the rail. */
@@ -165,6 +168,7 @@ export function parseFrame(
   finished: string | null = null,
   run: string | null = null,
   agent: string | null = null,
+  post: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -181,7 +185,8 @@ export function parseFrame(
     idea &&
     (finished === null || finished === 'hidden') &&
     (run === null || /^r-[1-9]\d{0,5}$/.test(run)) &&
-    (agent === null || /^a-[1-9]\d{0,3}$/.test(agent))
+    (agent === null || /^a-[1-9]\d{0,3}$/.test(agent)) &&
+    (post === null || /^p-[1-9]\d{0,5}$/.test(post))
     ? {
         view: shown,
         panel: opened,
@@ -190,6 +195,7 @@ export function parseFrame(
         ...(finished ? { hideFinished: true } : {}),
         ...(run ? { run } : {}),
         ...(agent ? { agent } : {}),
+        ...(post ? { post } : {}),
       }
     : null;
 }
@@ -530,6 +536,8 @@ interface LabAgentPane {
   readonly about: string;
   readonly checker: boolean;
   readonly terminal: boolean;
+  /** This desk only shows the lab. */
+  readonly readOnly: boolean;
 }
 
 /**
@@ -547,7 +555,7 @@ function renderTerminal(
   if (typeof live.terminals === 'string')
     return `<p class="notice">${e(live.terminals)}</p>`;
   if (lab && !lab.terminal && record.status !== 'terminal')
-    return `<p class="fine">${lab.checker ? 'A checker has no terminal here: it works without the author.' : 'Its direction ended, so its terminal does not open here.'}</p>`;
+    return `<p class="fine">${lab.checker ? 'A checker has no terminal here: it works without the author.' : lab.readOnly ? 'This desk runs one session, so it opens no lab terminal. Run verifold in the project folder.' : 'Its direction ended, so its terminal does not open here.'}</p>`;
   if (lab && record.status !== 'terminal') {
     if (!view.live)
       return '<p class="fine">The agent has no process now. Its terminal opens between its turns, while its process runs.</p>';
@@ -611,14 +619,6 @@ function requestItem(
   return `<article class="request" aria-label="Request ${e(request.id)}"><p class="request-type"><span class="mark you" aria-hidden="true"></span>${e(workerName(record, tasks))} asks to use ${e(toolName(request.tool))}<span class="ref">${e(request.id)}</span></p>${requestBody(request)}</article>`;
 }
 
-/** What the side panel shows. `sub` is HTML, already escaped. */
-interface Panel {
-  readonly kind: string;
-  readonly title: string;
-  readonly sub: string;
-  readonly body: string;
-}
-
 /**
  * A lab agent or a checker in the panel: the worker panel of its session,
  * with the lab's terminal and a Message button that writes on the board.
@@ -647,6 +647,7 @@ function labAgentPanel(
       : `Checks ${check?.claim ?? ''} without the author's reasoning`,
     checker: !entry,
     terminal: lab.runs && entry?.direction.state === 'open',
+    readOnly: !lab.runs,
   };
   return live.labAgent
     ? workerPanel(live.labAgent, live, tasks, pane)
@@ -672,7 +673,9 @@ function workerPanel(
     : record.status === 'failed'
       ? ['Stopped with an error', 'failed']
       : ['Ended', 'muted'];
-  const body = `<p class="session-meta"><span>${e(hostName(record.host))}</span><span>Mode: ${e(modeLabel(record))}</span><span>Model request: ${e(record.model ?? 'harness default')}</span>${record.costUsd === null ? '' : `<span>Cost estimate from Claude Code: $${e(record.costUsd.toFixed(2))}</span>`}</p>
+  // Claude Code counts from zero in each process. The record adds up its processes.
+  const cost = record.spentUsd ?? record.costUsd;
+  const body = `<p class="session-meta"><span>${e(hostName(record.host))}</span><span>Mode: ${e(modeLabel(record))}</span><span>Model request: ${e(record.model ?? 'harness default')}</span>${cost === null ? '' : `<span>Cost estimate from Claude Code: $${e(cost.toFixed(2))}</span>`}</p>
   ${view.saveFailed ? '<p class="notice">Verifold could not save the latest session record. The next change tries again.</p>' : ''}
   ${record.requests.length > 10 ? `<p class="notice">${record.requests.length} requests are open. The first 10 are shown.</p>` : ''}
   ${record.requests
@@ -1355,7 +1358,19 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
         title: `${entry.agent.handle} stopped by itself`,
         why: `${stateOf(entry, clock).text}, so the lab does not start it again by itself.`,
         since: entry.agent.restarts.at(-1) ?? null,
-        body: `<div class="actions"><button type="button" class="primary" data-action="lab-agent-restart" data-agent="${e(entry.agent.id)}">Start it again</button><button type="button" data-panel="agent" data-agent="${e(entry.agent.id)}">What it did</button></div>`,
+        body: `<div class="actions"><button type="button" class="primary" data-action="lab-agent-restart" data-agent="${e(entry.agent.id)}">Start it again</button><button type="button" data-panel="agent" data-agent="${e(entry.agent.id)}" data-open-pane="summary">What it did</button></div>`,
+      });
+  // A terminal that the person holds keeps its agent from working.
+  for (const entry of live.lab?.runs ? live.lab.directions : [])
+    if (entry.status === 'terminal' && entry.agent.session)
+      items.push({
+        key: `lab-terminal:${entry.agent.id}`,
+        view: 'home',
+        kind: 'Terminal',
+        title: `You hold ${entry.agent.handle}'s terminal`,
+        why: 'The agent gets no turn until you return the terminal to Verifold.',
+        since: null,
+        body: `<div class="actions"><button type="button" class="primary" data-action="terminal-return" data-session="${e(entry.agent.session)}">Return it to Verifold</button><button type="button" data-panel="agent" data-agent="${e(entry.agent.id)}" data-open-pane="terminal">Open the terminal</button></div>`,
       });
   // A lab run has no research to continue.
   if (
@@ -1607,9 +1622,27 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   return live.lab ? labOrder(items) : items;
 }
 
+/** What the lab's pods cost so far, and the project's limit. Pods of tasks are not the lab's. */
+function labGpu(compute: ComputeView): { spent: number; limit: number | null } {
+  const now = Date.now();
+  return {
+    spent: compute.leases
+      .filter((lease) => lease.directions?.length)
+      .reduce((sum, lease) => sum + spent(lease, now), 0),
+    limit: compute.settings.limitUsd,
+  };
+}
+
 /** The order of a lab's needs. The sort is stable, so each kind keeps its own order. */
 function labOrder(items: readonly Need[]): Need[] {
-  const order = ['lab-call:', 'lab-agent:', 'lease-secret:', 'lease:'];
+  const order = [
+    'lab-call:',
+    'lab-agent:',
+    'lease-secret:',
+    'lease:',
+    'request:',
+    'lab-terminal:',
+  ];
   const rank = (key: string): number => {
     const index = order.findIndex((prefix) => key.startsWith(prefix));
     return index < 0 ? order.length : index;
@@ -3622,7 +3655,7 @@ function renderPanel(
       : panel === 'run'
         ? runPanel(lab, frame.run, clock)
         : panel === 'diff'
-          ? diffPanel(lab, direction, live.labDiff ?? null)
+          ? diffPanel(lab, direction, frame.post, live.labDiff ?? null)
           : labAgentPanel(lab, frame.agent, live, tasks);
   else if (panel === 'worker')
     shown = live.session
@@ -3771,12 +3804,7 @@ export function renderDesk(
                     ? renderLab(live.lab, clock, {
                         needs,
                         works: live.labWorks ?? [],
-                        gpu: live.compute
-                          ? {
-                              spent: live.compute.budget.spent,
-                              limit: live.compute.settings.limitUsd,
-                            }
-                          : null,
+                        gpu: live.compute ? labGpu(live.compute) : null,
                         extra: `${renderPodsLine(live.compute)}${renderPaused(live)}`,
                       })
                     : renderHome(

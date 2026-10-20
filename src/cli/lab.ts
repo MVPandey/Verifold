@@ -866,23 +866,23 @@ function spendOf(value: unknown): { readonly spend?: Spend } {
 }
 
 /**
- * Add a session's newest Claude Code estimate to what the agent spent. In
- * one process the estimate grows. One that falls started again from zero
- * in a new process of the same session, so all of it is new. Returns
+ * Add what a session spent since the agent last looked to what the agent
+ * spent. The session adds up Claude Code's estimates of its processes, so
+ * its sum only grows. An agent's new session starts from zero. Returns
  * `prior` itself when nothing changed.
  */
 export function addSpend(
   prior: Spend | undefined,
   record: SessionRecord,
 ): Spend | undefined {
-  const raw = record.costUsd;
-  if (raw === null || !Number.isFinite(raw) || raw < 0) return prior;
-  const last = prior?.session === record.id ? prior.seen : 0;
-  if (prior && prior.session === record.id && raw === last) return prior;
+  const total = record.spentUsd;
+  if (total === undefined) return prior;
+  const same = prior?.session === record.id;
+  if (same && total <= prior.seen) return prior;
   return {
-    usd: (prior?.usd ?? 0) + (raw >= last ? raw - last : raw),
+    usd: (prior?.usd ?? 0) + total - (same ? prior.seen : 0),
     session: record.id,
-    seen: raw,
+    seen: total,
   };
 }
 
@@ -2952,11 +2952,17 @@ export class Lab {
           : input.kind === 'question' || input.kind === 'objection'
             ? input.kind
             : fail('A post from you is a message or an objection.');
+      // The first @d-N in the text that names an open direction.
+      const open = new Set(
+        this.current()
+          .directions.filter((entry) => entry.state === 'open')
+          .map((entry) => entry.id),
+      );
       const direction =
         this.directionArg(input.direction) ??
-        this.current().directions.find((entry) =>
-          new RegExp(`(?:^|\\s)@${entry.id}\\b`).test(body),
-        )?.id;
+        [...body.matchAll(/(?:^|\s)@(d-[1-9]\d{0,3})\b/g)]
+          .map((match) => match[1] ?? '')
+          .find((id) => open.has(id));
       const replyTo =
         typeof input.replyTo === 'string' && input.replyTo
           ? input.replyTo
@@ -3007,11 +3013,13 @@ export class Lab {
       (entry) => entry.session === record.id,
     );
     if (!agent) return;
-    const spend = addSpend(agent.spend, record);
-    if (spend && spend !== agent.spend)
-      void this.update(agent.id, (current) => ({ ...current, spend })).catch(
-        () => {},
-      );
+    if (record.spentUsd !== undefined)
+      void this.serial(async () => {
+        const latest = this.agents.get(agent.id);
+        const spend = latest && addSpend(latest.spend, record);
+        if (spend && spend !== latest.spend)
+          await this.update(agent.id, (current) => ({ ...current, spend }));
+      }).catch(() => {});
     // The person gave the terminal back: the agent's next turn follows.
     const held = this.runtimes.get(agent.id);
     if (held?.terminal && record.status !== 'terminal') {
@@ -3243,6 +3251,21 @@ export class Lab {
     }
   }
 
+  /**
+   * The person holds the agent's harness terminal, or Verifold hands it
+   * over now. The agent gets no turn, gives no slot, and its process
+   * ends for nothing but a domain that it lost.
+   */
+  private holdsTerminal(id: string): boolean {
+    const session = this.agents.get(id)?.session;
+    return (
+      Boolean(this.runtimes.get(id)?.terminal) ||
+      (session !== null &&
+        session !== undefined &&
+        this.options.sessions.view(session)?.record.status === 'terminal')
+    );
+  }
+
   /** The runtime of an agent, made on first use. */
   private rt(id: string): AgentRuntime {
     let run = this.runtimes.get(id);
@@ -3433,6 +3456,7 @@ export class Lab {
           !this.ended(this.state) &&
           agent.session !== null &&
           !this.runtimes.get(agent.id)?.parking &&
+          !this.holdsTerminal(agent.id) &&
           this.options.sessions.idle(agent.session),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         send: (events, left) => {
@@ -4534,7 +4558,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       lost ||
       network.length !== run.got.network.length ||
       (pods !== run.got.pods && (agent.host === 'claude' || pods));
-    if (!changed || (run.turning && !lost)) return;
+    // A turn or a held terminal ends first, unless the agent lost a domain.
+    if (!changed || ((run.turning || this.holdsTerminal(id)) && !lost)) return;
     run.parking = true;
     void this.options.sessions
       .park(session)
@@ -4849,12 +4874,15 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
 
   /**
    * For the desk: what a direction's branch changed since its start, at its
-   * newest commit, and the diff of one of those files when `path` names it.
-   * Null for a direction that the lab does not have.
+   * newest commit, or with `post`, the diff that the post cites: its commits
+   * and its paths. With `path`, also the diff of that file, which must be
+   * one of those files. Null for a direction that the lab does not have, or
+   * a post that cites no diff of it.
    */
   async directionDiff(
     id: unknown,
     path?: unknown,
+    post?: unknown,
   ): Promise<{
     readonly from: string;
     readonly to: string;
@@ -4863,18 +4891,34 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   } | null> {
     const direction = this.state?.directions.find((entry) => entry.id === id);
     if (!direction) return null;
-    const { workspace, head } = direction;
-    const files = await changes(this.root, workspace, workspace.start, head);
-    if (path === undefined)
-      return { from: workspace.start, to: head, files, diff: null };
+    const { workspace } = direction;
+    let from = workspace.start;
+    let to = direction.head;
+    let paths: readonly string[] | null = null;
+    if (post !== undefined) {
+      const cited = (
+        typeof post === 'string' ? this.board.get(post) : undefined
+      )?.artifacts.find(
+        (artifact) =>
+          artifact.type === 'diff' &&
+          (artifact.direction ?? direction.id) === direction.id,
+      );
+      if (cited?.type !== 'diff') return null;
+      ({ from, to } = cited);
+      paths = cited.paths;
+    }
+    const files = (await changes(this.root, workspace, from, to)).filter(
+      (file) => !paths || paths.includes(file.path),
+    );
+    if (path === undefined) return { from, to, files, diff: null };
     const file =
       files.find((entry) => entry.path === path) ??
-      fail('That file did not change in this direction.');
+      fail('That file is not in this diff.');
     return {
-      from: workspace.start,
-      to: head,
+      from,
+      to,
       files,
-      diff: await diff(this.root, workspace, workspace.start, head, file.path),
+      diff: await diff(this.root, workspace, from, to, file.path),
     };
   }
 
@@ -5734,13 +5778,13 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
    */
   private checkTurnEnded(id: string, record: SessionRecord): void {
     const run = this.ck(id);
-    if (record.costUsd !== null)
-      void this.serial(() =>
-        this.changeCheck(id, (check) => {
-          const spend = addSpend(check.spend, record);
-          return spend && spend !== check.spend ? { ...check, spend } : check;
-        }),
-      ).catch(() => {});
+    if (record.spentUsd !== undefined)
+      void this.serial(async () => {
+        const check = this.checkById(id);
+        const spend = check && addSpend(check.spend, record);
+        if (spend && spend !== check.spend)
+          await this.changeCheck(id, (entry) => ({ ...entry, spend }));
+      }).catch(() => {});
     if (record.status === 'idle') {
       if (!run.turning) return;
       run.turning = false;
@@ -7459,7 +7503,12 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         : false;
       const parked = this.options.quota?.parked(agent.host) ?? null;
       if (live) {
-        if (parked && agent.session && sessions.idle(agent.session)) {
+        if (
+          parked &&
+          agent.session &&
+          !this.holdsTerminal(agent.id) &&
+          sessions.idle(agent.session)
+        ) {
           await sessions.park(agent.session);
           this.loop(agent.id).add([
             { kind: 'quota', text: "Your harness's usage window reset." },
@@ -7508,6 +7557,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         const capped = (this.turnsUntil(agent) ?? 0) > now;
         return agent.id !== except &&
           agent.session !== null &&
+          !this.holdsTerminal(agent.id) &&
           sessions.view(agent.session)?.live &&
           sessions.idle(agent.session) &&
           !run.turning &&
