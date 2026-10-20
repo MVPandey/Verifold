@@ -32,7 +32,8 @@ import { terminalInput, type CliIO } from '../src/cli/commands.ts';
  * has no `when`. A call runs Verifold's tool over the SDK MCP channel. Calls
  * named WRITE write a file, WAIT keep the turn running until a steered message
  * arrives, EXIT stop the process, and FAIL end the turn as failed. A call with
- * an `id` uses it as its tool-use ID.
+ * an `id` uses it as its tool-use ID. With a `resume-fails` file next to the
+ * fake, a resume stops at once, as when the harness lost the conversation.
  */
 const claudeHost = `const fs = require('node:fs');
 const path = require('node:path');
@@ -45,7 +46,8 @@ fs.mkdirSync(log, { recursive: true });
 fs.writeFileSync(path.join(log, 'args.json'), JSON.stringify(args));
 fs.writeFileSync(path.join(log, 'env.json'), JSON.stringify(process.env));
 fs.appendFileSync(path.join(log, 'launches.jsonl'), JSON.stringify(args.includes('--resume') ? 'resume' : 'start') + '\\n');
-const id = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : args[args.indexOf('--session-id') + 1];
+if (args.includes('--resume') && fs.existsSync(path.join(base, 'resume-fails'))) process.exit(1);
+const id =args.includes('--resume') ? args[args.indexOf('--resume') + 1] : args[args.indexOf('--session-id') + 1];
 const usedFile = path.join(log, 'used.json');
 let calls = [];
 let next = 0;
@@ -659,11 +661,12 @@ await test('a used-up usage window parks that harness only, and its agents resum
 
 await test('an agent whose process stops by itself starts again, twice an hour at most', async (t) => {
   const lab = await fixture(t);
-  await lab.script('d-1-alpha', [
-    { calls: [{ name: 'EXIT' }] },
-    { calls: [{ name: 'EXIT' }] },
-    { calls: [{ name: 'EXIT' }] },
-  ]);
+  // Each stop of a new conversation counts. A resumed one that stops before
+  // its first turn ends does not count: the next start is new.
+  await lab.script(
+    'd-1-alpha',
+    Array.from({ length: 5 }, () => ({ calls: [{ name: 'EXIT' }] })),
+  );
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
   const first = Date.now();
@@ -674,10 +677,43 @@ await test('an agent whose process stops by itself starts again, twice an hour a
     `restarted after ${Date.now() - first} ms`,
   );
   await until(() => lab.lab.view()?.directions[0]?.status === 'crashed');
-  assert.equal((await lab.inputs('d-1-alpha')).length, 3);
+  assert.equal((await lab.inputs('d-1-alpha')).length, 5);
   assert.equal(lab.lab.view()?.directions[0]?.agent.restarts.length, 3);
+  assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), [
+    'start',
+    'resume',
+    'start',
+    'resume',
+    'start',
+  ]);
+  // Start again begins a new conversation.
   await lab.lab.restartAgent('a-1');
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 6);
+  assert.equal(
+    (await lab.lines('d-1-alpha', 'launches.jsonl')).at(-1),
+    'start',
+  );
+  assert.match((await lab.inputs('d-1-alpha'))[5] ?? '', /The question:/);
+});
+
+await test('a conversation that the harness cannot resume starts new at once, and its stop does not count', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: [{ name: 'EXIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The first turn's process stops. From now on a resume stops at once.
+  await until(
+    () => (lab.lab.view()?.directions[0]?.agent.restarts.length ?? 0) === 1,
+  );
+  await writeFile(join(lab.base, 'resume-fails'), '');
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 2, 8000);
+  assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), [
+    'start',
+    'resume',
+    'start',
+  ]);
+  assert.match((await lab.inputs('d-1-alpha'))[1] ?? '', /The question:/);
+  assert.equal(lab.lab.view()?.directions[0]?.agent.restarts.length, 1);
+  assert.notEqual(lab.lab.view()?.directions[0]?.status, 'crashed');
 });
 
 await test('lab agents run with the strict limits and without RunPod or pod secret variables', async (t) => {
@@ -1001,7 +1037,11 @@ interface LabInside {
   rt(id: string): {
     turning: boolean;
     turn: number;
-    launch: { readonly at: number; turns: number } | null;
+    launch: {
+      readonly at: number;
+      turns: number;
+      readonly resumed: boolean;
+    } | null;
   };
 }
 
@@ -1565,7 +1605,7 @@ await test('a park that ends after a resume and a new turn leaves that turn alon
     session: '20260101T000000000Z-deadbeef',
   }));
   inside.begin('a-1', null);
-  inside.rt('a-1').launch = { at: Date.now(), turns: 0 };
+  inside.rt('a-1').launch = { at: Date.now(), turns: 0, resumed: false };
   // The park of turn 1 waits. Meanwhile the person resumes, and turn 2 starts.
   const pausing = lab.pause();
   await until(() => parks === 1);
@@ -1598,4 +1638,53 @@ await test('a park that ends after a resume and a new turn leaves that turn alon
   await second;
   await suspending;
   assert.equal(suspended, true);
+});
+
+await test('while Start over parks the agents, a resume, a post, or a new direction waits for the move', async (t) => {
+  const fx = await fixture(t);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let parks = 0;
+  const sessions: LabSessions = {
+    full: false,
+    view: () =>
+      ({ live: true, record: { status: 'running' } }) as unknown as SessionView,
+    idle: () => false,
+    startAgent: () => Promise.reject(new Error('Not in this test.')),
+    resumeAgent: () => Promise.resolve(),
+    park: async () => {
+      parks += 1;
+      await gate;
+      return true;
+    },
+    continueTask: () => {},
+    steer: () => false,
+    endTask: () => {},
+  };
+  const lab = new Lab(fx.root, { sessions, timing, runs: false });
+  t.after(() => lab.close());
+  await lab.start('A question.');
+  await lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  const inside = lab as unknown as LabInside;
+  await inside.update('a-1', (agent) => ({
+    ...agent,
+    session: '20260101T000000000Z-deadbeef',
+  }));
+  // Start over pauses the running lab, and the park waits.
+  const suspending = lab.suspend();
+  await until(() => parks === 1);
+  await assert.rejects(lab.resume(), /moving the lab/);
+  await assert.rejects(lab.post({ text: 'Hello.' }), /moving the lab/);
+  await assert.rejects(
+    lab.addDirection({ title: 'Beta', harness: 'claude' }),
+    /moving the lab/,
+  );
+  release();
+  assert.equal(await suspending, true);
+  // After the move, the lab reads its records again and resumes as before.
+  await lab.reload();
+  await lab.resume();
+  assert.equal(lab.view()?.state.pausedAt, null);
 });

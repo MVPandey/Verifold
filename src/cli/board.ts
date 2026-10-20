@@ -468,9 +468,9 @@ export class Board {
    * The digest of an agent's unread posts, and the read state after it.
    * Unread posts are the posts after `readThrough` that others wrote and that
    * are not in `seen`. The posts that wake the agent come first, then the
-   * others, each oldest first, in at most `limit` lines; a post that wakes the
-   * agent says so. When they do not fit, the last line says how many more
-   * wait: `readThrough` stops before the oldest post that did not fit, and the
+   * others, each oldest first, in at most `limit` lines and `budget`
+   * characters; a post that wakes the agent says so. When they do not fit, the
+   * last line says how many more wait: `readThrough` stops before the oldest post that did not fit, and the
    * posts shown after it go into `seen`. If `seen` would pass its limit, the
    * read mark moves past the oldest posts that did not fit instead, so no post
    * that was shown comes again.
@@ -483,6 +483,8 @@ export class Board {
       readonly name?: (author: string) => string;
       /** Cut each post's quoted text at this length. */
       readonly fold?: number;
+      /** Characters of all lines, each with its newline. The first post always shows. */
+      readonly budget?: number;
     } = {},
   ): { readonly lines: string[]; readonly read: ReadState } {
     const seen = new Set(read.seen);
@@ -497,10 +499,24 @@ export class Board {
     const room =
       unread.length <= limit ? unread.length : Math.max(1, limit - 1);
     const waking = new Set(unread.filter((post) => this.wakes(post, agent)));
-    const shown = [
-      ...waking,
-      ...unread.filter((post) => !waking.has(post)),
-    ].slice(0, room);
+    const ordered = [...waking, ...unread.filter((post) => !waking.has(post))];
+    const budget = options.budget ?? Infinity;
+    // The line that says how many more wait needs its room too.
+    const more = (count: number): string =>
+      `- ${count} more unread posts. Read them with verifold_board.`;
+    const shown: Post[] = [];
+    const lines: string[] = [];
+    let used = 0;
+    for (const post of ordered) {
+      if (shown.length >= room) break;
+      const line = postLine(post, options.name, waking.has(post), options.fold);
+      const rest = ordered.length - shown.length - 1;
+      const reserve = rest > 0 ? more(ordered.length).length + 1 : 0;
+      if (shown.length && used + line.length + 1 + reserve > budget) break;
+      shown.push(post);
+      lines.push(line);
+      used += line.length + 1;
+    }
     const shownIds = new Set(shown.map((post) => post.id));
     const left = unread.filter((post) => !shownIds.has(post.id));
     let through = left.length
@@ -512,16 +528,7 @@ export class Board {
       after = [];
     }
     return {
-      lines: [
-        ...shown.map((post) =>
-          postLine(post, options.name, waking.has(post), options.fold),
-        ),
-        ...(left.length
-          ? [
-              `- ${left.length} more unread posts. Read them with verifold_board.`,
-            ]
-          : []),
-      ],
+      lines: [...lines, ...(left.length ? [more(left.length)] : [])],
       read: {
         readThrough: Math.max(read.readThrough, through),
         seen: after,
