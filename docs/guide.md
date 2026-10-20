@@ -26,13 +26,13 @@ Verifold starts your harness with its own configuration and permissions. The age
 Run `verifold` in your terminal.
 
 - In a folder that is already a Verifold project, Verifold first checks for global setup that is not finished, then opens the project's desk. This does not change the harness or the research that the project saved.
-- In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project and opens the desk before planning and research start.
+- In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project, opens the desk, and starts a lab on your question (see The lab).
 
 The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in the top bar of the desk does the same.
 
-In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal shows each step as one line. Ctrl+C during setup cancels it and saves nothing. When setup ends, a background process takes over the project, and the same browser tab shows it while planning starts.
+In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal shows each step as one line. Ctrl+C during setup cancels it and saves nothing. When setup ends, a background process takes over the project, and the same browser tab shows the lab while its first agent reads the question.
 
-`verifold init`, `--no-open`, and runs without a terminal do setup in the terminal instead. Both paths run the same setup, with the same consent steps, file limits, and retries. Use `verifold init` to do setup and research entirely in the CLI. A bare `verifold` needs an interactive terminal. `verifold --no-open` prints the desk URL and does not open a browser.
+`verifold init`, `--no-open`, and runs without a terminal do setup in the terminal instead. Both paths run the same setup, with the same consent steps, file limits, and retries. After setup in the terminal, a bare `verifold --no-open` starts a lab too. Use `verifold init` to do setup and research entirely in the CLI, without a lab. A bare `verifold` needs an interactive terminal. `verifold --no-open` prints the desk URL and does not open a browser.
 
 Run later commands from the project folder, or add `--workspace <path>`:
 
@@ -398,14 +398,16 @@ Claude Code and Codex report the usage window of your plan. When the window of t
 
 Stop the coordinator ends its session. Running agents finish their turns, and their versions wait for your review. If Verifold stops, the coordinator pauses with the agents. The next `verifold` offers Resume, which continues the same conversation with its tools and sends the events that arrived in between. The coordinator has no terminal.
 
-### The lab (preview)
+### The lab
 
-The lab is a second way to run a question. Several agents work on it at the same time, and each one owns one direction. They talk on one board instead of through a coordinator.
+The lab is how a new project works on its question. Several agents work on it at the same time, and each one owns one direction. They talk on one board instead of through a coordinator.
 
 The lab starts in one of two ways:
 
-- In a run that no team owns yet, Home offers **Start the lab**, with your question, while no research step runs.
-- `verifold --lab` does the usual setup, then starts a lab on the question instead of research.
+- After setup, a new project starts a lab on its question. No research step starts.
+- In a run that no team owns yet, such as an older project or a run after Start over, Home offers **Start the lab**, with your question, while no research step runs.
+
+`--lab` is no longer needed. Verifold still accepts it and says so.
 
 You give the lab a time budget in hours: 8 unless you choose another.
 
@@ -554,6 +556,8 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 
 - A lab's Home is one column. The header gives the question, the day of the lab, the deadline, and the money: Claude Code's cost estimates of the lab's sessions plus what the pods cost. The total is an estimate. Codex reports no cost, so its usage is not counted, and the header says so. The views and the team open from the menu at the top left.
 - **Pause** pauses every agent until you resume it. After the time budget ends, give the lab more time instead.
+- **Search** opens in the side panel, also with ⌘K, or Ctrl+K off a Mac. It finds posts by their ID, kind, author, and text, runs by their ID and command, and calls by their question and options. Each word must match, in upper or lower case. The newest hits come first, at most 50. A post on the board opens there, and an older post shows its whole text in the hit. A run opens in the panel, and an open call opens in Needs you. Escape closes the search, and its words stay for the next one.
+- When you come back after 30 minutes or more, Home starts with **While you were away**: a line for each direction with news, how many posts, runs, and calls came, and what the lab spent since your last look. These costs add up to what the header added since then. **Dismiss** hides it until your next time away. This browser keeps the time of its last look, also across its tabs.
 - One line says what needs you first: an open call, then an agent that stopped by itself, a missing pod secret, and a pod outside your limits. It opens in place and counts the rest, which Needs you lists. While a call is open, the number keys choose its options.
 - Each direction has one row: its verdict, its title with one line of evidence, its agent, and its check or its state. The row opens in place to its bar, its runs, and its controls:
   - **Message** puts the agent's handle in the message box.

@@ -1515,6 +1515,8 @@ export async function startDesk(
       url.searchParams.get('run'),
       url.searchParams.get('agent'),
       url.searchParams.get('proof'),
+      url.searchParams.get('q'),
+      url.searchParams.get('spent'),
     );
     const keys = [
       'attempt',
@@ -1528,6 +1530,8 @@ export async function startDesk(
       'run',
       'agent',
       'proof',
+      'q',
+      'spent',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||

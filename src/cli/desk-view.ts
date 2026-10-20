@@ -49,6 +49,8 @@ import {
   renderLabStart,
   renderLabWork,
   runPanel,
+  searchPanel,
+  type Away,
   type LabDiff,
   type LabWork,
   type Panel,
@@ -135,10 +137,11 @@ export const deskPanels = [
   'direction',
   'coordinator',
   'new-task',
-  // A lab's depth: a run, a direction's diff, and an agent.
+  // A lab's depth: a run, a direction's diff, an agent, and its search.
   'run',
   'diff',
   'agent',
+  'search',
 ] as const;
 export type DeskPanel = (typeof deskPanels)[number];
 
@@ -158,6 +161,10 @@ export interface DeskFrame {
   readonly agent?: string;
   /** The person cleared finished tasks: done and cancelled tasks leave the map and the rail. */
   readonly hideFinished?: boolean;
+  /** The words of a lab's search panel. */
+  readonly q?: string;
+  /** A lab's two costs when the person left at `since`: Claude Code's estimate and the pods'. */
+  readonly spent?: Away['spent'];
 }
 
 /** The frame from the query of /api/view, or null when a value is unknown. No view means Home. */
@@ -170,6 +177,8 @@ export function parseFrame(
   run: string | null = null,
   agent: string | null = null,
   proof: string | null = null,
+  q: string | null = null,
+  spent: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -180,6 +189,11 @@ export function parseFrame(
   // Direction IDs are lowercase slugs, as the research report contract says.
   const idea =
     direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
+  // A search has at most 100 printable characters.
+  const words = q === null || ([...q].length <= 100 && !/\p{Cc}/u.test(q));
+  const costs = spent?.match(
+    /^(\d{1,7}(?:\.\d{1,6})?),(\d{1,7}(?:\.\d{1,6})?)$/,
+  );
   return shown &&
     (panel === null || opened) &&
     (since === null || time) &&
@@ -187,7 +201,9 @@ export function parseFrame(
     (finished === null || finished === 'hidden') &&
     (run === null || runId.test(run)) &&
     (agent === null || agentId.test(agent)) &&
-    (proof === null || proofRef(proof) !== null)
+    (proof === null || proofRef(proof) !== null) &&
+    words &&
+    (spent === null || costs)
     ? {
         view: shown,
         panel: opened,
@@ -197,6 +213,10 @@ export function parseFrame(
         ...(run ? { run } : {}),
         ...(agent ? { agent } : {}),
         ...(proof ? { proof } : {}),
+        ...(q ? { q } : {}),
+        ...(costs
+          ? { spent: { claude: Number(costs[1]), gpu: Number(costs[2]) } }
+          : {}),
       }
     : null;
 }
@@ -3499,7 +3519,9 @@ function renderRail(
       (view) =>
         `<li><button type="button" data-view="${view}"${view === frame.view || (view === 'tasks' && frame.view === 'task') ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
     )
-    .join('')}</ul>
+    .join(
+      '',
+    )}${live.lab ? `<li><button type="button" data-panel="search" data-focus="lab-search" aria-pressed="${frame.panel === 'search'}" aria-keyshortcuts="Meta+K Control+K">${viewIcons.research}<span>Search</span></button></li>` : ''}</ul>
   <div class="rail-team"><div class="rail-title"><h2>Team</h2></div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
 </nav>`;
 }
@@ -3658,14 +3680,21 @@ function renderPanel(
   });
   let shown: Panel;
   const lab = live.lab;
-  if (panel === 'run' || panel === 'diff' || panel === 'agent')
+  if (
+    panel === 'run' ||
+    panel === 'diff' ||
+    panel === 'agent' ||
+    panel === 'search'
+  )
     shown = !lab
       ? gone('Lab', 'No lab', 'This project has no lab.')
       : panel === 'run'
         ? runPanel(lab, frame.run, clock)
         : panel === 'diff'
           ? diffPanel(lab, direction, frame.proof, live.labDiff ?? null)
-          : labAgentPanel(lab, frame.agent, live, tasks);
+          : panel === 'search'
+            ? searchPanel(lab, frame.q, clock)
+            : labAgentPanel(lab, frame.agent, live, tasks);
   else if (panel === 'worker')
     shown = live.session
       ? workerPanel(live.session, live, tasks)
@@ -3817,6 +3846,10 @@ export function renderDesk(
                           ? labGpu(live.compute, live.lab.state.startedAt)
                           : null,
                         extra: `${renderPodsLine(live.compute)}${renderPaused(live)}`,
+                        away:
+                          frame.since && frame.spent
+                            ? { since: frame.since, spent: frame.spent }
+                            : null,
                       })
                     : renderHome(
                         snapshot,
