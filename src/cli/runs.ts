@@ -943,6 +943,8 @@ export class RunLedger {
     readonly where?: 'local' | 'pod';
     /** On a pod: the lease to use. Default: the direction's newest ready lease. */
     readonly lease?: unknown;
+    /** Real paths that a local run cannot read, besides the credential paths, such as the lab's records for a checker's run. */
+    readonly deny?: readonly string[];
   }): Promise<RunRecord> {
     const runner =
       input.where === 'pod'
@@ -1014,7 +1016,13 @@ export class RunLedger {
             input.workspace,
             started,
           )
-        : this.execute(made.run, runner.sandbox, input.workspace, started)
+        : this.execute(
+            made.run,
+            runner.sandbox,
+            input.workspace,
+            started,
+            input.deny ?? [],
+          )
     )
       .catch(() => {
         /* The run's end records what failed. */
@@ -1052,6 +1060,7 @@ export class RunLedger {
     sandbox: Sandbox,
     workspace: Workspace,
     started: (run: RunRecord) => void,
+    deny: readonly string[],
   ): Promise<void> {
     const paths = this.trees(run);
     let log: RunLog | null = null;
@@ -1072,7 +1081,7 @@ export class RunLedger {
         command: run.command,
         folder,
         cwd: join(folder, 'tree'),
-        denied: await deniedPaths(this.options.home),
+        denied: [...(await deniedPaths(this.options.home)), ...deny],
       });
       log = new RunLog(
         await open(join(this.record(run.id), 'log.txt'), 'w', 0o600),

@@ -440,7 +440,7 @@ Each direction has a verdict that its own agent gives, with one line of evidence
 
 - **Leading**: the results meet the bar so far. It needs a claim, evidence, or rerun post about the direction, with proof.
 - **Ruled out**: the direction failed its bar. It needs a ruled-out post about the direction, with proof.
-- **Holds up** needs a rerun by the other harness. Verifold does not start those reruns yet, so no agent gives this verdict.
+- **Holds up** needs a check. The agent names a claim, evidence, or rerun post that cites a run, and Verifold starts a check of it (see Checks). Until the check ends, the direction is leading. When the check reruns the post and it holds, the direction holds up.
 - An agent can take its verdict back. Each verdict is a note in the direction's thread.
 - After ruled out, the agent can close its direction. Its runs are cancelled and its leases end. Its session ends after that turn, or when a pause or a stop of Verifold cuts the turn short, and Verifold commits that turn's work. If Verifold stopped before that commit, the next start makes it. Its folder and branch stay.
 - `memory/progress.md` lists the directions with their verdicts and evidence.
@@ -481,6 +481,24 @@ When pods are on, with a RunPod key and a spend limit, each agent can also run o
 - A run on a pod takes up to 1,440 minutes. Verifold reads its job every 20 seconds, which also keeps the pod from the idle stop, and keeps the end of its log in the record while it runs. A cancel or the time limit sends SIGTERM to the job's process group, and SIGKILL 5 seconds later and with each read after that. A job that has not ended a minute after SIGTERM ends the run all the same. A pod that does not answer for 10 minutes ends the run as interrupted.
 - When the job ends, Verifold stops what is left of its process group. It copies back `metrics.json` and each output that the agent named, one at a time, so one that fails leaves the others, and checks them as for a local run. Verifold keeps no copy of a file whose name or content holds the value of a pod secret, and the note says so. The log comes back with each secret's value replaced by its name, also a part of a value where Verifold cut the log. The `METRIC` lines count also from a part of a long log that the record leaves out. Then Verifold removes the run's folder on the pod. When a copy failed, the folder stays on the pod until the lease ends, and the note says so.
 - Before a pod stops or its lease ends, its runs end as interrupted and copy back what they have. The stop waits up to 2 minutes for them, and no run starts on that pod meanwhile. When Verifold stops, its pod runs end the same way. After a crash, the next start reads each pod run's job in the background, so the desk opens at once: a job that ended gives its result, and one that still runs stops. Then lease recovery stops the pod.
+
+**Checks**
+
+A check settles a dispute without you: a fresh agent of the other harness tests the claim without the author's reasoning, and the verdict follows what it finds.
+
+- An objection that replies to a claim, evidence, or rerun post that cites a run queues a check of that post, from an agent or from you. So does a direction's agent that asks for holds up. A second objection while the check waits or runs joins it.
+- The checker runs on the harness that did not write the post. With one harness in the team, a fresh session of the same harness checks, and its mark says so. It gets a handle of its own, such as `codex-2`, and no direction.
+- Its folder, `.verifold/workspaces/k-N`, holds the files of the post's run commit and nothing else, with a Git directory of its own.
+- Its prompt has the lab's question, the direction's bar, the post's text, the command and results of its runs, and the objection. It gets no other post, no project memory, and no transcript.
+- Its harness cannot read the board, the lab's records, the session records, the project memory, the project's Git data, the other folders under `.verifold/workspaces`, or the transcripts of Claude Code and Codex. Its runs cannot read them either.
+- It has its own tools: `verifold_run` on its folder, `verifold_run_status` for its own runs, `verifold_read` for the post's files at its commit, and `verifold_post` for one rerun post. It cannot read the board, plan, or open directions.
+- Its prompt tells it to find the post's premise, to measure the result with its own code where it can, and not only to rerun the author's script.
+- Its rerun post replies to the claim with an outcome, holds, fails, or differs, and a method, rerun or code-read. A rerun cites a run that the checker made. A code-read cites the post's run. The post mentions the author, the objectors, and the direction's agent, so they wake. Its session ends after that turn.
+- Holds by rerun turns an ask for holds up into holds up. Fails or differs takes back a leading or holds-up verdict that rests on the post, and that post can then carry no verdict but ruled out. A code-read never gives holds up.
+- One check runs at a time, or two when "Agents at once" is 5 or more. A check takes a free slot before any agent. It waits while the lab is paused or past its time budget, and while its harness's usage window is used up.
+- A check has 3 turns and 60 minutes. A run that ends after its last turn gives it one more turn to post. A check that does not post in that time fails, with a note on the board, and its dispute stays open. A post gets at most 2 checks.
+- A pause or Start over ends a check's session; a fresh one starts after the resume, with a list of its earlier runs. When Verifold or the checker's process stops, the check starts again once the same way. After a second stop it fails.
+- The desk pins open disputes above the directions: each objection whose post has no check that ended after it. A post that a check tested shows how: `reran r-9 (Codex): acc=0.7`, `did not hold on r-9`, `read the code only`, or `(same harness)`. A row's evidence line says the same, or `not checked`, and a row whose evidence is in dispute says so.
 
 **Who a post wakes**
 A post wakes an agent when:

@@ -634,6 +634,54 @@ export async function allocate(
   return { kind, path, branch, start: commit };
 }
 
+/**
+ * The folder of a lab check: the files of `commit` from the folder of
+ * another workspace, and nothing else, with a Git directory of its own under
+ * `.verifold/tasks/git/`. It holds no other commit of the project, so the
+ * checker cannot read another direction's work through Git. Returns a folder
+ * workspace whose start is that content.
+ */
+export async function checkFolder(
+  root: string,
+  options: {
+    readonly name: string;
+    readonly from: Workspace;
+    readonly commit: string;
+  },
+): Promise<Workspace> {
+  if (!/^[a-z0-9][a-z0-9-]{0,80}$/.test(options.name))
+    throw new WorkspaceError('Invalid workspace name.');
+  const path = join('.verifold', 'workspaces', options.name);
+  const target = join(root, path);
+  const gitDir = join(root, '.verifold', 'tasks', 'git', options.name);
+  await mkdir(join(root, '.verifold', 'workspaces'), {
+    recursive: true,
+    mode: 0o700,
+  });
+  if (
+    (await lstat(target).catch(() => null)) !== null ||
+    (await lstat(gitDir).catch(() => null)) !== null
+  )
+    throw new WorkspaceError(`The workspace ${options.name} already exists.`);
+  await mkdir(dirname(gitDir), { recursive: true, mode: 0o700 });
+  await mkdir(target, { mode: 0o700 });
+  try {
+    await checkoutAt(root, options.from, options.commit, target);
+    await git(target, ['init', '--quiet', `--separate-git-dir=${gitDir}`]);
+    const { commit } = await commitAll(
+      target,
+      ['.'],
+      'Verifold: the start of a check',
+      { lab: true },
+    );
+    return { kind: 'folder', path, branch: null, start: commit };
+  } catch (error) {
+    await rm(target, { recursive: true, force: true });
+    await rm(gitDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 /** Commit the workspace as one version. */
 export function commitVersion(
   root: string,

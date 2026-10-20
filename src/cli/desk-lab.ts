@@ -12,6 +12,7 @@ import {
   defaultLabHours,
   labLimits,
   verdictWords,
+  type Check,
   type DirectionView,
   type LabView,
 } from './lab.ts';
@@ -132,6 +133,114 @@ function proofText(artifact: Artifact): string {
   }
 }
 
+/** The kinds of post that a check can test, when they cite a run. */
+const checkable: ReadonlySet<PostKind> = new Set([
+  'claim',
+  'evidence',
+  'rerun',
+]);
+
+/**
+ * How a check tested a post, in a few words, or null when no check did:
+ * "reran r-9 (Codex): acc=0.7", "did not hold on r-9", "read the code only",
+ * a check that waits or runs, or one that failed. The newest done check
+ * counts first.
+ */
+export function checkMark(
+  post: Post,
+  view: LabView,
+  ledger: ReadonlyMap<string, RunRecord>,
+): string | null {
+  const checks = view.checks.filter((check) => check.claim === post.id);
+  const done = checks.filter((check) => check.state === 'done').at(-1);
+  if (done) {
+    const result = view.posts.find((entry) => entry.id === done.result);
+    const runs = (result?.artifacts ?? []).flatMap((artifact) => {
+      const run =
+        artifact.type === 'run' ? ledger.get(artifact.run) : undefined;
+      return run?.agent === done.agent ? [run] : [];
+    });
+    const ids = runs.map((run) => run.id).join(', ') || done.run;
+    const who = `${hostName(done.harness)}${done.sameHarness ? ', same harness' : ''}`;
+    if (done.method === 'code-read') return `read the code only (${who})`;
+    if (done.outcome === 'holds') {
+      const metrics = runs[0] ? metricsText(runs[0]) : '';
+      return `reran ${ids} (${who})${metrics ? `: ${metrics}` : ''}`;
+    }
+    return `${done.outcome === 'differs' ? 'differs on' : 'did not hold on'} ${ids} (${who})`;
+  }
+  const open = checks.find(
+    (check) => check.state === 'queued' || check.state === 'running',
+  );
+  if (open)
+    return open.state === 'running'
+      ? `${open.handle} checks it`
+      : `check ${open.id} waits`;
+  if (checks.some((check) => check.state === 'failed')) return 'check failed';
+  return null;
+}
+
+/**
+ * An objection to a claim, evidence, or rerun post is a dispute until a
+ * check of that post ends after it. The open ones, oldest first, with the
+ * newest check of each target.
+ */
+export function openDisputes(view: LabView): {
+  readonly objection: Post;
+  readonly target: Post;
+  readonly check: Check | null;
+}[] {
+  const posts = new Map(view.posts.map((post) => [post.id, post]));
+  return view.posts.flatMap((objection) => {
+    const target =
+      objection.kind === 'objection' && objection.replyTo
+        ? posts.get(objection.replyTo)
+        : undefined;
+    if (!target || !checkable.has(target.kind)) return [];
+    const checks = view.checks.filter((check) => check.claim === target.id);
+    const settled = checks.some(
+      (check) =>
+        check.state === 'done' &&
+        (check.objections.includes(objection.id) ||
+          Date.parse(check.endedAt ?? '') > Date.parse(objection.at)),
+    );
+    return settled ? [] : [{ objection, target, check: checks.at(-1) ?? null }];
+  });
+}
+
+/** Open disputes, pinned above the directions. Each says where its check is. */
+function disputesCard(
+  view: LabView,
+  name: (author: string) => string,
+  slot: TranscriptSlot,
+): string {
+  const open = openDisputes(view);
+  if (!open.length) return '';
+  const items = open.map(({ objection, target, check }) => {
+    const where = !target.artifacts.some((artifact) => artifact.type === 'run')
+      ? `${target.id} cites no run, so no check can rerun it.`
+      : !check
+        ? 'No check yet.'
+        : check.state === 'failed'
+          ? `Check ${check.id} failed: ${check.note ?? 'no reason'}`
+          : check.state === 'running'
+            ? `${check.handle} (${hostName(check.harness)}) checks it now, without the author's reasoning.`
+            : `Check ${check.id} waits for ${check.handle} (${hostName(check.harness)}).`;
+    const runs = check
+      ? view.ledger
+          .filter((run) => run.agent === check.agent)
+          .map((run) => runHtml(run, check.id, view.runs))
+          .join('')
+      : '';
+    const transcript =
+      check?.session && check.state !== 'queued'
+        ? `<details class="lab-activity"><summary>What ${e(check.handle)} did</summary>${slot(`session:${check.session}`, `${check.handle} transcript`)}</details>`
+        : '';
+    return `<li><a href="#post-${e(objection.id)}">${e(name(objection.author))} objects to ${e(target.id)}</a>${target.direction ? ` <span class="fine">in ${e(view.state.directions.find((entry) => entry.id === target.direction)?.title ?? target.direction)}</span>` : ''}<p class="pre">${e(clip(objection.text, 280))}</p><p class="fine">${e(where)}</p>${runs ? `<div class="lab-runs">${runs}</div>` : ''}${transcript}</li>`;
+  });
+  return `<section class="card lab-disputes" aria-labelledby="disputes-title"><h2 id="disputes-title">Open disputes</h2><ul>${items.join('')}</ul><p class="fine">A fresh agent of the other harness reruns the disputed post. Its rerun settles the dispute.</p></section>`;
+}
+
 /** Runs that a direction's row shows: those that run now, then the newest. */
 const rowRuns = 3;
 
@@ -218,11 +327,16 @@ function directionRow(
   entry: DirectionView,
   clock: (value: string) => string,
   slot: TranscriptSlot,
-  runs: boolean,
-  ledger: readonly RunRecord[],
+  view: LabView,
+  disputed: ReadonlySet<string>,
 ): string {
+  const { runs, ledger } = view;
   const { direction, agent, status } = entry;
-  const own = ledger.filter((run) => run.direction === direction.id);
+  const checkers = new Set(view.checks.map((check) => check.agent));
+  // A check's runs show with its dispute and its rerun post, not on the row.
+  const own = ledger.filter(
+    (run) => run.direction === direction.id && !checkers.has(run.agent),
+  );
   const shown = [
     ...own.filter(runActive),
     ...own.filter((run) => !runActive(run)).reverse(),
@@ -251,10 +365,23 @@ function directionRow(
     direction.verdict === 'open'
       ? ''
       : ` <span class="chip verdict-${e(direction.verdict)}">${e(verdictWords[direction.verdict])}</span>`;
+  const proof = direction.evidence
+    ? view.posts.find((post) => post.id === direction.evidence?.post)
+    : undefined;
+  // A ruled-out verdict needs no check.
+  const mark =
+    proof && checkable.has(proof.kind)
+      ? (checkMark(proof, view, new Map(ledger.map((run) => [run.id, run]))) ??
+        'not checked')
+      : null;
   const evidence = direction.evidence
-    ? `<span class="fine">${e(direction.evidence.text)} · ${e(direction.evidence.post)}${direction.evidence.run ? ` · ${e(direction.evidence.run)}` : ''}</span>`
+    ? `<span class="fine">${e(direction.evidence.text)} · ${e(direction.evidence.post)}${direction.evidence.run ? ` · ${e(direction.evidence.run)}` : ''}${mark ? ` · ${e(mark)}` : ''}</span>`
     : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}${verdict}</strong>${evidence}${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
+  const dispute =
+    direction.evidence && disputed.has(direction.evidence.post)
+      ? ' <span class="chip kind-objection">Disputed</span>'
+      : '';
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}${verdict}${dispute}</strong>${evidence}${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${experiments}${transcript}</li>`;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */
@@ -293,9 +420,11 @@ function postHtml(
   clock: (value: string) => string,
   replies: readonly Post[],
   budget: { left: number },
-  runs: boolean,
+  view: LabView,
   ledger: ReadonlyMap<string, RunRecord>,
 ): string {
+  const { runs } = view;
+  const mark = checkable.has(post.kind) ? checkMark(post, view, ledger) : null;
   const proof = (artifact: Artifact): string => {
     const run = artifact.type === 'run' ? ledger.get(artifact.run) : undefined;
     return run
@@ -307,7 +436,7 @@ function postHtml(
     post.kind === 'status'
       ? ''
       : `<span class="chip kind-${post.kind}">${person && post.kind === 'question' ? 'Message' : kindWords[post.kind]}</span>`;
-  return `<article class="post${post.kind === 'status' ? ' note' : ''}" id="post-${e(post.id)}"><header class="feed-head"><strong>${e(name(post.author))}</strong>${kind}<time datetime="${e(post.at)}">${e(clock(post.at))}</time></header>${postText(post, budget)}${post.artifacts.length ? `<ul class="proof">${post.artifacts.map(proof).join('')}</ul>` : ''}${post.kind === 'status' || !runs ? '' : `<button type="button" class="quiet" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`}${replies.length ? `<div class="replies">${replies.map((reply) => postHtml(reply, name, clock, [], budget, runs, ledger)).join('')}</div>` : ''}</article>`;
+  return `<article class="post${post.kind === 'status' ? ' note' : ''}" id="post-${e(post.id)}"><header class="feed-head"><strong>${e(name(post.author))}</strong>${kind}<time datetime="${e(post.at)}">${e(clock(post.at))}</time>${mark ? `<span class="fine">${e(mark)}</span>` : ''}</header>${postText(post, budget)}${post.artifacts.length ? `<ul class="proof">${post.artifacts.map(proof).join('')}</ul>` : ''}${post.kind === 'status' || !runs ? '' : `<button type="button" class="quiet" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`}${replies.length ? `<div class="replies">${replies.map((reply) => postHtml(reply, name, clock, [], budget, view, ledger)).join('')}</div>` : ''}</article>`;
 }
 
 /**
@@ -374,15 +503,7 @@ function board(
         })
         .sort((a, b) => b.latest - a.latest)
         .map((thread) =>
-          postHtml(
-            thread.root,
-            name,
-            clock,
-            thread.list,
-            budget,
-            view.runs,
-            ledger,
-          ),
+          postHtml(thread.root, name, clock, thread.list, budget, view, ledger),
         )
         .join('')}</section>`;
     })
@@ -413,6 +534,9 @@ export function renderLab(
   );
   const handles = open.map((entry) => `@${entry.agent.handle}`);
   const { runs } = view;
+  const disputed = new Set(
+    openDisputes(view).map((dispute) => dispute.target.id),
+  );
   const working = renderLabWork(works, clock);
   // After the time budget, the lab goes on with more time, from Needs you: no plain Resume.
   const over = budgetEnded(state);
@@ -437,9 +561,10 @@ export function renderLab(
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Lab</h1><p class="question">${e(state.question)}</p>${time}</div>
   <div class="view lab">
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${needs}
+  ${disputesCard(view, name, slot)}
   ${planCard(view, name, clock)}
   <section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Directions</h2><span class="actions">${pause}</span></div>
-  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, runs, view.ledger)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
+  ${view.directions.length ? `<ul class="lab-directions">${view.directions.map((entry) => directionRow(entry, clock, slot, view, disputed)).join('')}</ul>` : '<p class="empty-note">No direction yet. Open one below: each direction gets its own agent and its own copy of the project.</p>'}
   ${runs ? addForm(view.directions.length > 0) : ''}</section>
   ${runs ? composeBox(state, handles) : ''}
   <section aria-labelledby="board-title"><div class="section-title"><h2 id="board-title">Board</h2><span class="count">${view.posts.length} ${view.posts.length === 1 ? 'post' : 'posts'}</span></div>${board(view, name, clock)}</section>

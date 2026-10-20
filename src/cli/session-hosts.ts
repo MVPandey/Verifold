@@ -54,8 +54,14 @@ export const credentialPaths = [
  * the task's domains. Neither shell commands nor file tools can read the
  * credential paths. When the sandbox cannot start, Claude Code stops instead
  * of running commands without it. Probed on Claude Code 2.1.288 and 2.1.289.
+ * `denyRead` closes more paths the same way; absolute paths were probed on
+ * Claude Code 2.1.304.
  */
-export function strictClaudeSettings(domains: readonly string[] = []): string {
+export function strictClaudeSettings(
+  domains: readonly string[] = [],
+  denyRead: readonly string[] = [],
+): string {
+  const denied = [...credentialPaths, ...denyRead];
   return JSON.stringify({
     // Edit(./**) and Write(./**) resolve against Claude Code's current folder. See strictClaudeEnvironment.
     sandbox: {
@@ -63,16 +69,17 @@ export function strictClaudeSettings(domains: readonly string[] = []): string {
       autoAllowBashIfSandboxed: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
-      filesystem: { denyRead: credentialPaths },
+      filesystem: { denyRead: denied },
       ...(domains.length ? { network: { allowedDomains: domains } } : {}),
     },
     permissions: {
       allow: ['Edit(./**)', 'Write(./**)', 'WebSearch', 'WebFetch'],
-      // The sandbox limits shell commands only. These rules limit the Read tool.
-      deny: credentialPaths.flatMap((path) => [
-        `Read(${path})`,
-        `Read(${path}/**)`,
-      ]),
+      // The sandbox limits shell commands only. These rules limit the Read
+      // tool. A rule path that starts with `//` is absolute.
+      deny: denied.flatMap((path) => {
+        const rule = path.startsWith('/') ? `/${path}` : path;
+        return [`Read(${rule})`, `Read(${rule}/**)`];
+      }),
     },
   });
 }
@@ -82,17 +89,18 @@ export function strictClaudeSettings(domains: readonly string[] = []): string {
  * task session extends the built-in workspace profile (writes only in the
  * working folder and temporary folders), and the coordinator extends the
  * read-only profile. Neither can read the credential paths. A task with domains
- * gets the network, because Codex cannot limit it to domains. Probed on Codex
- * 0.160.0.
+ * gets the network, because Codex cannot limit it to domains. `denyRead`
+ * closes more paths, absolute or under `~/`. Probed on Codex 0.160.0.
  */
 function codexProfile(
   mode: 'strict' | 'coordinator',
   network: boolean,
+  denyRead: readonly string[] = [],
 ): Record<string, unknown> {
   return {
     extends: mode === 'strict' ? ':workspace' : ':read-only',
     filesystem: Object.fromEntries(
-      credentialPaths.map((path) => [path, 'deny']),
+      [...credentialPaths, ...denyRead].map((path) => [path, 'deny']),
     ),
     ...(network ? { network: { enabled: true } } : {}),
   };
@@ -227,6 +235,11 @@ export interface HostOptions {
   readonly tools?: AgentTools;
   /** A strict task: the domains that its shell commands may reach. Codex cannot limit domains, so any domain opens its network. */
   readonly network?: readonly string[];
+  /**
+   * A strict session: more paths that it cannot read, absolute or under `~/`,
+   * besides the credential paths. A lab's checker gets the lab's records.
+   */
+  readonly denyRead?: readonly string[];
   readonly onEvent: (event: HostEvent) => void;
 }
 
@@ -543,7 +556,10 @@ function claude(options: HostOptions): HostSession {
           ? 'dontAsk'
           : 'default',
       ...(options.mode === 'strict'
-        ? ['--settings', strictClaudeSettings(options.network)]
+        ? [
+            '--settings',
+            strictClaudeSettings(options.network, options.denyRead),
+          ]
         : []),
       ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
       ...(options.model ? ['--model', options.model] : []),
@@ -1320,6 +1336,7 @@ function codex(options: HostOptions): HostSession {
                 [`verifold-${unsupervised}`]: codexProfile(
                   unsupervised,
                   Boolean(options.network?.length),
+                  options.denyRead,
                 ),
               },
               default_permissions: `verifold-${unsupervised}`,
