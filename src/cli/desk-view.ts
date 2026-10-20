@@ -3229,6 +3229,13 @@ function progress(workspace: Workspace, live: DeskSession): Progress {
       notes[0] = 'No question yet';
       return { current: 0, notes, waits: false, working: false };
     }
+    // A question that no research step took yet, such as one that a lab keeps, is still asked.
+    if (
+      !searching &&
+      !research.latestAttempt &&
+      research.phase === 'needs-plan'
+    )
+      return { current: 0, notes, waits: false, working: false };
     // Research, its optional plan stop, and a choice of direction belong to the plan.
     const waits =
       !searching &&
@@ -3758,6 +3765,8 @@ export function renderDesk(
   work: { done: number; total: number } | null;
   /** A project owner runs the team, so the top bar offers Stop the team. */
   stoppable: boolean;
+  /** The project has a lab. Its owner keeps the person's last look, so the page sends no time away of its own. */
+  lab: boolean;
 } {
   const { workspace, attempts } = snapshot;
   const active = attempts.filter((attempt) => attempt.activity === 'recent');
@@ -3875,6 +3884,7 @@ export function renderDesk(
     needs: needs.map(({ key, title }) => ({ key, title })),
     work: at.work ?? null,
     stoppable: live.archives !== undefined,
+    lab: Boolean(live.lab),
   };
 }
 

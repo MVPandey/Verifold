@@ -248,6 +248,13 @@ export async function initializeProject(
   let research: Initialization['research'] = null;
   // The research plan waits for the person only when they ask for that stop.
   let askFirst = parseAutonomy(options.autonomy) === 'guided';
+  // A lab follows setup, and a lab has no stop before its work.
+  if (options.lab && askFirst) {
+    askFirst = false;
+    io.progress?.(
+      'A lab starts after this setup, and a lab has no stop before its work, so --autonomy guided changes nothing here. It applies to verifold init and verifold research.',
+    );
+  }
   let projectReviewed = false;
   let topicFromBrief = false;
   if (!options.setupOnly && io.interactive) {
@@ -442,6 +449,16 @@ export async function initializeProject(
       ...(model ? { model } : {}),
       ...(helper && helper !== host ? { helper } : {}),
       ...(context ? { context } : {}),
+      // The question stays with the project from the start, so Home offers it with Start the lab even when the lab cannot start.
+      ...(options.lab && research
+        ? {
+            research: {
+              topic: research.topic,
+              autonomy: research.autonomy,
+              phase: 'needs-plan' as const,
+            },
+          }
+        : {}),
       candidates: [],
       selectedId: null,
     },

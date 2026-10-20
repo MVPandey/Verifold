@@ -748,7 +748,7 @@ export function renderLab(
   return `<div class="lab-screen">
   <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, gpu))}</p></div><span class="actions">${searchButton}${pause}</span></header>
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${renderLabWork(options.works ?? [], clock)}
-  ${options.away ? awayDigest(view, options.away, gpu, clock) : ''}${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
+  ${options.away ? awayDigest(view, options.away, gpu, disputed, clock) : ''}${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
   <section class="lab-section" aria-labelledby="directions-title"><h2 id="directions-title" class="lab-label">Directions</h2>
   ${view.directions.length ? `<ul class="lab-rows">${view.directions.map((entry) => directionRow(entry, clock, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. The plan opens them, or you open one yourself.</p>'}
   ${runs ? addForm() : ''}</section>
@@ -1104,11 +1104,18 @@ function snippet(text: string, any: RegExp): string {
 }
 
 /**
+ * UTF-8 bytes of whole post texts that one search shows. A hit past it shows
+ * its start and where the whole post is, so the view stays under its limit.
+ */
+const searchTextBytes = 300_000;
+
+/**
  * The search panel: posts by their ID, kind, author, and text; runs by
  * their ID and command; and calls by their ID, kind, question, and options.
- * Each word must match, in any case. The newest hits come first. A post on
- * the board links to it; an older one shows its whole text here. Every
- * agent text is escaped.
+ * Each word must match, in any case. The newest hits come first, and only
+ * the newest `searchLimit` render. A post on the board links to it; an older
+ * one shows its whole text here, within `searchTextBytes`. Every agent text
+ * is escaped.
  */
 export function searchPanel(
   view: LabView,
@@ -1116,80 +1123,88 @@ export function searchPanel(
   clock: (value: string) => string,
 ): Panel {
   const words = q ? searchWords(q) : null;
-  const hits: { readonly at: string; readonly html: string }[] = [];
+  type Found =
+    | { readonly at: string; readonly post: Post }
+    | { readonly at: string; readonly run: RunRecord }
+    | { readonly at: string; readonly call: Call };
+  const found: Found[] = [];
   if (words) {
-    const { any } = words;
     const has = (text: string): boolean =>
       words.each.every((word) => word.test(text));
-    const shown = new Set(boardPosts(view).map((post) => post.id));
-    for (const post of view.posts) {
-      const author = authorName(view, post.author);
-      const kind = kindLabel(post);
-      if (!has(`${post.id} ${post.kind} ${kind} ${author} ${post.text}`))
-        continue;
+    for (const post of view.posts)
+      if (
+        has(
+          `${post.id} ${post.kind} ${kindLabel(post)} ${authorName(view, post.author)} ${post.text}`,
+        )
+      )
+        found.push({ at: post.at, post });
+    for (const run of view.ledger)
+      if (has(`${run.id} ${run.command}`))
+        found.push({ at: run.startedAt ?? run.queuedAt, run });
+    for (const call of view.state.calls)
+      if (
+        has(
+          `${call.id} ${call.kind} ${callWords[call.kind]} ${authorName(view, call.by)} ${call.question} ${call.options.map((option) => option.label).join(' ')}`,
+        )
+      )
+        found.push({ at: call.at, call });
+  }
+  found.sort((a, b) => b.at.localeCompare(a.at));
+  const shown = new Set(boardPosts(view).map((post) => post.id));
+  const budget = { left: searchTextBytes };
+  const hit = (entry: Found, any: RegExp): string => {
+    if ('post' in entry) {
+      const { post } = entry;
       const id = shown.has(post.id)
         ? `<a href="#post-${e(post.id)}" data-post-link="${e(post.id)}">${e(post.id)}</a>`
         : e(post.id);
-      const whole =
-        shown.has(post.id) || post.text.length <= snippetWidth
-          ? ''
-          : `<details id="hit-${e(post.id)}"><summary>Show the whole post</summary><p class="pre">${e(post.text)}</p></details>`;
-      hits.push({
-        at: post.at,
-        html: `<li class="hit"><p class="hit-head"><span class="chip kind-${post.kind}">${kind}</span> ${id} · ${e(author)} · <time datetime="${e(post.at)}">${e(clock(post.at))}</time></p><p class="hit-text">${snippet(post.text, any)}</p>${whole}</li>`,
-      });
+      let whole = '';
+      if (!shown.has(post.id) && post.text.length > snippetWidth) {
+        const text = e(post.text);
+        const bytes = Buffer.byteLength(text);
+        if (bytes <= budget.left) {
+          budget.left -= bytes;
+          whole = `<details id="hit-${e(post.id)}"><summary>Show the whole post</summary><p class="pre">${text}</p></details>`;
+        } else
+          whole = `<p class="fine">The whole post is on the board, in .verifold/board/${e(post.id)}.json.</p>`;
+      }
+      return `<li class="hit"><p class="hit-head"><span class="chip kind-${post.kind}">${kindLabel(post)}</span> ${id} · ${e(authorName(view, post.author))} · <time datetime="${e(post.at)}">${e(clock(post.at))}</time></p><p class="hit-text">${snippet(post.text, any)}</p>${whole}</li>`;
     }
-    for (const run of view.ledger) {
-      if (!has(`${run.id} ${run.command}`)) continue;
-      const at = run.startedAt ?? run.queuedAt;
-      hits.push({
-        at,
-        html: `<li class="hit"><p class="hit-head"><span class="chip">Run</span> <button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button> · ${e(authorName(view, run.agent))} · <time datetime="${e(at)}">${e(clock(at))}</time> · ${e(runSummary(run))}</p><p class="hit-text"><code>${snippet(run.command, any)}</code></p></li>`,
-      });
+    if ('run' in entry) {
+      const { run, at } = entry;
+      return `<li class="hit"><p class="hit-head"><span class="chip">Run</span> <button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button> · ${e(authorName(view, run.agent))} · <time datetime="${e(at)}">${e(clock(at))}</time> · ${e(runSummary(run))}</p><p class="hit-text"><code>${snippet(run.command, any)}</code></p></li>`;
     }
-    for (const call of view.state.calls) {
-      const asker = authorName(view, call.by);
-      const labels = call.options.map((option) => option.label);
-      if (
-        !has(
-          `${call.id} ${call.kind} ${callWords[call.kind]} ${asker} ${call.question} ${labels.join(' ')}`,
-        )
-      )
-        continue;
-      const chosen = call.answer
-        ? call.options[call.answer.option]?.label
-        : undefined;
-      const state =
-        call.state === 'open'
-          ? 'waits for you'
-          : call.state === 'withdrawn'
-            ? 'withdrawn'
-            : call.state === 'undoing'
-              ? 'Verifold undoes your answer'
-              : `you chose "${chosen ?? ''}"`;
-      hits.push({
-        at: call.at,
-        html: `<li class="hit"><p class="hit-head"><span class="chip">${callWords[call.kind]}</span> ${e(call.id)} · ${e(asker)} · <time datetime="${e(call.at)}">${e(clock(call.at))}</time> · ${e(state)}</p><p class="hit-text">${snippet(`${call.question} (${labels.join(', ')})`, any)}</p>${call.state === 'open' ? '<p><button type="button" class="link" data-view="needs">Answer it in Needs you</button></p>' : ''}</li>`,
-      });
-    }
-  }
-  hits.sort((a, b) => b.at.localeCompare(a.at));
+    const { call } = entry;
+    const labels = call.options.map((option) => option.label);
+    const chosen = call.answer
+      ? call.options[call.answer.option]?.label
+      : undefined;
+    const state =
+      call.state === 'open'
+        ? 'waits for you'
+        : call.state === 'withdrawn'
+          ? 'withdrawn'
+          : call.state === 'undoing'
+            ? 'Verifold undoes your answer'
+            : `you chose "${chosen ?? ''}"`;
+    return `<li class="hit"><p class="hit-head"><span class="chip">${callWords[call.kind]}</span> ${e(call.id)} · ${e(authorName(view, call.by))} · <time datetime="${e(call.at)}">${e(clock(call.at))}</time> · ${e(state)}</p><p class="hit-text">${snippet(`${call.question} (${labels.join(', ')})`, any)}</p>${call.state === 'open' ? '<p><button type="button" class="link" data-view="needs">Answer it in Needs you</button></p>' : ''}</li>`;
+  };
   const note = !words
     ? 'Type a word, an ID such as p-12 or r-3, or a part of a command.'
-    : !hits.length
+    : !found.length
       ? 'No post, run, or call has these words.'
-      : hits.length > searchLimit
-        ? `The newest ${searchLimit} of ${hits.length} hits. Add a word to find fewer.`
-        : `${hits.length} ${hits.length === 1 ? 'hit' : 'hits'}, the newest first.`;
+      : found.length > searchLimit
+        ? `The newest ${searchLimit} of ${found.length} hits. Add a word to find fewer.`
+        : `${found.length} ${found.length === 1 ? 'hit' : 'hits'}, the newest first.`;
   return {
     kind: '',
     title: 'Search the lab',
     sub: '',
     body: `<div class="lab-panel lab-search"><label class="field" for="lab-search">Posts, runs, and calls</label><input id="lab-search" type="search" maxlength="100" autocomplete="off" spellcheck="false" value="${e(q ?? '')}" aria-describedby="lab-search-note"><p class="fine" id="lab-search-note" role="status">${e(note)}</p>${
-      hits.length
-        ? `<ol class="hits" aria-label="Hits">${hits
+      words && found.length
+        ? `<ol class="hits" aria-label="Hits">${found
             .slice(0, searchLimit)
-            .map((hit) => hit.html)
+            .map((entry) => hit(entry, words.any))
             .join('')}</ol>`
         : ''
     }</div>`,
@@ -1210,32 +1225,33 @@ function counted(value: number, noun: string): string {
   return `${value} ${noun}${value === 1 ? '' : 's'}`;
 }
 
+/** Failed runs that the away digest links. The run ledger has the rest. */
+const awayRuns = 5;
+
 /**
  * What changed while the person was away: a line for each direction with
- * news, the most settled first, then how many posts, runs, and calls came,
- * and what the lab spent. The costs add up to the header's growth since
- * then. A lab that started since then counts from its start.
+ * news, a disputed one first, then how many posts, runs, and calls came, and
+ * what the lab spent. The costs add up to the header's growth since then,
+ * and money spent always shows. `disputed` holds the posts in open dispute.
  */
 function awayDigest(
   view: LabView,
   away: Away,
   gpu: LabGpu | null,
+  disputed: ReadonlySet<string>,
   clock: (value: string) => string,
 ): string {
   const left = Date.parse(away.since);
   const after = (at: string | null | undefined): boolean =>
     typeof at === 'string' && Date.parse(at) > left;
-  const fresh = after(view.state.startedAt);
   const posts = view.posts.filter((post) => after(post.at));
+  // A dispute comes first, then the most settled. A direction that ended comes last.
   const order: Record<Verdict, number> = {
-    'holds-up': 0,
-    'ruled-out': 1,
-    leading: 2,
-    open: 3,
+    'holds-up': 1,
+    'ruled-out': 3,
+    leading: 4,
+    open: 5,
   };
-  const disputed = new Set(
-    openDisputes(view).map((dispute) => dispute.target.id),
-  );
   // Each line links to its row, so only the directions that have a row.
   const changed = view.directions
     .flatMap(({ direction }) => {
@@ -1251,6 +1267,7 @@ function awayDigest(
           check.outcome !== 'holds' &&
           after(check.endedAt),
       );
+      // A note of Verifold, such as a verdict, counts as news too.
       const noted = posts.some((post) => post.direction === direction.id);
       if (!noted && !opened && !ended) return [];
       const row = `<a href="#row-${e(direction.id)}">${e(direction.title)}</a>`;
@@ -1281,11 +1298,13 @@ function awayDigest(
           : verdictMarks[verdict];
       return [
         {
-          rank: ended
-            ? 5
-            : dispute || missed
-              ? 0
-              : order[verdict] + (opened ? 1 : 0),
+          rank: dispute
+            ? 0
+            : ended
+              ? 7
+              : missed
+                ? 2
+                : order[verdict] + (opened ? 1 : 0),
           html: `<li><span class="away-mark" aria-hidden="true">${glyph}</span><span>${row}: ${said}</span></li>`,
         },
       ];
@@ -1298,24 +1317,31 @@ function awayDigest(
   const asked = view.state.calls.filter((call) => after(call.at)).length;
   const written = posts.filter((post) => post.kind !== 'status').length;
   // Counts as HTML: a run that failed opens in the panel.
+  const links = failed
+    .slice(0, awayRuns)
+    .map(
+      (run) =>
+        `<button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button>`,
+    );
+  if (failed.length > awayRuns) links.push(`${failed.length - awayRuns} more`);
   const counts = [
     written ? counted(written, 'post') : '',
     finished.length
-      ? `${counted(finished.length, 'run')} ended${failed.length ? ` (${failed.length} failed: ${failed.map((run) => `<button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button>`).join(', ')})` : ''}`
+      ? `${counted(finished.length, 'run')} ended${failed.length ? ` (${failed.length} failed: ${links.join(', ')})` : ''}`
       : '',
     asked ? `${counted(asked, 'call')} for you` : '',
   ].filter(Boolean);
-  // A baseline above today's costs is from another lab or another project, so it gives no cost line.
-  const claude = view.claudeUsd - (fresh ? 0 : away.spent.claude);
-  const pods = (gpu?.spent ?? 0) - (fresh ? 0 : away.spent.gpu);
+  const claude = Math.max(0, view.claudeUsd - away.spent.claude);
+  const pods = Math.max(0, (gpu?.spent ?? 0) - away.spent.gpu);
+  // Money spent always shows, also when nothing else changed.
   const cost =
-    claude < -0.005 || pods < -0.005
-      ? ''
-      : `Spent since then: ≈${usd(Math.max(0, claude) + Math.max(0, pods))} (Claude Code ≈${usd(Math.max(0, claude))}${gpu ? `, GPU ${usd(Math.max(0, pods))}` : ''}).`;
+    claude + pods >= 0.005
+      ? `Spent since then: ≈${usd(claude + pods)} (Claude Code ≈${usd(claude)}${gpu ? `, GPU ${usd(pods)}` : ''}).`
+      : '';
   const quiet = !changed.length && !counts.length;
   return `<section class="lab-away" aria-labelledby="away-title"><div class="away-head"><h2 id="away-title">While you were away</h2><button type="button" class="link" data-action="lab-away-dismiss">Dismiss</button></div>
-  <p class="fine">Since ${e(clock(away.since))}${fresh ? `. The lab started at ${e(clock(view.state.startedAt))}` : ''}.</p>
-  ${quiet ? '<p>Nothing changed.</p>' : ''}${
+  <p class="fine">Since ${e(clock(away.since))}.</p>
+  ${quiet ? `<p>${cost ? 'No post, run, or call came.' : 'Nothing changed.'}</p>` : ''}${
     changed.length
       ? `<ul class="away-lines">${changed
           .slice(0, awayLines)
@@ -1324,5 +1350,5 @@ function awayDigest(
             '',
           )}</ul>${changed.length > awayLines ? `<p class="fine">${counted(changed.length - awayLines, 'more direction')} changed too. Their rows are below.</p>` : ''}`
       : ''
-  }${counts.length ? `<p class="fine">${counts.join(', ')}.</p>` : ''}${cost && !quiet ? `<p class="fine">${e(cost)}</p>` : ''}</section>`;
+  }${counts.length ? `<p class="fine">${counts.join(', ')}.</p>` : ''}${cost ? `<p class="fine">${e(cost)}</p>` : ''}</section>`;
 }

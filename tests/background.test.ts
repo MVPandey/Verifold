@@ -250,7 +250,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.match(lines.at(-1) ?? '', /^Detached\. The team keeps working\./);
   assert.ok(await liveOwner(root));
   // A second terminal attaches to the same owner, without a second owner.
-  // --lab is no longer needed. It starts nothing, and says where a lab starts.
+  // --lab in a project that has an owner starts nothing, and says where to start a lab.
   const again: string[] = [];
   const againUrls: string[] = [];
   const second = runCli(
@@ -267,7 +267,12 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   );
   assert.ok(
     again.includes(
-      '--lab is no longer needed: a new project starts a lab after setup. In a project without a lab, start one from Home in the desk.',
+      "--lab is no longer needed for a new project, which starts a lab after setup. Here it starts a lab on the project's question.",
+    ),
+  );
+  assert.ok(
+    again.includes(
+      'Verifold already works in the background, so --lab started nothing. Start the lab from Home in the desk.',
     ),
   );
   assert.equal(existsSync(join(root, '.verifold', 'lab.json')), false);
@@ -465,6 +470,49 @@ await test('an owner that setup started starts a lab on the question of setup, a
   assert.equal(started.opener, started.directions[0]?.agent);
   assert.equal(started.budget?.hours, 8);
   assert.equal(existsSync(join(root, '.verifold', 'runs')), false);
+  owner.abort();
+  await done.catch(() => {});
+});
+
+await test('an owner started with --lab in a project without a lab starts one on its saved question', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await changeWorkspace(root, (current) => ({
+    ...current!,
+    research: {
+      topic: 'Do weekdays lie on a circle?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+  }));
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  const owner = new AbortController();
+  const done = runCli(
+    ['owner'],
+    root,
+    {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      browse: () => Promise.resolve(true),
+      deskAssets: assets,
+      background: {
+        keys,
+        start: () => Promise.reject(new Error('The owner starts no owner.')),
+        input: () => Promise.resolve(JSON.stringify({ ...control, lab: true })),
+      },
+    },
+    owner.signal,
+  );
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
+  await until(() => existsSync(join(root, '.verifold', 'lab.json')));
+  const lab = JSON.parse(
+    await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
+  ) as { question: string };
+  assert.equal(lab.question, 'Do weekdays lie on a circle?');
   owner.abort();
   await done.catch(() => {});
 });
