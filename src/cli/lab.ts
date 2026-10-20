@@ -604,7 +604,9 @@ function parseState(value: Record<string, unknown> | null): LabState | null {
 /** Whole hours for a time budget: a number from 1 to `labLimits.hours`. */
 function hours(value: unknown): number {
   const count =
-    typeof value === 'string' && value.trim() ? Number(value) : value;
+    typeof value === 'string' && /^\d+$/.test(value.trim())
+      ? Number(value)
+      : value;
   return Number.isSafeInteger(count) &&
     (count as number) >= 1 &&
     (count as number) <= labLimits.hours
@@ -1503,7 +1505,7 @@ export class Lab {
         this.state = next;
         await this.stateFile.save();
         // A lab whose deadline passed before it paused held its digests back: they go out now.
-        if (!state.pausedAt) this.wakeAll(why);
+        if (!state.pausedAt && this.ended(state)) this.wakeAll(why);
       }
     });
   }
@@ -3364,8 +3366,18 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       return;
     }
     const resume = saved !== null && prompt === null;
-    // From here on nothing awaits before the start takes its slot.
-    if (sessions.full || this.closing || this.suspended || this.moving) return;
+    // From here on nothing awaits before the start takes its slot. A pause or
+    // the deadline that came during the reads wins: no turn starts after it.
+    if (
+      sessions.full ||
+      this.closing ||
+      this.suspended ||
+      this.moving ||
+      !this.state ||
+      this.state.pausedAt ||
+      this.ended(this.state)
+    )
+      return;
     const loop = this.loop(id);
     const run = this.rt(id);
     // The new generation is known before the first tool call can come.

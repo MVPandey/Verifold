@@ -2619,11 +2619,11 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
 });
 
 await test('when the time budget ends the lab pauses, Needs you asks for more time, and more time resumes it', async (t) => {
-  const lab = await fixture(t, { hourMs: 1500 });
+  const lab = await fixture(t, { hourMs: 4000 });
   await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
   await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
-  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 5_000);
+  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 10_000);
   // No continuation starts after the deadline.
   const count = (await lab.inputs('d-1-alpha')).length;
   await delay(300);
@@ -2639,7 +2639,8 @@ await test('when the time budget ends the lab pauses, Needs you asks for more ti
         ) ?? false,
   );
   await assert.rejects(lab.lab.resume(), /The time budget ended/);
-  await assert.rejects(lab.lab.extend('0'), /whole hours, from 1 to 168/);
+  for (const bad of ['0', '0x10', '1e2', '2.5'])
+    await assert.rejects(lab.lab.extend(bad), /whole hours, from 1 to 168/);
   const html = renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
     session: null,
     controllable: true,
@@ -2660,6 +2661,14 @@ await test('when the time budget ends the lab pauses, Needs you asks for more ti
   await until(async () =>
     (await lab.inputs('d-1-alpha')).some((input) =>
       input.includes('The person gave the lab 10 more hours.'),
+    ),
+  );
+  // More time before the deadline wakes no one.
+  await lab.lab.extend('1');
+  await delay(300);
+  assert.ok(
+    !(await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('The person gave the lab 1 more hour.'),
     ),
   );
 });
@@ -2782,10 +2791,10 @@ await test('a plan keeps the directions that the person opened, also many and ou
 });
 
 await test('when the time budget ends while the person paused the lab, more time keeps it paused', async (t) => {
-  const lab = await fixture(t, { hourMs: 300 });
+  const lab = await fixture(t, { hourMs: 1500 });
   await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
   await lab.lab.pause();
-  await delay(400);
+  await delay(1800);
   // The person's pause stays the person's.
   assert.equal(lab.lab.view()?.state.pausedFor, 'person');
   await assert.rejects(lab.lab.resume(), /The time budget ended/);
