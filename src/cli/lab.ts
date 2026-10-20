@@ -49,8 +49,10 @@ import {
   verdicts,
 } from './lab-tools.ts';
 import type { LabPod } from './compute.ts';
+import { validSecretName } from './credentials.ts';
 import {
   isOpen as isOpenLease,
+  leaseLimits,
   usd,
   type Cause,
   type Lease,
@@ -254,8 +256,6 @@ export interface LabState {
   readonly checks: readonly Check[];
   /** The calls for the person, oldest first. */
   readonly calls: readonly Call[];
-  /** The person approved a GPU pod in a call. Until then, each pod request of an agent is a call. */
-  readonly firstGpuApproved: boolean;
 }
 
 export type CheckOutcome = (typeof checkOutcomes)[number];
@@ -346,6 +346,8 @@ export type CallApplied =
       readonly hours: number;
       /** The time budget before the answer. */
       readonly budget: LabState['budget'];
+      /** The deadline that the answer set. */
+      readonly deadline: string | null;
     }
   | { readonly type: 'open'; readonly direction: string }
   | { readonly type: 'stop'; readonly direction: string }
@@ -378,11 +380,12 @@ export interface Call {
   /** Verifold's call at the end of the time budget: the deadline that ended. */
   readonly deadline: string | null;
   /**
-   * `answered`: Verifold applies the answer, or applied it. `undone`: the
-   * person undid it. `withdrawn`: the asker's direction ended, or the call no
-   * longer makes sense.
+   * `answered`: Verifold applies the answer, or applied it. `undoing`:
+   * Verifold reverses it, and the call is open again after that.
+   * `withdrawn`: the asker's direction ended, or the call no longer makes
+   * sense.
    */
-  readonly state: 'open' | 'answered' | 'undone' | 'withdrawn';
+  readonly state: 'open' | 'answered' | 'undoing' | 'withdrawn';
   readonly answer: { readonly option: number; readonly at: string } | null;
   /** Until then the person can undo the answer. Null: no undo. */
   readonly undoUntil: string | null;
@@ -625,6 +628,12 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
+/** A call that no longer makes sense when Verifold applies its answer. Nothing of it stays changed. */
+class CallWithdrawn extends SessionActionError {}
+
+/** The question of the access call that a pod request makes while pods are off. */
+const podsOffQuestion = 'Add a RunPod key and a spend limit in Compute?';
+
 /** The proof that an agent's post names, before Verifold commits its folder. */
 type ProofRequest = (
   | { readonly type: 'file' | 'figure'; readonly path: string }
@@ -667,8 +676,10 @@ interface AgentRuntime {
   } | null;
   /** When the agent's last turn ended. The agent that worked least recently gives its slot first. */
   endedAt: number;
-  /** The domains of its shell changed during a turn: its process ends after the turn. */
+  /** The domains or the tools of its session changed during a turn: its process ends after the turn. */
   relaunch: boolean;
+  /** Its process ends now for such a change. No digest goes to it meanwhile: the next start gets it. */
+  parking: boolean;
 }
 
 /** What the lab knows of a running check only while the process runs. */
@@ -820,6 +831,13 @@ function parseCheck(value: unknown): Check | null {
 
 const callPattern = /^c-[1-9]\d{0,5}$/;
 
+/** The person approved a GPU pod in an answer that stands. Until then, each pod request of an agent is a call. */
+function gpuApproved(state: LabState): boolean {
+  return state.calls.some(
+    (call) => call.state === 'answered' && call.applied?.type === 'pod',
+  );
+}
+
 /** A whole number from `min` to `max`, or a refusal that names `what`. */
 function whole(value: unknown, min: number, max: number, what: string): number {
   return Number.isSafeInteger(value) &&
@@ -854,13 +872,12 @@ function callEffect(value: unknown, kind: CallKind): CallEffect | null {
       hours: whole(pod.hours, 1, callLimits.podHours, "the pod's hours"),
       secrets:
         Array.isArray(secrets) &&
-        secrets.length <= 8 &&
-        secrets.every(
-          (name) =>
-            typeof name === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(name),
-        )
-          ? [...new Set(secrets as string[])]
-          : fail('Name up to 8 secrets, such as HF_TOKEN.'),
+        secrets.length <= leaseLimits.secrets &&
+        secrets.every(validSecretName)
+          ? [...new Set(secrets)]
+          : fail(
+              `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
+            ),
     };
   }
   if (effect.hours !== undefined) {
@@ -1012,6 +1029,11 @@ function parseApplied(value: unknown): CallApplied | null {
     return {
       type: 'hours',
       hours: entry.hours as number,
+      deadline:
+        typeof entry.deadline === 'string' &&
+        !Number.isNaN(Date.parse(entry.deadline))
+          ? entry.deadline
+          : null,
       budget:
         budget &&
         Number.isSafeInteger(budget.hours) &&
@@ -1039,7 +1061,7 @@ function parseApplied(value: unknown): CallApplied | null {
     return {
       type: 'domains',
       agent: entry.agent,
-      before: (entry.before as string[]).slice(0, callLimits.domains * 4),
+      before: (entry.before as string[]).slice(0, callLimits.domains),
     };
   return null;
 }
@@ -1047,7 +1069,7 @@ function parseApplied(value: unknown): CallApplied | null {
 /** A call from `lab.json`, or null for one that is not valid. */
 function parseCall(value: unknown): Call | null {
   const entry = object(value);
-  const states = ['open', 'answered', 'undone', 'withdrawn'] as const;
+  const states = ['open', 'answered', 'undoing', 'withdrawn'] as const;
   const state = states.find((item) => item === entry?.state);
   const kind = callKinds.find((item) => item === entry?.kind);
   if (
@@ -1180,6 +1202,7 @@ function runtime(): AgentRuntime {
     launch: null,
     endedAt: 0,
     relaunch: false,
+    parking: false,
   };
 }
 
@@ -1431,7 +1454,7 @@ function parseState(value: Record<string, unknown> | null): LabState | null {
           })
           .slice(-500)
       : [],
-    // A lab from before calls has none, and its first GPU pod asks.
+    // A lab from before calls has none, so its next GPU pod asks.
     calls: Array.isArray(value.calls)
       ? value.calls
           .flatMap((entry) => {
@@ -1440,7 +1463,6 @@ function parseState(value: Record<string, unknown> | null): LabState | null {
           })
           .slice(-500)
       : [],
-    firstGpuApproved: value.firstGpuApproved === true,
   };
 }
 
@@ -1628,6 +1650,7 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
           'continue',
           'run',
           'pod',
+          'call',
         ].includes(event.kind as string)
         ? [event as unknown as QueuedEvent<LabEvent>]
         : [];
@@ -1674,7 +1697,7 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
             (domain): domain is string =>
               typeof domain === 'string' && validDomain(domain),
           )
-          .slice(0, callLimits.domains * 4)
+          .slice(0, callLimits.domains)
       : [],
   };
 }
@@ -1853,34 +1876,38 @@ export class Lab {
       }
     // A close that an earlier owner did not finish: the folder's last work is committed now.
     for (const agent of this.agents.values()) this.finishClosed(agent.id);
-    // An answer that an earlier owner did not finish applying has no undo, and the board says so.
-    const note =
+    // An answer or an undo that an earlier owner did not finish: the board
+    // says so, and the agent that asked wakes with it.
+    const applying =
       'Verifold stopped while it applied this answer, so it has no undo. Check Compute and the directions.';
-    const unfinished = this.state.calls.filter(
+    const undoing =
+      'Verifold stopped while it undid this answer, so the undo may not be complete. Check Compute and the directions.';
+    const left = this.state.calls.filter(
       (call) =>
-        call.state === 'answered' &&
-        !call.applied &&
-        !call.note &&
-        call.answer &&
-        call.options[call.answer.option]?.effect,
+        call.state === 'undoing' ||
+        (call.state === 'answered' &&
+          !call.applied &&
+          !call.note &&
+          call.answer &&
+          call.options[call.answer.option]?.effect),
     );
-    if (!unfinished.length) return;
+    if (!left.length) return;
     this.state = {
       ...this.state,
       calls: this.state.calls.map((call) =>
-        unfinished.includes(call) ? { ...call, note } : call,
+        !left.includes(call)
+          ? call
+          : call.state === 'undoing'
+            ? { ...call, state: 'withdrawn', note: undoing }
+            : { ...call, note: applying },
       ),
     };
     await this.stateFile.save().catch(() => {});
-    for (const call of unfinished)
-      await this.add({
-        author: 'verifold',
-        kind: 'status',
-        ...(call.direction ? { direction: call.direction } : {}),
-        text: `${call.id}: ${note}`,
-        mentions: [],
-        artifacts: [],
-      }).catch(() => {});
+    for (const call of left)
+      await this.tell(
+        call,
+        `${call.id}: ${call.state === 'undoing' ? undoing : applying}`,
+      );
   }
 
   /**
@@ -2074,7 +2101,6 @@ export class Lab {
           agentStarts: [],
           checks: [],
           calls: [],
-          firstGpuApproved: false,
           budget:
             budget === null
               ? null
@@ -2864,7 +2890,7 @@ export class Lab {
       run.turning = false;
       if (run.relaunch) {
         run.relaunch = false;
-        this.relaunch(record.id);
+        this.relaunch(agent.id);
       }
       run.usedUp = false;
       run.readBroken = false;
@@ -2951,6 +2977,8 @@ export class Lab {
     run.usedUp = false;
     run.readBroken = false;
     run.pending = null;
+    // The next start takes what changed anyway.
+    run.relaunch = false;
     this.loops.get(id)?.turnEnded(turned);
   }
 
@@ -3253,6 +3281,7 @@ export class Lab {
           !this.state.pausedAt &&
           !this.ended(this.state) &&
           agent.session !== null &&
+          !this.runtimes.get(agent.id)?.parking &&
           this.options.sessions.idle(agent.session),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         send: (events, left) => {
@@ -3609,7 +3638,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         // Without a key or a spend limit, the person adds them first.
         if (!this.podsOn()) return this.podCall(id, generation, why, null);
         // The lab's first GPU pod always asks the person, also when the Compute limits would start it.
-        if (await this.serial(() => !this.current().firstGpuApproved)) {
+        if (await this.serial(() => !gpuApproved(this.current()))) {
           const effect = callEffect(
             {
               pod: {
@@ -3765,6 +3794,14 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             ?.state !== 'open'
         )
           fail(`${effect.direction} is not an open direction of the lab.`);
+        if (
+          effect?.type === 'domains' &&
+          new Set([...agent.network, ...effect.domains]).size >
+            callLimits.domains
+        )
+          fail(
+            `Your shell can reach at most ${callLimits.domains} domains, with those that it has.`,
+          );
       }
       return this.recordCall({
         by: agent.id,
@@ -3795,7 +3832,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   ): Promise<string> {
     const question = pod
       ? `The lab's first GPU pod: ${pod.effect.gpuType} for ${pod.effect.hours} ${pod.effect.hours === 1 ? 'hour' : 'hours'}?`
-      : 'Add a RunPod key and a spend limit in Compute?';
+      : podsOffQuestion;
     const call = await this.serial(() => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       const waiting = this.current().calls.find(
@@ -3953,32 +3990,30 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     await this.tell(call, `Verifold withdrew ${call.id}: ${why}`);
   }
 
-  /** Why an option of a call no longer makes sense, or null. */
+  /** Why a call, or the option that the person picks, no longer makes sense, or null. In the lab's queue. */
   private stale(call: Call, effect: CallEffect | null): string | null {
     const state = this.current();
     const open = (id: string | null): boolean =>
       state.directions.find((entry) => entry.id === id)?.state === 'open';
     if (call.deadline && call.deadline !== state.budget?.deadline)
       return 'The lab got more time.';
+    if (call.by !== 'verifold' && !open(call.direction))
+      return `${call.direction ?? 'Its direction'} no longer works for the lab.`;
     if (effect?.type === 'stop' && !open(effect.direction))
       return `${effect.direction} is not open any more.`;
-    if (
-      (effect?.type === 'pod' || effect?.type === 'domains') &&
-      !open(call.direction)
-    )
-      return `${call.direction ?? 'Its direction'} no longer works for the lab.`;
     return null;
   }
 
   /**
    * The person answers a call with one of its options, and Verifold applies
    * the option's effect at once. The effect runs outside the lab's queue: the
-   * call says `answered` first, so a second answer is refused, and it goes
-   * back to open when the effect fails. The board says what Verifold did,
-   * and the agent that asked wakes with it.
+   * call says `answered` first, so a second answer is refused. An effect that
+   * fails before it changed anything leaves the call open, and one that no
+   * longer makes sense withdraws it. The board says what Verifold did, and
+   * the agent that asked wakes with it.
    */
   async answerCall(id: unknown, option: unknown): Promise<void> {
-    const taken = await this.serial(async () => {
+    const { call, picked } = await this.serial(async () => {
       const call = this.callById(id);
       if (call.state !== 'open') fail(`${call.id} waits for no answer now.`);
       const index =
@@ -3992,11 +4027,17 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         index < call.options.length
           ? index
           : fail('Choose one of the options.');
-      const stale = this.stale(call, call.options[picked]?.effect ?? null);
+      const effect = call.options[picked]?.effect ?? null;
+      const stale = this.stale(call, effect);
       if (stale) {
         await this.withdraw(call, stale);
         fail(`Verifold withdrew ${call.id}: ${stale}`);
       }
+      const state = this.current();
+      if (effect?.type === 'pod' && (state.pausedAt || this.ended(state)))
+        fail(
+          'The lab is paused, so no pod starts now. Resume the lab or give it more time, then answer.',
+        );
       await this.changeCall(call.id, (entry) => ({
         ...entry,
         state: 'answered',
@@ -4004,23 +4045,30 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       }));
       return { call, picked };
     });
-    const { call, picked } = taken;
     const chosen = call.options[picked];
     let applied: CallApplied | null = null;
     try {
-      if (chosen?.effect) applied = await this.apply(call, chosen.effect);
+      if (chosen?.effect)
+        applied = await this.apply(call, chosen, chosen.effect);
     } catch (error) {
-      await this.serial(() =>
-        this.changeCall(call.id, (entry) => ({
-          ...entry,
-          state: 'open',
-          answer: null,
-        })),
-      ).catch(() => {});
-      throw error;
+      if (!(error instanceof CallWithdrawn)) {
+        await this.serial(() =>
+          this.changeCall(call.id, (entry) => ({
+            ...entry,
+            state: 'open',
+            answer: null,
+          })),
+        ).catch(() => {});
+        throw error;
+      }
+      await this.serial(() => this.withdraw(call, error.message)).catch(
+        () => {},
+      );
+      fail(`Verifold withdrew ${call.id}: ${error.message}`);
     }
     await this.serial(async () => {
-      const state = this.current();
+      const state = this.state;
+      if (!state) return;
       const until =
         call.undoMinutes > 0
           ? new Date(Date.now() + call.undoMinutes * 60_000).toISOString()
@@ -4029,7 +4077,6 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       // The effect happened, so the lab keeps it also when the save fails: the next save writes it.
       this.state = {
         ...state,
-        firstGpuApproved: state.firstGpuApproved || applied?.type === 'pod',
         calls: state.calls.map((entry) =>
           entry.id === call.id
             ? { ...entry, applied, undoUntil: until, note: did || null }
@@ -4043,6 +4090,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             `Verifold could not save the answer to ${call.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
           ),
         );
+      // A key and a spend limit that the person added: the agent's next start
+      // gets the pod tools, and the answer with it.
+      if (call.question === podsOffQuestion && this.podsOn())
+        await this.refreshTools(call.by);
       await this.tell(
         call,
         `The person chose ${JSON.stringify(chosen?.label ?? '')} on ${call.id}.${did ? ` ${did}` : ''}`,
@@ -4051,10 +4102,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   }
 
   /**
-   * The person undoes an answer inside its window, and Verifold reverses
-   * what the answer changed. The reversal runs outside the lab's queue: the
-   * call says `undone` first, so a second undo is refused, and it says
-   * `answered` again when the reversal fails.
+   * The person undoes an answer inside its window. Verifold reverses what the
+   * answer changed, and the call is open again, so the person can choose
+   * another option. The reversal runs outside the lab's queue: the call says
+   * `undoing` first, so a second undo is refused, and it says `answered`
+   * again when the reversal fails.
    */
   async undoCall(id: unknown): Promise<void> {
     const call = await this.serial(async () => {
@@ -4065,7 +4117,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         fail(`The time to undo ${call.id} ended at ${call.undoUntil}.`);
       await this.changeCall(call.id, (entry) => ({
         ...entry,
-        state: 'undone',
+        state: 'undoing',
       }));
       return call;
     });
@@ -4078,45 +4130,97 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       ).catch(() => {});
       throw error;
     }
-    await this.serial(() =>
-      this.tell(
+    await this.serial(async () => {
+      if (!this.state) return;
+      await this.changeCall(call.id, (entry) => ({
+        ...entry,
+        state: 'open',
+        answer: null,
+        undoUntil: null,
+        applied: null,
+        note: null,
+      })).catch((error: unknown) =>
+        this.options.progress?.(
+          `Verifold could not save the undo of ${call.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        ),
+      );
+      const stale = this.stale(call, null);
+      await this.tell(
         call,
-        `The person undid their answer to ${call.id}.${did ? ` ${did}` : ''}`,
-      ),
-    );
+        `The person undid their answer to ${call.id}.${did ? ` ${did}` : ''}${stale ? '' : ' The call is open again.'}`,
+      );
+      if (stale) await this.withdraw(call, stale);
+    });
   }
 
-  /** Apply the effect of a call's option, outside the lab's queue. Returns what it changed. */
-  private async apply(call: Call, effect: CallEffect): Promise<CallApplied> {
+  /**
+   * Apply the effect of a call's option, outside the lab's queue. Returns
+   * what it changed. `CallWithdrawn`: the call no longer makes sense, and
+   * nothing stays changed.
+   */
+  private async apply(
+    call: Call,
+    option: CallOption,
+    effect: CallEffect,
+  ): Promise<CallApplied> {
     switch (effect.type) {
       case 'pod': {
         const direction =
           call.direction ?? fail('The call names no direction for the pod.');
-        const lease = await this.pods().startPod({
+        const pod = {
           gpu: effect.gpuType,
           hours: effect.hours,
           directions: [direction],
           reason: `${call.id}: ${call.why}`,
           secrets: effect.secrets,
-        });
+        };
+        // The person approved at most the dollars that the call showed.
+        const most = option.usd ?? 0;
+        const cost = await this.pods().podCost(pod);
+        if (cost > most + 0.005)
+          throw new CallWithdrawn(
+            `The pod can now cost up to ${usd(cost)}, more than the ${usd(most)} in the call. Ask again.`,
+          );
+        const lease = await this.pods().startPod({ ...pod, most });
         // The direction can end while the pod starts: then its lease ends at once.
-        await this.serial(() => {
+        const ended = await this.serial(() => {
           if (
             this.state?.directions.find((entry) => entry.id === direction)
-              ?.state !== 'open'
+              ?.state === 'open'
           )
-            this.endLeases(
-              direction,
-              'person',
-              `${direction} no longer works for the lab.`,
-            );
+            return false;
+          this.endLeases(
+            direction,
+            'person',
+            `${direction} no longer works for the lab.`,
+          );
+          return true;
         });
+        if (ended)
+          throw new CallWithdrawn(
+            `${direction} ended while its pod started, so Verifold ended ${lease.id}.`,
+          );
         return { type: 'pod', lease: lease.id };
       }
-      case 'hours': {
-        const budget = await this.serial(() => this.extendNow(effect.hours));
-        return { type: 'hours', hours: effect.hours, budget };
-      }
+      case 'hours':
+        return this.serial(async () => {
+          const budget = this.current().budget;
+          try {
+            await this.extendNow(effect.hours);
+          } catch (error) {
+            // A save that failed after the change: the lab has the hours, and the next save writes them.
+            if (this.state?.budget === budget) throw error;
+            this.options.progress?.(
+              `Verifold could not save the hours of ${call.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
+          }
+          return {
+            type: 'hours',
+            hours: effect.hours,
+            budget,
+            deadline: this.current().budget?.deadline ?? null,
+          };
+        });
       case 'open': {
         const direction = await this.addDirection(
           { title: effect.title, harness: effect.harness, bar: effect.bar },
@@ -4125,17 +4229,32 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         return { type: 'open', direction };
       }
       case 'stop':
-        await this.stopDirection(effect.direction);
+        try {
+          await this.stopDirection(effect.direction);
+        } catch (error) {
+          // A stop whose save failed is a stop all the same.
+          if (
+            (await this.serial(
+              () => this.direction(effect.direction).state,
+            )) !== 'stopped'
+          )
+            throw error;
+        }
         return { type: 'stop', direction: effect.direction };
-      case 'domains': {
-        const agent = call.by;
-        const before = await this.serial(() =>
-          this.setNetwork(agent, [
-            ...new Set([...this.agent(agent).network, ...effect.domains]),
-          ]),
-        );
-        return { type: 'domains', agent, before };
-      }
+      case 'domains':
+        return this.serial(async () => {
+          const agent = this.agent(call.by);
+          const next = [...new Set([...agent.network, ...effect.domains])];
+          if (next.length > callLimits.domains)
+            fail(
+              `${agent.handle}'s shell would reach more than ${callLimits.domains} domains. Undo an earlier access call first.`,
+            );
+          return {
+            type: 'domains',
+            agent: agent.id,
+            before: await this.setNetwork(agent.id, next),
+          };
+        });
     }
   }
 
@@ -4145,7 +4264,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       case 'pod':
         return `Verifold started ${applied.lease}.`;
       case 'hours':
-        return `The lab has ${applied.hours} more ${applied.hours === 1 ? 'hour' : 'hours'}, until ${this.state?.budget?.deadline ?? 'its new deadline'}.`;
+        return `The lab has ${applied.hours} more ${applied.hours === 1 ? 'hour' : 'hours'}, until ${applied.deadline ?? 'its new deadline'}.`;
       case 'open':
         return `Verifold opened ${applied.direction}.`;
       case 'stop':
@@ -4165,21 +4284,9 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       case 'pod': {
         const leases = this.pods().leases;
         const lease = leases.get(applied.lease);
-        if (lease.state === 'requested' || isOpenLease(lease))
-          await leases.end(lease.id, 'person', `you undid ${call.id}.`);
-        // The approval is taken back: the next pod asks again, unless another answer approved one.
-        await this.serial(async () => {
-          const state = this.current();
-          await this.saveState({
-            ...state,
-            firstGpuApproved: state.calls.some(
-              (entry) =>
-                entry.id !== call.id &&
-                entry.state === 'answered' &&
-                entry.applied?.type === 'pod',
-            ),
-          });
-        });
+        if (lease.state !== 'requested' && !isOpenLease(lease))
+          return `${lease.id} had ended already.`;
+        await leases.end(lease.id, 'person', `you undid ${call.id}.`);
         return `Verifold ended ${lease.id}. The minutes billed so far stay billed.`;
       }
       case 'hours':
@@ -4187,65 +4294,114 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         return `The lab has ${applied.hours} ${applied.hours === 1 ? 'hour' : 'hours'} less.`;
       case 'open':
         if (
-          (await this.serial(() => this.direction(applied.direction).state)) ===
+          (await this.serial(() => this.direction(applied.direction).state)) !==
           'open'
         )
-          await this.stopDirection(applied.direction);
+          return `${applied.direction} had ended already.`;
+        await this.stopDirection(applied.direction);
         return `Verifold stopped ${applied.direction}. Its folder and branch stay.`;
       case 'stop':
         await this.serial(() => this.reopen(applied.direction, call));
         return `Verifold opened ${applied.direction} again.`;
-      case 'domains': {
-        // Only the domains that this answer added go: a later answer keeps its own.
-        const effect = call.answer
-          ? call.options[call.answer.option]?.effect
-          : null;
-        const added =
-          effect?.type === 'domains'
-            ? effect.domains.filter(
-                (domain) => !applied.before.includes(domain),
-              )
-            : [];
-        await this.serial(() =>
-          this.setNetwork(
+      case 'domains':
+        return this.serial(async () => {
+          const effect = call.answer
+            ? call.options[call.answer.option]?.effect
+            : null;
+          // A domain that another answer that stands asked for stays.
+          const kept = new Set(
+            this.current().calls.flatMap((entry) => {
+              const other = entry.answer
+                ? entry.options[entry.answer.option]?.effect
+                : null;
+              return entry.id !== call.id &&
+                entry.state === 'answered' &&
+                entry.applied?.type === 'domains' &&
+                entry.applied.agent === applied.agent &&
+                other?.type === 'domains'
+                ? other.domains
+                : [];
+            }),
+          );
+          const removed =
+            effect?.type === 'domains'
+              ? effect.domains.filter(
+                  (domain) =>
+                    !applied.before.includes(domain) && !kept.has(domain),
+                )
+              : [];
+          await this.setNetwork(
             applied.agent,
             this.agent(applied.agent).network.filter(
-              (domain) => !added.includes(domain),
+              (domain) => !removed.includes(domain),
             ),
-          ),
-        );
-        return `${this.name(applied.agent)}'s shell loses ${added.join(', ') || 'no domain'} from its next turn.`;
-      }
+          );
+          return removed.length
+            ? `${this.name(applied.agent)}'s shell loses ${removed.join(', ')} from its next turn.`
+            : `${this.name(applied.agent)}'s shell keeps its domains: other answers asked for them too.`;
+        });
     }
   }
 
   /**
    * Change the domains of an agent's shell, in the lab's queue. Returns the
-   * domains before. Its process ends, so the next start resumes its
+   * domains before. The agent's process ends, so its next start resumes the
    * conversation with them: both harnesses take a changed network on resume.
-   * A turn that runs ends first.
    */
   private async setNetwork(
     id: string,
     next: readonly string[],
   ): Promise<readonly string[]> {
     const before = this.agent(id).network;
+    if (
+      before.length === next.length &&
+      before.every((domain) => next.includes(domain))
+    )
+      return before;
     await this.update(id, (agent) => ({ ...agent, network: next }));
-    const session = this.agents.get(id)?.session;
-    if (session && this.options.sessions.view(session)?.live) {
-      const run = this.rt(id);
-      if (run.turning) run.relaunch = true;
-      else this.relaunch(session);
-    }
+    this.relaunch(id);
     return before;
   }
 
-  /** End a session's process, so the next start resumes it with what changed. */
-  private relaunch(session: string): void {
-    void this.options.sessions.park(session).then(
-      () => this.kick(),
-      () => {},
-    );
+  /**
+   * The agent's tools changed, such as the pod tools after the person added
+   * a RunPod key: its next start gets them. A Codex thread keeps the tools
+   * that it started with, so a Codex agent starts a new thread.
+   */
+  private async refreshTools(id: string): Promise<void> {
+    const agent = this.agents.get(id);
+    if (!agent || !this.active(agent)) return;
+    if (agent.host === 'codex')
+      await this.update(id, (current) => ({ ...current, toolsVersion: 0 }));
+    this.relaunch(id);
+  }
+
+  /**
+   * End the agent's live process, so its next start resumes with what
+   * changed. A turn that runs ends first. A process that does not end keeps
+   * the flag, and the end of its next turn tries again.
+   */
+  private relaunch(id: string): void {
+    const session = this.agents.get(id)?.session;
+    if (!session || !this.options.sessions.view(session)?.live) return;
+    const run = this.rt(id);
+    if (run.turning) {
+      run.relaunch = true;
+      return;
+    }
+    run.parking = true;
+    void this.options.sessions
+      .park(session)
+      .catch((error: unknown) => {
+        run.relaunch = true;
+        this.options.progress?.(
+          `Verifold could not restart the process of ${this.name(id)}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      })
+      .finally(() => {
+        run.parking = false;
+        this.kick();
+      });
   }
 
   /** Open a direction again that a call stopped, with its agent. In the lab's queue. */
@@ -4279,7 +4435,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     this.kick();
   }
 
-  /** Take back the hours that an answer gave, in the lab's queue. A deadline that passed pauses the lab at the next tick. */
+  /**
+   * Take back the hours that an answer gave, in the lab's queue: the time
+   * budget before the answer, when nothing changed it since, or else the
+   * hours less. A deadline that passed pauses the lab at the next tick.
+   */
   private async shorten(
     applied: Extract<CallApplied, { type: 'hours' }>,
   ): Promise<void> {
@@ -4289,15 +4449,17 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     await this.saveState({
       ...state,
       budget:
-        applied.budget === null && budget.hours <= applied.hours
-          ? null
-          : {
-              hours: Math.max(1, budget.hours - applied.hours),
-              deadline: new Date(
-                Date.parse(budget.deadline) -
-                  applied.hours * this.timing.hourMs,
-              ).toISOString(),
-            },
+        budget.deadline === applied.deadline
+          ? applied.budget
+          : applied.budget === null && budget.hours <= applied.hours
+            ? null
+            : {
+                hours: Math.max(1, budget.hours - applied.hours),
+                deadline: new Date(
+                  Date.parse(budget.deadline) -
+                    applied.hours * this.timing.hourMs,
+                ).toISOString(),
+              },
     });
     this.kick();
   }

@@ -773,11 +773,9 @@ function undoLines(view: LabView): string {
       )
         return [];
       const left = Math.ceil((Date.parse(call.undoUntil) - now) / 60_000);
-      const undo = option.effect
-        ? effectLines(option.effect, call, view).undo
-        : '';
+      const undo = `${option.effect ? `${effectLines(option.effect, call, view).undo} ` : ''}Then the call asks again.`;
       return [
-        `<p class="notice" role="status">You chose "${e(option.label)}" on ${e(call.id)}. <button type="button" class="quiet" data-action="lab-call-undo" data-call="${e(call.id)}">Undo</button> <span class="fine">${e(minutesText(left))} left.${undo ? ` ${e(undo)}` : ''}</span></p>`,
+        `<p class="notice" role="status">You chose "${e(option.label)}" on ${e(call.id)}. <button type="button" class="quiet" data-action="lab-call-undo" data-call="${e(call.id)}">Undo</button> <span class="fine">${e(minutesText(left))} left. ${e(undo)}</span></p>`,
       ];
     })
     .join('');
