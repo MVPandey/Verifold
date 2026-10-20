@@ -12,6 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { childEnvironment } from './harness.ts';
 
@@ -31,6 +32,31 @@ export interface Workspace {
   readonly start: string;
 }
 
+/** A commit ID: SHA-1 or SHA-256. */
+export const commitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** A saved workspace record, or undefined when it is not valid. Tasks and the lab read the same shape. */
+export function parseWorkspace(value: unknown): Workspace | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return undefined;
+  const entry = value as Record<string, unknown>;
+  return (entry.kind === 'git' || entry.kind === 'folder') &&
+    typeof entry.path === 'string' &&
+    /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(entry.path) &&
+    (entry.branch === null ||
+      (typeof entry.branch === 'string' &&
+        /^verifold\/[a-z0-9][a-z0-9-]{0,80}$/.test(entry.branch))) &&
+    typeof entry.start === 'string' &&
+    commitPattern.test(entry.start)
+    ? {
+        kind: entry.kind,
+        path: entry.path,
+        branch: entry.branch,
+        start: entry.start,
+      }
+    : undefined;
+}
+
 export interface ChangedFile {
   readonly path: string;
   readonly change: 'added' | 'modified' | 'deleted';
@@ -46,6 +72,10 @@ const limits = {
   bytes: 200 * 1024 * 1024,
   fileBytes: 50 * 1024 * 1024,
   diffBytes: 512 * 1024,
+  /** A lab direction's folder leaves out larger files that are not committed. Its agent reads them in the project folder. */
+  lightFileBytes: 1024 * 1024,
+  /** A lab direction's folder copies at most this much that is not committed. */
+  lightBytes: 50 * 1024 * 1024,
 };
 
 /**
@@ -74,6 +104,7 @@ function git(
   cwd: string,
   args: readonly string[],
   input?: string,
+  env: NodeJS.ProcessEnv = {},
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -81,6 +112,9 @@ function git(
       [
         '-c',
         'core.hooksPath=/dev/null',
+        // Several agents commit in worktrees of one repository. An automatic gc in one would race the others.
+        '-c',
+        'gc.auto=0',
         '-c',
         'commit.gpgsign=false',
         '-c',
@@ -96,7 +130,7 @@ function git(
         encoding: 'buffer',
         maxBuffer: 64 * 1024 * 1024,
         timeout: 60_000,
-        env: gitEnvironment(),
+        env: { ...gitEnvironment(), ...env },
       },
       (error, stdout, stderr) => {
         // check-ignore exits with 1 when no path matches.
@@ -114,9 +148,11 @@ function git(
   });
 }
 
-function tooMany(): WorkspaceError {
+function tooMany(lab = false): WorkspaceError {
   return new WorkspaceError(
-    `The task folder changed more than ${limits.files} files, so Verifold saved no version. Move generated files out of the writable paths, or list them in a .gitignore there.`,
+    lab
+      ? `Your direction's folder changed more than ${limits.files} files, so Verifold could not commit it. Move generated files out of the folder, or list them in a .gitignore there. Until then, other agents read your previous commit.`
+      : `The task folder changed more than ${limits.files} files, so Verifold saved no version. Move generated files out of the writable paths, or list them in a .gitignore there.`,
   );
 }
 
@@ -197,14 +233,30 @@ async function contained(root: string, path: string): Promise<void> {
   }
 }
 
-/** Regular files under `path` in a folder, within the limits. Symbolic links are skipped. */
-async function walk(root: string, path: string): Promise<string[]> {
+/**
+ * Regular files under `path` in a folder, within the limits. Symbolic links
+ * are skipped. A `light` walk leaves out tool folders, files above
+ * `lightFileBytes`, and every file after `lightBytes` or after `files`
+ * files, instead of failing. What it leaves out stays in the project folder.
+ */
+async function walk(
+  root: string,
+  path: string,
+  light = false,
+): Promise<string[]> {
   const found: string[] = [];
   let bytes = 0;
   const visit = async (rel: string): Promise<void> => {
+    if (light && found.length >= limits.files) return;
     const stats = await lstat(join(root, rel)).catch(() => null);
     if (!stats || stats.isSymbolicLink()) return;
     if (stats.isFile()) {
+      if (
+        light &&
+        (stats.size > limits.lightFileBytes ||
+          bytes + stats.size > limits.lightBytes)
+      )
+        return;
       bytes += stats.size;
       found.push(rel);
       if (found.length > limits.files || bytes > limits.bytes)
@@ -215,7 +267,10 @@ async function walk(root: string, path: string): Promise<string[]> {
     }
     if (!stats.isDirectory()) return;
     for (const name of (await readdir(join(root, rel))).sort())
-      if (rel !== '.' || !['.git', '.verifold'].includes(name))
+      if (
+        (rel !== '.' || !['.git', '.verifold'].includes(name)) &&
+        !(light && toolFolders.includes(name))
+      )
         await visit(rel === '.' ? name : `${rel}/${name}`);
   };
   await visit(path);
@@ -231,9 +286,12 @@ async function startFiles(
   root: string,
   kind: Workspace['kind'],
   writable: readonly string[],
+  light: boolean,
 ): Promise<string[]> {
   if (kind === 'folder')
-    return (await Promise.all(writable.map((path) => walk(root, path)))).flat();
+    return (
+      await Promise.all(writable.map((path) => walk(root, path, light)))
+    ).flat();
   const changed = await list(root, [
     'status',
     '--porcelain=v1',
@@ -243,11 +301,31 @@ async function startFiles(
     '--',
     ...writable,
   ]);
-  if (changed.length > limits.files)
+  if (changed.length > limits.files && !light)
     throw new WorkspaceError(
       `The writable paths have more than ${limits.files} uncommitted changes.`,
     );
-  return changed.map((entry) => entry.slice(3));
+  const paths = changed.map((entry) => entry.slice(3));
+  if (!light) return paths;
+  // New files above the size limit stay in the project folder. A deletion or a changed tracked file is copied. After `files` files, the rest stays too.
+  const kept: string[] = [];
+  let bytes = 0;
+  for (const [index, path] of paths.entries()) {
+    if (kept.length >= limits.files) break;
+    const stats = await lstat(join(root, path)).catch(() => null);
+    const size = stats?.isFile() ? stats.size : 0;
+    const tracked = !changed[index]?.startsWith('??');
+    if (
+      !tracked &&
+      (leftOut(path) ||
+        size > limits.lightFileBytes ||
+        bytes + size > limits.lightBytes)
+    )
+      continue;
+    bytes += size;
+    kept.push(path);
+  }
+  return kept;
 }
 
 /** Environments and caches that tools make as a side effect. A version leaves them out, even inside writable paths. */
@@ -360,13 +438,27 @@ async function ownExclusions(
  * Commit everything in the workspace. Inside writable paths, ignored files
  * count too, so output in an ignored folder is kept. Environments, caches, and
  * the files that the task's own `.gitignore` ignores stay out. Files above the
- * size limit stay out of the commit and are listed.
+ * size limit stay out of the commit and are listed. `named` files count even
+ * when a `.gitignore` ignores them. With `empty: false`, a workspace without
+ * changes keeps its commit. A lab folder (`lab`) also leaves out files with
+ * more than one hard link: Git reads files outside any sandbox, so a link to
+ * a file outside the folder must not reach a commit that agents read.
  */
 async function commitAll(
   target: string,
   writable: readonly string[],
   message: string,
-): Promise<{ readonly commit: string; readonly skipped: readonly string[] }> {
+  options: {
+    readonly named?: readonly string[];
+    readonly empty?: boolean;
+    readonly lab?: boolean;
+  } = {},
+): Promise<{
+  readonly commit: string;
+  readonly skipped: readonly string[];
+  readonly linked: readonly string[];
+}> {
+  const lab = options.lab ?? false;
   // Git refuses a path that does not exist. A writable folder can be new.
   const forced: string[] = [];
   for (const path of writable)
@@ -402,15 +494,20 @@ async function commitAll(
   const pending = new Set(
     all.filter((entry) => !inScope(entry.slice(3).replace(/\/$/, ''), folders)),
   );
-  if (pending.size > limits.files) throw tooMany();
+  if (pending.size > limits.files) throw tooMany(lab);
   const skipped: string[] = [];
+  const linked: string[] = [];
   for (const entry of pending) {
     const file = entry.slice(3);
     const stats = await lstat(join(target, file)).catch(() => null);
-    if (stats?.isFile() && stats.size > limits.fileBytes) skipped.push(file);
+    if (lab && stats?.isFile() && stats.nlink > 1) linked.push(file);
+    else if (stats?.isFile() && stats.size > limits.fileBytes)
+      skipped.push(file);
   }
   const exclude = [
-    ...[...skipped, ...own.seen].map((file) => `:(exclude,literal)${file}`),
+    ...[...skipped, ...linked, ...own.seen].map(
+      (file) => `:(exclude,literal)${file}`,
+    ),
     ...caches,
   ];
   await git(target, ['add', '--all', '--', '.', ...exclude]);
@@ -424,14 +521,29 @@ async function commitAll(
       ...exclude,
       ...own.ignored.map((file) => `:(exclude,literal)${file}`),
     ]);
-  // An ignored folder is one pending entry, so count again what Git holds now.
-  if (
-    (await list(target, ['diff', '--cached', '--name-only', '-z'])).length >
-    limits.files
-  ) {
-    await git(target, ['reset', '--quiet']);
-    throw tooMany();
+  const named: string[] = [];
+  for (const path of options.named ?? []) {
+    const stats = await lstat(join(target, path)).catch(() => null);
+    if (lab && stats?.isFile() && stats.nlink > 1) {
+      if (!linked.includes(path)) linked.push(path);
+    } else if (stats?.isFile() && stats.size <= limits.fileBytes)
+      named.push(path);
   }
+  if (named.length)
+    await git(target, [
+      'add',
+      '--force',
+      '--',
+      ...named.map((path) => `:(literal)${path}`),
+    ]);
+  // An ignored folder is one pending entry, so count again what Git holds now.
+  const staged = await list(target, ['diff', '--cached', '--name-only', '-z']);
+  if (staged.length > limits.files) {
+    await git(target, ['reset', '--quiet']);
+    throw tooMany(lab);
+  }
+  if (!staged.length && options.empty === false)
+    return { commit: await head(target), skipped, linked };
   await git(target, [
     'commit',
     '--quiet',
@@ -440,7 +552,7 @@ async function commitAll(
     '-m',
     message,
   ]);
-  return { commit: await head(target), skipped };
+  return { commit: await head(target), skipped, linked };
 }
 
 /**
@@ -459,6 +571,11 @@ export async function allocate(
       readonly path: string;
       readonly copy: string;
     }[];
+    /**
+     * A lab direction's folder: new files above 1 MB, tool folders, and
+     * anything after 50 MB stay in the project folder instead of being copied.
+     */
+    readonly light?: boolean;
   },
 ): Promise<Workspace> {
   if (!/^[a-z0-9][a-z0-9-]{0,80}$/.test(options.name))
@@ -474,7 +591,12 @@ export async function allocate(
   const kind = (await gitProject(root)) ? 'git' : 'folder';
   for (const writable of options.writable)
     await contained(root, join(root, writable));
-  const copies = await startFiles(root, kind, options.writable);
+  const copies = await startFiles(
+    root,
+    kind,
+    options.writable,
+    options.light ?? false,
+  );
   let branch: string | null = null;
   if (kind === 'git') {
     branch = `verifold/${options.name}`;
@@ -520,6 +642,60 @@ export function commitVersion(
   message: string,
 ): Promise<{ readonly commit: string; readonly skipped: readonly string[] }> {
   return commitAll(join(root, workspace.path), writable, message);
+}
+
+/**
+ * Commit everything in a lab direction's folder, so other agents can read its
+ * files at this commit. The `named` files, such as the proof of a post, count
+ * even when the project ignores them. A folder without changes keeps its
+ * commit. Files with more than one hard link stay out. Returns the commit and
+ * the files that stayed out for that reason.
+ */
+export async function snapshot(
+  root: string,
+  workspace: Workspace,
+  message: string,
+  named: readonly string[] = [],
+): Promise<{ readonly commit: string; readonly linked: readonly string[] }> {
+  const { commit, linked } = await commitAll(
+    join(root, workspace.path),
+    ['.'],
+    message,
+    { named, empty: false, lab: true },
+  );
+  return { commit, linked };
+}
+
+/**
+ * The workspace names in use: the folders under `.verifold/workspaces`, the
+ * Git folders of folder projects, and Verifold's branches. A new workspace
+ * must take another name. Start over keeps them all.
+ */
+export async function workspaceNames(root: string): Promise<string[]> {
+  const names = async (folder: string): Promise<string[]> => {
+    try {
+      return await readdir(join(root, '.verifold', folder));
+    } catch {
+      return [];
+    }
+  };
+  const branches = (await gitProject(root))
+    ? (
+        await git(root, [
+          'for-each-ref',
+          '--format=%(refname:lstrip=3)',
+          'refs/heads/verifold/',
+        ])
+      )
+        .toString('utf8')
+        .split('\n')
+        .filter(Boolean)
+    : [];
+  return [
+    ...(await names('workspaces')),
+    ...(await names(join('tasks', 'git'))),
+    ...branches,
+  ];
 }
 
 const changeNames: Record<string, ChangedFile['change']> = {
@@ -596,6 +772,121 @@ export function readAt(
   path: string,
 ): Promise<Buffer | null> {
   return fileAt(join(root, workspace.path), commit, path);
+}
+
+/**
+ * A fingerprint of a lab direction's folder: its commit, plus the path, size,
+ * and change time of each file that is not committed, ignored files too. A
+ * turn that writes only ignored output still changes it.
+ */
+export async function folderState(
+  root: string,
+  workspace: Workspace,
+): Promise<string> {
+  const target = join(root, workspace.path);
+  const hash = createHash('sha256').update(await head(target));
+  const entries = (
+    await list(target, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--no-renames',
+      '--untracked-files=all',
+      '--ignored=traditional',
+      '--',
+      '.',
+      ...caches,
+    ])
+  ).slice(0, limits.files);
+  for (const entry of entries) {
+    const stats = await lstat(join(target, entry.slice(3))).catch(() => null);
+    hash.update(`${entry}\0${stats?.size ?? -1}\0${stats?.mtimeMs ?? -1}\0`);
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * A lab direction's file as it is now, ignored files too, read through Git:
+ * Verifold never opens the path itself. Git adds it to a private index that
+ * is not the folder's own. Git does not follow a symbolic link: a link is
+ * stored as a link, and a path through a linked folder is refused. So an
+ * agent cannot make Verifold read a file outside its folder by a link. A
+ * hard link is not a link to Git, so a file with more than one hard link is
+ * refused. Null when the path is not a regular file in the folder, or it is
+ * larger than Verifold commits.
+ */
+export async function readCurrent(
+  root: string,
+  workspace: Workspace,
+  path: string,
+): Promise<Buffer | null> {
+  const target = join(root, workspace.path);
+  // A size and link check only: the content comes from Git, never from this path.
+  const stats = await lstat(join(target, path)).catch(() => null);
+  if (!stats?.isFile() || stats.size > limits.fileBytes) return null;
+  if (stats.nlink > 1)
+    throw new WorkspaceError(
+      `${path} has more than one hard link, so Verifold does not read it. Write a separate copy of the file instead.`,
+    );
+  const index = join(
+    tmpdir(),
+    `verifold-index-${randomBytes(8).toString('hex')}`,
+  );
+  try {
+    const env = { GIT_INDEX_FILE: index };
+    await git(
+      target,
+      ['add', '--force', '--', `:(literal)${path}`],
+      undefined,
+      env,
+    );
+    const entry = (
+      await git(
+        target,
+        ['ls-files', '--stage', '-z', '--', `:(literal)${path}`],
+        undefined,
+        env,
+      )
+    )
+      .toString('utf8')
+      .split('\0')
+      .find((line) => line.endsWith(`\t${path}`));
+    // An index entry is `<mode> <id> <stage>\t<path>`. A link has mode 120000.
+    const [mode, id] = entry?.split('\t')[0]?.split(' ') ?? [];
+    return (mode === '100644' || mode === '100755') && id
+      ? await git(target, ['cat-file', 'blob', id])
+      : null;
+  } catch {
+    return null;
+  } finally {
+    await rm(index, { force: true });
+  }
+}
+
+/**
+ * The content of a file at a commit when it is a regular file there, or
+ * null. A symbolic link at that path reads as null, not as its target.
+ */
+export async function readFileAt(
+  root: string,
+  workspace: Workspace,
+  commit: string,
+  path: string,
+): Promise<Buffer | null> {
+  const target = join(root, workspace.path);
+  try {
+    const entry = (await git(target, ['ls-tree', '-z', commit, '--', path]))
+      .toString('utf8')
+      .split('\0')
+      .find((line) => line.endsWith(`\t${path}`));
+    // A tree entry is `<mode> <type> <id>\t<path>`.
+    const [mode, , id] = entry?.split('\t')[0]?.split(' ') ?? [];
+    return (mode === '100644' || mode === '100755') && id
+      ? await git(target, ['cat-file', 'blob', id])
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The content of a file at a commit, or null when it does not exist there. */

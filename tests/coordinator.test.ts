@@ -764,7 +764,8 @@ await test('a used-up usage window holds the coordinator until the reset, and th
   ).html;
   assert.match(
     html,
-    /The coordinator waits for Claude Code's usage window until \d{2}:\d{2}\. The window is used up, so a turn would fail\./,
+    // A time that is not today shows its day, such as Tue 00:19.
+    /The coordinator waits for Claude Code's usage window until (?:\w{3} )?\d{2}:\d{2}\. The window is used up, so a turn would fail\./,
   );
   // No turn starts inside the window.
   await delay(500);

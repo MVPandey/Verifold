@@ -289,3 +289,24 @@ await test('a session passes its harness usage windows to the quota, and its rec
   assert.equal(saved.claude?.exhausted, true);
   assert.equal(saved.codex?.exhausted, true);
 });
+
+await test('a reported reset more than 8 days away waits 8 days only', async (t) => {
+  const root = await folder(t);
+  const quota = new Quota(root, { graceMs: 0 });
+  const now = Date.parse('2026-10-19T12:00:00.000Z');
+  quota.record(
+    'codex',
+    {
+      exhausted: true,
+      resetsAt: '2099-01-01T00:00:00.000Z',
+      usedPercent: 100,
+      window: 'weekly',
+    },
+    now,
+  );
+  assert.equal(
+    quota.parked('codex', now),
+    new Date(now + 8 * 24 * 3_600_000).toISOString(),
+  );
+  await quota.settled();
+});

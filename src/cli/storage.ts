@@ -1,6 +1,6 @@
 import { mkdir, open, rename, rm, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseWorkspace } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
@@ -102,5 +102,28 @@ export async function changeWorkspace(
     await rm(temporary, { force: true });
     await lock.close();
     await rm(lockPath, { force: true });
+  }
+}
+
+/**
+ * Write a private file whole: a temporary file in the same folder, then a
+ * rename, readable by the owner only. A reader sees the old or the new file,
+ * never a part.
+ */
+export async function writePrivateFile(
+  path: string,
+  body: string,
+): Promise<void> {
+  const temporary = join(dirname(path), `.${randomUUID()}.tmp`);
+  try {
+    const file = await open(temporary, 'wx', 0o600);
+    try {
+      await file.writeFile(body);
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
   }
 }
