@@ -307,6 +307,9 @@ async function startCoordinator(
   });
 }
 
+/** The projects whose run moves now. */
+const changing = new Set<string>();
+
 /**
  * Start over, or bring back an archived run. Nothing may run: no research
  * step, no task turn, and no session of the person. The coordinator stops,
@@ -327,6 +330,38 @@ async function changeRun(
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
     throw new SessionActionError('Choose an archive from Records.');
+  // One Start over or restore at a time: a second one would move the records while the first moves them.
+  if (changing.has(root))
+    throw new SessionActionError(
+      'Start over or a restore already runs. Wait for it to end.',
+    );
+  changing.add(root);
+  try {
+    await changeRunNow(
+      root,
+      sessions,
+      research,
+      tasks,
+      coordinator,
+      memory,
+      labRun,
+      restore,
+    );
+  } finally {
+    changing.delete(root);
+  }
+}
+
+async function changeRunNow(
+  root: string,
+  sessions: SessionPool,
+  research: ResearchRunner | undefined,
+  tasks: TaskManager,
+  coordinator: Coordinator | undefined,
+  memory: ProjectMemory | undefined,
+  labRun: Lab | undefined,
+  restore?: unknown,
+): Promise<void> {
   if (research?.running)
     throw new SessionActionError(
       'Research is running. Wait for its step to end, or cancel it first.',
@@ -1194,7 +1229,8 @@ export async function startDesk(
           {
             workers,
             session: worker,
-            full: sessions?.full ?? false,
+            // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
+            full: (sessions?.full ?? false) && !(lab?.canYield() ?? false),
             ...(sessions ? { agents: sessions.limit } : {}),
             terminals: await terminalSupport(),
             controllable: sessions !== undefined,

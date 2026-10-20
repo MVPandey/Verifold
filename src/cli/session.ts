@@ -688,6 +688,19 @@ export function resumable(record: SessionRecord): boolean {
   );
 }
 
+/**
+ * A lab agent's session that can resume. A process that stopped by itself
+ * leaves its conversation with the harness, so the lab resumes it too.
+ */
+export function agentResumable(record: SessionRecord): boolean {
+  return (
+    resumable(record) ||
+    (Boolean(record.agent) &&
+      (record.status === 'ended' || record.status === 'failed') &&
+      conversation(record))
+  );
+}
+
 async function recordIds(root: string): Promise<string[]> {
   let names: string[];
   try {
@@ -1218,10 +1231,10 @@ export class SessionManager {
       typeof id === 'string' && validSessionId(id)
         ? await readRecord(this.root, id)
         : null;
-    if (!saved || !resumable(saved))
+    // A lab agent resumes only through the lab, which gives it its tools, also after its process stopped.
+    if (saved?.agent && !tools) fail(agentSession);
+    if (!saved || !(saved.agent ? agentResumable(saved) : resumable(saved)))
       fail('That session cannot resume. Choose a paused session.');
-    // A lab agent resumes only through the lab, which gives it its tools.
-    if (saved.agent && !tools) fail(agentSession);
     // Another start can begin while the record loads.
     this.ready();
     this.current = { ...saved, status: 'starting', endedAt: null };

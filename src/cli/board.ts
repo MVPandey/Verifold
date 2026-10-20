@@ -291,16 +291,32 @@ function artifactText(artifact: Artifact): string {
 }
 
 /**
+ * A post's text, JSON-quoted. With `fold`, a quoted text longer than `fold`
+ * characters is cut, and the line says where the whole post is.
+ */
+function quoted(post: Post, fold?: number): string {
+  const whole = JSON.stringify(post.text);
+  if (fold === undefined || whole.length <= fold) return whole;
+  let cut = post.text.slice(0, fold);
+  while (cut && JSON.stringify(cut).length > fold)
+    cut = cut.slice(0, Math.floor(cut.length * 0.8));
+  // A cut between the two halves of a surrogate pair would leave half a character.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${JSON.stringify(`${cut}…`)} (cut: verifold_board with view thread and post ${post.id} shows the whole post)`;
+}
+
+/**
  * One digest line for a post. The post's text is JSON-quoted, so a line break
  * or a quote in it cannot look like a line from Verifold. `forYou` marks a post
- * that wakes the reader.
+ * that wakes the reader. `fold` cuts a long text.
  */
 export function postLine(
   post: Post,
   name: (author: string) => string = (author) => author,
   forYou = false,
+  fold?: number,
 ): string {
-  return `- ${post.id} [${post.kind}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${JSON.stringify(post.text)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
+  return `- ${post.id} [${post.kind}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
 }
 
 /** What an agent has read: every post through `readThrough`, and the posts in `seen` after it. */
@@ -465,6 +481,8 @@ export class Board {
     options: {
       readonly limit?: number;
       readonly name?: (author: string) => string;
+      /** Cut each post's quoted text at this length. */
+      readonly fold?: number;
     } = {},
   ): { readonly lines: string[]; readonly read: ReadState } {
     const seen = new Set(read.seen);
@@ -495,7 +513,9 @@ export class Board {
     }
     return {
       lines: [
-        ...shown.map((post) => postLine(post, options.name, waking.has(post))),
+        ...shown.map((post) =>
+          postLine(post, options.name, waking.has(post), options.fold),
+        ),
         ...(left.length
           ? [
               `- ${left.length} more unread posts. Read them with verifold_board.`,
