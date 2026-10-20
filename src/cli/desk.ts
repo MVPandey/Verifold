@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { copyFile, readFile, realpath } from 'node:fs/promises';
+import { copyFile, readFile, realpath, stat } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -26,8 +26,11 @@ import type { ResearchReport } from './research.ts';
 import {
   SessionActionError,
   hostName,
+  readRecord,
   sessionTranscript,
   validSessionId,
+  type SessionRecord,
+  type SessionView,
 } from './session.ts';
 import type { SessionPool } from './workers.ts';
 import { TranscriptFile, type TranscriptLog } from './transcript.ts';
@@ -48,9 +51,9 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
-import { runId } from './board.ts';
-import { startLabOn, type Lab } from './lab.ts';
-import type { LabWork } from './desk-lab.ts';
+import { directionId, proofRef, runId } from './board.ts';
+import { startLabOn, type Lab, type LabView } from './lab.ts';
+import type { LabDiff, LabWork } from './desk-lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
@@ -506,6 +509,11 @@ async function labAction(
     case 'lab-call-undo':
       await lab.undoCall(body.call);
       return 200;
+    case 'lab-terminal-open':
+      if (!validLease(body.lease))
+        fail('The desk sent an invalid input lease.');
+      await lab.openTerminal(body.agent, body.lease);
+      return 200;
     default:
       return 400;
   }
@@ -513,6 +521,88 @@ async function labAction(
 
 function fail(message: string): never {
   throw new SessionActionError(message);
+}
+
+/**
+ * What the lab's panels read, kept between the page's polls: a session
+ * record by the time its file changed, and a diff by its commits.
+ */
+interface LabReads {
+  readonly records: Map<
+    string,
+    { readonly mtime: number; readonly record: SessionRecord }
+  >;
+  readonly diffs: Map<string, LabDiff>;
+}
+
+/** Keep a cache to its newest 20 entries. */
+function keep<T>(cache: Map<string, T>, key: string, value: T): T {
+  cache.delete(key);
+  cache.set(key, value);
+  for (const old of [...cache.keys()].slice(0, -20)) cache.delete(old);
+  return value;
+}
+
+/**
+ * What a direction changed, or the diff that a post cites, for the diff
+ * panel. Null when Verifold cannot read it. It reads Git again only when
+ * the direction's newest commit moved.
+ */
+async function labDiff(
+  lab: Lab,
+  view: LabView,
+  direction: string,
+  proof: string | undefined,
+  reads: LabReads,
+): Promise<LabDiff | null> {
+  const head =
+    view.state.directions.find((entry) => entry.id === direction)?.head ?? '';
+  const key = `${direction}|${proof ?? ''}|${head}`;
+  const known = reads.diffs.get(key);
+  if (known !== undefined) return known;
+  const shown = await lab
+    .directionDiff(direction, undefined, proof)
+    .catch(() => null);
+  // A read that failed tries again at the next poll.
+  if (!shown) return null;
+  return keep(reads.diffs, key, {
+    direction,
+    proof: proof ?? null,
+    from: shown.from,
+    to: shown.to,
+    files: shown.files,
+  });
+}
+
+/**
+ * The session of a lab agent or checker for the agent panel: its slot's
+ * view, or its saved record when no slot holds it now. The record is read
+ * again only when its file changed. Null before it starts.
+ */
+async function labSession(
+  root: string,
+  sessions: SessionPool | undefined,
+  view: LabView,
+  agent: string | undefined,
+  reads: LabReads,
+): Promise<SessionView | null> {
+  const id =
+    view.directions.find((entry) => entry.agent.id === agent)?.agent.session ??
+    view.checks.find((check) => check.agent === agent)?.session ??
+    null;
+  if (!id) return null;
+  const known = sessions?.view(id);
+  if (known) return known;
+  const file = await stat(
+    join(root, '.verifold', 'sessions', `${id}.json`),
+  ).catch(() => null);
+  if (!file) return null;
+  const cached = reads.records.get(id);
+  const record =
+    cached?.mtime === file.mtimeMs ? cached.record : await readRecord(root, id);
+  if (!record) return null;
+  keep(reads.records, id, { mtime: file.mtimeMs, record });
+  return { record, live: false, saveFailed: false };
 }
 
 /**
@@ -882,6 +972,7 @@ export async function startDesk(
     requests: new Map(),
     works: [],
   };
+  const labReads: LabReads = { records: new Map(), diffs: new Map() };
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -1356,6 +1447,54 @@ export async function startDesk(
         .end(JSON.stringify(log));
       return;
     }
+    if (url.pathname === '/api/lab-diff') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const direction = url.searchParams.get('direction') ?? '';
+      const file = url.searchParams.get('file') ?? '';
+      const proof = url.searchParams.get('proof');
+      if (
+        !directionId.test(direction) ||
+        !file ||
+        file.length > 300 ||
+        (proof !== null && !proofRef(proof)) ||
+        [...url.searchParams.keys()].some(
+          (key) => !['direction', 'file', 'proof'].includes(key),
+        ) ||
+        ['direction', 'file', 'proof'].some(
+          (key) => url.searchParams.getAll(key).length > 1,
+        )
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      try {
+        const shown = await labDesk.lab?.directionDiff(
+          direction,
+          file,
+          proof ?? undefined,
+        );
+        if (!shown?.diff) {
+          response.writeHead(404).end();
+          return;
+        }
+        response
+          .writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify({ ...shown.diff, to: shown.to }));
+      } catch (error) {
+        if (!(error instanceof SessionActionError)) throw error;
+        response
+          .writeHead(404, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify({ error: error.message }));
+      }
+      return;
+    }
     if (url.pathname !== '/api/view') {
       response.writeHead(404).end();
       return;
@@ -1373,6 +1512,9 @@ export async function startDesk(
       url.searchParams.get('since'),
       url.searchParams.get('direction'),
       url.searchParams.get('finished'),
+      url.searchParams.get('run'),
+      url.searchParams.get('agent'),
+      url.searchParams.get('proof'),
     );
     const keys = [
       'attempt',
@@ -1383,6 +1525,9 @@ export async function startDesk(
       'since',
       'direction',
       'finished',
+      'run',
+      'agent',
+      'proof',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
@@ -1464,6 +1609,7 @@ export async function startDesk(
           .at(0) ??
         workers[0] ??
         null;
+      const labView = labDesk.lab?.view() ?? null;
       const body = JSON.stringify(
         renderDesk(
           snapshot,
@@ -1472,6 +1618,32 @@ export async function startDesk(
           {
             workers,
             session: worker,
+            // The lab's depth reads only for the panel that is open.
+            ...(labView && frame.panel === 'agent'
+              ? {
+                  labAgent: await labSession(
+                    root,
+                    sessions,
+                    labView,
+                    frame.agent,
+                    labReads,
+                  ),
+                }
+              : {}),
+            ...(labDesk.lab &&
+            labView &&
+            frame.panel === 'diff' &&
+            frame.direction
+              ? {
+                  labDiff: await labDiff(
+                    labDesk.lab,
+                    labView,
+                    frame.direction,
+                    frame.proof,
+                    labReads,
+                  ),
+                }
+              : {}),
             // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
             full:
               (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
@@ -1484,7 +1656,7 @@ export async function startDesk(
             ...(compute ? { compute: compute.view() } : {}),
             ...(labDesk.lab
               ? {
-                  lab: labDesk.lab.view(),
+                  lab: labView,
                   labWorks: labDesk.works,
                   // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
                   labCanStart:

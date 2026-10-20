@@ -21,6 +21,7 @@ import {
   object,
   postId,
   postLine,
+  proofRef,
   runId,
   type Artifact,
   type Post,
@@ -77,6 +78,8 @@ import {
   hostName,
   readRecord,
   SessionActionError,
+  usdValue,
+  validSessionId,
   type SessionRecord,
   type SessionView,
 } from './session.ts';
@@ -90,6 +93,7 @@ import {
   changes,
   checkFolder,
   checkPath,
+  diff,
   gitDirs,
   folderState,
   parseWorkspace,
@@ -100,6 +104,7 @@ import {
   snapshot,
   workspaceNames,
   WorkspaceError,
+  type ChangedFile,
   type Workspace,
 } from './workspaces.ts';
 import { PoolFullError } from './workers.ts';
@@ -308,6 +313,18 @@ export interface Check {
    * project's path has characters that its deny rules read as patterns.
    */
   readonly blind: boolean;
+  /** Claude Code's cost estimate of the checker's sessions. */
+  readonly spend?: Spend;
+}
+
+/**
+ * Claude Code's cost estimate of an agent's sessions, added up across their
+ * processes. `seen` is the newest estimate of `session`.
+ */
+export interface Spend {
+  readonly usd: number;
+  readonly session: string;
+  readonly seen: number;
 }
 
 export type CallKind = (typeof callKinds)[number];
@@ -488,6 +505,8 @@ export interface AgentRecord {
    * thread when pods are on.
    */
   readonly pods: boolean;
+  /** Claude Code's cost estimate of the agent's sessions. */
+  readonly spend?: Spend;
 }
 
 /** What the desk shows of one direction. */
@@ -500,11 +519,13 @@ export interface DirectionView {
    * harness's usage window. `turns`: it waits for its hourly turns. `paused`:
    * the lab is paused. `plan`: a plan opened it, and it starts once the plan
    * is kept. `closed`: its agent closed it after its final verdict.
+   * `terminal`: the person holds its harness's own terminal.
    */
   readonly status:
     | 'plan'
     | 'starting'
     | 'working'
+    | 'terminal'
     | 'idle'
     | 'slot'
     | 'usage'
@@ -529,6 +550,8 @@ export interface LabView {
   readonly ledger: readonly RunRecord[];
   /** The checks of claims, oldest first. */
   readonly checks: readonly Check[];
+  /** USD: Claude Code's cost estimates of every agent's and checker's sessions, added up. Codex reports none. */
+  readonly claudeUsd: number;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -556,6 +579,8 @@ export interface LabSessions {
     tools: AgentTools,
     network?: readonly string[],
   ): Promise<void>;
+  /** Hand an agent's live session to its harness's own terminal, between turns. */
+  takeAgentTerminal(id: string, lease: string): Promise<void>;
   park(id: string): Promise<boolean>;
   continueTask(id: string, text: string): void;
   steer(id: string, text: string, done: (taken: boolean) => void): boolean;
@@ -677,6 +702,8 @@ interface AgentRuntime {
   got: { readonly network: readonly string[]; readonly pods: boolean } | null;
   /** Its process ends now because what it got changed. No digest goes to it meanwhile: the next start gets it. */
   parking: boolean;
+  /** The person holds its harness's own terminal. When it ends, the agent's next turn follows. */
+  terminal: boolean;
 }
 
 /** What the lab knows of a running check only while the process runs. */
@@ -823,10 +850,50 @@ function parseCheck(value: unknown): Check | null {
         ? entry.start
         : null,
     blind: entry.blind !== false,
+    ...spendOf(entry.spend),
+  };
+}
+
+/** A saved cost estimate, or nothing for a record from before it or one that is not valid. */
+function spendOf(value: unknown): { readonly spend?: Spend } {
+  const entry = object(value);
+  return entry &&
+    usdValue(entry.usd) &&
+    usdValue(entry.seen) &&
+    typeof entry.session === 'string' &&
+    validSessionId(entry.session)
+    ? { spend: { usd: entry.usd, session: entry.session, seen: entry.seen } }
+    : {};
+}
+
+/**
+ * Add what a session spent since the agent last looked to what the agent
+ * spent. Claude Code's estimate covers the whole session, also after a
+ * resume, so it only grows. An agent's new session starts from zero.
+ * Returns `prior` itself when nothing changed.
+ */
+export function addSpend(
+  prior: Spend | undefined,
+  record: SessionRecord,
+): Spend | undefined {
+  const total = record.costUsd;
+  if (total === null || !usdValue(total)) return prior;
+  const same = prior?.session === record.id;
+  if (same && total <= prior.seen) return prior;
+  return {
+    usd: (prior?.usd ?? 0) + total - (same ? prior.seen : 0),
+    session: record.id,
+    seen: total,
   };
 }
 
 const callPattern = /^c-[1-9]\d{0,5}$/;
+
+/** `@d-2` in the person's post: the direction's ID, from its own pattern. */
+const mentionedDirection = new RegExp(
+  `(?:^|\\s)@(${directionId.source.slice(1, -1)})\\b`,
+  'g',
+);
 
 /** The effect of the option that the person chose, or null. */
 function chosenEffect(call: Call): CallEffect | null {
@@ -1235,6 +1302,7 @@ function runtime(): AgentRuntime {
     endedAt: 0,
     got: null,
     parking: false,
+    terminal: false,
   };
 }
 
@@ -1725,6 +1793,7 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
     held: value.held === true,
     // A record from before this field: its thread may have had the pod tools, so it keeps its conversation.
     pods: value.pods !== false,
+    ...spendOf(value.spend),
   };
 }
 
@@ -1826,6 +1895,8 @@ export class Lab {
   private planning = false;
   /** Closed directions whose close runs now. */
   private readonly finishing = new Set<string>();
+  /** The calls whose answer Verifold applies now. Each one still answers its deadline. */
+  private readonly applying = new Set<string>();
   /** The directions that agents opened in the last minute, by call. A repeated call gets the first one's answer. */
   private readonly opening = new Map<string, Promise<string>>();
   /** The lab pauses at the end of its time budget now. */
@@ -2054,6 +2125,10 @@ export class Lab {
       runs: this.runs,
       ledger: this.ledger.list(),
       checks: state.checks,
+      claudeUsd: [...this.agents.values(), ...state.checks].reduce(
+        (sum, entry) => sum + (entry.spend?.usd ?? 0),
+        0,
+      ),
       directions: state.directions.flatMap((direction) => {
         const agent = this.agents.get(direction.agent);
         return agent
@@ -2607,6 +2682,44 @@ export class Lab {
           );
   }
 
+  /**
+   * Hand an agent's session to its harness's own terminal, between turns.
+   * The agent gets no turn while the person holds it. When the terminal
+   * ends, a note wakes the agent, so its next turn follows.
+   */
+  openTerminal(id: unknown, lease: string): Promise<void> {
+    return this.serial(async () => {
+      const state = this.current();
+      const agent = typeof id === 'string' ? this.agents.get(id) : undefined;
+      if (!agent || !this.active(agent))
+        fail('Only the agent of an open direction has a terminal here.');
+      if (state.pausedAt || this.ended(state))
+        fail(
+          'The lab is paused, so its agents have no process. Resume it first.',
+        );
+      const run = this.rt(agent.id);
+      const sessions = this.options.sessions;
+      if (
+        !agent.session ||
+        !sessions.view(agent.session)?.live ||
+        !sessions.idle(agent.session) ||
+        run.turning ||
+        run.settling ||
+        run.parking
+      )
+        fail(
+          `${agent.handle} is not between turns. Open its terminal when its turn ends.`,
+        );
+      run.terminal = true;
+      try {
+        await sessions.takeAgentTerminal(agent.session, lease);
+      } catch (error) {
+        run.terminal = false;
+        throw error;
+      }
+    });
+  }
+
   /** Start again an agent whose process stopped too often by itself. */
   restartAgent(id: unknown): Promise<void> {
     return this.serial(async () => {
@@ -2672,8 +2785,7 @@ export class Lab {
         const run = this.rt(agent.id);
         clearTimeout(run.next);
         run.next = undefined;
-        if (agent.session && this.options.sessions.view(agent.session)?.live)
-          ids.push(agent.id);
+        if (this.alive(agent.session)) ids.push(agent.id);
       }
       return ids;
     });
@@ -2830,7 +2942,8 @@ export class Lab {
 
   /**
    * The person posts on the board. `@claude-1` in the text mentions that
-   * agent, and `@all` every agent. The post wakes the agents that it is for.
+   * agent, and `@all` every agent. `@d-2` puts the post in that direction,
+   * when no direction is given. The post wakes the agents that it is for.
    */
   post(input: {
     readonly text: unknown;
@@ -2847,7 +2960,17 @@ export class Lab {
           : input.kind === 'question' || input.kind === 'objection'
             ? input.kind
             : fail('A post from you is a message or an objection.');
-      const direction = this.directionArg(input.direction);
+      // The first @d-N in the text that names an open direction.
+      const open = new Set(
+        this.current()
+          .directions.filter((entry) => entry.state === 'open')
+          .map((entry) => entry.id),
+      );
+      const direction =
+        this.directionArg(input.direction) ??
+        [...body.matchAll(mentionedDirection)]
+          .map((match) => match[1] ?? '')
+          .find((id) => open.has(id));
       const replyTo =
         typeof input.replyTo === 'string' && input.replyTo
           ? input.replyTo
@@ -2886,6 +3009,7 @@ export class Lab {
     record: SessionRecord,
     outcome?: 'completed' | 'interrupted' | 'failed',
   ): void {
+    this.recordSpend(record);
     // A checker's session: its agent ID is the check's, known before its start returns.
     const check = record.agent
       ? this.state?.checks.find((entry) => entry.agent === record.agent)
@@ -2898,6 +3022,21 @@ export class Lab {
       (entry) => entry.session === record.id,
     );
     if (!agent) return;
+    // The person gave the terminal back: the agent's next turn follows.
+    const held = this.runtimes.get(agent.id);
+    if (held?.terminal && record.status !== 'terminal') {
+      held.terminal = false;
+      if (this.active(agent))
+        this.loop(agent.id).add(
+          [
+            {
+              kind: 'continue',
+              text: 'The person worked in your harness terminal and gave it back to Verifold. Look at what changed in your folder, then continue.',
+            },
+          ],
+          0,
+        );
+    }
     // The agent closed its direction in this turn, however the turn ended.
     if (agent.stopReason === 'closed') {
       this.finishClosed(agent.id);
@@ -3114,6 +3253,57 @@ export class Lab {
     }
   }
 
+  /**
+   * The session has a process, or starts one now, such as after its
+   * terminal. Every path that starts or parks agents counts both, so no
+   * second process starts for an agent.
+   */
+  private alive(session: string | null | undefined): boolean {
+    const view = session ? this.options.sessions.view(session) : null;
+    return Boolean(view?.live || view?.starting);
+  }
+
+  /**
+   * Add what a session spent to its agent or its checker, in the lab's
+   * queue. Only a change is saved.
+   */
+  private recordSpend(record: SessionRecord): void {
+    if (record.costUsd === null) return;
+    void this.serial(async () => {
+      const check = this.state?.checks.find(
+        (entry) => entry.session === record.id,
+      );
+      const agent = check
+        ? undefined
+        : [...this.agents.values()].find(
+            (entry) => entry.session === record.id,
+          );
+      const spend = addSpend((check ?? agent)?.spend, record);
+      if (!spend || spend === (check ?? agent)?.spend) return;
+      if (check)
+        await this.changeCheck(check.id, (entry) => ({ ...entry, spend }));
+      else if (agent)
+        await this.update(agent.id, (current) => ({ ...current, spend }));
+    }).catch(() => {});
+  }
+
+  /**
+   * The person holds the agent's harness terminal, or Verifold hands it
+   * over now. The agent gets no turn, gives no slot, and its process
+   * ends for nothing but a domain that it lost.
+   */
+  private holdsTerminal(id: string): boolean {
+    const session = this.agents.get(id)?.session;
+    const view = session ? this.options.sessions.view(session) : null;
+    if (view?.record.status === 'terminal') return true;
+    // The hand-over or the return runs while the session runs or starts. A
+    // session that stopped meanwhile is not held: the lab starts it again.
+    return (
+      Boolean(this.runtimes.get(id)?.terminal) &&
+      Boolean(view?.live || view?.starting)
+    );
+  }
+
   /** The runtime of an agent, made on first use. */
   private rt(id: string): AgentRuntime {
     let run = this.runtimes.get(id);
@@ -3304,6 +3494,7 @@ export class Lab {
           !this.ended(this.state) &&
           agent.session !== null &&
           !this.runtimes.get(agent.id)?.parking &&
+          !this.holdsTerminal(agent.id) &&
           this.options.sessions.idle(agent.session),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         send: (events, left) => {
@@ -4071,8 +4262,19 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         state: 'answered',
         answer: { option: picked, at: new Date().toISOString() },
       }));
+      // Known in the same step as the answer, so no tick finds it unapplied meanwhile.
+      this.applying.add(call.id);
       return { call, picked };
     });
+    try {
+      await this.applyAnswer(call, picked);
+    } finally {
+      this.applying.delete(call.id);
+    }
+  }
+
+  /** Apply a saved answer and record what it did. The answer is in `applying` meanwhile. */
+  private async applyAnswer(call: Call, picked: number): Promise<void> {
     const chosen = call.options[picked];
     let applied: CallApplied | null = null;
     try {
@@ -4405,7 +4607,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       lost ||
       network.length !== run.got.network.length ||
       (pods !== run.got.pods && (agent.host === 'claude' || pods));
-    if (!changed || (run.turning && !lost)) return;
+    // A turn or a held terminal ends first, unless the agent lost a domain.
+    if (!changed || ((run.turning || this.holdsTerminal(id)) && !lost)) return;
     run.parking = true;
     void this.options.sessions
       .park(session)
@@ -4502,9 +4705,13 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     if (
       this.current().calls.some(
         (call) =>
-          // An answer that Verifold did not finish applying does not stand, so the deadline asks again.
+          // An answer that Verifold did not finish applying, as after a stop, does not stand, so the
+          // deadline asks again. One that it applies or undoes now still answers that deadline.
           (call.deadline === deadline &&
-            (call.state === 'open' || stands(call))) ||
+            (call.state === 'open' ||
+              call.state === 'undoing' ||
+              this.applying.has(call.id) ||
+              stands(call))) ||
           (call.state === 'open' &&
             call.options.some((option) => option.effect?.type === 'hours')),
       )
@@ -4716,6 +4923,57 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   async runLog(id: unknown): Promise<RunLogPart | null> {
     const run = this.ledger.get(id);
     return run ? this.ledger.log(run.id, 'tail', runLimits.deskLog) : null;
+  }
+
+  /**
+   * For the desk: what a direction's branch changed since its start, at its
+   * newest commit, or with `proof` (such as p-12.0), the diff that a post
+   * cites: its commits and its paths. With `path`, also the diff of that
+   * file, which must be one of those files. Null for a direction that the
+   * lab does not have, or a proof that is no diff of it.
+   */
+  async directionDiff(
+    id: unknown,
+    path?: unknown,
+    proof?: unknown,
+  ): Promise<{
+    readonly from: string;
+    readonly to: string;
+    readonly files: readonly ChangedFile[];
+    readonly diff: { readonly text: string; readonly cut: boolean } | null;
+  } | null> {
+    const direction = this.state?.directions.find((entry) => entry.id === id);
+    if (!direction) return null;
+    const { workspace } = direction;
+    let from = workspace.start;
+    let to = direction.head;
+    let paths: readonly string[] | null = null;
+    if (proof !== undefined) {
+      const place = proofRef(proof);
+      const cited = place
+        ? this.board.get(place.post)?.artifacts[place.index]
+        : undefined;
+      if (
+        cited?.type !== 'diff' ||
+        (cited.direction ?? direction.id) !== direction.id
+      )
+        return null;
+      ({ from, to } = cited);
+      paths = cited.paths;
+    }
+    const files = (await changes(this.root, workspace, from, to)).filter(
+      (file) => !paths || paths.includes(file.path),
+    );
+    if (path === undefined) return { from, to, files, diff: null };
+    const file =
+      files.find((entry) => entry.path === path) ??
+      fail('That file is not in this diff.');
+    return {
+      from,
+      to,
+      files,
+      diff: await diff(this.root, workspace, from, to, file.path),
+    };
   }
 
   /**
@@ -7192,7 +7450,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       ? this.options.sessions.view(agent.session)
       : null;
     const status = view?.record.status;
-    if (view?.live && (status === 'running' || status === 'starting'))
+    const alive = this.alive(agent.session);
+    if (alive && status === 'terminal')
+      return { status: 'terminal', until: null };
+    if (alive && (status === 'running' || status === 'starting'))
       return {
         status: status === 'running' ? 'working' : 'starting',
         until: null,
@@ -7202,7 +7463,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     const limited = this.loops.get(agent.id)?.limitedUntil ?? null;
     if (limited) return { status: 'turns', until: limited };
     if (
-      !view?.live &&
+      !alive &&
       (agent.session === null || this.waiting(agent)) &&
       this.options.sessions.full
     )
@@ -7285,12 +7546,15 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         this.runtimes.get(agent.id)?.parking
       )
         continue;
-      const live = agent.session
-        ? (sessions.view(agent.session)?.live ?? false)
-        : false;
+      const live = this.alive(agent.session);
       const parked = this.options.quota?.parked(agent.host) ?? null;
       if (live) {
-        if (parked && agent.session && sessions.idle(agent.session)) {
+        if (
+          parked &&
+          agent.session &&
+          !this.holdsTerminal(agent.id) &&
+          sessions.idle(agent.session)
+        ) {
           await sessions.park(agent.session);
           this.loop(agent.id).add([
             { kind: 'quota', text: "Your harness's usage window reset." },
@@ -7339,6 +7603,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         const capped = (this.turnsUntil(agent) ?? 0) > now;
         return agent.id !== except &&
           agent.session !== null &&
+          !this.holdsTerminal(agent.id) &&
           sessions.view(agent.session)?.live &&
           sessions.idle(agent.session) &&
           !run.turning &&
@@ -7388,6 +7653,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    */
   private async launch(id: string): Promise<void> {
     const agent = this.agent(id);
+    // The session runs, starts, or is in the person's hands: it needs no start.
+    if (this.holdsTerminal(id) || this.alive(agent.session)) return;
     const generation = randomBytes(4).toString('hex');
     const pods = this.podsOn();
     const tools = this.tools(id, generation, pods);
