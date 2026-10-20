@@ -883,6 +883,7 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
       Promise.resolve({ bytes: 15, head: 'METRIC acc=0.9\n', tail: null }),
     metrics: () => Promise.resolve('METRIC acc=0.9\n'),
     fetch: () => Promise.resolve(null),
+    remove: () => Promise.resolve(),
   };
   const compute: LabCompute = {
     describe: () => Promise.resolve('{"podsOn":true}'),
@@ -890,7 +891,9 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
       asked.push(input);
       return Promise.resolve('Started lease-1.');
     },
+    podsOn: () => true,
     leases: {
+      list: () => [...leases.values()],
       get: (id) => {
         const found = leases.get(String(id));
         if (!found) throw new Error('No lease.');
@@ -990,6 +993,12 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
       input.includes('[pod] lease-1: The pod is ready.'),
     ),
   );
+  // A stopped direction's leases end, so its pod bills no more. Another direction's lease stays.
+  await lab.lab.stopDirection('d-1');
+  await until(() => ended.length === 1);
+  assert.deepEqual(ended, [
+    { id: 'lease-1', by: 'person', reason: 'you stopped d-1.' },
+  ]);
 });
 
 await test('start over moves the lab and its board into the archive', async (t) => {

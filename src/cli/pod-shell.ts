@@ -393,8 +393,9 @@ echo watching
 
   /**
    * Start a lab run's job in its folder on the pod. The script goes on stdin.
-   * A wrapper waits for the job and writes its exit code. The job runs in its
-   * own process group, so a stop reaches every process that it started.
+   * A wrapper waits for the job and writes its exit code in one move, so a
+   * read never sees half of it. The job runs in its own process group, so a
+   * stop reaches every process that it started.
    */
   async startRun(
     target: PodTarget,
@@ -407,7 +408,7 @@ echo watching
       this.ssh,
       [
         ...this.args(target),
-        `mkdir -p ${runsFolder} && cd ${folder} && cat > ${at}.sh && (nohup bash -c 'echo $$ > ${at}.wrap; set -m; bash ${at}.sh > ${at}.log 2>&1 < /dev/null & echo $! > ${at}.pid; wait $!; echo $? > ${at}.exit' > /dev/null 2>&1 < /dev/null &) && i=0 && while { [ ! -s ${at}.wrap ] || [ ! -s ${at}.pid ]; } && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done && echo started`,
+        `mkdir -p ${runsFolder} && cd ${folder} && cat > ${at}.sh && (nohup bash -c 'echo $$ > ${at}.wrap; set -m; bash ${at}.sh > ${at}.log 2>&1 < /dev/null & echo $! > ${at}.pid; wait $!; echo $? > ${at}.exit.tmp; mv ${at}.exit.tmp ${at}.exit' > /dev/null 2>&1 < /dev/null &) && i=0 && while { [ ! -s ${at}.wrap ] || [ ! -s ${at}.pid ]; } && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done && [ -s ${at}.pid ] && echo started`,
       ],
       { input: script, timeoutMs: 60_000, keep: 1024 },
     );
@@ -427,7 +428,8 @@ echo watching
         ...this.args(target),
         `if [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif kill -0 "$(cat ${at}.wrap 2>/dev/null)" 2>/dev/null; then echo running; elif [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; else echo gone; fi; tail -c ${podLimits.output} ${at}.log 2>/dev/null; true`,
       ],
-      { timeoutMs: 60_000 },
+      // The status line comes first: the tail of stdout keeps it.
+      { timeoutMs: 60_000, keep: podLimits.output + 64 },
     );
     if (result.code !== 0)
       fail(
@@ -476,11 +478,12 @@ echo watching
     readonly tail: Buffer | null;
   }> {
     const at = runFiles(run);
+    // At most `head + tail` bytes follow the size line, also while the log grows, so the line stays.
     const result = await program(
       this.ssh,
       [
         ...this.args(target),
-        `size=$(( $(wc -c 2>/dev/null < ${at}.log) + 0 )); echo $size; if [ $size -le ${head + tail} ]; then cat ${at}.log 2>/dev/null; else head -c ${head} ${at}.log; tail -c ${tail} ${at}.log; fi; true`,
+        `size=$(( $(wc -c 2>/dev/null < ${at}.log) + 0 )); echo $size; if [ $size -le ${head + tail} ]; then head -c ${head + tail} ${at}.log 2>/dev/null; else head -c ${head} ${at}.log; tail -c ${tail} ${at}.log; fi; true`,
       ],
       { timeoutMs: 600_000, keep: head + tail + 64 },
     );
@@ -511,6 +514,15 @@ echo watching
     return result.code === 0 ? result.stdout.toString('utf8') : '';
   }
 
+  /** Remove a lab run's folder on the pod, after its outputs came back. Its job files stay. */
+  async removeRun(target: PodTarget, run: string): Promise<void> {
+    await program(
+      this.ssh,
+      [...this.args(target), `rm -rf ${remoteFolder(run)}; true`],
+      { timeoutMs: 120_000, keep: 1024 },
+    );
+  }
+
   /** The paths among `paths` that exist in a lab run's folder on the pod, links too. */
   async existing(
     target: PodTarget,
@@ -522,7 +534,7 @@ echo watching
       this.ssh,
       [
         ...this.args(target),
-        `cd ${remoteFolder(run)} && for path in ${chosen.map(quote).join(' ')}; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\\n' "$path"; fi; done`,
+        `cd ${remoteFolder(run)} 2>/dev/null || exit 0; for path in ${chosen.map(quote).join(' ')}; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\\n' "$path"; fi; done`,
       ],
       { timeoutMs: 60_000 },
     );
@@ -544,13 +556,17 @@ echo watching
     return this.send(target, remoteFolder(task), folder, this.paths(paths));
   }
 
-  /** Copy a lab run's whole folder to its folder on the pod, inside the same limits as a copy. */
+  /**
+   * Copy a lab run's whole folder to its folder on the pod, inside the same
+   * limits as a copy. The folder is a checkout of a commit, so its links are
+   * the commit's, and they go as links.
+   */
   sendRun(
     target: PodTarget,
     run: string,
     folder: string,
   ): Promise<{ readonly files: number; readonly bytes: number }> {
-    return this.send(target, remoteFolder(run), folder, ['.']);
+    return this.send(target, remoteFolder(run), folder, ['.'], true);
   }
 
   private async send(
@@ -558,13 +574,16 @@ echo watching
     remote: string,
     folder: string,
     chosen: readonly string[],
+    links = false,
   ): Promise<{ readonly files: number; readonly bytes: number }> {
     let files = 0;
     let bytes = 0;
     const walk = async (path: string): Promise<void> => {
       const stats = await lstat(join(folder, path)).catch(() =>
-        fail(`${path} is not in the task folder.`),
+        fail(`${path} is not in the folder.`),
       );
+      // tar copies a link as a link and never reads through it.
+      if (stats.isSymbolicLink() && links) return;
       if (stats.isSymbolicLink())
         fail(`${path} is a link. Copy regular files only.`);
       if (stats.isDirectory()) {

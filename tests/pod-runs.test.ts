@@ -160,7 +160,12 @@ await test('a pod run copies its commit to the pod, runs there, and brings back 
       'echo hi > out/a.txt',
       'echo "$VERIFOLD_RUN $VERIFOLD_COMMIT" > out/env.txt',
       `echo "${secret}" > out/leak.txt`,
+      `echo x > "out/${secret}.txt"`,
       'ln -s /etc/hosts out/link',
+      // More output than one read of the job's log holds.
+      "head -c 70000 /dev/zero | tr '\\0' 'x'",
+      'echo',
+      'echo "the end"',
     ].join('\n'),
   );
   const { ledger, ended } = fx.ledger();
@@ -182,7 +187,12 @@ await test('a pod run copies its commit to the pod, runs there, and brings back 
     run?.note ?? '',
     /Verifold kept no copy of out\/leak\.txt, because it holds the value of a pod secret\./,
   );
+  assert.match(
+    run?.note ?? '',
+    /Verifold kept no copy of 1 file whose name holds the value of a pod secret\./,
+  );
   assert.match(run?.note ?? '', /No output file at missing\.txt\./);
+  assert.doesNotMatch(JSON.stringify(run), /SECRETVALUE/);
   const record = join(fx.root, '.verifold', 'lab', 'runs', 'r-1');
   assert.equal(
     await readFile(join(record, 'outputs', 'out', 'env.txt'), 'utf8'),
@@ -190,11 +200,12 @@ await test('a pod run copies its commit to the pod, runs there, and brings back 
   );
   const log = await readFile(join(record, 'log.txt'), 'utf8');
   assert.match(log, /^training\nMETRIC acc=0\.7\ntoken=\[HF_TOKEN\]\n/);
+  assert.match(log, /x{70000}\nthe end\n$/);
   assert.doesNotMatch(log, /SECRETVALUE/);
   assert.equal(run?.log.cut, false);
-  // The run's copy is on the pod, and nothing of it stays in the project.
+  // Nothing of the run's copy stays, on the pod or in the project.
   assert.ok(
-    (await readdir(join(fx.pod, 'verifold'))).includes(run?.folder ?? ''),
+    !(await readdir(join(fx.pod, 'verifold'))).includes(run?.folder ?? ''),
   );
   assert.deepEqual(
     (await readdir(join(fx.root, '.verifold', 'workspaces'))).filter((name) =>
