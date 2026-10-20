@@ -287,6 +287,11 @@ export const checkLimits = {
   widerAt: 5,
   /** A check that Verifold or its process stopped starts again once, then fails. */
   restarts: 1,
+  /**
+   * Check numbers after the newest that a checker's harness denies before
+   * their folders exist. A check beyond them waits for that checker to end.
+   */
+  reserved: 16,
 };
 
 /** The kinds of post that a check tests, when they cite a run. */

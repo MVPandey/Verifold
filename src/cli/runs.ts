@@ -948,6 +948,8 @@ export class RunLedger {
     readonly lease?: unknown;
     /** Real paths that a local run cannot read, besides the credential paths, such as the lab's records for a checker's run. */
     readonly deny?: readonly string[];
+    /** Throws when the run may not start now. It runs in the lab's queue, in the step that records the run. */
+    readonly may?: () => void;
   }): Promise<RunRecord> {
     const runner =
       input.where === 'pod'
@@ -960,6 +962,7 @@ export class RunLedger {
       if (known) return { run: known, known: true, lease: null };
       if (this.closed)
         fail('Verifold stops or moves the lab now, so no run starts.');
+      input.may?.();
       this.room(input.agent);
       const place =
         'pods' in runner
