@@ -25,10 +25,10 @@ import {
   labToolsVersion,
   planLimits,
   planToolSpec,
-  podToolSpecs,
+  labPodToolSpecs,
   runToolSpecs,
 } from './lab-tools.ts';
-import type { Cause, Lease } from './leases.ts';
+import { isOpen as isOpenLease, type Cause, type Lease } from './leases.ts';
 import { loadPrompt } from './prompts.ts';
 import type { LimitSignal } from './quota.ts';
 import {
@@ -375,7 +375,10 @@ export interface LabCompute {
     readonly reason: string;
     readonly secrets?: unknown;
   }): Promise<string>;
+  /** A key is stored and the person set a spend limit. */
+  podsOn(): boolean;
   readonly leases: {
+    list(): readonly Lease[];
     get(id: unknown): Lease;
     end(id: unknown, by: Cause, reason: string): Promise<Lease>;
   };
@@ -1393,8 +1396,8 @@ export class Lab {
   }
 
   /** Stop a direction. Its agent's session ends. Its folder and branch stay. */
-  stopDirection(id: unknown): Promise<void> {
-    return this.serial(async () => {
+  async stopDirection(id: unknown): Promise<void> {
+    const stopped = await this.serial(async () => {
       const state = this.current();
       const direction =
         state.directions.find((entry) => entry.id === id) ??
@@ -1458,7 +1461,19 @@ export class Lab {
         mentions: [],
         artifacts: [],
       }).catch(() => {});
+      return direction.id;
     });
+    // No agent works for the direction any more, so its pods end and billing stops. The end waits for the compute's queue, outside the lab's.
+    const compute = this.options.compute;
+    for (const lease of compute?.leases.list() ?? [])
+      if (lease.directions?.includes(stopped) && isOpenLease(lease))
+        void compute?.leases
+          .end(lease.id, 'person', `you stopped ${stopped}.`)
+          .catch((error: unknown) =>
+            this.options.progress?.(
+              `Verifold could not end ${lease.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            ),
+          );
   }
 
   /** Start again an agent whose process stopped too often by itself. */
@@ -2164,7 +2179,7 @@ export class Lab {
         ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and a bar changes before a result, never after it.'
         : '';
     // Without a sandbox for runs, agents run experiments in their own harness.
-    const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.options.compute ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
+    const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.podsOn() ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
     return `${await loadPrompt('lab-peer')}${runs}${role}
 
 The question:
@@ -2192,8 +2207,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     return {
       specs: [
         ...labToolSpecs,
-        ...(this.ledger.sandboxed || this.options.compute ? runToolSpecs : []),
-        ...(this.options.compute ? podToolSpecs : []),
+        ...(this.ledger.sandboxed || this.podsOn() ? runToolSpecs : []),
+        ...(this.podsOn() ? labPodToolSpecs : []),
         ...(this.state?.opener === id ? [planToolSpec] : []),
         ...(this.options.memory ? [noteToolSpec] : []),
       ],
@@ -2419,6 +2434,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     return this.options.compute ?? fail('This Verifold has no pods.');
   }
 
+  /** Pods are on when a session starts: its agent gets the pod tools and the pod part of its prompt. */
+  private podsOn(): boolean {
+    return this.options.compute?.podsOn() ?? false;
+  }
+
   /**
    * A lease of lab directions changed: the agents of its directions wake
    * with its line, unless an agent made the change.
@@ -2481,6 +2501,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       const want = [...new Set(outputs.map((path) => projectPath(path)))];
       if (want.includes('.'))
         fail('Name files or folders in the copy, not the whole copy.');
+      // A pod run needs a ready lease before Verifold commits the folder for it.
+      if (where === 'pod') this.ledger.podFor(agent.direction, args.lease);
       const draft = {
         agent,
         direction: this.direction(agent.direction),

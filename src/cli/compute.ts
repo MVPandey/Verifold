@@ -530,6 +530,12 @@ export class Compute {
         `The pod of ${id} does not run now${lease?.end ? `: ${lease.end.reason}` : '.'}`,
       );
     };
+    // A run that works keeps its pod from the idle stop. A lease record is written at most once a minute for it.
+    const touch = (id: string): void => {
+      const lease = this.leases.list().find((entry) => entry.id === id);
+      if (Date.now() - Date.parse(lease?.activeAt ?? '') >= 60_000)
+        void this.leases.active(id).catch(() => undefined);
+    };
     // Each call hides secrets in its result and in its error.
     const hidden = async <T>(
       id: string,
@@ -558,26 +564,37 @@ export class Compute {
           );
         if (chosen?.state === 'ready' && chosen.ssh)
           return { lease: chosen.id, gpu: chosen.gpu };
+        const stopped = own.findLast((entry) => entry.state === 'stopped');
         throw new SessionActionError(
           own.some(
             (entry) =>
               entry.state === 'starting' || entry.state === 'requested',
           )
             ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
-            : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
+            : stopped
+              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in Compute.`
+              : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },
       send: (id, run, folder) =>
         hidden(id, async (target) => {
+          void this.leases.active(id).catch(() => undefined);
           await this.shell.sendRun(target, run, folder);
         }),
       start: (id, run, script) =>
-        hidden(id, (target) => this.shell.startRun(target, run, script)),
+        hidden(id, async (target) => {
+          // The pod has the lease's secrets in its container's environment, which an SSH session does not get.
+          const names = this.leases.get(id).secrets ?? [];
+          const secrets = names.length
+            ? `for name in ${names.join(' ')}; do if [ -z "$(printenv "$name")" ]; then line=$(tr '\\0' '\\n' 2>/dev/null < /proc/1/environ | grep -m 1 "^$name="); [ -n "$line" ] && export "$line"; fi; done\n`
+            : '';
+          await this.shell.startRun(target, run, `${secrets}${script}`);
+          void this.leases.active(id).catch(() => undefined);
+        }),
       state: (id, run) =>
         hidden(id, async (target, hide) => {
           const state = await this.shell.runState(target, run);
-          // A run that works keeps its pod from the idle stop.
-          void this.leases.active(id).catch(() => undefined);
+          touch(id);
           return { ...state, tail: hide(state.tail) };
         }),
       stop: (id, run, signal) =>
@@ -606,23 +623,42 @@ export class Compute {
             ['.'],
             found,
           );
-          // A file that holds a secret value stays on the pod: the agent would read it.
+          // A file whose name or content holds a secret value stays on the pod: the agent would read it.
           const values = Object.values(this.hidden.get(id) ?? {}).filter(
             Boolean,
           );
           const held: string[] = [];
+          let named = 0;
           if (values.length)
             for (const path of copied) {
-              const content = await readFile(join(folder, path));
-              if (values.some((value) => content.includes(value))) {
+              const inName = values.some((value) => path.includes(value));
+              const content = inName
+                ? null
+                : await readFile(join(folder, path));
+              if (
+                inName ||
+                values.some((value) => content?.includes(value) === true)
+              ) {
                 await rm(join(folder, path), { force: true });
-                held.push(path);
+                if (inName) named++;
+                else held.push(path);
               }
             }
-          return held.length
-            ? `Verifold kept no copy of ${held.slice(0, 5).join(', ')}, because ${held.length === 1 ? 'it holds' : 'they hold'} the value of a pod secret.`
-            : null;
+          return (
+            [
+              held.length
+                ? `Verifold kept no copy of ${held.slice(0, 5).join(', ')}, because ${held.length === 1 ? 'it holds' : 'they hold'} the value of a pod secret.`
+                : '',
+              named
+                ? `Verifold kept no copy of ${named} ${named === 1 ? 'file' : 'files'} whose name holds the value of a pod secret.`
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' ') || null
+          );
         }),
+      remove: (id, run) =>
+        hidden(id, (target) => this.shell.removeRun(target, run)),
     };
   }
 

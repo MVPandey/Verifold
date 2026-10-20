@@ -215,7 +215,7 @@ export const runToolSpecs: readonly AgentTool[] = [
 ];
 
 /** The pod tools of a lab agent. A lease that an agent asks for is for its own direction. */
-export const podToolSpecs: readonly AgentTool[] = [
+export const labPodToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_compute',
     description:
