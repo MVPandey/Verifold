@@ -47,6 +47,15 @@ export async function checkProjectDirectory(root: string): Promise<void> {
   }
 }
 
+/** How a lab project continues, in .verifold.md. */
+const labGuide =
+  "## Continue in the lab\n\nRun verifold in this project directory. It opens the desk, where a lab works on the question: agents each own a direction, post what they find with proof on one board, and check each other's claims. You answer their calls on money, scope, access, or more time. The lab keeps working after you close the terminal. To stop it, run verifold stop.\n\n";
+
+/** How a research project continues, in .verifold.md. */
+function researchGuide(workspace: Workspace): string {
+  return `## Continue researching\n\nRun verifold in this project directory. It opens the desk, where you approve the research plan, choose a direction, approve the task plan of the coordinator, and follow the team. The team keeps working after you close the terminal. To stop it, run verifold stop. Harness: ${workspace.host}; model: ${workspace.model ?? 'host default'}. The harness owns its tools, permissions, and sessions.\n\nWhen the desk is closed, scripts can use verifold status, verifold research --approve, and verifold select --id with a direction ID.\n\n`;
+}
+
 /** Create a scaffold under the state-write lock; roll back only artifacts made by this call. */
 export async function createProject(
   root: string,
@@ -54,6 +63,8 @@ export async function createProject(
   topic: string | undefined,
   brief: string | undefined,
   signal: AbortSignal,
+  /** A lab starts on the question after setup, so the guide in .verifold.md describes the lab. */
+  lab = false,
 ): Promise<Workspace> {
   await checkProjectDirectory(root);
   const created: string[] = [];
@@ -98,7 +109,7 @@ export async function createProject(
               .map(([name, purpose]) => `- ${name}/: ${purpose}`)
               .join(
                 '\n',
-              )}\n- .verifold/: Private state, coordinator sessions, source reports, and research attempts.\n\n## Continue researching\n\nRun verifold in this project directory. It opens the desk, where you approve the research plan, choose a direction, approve the task plan of the coordinator, and follow the team. The team keeps working after you close the terminal. To stop it, run verifold stop. Harness: ${workspace.host}; model: ${workspace.model ?? 'host default'}. The harness owns its tools, permissions, and sessions.\n\nWhen the desk is closed, scripts can use verifold status, verifold research --approve, and verifold select --id with a direction ID.\n\nPreserve sources, assumptions, evaluator definitions, negative results, and reproducible commands. Agent proposals are not evidence or execution approval.\n`,
+              )}\n- .verifold/: Private state, coordinator sessions, source reports, and research attempts.\n\n${lab ? labGuide : researchGuide(workspace)}Preserve sources, assumptions, evaluator definitions, negative results, and reproducible commands. Agent proposals are not evidence or execution approval.\n`,
           );
           await file.sync();
         } finally {

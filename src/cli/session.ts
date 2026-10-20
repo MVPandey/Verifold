@@ -161,7 +161,9 @@ export interface SessionView {
   readonly live: boolean;
   /**
    * A launch saves its record or starts the harness now, such as after a
-   * terminal. The session is busy, though it has no process yet.
+   * terminal, or a park ends the harness and saves its record now. The
+   * session is busy, though it has no process: its saved record can still
+   * be the one before.
    */
   readonly starting?: boolean;
   readonly saveFailed: boolean;
@@ -966,6 +968,8 @@ export class SessionManager {
   private launching = false;
   /** The session moves to its terminal now: Claude Code's process ended, and the terminal opens. */
   private handing = false;
+  /** A park ends the harness and saves the record now. */
+  private closing = false;
   /** Each close adds one. A start that began before a close starts no harness after it. */
   private generation = 0;
   /** The launch in progress, so close can wait for it. */
@@ -1010,7 +1014,9 @@ export class SessionManager {
           record: this.current,
           // A Claude Code session in its terminal has no structured process, but it is live.
           live: this.host !== null || this.native !== null,
-          ...(this.launching || this.handing ? { starting: true } : {}),
+          ...(this.launching || this.handing || this.closing
+            ? { starting: true }
+            : {}),
           saveFailed: this.saveFailed,
         }
       : null;
@@ -1536,11 +1542,17 @@ export class SessionManager {
    */
   async close(): Promise<boolean> {
     this.generation++;
-    // A launch, for example after a terminal, can still be saving its record. It must not start a harness after this.
-    await this.inflight;
-    this.pause();
-    while (this.writing) await this.writing;
-    await this.transcript?.writer.flushed();
+    // Until the paused record is saved, the session counts as busy: a reader of the old record would start a new conversation.
+    this.closing = true;
+    try {
+      // A launch, for example after a terminal, can still be saving its record. It must not start a harness after this.
+      await this.inflight;
+      this.pause();
+      while (this.writing) await this.writing;
+      await this.transcript?.writer.flushed();
+    } finally {
+      this.closing = false;
+    }
     return !this.saveFailed;
   }
 

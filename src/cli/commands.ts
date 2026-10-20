@@ -157,12 +157,11 @@ again.`,
 
 const help = `Verifold - private research with your existing agent harness
 
-verifold [--no-open]                  Set up a project or open its research desk
-verifold --lab                        The same, then start a lab on the question instead of research
+verifold [--no-open]                  Set up a project and start a lab on its question, or open its desk
 verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
 verifold init --setup-only [--profile profile.json] [--host name]
 verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
-verifold ui [--no-open] [--lab]       Open the live research desk and control a harness session there
+verifold ui [--no-open]               Open the live research desk and control a harness session there
 verifold stop                         Stop the team that works in the background, with its pods
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
@@ -195,11 +194,17 @@ another folder (default: ~/.verifold/agency). --setup-only sets up without resea
 and offers a research memory that other projects can reuse. Without a terminal,
 research needs --host, --topic, and --autonomy autonomous.
 
-Research searches the web and proposes directions. After you choose one, the
-coordinator plans tasks, and task agents run the experiments on this computer, or
-on RunPod GPU pods within the limits that you set. Keeping PDFs is optional and
-comes after you choose a direction. Verifold keeps its records in .verifold/, and
-Claude Code or Codex keeps its own permissions and sessions.
+After setup, a bare verifold starts a lab on your question. Several agents each
+own a direction and post what they find, with proof, on one board in the desk.
+They check each other's claims, and they ask you only about money, scope,
+access, or more time. Runs go on this computer, or on RunPod GPU pods within the
+limits that you set.
+
+verifold init and verifold research run the research flow instead: research
+searches the web and proposes directions, and after you choose one, the
+coordinator plans tasks, and task agents run the experiments. Keeping PDFs is
+optional and comes after you choose a direction. Verifold keeps its records in
+.verifold/, and Claude Code or Codex keeps its own permissions and sessions.
 With a terminal, the team works in a background process, so closing the terminal
 or Ctrl+C does not stop it. Type /help in the terminal for its commands, and run
 verifold stop to stop the team. Session records are in .verifold/sessions/.
@@ -433,7 +438,7 @@ interface DeskRun {
   };
   /** After setup, close the desk and return the project, so a background owner takes over. */
   readonly handoff?: boolean;
-  /** Start a lab on the project's question instead of research, unless the team already works. */
+  /** `--lab` in a project that exists: start a lab on its saved question, unless it has one. */
   readonly lab?: boolean;
   /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
   readonly owner?: {
@@ -821,8 +826,8 @@ async function serveDesk(
           io.progress?.(
             'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
-        if (run.lab) await startLab(root, lab, research, io);
-        else if (research) await runner.start(research);
+        // The question of setup starts a lab: the lab is the default. --lab still starts one in a project that exists.
+        if (research || run.lab) await startLab(root, lab, research ?? {}, io);
         io.listen?.(
           (line) =>
             terminalInput(sessions, line, io, {
@@ -918,26 +923,24 @@ function ownerLog(root: string): (line: string) => void {
 }
 
 /**
- * `verifold --lab`: start a lab on the question of setup or of the project,
- * unless the project has one. The lab says why it cannot start, for example
- * when the coordinator's team works on the run. A failure does not stop the
- * owner.
+ * After setup, start a lab on its question, unless the project has one. The
+ * lab says why it cannot start, for example when the coordinator's team works
+ * on the run. A failure does not stop the owner.
  */
 async function startLab(
   root: string,
   lab: Lab,
-  research: ResearchOptions | undefined,
+  research: ResearchOptions,
   io: CliIO,
 ): Promise<void> {
   if (lab.exists) {
     io.progress?.(
-      'This project has a lab already, so --lab started nothing new. Open it on Home in the desk.',
+      'This project has a lab already, so Verifold started nothing new. Open it on Home in the desk.',
     );
     return;
   }
   try {
-    const workspace = await loadWorkspace(root);
-    const asked = research?.topic ?? workspace.research?.topic;
+    const asked = research.topic ?? (await loadWorkspace(root)).research?.topic;
     if (!asked) {
       io.progress?.(
         'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
@@ -945,7 +948,7 @@ async function startLab(
       return;
     }
     // The same start as the desk's: the setup question stays with the project.
-    const planned = await startLabOn(root, lab, asked, research?.autonomy);
+    const planned = await startLabOn(root, lab, asked, research.autonomy);
     io.progress?.(
       planned
         ? 'The lab started. Its first agent reads the question and posts a plan on the board in the desk.'
@@ -958,7 +961,7 @@ async function startLab(
   }
 }
 
-/** The research and the setup desk that a background owner gets in its input. Anything else is left out. */
+/** The question of setup and the setup desk that a background owner gets in its input. Anything else is left out. */
 function ownerStart(value: unknown): {
   readonly research: ResearchOptions | undefined;
   readonly desk: DeskPlace | undefined;
@@ -978,10 +981,6 @@ function ownerStart(value: unknown): {
             research.autonomy === 'autonomous'
               ? { autonomy: research.autonomy }
               : {}),
-            ...(typeof research.feedback === 'string'
-              ? { feedback: research.feedback }
-              : {}),
-            ...(research.approve === true ? { approve: true } : {}),
           }
         : undefined,
     desk:
@@ -1585,6 +1584,13 @@ export async function runCli(
       !allowed[command]?.includes(key)
     )
       throw new Error(`--${key} is not valid for ${command}.`);
+  // The lab is the default for a new project. In a project that exists, --lab still starts one on its question.
+  if (values.lab)
+    io.progress?.(
+      command === 'init'
+        ? '--lab is no longer needed: a new project starts a lab after setup.'
+        : "--lab is no longer needed for a new project, which starts a lab after setup. Here it starts a lab on the project's question.",
+    );
   signal.throwIfAborted();
   if (command === 'profile') {
     if (values.workspace !== undefined)
@@ -1692,6 +1698,8 @@ export async function runCli(
       setupOnly: values['setup-only'] ?? false,
       workspaceSpecified: values.workspace !== undefined,
       harnesses: await installedHarnesses(),
+      // A bare verifold starts a lab after setup, so setup offers no research stop.
+      ...(launch ? { lab: true } : {}),
     };
     // Bare verifold in a new folder sets up in the desk. init and --no-open stay the terminal path.
     // With a terminal, setup hands the project to a background owner.
@@ -1701,14 +1709,12 @@ export async function runCli(
         harness,
         setup: { cwd, options },
         handoff: background !== undefined,
-        lab: values.lab ?? false,
       });
       if (handoff && background)
         await attachTeam(handoff.root, io, signal, background, {
           noOpen: false,
           research: handoff.research,
           desk: handoff.desk,
-          lab: values.lab ?? false,
         });
       return;
     }
@@ -1724,7 +1730,6 @@ export async function runCli(
       const run = {
         noOpen: values['no-open'] ?? false,
         research: initialized.research ?? undefined,
-        lab: values.lab ?? false,
       };
       if (background)
         await attachTeam(initialized.root, io, signal, background, run);

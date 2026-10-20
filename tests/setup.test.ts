@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SetupBridge, type SetupView } from '../src/cli/setup-bridge.ts';
@@ -10,6 +10,19 @@ import { renderSetup } from '../src/cli/desk-view.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { loadWorkspace } from '../src/cli/storage.ts';
 import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
+
+// After setup, the project starts a lab, whose first agent starts a harness
+// process from PATH. Fake claude and codex commands that stop at once come
+// first for the whole file, so no test reaches a real harness.
+const fakeBin = await mkdtemp(join(tmpdir(), 'verifold-fake-bin-'));
+for (const name of ['claude', 'codex'])
+  await writeFile(join(fakeBin, name), '#!/bin/sh\nexit 1\n', {
+    mode: 0o700,
+  });
+process.env.PATH = `${fakeBin}:${process.env.PATH ?? ''}`;
+process.on('exit', () => {
+  rmSync(fakeBin, { recursive: true, force: true });
+});
 
 const terminal = (lines: string[]): CliIO => ({
   interactive: true,
@@ -143,9 +156,12 @@ for (const background of [false, true])
       await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
     let interview = 0;
+    // The research requests that reach the harness. A lab starts none.
+    const asked: string[] = [];
     const harness = (request: HarnessRequest): Promise<HarnessResult> => {
       request.onActivity?.('Claude Code requested WebSearch.', 'event');
-      if (request.prompt.includes('\nTopic: '))
+      if (request.prompt.includes('\nTopic: ')) {
+        asked.push(request.prompt);
         return Promise.resolve({
           text: JSON.stringify({
             scope: 'Compare graph search on CPUs.',
@@ -156,6 +172,7 @@ for (const background of [false, true])
           }),
           sessionId: 'research-1',
         });
+      }
       interview++;
       request.onTranscript?.({
         kind: 'request',
@@ -273,7 +290,6 @@ for (const background of [false, true])
       assert.equal(response.status, 200, await response.text());
     };
     // One question at a time: the question with its settings, at most three quick questions, then the brief.
-    // The settings turn on the stop before the source search, so research waits at its plan and starts no coordinator.
     const answers: [RegExp, unknown][] = [
       [
         // With both harnesses on the PATH, the default team has a helper.
@@ -282,8 +298,11 @@ for (const background of [false, true])
       ],
       [/Which harnesses run the research/, 'claude'],
       [/Which model should Claude Code use/, ''],
-      [/Ask you before the source search/, 'y'],
-      [/Asks you before the source search\./, 'Fast graph search on CPUs'],
+      // A lab follows setup, and a lab has no stop before its work, so the settings offer none.
+      [
+        /What do you want to find out\?[\s\S]*Claude Code, with its default model\. Folder: [^<]*\.</,
+        'Fast graph search on CPUs',
+      ],
       [
         /class="setup-said"[\s\S]*Which baseline do you trust\?[\s\S]*Question 1 of up to 3/,
         'The speedrun baseline',
@@ -302,6 +321,7 @@ for (const background of [false, true])
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       assert.match(html, pattern);
+      assert.doesNotMatch(html, /source search/);
       seen.push(pattern.source);
       if (pattern.source === 'Review the brief') {
         // The setup log holds the earlier steps and, under Details, the harness runs of setup.
@@ -320,22 +340,45 @@ for (const background of [false, true])
       }
       await answer(Number(/data-prompt="(\d+)"/.exec(html)?.[1]), value);
     }
+    // After setup, the project starts a lab on its question. No research step starts.
     let html = '';
-    for (let tries = 0; tries < 300 && !/Review the plan/.test(html); tries++) {
+    for (
+      let tries = 0;
+      tries < 1500 && !/class="lab-screen"/.test(html);
+      tries++
+    ) {
       // While the background owner takes over, the desk does not answer for a moment.
       html = await view().catch(() => '');
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.match(html, /Review the plan/);
+    assert.match(
+      html,
+      /<h1 id="view-title" tabindex="-1">Fast graph search on CPUs<\/h1>/,
+    );
+    assert.equal(
+      (
+        JSON.parse(
+          await readFile(join(project, '.verifold', 'lab.json'), 'utf8'),
+        ) as { question: string }
+      ).question,
+      'Fast graph search on CPUs',
+    );
+    assert.equal(asked.length, 0);
     // After setup, the setup transcript is gone with the setup desk.
     assert.equal(
       (await fetch(`${url.origin}/api/transcript?source=setup`, { headers }))
         .status,
       404,
     );
-    const workspace = await loadWorkspace(project);
+    // The lab keeps the question for the project once it runs, a moment after it starts.
+    let workspace = await loadWorkspace(project);
+    for (let tries = 0; tries < 1500 && !workspace.research; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      workspace = await loadWorkspace(project);
+    }
     assert.equal(workspace.context, '# Research brief\n\nEdited by me.');
-    assert.equal(workspace.research?.phase, 'awaiting-plan-review');
+    assert.equal(workspace.research?.topic, 'Fast graph search on CPUs');
+    assert.equal(workspace.research?.phase, 'needs-plan');
     assert.ok(
       lines.some((line) =>
         line.includes('Setup step in the desk: Quick questions'),
@@ -362,8 +405,9 @@ for (const background of [false, true])
       await done.catch(() => {});
     }
     assert.equal(existsSync(join(project, '.verifold', 'owner.json')), false);
-    assert.match(
-      await readFile(join(project, '.verifold.md'), 'utf8'),
-      /Edited by me/,
-    );
+    const guide = await readFile(join(project, '.verifold.md'), 'utf8');
+    assert.match(guide, /Edited by me/);
+    // The project's guide describes the lab that follows setup.
+    assert.match(guide, /## Continue in the lab/);
+    assert.doesNotMatch(guide, /research --approve/);
   });

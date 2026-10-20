@@ -64,6 +64,53 @@ const plan = {
   ],
 };
 
+await test('setup before a lab asks no research stop, says that --autonomy guided changes nothing, and keeps the question and a lab guide in the project', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-init-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const agencyDir = join(root, 'agency');
+  const ui = prompts([
+    '/settings',
+    'codex',
+    '',
+    '',
+    'Tiny graph search',
+    'no',
+    '',
+  ]);
+  const initialized = await initializeProject(
+    root,
+    root,
+    { agencyDir, lab: true, autonomy: 'guided' },
+    ui.io,
+    signal(),
+    readyHost,
+  );
+  assert.doesNotMatch(ui.questions.join('\n'), /source search/);
+  assert.match(
+    ui.questions[4] ?? '',
+    /Codex, with its default model\. Folder: [^ ]*\. Type \/settings/,
+  );
+  assert.ok(
+    ui.messages.some((message) =>
+      message.includes('--autonomy guided changes nothing here'),
+    ),
+  );
+  assert.deepEqual(ui.remaining, []);
+  assert.deepEqual(initialized.research, {
+    topic: 'Tiny graph search',
+    autonomy: 'autonomous',
+  });
+  // The question stays with the project from the start, so Home offers it with Start the lab.
+  assert.deepEqual((await loadWorkspace(root)).research, {
+    topic: 'Tiny graph search',
+    autonomy: 'autonomous',
+    phase: 'needs-plan',
+  });
+  const guide = await readFile(join(root, '.verifold.md'), 'utf8');
+  assert.match(guide, /## Continue in the lab/);
+  assert.doesNotMatch(guide, /research --approve/);
+});
+
 await test('init asks the question first, with the harness, model, and folder in one line of settings', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-init-'));
   t.after(() => rm(root, { recursive: true, force: true }));

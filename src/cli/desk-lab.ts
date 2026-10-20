@@ -83,6 +83,13 @@ export function renderLabWork(
     .join('');
 }
 
+/** A post's kind in words. The person's question is a message. */
+function kindLabel(post: Post): string {
+  return post.author === 'person' && post.kind === 'question'
+    ? 'Message'
+    : kindWords[post.kind];
+}
+
 const kindWords: Record<PostKind, string> = {
   plan: 'Plan of record',
   claim: 'Claim',
@@ -114,6 +121,22 @@ function verdictText(verdict: Verdict, disputed: boolean): string {
 
 /** The posts that the view shows. Older ones stay on the board and in the agents' digests. */
 const shownPosts = 120;
+
+/** The posts that the board shows: the newest, and the plan of record after newer posts push it out. */
+function boardPosts(view: LabView): readonly Post[] {
+  const newest = view.posts.slice(-shownPosts);
+  const plan = view.posts.find((post) => post.id === view.state.plan?.post);
+  return plan && !newest.includes(plan) ? [plan, ...newest] : newest;
+}
+
+/** Who wrote a post or asked a call, in the lab's words. */
+function authorName(view: LabView, author: string): string {
+  return author === 'person'
+    ? 'You'
+    : author === 'verifold'
+      ? 'Verifold'
+      : (view.handles[author] ?? author);
+}
 
 /**
  * What a direction's state says, on its row and in the rail, and the face of
@@ -500,11 +523,10 @@ function postHtml(
 ): string {
   const { runs } = view;
   const mark = checkable.has(post.kind) ? checkMark(post, view, ledger) : null;
-  const person = post.author === 'person';
   const note = post.kind === 'status';
   const kind = note
     ? ''
-    : ` <span class="chip kind-${post.kind}">${person && post.kind === 'question' ? 'Message' : kindWords[post.kind]}</span>`;
+    : ` <span class="chip kind-${post.kind}">${kindLabel(post)}</span>`;
   const plan =
     post.kind === 'plan' && view.state.plan?.post === post.id
       ? planTable(view, name)
@@ -516,7 +538,7 @@ function postHtml(
     note || !runs
       ? ''
       : `<button type="button" class="link reply" data-action="lab-reply" data-post="${e(post.id)}">Reply</button>`;
-  return `<article class="post${note ? ' note' : ''}" id="post-${e(post.id)}">${who(host(post.author))}<div class="post-body"><header class="post-head"><strong>${e(name(post.author))}</strong>${kind} <time datetime="${e(post.at)}">${e(clock(post.at))}</time>${mark ? ` <span class="post-mark">${e(mark)}</span>` : ''}</header>${postText(post, budget)}${plan}${proofs}${reply}${replies.length ? `<div class="replies">${replies.map((entry) => postHtml(entry, name, host, clock, [], budget, view, ledger)).join('')}</div>` : ''}</div></article>`;
+  return `<article class="post${note ? ' note' : ''}" id="post-${e(post.id)}" tabindex="-1">${who(host(post.author))}<div class="post-body"><header class="post-head"><strong>${e(name(post.author))}</strong>${kind} <time datetime="${e(post.at)}">${e(clock(post.at))}</time>${mark ? ` <span class="post-mark">${e(mark)}</span>` : ''}</header>${postText(post, budget)}${plan}${proofs}${reply}${replies.length ? `<div class="replies">${replies.map((entry) => postHtml(entry, name, host, clock, [], budget, view, ledger)).join('')}</div>` : ''}</div></article>`;
 }
 
 /**
@@ -532,10 +554,7 @@ function board(
 ): string {
   const budget = { left: textBytes };
   const ledger = new Map(view.ledger.map((run) => [run.id, run]));
-  const newest = view.posts.slice(-shownPosts);
-  // The plan of record stays on the board after newer posts push it out.
-  const plan = view.posts.find((post) => post.id === view.state.plan?.post);
-  const posts = plan && !newest.includes(plan) ? [plan, ...newest] : newest;
+  const posts = boardPosts(view);
   if (!posts.length) {
     const opener = view.directions.find(
       (entry) => entry.agent.id === view.state.opener,
@@ -677,6 +696,8 @@ export function renderLab(
     readonly gpu?: LabGpu | null;
     /** More of Home, such as sessions that an earlier owner paused. */
     readonly extra?: string;
+    /** The person comes back after a while: Home says what changed. */
+    readonly away?: Away | null;
   } = {},
 ): string {
   const { state } = view;
@@ -686,12 +707,7 @@ export function renderLab(
     ),
     ...view.checks.map((check) => [check.agent, check.harness] as const),
   ]);
-  const name = (author: string): string =>
-    author === 'person'
-      ? 'You'
-      : author === 'verifold'
-        ? 'Verifold'
-        : (view.handles[author] ?? author);
+  const name = (author: string): string => authorName(view, author);
   const host = (author: string): HarnessName | 'person' | 'verifold' =>
     author === 'person' ? 'person' : (hosts.get(author) ?? 'verifold');
   const { runs } = view;
@@ -728,10 +744,11 @@ export function renderLab(
   const open = view.directions.filter(
     (entry) => entry.direction.state === 'open',
   );
+  const gpu = options.gpu ?? null;
   return `<div class="lab-screen">
-  <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, options.gpu ?? null))}</p></div>${pause ? `<span class="actions">${pause}</span>` : ''}</header>
+  <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, gpu))}</p></div><span class="actions">${searchButton}${pause}</span></header>
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${renderLabWork(options.works ?? [], clock)}
-  ${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
+  ${options.away ? awayDigest(view, options.away, gpu, disputed, clock) : ''}${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
   <section class="lab-section" aria-labelledby="directions-title"><h2 id="directions-title" class="lab-label">Directions</h2>
   ${view.directions.length ? `<ul class="lab-rows">${view.directions.map((entry) => directionRow(entry, clock, view, disputed, byId)).join('')}</ul>` : '<p class="empty-note">No direction yet. The plan opens them, or you open one yourself.</p>'}
   ${runs ? addForm() : ''}</section>
@@ -1032,4 +1049,306 @@ export function diffPanel(
     // A root of its own scopes the lab panel's styles.
     body: `<div class="lab-panel">${body}</div>`,
   };
+}
+
+/** Search opens in the side panel. ⌘K, or Ctrl+K off a Mac, opens it from anywhere in the desk. */
+const searchButton =
+  '<button type="button" class="quiet" id="lab-search-open" data-panel="search" data-focus="lab-search" aria-keyshortcuts="Meta+K Control+K">Search <kbd class="search-key"><span class="key-mac">⌘K</span><span class="key-other">Ctrl+K</span></kbd></button>';
+
+/** Hits that a search shows at most. */
+const searchLimit = 50;
+
+/** Characters of a hit's text that show around its first match. */
+const snippetWidth = 160;
+
+/**
+ * The words of a search as patterns that ignore case: one for each word,
+ * and one that finds them all. Null when the search has no word.
+ */
+function searchWords(
+  q: string,
+): { readonly each: readonly RegExp[]; readonly any: RegExp } | null {
+  const words = q.trim().split(/\s+/u).filter(Boolean);
+  if (!words.length) return null;
+  const sources = words.map((word) =>
+    word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  );
+  return {
+    each: sources.map((source) => new RegExp(source, 'iu')),
+    any: new RegExp(sources.join('|'), 'giu'),
+  };
+}
+
+/** Text with each match of `any` in a mark. Every part is escaped. */
+function marked(text: string, any: RegExp): string {
+  let html = '';
+  let at = 0;
+  for (const match of text.matchAll(any)) {
+    html += `${e(text.slice(at, match.index))}<mark>${e(match[0])}</mark>`;
+    at = match.index + match[0].length;
+  }
+  return html + e(text.slice(at));
+}
+
+/** A text on one line around its first match, with the matches marked. */
+function snippet(text: string, any: RegExp): string {
+  const flat = text.replace(/\s+/gu, ' ').trim();
+  if (flat.length <= snippetWidth) return marked(flat, any);
+  let start = Math.max(
+    0,
+    Math.min(flat.search(any) - 40, flat.length - snippetWidth),
+  );
+  // A cut never splits a character in two.
+  if (/[\uDC00-\uDFFF]/u.test(flat.charAt(start))) start++;
+  return `${start ? '…' : ''}${marked(clip(flat.slice(start), snippetWidth), any)}`;
+}
+
+/**
+ * UTF-8 bytes of whole post texts that one search shows. A hit past it shows
+ * its start and where the whole post is, so the view stays under its limit.
+ */
+const searchTextBytes = 300_000;
+
+/**
+ * The search panel: posts by their ID, kind, author, and text; runs by
+ * their ID and command; and calls by their ID, kind, question, and options.
+ * Each word must match, in any case. The newest hits come first, and only
+ * the newest `searchLimit` render. A post on the board links to it; an older
+ * one shows its whole text here, within `searchTextBytes`. Every agent text
+ * is escaped.
+ */
+export function searchPanel(
+  view: LabView,
+  q: string | undefined,
+  clock: (value: string) => string,
+): Panel {
+  const words = q ? searchWords(q) : null;
+  type Found =
+    | { readonly at: string; readonly post: Post }
+    | { readonly at: string; readonly run: RunRecord }
+    | { readonly at: string; readonly call: Call };
+  const found: Found[] = [];
+  if (words) {
+    const has = (text: string): boolean =>
+      words.each.every((word) => word.test(text));
+    for (const post of view.posts)
+      if (
+        has(
+          `${post.id} ${post.kind} ${kindLabel(post)} ${authorName(view, post.author)} ${post.text}`,
+        )
+      )
+        found.push({ at: post.at, post });
+    for (const run of view.ledger)
+      if (has(`${run.id} ${run.command}`))
+        found.push({ at: run.startedAt ?? run.queuedAt, run });
+    for (const call of view.state.calls)
+      if (
+        has(
+          `${call.id} ${call.kind} ${callWords[call.kind]} ${authorName(view, call.by)} ${call.question} ${call.options.map((option) => option.label).join(' ')}`,
+        )
+      )
+        found.push({ at: call.at, call });
+  }
+  found.sort((a, b) => b.at.localeCompare(a.at));
+  const shown = new Set(boardPosts(view).map((post) => post.id));
+  const budget = { left: searchTextBytes };
+  const hit = (entry: Found, any: RegExp): string => {
+    if ('post' in entry) {
+      const { post } = entry;
+      const id = shown.has(post.id)
+        ? `<a href="#post-${e(post.id)}" data-post-link="${e(post.id)}">${e(post.id)}</a>`
+        : e(post.id);
+      let whole = '';
+      if (!shown.has(post.id) && post.text.length > snippetWidth) {
+        const text = e(post.text);
+        const bytes = Buffer.byteLength(text);
+        if (bytes <= budget.left) {
+          budget.left -= bytes;
+          whole = `<details id="hit-${e(post.id)}"><summary>Show the whole post</summary><p class="pre">${text}</p></details>`;
+        } else
+          whole = `<p class="fine">The whole post is on the board, in .verifold/board/${e(post.id)}.json.</p>`;
+      }
+      return `<li class="hit"><p class="hit-head"><span class="chip kind-${post.kind}">${kindLabel(post)}</span> ${id} · ${e(authorName(view, post.author))} · <time datetime="${e(post.at)}">${e(clock(post.at))}</time></p><p class="hit-text">${snippet(post.text, any)}</p>${whole}</li>`;
+    }
+    if ('run' in entry) {
+      const { run, at } = entry;
+      return `<li class="hit"><p class="hit-head"><span class="chip">Run</span> <button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button> · ${e(authorName(view, run.agent))} · <time datetime="${e(at)}">${e(clock(at))}</time> · ${e(runSummary(run))}</p><p class="hit-text"><code>${snippet(run.command, any)}</code></p></li>`;
+    }
+    const { call } = entry;
+    const labels = call.options.map((option) => option.label);
+    const chosen = call.answer
+      ? call.options[call.answer.option]?.label
+      : undefined;
+    const state =
+      call.state === 'open'
+        ? 'waits for you'
+        : call.state === 'withdrawn'
+          ? 'withdrawn'
+          : call.state === 'undoing'
+            ? 'Verifold undoes your answer'
+            : `you chose "${chosen ?? ''}"`;
+    return `<li class="hit"><p class="hit-head"><span class="chip">${callWords[call.kind]}</span> ${e(call.id)} · ${e(authorName(view, call.by))} · <time datetime="${e(call.at)}">${e(clock(call.at))}</time> · ${e(state)}</p><p class="hit-text">${snippet(`${call.question} (${labels.join(', ')})`, any)}</p>${call.state === 'open' ? '<p><button type="button" class="link" data-view="needs">Answer it in Needs you</button></p>' : ''}</li>`;
+  };
+  const note = !words
+    ? 'Type a word, an ID such as p-12 or r-3, or a part of a command.'
+    : !found.length
+      ? 'No post, run, or call has these words.'
+      : found.length > searchLimit
+        ? `The newest ${searchLimit} of ${found.length} hits. Add a word to find fewer.`
+        : `${found.length} ${found.length === 1 ? 'hit' : 'hits'}, the newest first.`;
+  return {
+    kind: '',
+    title: 'Search the lab',
+    sub: '',
+    body: `<div class="lab-panel lab-search"><label class="field" for="lab-search">Posts, runs, and calls</label><input id="lab-search" type="search" maxlength="100" autocomplete="off" spellcheck="false" value="${e(q ?? '')}" aria-describedby="lab-search-note"><p class="fine" id="lab-search-note" role="status">${e(note)}</p>${
+      words && found.length
+        ? `<ol class="hits" aria-label="Hits">${found
+            .slice(0, searchLimit)
+            .map((entry) => hit(entry, words.any))
+            .join('')}</ol>`
+        : ''
+    }</div>`,
+  };
+}
+
+/** When the person left the lab, and the header's two costs then: Claude Code's estimate and the pods'. */
+export interface Away {
+  readonly since: string;
+  readonly spent: { readonly claude: number; readonly gpu: number };
+}
+
+/** Directions that the away digest names. Their rows show the rest. */
+const awayLines = 5;
+
+/** A count with its noun, such as "1 post" or "4 posts". */
+function counted(value: number, noun: string): string {
+  return `${value} ${noun}${value === 1 ? '' : 's'}`;
+}
+
+/** Failed runs that the away digest links. The run ledger has the rest. */
+const awayRuns = 5;
+
+/**
+ * What changed while the person was away: a line for each direction with
+ * news, a disputed one first, then how many posts, runs, and calls came, and
+ * what the lab spent. The costs add up to the header's growth since then,
+ * and money spent always shows. `disputed` holds the posts in open dispute.
+ */
+function awayDigest(
+  view: LabView,
+  away: Away,
+  gpu: LabGpu | null,
+  disputed: ReadonlySet<string>,
+  clock: (value: string) => string,
+): string {
+  const left = Date.parse(away.since);
+  const after = (at: string | null | undefined): boolean =>
+    typeof at === 'string' && Date.parse(at) > left;
+  const posts = view.posts.filter((post) => after(post.at));
+  // A dispute comes first, then the most settled. A direction that ended comes last.
+  const order: Record<Verdict, number> = {
+    'holds-up': 1,
+    'ruled-out': 3,
+    leading: 4,
+    open: 5,
+  };
+  // Each line links to its row, so only the directions that have a row.
+  const changed = view.directions
+    .flatMap(({ direction }) => {
+      const news = posts.filter(
+        (post) => post.direction === direction.id && post.kind !== 'status',
+      ).length;
+      const opened = after(direction.openedAt);
+      const ended = direction.state !== 'open' && after(direction.stoppedAt);
+      const missed = view.checks.some(
+        (check) =>
+          check.direction === direction.id &&
+          check.state === 'done' &&
+          check.outcome !== 'holds' &&
+          after(check.endedAt),
+      );
+      // A note of Verifold, such as a verdict, counts as news too.
+      const noted = posts.some((post) => post.direction === direction.id);
+      if (!noted && !opened && !ended) return [];
+      const row = `<a href="#row-${e(direction.id)}">${e(direction.title)}</a>`;
+      const { verdict, evidence } = direction;
+      const dispute = evidence !== null && disputed.has(evidence.post);
+      // The agent's evidence goes in brackets, so its words keep their own case.
+      const said = [
+        verdict !== 'open' && evidence
+          ? `${verdictText(verdict, dispute)} (${e(evidence.text.replace(/[.!?…]+$/u, ''))}).`
+          : opened
+            ? `New. ${direction.openedBy === 'person' ? 'You' : e(authorName(view, direction.openedBy))} opened it.`
+            : 'Not settled yet.',
+        missed ? 'A check did not hold.' : '',
+        ended
+          ? direction.state === 'stopped'
+            ? 'You stopped it.'
+            : 'Its agent closed it.'
+          : '',
+        news ? `${counted(news, 'new post')}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      // The mark is the row's: a direction that ended keeps its verdict's mark.
+      const glyph = dispute
+        ? verdictMarks.disputed
+        : verdict === 'open' && opened && !ended
+          ? '+'
+          : verdictMarks[verdict];
+      return [
+        {
+          rank: dispute
+            ? 0
+            : ended
+              ? 7
+              : missed
+                ? 2
+                : order[verdict] + (opened ? 1 : 0),
+          html: `<li><span class="away-mark" aria-hidden="true">${glyph}</span><span>${row}: ${said}</span></li>`,
+        },
+      ];
+    })
+    .sort((a, b) => a.rank - b.rank);
+  const finished = view.ledger.filter((run) => after(run.endedAt));
+  const failed = finished.filter(
+    (run) => run.status === 'failed' || run.status === 'timed-out',
+  );
+  const asked = view.state.calls.filter((call) => after(call.at)).length;
+  const written = posts.filter((post) => post.kind !== 'status').length;
+  // Counts as HTML: a run that failed opens in the panel.
+  const links = failed
+    .slice(0, awayRuns)
+    .map(
+      (run) =>
+        `<button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button>`,
+    );
+  if (failed.length > awayRuns) links.push(`${failed.length - awayRuns} more`);
+  const counts = [
+    written ? counted(written, 'post') : '',
+    finished.length
+      ? `${counted(finished.length, 'run')} ended${failed.length ? ` (${failed.length} failed: ${links.join(', ')})` : ''}`
+      : '',
+    asked ? `${counted(asked, 'call')} for you` : '',
+  ].filter(Boolean);
+  const claude = Math.max(0, view.claudeUsd - away.spent.claude);
+  const pods = Math.max(0, (gpu?.spent ?? 0) - away.spent.gpu);
+  // Money spent always shows, also when nothing else changed.
+  const cost =
+    claude + pods >= 0.005
+      ? `Spent since then: ≈${usd(claude + pods)} (Claude Code ≈${usd(claude)}${gpu ? `, GPU ${usd(pods)}` : ''}).`
+      : '';
+  const quiet = !changed.length && !counts.length;
+  return `<section class="lab-away" aria-labelledby="away-title"><div class="away-head"><h2 id="away-title">While you were away</h2><button type="button" class="link" data-action="lab-away-dismiss">Dismiss</button></div>
+  <p class="fine">Since ${e(clock(away.since))}.</p>
+  ${quiet ? `<p>${cost ? 'No post, run, or call came.' : 'Nothing changed.'}</p>` : ''}${
+    changed.length
+      ? `<ul class="away-lines">${changed
+          .slice(0, awayLines)
+          .map((line) => line.html)
+          .join(
+            '',
+          )}</ul>${changed.length > awayLines ? `<p class="fine">${counted(changed.length - awayLines, 'more direction')} changed too. Their rows are below.</p>` : ''}`
+      : ''
+  }${counts.length ? `<p class="fine">${counts.join(', ')}.</p>` : ''}${cost ? `<p class="fine">${e(cost)}</p>` : ''}</section>`;
 }
