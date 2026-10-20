@@ -1895,6 +1895,8 @@ export class Lab {
   private planning = false;
   /** Closed directions whose close runs now. */
   private readonly finishing = new Set<string>();
+  /** The calls whose answer Verifold applies now. Each one still answers its deadline. */
+  private readonly applying = new Set<string>();
   /** The directions that agents opened in the last minute, by call. A repeated call gets the first one's answer. */
   private readonly opening = new Map<string, Promise<string>>();
   /** The lab pauses at the end of its time budget now. */
@@ -4260,8 +4262,19 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         state: 'answered',
         answer: { option: picked, at: new Date().toISOString() },
       }));
+      // Known in the same step as the answer, so no tick finds it unapplied meanwhile.
+      this.applying.add(call.id);
       return { call, picked };
     });
+    try {
+      await this.applyAnswer(call, picked);
+    } finally {
+      this.applying.delete(call.id);
+    }
+  }
+
+  /** Apply a saved answer and record what it did. The answer is in `applying` meanwhile. */
+  private async applyAnswer(call: Call, picked: number): Promise<void> {
     const chosen = call.options[picked];
     let applied: CallApplied | null = null;
     try {
@@ -4692,11 +4705,12 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     if (
       this.current().calls.some(
         (call) =>
-          // An answer that Verifold did not finish applying does not stand, so the deadline asks again.
-          // An answer that the person undoes now opens its call again, so it asks already.
+          // An answer that Verifold did not finish applying, as after a stop, does not stand, so the
+          // deadline asks again. One that it applies or undoes now still answers that deadline.
           (call.deadline === deadline &&
             (call.state === 'open' ||
               call.state === 'undoing' ||
+              this.applying.has(call.id) ||
               stands(call))) ||
           (call.state === 'open' &&
             call.options.some((option) => option.effect?.type === 'hours')),
