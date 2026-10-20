@@ -288,6 +288,11 @@ export interface AgentRecord {
   readonly quietWork: number;
   /** The agent got asked to post in this quiet stretch. Its next post ends the stretch. */
   readonly nudged: boolean;
+  /**
+   * The agent closed its direction, and the close is done: its session ended
+   * and its folder's last work is committed.
+   */
+  readonly finished: boolean;
   /** The fingerprint of the direction's folder after the last turn, ignored files too. */
   readonly folder: string | null;
   /** When its process stopped by itself, recently. */
@@ -930,6 +935,7 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
       ? (value.quietWork as number)
       : 0,
     nudged: value.nudged === true,
+    finished: value.finished === true,
     folder:
       typeof value.folder === 'string' && /^[0-9a-f]{64}$/.test(value.folder)
         ? value.folder
@@ -1054,6 +1060,8 @@ export class Lab {
   private parking: Promise<void> | null = null;
   /** A plan opens its directions now. A second plan waits for it. */
   private planning = false;
+  /** Closed directions whose close runs now. */
+  private readonly finishing = new Set<string>();
   /** The directions that agents opened in the last minute, by call. A repeated call gets the first one's answer. */
   private readonly opening = new Map<string, Promise<string>>();
   /** The lab pauses at the end of its time budget now. */
@@ -1126,6 +1134,8 @@ export class Lab {
         await this.saveAgent({ ...agent, held: false }).catch(() => {});
         await this.unkept(agent);
       }
+    // A close that an earlier owner did not finish: the folder's last work is committed now.
+    for (const agent of this.agents.values()) this.finishClosed(agent.id);
   }
 
   /**
@@ -1541,6 +1551,7 @@ export class Lab {
       quietTurns: 0,
       quietWork: 0,
       nudged: false,
+      finished: false,
       folder,
       restarts: [],
       actions: [],
@@ -1636,27 +1647,33 @@ export class Lab {
           );
         }
       }
-      await this.endDirection(
+      const unsaved = await this.endDirection(
         direction,
         'stopped',
         `The person stopped ${JSON.stringify(direction.title)}.`,
       );
-      return direction.id;
+      return { id: direction.id, unsaved };
     });
-    this.endLeases(stopped, 'person', `you stopped ${stopped}.`);
+    this.endLeases(stopped.id, 'person', `you stopped ${stopped.id}.`);
+    if (stopped.unsaved)
+      fail(
+        `Verifold stopped ${stopped.id}, but could not save the lab: ${stopped.unsaved.message} It saves again with the next change.`,
+      );
   }
 
   /**
    * End a direction in the lab's queue. `stopped`: the person stopped it, and
    * its session ended already. `closed`: its agent closed it, and its session
    * ends when the turn that closed it ends. Its runs are cancelled, its wakes
-   * stop, and the board says so. Its folder and branch stay.
+   * stop, and the board says so. Its folder and branch stay. A close whose
+   * save fails changes nothing. A stop stays a stop, because its session
+   * ended already: the error comes back, and the next save writes the stop.
    */
   private async endDirection(
     direction: Direction,
     how: 'stopped' | 'closed',
     note: string,
-  ): Promise<void> {
+  ): Promise<Error | null> {
     const state = this.current();
     const agent = this.agents.get(direction.agent);
     const now = new Date().toISOString();
@@ -1668,12 +1685,16 @@ export class Lab {
           : entry,
       ),
     };
+    let unsaved: Error | null = null;
     try {
       await this.stateFile.save();
     } catch (error) {
-      // The direction stays open, with its runs and its agent.
-      this.state = state;
-      throw error;
+      // A close changed nothing yet: the direction stays open, with its runs and its agent.
+      if (how === 'closed') {
+        this.state = state;
+        throw error;
+      }
+      unsaved = error instanceof Error ? error : new Error('unknown error');
     }
     // A run that ends now needs no cancel. One run never stops the end.
     for (const run of this.ledger.list())
@@ -1712,6 +1733,7 @@ export class Lab {
       artifacts: [],
     }).catch(() => {});
     this.options.onChange?.();
+    return unsaved;
   }
 
   /**
@@ -1806,7 +1828,7 @@ export class Lab {
         // start a new turn meanwhile, and that one must keep its state.
         // An agent that closed its direction in this turn ends instead.
         if (this.agents.get(id)?.stopReason === 'closed') {
-          this.endClosed(session);
+          this.finishClosed(id);
           continue;
         }
         const run = this.rt(id);
@@ -2006,14 +2028,12 @@ export class Lab {
       (entry) => entry.session === record.id,
     );
     if (!agent) return;
-    const run = this.rt(agent.id);
-    if (record.status === 'idle' && agent.stopReason === 'closed') {
-      // The agent closed its direction in this turn: its session ends now, and the branch keeps the turn's work.
-      this.forget(agent.id);
-      this.endClosed(record.id);
-      this.commitClosed(agent);
+    // The agent closed its direction in this turn, however the turn ended.
+    if (agent.stopReason === 'closed') {
+      this.finishClosed(agent.id);
       return;
     }
+    const run = this.rt(agent.id);
     const loop = this.loop(agent.id);
     if (record.status === 'idle') {
       // A resumed session is ready: no turn ended, and its waiting events go out.
@@ -2223,6 +2243,8 @@ export class Lab {
     this.closing = true;
     clearInterval(this.ticker);
     this.ticker = undefined;
+    // A turn that closed its direction ends now, and its work is committed before Verifold stops.
+    for (const agent of this.agents.values()) this.finishClosed(agent.id);
     for (const run of this.runtimes.values()) clearTimeout(run.next);
     await Promise.all([...this.loops.values()].map((loop) => loop.close()));
     await this.settle();
@@ -2680,13 +2702,27 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         return this.pods().describe();
       case 'verifold_request_pod': {
         const direction = await this.ownDirection(id, generation, true);
-        return this.pods().requestPod({
+        const reply = await this.pods().requestPod({
           by: 'agent',
           gpu: args.gpuType,
           hours: args.hours,
           directions: [direction],
           reason: text(args.why, 1000, 'why your direction needs the pod'),
           ...(args.secrets === undefined ? {} : { secrets: args.secrets }),
+        });
+        // The direction can end while the request runs, after its leases ended: then the new lease ends at once.
+        return this.serial(() => {
+          const agent = this.agents.get(id);
+          const state = this.state?.directions.find(
+            (entry) => entry.id === direction,
+          )?.state;
+          if (agent && this.active(agent)) return reply;
+          this.endLeases(
+            direction,
+            state === 'stopped' ? 'person' : 'agent',
+            `${direction} no longer works for the lab.`,
+          );
+          return `${direction} no longer works for the lab, so Verifold ended its lease.`;
         });
       }
       case 'verifold_end_lease': {
@@ -3054,8 +3090,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         'closed',
         `${agent.handle} closed ${JSON.stringify(direction.title)}: ${verdictWord(direction)}. Why: ${JSON.stringify(why)}`,
       );
-      // A session that takes no turn now ends at once. Otherwise it ends after this turn.
-      if (agent.session && !this.rt(id).turning) this.endClosed(agent.session);
+      // A session that takes no turn now finishes at once. Otherwise it finishes after this turn.
+      if (!this.rt(id).turning) this.finishClosed(id);
       return {
         text: 'Closed your direction. Its folder and branch stay. Your session ends after this turn.',
         closed: direction.id,
@@ -3217,12 +3253,33 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     run.spoke = true;
   }
 
-  /** Commit the work of the turn that closed a direction, so its branch has it. Close and Start over wait for it. */
-  private commitClosed(agent: AgentRecord): void {
+  /**
+   * Finish a direction that its agent closed: end its session if it runs,
+   * forget its runtime, and commit its folder through the usual snapshot, so
+   * the branch has the work of the closing turn. Each path that can leave a
+   * close behind calls it: the end of the closing turn, however it ends; a
+   * pause or Start over; Verifold's stop; a close while no turn runs; and the
+   * next load. The record says when the close is done, so a commit that
+   * failed is tried again at the next load. Close and Start over wait for it.
+   */
+  private finishClosed(id: string): void {
+    const agent = this.agents.get(id);
     const direction = this.state?.directions.find(
-      (entry) => entry.id === agent.direction,
+      (entry) => entry.id === agent?.direction,
     );
-    if (!direction) return;
+    if (
+      !this.runs ||
+      !agent ||
+      !direction ||
+      agent.stopReason !== 'closed' ||
+      agent.finished ||
+      this.finishing.has(id)
+    )
+      return;
+    this.finishing.add(id);
+    if (agent.session && this.options.sessions.view(agent.session)?.live)
+      this.endClosed(agent.session);
+    this.forget(id);
     const work = this.inDirection(direction.id, async () => {
       const made = await snapshot(
         this.root,
@@ -3230,14 +3287,17 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         `Verifold: the last turn of ${agent.handle}`,
       );
       const order = ++this.commits;
-      await this.serial(() =>
-        this.setHead(direction, { commit: made.commit, order }),
-      );
-    }).catch((error: unknown) =>
-      this.options.progress?.(
-        `Verifold could not commit ${direction.id} after it closed: ${error instanceof Error ? error.message : 'unknown error'}`,
-      ),
-    );
+      await this.serial(async () => {
+        await this.setHead(direction, { commit: made.commit, order });
+        await this.update(id, (current) => ({ ...current, finished: true }));
+      });
+    })
+      .catch((error: unknown) =>
+        this.options.progress?.(
+          `Verifold could not commit ${direction.id} after it closed: ${error instanceof Error ? error.message : 'unknown error'}. It tries again at the next start.`,
+        ),
+      )
+      .finally(() => this.finishing.delete(id));
     this.after.add(work);
     void work.finally(() => this.after.delete(work));
   }
@@ -4038,12 +4098,23 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       if (notes.length)
         this.loop(id).add([{ kind: 'continue', text: notes.join(' ') }]);
       if (did.spoke)
-        await this.update(id, (entry) => ({
-          ...entry,
-          quietTurns: 0,
-          quietWork: 0,
-          nudged: false,
-        }));
+        await this.serial(async () => {
+          const latest = this.agents.get(id);
+          if (
+            latest?.generation !== generation ||
+            !this.active(latest) ||
+            this.closing ||
+            this.moving ||
+            !current()
+          )
+            return;
+          await this.update(id, (entry) => ({
+            ...entry,
+            quietTurns: 0,
+            quietWork: 0,
+            nudged: false,
+          }));
+        });
       return;
     }
     await this.serial(async () => {
