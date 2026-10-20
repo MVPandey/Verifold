@@ -4657,8 +4657,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       this.current().calls.some(
         (call) =>
           // An answer that Verifold did not finish applying does not stand, so the deadline asks again.
+          // An answer that the person undoes now opens its call again, so it asks already.
           (call.deadline === deadline &&
-            (call.state === 'open' || stands(call))) ||
+            (call.state === 'open' ||
+              call.state === 'undoing' ||
+              stands(call))) ||
           (call.state === 'open' &&
             call.options.some((option) => option.effect?.type === 'hours')),
       )
