@@ -13,6 +13,7 @@ import { RunPod, hideSecrets, secretGuard, type GpuOffer } from './runpod.ts';
 import {
   Leases,
   isOpen,
+  maxCost,
   spent,
   usd,
   type Budget,
@@ -83,6 +84,8 @@ export interface LabPod {
   readonly directions: readonly string[];
   readonly reason: string;
   readonly secrets?: unknown;
+  /** USD: the most that the person approved. A lease that can cost more does not start. */
+  readonly most?: number;
 }
 
 function fail(message: string): never {
@@ -481,13 +484,19 @@ export class Compute {
 
   /**
    * The person picked a pod in a lab's call: the lease starts as one that the
-   * person approved. A start that fails withdraws the request, so nothing
-   * waits, and the error says why.
+   * person approved, when it can cost at most `most`. A start that fails
+   * withdraws the request, so nothing waits, and the error says why.
    */
   async startPod(input: LabPod): Promise<Lease> {
-    const lease = await this.leases.request({ by: 'agent', ...input });
+    const { most, ...pod } = input;
+    const lease = await this.leases.request({ by: 'agent', ...pod });
     let started: Lease;
     try {
+      const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
+      if (most !== undefined && cost > most + 0.005)
+        fail(
+          `The pod can now cost up to ${usd(cost)}, more than the ${usd(most)} that you approved.`,
+        );
       started = await this.leases.approve(lease.id, 'person');
     } catch (error) {
       await this.leases
