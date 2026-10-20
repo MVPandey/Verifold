@@ -9,9 +9,17 @@ import {
   type SecretStatus,
   type SecretStore,
 } from './credentials.ts';
-import { RunPod, hideSecrets, type GpuOffer } from './runpod.ts';
-import { Leases, isOpen, type Budget, type Lease } from './leases.ts';
+import { RunPod, hideSecrets, secretGuard, type GpuOffer } from './runpod.ts';
+import {
+  Leases,
+  isOpen,
+  spent,
+  usd,
+  type Budget,
+  type Lease,
+} from './leases.ts';
 import { PodShell, podLimits, type PodTarget } from './pod-shell.ts';
+import { PodGoneError, type PodRuns } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
 import type { PodTools, TaskPlace } from './tasks.ts';
 import { SessionActionError } from './session.ts';
@@ -241,6 +249,7 @@ export class Compute {
   private readonly taskFolder:
     | ((task: string) => Promise<TaskPlace | null>)
     | undefined;
+  private readonly runsStop: ((lease: string) => Promise<void>) | undefined;
   /** The pod leases of the project. The desk and the coordinator act on them. */
   readonly leases: Leases;
 
@@ -257,6 +266,8 @@ export class Compute {
       readonly now?: () => number;
       /** The folder and writable paths of a task, for the copy back before a stop. */
       readonly taskFolder?: (task: string) => Promise<TaskPlace | null>;
+      /** Before the pod of a lab lease stops: its runs end and copy back their outputs. */
+      readonly runsStop?: (lease: string) => Promise<void>;
       /** The `ssh`, `ssh-keyscan`, and `ssh-keygen` programs. Tests use fakes. */
       readonly programs?: {
         readonly ssh?: string;
@@ -270,6 +281,7 @@ export class Compute {
     this.secretStore = this.store.secrets();
     this.url = options.url;
     this.taskFolder = options.taskFolder;
+    this.runsStop = options.runsStop;
     this.shell = new PodShell({
       root,
       credentials: this.store.folder,
@@ -362,6 +374,97 @@ export class Compute {
     return this.state.key !== null && this.state.settings.limitUsd !== null;
   }
 
+  /**
+   * The pods part of an agent's state: the person's limits, the budget, the
+   * leases, and the allowed GPUs now.
+   */
+  async describe(): Promise<string> {
+    const view = this.view();
+    const { settings, budget } = view;
+    let offers: unknown;
+    try {
+      const catalog = await this.catalog();
+      offers = settings.gpuTypes.map((id) => {
+        const offer = catalog.find((entry) => entry.id === id);
+        return offer
+          ? {
+              gpuType: id,
+              memoryGb: offer.memoryGb,
+              usdPerHour: offer.price,
+              stock: offer.stock,
+            }
+          : { gpuType: id, offered: false };
+      });
+    } catch (error) {
+      offers = `unknown: ${error instanceof Error ? error.message : 'RunPod did not answer.'}`;
+    }
+    const now = Date.now();
+    return JSON.stringify({
+      podsOn: settings.limitUsd !== null && view.key !== null,
+      personApprovesEachPod: settings.askBeforePod,
+      storedSecrets: view.secrets.map((secret) => secret.name),
+      limits: {
+        spendLimitUsd: settings.limitUsd,
+        maxUsdPerHourPerPod: settings.maxUsdPerHour,
+        maxHoursPerLease: settings.maxHoursPerLease,
+        idleMinutesBeforeStop: settings.idleMinutes,
+        podsAtOnce: settings.maxRunningPods,
+        diskGb: settings.diskGb,
+        images: settings.images,
+      },
+      budget: {
+        spentUsd: Number(budget.spent.toFixed(2)),
+        heldUsd: Number(budget.reserved.toFixed(2)),
+        leftUsd: budget.left === null ? null : Number(budget.left.toFixed(2)),
+      },
+      allowedGpus: offers,
+      leases: view.leases.slice(-20).map((lease) => ({
+        id: lease.id,
+        state: lease.state,
+        tasks: lease.tasks,
+        ...(lease.directions ? { directions: lease.directions } : {}),
+        gpuType: lease.gpu,
+        usdPerHour: lease.rate,
+        hours: lease.hours,
+        endsAt: lease.deadline,
+        costSoFarUsd: Number(spent(lease, now).toFixed(2)),
+        ...(lease.end ? { ended: lease.end.reason } : {}),
+      })),
+    });
+  }
+
+  /**
+   * An agent asks for a lease, for tasks or for lab directions. D90: a
+   * request inside the person's limits starts at once, unless the person
+   * approves each pod. A start that a limit refuses, such as the pods at
+   * once, waits for the person. Returns the reply for the agent.
+   */
+  async requestPod(input: {
+    readonly by: 'coordinator' | 'agent';
+    readonly gpu: unknown;
+    readonly hours: unknown;
+    readonly tasks?: unknown;
+    readonly directions?: unknown;
+    readonly reason: string;
+    readonly secrets?: unknown;
+  }): Promise<string> {
+    const lease = await this.leases.request(input);
+    const what = `${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour`;
+    const missing = this.missingSecrets(lease);
+    if (missing.length)
+      return `Asked the person to add the secret ${missing.join(' and ')} in Compute for ${lease.id}: ${what}. ${this.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
+    if (!this.view().settings.askBeforePod) {
+      const started = await this.leases
+        .approve(lease.id, 'verifold')
+        .catch(() => null);
+      if (started?.state === 'starting')
+        return `Started ${lease.id} inside the person's limits: ${what}. An event tells you when the pod is ready.`;
+      if (started?.state === 'failed')
+        return `RunPod did not create the pod of ${lease.id}: ${started.end?.reason ?? 'no reason given'}.`;
+    }
+    return `Asked the person for ${lease.id}: ${what}. Nothing is created until the person approves it. An event tells you the decision.`;
+  }
+
   /** The worker tools for pods. */
   podTools(): PodTools {
     return {
@@ -396,17 +499,135 @@ export class Compute {
     name: string,
     input: Record<string, unknown>,
   ): Promise<string> {
-    const lease = this.leases.get(this.target(task.id).lease);
-    let values = this.hidden.get(lease.id);
-    if (!values && lease.secrets?.length)
-      values = await this.secretValues(lease).catch(() => ({}));
-    const hide = (text: string): string => hideSecrets(text, values ?? {});
+    const hide = await this.hider(this.target(task.id).lease);
     try {
       return hide(await this.podTool(task, name, input));
     } catch (error) {
       if (error instanceof Error) error.message = hide(error.message);
       throw error;
     }
+  }
+
+  /** A function that hides the secret values of a lease's pod in a text. */
+  private async hider(id: string): Promise<(text: string) => string> {
+    const values = await this.leaseSecrets(id);
+    return (text) => hideSecrets(text, values);
+  }
+
+  /** The secret values of a lease's pod, or none when they cannot be read. */
+  private async leaseSecrets(
+    id: string,
+  ): Promise<Readonly<Record<string, string>>> {
+    const lease = this.leases.list().find((entry) => entry.id === id);
+    const values = this.hidden.get(id);
+    if (values || !lease?.secrets?.length) return values ?? {};
+    return this.secretValues(lease).catch(() => ({}));
+  }
+
+  /**
+   * The pod work of lab runs. Each call needs the lease's pod ready, and no
+   * error that it throws holds a secret value. The ledger hides a job's texts
+   * with the run's guard.
+   */
+  podRuns(): PodRuns {
+    const ready = (id: string): PodTarget => {
+      const lease = this.leases.list().find((entry) => entry.id === id);
+      if (lease?.state === 'ready' && lease.ssh)
+        return { lease: lease.id, host: lease.ssh.host, port: lease.ssh.port };
+      throw new PodGoneError(
+        `The pod of ${id} does not run now${lease?.end ? `: ${lease.end.reason}` : '.'}`,
+      );
+    };
+    // A run that works keeps its pod from the idle stop. A lease record is written at most once a minute for it.
+    const touch = (id: string): void => {
+      const lease = this.leases.list().find((entry) => entry.id === id);
+      if (Date.now() - Date.parse(lease?.activeAt ?? '') >= 60_000)
+        void this.leases.active(id).catch(() => undefined);
+    };
+    // Each call hides secrets in its error.
+    const hidden = async <T>(
+      id: string,
+      work: (target: PodTarget) => Promise<T>,
+    ): Promise<T> => {
+      const hide = await this.hider(id);
+      try {
+        return await work(ready(id));
+      } catch (error) {
+        if (error instanceof Error) error.message = hide(error.message);
+        throw error;
+      }
+    };
+    return {
+      pick: (direction, lease) => {
+        const own = this.leases
+          .list()
+          .filter((entry) => entry.directions?.includes(direction));
+        const chosen =
+          lease === undefined
+            ? own.findLast((entry) => entry.state === 'ready' && entry.ssh)
+            : own.find((entry) => entry.id === lease);
+        if (lease !== undefined && !chosen)
+          throw new SessionActionError(
+            `${typeof lease === 'string' ? lease.slice(0, 40) : 'That'} is no lease of ${direction}. Read your leases with verifold_compute.`,
+          );
+        if (chosen?.state === 'ready' && chosen.ssh)
+          return { lease: chosen.id, gpu: chosen.gpu };
+        const stopped = own.findLast((entry) => entry.state === 'stopped');
+        throw new SessionActionError(
+          own.some(
+            (entry) =>
+              entry.state === 'starting' || entry.state === 'requested',
+          )
+            ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
+            : stopped
+              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in Compute.`
+              : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
+        );
+      },
+      guard: async (id) => secretGuard(await this.leaseSecrets(id)),
+      send: (id, run, folder) =>
+        hidden(id, async (target) => {
+          void this.leases.active(id).catch(() => undefined);
+          await this.shell.sendRun(target, run, folder);
+        }),
+      start: (id, run, script) =>
+        hidden(id, async (target) => {
+          // The pod has the lease's secrets in its container's environment, which an SSH session does not get.
+          const names = this.leases.get(id).secrets ?? [];
+          const secrets = names.length
+            ? `for name in ${names.join(' ')}; do if [ -z "$(printenv "$name")" ]; then line=$(tr '\\0' '\\n' 2>/dev/null < /proc/1/environ | grep -m 1 "^$name="); [ -n "$line" ] && export "$line"; fi; done\n`
+            : '';
+          await this.shell.startRun(target, run, `${secrets}${script}`);
+          void this.leases.active(id).catch(() => undefined);
+        }),
+      state: (id, run) =>
+        hidden(id, async (target) => {
+          const state = await this.shell.runState(target, run);
+          touch(id);
+          return state;
+        }),
+      stop: (id, run, signal) =>
+        hidden(id, (target) => this.shell.stopRun(target, run, signal)),
+      log: (id, run, head, tail) =>
+        hidden(id, async (target) => {
+          const log = await this.shell.runLog(target, run, head, tail);
+          return {
+            bytes: log.bytes,
+            head: log.head.toString('utf8'),
+            tail: log.tail ? log.tail.toString('utf8') : null,
+          };
+        }),
+      metrics: (id, run) =>
+        hidden(id, (target) => this.shell.runMetrics(target, run)),
+      fetch: (id, run, paths, folder) =>
+        hidden(id, async (target) => {
+          const found = await this.shell.existing(target, run, paths);
+          if (found.length)
+            await this.shell.copyFrom(target, run, folder, ['.'], found);
+        }),
+      remove: (id, run) =>
+        hidden(id, (target) => this.shell.removeRun(target, run)),
+    };
   }
 
   /** One worker pod tool call. Each call counts as activity, so the idle stop waits. */
@@ -478,8 +699,14 @@ export class Compute {
     }
   }
 
-  /** Copy the writable paths of each task of a lease back from its pod. Returns a notice when a copy failed. */
+  /**
+   * Before a pod stops: the lab runs on it end and copy their outputs back,
+   * and the writable paths of each task of a lease come back from its pod.
+   * Returns a notice when a copy failed.
+   */
   private async copyBack(lease: Lease): Promise<string | null> {
+    if (lease.directions?.length)
+      await this.runsStop?.(lease.id).catch(() => undefined);
     if (!lease.ssh || !this.taskFolder) return null;
     const target = {
       lease: lease.id,
@@ -567,8 +794,8 @@ export class Compute {
   }
 
   /**
-   * Read the stored secret names again. A new one starts the coordinator's
-   * requests that waited for it, when the person does not approve each pod and
+   * Read the stored secret names again. A new one starts the requests of the
+   * coordinator and of lab agents that waited for it, when the person does not approve each pod and
    * the request still fits the limits. Otherwise the request waits in Needs you.
    */
   private async readSecrets(): Promise<void> {
@@ -579,7 +806,7 @@ export class Compute {
     for (const lease of this.leases.list())
       if (
         lease.state === 'requested' &&
-        lease.requestedBy === 'coordinator' &&
+        lease.requestedBy !== 'person' &&
         lease.secrets?.length &&
         !this.missingSecrets(lease).length
       )

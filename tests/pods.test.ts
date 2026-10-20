@@ -1,241 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer, type IncomingMessage } from 'node:http';
-import { once } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmod,
   lstat,
   mkdir,
-  mkdtemp,
   readFile,
-  rm,
   stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Compute } from '../src/cli/compute.ts';
-import { KeyStore } from '../src/cli/credentials.ts';
+import { fakePod, type FakePod } from './fake-pod.ts';
 
-const key = 'rpa_TESTKEY0123456789abcdefWXYZ';
-
-/**
- * A fake `ssh`: it checks the key and the pinned host key like the real one,
- * then runs the remote command with bash in a local folder that stands for the
- * pod. `timeout` is left out, because macOS has none.
- */
-const fakeSsh = `#!/usr/bin/env node
-const { spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-const at = args.indexOf('--');
-const option = (name) => args.find((arg, index) => args[index - 1] === '-o' && arg.startsWith(name + '='))?.split('=')[1];
-const identity = args[args.indexOf('-i') + 1];
-const port = args[args.indexOf('-p') + 1];
-const host = args[at - 1].split('@')[1];
-fs.appendFileSync(process.env.FAKE_DIR + '/ssh.log', JSON.stringify(args) + '\\n');
-const known = fs.existsSync(option('UserKnownHostsFile')) ? fs.readFileSync(option('UserKnownHostsFile'), 'utf8') : '';
-if (!fs.existsSync(identity) || !known.startsWith('[' + host + ']:' + port + ' ' + process.env.FAKE_HOST_KEY)) {
-  process.stderr.write('Host key verification failed.\\n');
-  process.exit(255);
-}
-// The watchdog loop runs for the life of a pod, so the fake records its script instead of starting it.
-if (args.slice(at + 1).join(' ') === 'bash -s') {
-  fs.writeFileSync(process.env.FAKE_DIR + '/watchdog.txt', fs.readFileSync(0, 'utf8'));
-  fs.mkdirSync(process.env.FAKE_POD + '/verifold/.watchdog', { recursive: true });
-  process.stdout.write('watching\\n');
-  process.exit(0);
-}
-const remote = args.slice(at + 1).join(' ').replaceAll('/root/verifold', process.env.FAKE_POD + '/verifold').replace(/timeout \\d+ /, '');
-const result = spawnSync('bash', ['-c', remote], { stdio: ['inherit', 'inherit', 'inherit'] });
-process.exit(result.status ?? 1);
-`;
-const fakeKeyscan = `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (process.env.FAKE_SSH_DOWN === '1') process.exit(1);
-process.stdout.write('[' + args.at(-1) + ']:' + args[args.indexOf('-p') + 1] + ' ' + process.env.FAKE_HOST_KEY + '\\n');
-`;
-
-interface Pod {
-  id: string;
-  status: string;
-  env: Record<string, string>;
-}
-
-async function setup(t: test.TestContext): Promise<{
-  compute: Compute;
-  pod: string;
-  task: string;
-  dir: string;
-  home: string;
-  pods: Map<string, Pod>;
-  logged: { fingerprint: string };
-  fingerprint: string;
-}> {
-  const dir = await mkdtemp(join(tmpdir(), 'verifold-pods-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const home = join(dir, 'home');
-  const root = join(dir, 'project');
-  const pod = join(dir, 'pod');
-  const task = join(dir, 'task-folder');
-  await mkdir(root);
-  await mkdir(pod);
-  await mkdir(join(task, 'results'), { recursive: true });
-  // The pod's host key, made by the real ssh-keygen.
-  execFileSync('ssh-keygen', [
-    '-q',
-    '-t',
-    'ed25519',
-    '-N',
-    '',
-    '-f',
-    join(dir, 'host'),
-  ]);
-  const hostKey = (await readFile(join(dir, 'host.pub'), 'utf8'))
-    .split(' ')
-    .slice(0, 2)
-    .join(' ');
-  const fingerprint =
-    execFileSync('ssh-keygen', ['-lf', join(dir, 'host.pub')], {
-      encoding: 'utf8',
-    }).split(' ')[1] ?? '';
-  for (const [name, text] of [
-    ['ssh', fakeSsh],
-    ['ssh-keyscan', fakeKeyscan],
-  ] as const) {
-    await writeFile(join(dir, name), text);
-    await chmod(join(dir, name), 0o755);
-  }
-  const saved = { ...process.env };
-  t.after(() => {
-    for (const name of [
-      'FAKE_DIR',
-      'FAKE_POD',
-      'FAKE_HOST_KEY',
-      'FAKE_SSH_DOWN',
-    ])
-      if (saved[name] === undefined) delete process.env[name];
-      else process.env[name] = saved[name];
-  });
-  process.env.FAKE_DIR = dir;
-  process.env.FAKE_POD = pod;
-  process.env.FAKE_HOST_KEY = hostKey;
-  const pods = new Map<string, Pod>();
-  const logged = { fingerprint };
-  const server = createServer((request: IncomingMessage, response) => {
-    let body = '';
-    request.on('data', (chunk: Buffer) => (body += chunk.toString()));
-    request.on('end', () => {
-      const json = (status: number, value?: unknown): void => {
-        response.writeHead(status, { 'Content-Type': 'application/json' });
-        response.end(value === undefined ? '' : JSON.stringify(value));
-      };
-      const url = new URL(request.url ?? '/', 'http://x');
-      const match = /^\/v2\/pods\/([^/]+)(\/[a-z]+)?$/.exec(url.pathname);
-      const found = match ? pods.get(match[1] ?? '') : undefined;
-      const view = (entry: Pod): unknown => ({
-        id: entry.id,
-        name: 'vf',
-        status: entry.status,
-        cost: 0.27,
-        env: entry.env,
-        ssh: {
-          direct:
-            entry.status === 'RUNNING'
-              ? {
-                  host: '127.0.0.1',
-                  port: 2200,
-                  username: 'root',
-                  command: 'ssh',
-                }
-              : null,
-        },
-        runtime: { gpus: [{ util: 0 }] },
-      });
-      if (url.pathname.startsWith('/v2/catalog/gpus'))
-        json(200, {
-          gpus: [
-            {
-              id: 'NVIDIA RTX A5000',
-              name: 'RTX A5000',
-              memory: 24,
-              secure: true,
-              price: { secure: 0.27 },
-              availability: 'HIGH',
-            },
-          ],
-        });
-      else if (request.method === 'GET' && url.pathname === '/v2/pods')
-        json(200, {
-          pods: [...pods.values()].map(view),
-          pagination: { nextCursor: null },
-        });
-      else if (request.method === 'POST' && url.pathname === '/v2/pods') {
-        const input = JSON.parse(body) as { env?: Record<string, string> };
-        const created = {
-          id: `pod${pods.size + 1}`,
-          status: 'RUNNING',
-          env: input.env ?? {},
-        };
-        pods.set(created.id, created);
-        json(201, view(created));
-      } else if (found && match?.[2] === '/logs') {
-        // The pod's start script prints its host key fingerprints.
-        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        response.end(
-          `data: ${JSON.stringify({ source: 'container', line: 'Setting up SSH...' })}\n\ndata: ${JSON.stringify({ source: 'container', line: `256 ${logged.fingerprint} root@pod (ED25519)` })}\n\n`,
-        );
-      } else if (found && match?.[2] === '/action') {
-        found.status =
-          (JSON.parse(body) as { action: string }).action === 'stop'
-            ? 'EXITED'
-            : 'RUNNING';
-        json(200, view(found));
-      } else if (found && request.method === 'DELETE') {
-        pods.delete(found.id);
-        json(204);
-      } else if (found) json(200, view(found));
-      else if (url.pathname === '/v2/billing/pods') json(200, { records: [] });
-      else json(404, { title: 'Not Found', status: 404, detail: 'none' });
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  t.after(() => {
-    server.closeAllConnections();
-    server.close();
-  });
-  const address = server.address();
-  const compute = new Compute(root, {
-    store: new KeyStore({
-      home,
-      platform: 'linux',
-      secretTool: join(dir, 'none'),
-    }),
-    url: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`,
-    programs: { ssh: join(dir, 'ssh'), keyscan: join(dir, 'ssh-keyscan') },
+/** A fake pod, with the folder of task-1 whose writable path is results/. */
+async function setup(t: test.TestContext): Promise<FakePod & { task: string }> {
+  const made: { task?: string } = {};
+  const fake = await fakePod(t, {
     taskFolder: (id) =>
       Promise.resolve(
-        id === 'task-1' ? { id, folder: task, writable: ['results'] } : null,
+        id === 'task-1' && made.task
+          ? { id, folder: made.task, writable: ['results'] }
+          : null,
       ),
   });
-  await compute.load();
-  await compute.setKey(key, true);
-  await compute.saveSettings({
-    limitUsd: '10',
-    maxUsdPerHour: '1',
-    maxHoursPerLease: '4',
-    idleMinutes: '15',
-    maxRunningPods: '1',
-    diskGb: '50',
-    images: 'runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404',
-    gpuTypes: ['NVIDIA RTX A5000'],
-  });
-  return { compute, pod, task, dir, home, pods, logged, fingerprint };
+  const task = join(fake.dir, 'task-folder');
+  await mkdir(join(task, 'results'), { recursive: true });
+  made.task = task;
+  return { ...fake, task };
 }
 
 const place = (

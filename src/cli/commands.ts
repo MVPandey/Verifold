@@ -630,16 +630,19 @@ async function serveDesk(
         },
       });
       // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
-      // Before a pod stops, its tasks' results come back into their folders.
+      // A lease of lab directions wakes their agents instead.
+      // Before a pod stops, its tasks' results and its lab runs' outputs come back.
       const compute = computeFor(
         root,
         io,
         (lease, line) => {
           io.progress?.(`Pod ${line}`);
-          if (lease.history.at(-1)?.by !== 'coordinator')
+          if (lease.directions?.length) owned.lab?.leaseChanged(lease, line);
+          else if (lease.history.at(-1)?.by !== 'coordinator')
             owned.coordinator?.notify({ kind: 'pod', text: line });
         },
         (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
+        (lease) => owned.lab?.podStops(lease) ?? Promise.resolve(),
       );
       // The project memory follows every change of the records, and every agent reads its index.
       const memory = new ProjectMemory(
@@ -722,10 +725,13 @@ async function serveDesk(
         },
         // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
         runs: session === undefined,
+        compute,
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;
       // While an agent works, a lab run runs, or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
+      // Lease recovery that waits for the lab's pod runs. The owner's stop waits for it.
+      let leasesRecovered: Promise<void> = Promise.resolve();
       const awake = new KeepAwake();
       const working = setInterval(() => {
         awake.set(
@@ -746,12 +752,24 @@ async function serveDesk(
       try {
         await sessions.load();
         await coordinator.load();
-        await lab.load();
+        // The leases come first: the lab's runs on pods recover through them, before lease recovery stops the pods.
         await compute.load();
+        await lab.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
-        await compute.leases.recover();
-        compute.watch();
+        // The lab's pod runs of an earlier owner read their jobs first, in the background, so the desk opens at once.
+        const pending = lab.podRunsRecovering;
+        if (pending)
+          leasesRecovered = pending
+            .then(() => compute.leases.recover())
+            .catch(() => {
+              /* recover() keeps its problem for the view. */
+            })
+            .then(() => compute.watch());
+        else {
+          await compute.leases.recover();
+          compute.watch();
+        }
         const stopped = await tasks.settle();
         // Agents whose direction is open resume one at a time, each with a digest.
         lab.resumeAll();
@@ -850,6 +868,8 @@ async function serveDesk(
         // The coordinator pauses first, so no wakeup starts a task while the workers stop.
         const coordinatorSaved = await coordinator.close();
         await lab.close();
+        // Lease recovery after the lab's pod runs ends before the pods stop.
+        await leasesRecovered;
         if (!(await sessions.close()) || !coordinatorSaved)
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',
@@ -1285,6 +1305,7 @@ function computeFor(
   io: CliIO,
   onChange?: (lease: Lease, line: string) => void,
   taskFolder?: (task: string) => Promise<TaskPlace | null>,
+  runsStop?: (lease: string) => Promise<void>,
 ): Compute {
   return new Compute(root, {
     store: new KeyStore(io.compute?.store),
@@ -1292,6 +1313,7 @@ function computeFor(
     ...(io.compute?.programs ? { programs: io.compute.programs } : {}),
     ...(onChange ? { onChange } : {}),
     ...(taskFolder ? { taskFolder } : {}),
+    ...(runsStop ? { runsStop } : {}),
   });
 }
 
@@ -1421,6 +1443,7 @@ async function podsCommand(
         gpu: lease.gpu,
         pod: lease.podId,
         tasks: lease.tasks,
+        ...(lease.directions ? { directions: lease.directions } : {}),
         costUsd: Number(spent(lease, now).toFixed(2)),
         endsAt: lease.deadline,
       })),

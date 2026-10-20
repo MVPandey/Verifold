@@ -6,10 +6,11 @@ import type { AgentTool } from './session-hosts.ts';
  * a change of a tool that a thread has raises `labToolsVersion`, and a Codex
  * agent with an older thread starts a new one. A tool that only new threads
  * get needs no new version: `verifold_plan` goes only to the agent that opens
- * a lab, and that agent's thread is new. The run tools and the run proof of
- * `verifold_post` add to the tools and change none that a thread uses, so they
- * raise no version either: a Codex agent whose thread is older keeps its
- * conversation, and gets them with its next new thread.
+ * a lab, and that agent's thread is new. The run tools, the pod tools, and
+ * the run proof of `verifold_post` add to the tools. `where` and `lease` of
+ * `verifold_run` are optional, so every call of its older schema stays valid.
+ * None of them raises a version: a Codex agent whose thread is older keeps
+ * its conversation, and gets them with its next new thread.
  */
 export const labToolsVersion = 2;
 
@@ -136,19 +137,31 @@ export const labToolSpecs: readonly AgentTool[] = [
   },
 ];
 
-/** The run tools. Only a lab on a computer with a sandbox for runs offers them. */
+const leaseId = { type: 'string', pattern: '^lease-[0-9]{1,6}$' };
+
+/** The run tools. A lab offers them on a computer with a sandbox for runs, or with pods. */
 export const runToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_run',
     description:
-      'Run a command on your folder in a sandbox. Verifold commits your folder first. The run works on its own copy of that commit, so your later edits do not change it. The run writes only in its copy and its temporary folder, has no network and no GPU, and cannot read credential files. It can read the project folder. The copy is no Git repository: VERIFOLD_COMMIT holds the commit. Verifold records the commit, the command, the log, the exit code, the time, and the metrics: `METRIC name=value` lines in the output, and a metrics.json of numbers that the run writes in the top folder of its copy. `outputs` names the files or folders of the copy that Verifold keeps. Verifold wakes you when the run ends. Once it ends, cite the run as proof with the artifact {type: run, run: r-N}.',
+      'Run a command on your folder. Verifold commits your folder first. The run works on its own copy of that commit, so your later edits do not change it. where: local (the default) runs on this computer in a sandbox: the run writes only in its copy and its temporary folder, has no network and no GPU, and cannot read credential files. It can read the project folder. where: pod runs on the GPU pod of a lease of your direction, as root, with network, and with the secrets of the lease as environment variables. It has only the copy, not the rest of the project. The copy is no Git repository: VERIFOLD_COMMIT holds the commit. Verifold records the commit, the command, the log, the exit code, the time, and the metrics: `METRIC name=value` lines in the output, and a metrics.json of numbers that the run writes in the top folder of its copy. `outputs` names the files or folders of the copy that Verifold keeps. Verifold wakes you when the run ends. Once it ends, cite the run as proof with the artifact {type: run, run: r-N}.',
     inputSchema: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
           maxLength: runLimits.command,
-          description: 'A shell command, run with /bin/sh in the copy.',
+          description: 'A shell command, run with sh in the copy.',
+        },
+        where: {
+          type: 'string',
+          enum: ['local', 'pod'],
+          description: 'local (the default) or pod.',
+        },
+        lease: {
+          ...leaseId,
+          description:
+            'On a pod: the lease to use. Default: the newest ready lease of your direction.',
         },
         why: {
           type: 'string',
@@ -158,8 +171,8 @@ export const runToolSpecs: readonly AgentTool[] = [
         minutes: {
           type: 'integer',
           minimum: 1,
-          maximum: runLimits.minutes,
-          description: `The time limit. Default: ${runLimits.defaultMinutes}.`,
+          maximum: runLimits.podMinutes,
+          description: `The time limit: up to ${runLimits.minutes} minutes locally, ${runLimits.podMinutes} on a pod. Default: ${runLimits.defaultMinutes}.`,
         },
         outputs: {
           type: 'array',
@@ -196,6 +209,63 @@ export const runToolSpecs: readonly AgentTool[] = [
         why: { type: 'string', maxLength: 280 },
       },
       required: ['run', 'why'],
+      additionalProperties: false,
+    },
+  },
+];
+
+/** The pod tools of a lab agent. A lease that an agent asks for is for its own direction. */
+export const labPodToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_compute',
+    description:
+      'Read the GPU pod limits that the person set, what is spent and held, each lease with its state and cost, and the allowed GPU types with their price and stock now.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_request_pod',
+    description:
+      "Ask for a GPU pod lease for your direction: one GPU of an allowed type, for a number of hours. Pods cost the person money, so ask only when your next runs need a GPU. Verifold refuses a request that does not fit the person's limits. A request inside the limits starts at once, unless the person approves each pod. The reply says which. Verifold wakes you when the pod is ready.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        gpuType: {
+          type: 'string',
+          description: 'An allowed GPU type ID from verifold_compute',
+        },
+        hours: { type: 'integer', minimum: 1, maximum: 24 },
+        secrets: {
+          type: 'array',
+          items: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+          maxItems: 8,
+          description:
+            'Names of the secrets that the pod needs as environment variables, such as HF_TOKEN for gated Hugging Face models. The person stores them in Compute. You never see the values.',
+        },
+        why: {
+          type: 'string',
+          maxLength: 1000,
+          description: 'Why your direction needs the pod. The person reads it.',
+        },
+      },
+      required: ['gpuType', 'hours', 'why'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_end_lease',
+    description:
+      "End a lease of your direction now: its runs end and copy back their outputs, Verifold deletes its pod, and billing ends. A request that waits for the person is withdrawn. End a lease when your direction's runs no longer need it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lease: leaseId,
+        why: { type: 'string', maxLength: 1000 },
+      },
+      required: ['lease', 'why'],
       additionalProperties: false,
     },
   },

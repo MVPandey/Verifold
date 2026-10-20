@@ -446,7 +446,7 @@ Agents run experiments through Verifold, so each result has a record that other 
 
 - An agent's run starts with a commit of its folder. The run works on its own copy of that commit, in a folder under `.verifold/workspaces` that no other run gets, so later edits do not change it. The copy has the committed files only. The run can read large data in the project folder.
 - The run is a shell command in the macOS sandbox, `sandbox-exec`. It writes only in its copy and its own temporary folder. It has no network and no GPU, and it cannot read the credential files. Its environment has no `RUNPOD_*` variables, no stored pod secret names, no `ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_*`, `CODEX_*`, `AWS_*`, `AZURE_*`, `GOOGLE_*`, `GEMINI_*`, or `GIT_*` variables, and no `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, or `XDG_RUNTIME_DIR`.
-- On other systems, Verifold runs nothing locally. The agents get no run tools there, and they run experiments in their own harness.
+- On other systems, Verifold runs nothing locally. Without pods, the agents get no run tools there, and they run experiments in their own harness.
 - The copy is no Git repository. `VERIFOLD_RUN` holds the run's ID and `VERIFOLD_COMMIT` its commit.
 - The record is in `.verifold/lab/runs/r-N/`: the commit, the command, why it runs, the status, the exit code, the times, and the metrics. A run is done only when Verifold saw its process exit with code 0.
 - Metrics come from output lines `METRIC name=value`, and from a `metrics.json` of numbers that the run writes in the top folder of its copy. A value that is not a number is null. A `metrics.json` in the commit does not count.
@@ -459,6 +459,16 @@ Agents run experiments through Verifold, so each result has a record that other 
 - When Verifold stops, the runs stop and end as interrupted. Their agents hear it after the next start. A run that an earlier Verifold left running stops when Verifold starts, if its process ID and start time match.
 - Pause starts no new run. A run that runs goes on, and its end waits for the agent's next turn.
 - While a run runs, the Mac does not go to idle sleep.
+
+**Runs on a pod**
+
+When pods are on, with a RunPod key and a spend limit, each agent can also run on a GPU pod of its own direction. An agent gets the pod tools when its session starts while pods are on.
+
+- An agent asks for a pod with `verifold_request_pod`, for its own direction only, and reads the limits and the leases with `verifold_compute`. Your limits and approvals apply as they do for the coordinator. A change of the lease, such as a ready pod, wakes the agent. An agent ends only its own direction's leases, with `verifold_end_lease`. When you stop a direction, its leases end, and a request that waits is withdrawn. A paused lab starts no pod.
+- `verifold_run` with `where: pod` runs on the newest ready lease of the agent's direction, or on the lease that it names. Verifold copies the commit's files to `/root/verifold/run-N-<hex>` on the pod, at most 2,000 files and 200 MB, and starts the command there as a job, as root, with network. The run has only that copy, not the rest of the project. Verifold puts the secrets that the lease names into the job's environment.
+- A run on a pod takes up to 1,440 minutes. Verifold reads its job every 20 seconds, which also keeps the pod from the idle stop, and keeps the end of its log in the record while it runs. A cancel or the time limit sends SIGTERM to the job's process group, and SIGKILL 5 seconds later and with each read after that. A job that has not ended a minute after SIGTERM ends the run all the same. A pod that does not answer for 10 minutes ends the run as interrupted.
+- When the job ends, Verifold stops what is left of its process group. It copies back `metrics.json` and each output that the agent named, one at a time, so one that fails leaves the others, and checks them as for a local run. Verifold keeps no copy of a file whose name or content holds the value of a pod secret, and the note says so. The log comes back with each secret's value replaced by its name, also a part of a value where Verifold cut the log. The `METRIC` lines count also from a part of a long log that the record leaves out. Then Verifold removes the run's folder on the pod. When a copy failed, the folder stays on the pod until the lease ends, and the note says so.
+- Before a pod stops or its lease ends, its runs end as interrupted and copy back what they have. The stop waits up to 2 minutes for them, and no run starts on that pod meanwhile. When Verifold stops, its pod runs end the same way. After a crash, the next start reads each pod run's job in the background, so the desk opens at once: a job that ended gives its result, and one that still runs stops. Then lease recovery stops the pod.
 
 **Who a post wakes**
 A post wakes an agent when:
@@ -502,7 +512,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 
 ### GPU pods on RunPod
 
-Compute in the desk holds the settings and the leases for GPU pods on RunPod. A lease is one pod for named tasks: one GPU type on Secure Cloud, one image, a maximum number of hours, and the rate that its cost is counted at. The desk calls a lease a pod.
+Compute in the desk holds the settings and the leases for GPU pods on RunPod. A lease is one pod for named tasks, or for lab directions: one GPU type on Secure Cloud, one image, a maximum number of hours, and the rate that its cost is counted at. The desk calls a lease a pod.
 
 Compute asks for one thing at a time: the key, then a spend limit, then the GPUs that pods can use. The other limits fold under More limits. After that, it shows the pods, the limits in one line, and the allowed GPUs, each with its form folded.
 
@@ -532,7 +542,7 @@ Show the GPUs lists the Secure Cloud GPU types, with their list price for one GP
 
 #### Requests
 
-The coordinator asks for a lease with `verifold_request_pod`: a GPU type, the hours, the tasks, and a reason. Verifold refuses a request that does not fit your limits: a type that you did not allow or that has no stock, a rate above your cap, too many hours, or a maximum cost above what is left of the spend limit.
+The coordinator asks for a lease with `verifold_request_pod`: a GPU type, the hours, the tasks, and a reason. A lab agent asks the same way, for its own direction. Verifold refuses a request that does not fit your limits: a type that you did not allow or that has no stock, a rate above your cap, too many hours, or a maximum cost above what is left of the spend limit.
 
 A request inside all your limits starts at once, also while you are away. Compute shows the pod, and you can stop it there. Needs you shows the request instead when you tick "Ask me before each pod starts" in Compute, or when the request cannot start now, for example because the pods at the same time are at your limit. It shows the rate, the hours, the maximum cost, what is left after it, the coordinator's reason, and what the pod allows. Nothing is created or billed before you approve it.
 

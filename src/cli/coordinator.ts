@@ -28,7 +28,6 @@ import {
 } from './tasks.ts';
 import { ResultsStore, type Results } from './results.ts';
 import type { Compute } from './compute.ts';
-import { spent, usd } from './leases.ts';
 import { loadWorkspace } from './storage.ts';
 import { defaultAgents } from './workers.ts';
 import type { LimitSignal } from './quota.ts';
@@ -807,14 +806,13 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
         return 'Recorded the answer. The person signs off.';
       }
       case 'verifold_compute':
-        return this.describeCompute();
+        return this.pods().describe();
       case 'verifold_note':
         return this.memory
           ? this.memory.note('Coordinator', args.text)
           : fail('This project keeps no memory.');
-      case 'verifold_request_pod': {
-        const compute = this.pods();
-        const lease = await compute.leases.request({
+      case 'verifold_request_pod':
+        return this.pods().requestPod({
           by: 'coordinator',
           gpu: args.gpuType,
           hours: args.hours,
@@ -822,23 +820,6 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
           reason: why(),
           ...(args.secrets === undefined ? {} : { secrets: args.secrets }),
         });
-        const what = `${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour`;
-        const missing = compute.missingSecrets(lease);
-        if (missing.length)
-          return `Asked the person to add the secret ${missing.join(' and ')} in Compute for ${lease.id}: ${what}. ${compute.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
-        // D90: a request inside the person's limits starts at once, unless the person asks to approve each pod.
-        // A start that a limit refuses, such as the pods at once, waits for the person.
-        if (!compute.view().settings.askBeforePod) {
-          const started = await compute.leases
-            .approve(lease.id, 'verifold')
-            .catch(() => null);
-          if (started?.state === 'starting')
-            return `Started ${lease.id} inside the person's limits: ${what}. An event tells you when the pod is ready.`;
-          if (started?.state === 'failed')
-            return `RunPod did not create the pod of ${lease.id}: ${started.end?.reason ?? 'no reason given'}.`;
-        }
-        return `Asked the person for ${lease.id}: ${what}. Nothing is created until the person approves it. An event tells you the decision.`;
-      }
       case 'verifold_stop_pod': {
         const lease = await this.pods().leases.stop(
           args.lease,
@@ -872,62 +853,6 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
 
   private pods(): Compute {
     return this.compute ?? fail('This Verifold has no compute owner.');
-  }
-
-  /** The pods part of the state: the person's limits, the budget, the leases, and the allowed GPUs now. */
-  private async describeCompute(): Promise<string> {
-    const compute = this.pods();
-    const view = compute.view();
-    const { settings, budget } = view;
-    let offers: unknown;
-    try {
-      const catalog = await compute.catalog();
-      offers = settings.gpuTypes.map((id) => {
-        const offer = catalog.find((entry) => entry.id === id);
-        return offer
-          ? {
-              gpuType: id,
-              memoryGb: offer.memoryGb,
-              usdPerHour: offer.price,
-              stock: offer.stock,
-            }
-          : { gpuType: id, offered: false };
-      });
-    } catch (error) {
-      offers = `unknown: ${error instanceof Error ? error.message : 'RunPod did not answer.'}`;
-    }
-    const now = Date.now();
-    return JSON.stringify({
-      podsOn: settings.limitUsd !== null && view.key !== null,
-      personApprovesEachPod: settings.askBeforePod,
-      storedSecrets: view.secrets.map((secret) => secret.name),
-      limits: {
-        spendLimitUsd: settings.limitUsd,
-        maxUsdPerHourPerPod: settings.maxUsdPerHour,
-        maxHoursPerLease: settings.maxHoursPerLease,
-        idleMinutesBeforeStop: settings.idleMinutes,
-        podsAtOnce: settings.maxRunningPods,
-        diskGb: settings.diskGb,
-        images: settings.images,
-      },
-      budget: {
-        spentUsd: Number(budget.spent.toFixed(2)),
-        heldUsd: Number(budget.reserved.toFixed(2)),
-        leftUsd: budget.left === null ? null : Number(budget.left.toFixed(2)),
-      },
-      allowedGpus: offers,
-      leases: view.leases.slice(-20).map((lease) => ({
-        id: lease.id,
-        state: lease.state,
-        tasks: lease.tasks,
-        gpuType: lease.gpu,
-        usdPerHour: lease.rate,
-        hours: lease.hours,
-        endsAt: lease.deadline,
-        costSoFarUsd: Number(spent(lease, now).toFixed(2)),
-        ...(lease.end ? { ended: lease.end.reason } : {}),
-      })),
-    });
   }
 
   /** The person rules on a check that waits for their judgement. The coordinator reads it at its next wakeup. */
