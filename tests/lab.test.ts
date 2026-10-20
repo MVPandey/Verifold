@@ -21,10 +21,12 @@ import {
   Lab,
   labLimits,
   startLabOn,
+  type LabCompute,
   type LabSessions,
 } from '../src/cli/lab.ts';
 import { RunTeam } from '../src/cli/team.ts';
-import type { Sandbox } from '../src/cli/runs.ts';
+import type { PodRuns, Sandbox } from '../src/cli/runs.ts';
+import type { Lease } from '../src/cli/leases.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
@@ -265,6 +267,7 @@ async function fixture(
     readonly hourMs?: number;
     /** The sandbox of runs. Default: none at all, so a run's command runs as it is. Null: no runs. */
     readonly sandbox?: Sandbox | null;
+    readonly compute?: LabCompute;
   } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
@@ -329,6 +332,7 @@ async function fixture(
           ? (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] })
           : options.sandbox,
       timing: options.hourMs ? { ...timing, hourMs: options.hourMs } : timing,
+      ...(options.compute ? { compute: options.compute } : {}),
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
     });
@@ -847,6 +851,145 @@ await test('without a sandbox for runs, agents get no run tools and run experime
   const first = (await lab.inputs('d-1-beta'))[0] ?? '';
   assert.doesNotMatch(first, /verifold_run|Runs on this computer/);
   assert.match(first, /run experiments that fit on this computer/);
+});
+
+await test('with pods, an agent asks for a pod for its own direction, runs on it, and wakes when the lease changes', async (t) => {
+  const asked: unknown[] = [];
+  const ended: unknown[] = [];
+  const lease = (id: string, direction: string): Lease =>
+    ({
+      id,
+      state: 'ready',
+      gpu: 'NVIDIA A40',
+      tasks: [],
+      directions: [direction],
+      history: [{ at: new Date().toISOString(), by: 'verifold', text: '' }],
+    }) as unknown as Lease;
+  const leases = new Map([
+    ['lease-1', lease('lease-1', 'd-1')],
+    ['lease-2', lease('lease-2', 'd-2')],
+  ]);
+  const runs: PodRuns = {
+    pick: (direction) => {
+      if (direction !== 'd-1') throw new Error('No pod.');
+      return { lease: 'lease-1', gpu: 'NVIDIA A40' };
+    },
+    send: () => Promise.resolve(),
+    start: () => Promise.resolve(),
+    state: () =>
+      Promise.resolve({ state: 'done', exit: 0, tail: 'METRIC acc=0.9\n' }),
+    stop: () => Promise.resolve(),
+    log: () =>
+      Promise.resolve({ bytes: 15, head: 'METRIC acc=0.9\n', tail: null }),
+    metrics: () => Promise.resolve('METRIC acc=0.9\n'),
+    fetch: () => Promise.resolve(null),
+  };
+  const compute: LabCompute = {
+    describe: () => Promise.resolve('{"podsOn":true}'),
+    requestPod: (input) => {
+      asked.push(input);
+      return Promise.resolve('Started lease-1.');
+    },
+    leases: {
+      get: (id) => {
+        const found = leases.get(String(id));
+        if (!found) throw new Error('No lease.');
+        return found;
+      },
+      end: (id, by, reason) => {
+        ended.push({ id, by, reason });
+        return Promise.resolve(leases.get(String(id)) as Lease);
+      },
+    },
+    podRuns: () => runs,
+  };
+  const lab = await fixture(t, { compute });
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'verifold_compute', arguments: {} },
+        {
+          name: 'verifold_request_pod',
+          arguments: { gpuType: 'NVIDIA A40', hours: 2, why: 'Train.' },
+        },
+        {
+          name: 'verifold_end_lease',
+          arguments: { lease: 'lease-2', why: 'Not mine.' },
+        },
+        {
+          name: 'verifold_run',
+          arguments: {
+            command: 'python train.py',
+            why: 'Seed 1 on a GPU.',
+            where: 'pod',
+            minutes: 600,
+          },
+        },
+        {
+          name: 'verifold_run',
+          arguments: { command: 'true', why: 'Too long.', minutes: 600 },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'codex' }]);
+  await until(
+    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 5,
+  );
+  const results = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    call: string;
+    result: { contentItems?: { text: string }[] };
+  }[];
+  const text = (index: number): string =>
+    results[index]?.result.contentItems?.[0]?.text ?? '';
+  assert.equal(text(0), '{"podsOn":true}');
+  // The lease is for the agent's own direction, with its reason.
+  assert.deepEqual(asked, [
+    {
+      by: 'agent',
+      gpu: 'NVIDIA A40',
+      hours: 2,
+      directions: ['d-1'],
+      reason: 'Train.',
+    },
+  ]);
+  assert.match(text(2), /lease-2 is not a lease of d-1\./);
+  assert.deepEqual(ended, []);
+  assert.match(
+    text(3),
+    /^Started r-1 at [0-9a-f]{7} \(on lease-1 \(NVIDIA A40\), up to 600 min\)\./,
+  );
+  assert.match(text(4), /from 1 to 240, or up to 1440 on a pod\./);
+  await until(() => lab.lab.view()?.ledger[0]?.status === 'done');
+  assert.deepEqual(lab.lab.view()?.ledger[0]?.metrics, { acc: 0.9 });
+  const html = renderLab(
+    lab.lab.view()!,
+    (value) => value,
+    () => '',
+  );
+  assert.match(html, /<span class="fine">on lease-1 \(NVIDIA A40\)<\/span>/);
+  // The agent has the pod tools and the pod part of its prompt.
+  const thread = (
+    (await lab.lines('d-1-alpha', 'threads.jsonl')) as {
+      params: { dynamicTools: { name: string }[] };
+    }[]
+  )[0]?.params;
+  assert.deepEqual(thread?.dynamicTools.map((tool) => tool.name).slice(-3), [
+    'verifold_compute',
+    'verifold_request_pod',
+    'verifold_end_lease',
+  ]);
+  assert.match((await lab.inputs('d-1-alpha'))[0] ?? '', /Runs on a GPU pod:/);
+  // A change of the lease that the agent did not make wakes it.
+  lab.lab.leaseChanged(
+    leases.get('lease-1') as Lease,
+    'lease-1: The pod is ready.',
+  );
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('[pod] lease-1: The pod is ready.'),
+    ),
+  );
 });
 
 await test('start over moves the lab and its board into the archive', async (t) => {

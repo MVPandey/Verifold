@@ -630,16 +630,19 @@ async function serveDesk(
         },
       });
       // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
-      // Before a pod stops, its tasks' results come back into their folders.
+      // A lease of lab directions wakes their agents instead.
+      // Before a pod stops, its tasks' results and its lab runs' outputs come back.
       const compute = computeFor(
         root,
         io,
         (lease, line) => {
           io.progress?.(`Pod ${line}`);
-          if (lease.history.at(-1)?.by !== 'coordinator')
+          if (lease.directions?.length) owned.lab?.leaseChanged(lease, line);
+          else if (lease.history.at(-1)?.by !== 'coordinator')
             owned.coordinator?.notify({ kind: 'pod', text: line });
         },
         (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
+        (lease) => owned.lab?.podStops(lease) ?? Promise.resolve(),
       );
       // The project memory follows every change of the records, and every agent reads its index.
       const memory = new ProjectMemory(
@@ -722,6 +725,7 @@ async function serveDesk(
         },
         // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
         runs: session === undefined,
+        compute,
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;
@@ -746,8 +750,9 @@ async function serveDesk(
       try {
         await sessions.load();
         await coordinator.load();
-        await lab.load();
+        // The leases come first: the lab's runs on pods recover through them, before lease recovery stops the pods.
         await compute.load();
+        await lab.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
         await compute.leases.recover();
@@ -1285,6 +1290,7 @@ function computeFor(
   io: CliIO,
   onChange?: (lease: Lease, line: string) => void,
   taskFolder?: (task: string) => Promise<TaskPlace | null>,
+  runsStop?: (lease: string) => Promise<void>,
 ): Compute {
   return new Compute(root, {
     store: new KeyStore(io.compute?.store),
@@ -1292,6 +1298,7 @@ function computeFor(
     ...(io.compute?.programs ? { programs: io.compute.programs } : {}),
     ...(onChange ? { onChange } : {}),
     ...(taskFolder ? { taskFolder } : {}),
+    ...(runsStop ? { runsStop } : {}),
   });
 }
 
@@ -1421,6 +1428,7 @@ async function podsCommand(
         gpu: lease.gpu,
         pod: lease.podId,
         tasks: lease.tasks,
+        ...(lease.directions ? { directions: lease.directions } : {}),
         costUsd: Number(spent(lease, now).toFixed(2)),
         endsAt: lease.deadline,
       })),

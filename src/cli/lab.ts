@@ -25,18 +25,22 @@ import {
   labToolsVersion,
   planLimits,
   planToolSpec,
+  podToolSpecs,
   runToolSpecs,
 } from './lab-tools.ts';
+import type { Cause, Lease } from './leases.ts';
 import { loadPrompt } from './prompts.ts';
 import type { LimitSignal } from './quota.ts';
 import {
   localSandbox,
   metricsText,
   noSandboxText,
+  placeText,
   RunLedger,
   runActive,
   runLimits,
   runSummary,
+  type PodRuns,
   type RunLogPart,
   type RunRecord,
   type Sandbox,
@@ -138,6 +142,8 @@ export const labTiming = {
   hourMs: 3_600_000,
   /** One minute of a run's time limit. */
   minuteMs: 60_000,
+  /** The time between two reads of a pod run's job. */
+  podPollMs: 20_000,
 };
 
 /** Work that a direction builds on: known work, or new in this lab. */
@@ -198,7 +204,14 @@ export interface LabState {
 }
 
 export interface LabEvent {
-  readonly kind: 'post' | 'person' | 'restart' | 'quota' | 'continue' | 'run';
+  readonly kind:
+    | 'post'
+    | 'person'
+    | 'restart'
+    | 'quota'
+    | 'continue'
+    | 'run'
+    | 'pod';
   readonly text: string;
   /** The post that the event is about. */
   readonly post?: string;
@@ -343,8 +356,30 @@ export interface LabOptions {
    * the project's owner.
    */
   readonly runs?: boolean;
-  /** The sandbox of agents' runs. Default: this computer's. Null: runs are refused. */
+  /** The sandbox of agents' runs. Default: this computer's. Null: local runs are refused. */
   readonly sandbox?: Sandbox | null;
+  /** The project's GPU pods. Without it, agents get no pod tools, and pod runs are refused. */
+  readonly compute?: LabCompute;
+}
+
+/** What the lab uses of the project's compute: its pod tools and the pod work of runs. */
+export interface LabCompute {
+  /** The person's limits, the budget, the leases, and the allowed GPUs, as JSON for an agent. */
+  describe(): Promise<string>;
+  /** Ask for a lease, and start it when it fits the limits. Returns the reply for the agent. */
+  requestPod(input: {
+    readonly by: 'agent';
+    readonly gpu: unknown;
+    readonly hours: unknown;
+    readonly directions: readonly string[];
+    readonly reason: string;
+    readonly secrets?: unknown;
+  }): Promise<string>;
+  readonly leases: {
+    get(id: unknown): Lease;
+    end(id: unknown, by: Cause, reason: string): Promise<Lease>;
+  };
+  podRuns(): PodRuns;
 }
 
 function fail(message: string): never {
@@ -730,9 +765,15 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
         typeof event.seq === 'number' &&
         typeof event.at === 'string' &&
         typeof event.text === 'string' &&
-        ['post', 'person', 'restart', 'quota', 'continue', 'run'].includes(
-          event.kind as string,
-        )
+        [
+          'post',
+          'person',
+          'restart',
+          'quota',
+          'continue',
+          'run',
+          'pod',
+        ].includes(event.kind as string)
         ? [event as unknown as QueuedEvent<LabEvent>]
         : [];
     }),
@@ -874,9 +915,11 @@ export class Lab {
     this.board = new Board(root);
     this.ledger = new RunLedger(root, {
       sandbox: options.sandbox === undefined ? localSandbox() : options.sandbox,
+      ...(options.compute ? { pods: options.compute.podRuns() } : {}),
       serial: (work) => this.serial(work),
       ended: (run) => this.runEnded(run),
       minuteMs: this.timing.minuteMs,
+      pollMs: this.timing.podPollMs,
     });
     this.stateFile = new RecordFile(join(root, '.verifold', 'lab.json'), () =>
       this.suspended ? null : this.state,
@@ -2121,9 +2164,7 @@ export class Lab {
         ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and a bar changes before a result, never after it.'
         : '';
     // Without a sandbox for runs, agents run experiments in their own harness.
-    const runs = this.ledger.sandboxed
-      ? `\n\n${await loadPrompt('lab-runs')}`
-      : '';
+    const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.options.compute ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
     return `${await loadPrompt('lab-peer')}${runs}${role}
 
 The question:
@@ -2151,7 +2192,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     return {
       specs: [
         ...labToolSpecs,
-        ...(this.ledger.sandboxed ? runToolSpecs : []),
+        ...(this.ledger.sandboxed || this.options.compute ? runToolSpecs : []),
+        ...(this.options.compute ? podToolSpecs : []),
         ...(this.state?.opener === id ? [planToolSpec] : []),
         ...(this.options.memory ? [noteToolSpec] : []),
       ],
@@ -2329,9 +2371,74 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           );
           return `Verifold cancels ${run.id}. Its log and its outputs so far stay, and Verifold wakes you when it ends.`;
         });
+      // The pod tools wait for the compute's queue, so they run outside the lab's queue.
+      case 'verifold_compute':
+        await this.ownDirection(id, generation);
+        return this.pods().describe();
+      case 'verifold_request_pod': {
+        const direction = await this.ownDirection(id, generation);
+        return this.pods().requestPod({
+          by: 'agent',
+          gpu: args.gpuType,
+          hours: args.hours,
+          directions: [direction],
+          reason: text(args.why, 1000, 'why your direction needs the pod'),
+          ...(args.secrets === undefined ? {} : { secrets: args.secrets }),
+        });
+      }
+      case 'verifold_end_lease': {
+        const direction = await this.ownDirection(id, generation);
+        const compute = this.pods();
+        const lease = compute.leases.get(args.lease);
+        if (!lease.directions?.includes(direction))
+          fail(
+            `${lease.id} is not a lease of ${direction}. Ask its agent or the person on the board instead.`,
+          );
+        const ended = await compute.leases.end(
+          lease.id,
+          'agent',
+          text(args.why, 1000, 'why you end the lease'),
+        );
+        return ended.state === 'denied'
+          ? `Withdrew the request ${ended.id}.`
+          : `Ended ${ended.id}. Verifold deleted its pod.`;
+      }
       default:
         return fail(`Unknown tool: ${name}`);
     }
+  }
+
+  /** The direction of an agent whose session works for the lab, read in the lab's queue. */
+  private ownDirection(id: string, generation: string): Promise<string> {
+    return this.serial(
+      () => (this.usable(id, generation) ?? fail(stoppedText)).direction,
+    );
+  }
+
+  private pods(): LabCompute {
+    return this.options.compute ?? fail('This Verifold has no pods.');
+  }
+
+  /**
+   * A lease of lab directions changed: the agents of its directions wake
+   * with its line, unless an agent made the change.
+   */
+  leaseChanged(lease: Lease, line: string): void {
+    if (lease.history.at(-1)?.by === 'agent') return;
+    void this.serial(() => {
+      for (const direction of lease.directions ?? []) {
+        const agent = this.agents.get(this.direction(direction).agent);
+        if (agent && this.active(agent))
+          this.loop(agent.id).add([{ kind: 'pod', text: line }]);
+      }
+    }).catch(() => {
+      /* A direction that the lab no longer has needs no wake. */
+    });
+  }
+
+  /** The pod of a lease stops: its runs end, and their outputs come back first. */
+  podStops(lease: string): Promise<void> {
+    return this.ledger.podStops(lease);
   }
 
   /**
@@ -2351,15 +2458,22 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       const state = this.current();
       if (state.pausedAt || this.ended(state))
         fail('The lab is paused, so no run starts now.');
+      const where: 'local' | 'pod' =
+        args.where === undefined || args.where === 'local'
+          ? 'local'
+          : args.where === 'pod'
+            ? 'pod'
+            : fail('Give where as local or pod.');
+      const most = where === 'pod' ? runLimits.podMinutes : runLimits.minutes;
       const minutes =
         args.minutes === undefined
           ? runLimits.defaultMinutes
           : Number.isSafeInteger(args.minutes) &&
               (args.minutes as number) >= 1 &&
-              (args.minutes as number) <= runLimits.minutes
+              (args.minutes as number) <= most
             ? (args.minutes as number)
             : fail(
-                `Give the minutes as a whole number from 1 to ${runLimits.minutes}.`,
+                `Give the minutes as a whole number from 1 to ${most}${where === 'local' ? `, or up to ${runLimits.podMinutes} on a pod` : ''}.`,
               );
       const outputs = Array.isArray(args.outputs) ? args.outputs : [];
       if (outputs.length > runLimits.outputPaths)
@@ -2374,11 +2488,12 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         why: text(args.why, runLimits.why, 'what the run tests'),
         minutes,
         want,
+        where,
       };
       this.ledger.room(id);
       return draft;
     });
-    if (!this.ledger.sandboxed) fail(noSandboxText);
+    if (draft.where === 'local' && !this.ledger.sandboxed) fail(noSandboxText);
     const made = await this.commit(
       draft.direction,
       `Verifold: commit for a run of ${draft.agent.handle}`,
@@ -2402,6 +2517,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       why: draft.why,
       minutes: draft.minutes,
       want: draft.want,
+      where: draft.where,
+      ...(args.lease === undefined ? {} : { lease: args.lease }),
     });
     if (runActive(run) && this.usable(id, generation))
       this.rt(id).posted = true;
@@ -2409,7 +2526,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       ? ` Files with more than one hard link stayed out of the commit, so the run does not have them: ${made.linked.slice(0, 5).join(', ')}.`
       : '';
     return runActive(run)
-      ? `Started ${run.id} at ${run.commit.slice(0, 7)} (local, up to ${run.minutes} min). Verifold wakes you when it ends.${left}`
+      ? `Started ${run.id} at ${run.commit.slice(0, 7)} (${placeText(run)}, up to ${run.minutes} min). Verifold wakes you when it ends.${left}`
       : `${run.id} ended at once: ${this.runLine(run)}${left}`;
   }
 
@@ -2423,7 +2540,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         ? null
         : await this.ledger.log(run.id, part, runLimits.statusLog);
     const lines = [
-      `${run.id} by ${this.name(run.agent)} in ${run.direction}, at ${run.commit.slice(0, 7)}: ${runSummary(run)}. Up to ${run.minutes} min.`,
+      `${run.id} by ${this.name(run.agent)} in ${run.direction}, at ${run.commit.slice(0, 7)}${run.where === 'local' ? '' : `, ${placeText(run)}`}: ${runSummary(run)}. Up to ${run.minutes} min.`,
       `Command: ${JSON.stringify(run.command)}`,
       `Why: ${JSON.stringify(run.why)}`,
       `Metrics: ${metricsText(run, runLimits.metrics) || 'none'}`,
