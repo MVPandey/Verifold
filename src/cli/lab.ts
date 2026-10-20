@@ -4167,6 +4167,19 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         const lease = leases.get(applied.lease);
         if (lease.state === 'requested' || isOpenLease(lease))
           await leases.end(lease.id, 'person', `you undid ${call.id}.`);
+        // The approval is taken back: the next pod asks again, unless another answer approved one.
+        await this.serial(async () => {
+          const state = this.current();
+          await this.saveState({
+            ...state,
+            firstGpuApproved: state.calls.some(
+              (entry) =>
+                entry.id !== call.id &&
+                entry.state === 'answered' &&
+                entry.applied?.type === 'pod',
+            ),
+          });
+        });
         return `Verifold ended ${lease.id}. The minutes billed so far stay billed.`;
       }
       case 'hours':
@@ -4182,9 +4195,27 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       case 'stop':
         await this.serial(() => this.reopen(applied.direction, call));
         return `Verifold opened ${applied.direction} again.`;
-      case 'domains':
-        await this.serial(() => this.setNetwork(applied.agent, applied.before));
-        return `${this.name(applied.agent)}'s shell has its earlier network from its next turn.`;
+      case 'domains': {
+        // Only the domains that this answer added go: a later answer keeps its own.
+        const effect = call.answer
+          ? call.options[call.answer.option]?.effect
+          : null;
+        const added =
+          effect?.type === 'domains'
+            ? effect.domains.filter(
+                (domain) => !applied.before.includes(domain),
+              )
+            : [];
+        await this.serial(() =>
+          this.setNetwork(
+            applied.agent,
+            this.agent(applied.agent).network.filter(
+              (domain) => !added.includes(domain),
+            ),
+          ),
+        );
+        return `${this.name(applied.agent)}'s shell loses ${added.join(', ') || 'no domain'} from its next turn.`;
+      }
     }
   }
 

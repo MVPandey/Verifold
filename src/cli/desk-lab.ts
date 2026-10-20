@@ -699,7 +699,7 @@ function effectLines(
           askerHost(view, call) === 'codex'
             ? `Codex: any website. Codex cannot limit the network to ${effect.domains.join(', ')}, so ${who}'s shell can reach any website.`
             : `Lets ${who}'s shell reach ${effect.domains.join(', ')}.`,
-        undo: `Undo closes that network again. ${who} continues its conversation in a new process.`,
+        undo: `Undo takes these domains back. Either way, ${who} continues its conversation in a new process.`,
       };
   }
 }
