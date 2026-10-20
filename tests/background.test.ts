@@ -427,10 +427,16 @@ await test('an owner started with --lab starts a lab on the question of setup', 
     await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
   ) as { question: string };
   assert.equal(lab.question, 'Do months lie on a circle?');
-  // The question stays with the project too, so Home offers it again after Start over.
-  const workspace = JSON.parse(
-    await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
-  ) as { research?: { topic: string; autonomy: string } };
+  // The question stays with the project too, so Home offers it again after
+  // Start over. It is saved once the lab runs, so it can come a moment later.
+  const read = async (): Promise<{
+    research?: { topic: string; autonomy: string };
+  }> =>
+    JSON.parse(
+      await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
+    ) as { research?: { topic: string; autonomy: string } };
+  await until(async () => (await read()).research !== undefined);
+  const workspace = await read();
   assert.equal(workspace.research?.topic, 'Do months lie on a circle?');
   // Research is autonomous unless the person chose otherwise, as everywhere in the project.
   assert.equal(workspace.research?.autonomy, 'autonomous');
