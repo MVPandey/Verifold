@@ -240,6 +240,10 @@ const morphing = {
       !(
         node instanceof HTMLElement &&
         (node.matches('svg.map-links') ||
+          // A run's log keeps the text that the page loaded into it.
+          (node.matches('pre[data-run-log]') &&
+            next instanceof HTMLElement &&
+            next.dataset.runLog === node.dataset.runLog) ||
           (node.matches('.diff-pane[data-page]') &&
             next instanceof HTMLElement &&
             next.dataset.task === node.dataset.task &&
@@ -364,6 +368,7 @@ async function render(html: string): Promise<void> {
     }
     rendered = { view: viewKey(), panel: panelKey() };
     showReview();
+    showRunLogs();
     drawMaps();
     mountTranscripts(content, () => token);
     mountTerminals(content);
@@ -1035,9 +1040,70 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
       return { action, direction: button.dataset.labDirection };
     case 'lab-agent-restart':
       return { action, agent: button.dataset.agent };
+    case 'lab-run-cancel':
+      return { action, run: button.dataset.run };
     default:
       return { action };
   }
+}
+
+/** The logs of runs that the person opened, by run ID, with the time that each one came. The newest 20 stay. */
+const runLogs = new Map<
+  string,
+  { readonly text: string; readonly at: number }
+>();
+const loadingLogs = new Set<string>();
+let logTimer: number | undefined;
+
+/**
+ * Fill each open run log from the ones loaded. A log older than 5 seconds
+ * loads again, also while the view does not change.
+ */
+function showRunLogs(): void {
+  clearTimeout(logTimer);
+  const open = content.querySelectorAll<HTMLElement>(
+    'details.run-log[open] [data-run-log]',
+  );
+  for (const pre of open) {
+    const run = pre.dataset.runLog ?? '';
+    const known = runLogs.get(run);
+    if (known && pre.textContent !== known.text) pre.textContent = known.text;
+    if ((!known || Date.now() - known.at > 5000) && !loadingLogs.has(run))
+      void loadRunLog(run);
+  }
+  if (open.length) logTimer = window.setTimeout(showRunLogs, 5000);
+}
+
+/** Load the end of one run's log. */
+async function loadRunLog(run: string): Promise<void> {
+  loadingLogs.add(run);
+  let text: string;
+  try {
+    const response = await fetch(
+      `/api/run-log?${new URLSearchParams({ run }).toString()}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    const reply = response.ok
+      ? ((await response.json()) as Record<string, unknown>)
+      : null;
+    text =
+      reply && typeof reply.text === 'string' && typeof reply.bytes === 'number'
+        ? `${reply.partial === true ? `[The last part of a log of ${reply.bytes} bytes.]\n` : ''}${reply.text || '(The log is empty.)'}`
+        : 'This run has no log.';
+  } catch {
+    text =
+      'The desk did not answer. Run verifold in the project folder to check that it still runs.';
+  } finally {
+    loadingLogs.delete(run);
+  }
+  runLogs.delete(run);
+  runLogs.set(run, { text, at: Date.now() });
+  for (const old of [...runLogs.keys()].slice(0, -20)) runLogs.delete(old);
+  showRunLogs();
 }
 
 /** A compute action. The RunPod key and secret values go only into this request body. */
@@ -1206,6 +1272,7 @@ async function act(button: HTMLElement): Promise<void> {
     ['archive', button.dataset.archive],
     ['lab-direction', button.dataset.labDirection],
     ['agent', button.dataset.agent],
+    ['run', button.dataset.run],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -1592,6 +1659,18 @@ document.addEventListener('visibilitychange', () => {
   hiddenAt = undefined;
 });
 window.addEventListener('resize', drawMaps);
+// A toggle does not bubble either. An opened run log loads at once.
+content.addEventListener(
+  'toggle',
+  (event) => {
+    if (
+      event.target instanceof HTMLDetailsElement &&
+      event.target.classList.contains('run-log')
+    )
+      showRunLogs();
+  },
+  true,
+);
 // A scroll does not bubble, so the page listens in the capture phase.
 content.addEventListener(
   'scroll',

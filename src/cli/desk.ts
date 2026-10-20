@@ -48,6 +48,7 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
+import { runId } from './board.ts';
 import { startLabOn, type Lab } from './lab.ts';
 import type { LabWork } from './desk-lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
@@ -487,6 +488,9 @@ async function labAction(
       return 200;
     case 'lab-agent-restart':
       await lab.restartAgent(body.agent);
+      return 200;
+    case 'lab-run-cancel':
+      await lab.cancelRun(body.run);
       return 200;
     case 'lab-pause':
       await lab.pause();
@@ -1319,6 +1323,29 @@ export async function startDesk(
           })
           .end(JSON.stringify({ error: error.message }));
       }
+      return;
+    }
+    if (url.pathname === '/api/run-log') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const run = url.searchParams.get('run') ?? '';
+      if (
+        !runId.test(run) ||
+        [...url.searchParams.keys()].some((key) => key !== 'run')
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      const log = await labDesk.lab?.runLog(run);
+      if (!log) {
+        response.writeHead(404).end();
+        return;
+      }
+      response
+        .writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        .end(JSON.stringify(log));
       return;
     }
     if (url.pathname !== '/api/view') {
