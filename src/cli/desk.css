@@ -3032,6 +3032,16 @@ body:not(.dock-expanded) .dock .dock-thread :is(.pre, details) {
 body:not(.dock-expanded) .dock-threads {
   cursor: pointer;
 }
+/* A lab call: one row for each option, with its cost and what it does. */
+.call-options {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+.call-options .fine {
+  margin: 2px 0 0;
+}
 /* A draft task: the coordinator wrote it, and it waits for the person to start it. */
 .drafts {
   display: grid;

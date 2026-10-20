@@ -12,10 +12,14 @@ import {
   defaultLabHours,
   labLimits,
   verdictWords,
+  type Call,
+  type CallEffect,
+  type CallOption,
   type Check,
   type DirectionView,
   type LabView,
 } from './lab.ts';
+import { usd } from './leases.ts';
 import { checkableKinds, checkLimits } from './lab-tools.ts';
 import {
   metricsText,
@@ -584,14 +588,24 @@ export function renderLab(
   const time = state.budget
     ? `<p class="fine lab-time">Due ${e(clock(state.budget.deadline))} · ${over ? 'the time budget ended' : `${e(minutesText(minutes))} left`}</p>`
     : '';
+  // Needs you asks for more time with a call. Without one, as after "Stop here", the notice gives more time.
+  const asked = state.calls.some(
+    (call) =>
+      call.state === 'open' &&
+      call.options.some((option) => option.effect?.type === 'hours'),
+  );
+  const more =
+    runs && over && !asked
+      ? ` <span class="actions">${[2, defaultLabHours].map((count) => `<button type="button" data-action="lab-budget" data-hours="${count}">Give ${count} more hours</button>`).join('')}</span>`
+      : '';
   const paused = !state.pausedAt
     ? ''
     : state.pausedFor === 'deadline'
-      ? `<p class="notice">The time budget ended at ${e(clock(state.budget?.deadline ?? state.pausedAt))}, so the lab paused. Give it more time to go on.</p>`
-      : `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.${over ? ' Its time budget ended too: give it more time first.' : ''}</p>`;
+      ? `<p class="notice">The time budget ended at ${e(clock(state.budget?.deadline ?? state.pausedAt))}, so the lab paused. Give it more time to go on.${more}</p>`
+      : `<p class="notice">You paused the lab at ${e(clock(state.pausedAt))}. No agent works until you resume it.${over ? ` Its time budget ended too: give it more time first.${more}` : ''}</p>`;
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Lab</h1><p class="question">${e(state.question)}</p>${time}</div>
   <div class="view lab">
-  ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${needs}
+  ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${working}${undoLines(view)}${needs}
   ${disputesCard(view, disputes, name, slot)}
   ${planCard(view, name, clock)}
   <section class="card" aria-labelledby="directions-title"><div class="section-title"><h2 id="directions-title">Directions</h2><span class="actions">${pause}</span></div>
@@ -633,28 +647,138 @@ export function renderLabStart(topic: string | undefined): string {
   <div class="actions"><button type="button" class="primary" data-action="lab-start">Start the lab</button></div><p class="fine">The first agent reads your question and posts a plan. Work that costs nothing starts at once. You change the plan by replying to it. When the time budget ends, the lab pauses.</p></section>`;
 }
 
-/** Needs you: the time budget ended. The person gives more time, and the lab goes on. */
-export function labBudgetNeed(view: LabView): {
+const callWords = {
+  cost: 'Cost call',
+  scope: 'Scope call',
+  access: 'Access call',
+  go: 'Go call',
+} as const;
+
+/** The host of the agent that asked a call, from the lab's view. */
+function askerHost(view: LabView, call: Call): string | null {
+  return (
+    view.directions.find((entry) => entry.agent.id === call.by)?.agent.host ??
+    null
+  );
+}
+
+/**
+ * What an effect does and what an undo does, in Verifold's words. An
+ * agent's label says what the agent means; this line says what happens.
+ */
+function effectLines(
+  effect: CallEffect,
+  call: Call,
+  view: LabView,
+): { readonly does: string; readonly undo: string } {
+  const who = view.handles[call.by] ?? call.by;
+  switch (effect.type) {
+    case 'pod':
+      return {
+        does: `Starts a ${effect.gpuType} pod for ${effect.hours} ${effect.hours === 1 ? 'hour' : 'hours'} for ${call.direction ?? 'the direction'}.`,
+        undo: 'Undo ends the pod. The minutes billed so far stay billed.',
+      };
+    case 'hours':
+      return {
+        does: `Gives the lab ${effect.hours} more ${effect.hours === 1 ? 'hour' : 'hours'}.`,
+        undo: 'Undo takes the hours back.',
+      };
+    case 'open':
+      return {
+        does: `Opens "${effect.title}" with a new ${hostName(effect.harness)} agent.`,
+        undo: 'Undo stops it. Its folder and branch stay.',
+      };
+    case 'stop':
+      return {
+        does: `Stops ${effect.direction}. Its runs and pods end.`,
+        undo: 'Undo opens it again with its agent. Runs and pods that ended do not come back.',
+      };
+    case 'domains':
+      return {
+        does:
+          askerHost(view, call) === 'codex'
+            ? `Codex: any website. Codex cannot limit the network to ${effect.domains.join(', ')}, so ${who}'s shell can reach any website.`
+            : `Lets ${who}'s shell reach ${effect.domains.join(', ')}.`,
+        undo: `Undo closes that network again. ${who} continues its conversation in a new process.`,
+      };
+  }
+}
+
+/** One option of a call: its button, its dollars and minutes, and what it does. */
+function optionHtml(
+  call: Call,
+  option: CallOption,
+  index: number,
+  view: LabView,
+): string {
+  const lines = option.effect ? effectLines(option.effect, call, view) : null;
+  const facts = [
+    option.usd === null
+      ? ''
+      : option.usd === 0
+        ? 'No cost'
+        : `${usd(option.usd)}`,
+    option.minutes === null ? '' : minutesText(option.minutes),
+  ].filter(Boolean);
+  return `<li><button type="button"${call.pick === index ? ' class="primary"' : ''} data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}">${e(option.label)}</button>${facts.length ? ` <span class="fine">${e(facts.join(' · '))}</span>` : ''}${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}</li>`;
+}
+
+/**
+ * Needs you: each open call of the lab, with its options, their cost and
+ * time, the agents' pick and why. Every agent text is escaped. The answer
+ * applies at once and can be undone for a while.
+ */
+export function labCallNeeds(view: LabView): {
   readonly key: string;
+  readonly kind: string;
   readonly title: string;
   readonly why: string;
   readonly since: string | null;
   readonly body: string;
-} | null {
-  const { state } = view;
-  // Also a lab that the person paused: more time keeps it paused until they resume it.
-  if (!view.runs || !state.budget || !budgetEnded(state)) return null;
-  const deadline = state.budget.deadline;
-  const button = (count: number, primary: boolean): string =>
-    `<button type="button"${primary ? ' class="primary"' : ''} data-action="lab-budget" data-hours="${count}">Give ${count} more ${count === 1 ? 'hour' : 'hours'}</button>`;
-  return {
-    key: `lab-budget:${deadline}`,
-    title: 'The time budget ended',
-    why:
-      state.pausedFor === 'person'
-        ? 'You paused the lab, and its time budget ended too. Give it more time, then resume it.'
-        : 'No turn starts after the end of the time budget. Only you give the lab more time.',
-    since: deadline,
-    body: `<div class="actions">${button(2, true)}${button(defaultLabHours, false)}</div>`,
-  };
+}[] {
+  if (!view.runs) return [];
+  return view.state.calls
+    .filter((call) => call.state === 'open')
+    .map((call) => {
+      const asker =
+        call.by === 'verifold'
+          ? 'Verifold'
+          : (view.handles[call.by] ?? call.by);
+      const pick = call.pick === null ? null : call.options[call.pick];
+      return {
+        key: `lab-call:${call.id}`,
+        kind: callWords[call.kind],
+        title: call.question,
+        why: `${asker} asks${call.direction ? ` for ${call.direction}` : ''} (${call.id}).`,
+        since: call.at,
+        body: `<div class="why"><span class="tag reading">${pick ? `${e(asker)} advises "${e(pick.label)}"` : `${e(asker)} says`}</span> ${e(call.why)}</div>
+  <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view)).join('')}</ul>
+  <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}.` : 'Your answer applies at once, and it has no undo.'}</p>`,
+      };
+    });
+}
+
+/** The answers that the person can still undo, with the minutes left. */
+function undoLines(view: LabView): string {
+  if (!view.runs) return '';
+  const now = Date.now();
+  return view.state.calls
+    .flatMap((call) => {
+      const option = call.answer ? call.options[call.answer.option] : undefined;
+      if (
+        call.state !== 'answered' ||
+        !call.undoUntil ||
+        !option ||
+        Date.parse(call.undoUntil) <= now
+      )
+        return [];
+      const left = Math.ceil((Date.parse(call.undoUntil) - now) / 60_000);
+      const undo = option.effect
+        ? effectLines(option.effect, call, view).undo
+        : '';
+      return [
+        `<p class="notice" role="status">You chose "${e(option.label)}" on ${e(call.id)}. <button type="button" class="quiet" data-action="lab-call-undo" data-call="${e(call.id)}">Undo</button> <span class="fine">${e(minutesText(left))} left.${undo ? ` ${e(undo)}` : ''}</span></p>`,
+      ];
+    })
+    .join('');
 }
