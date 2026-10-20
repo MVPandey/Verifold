@@ -1250,17 +1250,23 @@ function awayDigest(
       if (!noted && !opened && !ended) return [];
       const row = `<a href="#row-${e(direction.id)}">${e(direction.title)}</a>`;
       const { verdict, evidence } = direction;
-      const said =
+      // The agent's evidence goes in brackets, so its words keep their own case.
+      const said = [
         verdict !== 'open' && evidence
-          ? `${verdictText(verdict, false)}, ${e(evidence.text.replace(/[.!?…]+$/u, ''))}.`
+          ? `${verdictText(verdict, false)} (${e(evidence.text.replace(/[.!?…]+$/u, ''))}).`
           : opened
-            ? `new, opened by ${direction.openedBy === 'person' ? 'you' : e(authorName(view, direction.openedBy))}.`
-            : 'not settled yet.';
-      const end = ended
-        ? direction.state === 'stopped'
-          ? ' You stopped it.'
-          : ' Its agent closed it.'
-        : '';
+            ? `New. ${direction.openedBy === 'person' ? 'You' : e(authorName(view, direction.openedBy))} opened it.`
+            : 'Not settled yet.',
+        missed ? 'A check did not hold.' : '',
+        ended
+          ? direction.state === 'stopped'
+            ? 'You stopped it.'
+            : 'Its agent closed it.'
+          : '',
+        news ? `${counted(news, 'new post')}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
       const glyph = ended
         ? '×'
         : verdict === 'open' && opened
@@ -1269,7 +1275,7 @@ function awayDigest(
       return [
         {
           rank: ended ? 5 : missed ? 2 : order[verdict] + (opened ? 1 : 0),
-          html: `<li><span class="away-mark" aria-hidden="true">${glyph}</span><span>${row}: ${said}${missed ? ' A check did not hold.' : ''}${end}${news ? ` ${counted(news, 'new post')}.` : ''}</span></li>`,
+          html: `<li><span class="away-mark" aria-hidden="true">${glyph}</span><span>${row}: ${said}</span></li>`,
         },
       ];
     })
@@ -1277,13 +1283,14 @@ function awayDigest(
   const finished = view.ledger.filter((run) => after(run.endedAt));
   const failed = finished.filter(
     (run) => run.status === 'failed' || run.status === 'timed-out',
-  ).length;
+  );
   const asked = view.state.calls.filter((call) => after(call.at)).length;
   const written = posts.filter((post) => post.kind !== 'status').length;
+  // Counts as HTML: a run that failed opens in the panel.
   const counts = [
     written ? counted(written, 'post') : '',
     finished.length
-      ? `${counted(finished.length, 'run')} ended${failed ? ` (${failed} failed)` : ''}`
+      ? `${counted(finished.length, 'run')} ended${failed.length ? ` (${failed.length} failed: ${failed.map((run) => `<button type="button" class="link" data-panel="run" data-run="${e(run.id)}">${e(run.id)}</button>`).join(', ')})` : ''}`
       : '',
     asked ? `${counted(asked, 'call')} for you` : '',
   ].filter(Boolean);
@@ -1306,5 +1313,5 @@ function awayDigest(
             '',
           )}</ul>${changed.length > awayLines ? `<p class="fine">${counted(changed.length - awayLines, 'more direction')} changed too. Their rows are below.</p>` : ''}`
       : ''
-  }${counts.length ? `<p class="fine">${e(counts.join(', '))}.</p>` : ''}${cost && !quiet ? `<p class="fine">${e(cost)}</p>` : ''}</section>`;
+  }${counts.length ? `<p class="fine">${counts.join(', ')}.</p>` : ''}${cost && !quiet ? `<p class="fine">${e(cost)}</p>` : ''}</section>`;
 }

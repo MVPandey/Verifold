@@ -7273,11 +7273,14 @@ await test('while you were away: a line for each direction with news, the counts
     (match) => match[1],
   );
   assert.deepEqual(lines, [
-    '<span class="away-mark" aria-hidden="true">↗</span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;/i&gt;</a>: Leading, acc 0.7. 2 new posts.</span>',
-    '<span class="away-mark" aria-hidden="true">+</span><span><a href="#row-d-2">Helix</a>: new, opened by you.</span>',
-    '<span class="away-mark" aria-hidden="true">×</span><span><a href="#row-d-3">Frequency</a>: not settled yet. You stopped it.</span>',
+    '<span class="away-mark" aria-hidden="true">↗</span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;/i&gt;</a>: Leading (acc 0.7). 2 new posts.</span>',
+    '<span class="away-mark" aria-hidden="true">+</span><span><a href="#row-d-2">Helix</a>: New. You opened it.</span>',
+    '<span class="away-mark" aria-hidden="true">×</span><span><a href="#row-d-3">Frequency</a>: Not settled yet. You stopped it.</span>',
   ]);
-  assert.match(digest, /2 posts, 1 run ended \(1 failed\), 1 call for you\./);
+  assert.match(
+    digest,
+    /2 posts, 1 run ended \(1 failed: <button type="button" class="link" data-panel="run" data-run="r-9">r-9<\/button>\), 1 call for you\./,
+  );
   // The costs since then add up to the header's growth: ≈$4.11 now, ≈$1.61 then.
   assert.match(
     html,

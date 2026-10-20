@@ -2051,10 +2051,12 @@ document.addEventListener('keydown', (event) => {
     field.select();
     return;
   }
+  // Closing the search returns focus to where it was, or to the view's title.
   const from = document.activeElement;
-  opener = selectorOf(
-    from instanceof HTMLElement && content.contains(from) ? from : trigger,
-  );
+  opener =
+    from instanceof HTMLElement && content.contains(from)
+      ? selectorOf(from)
+      : undefined;
   closeRail();
   navigate({ panel: 'search' }, '#lab-search');
 });
