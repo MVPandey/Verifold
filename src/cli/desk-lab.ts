@@ -1,9 +1,10 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import { number, type Artifact, type Post, type PostKind } from './board.ts';
 import {
+  barSummary,
+  budgetEnded,
   defaultLabHours,
   labLimits,
-  type Direction,
   type DirectionView,
   type LabView,
 } from './lab.ts';
@@ -71,6 +72,8 @@ export function stateOf(
 ): { readonly text: string; readonly face: string } {
   const until = entry.until ? clock(entry.until) : '';
   switch (entry.status) {
+    case 'plan':
+      return { text: 'Starts with the plan', face: 'idle' };
     case 'starting':
       return { text: 'Starting', face: 'working' };
     case 'working':
@@ -113,19 +116,6 @@ function proofText(artifact: Artifact): string {
   }
 }
 
-/** A bar with its repeat runs and its noise, such as "it beats SAE · 3 runs · noise ±0.02". */
-function barWords(direction: Direction): string {
-  return [
-    direction.bar ?? '',
-    direction.runs
-      ? `${direction.runs} ${direction.runs === 1 ? 'run' : 'runs'}`
-      : '',
-    direction.noise ? `noise ${direction.noise}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
 /**
  * The plan of record: how the lab reads the question, and each direction
  * with its bar and what it builds on. Before the plan, a line says that the
@@ -142,15 +132,18 @@ function planCard(
     const opener = view.directions.find(
       (entry) => entry.agent.id === state.opener,
     );
-    return opener && opener.direction.state === 'open'
-      ? `<section class="card lab-plan" aria-labelledby="plan-title"><h2 id="plan-title">Plan of record</h2><p>${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.</p></section>`
-      : '';
+    if (!opener) return '';
+    return `<section class="card lab-plan" aria-labelledby="plan-title"><h2 id="plan-title">Plan of record</h2><p>${
+      opener.status === 'stopped' || opener.status === 'crashed'
+        ? `${e(opener.agent.handle)} stopped before it posted a plan. Open directions yourself, or start it again.`
+        : `${e(opener.agent.handle)} reads the question and posts a plan here. Work that costs nothing starts with it.`
+    }</p></section>`;
   }
   const rows = plan.directions.flatMap((id) => {
     const direction = state.directions.find((entry) => entry.id === id);
     return direction
       ? [
-          `<tr><th scope="row">${e(direction.title)}</th><td>${e(barWords(direction))}</td><td>${direction.buildsOn.length ? direction.buildsOn.map((work) => `${e(work.text)} <span class="fine">(${work.known ? 'known' : 'new'})</span>`).join('<br>') : '<span class="fine">Nothing named</span>'}</td></tr>`,
+          `<tr><th scope="row">${e(direction.title)}${direction.state === 'stopped' ? ' <span class="fine">(stopped)</span>' : ''}</th><td>${e(barSummary(direction))}</td><td>${direction.buildsOn.length ? direction.buildsOn.map((work) => `${e(work.text)} <span class="fine">(${work.known ? 'known' : 'new'})</span>`).join('<br>') : '<span class="fine">Nothing named</span>'}</td></tr>`,
         ]
       : [];
   });
@@ -182,13 +175,6 @@ export function minutesText(minutes: number): string {
   return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 }
 
-/** The time budget ended. */
-function ended(state: LabView['state']): boolean {
-  return (
-    state.budget !== null && Date.parse(state.budget.deadline) <= Date.now()
-  );
-}
-
 /**
  * One direction: its title and bar, its agent, its state, its controls, and
  * the agent's transcript under them. A control keeps its direction in
@@ -218,7 +204,7 @@ function directionRow(
   const transcript = agent.session
     ? `<details class="lab-activity" id="lab-activity-${e(agent.id)}"><summary>What ${e(agent.handle)} did</summary>${slot(`session:${agent.session}`, `${agent.handle} transcript`)}</details>`
     : '';
-  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(barWords(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${transcript}</li>`;
+  return `<li class="lab-direction"><div class="lab-direction-text"><strong>${e(direction.title)}</strong>${direction.bar ? `<span class="fine">Holds up if ${e(barSummary(direction))}</span>` : ''}</div><span class="lab-agent">${e(agent.handle)} <span class="fine">${hostName(agent.host)}</span></span><span class="status${active ? ' active' : status === 'crashed' ? ' failed' : ''}">${e(stateOf(entry, clock).text)}</span><span class="lab-controls">${controls}</span>${transcript}</li>`;
 }
 
 /** Characters of a post that the view shows before it folds the rest. */
@@ -363,7 +349,7 @@ export function renderLab(
   const { runs } = view;
   const working = renderLabWork(works, clock);
   // After the time budget, the lab goes on with more time, from Needs you: no plain Resume.
-  const over = ended(state);
+  const over = budgetEnded(state);
   const pause = !runs
     ? ''
     : state.pausedAt
@@ -435,7 +421,7 @@ export function labBudgetNeed(view: LabView): {
 } | null {
   const { state } = view;
   // Also a lab that the person paused: more time keeps it paused until they resume it.
-  if (!view.runs || !state.budget || !ended(state)) return null;
+  if (!view.runs || !state.budget || !budgetEnded(state)) return null;
   const deadline = state.budget.deadline;
   const button = (count: number, primary: boolean): string =>
     `<button type="button"${primary ? ' class="primary"' : ''} data-action="lab-budget" data-hours="${count}">Give ${count} more ${count === 1 ? 'hour' : 'hours'}</button>`;

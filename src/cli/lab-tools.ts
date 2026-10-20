@@ -3,13 +3,16 @@ import type { AgentTool } from './session-hosts.ts';
 /**
  * The tools of a lab agent. Codex keeps the tools of a thread for its life, so
  * a change of a tool that a thread has raises `labToolsVersion`, and a Codex
- * agent with an older thread starts a new one. Version 3 added
- * `verifold_plan` for the agent that opens a lab.
+ * agent with an older thread starts a new one. A tool that only new threads
+ * get needs no new version: `verifold_plan` goes only to the agent that opens
+ * a lab, and that agent's thread is new.
  */
-export const labToolsVersion = 3;
+export const labToolsVersion = 2;
 
 /** The limits of a plan of record. The tool schema and the lab's checks use the same ones. */
 export const planLimits = {
+  /** Open directions of a lab, and so entries of a plan. */
+  directions: 6,
   reading: 600,
   cost: 200,
   title: 120,
@@ -137,7 +140,7 @@ export const planToolSpec: AgentTool = {
       directions: {
         type: 'array',
         minItems: 1,
-        maxItems: 6,
+        maxItems: planLimits.directions,
         items: {
           type: 'object',
           properties: {
@@ -196,7 +199,7 @@ export const planToolSpec: AgentTool = {
       mine: {
         type: 'integer',
         minimum: 0,
-        maximum: 5,
+        maximum: planLimits.directions - 1,
         description:
           'The index of your own direction in the first plan. Default: 0.',
       },
