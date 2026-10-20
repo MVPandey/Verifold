@@ -34,7 +34,18 @@ let view = 'home';
 let panel = '';
 /** When the page last went to the background for 5 minutes or more. Home lists what changed after it. */
 let since: string | undefined;
+/** A lab's two costs when the person left at `since`, as its header gave them. Only a lab's return sets it. */
+let spent: string | undefined;
 let hiddenAt: number | undefined;
+/** The words of the lab's search panel. They last for this tab. */
+let searchQuery: string | undefined;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * The page came back from the background, and has not yet checked how long
+ * the person was away. Until then a render keeps the old time of the last
+ * look, so a refresh cannot hide the time away.
+ */
+let returning = true;
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
@@ -90,6 +101,8 @@ try {
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   view = sessionStorage.getItem('verifold-desk-view') ?? 'home';
   since = sessionStorage.getItem('verifold-desk-since') ?? undefined;
+  spent = sessionStorage.getItem('verifold-desk-spent') ?? undefined;
+  searchQuery = sessionStorage.getItem('verifold-desk-q') ?? undefined;
   panel = sessionStorage.getItem('verifold-desk-panel') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
@@ -208,7 +221,9 @@ function viewQuery(): string {
   if (panel === 'run' && selectedRun) query.set('run', selectedRun);
   if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
   if (panel === 'diff' && selectedProof) query.set('proof', selectedProof);
+  if (panel === 'search' && searchQuery) query.set('q', searchQuery);
   if (since) query.set('since', since);
+  if (since && spent) query.set('spent', spent);
   if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
 }
@@ -441,6 +456,7 @@ async function render(html: string): Promise<void> {
     }
     lastHtml = html;
     showChanges(content, places, same);
+    noteSeen();
   };
   // Another view cross-fades in. The first view and live updates do not.
   if (
@@ -669,6 +685,56 @@ async function refresh(): Promise<void> {
         wanted !== viewQuery() ? 0 : 2000,
       );
   }
+}
+
+/** A person who comes back to a lab after this long sees on Home what changed. */
+const awayMs = 30 * 60_000;
+
+/** Keep when this browser last showed a lab while the person could see it, with the header's two costs then. */
+function noteSeen(): void {
+  if (returning || document.hidden) return;
+  const head = content.querySelector<HTMLElement>('.lab-head[data-spent]');
+  if (!head?.dataset.spent) return;
+  try {
+    localStorage.setItem(
+      'verifold-desk-lab-seen',
+      JSON.stringify({
+        at: new Date().toISOString(),
+        spent: head.dataset.spent,
+      }),
+    );
+  } catch {
+    /* Without browser storage, the next visit lists nothing. */
+  }
+}
+
+/**
+ * The last look of this browser at a lab, from any tab. After 30 minutes
+ * or more, Home lists what changed since then, until the person dismisses it.
+ */
+function checkAway(): void {
+  returning = false;
+  let seen: unknown;
+  try {
+    seen = JSON.parse(localStorage.getItem('verifold-desk-lab-seen') ?? 'null');
+  } catch {
+    return;
+  }
+  if (
+    !seen ||
+    typeof seen !== 'object' ||
+    !('at' in seen) ||
+    typeof seen.at !== 'string' ||
+    !('spent' in seen) ||
+    typeof seen.spent !== 'string'
+  )
+    return;
+  const at = Date.parse(seen.at);
+  if (!Number.isFinite(at) || Date.now() - at < awayMs) return;
+  since = new Date(at).toISOString();
+  spent = seen.spent;
+  remember('since', since);
+  remember('spent', spent);
 }
 
 function closeRail(): void {
@@ -1659,7 +1725,33 @@ document.addEventListener('click', (event) => {
     )
   )
     document.body.classList.remove('dock-open', 'dock-expanded');
+  // A post that the search found opens on Home. On a narrow screen the panel covers the board, so it closes.
+  const found =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('a[data-post-link]')
+      : null;
+  if (found?.dataset.postLink) {
+    event.preventDefault();
+    navigate(
+      {
+        view: 'home',
+        ...(matchMedia('(max-width: 860px)').matches ? { panel: '' } : {}),
+      },
+      `#post-${CSS.escape(found.dataset.postLink)}`,
+      'center',
+    );
+    return;
+  }
   if (!(target instanceof HTMLElement)) return;
+  if (target.hasAttribute('data-away-dismiss')) {
+    since = undefined;
+    spent = undefined;
+    remember('since', undefined);
+    remember('spent', undefined);
+    pendingFocus = '#view-title';
+    void refresh();
+    return;
+  }
   if (target.matches('a.skip')) {
     event.preventDefault();
     document.getElementById('view')?.focus();
@@ -1849,13 +1941,19 @@ document.addEventListener('keydown', (event) => {
     document.body.classList.remove('dock-open', 'dock-expanded');
     return;
   }
+  // In the search, Escape closes it. Its words stay for the next search.
+  const searching =
+    event.target instanceof HTMLElement && event.target.id === 'lab-search';
   if (
     !panel ||
     document.body.classList.contains('t-locked') ||
-    (event.target instanceof Element &&
+    (!searching &&
+      event.target instanceof Element &&
       event.target.closest('input, textarea, select'))
   )
     return;
+  // A search field clears itself on Escape. Here Escape closes the panel instead.
+  if (searching) event.preventDefault();
   navigate({ panel: '' }, opener ?? '#view-title');
   opener = undefined;
 });
@@ -1916,6 +2014,50 @@ content.addEventListener('input', (event) => {
   if (event.target instanceof HTMLElement && event.target.id === 'lab-text')
     showMentions();
 });
+// The lab's search asks the desk a moment after the person stops typing.
+content.addEventListener('input', (event) => {
+  if (
+    !(event.target instanceof HTMLInputElement) ||
+    event.target.id !== 'lab-search'
+  )
+    return;
+  const value = event.target.value.trim();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = value || undefined;
+    remember('q', searchQuery);
+    void refresh();
+  }, 250);
+});
+const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+document.documentElement.classList.toggle('mac', mac);
+// ⌘K, or Ctrl+K off a Mac, opens the lab's search from anywhere in the desk. In the search it selects the words.
+document.addEventListener('keydown', (event) => {
+  if (
+    event.key.toLowerCase() !== 'k' ||
+    event.altKey ||
+    event.shiftKey ||
+    (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey) ||
+    (event.target instanceof Element &&
+      event.target.closest('.terminal-screen'))
+  )
+    return;
+  const trigger = content.querySelector<HTMLElement>('[data-panel="search"]');
+  if (!trigger) return;
+  event.preventDefault();
+  const field = document.getElementById('lab-search');
+  if (panel === 'search' && field instanceof HTMLInputElement) {
+    field.focus();
+    field.select();
+    return;
+  }
+  const from = document.activeElement;
+  opener = selectorOf(
+    from instanceof HTMLElement && content.contains(from) ? from : trigger,
+  );
+  closeRail();
+  navigate({ panel: 'search' }, '#lab-search');
+});
 // A press on a name takes it before the box loses focus.
 content.addEventListener('mousedown', (event) => {
   const item =
@@ -1966,14 +2108,21 @@ content.addEventListener('keydown', (event) => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
+    returning = true;
     return;
   }
+  const before = since;
   if (hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
     since = new Date(hiddenAt).toISOString();
+    // The costs of an earlier return do not fit this time.
+    spent = undefined;
     remember('since', since);
-    void refresh();
+    remember('spent', undefined);
   }
   hiddenAt = undefined;
+  // A lab counts from its last look, after 30 minutes or more away.
+  checkAway();
+  if (since !== before) void refresh();
 });
 window.addEventListener('resize', drawMaps);
 // A toggle does not bubble either. An opened run log loads at once.
@@ -2040,4 +2189,5 @@ async function connect(): Promise<void> {
   }
   await refresh();
 }
+checkAway();
 void connect();

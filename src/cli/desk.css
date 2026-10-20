@@ -4030,6 +4030,102 @@ body:has(.lab-screen) .menu-button {
   padding-left: 18px;
 }
 
+/* While you were away: a few lines on what changed, above Needs you. */
+.lab-screen .lab-away {
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.lab-screen .lab-away > * + * {
+  margin-top: 6px;
+}
+.lab-screen .away-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lab-screen .away-head h2 {
+  font-size: 15px;
+}
+.lab-screen .away-lines {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.lab-screen .away-lines li {
+  display: flex;
+  gap: 8px;
+}
+.lab-screen .away-lines li > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lab-screen .away-mark {
+  flex: none;
+  width: 14px;
+  color: var(--violet);
+  font-weight: 700;
+  text-align: center;
+}
+/* A post that the search opened shows where it is. */
+.lab-screen .post:focus {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Search: the key shows for this computer, and the hits list under the field. */
+.search-key {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+}
+html.mac .search-key .key-other,
+html:not(.mac) .search-key .key-mac {
+  display: none;
+}
+.lab-panel.lab-search input {
+  width: 100%;
+}
+.lab-panel .hits {
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  list-style: none;
+}
+.lab-panel .hit {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.lab-panel .hit > * + * {
+  margin-top: 4px;
+}
+.lab-panel .hit-head {
+  color: var(--muted);
+}
+.lab-panel .hit-head a,
+.lab-panel .hit-head button.link {
+  font-weight: 650;
+}
+.lab-panel .hit-text {
+  overflow-wrap: anywhere;
+}
+.lab-panel mark {
+  border-radius: 3px;
+  background: var(--lavender);
+  color: var(--tint-ink);
+  font-weight: 650;
+}
+
 /* On a phone a row's verdict and agent share the first line, its title the next, then its state. */
 @media (max-width: 860px) {
   .lab-screen .lab-head {
@@ -4071,5 +4167,9 @@ body:has(.lab-screen) .menu-button {
   }
   .lab-screen .lab-needs > details > summary {
     flex-wrap: wrap;
+  }
+  /* A phone has no keyboard for the search key. */
+  .search-key {
+    display: none;
   }
 }

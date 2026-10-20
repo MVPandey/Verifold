@@ -47,12 +47,13 @@ import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { checkToolSpecs } from '../src/cli/lab-tools.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
+import { parseFrame, renderDesk } from '../src/cli/desk-view.ts';
 import {
   costLine,
   labCallNeeds,
   renderLab,
   runPanel,
+  searchPanel,
 } from '../src/cli/desk-lab.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
@@ -3005,7 +3006,7 @@ await test('the first agent posts the plan of record, and the lab opens its dire
   const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(
     html,
-    /<article class="post" id="post-p-1">[\s\S]*<span class="chip kind-plan">Plan of record<\/span>/,
+    /<article class="post" id="post-p-1" tabindex="-1">[\s\S]*<span class="chip kind-plan">Plan of record<\/span>/,
   );
   assert.match(
     html,
@@ -6624,6 +6625,7 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     '/api/view?panel=run&run=r-1',
     '/api/view?panel=diff&direction=d-1',
     '/api/view?panel=agent&agent=a-1',
+    '/api/view?panel=search&q=notes',
     '/api/run-log?run=r-1',
     '/api/lab-diff?direction=d-1&file=notes.md',
   ])
@@ -6716,8 +6718,24 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     '/api/view?panel=diff&direction=d-1&proof=x',
     '/api/view?panel=run&run=x',
     '/api/view?panel=agent&agent=a-1&agent=a-2',
+    '/api/view?panel=search&q=a&q=b',
+    `/api/view?panel=search&q=${'x'.repeat(101)}`,
+    '/api/view?panel=search&q=a%07b',
+    '/api/view?since=2026-10-20T09:00:00.000Z&spent=1',
   ])
     assert.equal((await get(path)).status, 400, path);
+  // With the token, the search finds the post in the panel.
+  const found = (
+    (await (await get('/api/view?panel=search&q=NOTES')).json()) as {
+      html: string;
+    }
+  ).html;
+  assert.match(
+    found,
+    new RegExp(
+      `data-post-link="${evidence}">${evidence}</a>[\\s\\S]*<mark>Notes</mark>\\.`,
+    ),
+  );
   // An unknown run or agent opens a panel that says so.
   assert.match(
     (
@@ -6964,3 +6982,377 @@ await test(
     await until(() => lab.lab.view()?.directions[0]?.status !== 'terminal');
   },
 );
+
+/** A run record for a screen test: done on this computer, with its command and times. */
+function screenRun(id: string, more: Partial<RunRecord> = {}): RunRecord {
+  const at = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    id,
+    agent: 'a-1',
+    key: `k-${id}`,
+    direction: 'd-1',
+    harness: 'claude',
+    commit: 'a'.repeat(40),
+    command: 'python probe.py',
+    why: 'A seed for the bar.',
+    status: 'done',
+    exitCode: 0,
+    queuedAt: at,
+    startedAt: at,
+    endedAt: at,
+    minutes: 10,
+    want: [],
+    metrics: {},
+    outputs: [],
+    config: 'c',
+    output: null,
+    log: { bytes: 0, cut: false },
+    process: null,
+    cancelledBy: null,
+    note: null,
+    told: true,
+    folder: `run-${id.slice(2)}-1a2b3c4d`,
+    where: 'local',
+    ...more,
+  };
+}
+
+/** A post for a screen test, in d-1 unless `more` says otherwise. */
+function screenPost(
+  id: string,
+  author: string,
+  kind: 'claim' | 'objection' | 'question' | 'evidence' | 'status',
+  text: string,
+  at: string,
+  more: Record<string, unknown> = {},
+): LabView['posts'][number] {
+  return {
+    schemaVersion: 1,
+    id,
+    at,
+    author,
+    kind,
+    text,
+    mentions: [],
+    artifacts: [],
+    direction: 'd-1',
+    ...more,
+  };
+}
+
+/** A call for a screen test that waits for the person. */
+function screenCall(at: string, more: Partial<LabCall> = {}): LabCall {
+  return {
+    id: 'c-1',
+    at,
+    by: 'a-1',
+    direction: 'd-1',
+    kind: 'cost',
+    question: 'Rent a <b>GPU</b> for the probe?',
+    options: [
+      { label: 'Rent <i>it</i>', usd: 1.4, minutes: 40, effect: null },
+      { label: 'Use this Mac', usd: 0, minutes: 360, effect: null },
+    ],
+    pick: 0,
+    why: 'Seeds now.',
+    undoMinutes: 10,
+    deadline: null,
+    state: 'open',
+    answer: null,
+    undoUntil: null,
+    applied: null,
+    note: null,
+    ...more,
+  };
+}
+
+await test('search finds posts, runs, and calls in any case, needs each word, marks them, escapes every hit, and shows the newest 50', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do months lie on a circle?', { hours: 8 });
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Circles', harness: 'claude' });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const at = (minutes: number): string =>
+    new Date(Date.UTC(2026, 9, 20, 9, minutes)).toISOString();
+  const clock = (value: string): string => value.slice(11, 16);
+  const seeded: LabView = {
+    ...view,
+    posts: [
+      ...view.posts,
+      screenPost(
+        'p-90',
+        'a-1',
+        'claim',
+        'The PROBE <script>x</script> wins.',
+        at(3),
+      ),
+      screenPost(
+        'p-91',
+        'person',
+        'question',
+        'Is the probe <b>fair</b>?',
+        at(4),
+      ),
+    ],
+    ledger: [
+      screenRun('r-9', {
+        command: 'python <probe>.py --seed "1"',
+        queuedAt: at(5),
+        startedAt: at(5),
+      }),
+    ],
+    state: { ...view.state, calls: [screenCall(at(7))] },
+  };
+  const panel = searchPanel(seeded, 'probe', clock);
+  assert.equal(panel.title, 'Search the lab');
+  const hits = [...panel.body.matchAll(/<li class="hit">[\s\S]*?<\/li>/g)].map(
+    (match) => match[0],
+  );
+  // The newest first: the call, the run, then the two posts.
+  assert.equal(hits.length, 4);
+  assert.match(
+    hits[0] ?? '',
+    /Cost call<\/span> c-1 · claude-1 · <time[^>]*>09:07<\/time> · waits for you/,
+  );
+  assert.match(
+    hits[0] ?? '',
+    /Rent a &lt;b&gt;GPU&lt;\/b&gt; for the <mark>probe<\/mark>\? \(Rent &lt;i&gt;it&lt;\/i&gt;, Use this Mac\)/,
+  );
+  assert.match(hits[0] ?? '', /data-view="needs">Answer it in Needs you</);
+  assert.match(
+    hits[1] ?? '',
+    /data-panel="run" data-run="r-9">r-9<\/button>[\s\S]*<code>python &lt;<mark>probe<\/mark>&gt;\.py --seed &quot;1&quot;<\/code>/,
+  );
+  assert.match(
+    hits[2] ?? '',
+    /<a href="#post-p-91" data-post-link="p-91">p-91<\/a> · You/,
+  );
+  assert.match(
+    hits[2] ?? '',
+    /<span class="chip kind-question">Message<\/span>/,
+  );
+  assert.match(
+    hits[3] ?? '',
+    /The <mark>PROBE<\/mark> &lt;script&gt;x&lt;\/script&gt; wins\./,
+  );
+  assert.match(panel.body, /4 hits, the newest first\./);
+  for (const raw of ['<script', '<b>', '<i>', '<probe>'])
+    assert.ok(!panel.body.includes(raw), raw);
+  // Each word must match. An ID finds its run, in any case.
+  assert.equal(
+    searchPanel(seeded, 'probe  WINS', clock).body.match(/<li class="hit">/g)
+      ?.length,
+    1,
+  );
+  assert.match(searchPanel(seeded, 'R-9', clock).body, /data-run="r-9"/);
+  // A pattern character is plain text, and the words go back into the field escaped.
+  const odd = searchPanel(seeded, '"><b> (.*', clock).body;
+  assert.match(odd, /value="&quot;&gt;&lt;b&gt; \(\.\*"/);
+  assert.match(odd, /No post, run, or call has these words\./);
+  assert.match(searchPanel(seeded, undefined, clock).body, /Type a word/);
+  // 130 posts: the newest 50 hits show, and an old post that the board leaves out shows its whole text.
+  const long = `needle ${'word '.repeat(60)}end of the old post`;
+  const many: LabView = {
+    ...seeded,
+    ledger: [],
+    posts: Array.from({ length: 130 }, (_, index) =>
+      screenPost(
+        `p-${index + 1}`,
+        'a-1',
+        'evidence',
+        index ? `Seed ${index}` : long,
+        new Date(Date.UTC(2026, 9, 20, 9, 0, index)).toISOString(),
+      ),
+    ),
+  };
+  const capped = searchPanel(many, 'seed', clock).body;
+  assert.equal(capped.match(/<li class="hit">/g)?.length, 50);
+  assert.match(
+    capped,
+    /The newest 50 of 129 hits\. Add a word to find fewer\./,
+  );
+  const old = searchPanel(many, 'needle', clock).body;
+  assert.doesNotMatch(old, /data-post-link/);
+  assert.match(
+    old,
+    /<details id="hit-p-1"><summary>Show the whole post<\/summary><p class="pre">needle [\s\S]*end of the old post<\/p><\/details>/,
+  );
+  // A search has at most 100 printable characters.
+  assert.equal(
+    parseFrame(
+      'home',
+      'search',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      'x'.repeat(100),
+    )?.q,
+    'x'.repeat(100),
+  );
+  for (const q of ['x'.repeat(101), 'a\u0007b'])
+    assert.equal(
+      parseFrame('home', 'search', null, null, null, null, null, null, q),
+      null,
+    );
+});
+
+await test('while you were away: a line for each direction with news, the counts, and costs that add up to the header', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do months lie on a circle?', { hours: 8 });
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Circles <i>x</i>', harness: 'claude' });
+  await lab.lab.addDirection({ title: 'Helix', harness: 'codex' });
+  await lab.lab.addDirection({ title: 'Frequency', harness: 'claude' });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const hours = (count: number): string =>
+    new Date(Date.now() - count * 3_600_000).toISOString();
+  const left = hours(3);
+  const evidence = { text: 'acc 0.7.', post: 'p-90', run: 'r-9' };
+  const directions = view.state.directions.map((direction) =>
+    direction.id === 'd-1'
+      ? {
+          ...direction,
+          openedAt: hours(5),
+          verdict: 'leading' as const,
+          evidence,
+        }
+      : direction.id === 'd-2'
+        ? { ...direction, openedAt: hours(1), openedBy: 'person' }
+        : {
+            ...direction,
+            openedAt: hours(5),
+            state: 'stopped' as const,
+            stoppedAt: hours(1),
+          },
+  );
+  const seeded: LabView = {
+    ...view,
+    claudeUsd: 2.61,
+    posts: [
+      screenPost('p-80', 'a-1', 'claim', 'Before you left.', hours(4)),
+      screenPost('p-90', 'a-1', 'claim', 'The probe wins.', hours(1)),
+      screenPost('p-91', 'a-2', 'objection', 'One seed.', hours(1), {
+        replyTo: 'p-90',
+      }),
+      screenPost('p-92', 'verifold', 'status', 'A note.', hours(1)),
+    ],
+    ledger: [
+      screenRun('r-8', { endedAt: hours(4) }),
+      screenRun('r-9', { status: 'failed', exitCode: 1, endedAt: hours(1) }),
+    ],
+    state: {
+      ...view.state,
+      startedAt: hours(6),
+      directions,
+      calls: [screenCall(hours(1))],
+    },
+  };
+  const gpu = { spent: 1.5, limit: 20 };
+  const clock = (value: string): string => value;
+  const html = renderLab(seeded, clock, {
+    gpu,
+    away: { since: left, spent: { claude: 1.11, gpu: 0.5 } },
+  });
+  const digest = html.slice(
+    html.indexOf('<section class="lab-away"'),
+    html.indexOf('</section>', html.indexOf('<section class="lab-away"')),
+  );
+  assert.match(
+    digest,
+    /<h2 id="away-title">While you were away<\/h2><button type="button" class="link" data-away-dismiss>Dismiss<\/button>/,
+  );
+  assert.ok(digest.includes(`Since ${left}.`));
+  // The most settled first: a verdict, a new direction, then one that ended.
+  const lines = [...digest.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(lines, [
+    '<span class="away-mark" aria-hidden="true">↗</span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;/i&gt;</a>: Leading, acc 0.7. 2 new posts.</span>',
+    '<span class="away-mark" aria-hidden="true">+</span><span><a href="#row-d-2">Helix</a>: new, opened by you.</span>',
+    '<span class="away-mark" aria-hidden="true">×</span><span><a href="#row-d-3">Frequency</a>: not settled yet. You stopped it.</span>',
+  ]);
+  assert.match(digest, /2 posts, 1 run ended \(1 failed\), 1 call for you\./);
+  // The costs since then add up to the header's growth: ≈$4.11 now, ≈$1.61 then.
+  assert.match(
+    html,
+    /≈\$4\.11 spent \(Claude Code ≈\$2\.61, GPU \$1\.50 of \$20\.00\)/,
+  );
+  assert.match(
+    digest,
+    /Spent since then: ≈\$2\.50 \(Claude Code ≈\$1\.50, GPU \$1\.00\)\./,
+  );
+  assert.ok(!digest.includes('<i>'));
+  // The header keeps the two costs that the page saw.
+  assert.match(
+    html,
+    /<header class="lab-head" data-spent="2\.610000,1\.500000">/,
+  );
+  // A baseline above today's costs fits no cost line. A lab that started since then counts from its start.
+  assert.doesNotMatch(
+    renderLab(seeded, clock, {
+      gpu,
+      away: { since: left, spent: { claude: 9, gpu: 0.5 } },
+    }),
+    /Spent since then/,
+  );
+  const fresh = renderLab(seeded, clock, {
+    gpu,
+    away: { since: hours(7), spent: { claude: 9, gpu: 9 } },
+  });
+  assert.ok(fresh.includes(`. The lab started at ${seeded.state.startedAt}.`));
+  assert.match(
+    fresh,
+    /Spent since then: ≈\$4\.11 \(Claude Code ≈\$2\.61, GPU \$1\.50\)\./,
+  );
+  // Nothing new: one quiet line.
+  const quiet = renderLab(seeded, clock, {
+    gpu,
+    away: {
+      since: new Date().toISOString(),
+      spent: { claude: 2.61, gpu: 1.5 },
+    },
+  });
+  assert.match(quiet, /<p>Nothing changed\.<\/p>/);
+  assert.doesNotMatch(quiet, /Spent since then/);
+  // Home shows it only with the costs of the last look. A plain return of a page shows none.
+  const snapshot = await readDeskSnapshot(lab.root);
+  const live = { session: null, controllable: true, lab: seeded } as never;
+  const frame = parseFrame(
+    'home',
+    null,
+    left,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    '1.11,0.5',
+  );
+  assert.deepEqual(frame?.spent, { claude: 1.11, gpu: 0.5 });
+  assert.ok(frame);
+  assert.match(
+    renderDesk(snapshot, undefined, null, live, frame).html,
+    /While you were away/,
+  );
+  assert.doesNotMatch(
+    renderDesk(snapshot, undefined, null, live, {
+      view: 'home',
+      panel: null,
+      since: left,
+    }).html,
+    /While you were away/,
+  );
+  for (const spent of ['1.11', '1,2,3', '-1,2', '1e3,2'])
+    assert.equal(
+      parseFrame('home', null, left, null, null, null, null, null, null, spent),
+      null,
+      spent,
+    );
+});
