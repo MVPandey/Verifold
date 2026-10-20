@@ -4292,14 +4292,17 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
     post: 'p-3',
     run: 'r-1',
   });
-  assert.ok(
-    lab.lab
-      .view()
-      ?.posts.some((post) =>
-        /"Alpha" holds up: codex-1 \(Codex\) reran p-3 in p-\d+\./.test(
-          post.text,
+  // The note follows the verdict.
+  await until(() =>
+    Boolean(
+      lab.lab
+        .view()
+        ?.posts.some((post) =>
+          /"Alpha" holds up: codex-1 \(Codex\) reran p-3 in p-\d+\./.test(
+            post.text,
+          ),
         ),
-      ),
+    ),
   );
   assert.equal(lab.lab.view()?.checks.length, 1);
   const html = renderLab(
@@ -4400,7 +4403,12 @@ await test('with one harness a fresh session of the same harness checks, and a c
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   const claim = await claimPost(lab);
   await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
-  await until(() => lab.lab.view()?.checks[0]?.state === 'running');
+  // The session is known once its start returns.
+  await until(
+    () =>
+      lab.lab.view()?.checks[0]?.state === 'running' &&
+      Boolean(lab.lab.view()?.checks[0]?.session),
+  );
   const check = lab.lab.view()?.checks[0];
   assert.equal(check?.harness, 'claude');
   assert.equal(check?.sameHarness, true);
