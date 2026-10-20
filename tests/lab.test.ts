@@ -17,10 +17,10 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
-import { Lab, labLimits } from '../src/cli/lab.ts';
+import { Lab, labLimits, type LabSessions } from '../src/cli/lab.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { Quota } from '../src/cli/quota.ts';
-import { readRecord } from '../src/cli/session.ts';
+import { readRecord, type SessionView } from '../src/cli/session.ts';
 import { archiveRun, restoreRun } from '../src/cli/archive.ts';
 import { terminalInput, type CliIO } from '../src/cli/commands.ts';
 
@@ -993,6 +993,16 @@ interface LabInside {
     direction: unknown,
     made: { readonly commit: string; readonly order: number },
   ): Promise<boolean>;
+  update(
+    id: string,
+    change: (agent: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void>;
+  begin(id: string, read: null): void;
+  rt(id: string): {
+    turning: boolean;
+    turn: number;
+    launch: { readonly at: number; turns: number } | null;
+  };
 }
 
 await test('directions take turns when they outnumber the slots, and an agent at its hourly turns gives its slot', async (t) => {
@@ -1040,7 +1050,7 @@ await test('directions take turns when they outnumber the slots, and an agent at
   assert.deepEqual(await counts(), before);
 });
 
-await test('a turn whose process stops brings its posts again, and the new conversation reads them', async (t) => {
+await test('a turn whose process stops brings its posts again, and the resumed conversation reads them', async (t) => {
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [
     { calls: [] },
@@ -1054,12 +1064,40 @@ await test('a turn whose process stops brings its posts again, and the new conve
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
   await lab.lab.post({ text: '@claude-1 check layer 12.' });
-  // The turn with the post stops. The agent starts a new conversation, and its next digest carries the post again.
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 5, 8000);
+  // The turn with the post stops. The harness keeps the conversation, so the
+  // agent resumes it, and its next digest carries the post again.
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
   const inputs = await lab.inputs('d-1-alpha');
   assert.match(inputs[2] ?? '', /check layer 12/);
-  assert.match(inputs[3] ?? '', /The question:/);
-  assert.match(inputs[4] ?? '', /check layer 12/);
+  assert.match(inputs[3] ?? '', /check layer 12/);
+  assert.match(inputs[3] ?? '', /started it again with your conversation/);
+  assert.doesNotMatch(inputs.join('\n'), /The question:[\s\S]*The question:/);
+  assert.deepEqual((await lab.lines('d-1-alpha', 'launches.jsonl')).slice(-1), [
+    'resume',
+  ]);
+});
+
+await test('a conversation that cannot resume starts new, without the notes about the earlier one', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: [{ name: 'EXIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The process stops. Before the lab starts it again, its session record goes, so nothing can resume.
+  await until(
+    () => (lab.lab.view()?.directions[0]?.agent.restarts.length ?? 0) === 1,
+  );
+  await delay(50);
+  await rm(
+    join(
+      lab.root,
+      '.verifold',
+      'sessions',
+      `${lab.lab.view()?.directions[0]?.agent.session}.json`,
+    ),
+  );
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 8000);
+  const inputs = await lab.inputs('d-1-alpha');
+  assert.match(inputs[1] ?? '', /The question:/);
+  assert.doesNotMatch(inputs.join('\n'), /started it again/);
 });
 
 await test('a refused read brings no digest again, and a repeated unread read gets its first answer', async (t) => {
@@ -1185,6 +1223,9 @@ await test('a lab agent resumes only through the lab, and a full pool parks an a
   );
   // The commit after its turn ends too.
   await delay(200);
+  // The desk shows the person's Resume and Start again: the agent can give its slot.
+  assert.equal(lab.sessions.full, true);
+  assert.equal(lab.lab.canYield(), true);
   // The person's session needs the only slot: the agent parks and keeps its conversation.
   const person = await lab.sessions.start({
     host: 'claude',
@@ -1449,4 +1490,112 @@ await test('an agent whose first prompt fails waits, and the agent after it star
   await until(async () => (await lab.inputs('d-2-beta')).length >= 1);
   assert.equal((await lab.inputs('d-1-alpha')).length, 0);
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+});
+
+await test('a commit that fails is not a turn without change: the agent hears why, and its turns go on', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  // Git cannot take the folder's index, so each commit after a turn fails.
+  const lock = join(lab.root, '.git', 'worktrees', 'd-1-alpha', 'index.lock');
+  await writeFile(lock, '');
+  await lab.lab.resume();
+  // Turns that change nothing would wait a minute after the second one. These do not count.
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
+  assert.match(
+    (await lab.inputs('d-1-alpha'))[1] ?? '',
+    /could not commit your folder after your last turn/,
+  );
+  assert.equal(lab.lab.view()?.directions[0]?.agent.idleStreak, 0);
+  await rm(lock);
+});
+
+await test('a digest of long posts stays within what a turn takes: long posts are cut and say where the rest is', async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.pause();
+  // Each quote doubles in the digest's JSON quoting: 20 such posts would pass 100,000 characters.
+  const long = '"'.repeat(boardLimits.personText);
+  for (let index = 0; index < 20; index += 1)
+    await lab.lab.post({ text: long });
+  await lab.lab.resume();
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha')).some((input) =>
+        input.includes('cut: verifold_board with view thread'),
+      ),
+    8000,
+  );
+  for (const input of await lab.inputs('d-1-alpha'))
+    assert.ok(input.length < 100_000, `A turn of ${input.length} characters.`);
+});
+
+await test('a park that ends after a resume and a new turn leaves that turn alone, and Start over waits for the parks', async (t) => {
+  const fx = await fixture(t);
+  let parks = 0;
+  let release: () => void = () => {};
+  let gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sessions: LabSessions = {
+    full: false,
+    view: () =>
+      ({ live: true, record: { status: 'running' } }) as unknown as SessionView,
+    idle: () => false,
+    startAgent: () => Promise.reject(new Error('Not in this test.')),
+    resumeAgent: () => Promise.resolve(),
+    park: async () => {
+      parks += 1;
+      await gate;
+      return true;
+    },
+    continueTask: () => {},
+    steer: () => false,
+    endTask: () => {},
+  };
+  const lab = new Lab(fx.root, { sessions, timing, runs: false });
+  t.after(() => lab.close());
+  await lab.start('A question.');
+  await lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  const inside = lab as unknown as LabInside;
+  await inside.update('a-1', (agent) => ({
+    ...agent,
+    session: '20260101T000000000Z-deadbeef',
+  }));
+  inside.begin('a-1', null);
+  inside.rt('a-1').launch = { at: Date.now(), turns: 0 };
+  // The park of turn 1 waits. Meanwhile the person resumes, and turn 2 starts.
+  const pausing = lab.pause();
+  await until(() => parks === 1);
+  await lab.resume();
+  inside.begin('a-1', null);
+  release();
+  await pausing;
+  assert.equal(inside.rt('a-1').turning, true);
+  assert.equal(inside.rt('a-1').turn, 2);
+  // A park of the turn that still runs stops it: its digest comes again.
+  gate = Promise.resolve();
+  await lab.pause();
+  assert.equal(inside.rt('a-1').turning, false);
+  // Start over waits for the parks of a pause that still runs.
+  await lab.resume();
+  inside.begin('a-1', null);
+  gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  parks = 0;
+  const second = lab.pause();
+  await until(() => parks === 1);
+  let suspended = false;
+  const suspending = lab.suspend().then(() => {
+    suspended = true;
+  });
+  await delay(100);
+  assert.equal(suspended, false);
+  release();
+  await second;
+  await suspending;
+  assert.equal(suspended, true);
 });

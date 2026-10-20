@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  link,
   mkdir,
   mkdtemp,
   readFile,
@@ -462,7 +463,7 @@ await test('a lab folder reads through Git: a link to a file outside, or a path 
   assert.equal(await readCurrent(root, workspace, 'link.txt'), null);
   assert.equal(await readCurrent(root, workspace, 'linked/secret.txt'), null);
   // A commit keeps a link as a link, and a read at the commit does not follow it.
-  const commit = await snapshot(root, workspace, 'Snapshot', ['link.txt']);
+  const { commit } = await snapshot(root, workspace, 'Snapshot', ['link.txt']);
   assert.equal(await readFileAt(root, workspace, commit, 'link.txt'), null);
   assert.equal(
     await readFileAt(root, workspace, commit, 'linked/secret.txt'),
@@ -471,6 +472,55 @@ await test('a lab folder reads through Git: a link to a file outside, or a path 
   assert.equal(
     (await readFileAt(root, workspace, commit, 'notes.md'))?.toString('utf8'),
     'notes\n',
+  );
+});
+
+await test('a lab folder leaves a file with a second hard link out of its commits and reads, and its message speaks of the folder', async (t) => {
+  const root = await folder(t);
+  const outside = await folder(t);
+  await write(outside, 'secret.txt', 'SECRET\n');
+  const workspace = await allocate(root, {
+    name: 'd-1-alpha',
+    writable: ['.'],
+    inputs: [],
+    light: true,
+  });
+  const target = join(root, workspace.path);
+  await write(target, 'kept.txt', 'kept\n');
+  // A hard link is a regular file to Git. Verifold leaves it out, named or not.
+  await link(join(outside, 'secret.txt'), join(target, 'copy.txt'));
+  await mkdir(join(target, 'nested'));
+  await link(join(outside, 'secret.txt'), join(target, 'nested', 'deep.txt'));
+  await assert.rejects(
+    readCurrent(root, workspace, 'copy.txt'),
+    /more than one hard link/,
+  );
+  const made = await snapshot(root, workspace, 'Snapshot', ['copy.txt']);
+  assert.deepEqual([...made.linked].sort(), ['copy.txt', 'nested/deep.txt']);
+  assert.equal(
+    await readFileAt(root, workspace, made.commit, 'copy.txt'),
+    null,
+  );
+  assert.equal(
+    await readFileAt(root, workspace, made.commit, 'nested/deep.txt'),
+    null,
+  );
+  assert.equal(
+    (await readFileAt(root, workspace, made.commit, 'kept.txt'))?.toString(
+      'utf8',
+    ),
+    'kept\n',
+  );
+  // Too many files: the message speaks of the direction's folder, not of a task.
+  await mkdir(join(target, 'many'));
+  await Promise.all(
+    Array.from({ length: 5001 }, (_, index) =>
+      writeFile(join(target, `many/${index}.csv`), 'x'),
+    ),
+  );
+  await assert.rejects(
+    snapshot(root, workspace, 'Snapshot'),
+    /Your direction's folder changed more than 5000 files/,
   );
 });
 
