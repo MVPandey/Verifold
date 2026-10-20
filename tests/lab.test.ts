@@ -6193,10 +6193,12 @@ await test('the lab adds up the cost estimates of its Claude Code agents for the
   assert.ok(Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 0.65) < 1e-9);
   await lab.lab.post({ text: '@claude-1 once more.' });
   await until(() => Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 1.25) < 1e-9);
+  // The session's record adds up both processes, and it is saved.
   const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
-  const record = await readRecord(lab.root, session);
-  assert.equal(record?.spentUsd, 1);
-  assert.equal(record?.costUsd, 0.6);
+  await until(
+    async () => (await readRecord(lab.root, session))?.spentUsd === 1,
+  );
+  assert.equal((await readRecord(lab.root, session))?.costUsd, 0.6);
 });
 
 await test('the main screen: one header, a Needs-you line in its order, a disputed row, and every agent text escaped', async (t) => {
