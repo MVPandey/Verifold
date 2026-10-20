@@ -1048,15 +1048,20 @@ export async function copyAt(
  * Copy the selected files of a version into the project. Each file in the
  * project must still match its start content, or nothing is copied. New
  * content goes to temporary files first, then each one is renamed.
- * `staged` runs after every check passed and every temporary file is
- * written, before the first rename. When it throws, nothing is copied.
+ * `bases` names another commit whose content a file must match instead of
+ * the start, such as the version that came in before. `staged` runs after
+ * every check passed and every temporary file is written, before the first
+ * rename. When it throws, nothing is copied.
  */
 export async function integrate(
   root: string,
   workspace: Workspace,
   version: string,
   paths: readonly string[],
-  staged?: () => Promise<void>,
+  options: {
+    readonly bases?: ReadonlyMap<string, string>;
+    readonly staged?: () => Promise<void>;
+  } = {},
 ): Promise<
   | { readonly applied: readonly string[] }
   | { readonly conflicts: readonly string[] }
@@ -1079,7 +1084,11 @@ export async function integrate(
       : stats.isFile()
         ? await readFile(destination)
         : undefined;
-    const start = await fileAt(target, workspace.start, path);
+    const start = await fileAt(
+      target,
+      options.bases?.get(path) ?? workspace.start,
+      path,
+    );
     const unchanged =
       current === null
         ? start === null
@@ -1100,7 +1109,7 @@ export async function integrate(
       if (modes.get(path) === '100755') await chmod(temporary, 0o755);
       written.push({ temporary, destination });
     }
-    await staged?.();
+    await options.staged?.();
   } catch (error) {
     for (const { temporary } of written) await rm(temporary, { force: true });
     throw error;
@@ -1132,27 +1141,48 @@ export async function clearStaged(
   }
 }
 
-/** The mode and size of each file of a commit, by path. A submodule has no size. */
+/**
+ * The mode, blob ID, and size of these files at a commit, by path. A path
+ * that the commit does not have is not in the map. A submodule has no size.
+ */
 export async function treeAt(
   root: string,
   workspace: Workspace,
   commit: string,
-): Promise<Map<string, { readonly mode: string; readonly bytes: number }>> {
-  const entries = await list(join(root, workspace.path), [
-    'ls-tree',
-    '-r',
-    '-l',
-    '-z',
-    commit,
-  ]);
-  // An entry is `<mode> <type> <id> <size>\t<path>`, with `-` as the size of a submodule.
-  return new Map(
-    entries.map((line) => {
+  paths: readonly string[],
+): Promise<
+  Map<
+    string,
+    { readonly mode: string; readonly id: string; readonly bytes: number }
+  >
+> {
+  const found = new Map<
+    string,
+    { readonly mode: string; readonly id: string; readonly bytes: number }
+  >();
+  // A few hundred paths at a time keep the command line short.
+  for (let at = 0; at < paths.length; at += 200) {
+    const entries = await list(join(root, workspace.path), [
+      '--literal-pathspecs',
+      'ls-tree',
+      '-l',
+      '-z',
+      commit,
+      '--',
+      ...paths.slice(at, at + 200),
+    ]);
+    // An entry is `<mode> <type> <id> <size>\t<path>`, with `-` as the size of a submodule.
+    for (const line of entries) {
       const [meta = '', path = ''] = line.split('\t');
-      const [mode = '', , , size = ''] = meta.split(/ +/);
-      return [path, { mode, bytes: /^\d+$/.test(size) ? Number(size) : 0 }];
-    }),
-  );
+      const [mode = '', , id = '', size = ''] = meta.split(/ +/);
+      found.set(path, {
+        mode,
+        id,
+        bytes: /^\d+$/.test(size) ? Number(size) : 0,
+      });
+    }
+  }
+  return found;
 }
 
 /**

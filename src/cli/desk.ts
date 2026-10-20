@@ -730,22 +730,28 @@ async function labDiff(
 
 /**
  * The files that a direction can bring in, at the commit that the person
- * looks at, for the bring-in panel. A commit does not change, so its list
- * is read once. Null before Verifold took the commit, or when it cannot
- * read it.
+ * looks at, for the bring-in panel, or why Verifold cannot read them. A
+ * list is read again only when its commit or the lab's bring-ins change.
+ * Null before Verifold took the commit.
  */
 async function labBring(
   lab: Lab,
+  view: LabView,
   direction: string,
   reads: LabReads,
-): Promise<BringList | null> {
+): Promise<BringList | string | null> {
   const commit = lab.bringCommit(direction);
   if (!commit) return null;
-  const key = `${direction}|${commit}`;
+  const last = view.state.brought.at(-1);
+  const key = `${direction}|${commit}|${view.state.brought.length}|${last?.at ?? ''}`;
   const known = reads.brings.get(key);
   if (known) return known;
-  const list = await lab.bringFiles(direction).catch(() => null);
-  return list ? keep(reads.brings, key, list) : null;
+  try {
+    const list = await lab.bringFiles(direction, commit);
+    return list ? keep(reads.brings, key, list) : null;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'unknown error';
+  }
 }
 
 /**
@@ -1845,9 +1851,14 @@ export async function startDesk(
               ),
             }
           : {}),
-        ...(labDesk.lab && frame.panel === 'bring' && frame.direction
+        ...(labDesk.lab && labView && frame.panel === 'bring' && frame.direction
           ? {
-              labBring: await labBring(labDesk.lab, frame.direction, labReads),
+              labBring: await labBring(
+                labDesk.lab,
+                labView,
+                frame.direction,
+                labReads,
+              ),
             }
           : {}),
         // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
