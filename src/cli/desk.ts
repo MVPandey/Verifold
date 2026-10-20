@@ -446,6 +446,8 @@ const slowLabActions: Readonly<Record<string, string>> = {
   'lab-direction-add': 'Opening the direction',
   'lab-pause': 'Pausing the lab',
   'lab-resume': 'Resuming the lab',
+  'lab-call-answer': 'Applying your answer',
+  'lab-call-undo': 'Undoing your answer',
 };
 const labWaitMs = 2_000;
 
@@ -497,6 +499,12 @@ async function labAction(
       return 200;
     case 'lab-resume':
       await lab.resume();
+      return 200;
+    case 'lab-call-answer':
+      await lab.answerCall(body.call, body.option);
+      return 200;
+    case 'lab-call-undo':
+      await lab.undoCall(body.call);
       return 200;
     default:
       return 400;

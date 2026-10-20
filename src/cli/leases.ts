@@ -216,6 +216,19 @@ export function usd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+/** A request for a lease, from the person, the coordinator, or a lab agent. Every field is checked. */
+export interface LeaseRequest {
+  readonly by: 'person' | 'coordinator' | 'agent';
+  readonly gpu: unknown;
+  readonly hours: unknown;
+  /** The tasks of the pod, or, with `directions`, none. */
+  readonly tasks?: unknown;
+  readonly directions?: unknown;
+  readonly reason: unknown;
+  readonly image?: unknown;
+  readonly secrets?: unknown;
+}
+
 export interface LeaseHooks {
   /** A RunPod client with the stored key. It fails when no key is stored. */
   readonly client: () => Promise<RunPod>;
@@ -379,95 +392,124 @@ export class Leases {
    * Ask for a lease. Nothing is created or billed until the person approves.
    * Verifold refuses a request that does not fit the person's limits.
    */
-  request(input: {
-    readonly by: 'person' | 'coordinator' | 'agent';
-    readonly gpu: unknown;
-    readonly hours: unknown;
-    /** The tasks of the pod, or, with `directions`, none. */
-    readonly tasks?: unknown;
-    readonly directions?: unknown;
-    readonly reason: unknown;
-    readonly image?: unknown;
-    readonly secrets?: unknown;
-  }): Promise<Lease> {
+  /** The checks of a request, and what its lease can cost at most. A refusal says why. In the queue. */
+  private async checked(input: LeaseRequest): Promise<{
+    readonly gpu: string;
+    readonly hours: number;
+    readonly lab: boolean;
+    readonly tasks: readonly string[];
+    readonly image: string;
+    readonly reason: string;
+    readonly secrets: readonly string[];
+    readonly offer: GpuOffer;
+    readonly diskGb: number;
+    readonly cost: number;
+  }> {
+    const settings = this.hooks.settings();
+    if (settings.limitUsd === null)
+      fail('Pods are off: the person has not set a spend limit in Compute.');
+    if (typeof input.gpu !== 'string' || !settings.gpuTypes.includes(input.gpu))
+      fail(
+        settings.gpuTypes.length
+          ? `Ask for an allowed GPU type: ${settings.gpuTypes.join(', ')}.`
+          : 'The person has allowed no GPU type in Compute yet.',
+      );
+    const hours = input.hours;
+    if (
+      typeof hours !== 'number' ||
+      !Number.isInteger(hours) ||
+      hours < 1 ||
+      hours > settings.maxHoursPerLease
+    )
+      fail(`Ask for 1 to ${settings.maxHoursPerLease} hours.`);
+    const lab = input.directions !== undefined;
+    const tasks = Array.isArray(lab ? input.directions : input.tasks)
+      ? ((lab ? input.directions : input.tasks) as unknown[])
+      : [];
+    if (
+      !tasks.length ||
+      tasks.length > leaseLimits.tasks ||
+      !tasks.every(
+        (task) =>
+          typeof task === 'string' &&
+          (lab ? /^d-[1-9]\d{0,3}$/ : /^task-\d{1,6}$/).test(task),
+      )
+    )
+      fail(
+        `Name 1 to ${leaseLimits.tasks} ${lab ? 'directions' : 'tasks'} that need the pod.`,
+      );
+    const image = input.image === undefined ? settings.images[0] : input.image;
+    if (typeof image !== 'string' || !settings.images.includes(image))
+      fail(`Use an allowed image: ${settings.images.join(', ')}.`);
+    const reason =
+      typeof input.reason === 'string' && input.reason.trim()
+        ? input.reason.trim().slice(0, leaseLimits.reason)
+        : fail('Give a short reason. The person reads it.');
+    const secrets = input.secrets === undefined ? [] : input.secrets;
+    if (
+      !Array.isArray(secrets) ||
+      secrets.length > leaseLimits.secrets ||
+      !secrets.every(validSecretName)
+    )
+      fail(
+        `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
+      );
+    if (
+      this.leases.filter((lease) => lease.state === 'requested').length >=
+      leaseLimits.waiting
+    )
+      fail(
+        `${leaseLimits.waiting} requests already wait for the person. Wait for a decision.`,
+      );
+    const offer = await this.hooks.offer(input.gpu);
+    if (!offer) fail(`RunPod does not offer ${input.gpu} on Secure Cloud now.`);
+    if (offer.stock === 'NONE')
+      fail(
+        `RunPod has no ${input.gpu} in stock now. Ask for another allowed type.`,
+      );
+    if (offer.price > settings.maxUsdPerHour)
+      fail(
+        `${input.gpu} costs ${usd(offer.price)} per hour, above the cap of ${usd(settings.maxUsdPerHour)}.`,
+      );
+    const cost = maxCost(offer.price, settings.diskGb, hours);
+    const left = this.budget().left ?? 0;
+    if (cost > left)
+      fail(
+        `The lease can cost ${usd(cost)}, but only ${usd(Math.max(0, left))} of the limit is left.`,
+      );
+    return {
+      gpu: input.gpu,
+      hours,
+      lab,
+      tasks: tasks as string[],
+      image,
+      reason,
+      secrets,
+      offer,
+      diskGb: settings.diskGb,
+      cost,
+    };
+  }
+
+  /** What a lease that `input` asks for can cost at most, after the checks of a request. It records nothing. */
+  quote(input: LeaseRequest): Promise<number> {
+    return this.serial(async () => (await this.checked(input)).cost);
+  }
+
+  request(input: LeaseRequest): Promise<Lease> {
     return this.serial(async () => {
-      const settings = this.hooks.settings();
-      if (settings.limitUsd === null)
-        fail('Pods are off: the person has not set a spend limit in Compute.');
-      if (
-        typeof input.gpu !== 'string' ||
-        !settings.gpuTypes.includes(input.gpu)
-      )
-        fail(
-          settings.gpuTypes.length
-            ? `Ask for an allowed GPU type: ${settings.gpuTypes.join(', ')}.`
-            : 'The person has allowed no GPU type in Compute yet.',
-        );
-      const hours = input.hours;
-      if (
-        typeof hours !== 'number' ||
-        !Number.isInteger(hours) ||
-        hours < 1 ||
-        hours > settings.maxHoursPerLease
-      )
-        fail(`Ask for 1 to ${settings.maxHoursPerLease} hours.`);
-      const lab = input.directions !== undefined;
-      const tasks = Array.isArray(lab ? input.directions : input.tasks)
-        ? ((lab ? input.directions : input.tasks) as unknown[])
-        : [];
-      if (
-        !tasks.length ||
-        tasks.length > leaseLimits.tasks ||
-        !tasks.every(
-          (task) =>
-            typeof task === 'string' &&
-            (lab ? /^d-[1-9]\d{0,3}$/ : /^task-\d{1,6}$/).test(task),
-        )
-      )
-        fail(
-          `Name 1 to ${leaseLimits.tasks} ${lab ? 'directions' : 'tasks'} that need the pod.`,
-        );
-      const image =
-        input.image === undefined ? settings.images[0] : input.image;
-      if (typeof image !== 'string' || !settings.images.includes(image))
-        fail(`Use an allowed image: ${settings.images.join(', ')}.`);
-      const reason =
-        typeof input.reason === 'string' && input.reason.trim()
-          ? input.reason.trim().slice(0, leaseLimits.reason)
-          : fail('Give a short reason. The person reads it.');
-      const secrets = input.secrets === undefined ? [] : input.secrets;
-      if (
-        !Array.isArray(secrets) ||
-        secrets.length > leaseLimits.secrets ||
-        !secrets.every(validSecretName)
-      )
-        fail(
-          `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
-        );
-      if (
-        this.leases.filter((lease) => lease.state === 'requested').length >=
-        leaseLimits.waiting
-      )
-        fail(
-          `${leaseLimits.waiting} requests already wait for the person. Wait for a decision.`,
-        );
-      const offer = await this.hooks.offer(input.gpu);
-      if (!offer)
-        fail(`RunPod does not offer ${input.gpu} on Secure Cloud now.`);
-      if (offer.stock === 'NONE')
-        fail(
-          `RunPod has no ${input.gpu} in stock now. Ask for another allowed type.`,
-        );
-      if (offer.price > settings.maxUsdPerHour)
-        fail(
-          `${input.gpu} costs ${usd(offer.price)} per hour, above the cap of ${usd(settings.maxUsdPerHour)}.`,
-        );
-      const cost = maxCost(offer.price, settings.diskGb, hours);
-      const left = this.budget().left ?? 0;
-      if (cost > left)
-        fail(
-          `The lease can cost ${usd(cost)}, but only ${usd(Math.max(0, left))} of the limit is left.`,
-        );
+      const {
+        gpu,
+        hours,
+        lab,
+        tasks,
+        image,
+        reason,
+        secrets,
+        offer,
+        diskGb,
+        cost,
+      } = await this.checked(input);
       const id = `lease-${(this.leases.reduce((top, lease) => Math.max(top, number(lease.id)), 0) + 1).toString()}`;
       const tag = createHash('sha256')
         .update(this.root)
@@ -479,12 +521,12 @@ export class Leases {
         state: 'requested',
         requestedBy: input.by,
         reason,
-        tasks: lab ? [] : [...new Set(tasks as string[])],
-        ...(lab ? { directions: [...new Set(tasks as string[])] } : {}),
+        tasks: lab ? [] : [...new Set(tasks)],
+        ...(lab ? { directions: [...new Set(tasks)] } : {}),
         ...(secrets.length ? { secrets: [...new Set(secrets)] } : {}),
-        gpu: input.gpu,
+        gpu,
         image,
-        diskGb: settings.diskGb,
+        diskGb,
         hours,
         rate: offer.price,
         requestedAt: this.stamp(),
@@ -506,7 +548,7 @@ export class Leases {
         lease,
         {},
         input.by,
-        `${asker(lease)} asked for a ${input.gpu} pod for ${hours} ${hours === 1 ? 'hour' : 'hours'} at ${usd(offer.price)} per hour, at most ${usd(cost)}.`,
+        `${asker(lease)} asked for a ${gpu} pod for ${hours} ${hours === 1 ? 'hour' : 'hours'} at ${usd(offer.price)} per hour, at most ${usd(cost)}.`,
       );
     });
   }

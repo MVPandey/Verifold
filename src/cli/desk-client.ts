@@ -1042,6 +1042,14 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
       return { action, agent: button.dataset.agent };
     case 'lab-run-cancel':
       return { action, run: button.dataset.run };
+    case 'lab-call-answer':
+      return {
+        action,
+        call: button.dataset.call,
+        option: button.dataset.option,
+      };
+    case 'lab-call-undo':
+      return { action, call: button.dataset.call };
     default:
       return { action };
   }
