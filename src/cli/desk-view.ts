@@ -38,9 +38,11 @@ import {
   type CoordinatorView,
 } from './coordinator.ts';
 import { defaultAgents } from './workers.ts';
-import type { LabView } from './lab.ts';
+import type { BringList, LabView } from './lab.ts';
 import { labWorks } from './team.ts';
 import {
+  answerPanel,
+  bringPanel,
   diffPanel,
   stateOf,
   labCallNeeds,
@@ -103,6 +105,8 @@ export interface DeskSession {
   readonly labAgent?: SessionView | null;
   /** What the direction of the diff panel changed. */
   readonly labDiff?: LabDiff | null;
+  /** The files that the bring-in panel's direction can bring in, once Verifold took its commit, or why Verifold cannot read them. */
+  readonly labBring?: BringList | string | null;
   /** The person came back to the lab after a while: Home lists what changed. */
   readonly labAway?: Away | null;
 }
@@ -144,6 +148,9 @@ export const deskPanels = [
   'diff',
   'agent',
   'search',
+  // A lab's answer, and a bring-in of a direction's files.
+  'answer',
+  'bring',
 ] as const;
 export type DeskPanel = (typeof deskPanels)[number];
 
@@ -3683,7 +3690,9 @@ function renderPanel(
     panel === 'run' ||
     panel === 'diff' ||
     panel === 'agent' ||
-    panel === 'search'
+    panel === 'search' ||
+    panel === 'answer' ||
+    panel === 'bring'
   )
     shown = !lab
       ? gone('Lab', 'No lab', 'This project has no lab.')
@@ -3693,7 +3702,11 @@ function renderPanel(
           ? diffPanel(lab, direction, frame.proof, live.labDiff ?? null)
           : panel === 'search'
             ? searchPanel(lab, frame.q, clock)
-            : labAgentPanel(lab, frame.agent, live, tasks);
+            : panel === 'answer'
+              ? answerPanel(lab, clock)
+              : panel === 'bring'
+                ? bringPanel(lab, direction, live.labBring ?? null, clock)
+                : labAgentPanel(lab, frame.agent, live, tasks);
   else if (panel === 'worker')
     shown = live.session
       ? workerPanel(live.session, live, tasks)

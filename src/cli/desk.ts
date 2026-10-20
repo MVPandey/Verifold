@@ -52,8 +52,8 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
-import { directionId, proofRef, runId } from './board.ts';
-import { startLabOn, type Lab, type LabView } from './lab.ts';
+import { commitId, directionId, proofRef, runId } from './board.ts';
+import { startLabOn, type BringList, type Lab, type LabView } from './lab.ts';
 import type { Away, LabDiff, LabWork } from './desk-lab.ts';
 import {
   changeWorkspace,
@@ -593,6 +593,8 @@ const slowLabActions: Readonly<Record<string, string>> = {
   'lab-resume': 'Resuming the lab',
   'lab-call-answer': 'Applying your answer',
   'lab-call-undo': 'Undoing your answer',
+  'lab-bring-look': 'Taking the newest work',
+  'lab-bring': 'Bringing in the files',
 };
 const labWaitMs = 2_000;
 
@@ -656,6 +658,15 @@ async function labAction(
         fail('The desk sent an invalid input lease.');
       await lab.openTerminal(body.agent, body.lease);
       return 200;
+    case 'lab-bring-look':
+      await lab.lookToBring(body.direction);
+      return 200;
+    case 'lab-bring':
+      await lab.bring(body.direction, body.commit, body.files);
+      return 200;
+    case 'lab-signoff':
+      await lab.signOff(body.note);
+      return 200;
     default:
       return 400;
   }
@@ -675,6 +686,7 @@ interface LabReads {
     { readonly mtime: number; readonly record: SessionRecord }
   >;
   readonly diffs: Map<string, LabDiff>;
+  readonly brings: Map<string, BringList>;
 }
 
 /** Keep a cache to its newest 20 entries. */
@@ -714,6 +726,35 @@ async function labDiff(
     to: shown.to,
     files: shown.files,
   });
+}
+
+/**
+ * The files that a direction can bring in, at the commit that the person
+ * looks at, for the bring-in panel, or why Verifold cannot read them. A
+ * list is read again only when its commit or the lab's bring-ins change.
+ * Null before Verifold took the commit.
+ */
+async function labBring(
+  lab: Lab,
+  view: LabView,
+  direction: string,
+  reads: LabReads,
+): Promise<BringList | string | null> {
+  const commit = lab.bringCommit(direction);
+  if (!commit) return null;
+  // The list changes with the bring-ins and with the direction's newest commit, for its newer work.
+  const head =
+    view.state.directions.find((entry) => entry.id === direction)?.head ?? '';
+  const last = view.state.brought.at(-1);
+  const key = `${direction}|${commit}|${head}|${view.state.brought.length}|${last?.path ?? ''}|${last?.at ?? ''}`;
+  const known = reads.brings.get(key);
+  if (known) return known;
+  try {
+    const list = await lab.bringFiles(direction, commit);
+    return list ? keep(reads.brings, key, list) : null;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'unknown error';
+  }
 }
 
 /**
@@ -1127,7 +1168,11 @@ export async function startDesk(
     works: [],
     saving: Promise.resolve(),
   };
-  const labReads: LabReads = { records: new Map(), diffs: new Map() };
+  const labReads: LabReads = {
+    records: new Map(),
+    diffs: new Map(),
+    brings: new Map(),
+  };
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -1610,17 +1655,17 @@ export async function startDesk(
       const direction = url.searchParams.get('direction') ?? '';
       const file = url.searchParams.get('file') ?? '';
       const proof = url.searchParams.get('proof');
+      // The commit of a bring-in that the person looks at.
+      const bring = url.searchParams.get('bring');
+      const keys = ['direction', 'file', 'proof', 'bring'];
       if (
         !directionId.test(direction) ||
         !file ||
         file.length > 300 ||
         (proof !== null && !proofRef(proof)) ||
-        [...url.searchParams.keys()].some(
-          (key) => !['direction', 'file', 'proof'].includes(key),
-        ) ||
-        ['direction', 'file', 'proof'].some(
-          (key) => url.searchParams.getAll(key).length > 1,
-        )
+        (bring !== null && (!commitId.test(bring) || proof !== null)) ||
+        [...url.searchParams.keys()].some((key) => !keys.includes(key)) ||
+        keys.some((key) => url.searchParams.getAll(key).length > 1)
       ) {
         response.writeHead(400).end();
         return;
@@ -1630,6 +1675,7 @@ export async function startDesk(
           direction,
           file,
           proof ?? undefined,
+          bring ?? undefined,
         );
         if (!shown?.diff) {
           response.writeHead(404).end();
@@ -1804,6 +1850,16 @@ export async function startDesk(
                 labView,
                 frame.direction,
                 frame.proof,
+                labReads,
+              ),
+            }
+          : {}),
+        ...(labDesk.lab && labView && frame.panel === 'bring' && frame.direction
+          ? {
+              labBring: await labBring(
+                labDesk.lab,
+                labView,
+                frame.direction,
                 labReads,
               ),
             }
