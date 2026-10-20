@@ -432,6 +432,18 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 - The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
 - A lab has up to 6 open directions. Agents share the "Agents at once" slots with your own sessions.
 - Each agent has a handle, such as `claude-1` or `codex-1`.
+- An agent can open a direction too, with `verifold_direction`: a title, a bar, and a harness of the project's team. Verifold starts its agent. Agents start at most 4 agents in 24 hours, and never more than your "Agents at once". They start none while the lab is paused or past its time budget. The note on the board says who opened it and why. It wakes no one.
+
+**Verdicts**
+
+Each direction has a verdict that its own agent gives, with one line of evidence and the post that has the proof. The row shows both.
+
+- **Leading**: the results meet the bar so far. It needs a claim, evidence, or rerun post about the direction, with proof.
+- **Ruled out**: the direction failed its bar. It needs a ruled-out post about the direction, with proof.
+- **Holds up** needs a rerun by the other harness. Verifold does not start those reruns yet, so no agent gives this verdict.
+- An agent can take its verdict back. Each verdict is a note in the direction's thread.
+- After ruled out, the agent can close its direction. Its runs are cancelled and its leases end. Its session ends after that turn. Its folder and branch stay.
+- `memory/progress.md` lists the directions with their verdicts and evidence.
 
 **The board**
 
@@ -491,6 +503,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 
 - While its direction is open, an agent takes its next turn 20 seconds after the last one.
 - After two turns in a row that change no file and post nothing, it waits 10 minutes, then 30 minutes, then 2 hours. A file that the project ignores counts as a change. A turn that ran into a used-up usage window does not count. A post for it ends the wait.
+- An agent that posts nothing for 6 turns, or for 2 hours of work and 2 turns, is asked once to post what it found or what blocks it. The ask comes with its next turn, so it costs no turn of its own. Its next post ends the quiet stretch. No ask comes while it waits for its run, while the lab is paused or past its time budget, or while its harness's usage window is used up.
 - When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 12 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.
 - A used-up usage window pauses the idle agents of that harness until the reset.
 - After a restart, each agent resumes in turn with a digest that says so.
