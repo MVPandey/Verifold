@@ -49,10 +49,9 @@ import {
   verdicts,
 } from './lab-tools.ts';
 import type { LabPod } from './compute.ts';
-import { validSecretName } from './credentials.ts';
 import {
   isOpen as isOpenLease,
-  leaseLimits,
+  secretNames,
   usd,
   type Cause,
   type Lease,
@@ -351,11 +350,8 @@ export type CallApplied =
     }
   | { readonly type: 'open'; readonly direction: string }
   | { readonly type: 'stop'; readonly direction: string }
-  | {
-      readonly type: 'domains';
-      readonly agent: string;
-      readonly before: readonly string[];
-    };
+  /** The agent's shell reaches the option's domains while the answer stands. */
+  | { readonly type: 'domains'; readonly agent: string };
 
 /**
  * A call for the person: cost, scope, access, or go. An agent asks with
@@ -486,8 +482,12 @@ export interface AgentRecord {
    * starts once it is, so its first prompt has the plan.
    */
   readonly held: boolean;
-  /** The domains that its shell commands may reach, from the person's access calls. */
-  readonly network: readonly string[];
+  /**
+   * The agent's session has the pod tools. A Codex thread keeps the tools
+   * that it started with, so a Codex agent that lacks them starts a new
+   * thread when pods are on.
+   */
+  readonly pods: boolean;
 }
 
 /** What the desk shows of one direction. */
@@ -631,9 +631,6 @@ function fail(message: string): never {
 /** A call that no longer makes sense when Verifold applies its answer. Nothing of it stays changed. */
 class CallWithdrawn extends SessionActionError {}
 
-/** The question of the access call that a pod request makes while pods are off. */
-const podsOffQuestion = 'Add a RunPod key and a spend limit in Compute?';
-
 /** The proof that an agent's post names, before Verifold commits its folder. */
 type ProofRequest = (
   | { readonly type: 'file' | 'figure'; readonly path: string }
@@ -676,9 +673,9 @@ interface AgentRuntime {
   } | null;
   /** When the agent's last turn ended. The agent that worked least recently gives its slot first. */
   endedAt: number;
-  /** The domains or the tools of its session changed during a turn: its process ends after the turn. */
-  relaunch: boolean;
-  /** Its process ends now for such a change. No digest goes to it meanwhile: the next start gets it. */
+  /** What the live process got at its start: the domains of its shell, and whether it has the pod tools. */
+  got: { readonly network: readonly string[]; readonly pods: boolean } | null;
+  /** Its process ends now because what it got changed. No digest goes to it meanwhile: the next start gets it. */
   parking: boolean;
 }
 
@@ -831,10 +828,61 @@ function parseCheck(value: unknown): Check | null {
 
 const callPattern = /^c-[1-9]\d{0,5}$/;
 
+/** The effect of the option that the person chose, or null. */
+function chosenEffect(call: Call): CallEffect | null {
+  return call.answer
+    ? (call.options[call.answer.option]?.effect ?? null)
+    : null;
+}
+
+/** The answer of a call stands: the person answered, and Verifold applied its effect, when it has one. */
+function stands(call: Call): boolean {
+  return (
+    call.state === 'answered' &&
+    (call.applied !== null || chosenEffect(call) === null)
+  );
+}
+
 /** The person approved a GPU pod in an answer that stands. Until then, each pod request of an agent is a call. */
 function gpuApproved(state: LabState): boolean {
   return state.calls.some(
-    (call) => call.state === 'answered' && call.applied?.type === 'pod',
+    (call) => stands(call) && call.applied?.type === 'pod',
+  );
+}
+
+/**
+ * The domains that an agent's shell reaches: those of its access answers
+ * that stand. A lab agent starts with none. Each start reads them, so no
+ * other copy can go stale.
+ */
+function networkOf(state: LabState, agent: string): string[] {
+  return [
+    ...new Set(
+      state.calls.flatMap((call) => {
+        const effect = chosenEffect(call);
+        return call.by === agent &&
+          stands(call) &&
+          call.applied?.type === 'domains' &&
+          effect?.type === 'domains'
+          ? effect.domains
+          : [];
+      }),
+    ),
+  ].sort();
+}
+
+/**
+ * The calls that `lab.json` keeps: the newest 500, and older answers of
+ * pods and domains that stand, so that the first GPU pod does not ask again
+ * and no shell loses a domain.
+ */
+function keptCalls(calls: readonly Call[]): Call[] {
+  const from = calls.length - 500;
+  return calls.filter(
+    (call, index) =>
+      index >= from ||
+      (stands(call) &&
+        (call.applied?.type === 'pod' || call.applied?.type === 'domains')),
   );
 }
 
@@ -865,19 +913,11 @@ function callEffect(value: unknown, kind: CallKind): CallEffect | null {
   if (effect.pod !== undefined) {
     goes(['cost'], 'A pod');
     const pod = object(effect.pod) ?? fail('Give the pod as an object.');
-    const secrets = pod.secrets ?? [];
     return {
       type: 'pod',
       gpuType: text(pod.gpuType, 100, 'the GPU type of the pod'),
       hours: whole(pod.hours, 1, callLimits.podHours, "the pod's hours"),
-      secrets:
-        Array.isArray(secrets) &&
-        secrets.length <= leaseLimits.secrets &&
-        secrets.every(validSecretName)
-          ? [...new Set(secrets)]
-          : fail(
-              `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
-            ),
+      secrets: secretNames(pod.secrets),
     };
   }
   if (effect.hours !== undefined) {
@@ -1052,17 +1092,9 @@ function parseApplied(value: unknown): CallApplied | null {
   if (
     entry.type === 'domains' &&
     typeof entry.agent === 'string' &&
-    agentId.test(entry.agent) &&
-    Array.isArray(entry.before) &&
-    entry.before.every(
-      (domain) => typeof domain === 'string' && validDomain(domain),
-    )
+    agentId.test(entry.agent)
   )
-    return {
-      type: 'domains',
-      agent: entry.agent,
-      before: (entry.before as string[]).slice(0, callLimits.domains),
-    };
+    return { type: 'domains', agent: entry.agent };
   return null;
 }
 
@@ -1201,7 +1233,7 @@ function runtime(): AgentRuntime {
     retryAt: 0,
     launch: null,
     endedAt: 0,
-    relaunch: false,
+    got: null,
     parking: false,
   };
 }
@@ -1456,12 +1488,12 @@ function parseState(value: Record<string, unknown> | null): LabState | null {
       : [],
     // A lab from before calls has none, so its next GPU pod asks.
     calls: Array.isArray(value.calls)
-      ? value.calls
-          .flatMap((entry) => {
+      ? keptCalls(
+          value.calls.flatMap((entry) => {
             const call = parseCall(entry);
             return call ? [call] : [];
-          })
-          .slice(-500)
+          }),
+        )
       : [],
   };
 }
@@ -1691,14 +1723,8 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
         : null;
     })(),
     held: value.held === true,
-    network: Array.isArray(value.network)
-      ? value.network
-          .filter(
-            (domain): domain is string =>
-              typeof domain === 'string' && validDomain(domain),
-          )
-          .slice(0, callLimits.domains)
-      : [],
+    // A record from before this field: its thread may have had the pod tools, so it keeps its conversation.
+    pods: value.pods !== false,
   };
 }
 
@@ -2354,7 +2380,7 @@ export class Lab {
       lastRead: null,
       // Its first prompt must have the plan, so it waits until the plan is kept.
       held: options.plan === true,
-      network: [],
+      pods: false,
     };
     this.track(record);
     this.state = {
@@ -2728,8 +2754,8 @@ export class Lab {
     });
   }
 
-  /** `extend`, in the lab's queue. Returns the time budget before. */
-  private async extendNow(added: number): Promise<LabState['budget']> {
+  /** `extend`, in the lab's queue. */
+  private async extendNow(added: number): Promise<void> {
     const state = this.current();
     const from = Math.max(
       Date.now(),
@@ -2751,7 +2777,6 @@ export class Lab {
       // A lab whose deadline passed before it paused held its digests back: they go out now.
       if (!state.pausedAt && this.ended(state)) this.wakeAll(why);
     }
-    return state.budget;
   }
 
   /**
@@ -2883,15 +2908,14 @@ export class Lab {
     if (record.status === 'idle') {
       // A resumed session is ready: no turn ended, and its waiting events go out.
       if (!run.turning) {
+        this.checkProcess(agent.id);
         loop.turnEnded();
         return;
       }
       const { usedUp, readBroken, pending, posted, spoke, turn, turnAt } = run;
       run.turning = false;
-      if (run.relaunch) {
-        run.relaunch = false;
-        this.relaunch(agent.id);
-      }
+      // A change that came during the turn ends the process now, before the next turn.
+      this.checkProcess(agent.id);
       run.usedUp = false;
       run.readBroken = false;
       run.pending = null;
@@ -2977,8 +3001,6 @@ export class Lab {
     run.usedUp = false;
     run.readBroken = false;
     run.pending = null;
-    // The next start takes what changed anyway.
-    run.relaunch = false;
     this.loops.get(id)?.turnEnded(turned);
   }
 
@@ -3444,14 +3466,14 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   }
 
   /** The tools of one launch of an agent's session. A call from an older launch changes nothing. */
-  private tools(id: string, generation: string): AgentTools {
+  private tools(id: string, generation: string, pods: boolean): AgentTools {
     return {
       specs: [
         ...labToolSpecs,
         directionToolSpec,
         askPersonToolSpec,
-        ...(this.ledger.sandboxed || this.podsOn() ? runToolSpecs : []),
-        ...(this.podsOn() ? labPodToolSpecs : []),
+        ...(this.ledger.sandboxed || pods ? runToolSpecs : []),
+        ...(pods ? labPodToolSpecs : []),
         ...(this.state?.opener === id ? [planToolSpec] : []),
         ...(this.options.memory ? [noteToolSpec] : []),
       ],
@@ -3796,11 +3818,15 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           fail(`${effect.direction} is not an open direction of the lab.`);
         if (
           effect?.type === 'domains' &&
-          new Set([...agent.network, ...effect.domains]).size >
+          new Set([...networkOf(state, agent.id), ...effect.domains]).size >
             callLimits.domains
         )
           fail(
             `Your shell can reach at most ${callLimits.domains} domains, with those that it has.`,
+          );
+        if (effect?.type === 'hours' && !state.budget)
+          fail(
+            'This lab has no time budget, so more hours change nothing. Give the options without hours.',
           );
       }
       return this.recordCall({
@@ -3832,16 +3858,18 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   ): Promise<string> {
     const question = pod
       ? `The lab's first GPU pod: ${pod.effect.gpuType} for ${pod.effect.hours} ${pod.effect.hours === 1 ? 'hour' : 'hours'}?`
-      : podsOffQuestion;
+      : 'Add a RunPod key and a spend limit in Compute?';
     const call = await this.serial(() => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       const waiting = this.current().calls.find(
         (entry) =>
           entry.state === 'open' &&
           entry.by === agent.id &&
+          entry.kind === (pod ? 'cost' : 'access') &&
+          // A pod request asks with a pod option, or, while pods are off, with no effect at all.
           (pod
             ? entry.options.some((option) => option.effect?.type === 'pod')
-            : entry.question === question),
+            : entry.options.every((option) => option.effect === null)),
       );
       if (waiting)
         fail(
@@ -3929,7 +3957,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     };
     await this.saveState({
       ...state,
-      calls: [...state.calls, call].slice(-500),
+      calls: keptCalls([...state.calls, call]),
     });
     if (call.by !== 'verifold')
       await this.add({
@@ -4073,27 +4101,48 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         call.undoMinutes > 0
           ? new Date(Date.now() + call.undoMinutes * 60_000).toISOString()
           : null;
-      const did = applied ? this.appliedText(applied) : '';
-      // The effect happened, so the lab keeps it also when the save fails: the next save writes it.
-      this.state = {
+      const next = {
         ...state,
         calls: state.calls.map((entry) =>
           entry.id === call.id
-            ? { ...entry, applied, undoUntil: until, note: did || null }
+            ? { ...entry, applied, undoUntil: until }
             : entry,
         ),
       };
-      await this.stateFile
-        .save()
-        .catch((error: unknown) =>
-          this.options.progress?.(
-            `Verifold could not save the answer to ${call.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
-          ),
-        );
-      // A key and a spend limit that the person added: the agent's next start
-      // gets the pod tools, and the answer with it.
-      if (call.question === podsOffQuestion && this.podsOn())
-        await this.refreshTools(call.by);
+      if (applied?.type === 'domains') {
+        // The saved answer is what gives the domains: one that is not saved gives none.
+        try {
+          await this.saveState(next);
+        } catch (error) {
+          await this.changeCall(call.id, (entry) => ({
+            ...entry,
+            state: 'open',
+            answer: null,
+          })).catch(() => {});
+          fail(
+            `Verifold could not save your answer to ${call.id}, so it changed nothing. Answer again. ${error instanceof Error ? error.message : ''}`.trim(),
+          );
+        }
+      } else {
+        // The effect happened, so the lab keeps it also when the save fails: the next save writes it.
+        this.state = next;
+        await this.stateFile
+          .save()
+          .catch((error: unknown) =>
+            this.options.progress?.(
+              `Verifold could not save the answer to ${call.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            ),
+          );
+      }
+      const did = applied ? this.appliedText(applied) : '';
+      if (did)
+        await this.changeCall(call.id, (entry) => ({
+          ...entry,
+          note: did,
+        })).catch(() => {});
+      // New domains, or the pod tools after a key: the agent's process ends
+      // before the answer reaches it, so the answer comes with its next start.
+      this.checkProcess(call.by);
       await this.tell(
         call,
         `The person chose ${JSON.stringify(chosen?.label ?? '')} on ${call.id}.${did ? ` ${did}` : ''}`,
@@ -4119,6 +4168,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         ...entry,
         state: 'undoing',
       }));
+      // An answer that undoes no longer stands: a domain that only it gave closes now.
+      this.checkProcess(call.by);
       return call;
     });
     let did = '';
@@ -4145,6 +4196,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         ),
       );
       const stale = this.stale(call, null);
+      this.checkProcess(call.by);
       await this.tell(
         call,
         `The person undid their answer to ${call.id}.${did ? ` ${did}` : ''}${stale ? '' : ' The call is open again.'}`,
@@ -4205,6 +4257,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       case 'hours':
         return this.serial(async () => {
           const budget = this.current().budget;
+          if (!budget)
+            throw new CallWithdrawn(
+              'The lab has no time budget, so more hours change nothing.',
+            );
           try {
             await this.extendNow(effect.hours);
           } catch (error) {
@@ -4242,18 +4298,17 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         }
         return { type: 'stop', direction: effect.direction };
       case 'domains':
-        return this.serial(async () => {
+        // The answer itself gives the domains, once it is saved.
+        return this.serial(() => {
           const agent = this.agent(call.by);
-          const next = [...new Set([...agent.network, ...effect.domains])];
-          if (next.length > callLimits.domains)
+          if (
+            new Set([...networkOf(this.current(), agent.id), ...effect.domains])
+              .size > callLimits.domains
+          )
             fail(
               `${agent.handle}'s shell would reach more than ${callLimits.domains} domains. Undo an earlier access call first.`,
             );
-          return {
-            type: 'domains',
-            agent: agent.id,
-            before: await this.setNetwork(agent.id, next),
-          };
+          return { type: 'domains', agent: agent.id };
         });
     }
   }
@@ -4273,7 +4328,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         const agent = this.agents.get(applied.agent);
         return agent?.host === 'codex'
           ? `${agent.handle}'s shell can reach any website from its next turn: Codex cannot limit the network to domains.`
-          : `${agent?.handle ?? applied.agent}'s shell can reach ${agent?.network.join(', ') ?? 'the domains'} from its next turn.`;
+          : `${this.name(applied.agent)}'s shell can reach ${this.state ? networkOf(this.state, applied.agent).join(', ') : 'the domains'} from its next turn.`;
       }
     }
   }
@@ -4304,102 +4359,64 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         await this.serial(() => this.reopen(applied.direction, call));
         return `Verifold opened ${applied.direction} again.`;
       case 'domains':
-        return this.serial(async () => {
-          const effect = call.answer
-            ? call.options[call.answer.option]?.effect
-            : null;
-          // A domain that another answer that stands asked for stays.
-          const kept = new Set(
-            this.current().calls.flatMap((entry) => {
-              const other = entry.answer
-                ? entry.options[entry.answer.option]?.effect
-                : null;
-              return entry.id !== call.id &&
-                entry.state === 'answered' &&
-                entry.applied?.type === 'domains' &&
-                entry.applied.agent === applied.agent &&
-                other?.type === 'domains'
-                ? other.domains
-                : [];
-            }),
-          );
+        // The undo took the answer out of those that stand, so its domains went with it.
+        return this.serial(() => {
+          const effect = chosenEffect(call);
+          const left = networkOf(this.current(), applied.agent);
           const removed =
             effect?.type === 'domains'
-              ? effect.domains.filter(
-                  (domain) =>
-                    !applied.before.includes(domain) && !kept.has(domain),
-                )
+              ? effect.domains.filter((domain) => !left.includes(domain))
               : [];
-          await this.setNetwork(
-            applied.agent,
-            this.agent(applied.agent).network.filter(
-              (domain) => !removed.includes(domain),
-            ),
-          );
+          this.checkProcess(applied.agent);
           return removed.length
-            ? `${this.name(applied.agent)}'s shell loses ${removed.join(', ')} from its next turn.`
-            : `${this.name(applied.agent)}'s shell keeps its domains: other answers asked for them too.`;
+            ? `${this.name(applied.agent)}'s shell loses ${removed.join(', ')}.`
+            : `${this.name(applied.agent)}'s shell keeps its domains: other answers gave them too.`;
         });
     }
   }
 
   /**
-   * Change the domains of an agent's shell, in the lab's queue. Returns the
-   * domains before. The agent's process ends, so its next start resumes the
-   * conversation with them: both harnesses take a changed network on resume.
+   * The live process of an agent got other domains or other tools at its
+   * start than the lab gives it now: it ends, and its next start resumes the
+   * conversation with them. Both harnesses take a changed network on resume.
+   * A process whose shell lost a domain ends at once, also in a turn, and the
+   * turn's posts come again; otherwise a turn that runs ends first, and the
+   * end of the turn checks again. A Codex thread keeps tools that stopped
+   * working, so only new tools end it. Each start, each turn's end, each
+   * answer and undo, and each tick check this.
    */
-  private async setNetwork(
-    id: string,
-    next: readonly string[],
-  ): Promise<readonly string[]> {
-    const before = this.agent(id).network;
-    if (
-      before.length === next.length &&
-      before.every((domain) => next.includes(domain))
-    )
-      return before;
-    await this.update(id, (agent) => ({ ...agent, network: next }));
-    this.relaunch(id);
-    return before;
-  }
-
-  /**
-   * The agent's tools changed, such as the pod tools after the person added
-   * a RunPod key: its next start gets them. A Codex thread keeps the tools
-   * that it started with, so a Codex agent starts a new thread.
-   */
-  private async refreshTools(id: string): Promise<void> {
+  private checkProcess(id: string): void {
     const agent = this.agents.get(id);
-    if (!agent || !this.active(agent)) return;
-    if (agent.host === 'codex')
-      await this.update(id, (current) => ({ ...current, toolsVersion: 0 }));
-    this.relaunch(id);
-  }
-
-  /**
-   * End the agent's live process, so its next start resumes with what
-   * changed. A turn that runs ends first. A process that does not end keeps
-   * the flag, and the end of its next turn tries again.
-   */
-  private relaunch(id: string): void {
-    const session = this.agents.get(id)?.session;
-    if (!session || !this.options.sessions.view(session)?.live) return;
-    const run = this.rt(id);
-    if (run.turning) {
-      run.relaunch = true;
+    const run = this.runtimes.get(id);
+    const session = agent?.session;
+    if (
+      !agent ||
+      !session ||
+      !run?.got ||
+      run.parking ||
+      !this.state ||
+      !this.options.sessions.view(session)?.live
+    )
       return;
-    }
+    const network = networkOf(this.state, id);
+    const lost = run.got.network.some((domain) => !network.includes(domain));
+    const pods = this.podsOn();
+    const changed =
+      lost ||
+      network.length !== run.got.network.length ||
+      (pods !== run.got.pods && (agent.host === 'claude' || pods));
+    if (!changed || (run.turning && !lost)) return;
     run.parking = true;
     void this.options.sessions
       .park(session)
-      .catch((error: unknown) => {
-        run.relaunch = true;
+      .catch((error: unknown) =>
         this.options.progress?.(
-          `Verifold could not restart the process of ${this.name(id)}: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-      })
+          `Verifold could not restart the process of ${agent.handle}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        ),
+      )
       .finally(() => {
         run.parking = false;
+        // A process that did not end is checked again.
         this.kick();
       });
   }
@@ -4485,8 +4502,9 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     if (
       this.current().calls.some(
         (call) =>
+          // An answer that Verifold did not finish applying does not stand, so the deadline asks again.
           (call.deadline === deadline &&
-            (call.state === 'open' || call.state === 'answered')) ||
+            (call.state === 'open' || stands(call))) ||
           (call.state === 'open' &&
             call.options.some((option) => option.effect?.type === 'hours')),
       )
@@ -7239,6 +7257,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   private async tick(): Promise<void> {
     const state = this.state;
     if (!state || this.closing || this.suspended || this.moving) return;
+    // Pods that the person turned on or off, from Compute or a call, reach each live process.
+    for (const agent of this.agents.values())
+      if (this.active(agent)) this.checkProcess(agent.id);
     // At the deadline the person gets a go call, also in a lab that they paused.
     await this.deadlineCall().catch((error: unknown) =>
       this.options.progress?.(
@@ -7257,7 +7278,13 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     const sessions = this.options.sessions;
     const waiting: AgentRecord[] = [];
     for (const agent of this.agents.values()) {
-      if (!this.active(agent) || agent.held) continue;
+      // A process that ends for a change starts again once it ended.
+      if (
+        !this.active(agent) ||
+        agent.held ||
+        this.runtimes.get(agent.id)?.parking
+      )
+        continue;
       const live = agent.session
         ? (sessions.view(agent.session)?.live ?? false)
         : false;
@@ -7362,15 +7389,21 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   private async launch(id: string): Promise<void> {
     const agent = this.agent(id);
     const generation = randomBytes(4).toString('hex');
-    const tools = this.tools(id, generation);
+    const pods = this.podsOn();
+    const tools = this.tools(id, generation, pods);
     const direction = this.direction(agent.direction);
     const sessions = this.options.sessions;
     let saved: SessionRecord | null;
     let prompt: string | null;
     try {
+      // A Codex thread keeps its tools, so a thread with older tools, or
+      // without the pod tools while pods are on, gives way to a new one.
       saved =
         agent.session &&
-        !(agent.host === 'codex' && agent.toolsVersion < labToolsVersion)
+        !(
+          agent.host === 'codex' &&
+          (agent.toolsVersion < labToolsVersion || (pods && !agent.pods))
+        )
           ? await readRecord(this.root, agent.session)
           : null;
       prompt =
@@ -7411,11 +7444,19 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     }
     // Known before the start: its process can stop before the start returns.
     run.launch = { at: Date.now(), turns: 0, resumed: resume };
+    // The domains come from the answers that stand now. A change during the
+    // start is found by the check after it.
+    const network = networkOf(this.state, id);
+    run.got = {
+      network,
+      pods: agent.host === 'codex' && resume ? agent.pods : pods,
+    };
     try {
-      // The domains are read now: a call can change them during the reads.
-      const { network } = this.agent(id);
-      if (resume && saved) await sessions.resumeAgent(saved.id, tools, network);
-      else {
+      if (resume && saved) {
+        await sessions.resumeAgent(saved.id, tools, network);
+        if (agent.host === 'claude')
+          await this.update(id, (current) => ({ ...current, pods }));
+      } else {
         const session = await sessions.startAgent({
           host: agent.host,
           ...(agent.model ? { model: agent.model } : {}),
@@ -7432,6 +7473,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           ...current,
           session,
           toolsVersion: labToolsVersion,
+          pods,
           events: current.events.filter(
             (event) => event.kind !== 'restart' || event.seq <= current.cursor,
           ),
@@ -7459,5 +7501,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       return;
     }
     await saving;
+    // An answer or an undo during the start changed what the process should have.
+    this.checkProcess(id);
   }
 }

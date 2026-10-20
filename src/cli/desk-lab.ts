@@ -710,8 +710,14 @@ function optionHtml(
   option: CallOption,
   index: number,
   view: LabView,
+  stored: readonly string[] | null,
 ): string {
   const lines = option.effect ? effectLines(option.effect, call, view) : null;
+  // A pod whose secret is not stored cannot start: the person adds it first.
+  const missing =
+    option.effect?.type === 'pod' && stored
+      ? option.effect.secrets.filter((name) => !stored.includes(name))
+      : [];
   const facts = [
     option.usd === null
       ? ''
@@ -720,15 +726,19 @@ function optionHtml(
         : `${usd(option.usd)}`,
     option.minutes === null ? '' : minutesText(option.minutes),
   ].filter(Boolean);
-  return `<li><button type="button"${call.pick === index ? ' class="primary"' : ''} data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}">${e(option.label)}</button>${facts.length ? ` <span class="fine">${e(facts.join(' · '))}</span>` : ''}${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}</li>`;
+  return `<li><button type="button"${call.pick === index ? ' class="primary"' : ''} data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}">${e(option.label)}</button>${facts.length ? ` <span class="fine">${e(facts.join(' · '))}</span>` : ''}${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
 }
 
 /**
  * Needs you: each open call of the lab, with its options, their cost and
  * time, the agents' pick and why. Every agent text is escaped. The answer
- * applies at once and can be undone for a while.
+ * applies at once and can be undone for a while. `stored` names the pod
+ * secrets that this computer stores, when Compute is known.
  */
-export function labCallNeeds(view: LabView): {
+export function labCallNeeds(
+  view: LabView,
+  stored: readonly string[] | null = null,
+): {
   readonly key: string;
   readonly kind: string;
   readonly title: string;
@@ -752,7 +762,7 @@ export function labCallNeeds(view: LabView): {
         why: `${asker} asks${call.direction ? ` for ${call.direction}` : ''} (${call.id}).`,
         since: call.at,
         body: `<div class="why"><span class="tag reading">${pick ? `${e(asker)} advises "${e(pick.label)}"` : `${e(asker)} says`}</span> ${e(call.why)}</div>
-  <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view)).join('')}</ul>
+  <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view, stored)).join('')}</ul>
   <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}.` : 'Your answer applies at once, and it has no undo.'}</p>`,
       };
     });

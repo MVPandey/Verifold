@@ -1242,7 +1242,12 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   const record = snapshot.attempts.find((entry) => entry.id === latest)?.record;
   const since = record?.finishedAt ?? record?.startedAt ?? null;
   const phase = workspace.research?.phase;
-  for (const call of live.lab ? labCallNeeds(live.lab) : [])
+  for (const call of live.lab
+    ? labCallNeeds(
+        live.lab,
+        live.compute?.secrets.map((secret) => secret.name) ?? null,
+      )
+    : [])
     items.push({ ...call, view: 'home' });
   // A lab run has no research to continue.
   if (
