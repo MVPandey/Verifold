@@ -6,11 +6,12 @@ import type { AgentTool } from './session-hosts.ts';
  * a change of a tool that a thread has raises `labToolsVersion`, and a Codex
  * agent with an older thread starts a new one. A tool that only new threads
  * get needs no new version: `verifold_plan` goes only to the agent that opens
- * a lab, and that agent's thread is new. The run tools, the pod tools, and
- * the run proof of `verifold_post` add to the tools. `where` and `lease` of
- * `verifold_run` are optional, so every call of its older schema stays valid.
- * None of them raises a version: a Codex agent whose thread is older keeps
- * its conversation, and gets them with its next new thread.
+ * a lab, and that agent's thread is new. The run tools, the pod tools,
+ * `verifold_direction`, and the run proof of `verifold_post` add to the
+ * tools. `where` and `lease` of `verifold_run` are optional, so every call of
+ * its older schema stays valid. None of them raises a version: a Codex agent
+ * whose thread is older keeps its conversation, and gets them with its next
+ * new thread.
  */
 export const labToolsVersion = 2;
 
@@ -270,6 +271,91 @@ export const labPodToolSpecs: readonly AgentTool[] = [
     },
   },
 ];
+
+/** The verdicts of a direction. `holds-up` needs a rerun by the other harness. */
+export const verdicts = ['open', 'leading', 'holds-up', 'ruled-out'] as const;
+
+/** The limits of `verifold_direction`. The tool schema and the lab's checks use the same ones. */
+export const directionLimits = {
+  evidence: 120,
+  why: 280,
+  /** Agents that agents start in 24 hours, and never more than "Agents at once". */
+  starts: 4,
+};
+
+/** Directions: an agent opens one with its own agent, gives its own direction a verdict, and closes it. */
+export const directionToolSpec: AgentTool = {
+  name: 'verifold_direction',
+  description:
+    "Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, and the harness of its agent. Verifold makes its folder and starts its agent when a slot is free. A lab has at most 6 open directions. Agents start at most 4 agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs `post`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs `post`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs a rerun by the other harness. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['open', 'update', 'close'] },
+      title: {
+        type: 'string',
+        maxLength: planLimits.title,
+        description: 'open: a short title.',
+      },
+      bar: {
+        type: 'string',
+        maxLength: planLimits.bar,
+        description:
+          'open: what makes the direction hold up, in plain words, with its number.',
+      },
+      runs: {
+        type: 'integer',
+        minimum: 1,
+        maximum: planLimits.runs,
+        description:
+          'open: the repeat runs, such as seeds, that the bar needs.',
+      },
+      noise: {
+        type: 'string',
+        maxLength: planLimits.noise,
+        description:
+          'open: the spread between repeat runs that counts as noise, such as ±0.02.',
+      },
+      buildsOn: {
+        type: 'array',
+        maxItems: planLimits.buildsOn,
+        items: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', maxLength: planLimits.buildsOnText },
+            known: { type: 'boolean' },
+          },
+          required: ['text', 'known'],
+          additionalProperties: false,
+        },
+        description: 'open: known work or new work that it builds on.',
+      },
+      harness: {
+        type: 'string',
+        enum: ['claude', 'codex'],
+        description: "open: the harness of the direction's agent.",
+      },
+      verdict: { type: 'string', enum: verdicts },
+      evidence: {
+        type: 'string',
+        maxLength: directionLimits.evidence,
+        description:
+          'update: one line of evidence, such as "old mix 61.2 vs 57.1, 3 seeds".',
+      },
+      post: {
+        ...postId,
+        description: 'update: the post with the proof of the verdict.',
+      },
+      why: {
+        type: 'string',
+        maxLength: directionLimits.why,
+        description: 'Why. The person and the other agents read it.',
+      },
+    },
+    required: ['action', 'why'],
+    additionalProperties: false,
+  },
+};
 
 /** The plan of record. Only the agent that opened the lab gets this tool. */
 export const planToolSpec: AgentTool = {

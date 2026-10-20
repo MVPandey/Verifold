@@ -13,6 +13,7 @@ import {
   object,
   postId,
   postLine,
+  runId,
   type Artifact,
   type Post,
   type PostKind,
@@ -21,12 +22,15 @@ import {
 import { validateModel, type HarnessName } from './harness.ts';
 import {
   agentPostKinds,
+  directionLimits,
+  directionToolSpec,
   labToolSpecs,
   labToolsVersion,
   planLimits,
   planToolSpec,
   labPodToolSpecs,
   runToolSpecs,
+  verdicts,
 } from './lab-tools.ts';
 import { isOpen as isOpenLease, type Cause, type Lease } from './leases.ts';
 import { loadPrompt } from './prompts.ts';
@@ -57,6 +61,7 @@ import type { AgentTools } from './session-hosts.ts';
 import { changeWorkspace, writePrivateFile } from './storage.ts';
 import type { RunTeam } from './team.ts';
 import { memoryText, noteToolSpec, restrictions } from './tasks.ts';
+import type { LabProgress } from './memory.ts';
 import {
   allocate,
   changes,
@@ -125,6 +130,8 @@ export const labLimits = {
   firstPlan: { min: 2, max: 4 },
   /** Hours of one time budget, or of one extension. */
   hours: 168,
+  /** Turns in a row without a post, after which an agent's next turn asks it to post. */
+  quietTurns: 6,
 };
 
 export const labTiming = {
@@ -144,12 +151,23 @@ export const labTiming = {
   minuteMs: 60_000,
   /** The time between two reads of a pod run's job. */
   podPollMs: 20_000,
+  /** An agent that worked this long since its last post gets asked to post, after 2 turns at least. */
+  quietMs: 2 * 3_600_000,
 };
 
 /** Work that a direction builds on: known work, or new in this lab. */
 export interface BuildsOn {
   readonly text: string;
   readonly known: boolean;
+}
+
+export type Verdict = (typeof verdicts)[number];
+
+/** The one line of evidence of a verdict, with the post that has the proof and the run that it cites. */
+export interface Evidence {
+  readonly text: string;
+  readonly post: string;
+  readonly run: string | null;
 }
 
 export interface Direction {
@@ -165,8 +183,12 @@ export interface Direction {
   /** `person`, or the agent that opened it. */
   readonly openedBy: string;
   readonly openedAt: string;
-  readonly state: 'open' | 'stopped';
+  /** `stopped`: the person stopped it. `closed`: its agent closed it after its final verdict. */
+  readonly state: 'open' | 'stopped' | 'closed';
   readonly stoppedAt: string | null;
+  /** What its agent says of it now. Only its agent changes it. */
+  readonly verdict: Verdict;
+  readonly evidence: Evidence | null;
   /** The agent that owns the direction. */
   readonly agent: string;
   /** The direction's own copy of the project. */
@@ -201,6 +223,8 @@ export interface LabState {
   readonly plan: PlanOfRecord | null;
   /** After `deadline`, the lab pauses itself. */
   readonly budget: { readonly hours: number; readonly deadline: string } | null;
+  /** When agents started agents, in the last 24 hours. */
+  readonly agentStarts: readonly string[];
 }
 
 export interface LabEvent {
@@ -235,10 +259,14 @@ export interface AgentRecord {
   readonly model: string | null;
   readonly direction: string;
   readonly startedAt: string;
-  /** The person stopped the agent's direction. */
+  /** The person stopped the agent's direction, or the agent closed it. */
   readonly stoppedAt: string | null;
-  /** `crashed`: its process stopped too often by itself. The person restarts it. */
-  readonly stopReason: 'person' | 'crashed' | null;
+  /**
+   * `crashed`: its process stopped too often by itself. The person restarts
+   * it. `closed`: the agent closed its direction, and its session ends after
+   * the turn.
+   */
+  readonly stopReason: 'person' | 'crashed' | 'closed' | null;
   /** Each start or resume of the session gets a new one. A tool call of an older one changes nothing. */
   readonly generation: string;
   readonly session: string | null;
@@ -254,6 +282,17 @@ export interface AgentRecord {
   readonly events: readonly QueuedEvent<LabEvent>[];
   /** Turns in a row that changed nothing: no post and no file change. */
   readonly idleStreak: number;
+  /** Turns in a row without a post of the agent. */
+  readonly quietTurns: number;
+  /** The time that those turns ran, in milliseconds. Waits and pauses do not count. */
+  readonly quietWork: number;
+  /** The agent got asked to post in this quiet stretch. Its next post ends the stretch. */
+  readonly nudged: boolean;
+  /**
+   * The agent closed its direction, and the close is done: its session ended
+   * and its folder's last work is committed.
+   */
+  readonly finished: boolean;
   /** The fingerprint of the direction's folder after the last turn, ignored files too. */
   readonly folder: string | null;
   /** When its process stopped by itself, recently. */
@@ -280,7 +319,7 @@ export interface DirectionView {
    * it. `slot`: it waits for a free agent slot. `usage`: it waits for its
    * harness's usage window. `turns`: it waits for its hourly turns. `paused`:
    * the lab is paused. `plan`: a plan opened it, and it starts once the plan
-   * is kept.
+   * is kept. `closed`: its agent closed it after its final verdict.
    */
   readonly status:
     | 'plan'
@@ -292,6 +331,7 @@ export interface DirectionView {
     | 'turns'
     | 'paused'
     | 'stopped'
+    | 'closed'
     | 'crashed';
   /** When a wait ends. */
   readonly until: string | null;
@@ -312,6 +352,8 @@ export interface LabView {
 /** The harness sessions of the lab: the project's worker slots. */
 export interface LabSessions {
   readonly full: boolean;
+  /** "Agents at once". Agents never start more agents than this in 24 hours. */
+  readonly limit?: number;
   view(id: string): SessionView | null;
   idle(id: string): boolean;
   startAgent(input: {
@@ -349,6 +391,8 @@ export interface LabOptions {
    */
   readonly harnesses?: () => Promise<readonly HarnessName[]>;
   readonly progress?: (line: string) => void;
+  /** The directions or their verdicts changed, so the project memory writes them. */
+  readonly onChange?: () => void;
   readonly timing?: Partial<typeof labTiming>;
   /**
    * Agents start, resume, and wake. False in a process that runs one session
@@ -404,6 +448,10 @@ interface AgentRuntime {
   turn: number;
   /** The agent posted or started a run in its current turn. */
   posted: boolean;
+  /** The agent posted to the board, or gave a verdict, in its current turn. */
+  spoke: boolean;
+  /** When the current turn started. */
+  turnAt: number;
   /** What the current turn read. It is saved when the turn ends cleanly. */
   pending: ReadState | null;
   /** The harness's usage window ran out in the current turn, so it did no work. */
@@ -434,6 +482,8 @@ function runtime(): AgentRuntime {
     turning: false,
     turn: 0,
     posted: false,
+    spoke: false,
+    turnAt: 0,
     pending: null,
     usedUp: false,
     readBroken: false,
@@ -541,7 +591,9 @@ function parseDirection(value: unknown): Direction | null {
     typeof entry.title !== 'string' ||
     typeof entry.openedBy !== 'string' ||
     typeof entry.openedAt !== 'string' ||
-    (entry.state !== 'open' && entry.state !== 'stopped') ||
+    (entry.state !== 'open' &&
+      entry.state !== 'stopped' &&
+      entry.state !== 'closed') ||
     typeof entry.agent !== 'string' ||
     !agentId.test(entry.agent) ||
     typeof entry.head !== 'string' ||
@@ -584,6 +636,24 @@ function parseDirection(value: unknown): Direction | null {
     openedAt: entry.openedAt,
     state: entry.state,
     stoppedAt: typeof entry.stoppedAt === 'string' ? entry.stoppedAt : null,
+    // A direction from before verdicts is open.
+    verdict: verdicts.find((verdict) => verdict === entry.verdict) ?? 'open',
+    evidence: (() => {
+      const evidence = object(entry.evidence);
+      return evidence &&
+        typeof evidence.text === 'string' &&
+        typeof evidence.post === 'string' &&
+        postId.test(evidence.post)
+        ? {
+            text: evidence.text.slice(0, directionLimits.evidence),
+            post: evidence.post,
+            run:
+              typeof evidence.run === 'string' && runId.test(evidence.run)
+                ? evidence.run
+                : null,
+          }
+        : null;
+    })(),
     agent: entry.agent,
     workspace,
     head: entry.head,
@@ -656,6 +726,14 @@ function parseState(value: Record<string, unknown> | null): LabState | null {
       !Number.isNaN(Date.parse(budget.deadline))
         ? { hours: budget.hours as number, deadline: budget.deadline }
         : null,
+    agentStarts: Array.isArray(value.agentStarts)
+      ? value.agentStarts
+          .filter(
+            (at): at is string =>
+              typeof at === 'string' && !Number.isNaN(Date.parse(at)),
+          )
+          .slice(-directionLimits.starts * 2)
+      : [],
   };
 }
 
@@ -688,6 +766,71 @@ export function barSummary(direction: Direction): string {
 /** The bar for a prompt or a digest: an agent wrote it, so it is quoted. */
 function barText(direction: Direction): string {
   return direction.bar ? JSON.stringify(barSummary(direction)) : 'not set';
+}
+
+/** A direction's verdict in words, such as "leading", or "no verdict yet". */
+function verdictWord(direction: Direction): string {
+  return direction.verdict === 'open'
+    ? 'no verdict yet'
+    : verdictWords[direction.verdict].toLowerCase();
+}
+
+/** A direction's state in words: open, closed by its agent, or stopped by the person. */
+function stateWord(direction: Direction): string {
+  return direction.state === 'open'
+    ? 'open'
+    : direction.state === 'closed'
+      ? 'closed by its agent'
+      : 'stopped by the person';
+}
+
+/** A direction's state and verdict for a prompt or a digest, such as "open, leading: "61.2 vs 57.1" (p-14, r-6)". */
+function verdictLine(direction: Direction): string {
+  return `${stateWord(direction)}, ${verdictWord(direction)}${direction.evidence ? `: ${evidenceText(direction.evidence)}` : ''}`;
+}
+
+/** What a direction builds on, from an agent's tool call. */
+function works(value: unknown): BuildsOn[] {
+  const listed = Array.isArray(value) ? value : [];
+  if (listed.length > planLimits.buildsOn)
+    fail(`Give up to ${planLimits.buildsOn} works that a direction builds on.`);
+  return listed.map((work) => {
+    const entry = object(work);
+    return entry && typeof entry.known === 'boolean'
+      ? {
+          text: text(
+            entry.text,
+            planLimits.buildsOnText,
+            'each work that a direction builds on',
+          ),
+          known: entry.known,
+        }
+      : fail('Each work that a direction builds on has text and known.');
+  });
+}
+
+/** The repeat runs that a bar needs, from an agent's tool call. */
+function repeatRuns(value: unknown): number {
+  return Number.isSafeInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= planLimits.runs
+    ? (value as number)
+    : fail(
+        `Give the repeat runs that a bar needs, from 1 to ${planLimits.runs}.`,
+      );
+}
+
+/** The words of each verdict. */
+export const verdictWords: Record<Verdict, string> = {
+  open: 'Open',
+  leading: 'Leading',
+  'holds-up': 'Holds up',
+  'ruled-out': 'Ruled out',
+};
+
+/** A verdict's evidence in one line, such as "61.2 vs 57.1" (p-14, r-6). Its text comes from an agent, so it is quoted. */
+export function evidenceText(evidence: Evidence): string {
+  return `${JSON.stringify(evidence.text)} (${evidence.post}${evidence.run ? `, ${evidence.run}` : ''})`;
 }
 
 /** The lab's time budget ended. */
@@ -739,7 +882,9 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
     startedAt: value.startedAt,
     stoppedAt: typeof value.stoppedAt === 'string' ? value.stoppedAt : null,
     stopReason:
-      value.stopReason === 'person' || value.stopReason === 'crashed'
+      value.stopReason === 'person' ||
+      value.stopReason === 'crashed' ||
+      value.stopReason === 'closed'
         ? value.stopReason
         : null,
     generation: value.generation.slice(0, 40),
@@ -783,6 +928,14 @@ function parseAgent(value: Record<string, unknown> | null): AgentRecord | null {
     idleStreak: Number.isSafeInteger(value.idleStreak)
       ? (value.idleStreak as number)
       : 0,
+    quietTurns: Number.isSafeInteger(value.quietTurns)
+      ? (value.quietTurns as number)
+      : 0,
+    quietWork: Number.isSafeInteger(value.quietWork)
+      ? (value.quietWork as number)
+      : 0,
+    nudged: value.nudged === true,
+    finished: value.finished === true,
     folder:
       typeof value.folder === 'string' && /^[0-9a-f]{64}$/.test(value.folder)
         ? value.folder
@@ -907,6 +1060,10 @@ export class Lab {
   private parking: Promise<void> | null = null;
   /** A plan opens its directions now. A second plan waits for it. */
   private planning = false;
+  /** Closed directions whose close runs now. */
+  private readonly finishing = new Set<string>();
+  /** The directions that agents opened in the last minute, by call. A repeated call gets the first one's answer. */
+  private readonly opening = new Map<string, Promise<string>>();
   /** The lab pauses at the end of its time budget now. */
   private reaching = false;
   private readonly ledger: RunLedger;
@@ -977,6 +1134,8 @@ export class Lab {
         await this.saveAgent({ ...agent, held: false }).catch(() => {});
         await this.unkept(agent);
       }
+    // A close that an earlier owner did not finish: the folder's last work is committed now.
+    for (const agent of this.agents.values()) this.finishClosed(agent.id);
   }
 
   /**
@@ -1088,6 +1247,28 @@ export class Lab {
     };
   }
 
+  /** The directions for the project memory, open ones first, or null without a lab. */
+  progress(): LabProgress | null {
+    const state = this.state;
+    if (!state || this.suspended) return null;
+    const order = { open: 0, closed: 1, stopped: 2 };
+    return [...state.directions]
+      .sort((a, b) => order[a.state] - order[b.state])
+      .map((direction) => {
+        const agent = this.agents.get(direction.agent);
+        return {
+          id: direction.id,
+          title: direction.title,
+          open: direction.state === 'open',
+          state: stateWord(direction),
+          agent: agent ? `${agent.handle} (${hostName(agent.host)})` : null,
+          bar: direction.bar ? barSummary(direction) : null,
+          verdict: verdictWord(direction),
+          evidence: direction.evidence,
+        };
+      });
+  }
+
   /** The handle of an author on the board. */
   name(author: string): string {
     if (author === 'person') return 'the person';
@@ -1123,6 +1304,7 @@ export class Lab {
           directions: [],
           opener: null,
           plan: null,
+          agentStarts: [],
           budget:
             budget === null
               ? null
@@ -1209,10 +1391,13 @@ export class Lab {
        * lists it, and its agent starts once the plan is kept.
        */
       readonly plan?: boolean;
+      /** An agent opens it with `verifold_direction`: the limits of agent starts apply. Its reason goes on the note. */
+      readonly started?: { readonly why: string };
     } = {},
   ): Promise<string> {
     const checked = await this.serial(() => {
       this.roomForDirection();
+      if (options.started) this.roomForStart();
       const host: HarnessName =
         input.harness === 'claude' || input.harness === 'codex'
           ? input.harness
@@ -1287,6 +1472,31 @@ export class Lab {
       );
   }
 
+  /**
+   * An agent can start one more agent: the lab works, its time budget has
+   * time left, and agents started fewer than `directionLimits.starts` agents
+   * in 24 hours, and fewer than "Agents at once".
+   */
+  private roomForStart(): void {
+    const state = this.current();
+    if (state.pausedAt || this.ended(state))
+      fail('The lab is paused, so no agent starts now.');
+    const most = Math.min(
+      directionLimits.starts,
+      this.options.sessions.limit ?? directionLimits.starts,
+    );
+    if (this.recentStarts(state).length >= most)
+      fail(
+        `Agents started ${most} ${most === 1 ? 'agent' : 'agents'} in the last 24 hours, the most that this lab allows. Ask the person on the board to open the direction.`,
+      );
+  }
+
+  /** When agents started agents in the last 24 hours. */
+  private recentStarts(state: LabState): string[] {
+    const day = Date.now() - 24 * 3_600_000;
+    return state.agentStarts.filter((at) => Date.parse(at) > day);
+  }
+
   /** Record a new direction with its folder and its agent. */
   private async openDirection(
     id: string,
@@ -1301,9 +1511,14 @@ export class Lab {
       readonly buildsOn: readonly BuildsOn[];
     },
     by: string,
-    options: { readonly opener?: boolean; readonly plan?: boolean },
+    options: {
+      readonly opener?: boolean;
+      readonly plan?: boolean;
+      readonly started?: { readonly why: string };
+    },
   ): Promise<string> {
     this.roomForDirection();
+    if (options.started) this.roomForStart();
     const state = this.current();
     // One agent plans the lab.
     if (options.opener && state.opener)
@@ -1333,6 +1548,10 @@ export class Lab {
       wakeups: [],
       events: [],
       idleStreak: 0,
+      quietTurns: 0,
+      quietWork: 0,
+      nudged: false,
+      finished: false,
       folder,
       restarts: [],
       actions: [],
@@ -1345,6 +1564,9 @@ export class Lab {
       ...state,
       handles: { ...state.handles, [host]: handle },
       ...(options.opener ? { opener: agent } : {}),
+      ...(options.started
+        ? { agentStarts: [...this.recentStarts(state), now] }
+        : {}),
       directions: [
         ...state.directions,
         {
@@ -1358,6 +1580,8 @@ export class Lab {
           openedAt: now,
           state: 'open',
           stoppedAt: null,
+          verdict: 'open',
+          evidence: null,
           agent,
           workspace,
           head: workspace.start,
@@ -1377,20 +1601,21 @@ export class Lab {
       await rm(join(this.folder, 'agents', `${agent}.json`), { force: true });
       throw error;
     }
-    // A full board refuses the note. The direction is open all the same.
+    // A full board refuses the note. The direction is open all the same. The note wakes no one.
     if (!options.plan && !options.opener)
       await this.add({
         author: 'verifold',
         kind: 'status',
         direction: id,
         text: clip(
-          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).`,
+          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).${options.started ? ` Why: ${JSON.stringify(options.started.why)}` : ''}`,
           boardLimits.text,
         ),
         mentions: [],
         artifacts: [],
       }).catch(() => {});
     this.options.progress?.(`Direction opened: ${title} (${hostName(host)}).`);
+    this.options.onChange?.();
     this.kick();
     return id;
   }
@@ -1403,7 +1628,11 @@ export class Lab {
         state.directions.find((entry) => entry.id === id) ??
         fail('Choose a direction of the lab.');
       if (direction.state !== 'open')
-        fail('That direction is already stopped.');
+        fail(
+          direction.state === 'closed'
+            ? 'Its agent closed that direction already.'
+            : 'That direction is already stopped.',
+        );
       const agent = this.agents.get(direction.agent);
       // The session ends first. If it cannot end, nothing changes.
       if (agent?.session && this.options.sessions.view(agent.session)?.live) {
@@ -1418,60 +1647,109 @@ export class Lab {
           );
         }
       }
-      const now = new Date().toISOString();
-      this.state = {
-        ...state,
-        directions: state.directions.map((entry) =>
-          entry.id === direction.id
-            ? { ...entry, state: 'stopped', stoppedAt: now }
-            : entry,
-        ),
-      };
-      await this.stateFile.save();
-      // A run that ends now needs no cancel. One run never stops the stop.
-      for (const run of this.ledger.list())
-        if (run.direction === direction.id && runActive(run))
-          try {
-            this.ledger.cancel(run.id, 'person');
-          } catch (error) {
-            // A refusal says that the run ends now. Anything else is logged.
-            if (!(error instanceof SessionActionError))
-              this.options.progress?.(
-                `Verifold could not cancel ${run.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
-              );
-          }
-      if (agent) {
-        this.loops.get(agent.id)?.cancel();
-        this.forget(agent.id);
-        await this.update(agent.id, (current) => ({
-          ...current,
-          stoppedAt: now,
-          stopReason: 'person',
-        }));
-      }
-      // A full board refuses the note. The direction is stopped all the same.
-      await this.add({
-        author: 'verifold',
-        kind: 'status',
-        direction: direction.id,
-        text: clip(
-          `The person stopped ${JSON.stringify(direction.title)}.`,
-          boardLimits.text,
-        ),
-        mentions: [],
-        artifacts: [],
-      }).catch(() => {});
-      return direction.id;
+      const unsaved = await this.endDirection(
+        direction,
+        'stopped',
+        `The person stopped ${JSON.stringify(direction.title)}.`,
+      );
+      return { id: direction.id, unsaved };
     });
-    // No agent works for the direction any more, so its pods end and billing stops, and a request that waits is withdrawn. The end waits for the compute's queue, outside the lab's.
+    this.endLeases(stopped.id, 'person', `you stopped ${stopped.id}.`);
+    if (stopped.unsaved)
+      fail(
+        `Verifold stopped ${stopped.id}, but could not save the lab: ${stopped.unsaved.message} It saves again with the next change.`,
+      );
+  }
+
+  /**
+   * End a direction in the lab's queue. `stopped`: the person stopped it, and
+   * its session ended already. `closed`: its agent closed it, and its session
+   * ends when the turn that closed it ends. Its runs are cancelled, its wakes
+   * stop, and the board says so. Its folder and branch stay. A close whose
+   * save fails changes nothing. A stop stays a stop, because its session
+   * ended already: the error comes back, and the next save writes the stop.
+   */
+  private async endDirection(
+    direction: Direction,
+    how: 'stopped' | 'closed',
+    note: string,
+  ): Promise<Error | null> {
+    const state = this.current();
+    const agent = this.agents.get(direction.agent);
+    const now = new Date().toISOString();
+    this.state = {
+      ...state,
+      directions: state.directions.map((entry) =>
+        entry.id === direction.id
+          ? { ...entry, state: how, stoppedAt: now }
+          : entry,
+      ),
+    };
+    let unsaved: Error | null = null;
+    try {
+      await this.stateFile.save();
+    } catch (error) {
+      // A close changed nothing yet: the direction stays open, with its runs and its agent.
+      if (how === 'closed') {
+        this.state = state;
+        throw error;
+      }
+      unsaved = error instanceof Error ? error : new Error('unknown error');
+    }
+    // A run that ends now needs no cancel. One run never stops the end.
+    for (const run of this.ledger.list())
+      if (run.direction === direction.id && runActive(run))
+        try {
+          this.ledger.cancel(
+            run.id,
+            how === 'stopped' || !agent ? 'person' : agent.id,
+            how === 'closed' ? 'Its direction closed.' : '',
+          );
+        } catch (error) {
+          // A refusal says that the run ends now. Anything else is logged.
+          if (!(error instanceof SessionActionError))
+            this.options.progress?.(
+              `Verifold could not cancel ${run.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
+        }
+    if (agent) {
+      this.loops.get(agent.id)?.cancel();
+      // The turn that closes the direction still runs: its runtime ends with it.
+      if (how === 'stopped') this.forget(agent.id);
+      else clearTimeout(this.rt(agent.id).next);
+      await this.update(agent.id, (current) => ({
+        ...current,
+        stoppedAt: now,
+        stopReason: how === 'stopped' ? 'person' : 'closed',
+      }));
+    }
+    // A full board refuses the note. The direction ends all the same.
+    await this.add({
+      author: 'verifold',
+      kind: 'status',
+      direction: direction.id,
+      text: clip(note, boardLimits.text),
+      mentions: [],
+      artifacts: [],
+    }).catch(() => {});
+    this.options.onChange?.();
+    return unsaved;
+  }
+
+  /**
+   * No agent works for a direction any more, so its pods end and billing
+   * stops, and a request that waits is withdrawn. The end waits for the
+   * compute's queue, outside the lab's.
+   */
+  private endLeases(direction: string, by: Cause, reason: string): void {
     const compute = this.options.compute;
     for (const lease of compute?.leases.list() ?? [])
       if (
-        lease.directions?.includes(stopped) &&
+        lease.directions?.includes(direction) &&
         (isOpenLease(lease) || lease.state === 'requested')
       )
         void compute?.leases
-          .end(lease.id, 'person', `you stopped ${stopped}.`)
+          .end(lease.id, by, reason)
           .catch((error: unknown) =>
             this.options.progress?.(
               `Verifold could not end ${lease.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
@@ -1548,6 +1826,11 @@ export class Lab {
         if (!session) continue;
         // The turn that the park stops, known before the park: a resume can
         // start a new turn meanwhile, and that one must keep its state.
+        // An agent that closed its direction in this turn ends instead.
+        if (this.agents.get(id)?.stopReason === 'closed') {
+          this.finishClosed(id);
+          continue;
+        }
         const run = this.rt(id);
         const { turn, launch } = run;
         await this.options.sessions.park(session);
@@ -1745,6 +2028,11 @@ export class Lab {
       (entry) => entry.session === record.id,
     );
     if (!agent) return;
+    // The agent closed its direction in this turn, however the turn ended.
+    if (agent.stopReason === 'closed') {
+      this.finishClosed(agent.id);
+      return;
+    }
     const run = this.rt(agent.id);
     const loop = this.loop(agent.id);
     if (record.status === 'idle') {
@@ -1753,7 +2041,7 @@ export class Lab {
         loop.turnEnded();
         return;
       }
-      const { usedUp, readBroken, pending, posted, turn } = run;
+      const { usedUp, readBroken, pending, posted, spoke, turn, turnAt } = run;
       run.turning = false;
       run.usedUp = false;
       run.readBroken = false;
@@ -1777,7 +2065,12 @@ export class Lab {
         ]);
       if (run.launch) run.launch.turns += 1;
       run.settling = true;
-      const after = this.afterTurn(agent.id, posted, turn, !usedUp)
+      const after = this.afterTurn(
+        agent.id,
+        { posted, spoke, worked: Date.now() - turnAt },
+        turn,
+        !usedUp,
+      )
         .catch(() => {})
         .finally(() => {
           this.after.delete(after);
@@ -1889,6 +2182,8 @@ export class Lab {
     run.turning = true;
     run.turn += 1;
     run.posted = false;
+    run.spoke = false;
+    run.turnAt = Date.now();
     run.usedUp = false;
     run.readBroken = false;
     run.pending = read;
@@ -1948,6 +2243,8 @@ export class Lab {
     this.closing = true;
     clearInterval(this.ticker);
     this.ticker = undefined;
+    // A turn that closed its direction ends now, and its work is committed before Verifold stops.
+    for (const agent of this.agents.values()) this.finishClosed(agent.id);
     for (const run of this.runtimes.values()) clearTimeout(run.next);
     await Promise.all([...this.loops.values()].map((loop) => loop.close()));
     await this.settle();
@@ -2055,11 +2352,12 @@ export class Lab {
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         send: (events, left) => {
           const agent = this.agent(id);
+          const ask = this.quiet(id);
           // The posts get the room that the rest of the message leaves, so a
           // post that is not shown stays unread.
           const room =
             labLimits.digestText -
-            this.digestText(agent, events, left, []).length;
+            this.digestText(agent, events, left, [], ask).length;
           const digest = this.board.digest(
             { id, direction: agent.direction },
             this.readState(agent),
@@ -2072,9 +2370,13 @@ export class Lab {
           const session = agent.session ?? fail('The agent has no session.');
           this.options.sessions.continueTask(
             session,
-            this.digestText(agent, events, left, digest.lines),
+            this.digestText(agent, events, left, digest.lines, ask),
           );
           this.begin(id, digest.read);
+          if (ask)
+            void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(
+              () => {},
+            );
         },
       },
       {
@@ -2093,6 +2395,7 @@ export class Lab {
     events: readonly QueuedEvent<LabEvent>[],
     left: number,
     posts: readonly string[],
+    ask: string | null,
   ): string {
     const direction = this.direction(agent.direction);
     const notes = events
@@ -2110,7 +2413,8 @@ export class Lab {
       events.some((event) => event.again === 'limit')
         ? "Your harness's usage window ran out in your last turn, so that turn did no work."
         : '',
-      `Your direction: ${direction.id} ${JSON.stringify(direction.title)}. Holds up if: ${barText(direction)}.`,
+      `Your direction: ${direction.id} ${JSON.stringify(direction.title)}, ${verdictLine(direction)}. Holds up if: ${barText(direction)}.`,
+      ask ?? '',
       'Continue your direction. Post what you find with proof. End your turn with one line on what you do next.',
     ]
       .filter(Boolean)
@@ -2134,7 +2438,7 @@ export class Lab {
         )
         .slice(-3);
       return [
-        `- ${direction.id} ${JSON.stringify(direction.title)}: ${agent ? `${agent.handle} (${hostName(agent.host)})` : 'no agent'}, ${direction.state === 'open' ? 'open' : 'stopped'}. Holds up if: ${barText(direction)}.`,
+        `- ${direction.id} ${JSON.stringify(direction.title)}: ${agent ? `${agent.handle} (${hostName(agent.host)})` : 'no agent'}, ${verdictLine(direction)}. Holds up if: ${barText(direction)}.`,
         ...posts.map((post) => `  ${postLine(post, name)}`),
       ];
     });
@@ -2179,7 +2483,7 @@ export class Lab {
     const role = planning
       ? `\n\n${await loadPrompt('lab-opener')}`
       : opener
-        ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and a bar changes before a result, never after it.'
+        ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.'
         : '';
     // Without a sandbox for runs, agents run experiments in their own harness.
     const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.podsOn() ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
@@ -2210,6 +2514,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     return {
       specs: [
         ...labToolSpecs,
+        directionToolSpec,
         ...(this.ledger.sandboxed || this.podsOn() ? runToolSpecs : []),
         ...(this.podsOn() ? labPodToolSpecs : []),
         ...(this.state?.opener === id ? [planToolSpec] : []),
@@ -2325,6 +2630,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         return this.postFor(id, generation, args, key);
       case 'verifold_plan':
         return this.planFor(id, generation, args, key);
+      case 'verifold_direction':
+        return this.directionFor(id, generation, args, key);
       case 'verifold_read': {
         const direction = this.direction(
           this.directionArg(args.direction) ??
@@ -2395,13 +2702,27 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         return this.pods().describe();
       case 'verifold_request_pod': {
         const direction = await this.ownDirection(id, generation, true);
-        return this.pods().requestPod({
+        const reply = await this.pods().requestPod({
           by: 'agent',
           gpu: args.gpuType,
           hours: args.hours,
           directions: [direction],
           reason: text(args.why, 1000, 'why your direction needs the pod'),
           ...(args.secrets === undefined ? {} : { secrets: args.secrets }),
+        });
+        // The direction can end while the request runs, after its leases ended: then the new lease ends at once.
+        return this.serial(() => {
+          const agent = this.agents.get(id);
+          const state = this.state?.directions.find(
+            (entry) => entry.id === direction,
+          )?.state;
+          if (agent && this.active(agent)) return reply;
+          this.endLeases(
+            direction,
+            state === 'stopped' ? 'person' : 'agent',
+            `${direction} no longer works for the lab.`,
+          );
+          return `${direction} no longer works for the lab, so Verifold ended its lease.`;
         });
       }
       case 'verifold_end_lease': {
@@ -2720,8 +3041,276 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         key: `${id}:${key}`,
       });
       this.rt(id).posted = true;
+      this.rt(id).spoke = true;
       return `Posted ${post.id}.`;
     });
+  }
+
+  /**
+   * `verifold_direction`. `open` opens a direction with its own agent, as the
+   * person does, inside the limits of agent starts. `update` gives the
+   * agent's own direction a verdict with one line of evidence, and `close`
+   * ends it after its final verdict. Both change the lab in its queue.
+   */
+  private async directionFor(
+    id: string,
+    generation: string,
+    args: Record<string, unknown>,
+    key: string,
+  ): Promise<string> {
+    const why = text(args.why, directionLimits.why, 'why');
+    if (args.action === 'open') {
+      // The folder takes a while: a repeated call waits for the first one.
+      const call = `${id}:${key}`;
+      const known = this.opening.get(call);
+      if (known) return known;
+      const opened = this.openFor(id, generation, args, why);
+      this.opening.set(call, opened);
+      // The entry stays until the call's answer is recorded, and a minute more.
+      void opened
+        .catch(() => {})
+        .finally(() =>
+          setTimeout(() => this.opening.delete(call), 60_000).unref(),
+        );
+      return opened;
+    }
+    if (args.action !== 'update' && args.action !== 'close')
+      fail('Give an action: open, update, or close.');
+    const done = await this.serial(async () => {
+      const agent = this.usable(id, generation) ?? fail(stoppedText);
+      const direction = this.direction(agent.direction);
+      if (args.action === 'update')
+        return { text: await this.verdictFor(agent, direction, args, why) };
+      if (direction.verdict !== 'ruled-out')
+        fail(
+          'Close your direction only after its verdict is ruled-out. Give it that verdict first.',
+        );
+      await this.endDirection(
+        direction,
+        'closed',
+        `${agent.handle} closed ${JSON.stringify(direction.title)}: ${verdictWord(direction)}. Why: ${JSON.stringify(why)}`,
+      );
+      // A session that takes no turn now finishes at once. Otherwise it finishes after this turn.
+      if (!this.rt(id).turning) this.finishClosed(id);
+      return {
+        text: 'Closed your direction. Its folder and branch stay. Your session ends after this turn.',
+        closed: direction.id,
+      };
+    });
+    if ('closed' in done)
+      this.endLeases(
+        done.closed,
+        'agent',
+        `${this.name(id)} closed ${done.closed}.`,
+      );
+    return done.text;
+  }
+
+  /** `verifold_direction` open: a new direction with its own agent, inside the limits of agent starts. */
+  private async openFor(
+    id: string,
+    generation: string,
+    args: Record<string, unknown>,
+    why: string,
+  ): Promise<string> {
+    const team = await this.team();
+    const draft = await this.serial(() => {
+      const agent = this.usable(id, generation) ?? fail(stoppedText);
+      this.postLimit(agent);
+      if (
+        this.current().directions.filter(
+          (direction) => direction.state === 'open',
+        ).length >= labLimits.directions
+      )
+        fail(
+          `${labLimits.directions} directions are open, the most that a lab allows. Ask the person on the board to stop one.`,
+        );
+      const host =
+        args.harness === 'claude' || args.harness === 'codex'
+          ? args.harness
+          : fail('Give the harness of its agent: claude or codex.');
+      if (!team.includes(host))
+        fail(
+          `${hostName(host)} is not in this project's team, so no agent of it starts.`,
+        );
+      return {
+        title: args.title,
+        harness: host,
+        bar: text(args.bar, planLimits.bar, 'what makes the direction hold up'),
+        runs: args.runs === undefined ? null : repeatRuns(args.runs),
+        noise:
+          args.noise === undefined
+            ? null
+            : text(
+                args.noise,
+                planLimits.noise,
+                'the spread that counts as noise',
+              ),
+        buildsOn: works(args.buildsOn),
+      };
+    });
+    const opened = await this.addDirection(draft, id, { started: { why } });
+    this.progressed(id, generation);
+    // The direction is open, also if Start over begins now: the answer must say so.
+    const agent = this.agents.get(
+      this.state?.directions.find((entry) => entry.id === opened)?.agent ?? '',
+    );
+    const who = agent
+      ? `${agent.handle} (${hostName(agent.host)})`
+      : 'its agent';
+    return `Opened ${opened} for ${who}. ${
+      this.options.sessions.full
+        ? 'Every agent slot is in use, so it starts when one is free.'
+        : 'It starts now.'
+    }`;
+  }
+
+  /** `verifold_direction` update, in the lab's queue: the verdict of the agent's own direction. */
+  private async verdictFor(
+    agent: AgentRecord,
+    direction: Direction,
+    args: Record<string, unknown>,
+    why: string,
+  ): Promise<string> {
+    const verdict =
+      verdicts.find((entry) => entry === args.verdict) ??
+      fail('Give a verdict: open, leading, or ruled-out.');
+    if (verdict === 'holds-up')
+      fail(
+        'Holds up needs a rerun by the other harness, and Verifold does not start those yet. Give leading, with your evidence.',
+      );
+    let evidence: Evidence | null = null;
+    if (verdict !== 'open') {
+      const post =
+        (typeof args.post === 'string' ? this.board.get(args.post) : null) ??
+        fail('Name the post with the proof, such as p-12.');
+      if (post.direction !== direction.id)
+        fail(`${post.id} is not about your direction ${direction.id}.`);
+      const kinds: readonly PostKind[] =
+        verdict === 'ruled-out'
+          ? ['ruled-out']
+          : ['claim', 'evidence', 'rerun'];
+      if (!kinds.includes(post.kind) || !post.artifacts.length)
+        fail(
+          verdict === 'ruled-out'
+            ? `Ruled out needs a ruled-out post with proof, and ${post.id} is not one. Post one first.`
+            : `Leading needs a claim, evidence, or rerun post with proof, and ${post.id} is not one.`,
+        );
+      const run = post.artifacts.find((artifact) => artifact.type === 'run');
+      evidence = {
+        text: text(
+          args.evidence,
+          directionLimits.evidence,
+          'one line of evidence',
+        ),
+        post: post.id,
+        run: run?.type === 'run' ? run.run : null,
+      };
+    }
+    const state = this.current();
+    this.state = {
+      ...state,
+      directions: state.directions.map((entry) =>
+        entry.id === direction.id ? { ...entry, verdict, evidence } : entry,
+      ),
+    };
+    try {
+      await this.stateFile.save();
+    } catch (error) {
+      this.state = state;
+      throw error;
+    }
+    const word = verdictWords[verdict].toLowerCase();
+    // A full board refuses the note. The verdict stands all the same. The note wakes no one.
+    await this.add({
+      author: 'verifold',
+      kind: 'status',
+      direction: direction.id,
+      text: clip(
+        evidence
+          ? `${agent.handle}: ${JSON.stringify(direction.title)} is ${word}. Evidence: ${evidenceText(evidence)}. Why: ${JSON.stringify(why)}`
+          : `${agent.handle} took back the verdict of ${JSON.stringify(direction.title)}. Why: ${JSON.stringify(why)}`,
+        boardLimits.text,
+      ),
+      mentions: [],
+      artifacts: [],
+    }).catch(() => {});
+    this.progressed(agent.id, agent.generation);
+    this.options.onChange?.();
+    return verdict === 'open'
+      ? `${direction.id} has no verdict now.`
+      : `${direction.id} is ${word} now.`;
+  }
+
+  /**
+   * A verdict, an open, or a close in the agent's current turn: it counts as
+   * progress, and it ends the quiet stretch.
+   */
+  private progressed(id: string, generation: string): void {
+    if (this.agents.get(id)?.generation !== generation) return;
+    const run = this.rt(id);
+    run.posted = true;
+    run.spoke = true;
+  }
+
+  /**
+   * Finish a direction that its agent closed: end its session if it runs,
+   * forget its runtime, and commit its folder through the usual snapshot, so
+   * the branch has the work of the closing turn. Each path that can leave a
+   * close behind calls it: the end of the closing turn, however it ends; a
+   * pause or Start over; Verifold's stop; a close while no turn runs; and the
+   * next load. The record says when the close is done, so a commit that
+   * failed is tried again at the next load. Close and Start over wait for it.
+   */
+  private finishClosed(id: string): void {
+    const agent = this.agents.get(id);
+    const direction = this.state?.directions.find(
+      (entry) => entry.id === agent?.direction,
+    );
+    if (
+      !this.runs ||
+      !agent ||
+      !direction ||
+      agent.stopReason !== 'closed' ||
+      agent.finished ||
+      this.finishing.has(id)
+    )
+      return;
+    this.finishing.add(id);
+    if (agent.session && this.options.sessions.view(agent.session)?.live)
+      this.endClosed(agent.session);
+    this.forget(id);
+    const work = this.inDirection(direction.id, async () => {
+      const made = await snapshot(
+        this.root,
+        direction.workspace,
+        `Verifold: the last turn of ${agent.handle}`,
+      );
+      const order = ++this.commits;
+      await this.serial(async () => {
+        await this.setHead(direction, { commit: made.commit, order });
+        await this.update(id, (current) => ({ ...current, finished: true }));
+      });
+    })
+      .catch((error: unknown) =>
+        this.options.progress?.(
+          `Verifold could not commit ${direction.id} after it closed: ${error instanceof Error ? error.message : 'unknown error'}. It tries again at the next start.`,
+        ),
+      )
+      .finally(() => this.finishing.delete(id));
+    this.after.add(work);
+    void work.finally(() => this.after.delete(work));
+  }
+
+  /** End the session of an agent that closed its direction. */
+  private endClosed(session: string): void {
+    try {
+      this.options.sessions.endTask(session, 'Its agent closed its direction.');
+    } catch (error) {
+      this.options.progress?.(
+        `Verifold could not end the session of a closed direction: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
   }
 
   /**
@@ -2820,28 +3409,6 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           keep: T | undefined,
         ): T =>
           item[name] === undefined && keeps ? (keep as T) : read(item[name]);
-        const works = (value: unknown): BuildsOn[] => {
-          const listed = Array.isArray(value) ? value : [];
-          if (listed.length > planLimits.buildsOn)
-            fail(
-              `Give up to ${planLimits.buildsOn} works that a direction builds on.`,
-            );
-          return listed.map((work) => {
-            const entry = object(work);
-            return entry && typeof entry.known === 'boolean'
-              ? {
-                  text: text(
-                    entry.text,
-                    planLimits.buildsOnText,
-                    'each work that a direction builds on',
-                  ),
-                  known: entry.known,
-                }
-              : fail(
-                  'Each work that a direction builds on has text and known.',
-                );
-          });
-        };
         return {
           target,
           harness,
@@ -2856,18 +3423,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             (value) => text(value, planLimits.bar, 'the bar of each direction'),
             current?.bar,
           ),
-          runs: field<number | null>(
-            'runs',
-            (value) =>
-              Number.isSafeInteger(value) &&
-              (value as number) >= 1 &&
-              (value as number) <= planLimits.runs
-                ? (value as number)
-                : fail(
-                    `Give the repeat runs that each bar needs, from 1 to ${planLimits.runs}.`,
-                  ),
-            current?.runs,
-          ),
+          runs: field<number | null>('runs', repeatRuns, current?.runs),
           noise: field<string | null>(
             'noise',
             (value) =>
@@ -2896,7 +3452,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       );
       if (missing.length)
         fail(
-          `List every open direction with its id: ${missing.map((direction) => direction.id).join(', ')}. Only the person stops a direction.`,
+          `List every open direction with its id: ${missing.map((direction) => direction.id).join(', ')}. Only the person stops a direction, and an agent closes only its own.`,
         );
       const reading = text(
         args.reading,
@@ -2917,6 +3473,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         previous: state.plan?.post ?? null,
         host: agent.host,
         own: own.id,
+        first,
       };
     });
     const made = new Map<number, string>();
@@ -2942,7 +3499,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
                 buildsOn: entry.buildsOn,
               },
               id,
-              { plan: true },
+              // The first plan opens the lab. A later plan's new directions are agents that an agent starts.
+              draft.first
+                ? { plan: true }
+                : { plan: true, started: { why: 'A change of the plan.' } },
             ),
           );
         } catch (error) {
@@ -3029,6 +3589,8 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         // The plan post is on the board and the plan in memory: a failed write comes again with the next save.
         await this.stateFile.save().catch(() => {});
         this.rt(id).posted = true;
+        this.rt(id).spoke = true;
+        this.options.onChange?.();
         const opened = [...made.values()];
         return [
           `Posted the plan ${post.id}. Your direction is ${draft.own}.`,
@@ -3133,7 +3695,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         const direction = state.directions.find((entry) => entry.id === id);
         return direction
           ? [
-              `- ${direction.id} ${JSON.stringify(direction.title)}${direction.state === 'stopped' ? ' (the person stopped it)' : ''}: holds up if ${barText(direction)}.${direction.buildsOn.length ? ` Builds on: ${direction.buildsOn.map((work) => `${JSON.stringify(work.text)} (${work.known ? 'known' : 'new'})`).join(', ')}.` : ''}`,
+              `- ${direction.id} ${JSON.stringify(direction.title)}${direction.state === 'open' ? '' : ` (${stateWord(direction)})`}: holds up if ${barText(direction)}.${direction.buildsOn.length ? ` Builds on: ${direction.buildsOn.map((work) => `${JSON.stringify(work.text)} (${work.known ? 'known' : 'new'})`).join(', ')}.` : ''}`,
             ]
           : [];
       }),
@@ -3472,11 +4034,17 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
    * into a used-up usage window (`count` false) commits its work but neither
    * counts nor sets a timer: the reset wakes the agent. A commit that fails
    * is not a turn without change: the agent hears why, its count stays, and
-   * its next turn comes after the usual wait.
+   * its next turn comes after the usual wait. An agent that works for a while
+   * without a post gets asked once, with its next turn, to post what it found
+   * or what blocks it. That costs no turn of its own.
    */
   private async afterTurn(
     id: string,
-    posted: boolean,
+    did: {
+      readonly posted: boolean;
+      readonly spoke: boolean;
+      readonly worked: number;
+    },
     turn: number,
     count: boolean,
   ): Promise<void> {
@@ -3526,9 +4094,27 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     }
     const note = (base: string): string => [...notes, base].join(' ');
     if (!count) {
-      // The reset wakes the agent. The notes wait for that turn.
+      // The reset wakes the agent. The notes wait for that turn. A post in it still ends the quiet stretch.
       if (notes.length)
         this.loop(id).add([{ kind: 'continue', text: notes.join(' ') }]);
+      if (did.spoke)
+        await this.serial(async () => {
+          const latest = this.agents.get(id);
+          if (
+            latest?.generation !== generation ||
+            !this.active(latest) ||
+            this.closing ||
+            this.moving ||
+            !current()
+          )
+            return;
+          await this.update(id, (entry) => ({
+            ...entry,
+            quietTurns: 0,
+            quietWork: 0,
+            nudged: false,
+          }));
+        });
       return;
     }
     await this.serial(async () => {
@@ -3542,14 +4128,22 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       )
         return;
       const idleStreak =
-        changed || posted
+        changed || did.posted
           ? 0
           : failed
             ? latest.idleStreak
             : latest.idleStreak + 1;
-      await this.update(id, (entry) => ({ ...entry, idleStreak }));
+      // A post ends the quiet stretch, so the next stretch can get its own ask.
+      await this.update(id, (entry) => ({
+        ...entry,
+        idleStreak,
+        quietTurns: did.spoke ? 0 : entry.quietTurns + 1,
+        quietWork: did.spoke ? 0 : entry.quietWork + Math.max(0, did.worked),
+        nudged: !did.spoke && entry.nudged,
+      }));
       // While a run of the agent runs, the run's end wakes it instead.
-      if (this.state?.pausedAt || this.ledger.running(id)) {
+      const state = this.state;
+      if (!state || state.pausedAt || this.ledger.running(id)) {
         if (notes.length)
           this.loop(id).add([{ kind: 'continue', text: notes.join(' ') }]);
         return;
@@ -3582,10 +4176,45 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     });
   }
 
+  /**
+   * The ask to post, for an agent that took `quietTurns` turns in a row
+   * without a post, or null. It comes after `labLimits.quietTurns` turns, or
+   * after `quietMs` of turns and 2 turns at least, once in each quiet
+   * stretch. Never while the lab is paused or past its time budget, while the
+   * agent's run runs, nor for a harness whose usage window is used up. It
+   * goes with the agent's next digest, so it costs no turn of its own.
+   */
+  private quiet(id: string): string | null {
+    const agent = this.agents.get(id);
+    const state = this.state;
+    if (
+      !agent ||
+      !state ||
+      agent.nudged ||
+      state.pausedAt ||
+      this.ended(state) ||
+      this.ledger.running(id) ||
+      this.options.quota?.parked(agent.host)
+    )
+      return null;
+    const { quietTurns, quietWork } = agent;
+    const turns = quietTurns >= labLimits.quietTurns;
+    if (!turns && !(quietTurns >= 2 && quietWork >= this.timing.quietMs))
+      return null;
+    const since = turns
+      ? quietTurns === 1
+        ? 'your last turn'
+        : `your last ${quietTurns} turns`
+      : `${Math.floor(quietWork / 3_600_000)} hours of work`;
+    return `You posted nothing in ${since}. Post what you found so far, with proof, or post what blocks you. A dead end is a result too: post it as ruled-out, with proof.`;
+  }
+
   private status(
     direction: Direction,
     agent: AgentRecord,
   ): Pick<DirectionView, 'status' | 'until'> {
+    if (direction.state === 'closed' || agent.stopReason === 'closed')
+      return { status: 'closed', until: null };
     if (direction.state === 'stopped' || agent.stoppedAt)
       return { status: 'stopped', until: null };
     if (agent.stopReason === 'crashed')
