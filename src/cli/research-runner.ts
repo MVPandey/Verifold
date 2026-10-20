@@ -271,17 +271,20 @@ export class ResearchRunner {
   }
 
   /**
-   * Mark research as starting, after the run's guard says that no lab works
-   * on the run. The check and the mark are one step under the run's lock.
+   * Mark research as starting before anything waits, so a second message
+   * that arrives meanwhile sees research busy and starts no step. Then the
+   * run's guard checks that no lab works on the run. A lab start that comes
+   * between sees research busy and refuses.
    */
   private async begin(busy: string): Promise<void> {
-    const mark = (): void => {
-      if (this.busy) fail(busy);
-      this.starting = true;
-    };
-    await (this.options.team
-      ? this.options.team.exclusive('research', mark)
-      : mark());
+    if (this.busy) fail(busy);
+    this.starting = true;
+    try {
+      await this.options.team?.exclusive('research', () => {});
+    } catch (error) {
+      this.starting = false;
+      throw error;
+    }
   }
 
   /** The coordinator drafts the tasks for the chosen direction. No task starts before the person approves the plan. */

@@ -16,9 +16,29 @@ type TranscriptSlot = (source: string, label: string) => string;
 
 /** A lab action that runs in the background, or why it failed. The lab view shows it. */
 export interface LabWork {
+  /** The desk action, such as lab-direction-add. */
+  readonly action: string;
   readonly label: string;
   readonly at: string;
   readonly error: string | null;
+}
+
+/**
+ * The lab actions that run in the background, and the ones that failed there.
+ * `data-lab-work` and `data-lab-failed` name the action, so the page knows
+ * when a background open ended.
+ */
+export function renderLabWork(
+  works: readonly LabWork[],
+  clock: (value: string) => string,
+): string {
+  return works
+    .map((work) =>
+      work.error === null
+        ? `<p class="notice" role="status" data-lab-work="${e(work.action)}">${e(work.label)}. It started at ${e(clock(work.at))} and goes on in the background.</p>`
+        : `<p class="notice" role="alert" data-lab-failed="${e(work.action)}">${e(work.label)} did not finish: ${e(work.error)} <button type="button" class="quiet" data-action="lab-dismiss">Dismiss</button></p>`,
+    )
+    .join('');
 }
 
 const kindWords: Record<PostKind, string> = {
@@ -245,7 +265,7 @@ export function renderLab(
   clock: (value: string) => string,
   slot: TranscriptSlot,
   needs = '',
-  work: LabWork | null = null,
+  works: readonly LabWork[] = [],
 ): string {
   const { state } = view;
   const name = (author: string): string =>
@@ -259,11 +279,7 @@ export function renderLab(
   );
   const handles = open.map((entry) => `@${entry.agent.handle}`);
   const { runs } = view;
-  const working = work
-    ? work.error === null
-      ? `<p class="notice" role="status">${e(work.label)}. It started at ${e(clock(work.at))} and goes on in the background.</p>`
-      : `<p class="notice" role="alert">${e(work.label)} did not finish: ${e(work.error)} <button type="button" class="quiet" data-action="lab-dismiss">Dismiss</button></p>`
-    : '';
+  const working = renderLabWork(works, clock);
   const pause = !runs
     ? ''
     : state.pausedAt

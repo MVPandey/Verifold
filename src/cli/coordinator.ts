@@ -403,14 +403,13 @@ ${input.guided ? 'In this project, the person approves your first task plan befo
       );
   }
 
-  /** Start the coordinator for the chosen direction, unless one already runs or a lab owns the run. */
+  /**
+   * Start the coordinator for the chosen direction, unless one already runs.
+   * The run's guard refuses the start, and this throws its reason, when a lab
+   * owns the run.
+   */
   async startForDirection(workspace: Workspace): Promise<void> {
     if (this.state && !this.state.stoppedAt) return;
-    const blocked = await this.team?.refusal('coordinator');
-    if (blocked) {
-      this.progress?.(blocked);
-      return;
-    }
     const objective = directionObjective(workspace);
     if (!objective) return;
     await this.start({

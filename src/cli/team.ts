@@ -37,18 +37,14 @@ export class RunTeam {
     this.owners = owners;
   }
 
-  /** The team that works on the run now, from the owners' records. */
-  async team(): Promise<TeamKind | null> {
-    if (this.owners.lab()) return 'lab';
-    return (await this.owners.coordinator()) ? 'coordinator' : null;
-  }
-
-  /** Why a team, or research, cannot start on the run now, or null. */
+  /**
+   * Why a team, or research, cannot start on the run now, or null. Only a lab
+   * start reads the coordinator's records: the others need only the lab's.
+   */
   async refusal(kind: TeamKind | 'research'): Promise<string | null> {
-    const team = await this.team();
-    if (kind !== 'lab') return team === 'lab' ? labWorks : null;
-    if (team === 'lab') return 'The lab already runs.';
-    if (team === 'coordinator') return coordinatorWorks;
+    if (kind !== 'lab') return this.owners.lab() ? labWorks : null;
+    if (this.owners.lab()) return 'The lab already runs.';
+    if (await this.owners.coordinator()) return coordinatorWorks;
     return this.owners.researchBusy() ? researchRuns : null;
   }
 

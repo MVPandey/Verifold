@@ -341,6 +341,7 @@ async function render(html: string): Promise<void> {
     }
     showThread();
     showReply();
+    settleOpen();
     // A section that is new to the page keeps the state that the server gave it.
     for (const detail of content.querySelectorAll<HTMLDetailsElement>(
       'details[id]',
@@ -957,6 +958,25 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
+/** A direction opens in the background. Its form clears when the open ends well. */
+let opening = false;
+
+/**
+ * After a view refresh: an open that went on in the background has ended
+ * when the lab no longer shows it. One that worked clears its form. One
+ * that failed keeps it, so the person can try again.
+ */
+function settleOpen(): void {
+  if (!opening || content.querySelector('[data-lab-work="lab-direction-add"]'))
+    return;
+  opening = false;
+  if (content.querySelector('[data-lab-failed="lab-direction-add"]')) return;
+  for (const id of ['lab-title', 'lab-bar']) {
+    const element = document.getElementById(id);
+    if (element instanceof HTMLInputElement) element.value = '';
+  }
+}
+
 /** The lab's message box says which post the next post answers, with a control to stop replying. */
 function showReply(): void {
   const post = field('lab-reply');
@@ -1229,6 +1249,7 @@ async function act(button: HTMLElement): Promise<void> {
       : name
         ? `Done: ${name}`
         : 'Done';
+    if (pending && body.action === 'lab-direction-add') opening = true;
     failure = undefined;
     if (action === 'stop') showStopped();
     // A new agent from the message box becomes the agent that the box writes to.

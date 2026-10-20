@@ -42,6 +42,7 @@ import {
   stateOf,
   renderLab,
   renderLabStart,
+  renderLabWork,
   type LabWork,
 } from './desk-lab.ts';
 import { scratch } from './workspaces.ts';
@@ -84,8 +85,8 @@ export interface DeskSession {
   readonly archives?: readonly ArchivedRun[];
   /** The lab of a project owner. Null: the project has none yet. */
   readonly lab?: LabView | null;
-  /** A lab action that runs in the background, or the one that failed there. */
-  readonly labWork?: LabWork | null;
+  /** The lab actions that run in the background, and the ones that failed there. */
+  readonly labWorks?: readonly LabWork[];
   /** The person can start a lab on this run now: the run's guard allows it, and this desk runs the lab. */
   readonly labCanStart?: boolean;
 }
@@ -3455,9 +3456,10 @@ function renderHome(
     lead = `<section class="card lead"><h2>Continue your research</h2><p>${e(next.instruction)}</p><p class="fine">Run in your project terminal</p><div class="command"><code>${e(next.command)}</code><button id="copy-command" type="button" data-command="${e(next.command)}" aria-label="Copy next command">Copy</button></div><p class="fine">${live.controllable ? 'Opening the desk starts nothing. To start an agent, pick A new agent in the message box.' : 'This desk shows saved work. It starts nothing.'}</p></section>`;
   }
   // A run that no team owns yet can start a lab instead, while no research step runs.
-  const labStart = live.labCanStart
-    ? renderLabStart(workspace.research?.topic)
-    : '';
+  // A lab start that runs or failed in the background shows here, also when the offer does not.
+  const labStart = `${renderLabWork(live.labWorks ?? [], clock)}${
+    live.labCanStart ? renderLabStart(workspace.research?.topic) : ''
+  }`;
   return `<div class="masthead"><h1 id="view-title" tabindex="-1">Home</h1>${workspace.research?.topic ? `<p class="question">${e(workspace.research.topic)}</p>` : ''}${renderArc(at)}</div>
   <div class="view">${labStart}${renderNow(workspace, live, needs)}${needsCard(needs)}${renderHomeAnswer(workspace, live)}${lead}${left ? renderSince(left, snapshot, live, needs.length) : ''}${renderHomeWork(workspace, live, needs, hideFinished)}${renderPodsLine(live.compute)}${renderPaused(live)}</div>`;
 }
@@ -3629,7 +3631,7 @@ export function renderDesk(
                         clock,
                         (source, label) => transcriptSlot(source, label, ''),
                         `${needsCard(needs)}${renderPodsLine(live.compute)}${renderPaused(live)}`,
-                        live.labWork ?? null,
+                        live.labWorks ?? [],
                       )
                     : renderHome(
                         snapshot,

@@ -416,6 +416,11 @@ await test('an owner started with --lab starts a lab on the question of setup', 
     },
     owner.signal,
   );
+  // A check that fails still stops the owner. Hooks run after the test's own end, which stops it first.
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
   // The question comes from setup: the project has no research record yet.
   await until(() => existsSync(join(root, '.verifold', 'lab.json')));
   const lab = JSON.parse(
@@ -425,8 +430,10 @@ await test('an owner started with --lab starts a lab on the question of setup', 
   // The question stays with the project too, so Home offers it again after Start over.
   const workspace = JSON.parse(
     await readFile(join(root, '.verifold', 'workspace.json'), 'utf8'),
-  ) as { research?: { topic: string } };
+  ) as { research?: { topic: string; autonomy: string } };
   assert.equal(workspace.research?.topic, 'Do months lie on a circle?');
+  // Research is autonomous unless the person chose otherwise, as everywhere in the project.
+  assert.equal(workspace.research?.autonomy, 'autonomous');
   owner.abort();
   await done.catch(() => {});
 });
@@ -460,6 +467,11 @@ await test('a lab that cannot start leaves the owner running and says why', asyn
     },
     owner.signal,
   );
+  // A check that fails still stops the owner. Hooks run after the test's own end, which stops it first.
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
   const log = join(root, '.verifold', 'owner.log');
   await until(
     async () =>
@@ -513,6 +525,11 @@ await test('--lab in a project that has a lab starts nothing new and says so', a
     },
     owner.signal,
   );
+  // A check that fails still stops the owner. Hooks run after the test's own end, which stops it first.
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
   const log = join(root, '.verifold', 'owner.log');
   await until(
     async () =>
