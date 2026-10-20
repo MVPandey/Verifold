@@ -14,7 +14,13 @@ import {
   type DirectionView,
   type LabView,
 } from './lab.ts';
-import { metricsText, runActive, runSummary, type RunRecord } from './runs.ts';
+import {
+  metricsText,
+  placeText,
+  runActive,
+  runSummary,
+  type RunRecord,
+} from './runs.ts';
 import { hostName } from './session.ts';
 
 /**
@@ -127,14 +133,14 @@ function proofText(artifact: Artifact): string {
 const rowRuns = 3;
 
 /**
- * One run: its ID, its state, and up to three metrics, with its log one click
+ * One run: its ID, its state, its pod, and up to three metrics, with its log one click
  * away. `place` keeps the log's ID apart where a run shows twice, on its row
  * and in a post. The person cancels a run that runs from its row.
  */
 function runHtml(run: RunRecord, place: string, cancel: boolean): string {
   const active = runActive(run);
   const metrics = metricsText(run);
-  return `<div class="lab-run"><span class="chip run-${e(run.status)}">${e(run.id)}</span> <span>${e(runSummary(run))}</span>${metrics ? ` <span class="fine">${e(metrics)}</span>` : ''}${cancel && active ? ` <button type="button" class="quiet" data-action="lab-run-cancel" data-run="${e(run.id)}" data-confirm="Click again to cancel this run">Cancel</button>` : ''}<details class="run-log" id="run-log-${e(place)}-${e(run.id)}"><summary>Log</summary><p class="fine">${e(run.why)} · <code>${e(clip(run.command, 300))}</code> at ${e(run.commit.slice(0, 7))}${run.note ? ` · ${e(run.note)}` : ''}</p><pre class="run-log-text" data-run-log="${e(run.id)}"></pre></details></div>`;
+  return `<div class="lab-run"><span class="chip run-${e(run.status)}">${e(run.id)}</span> <span>${e(runSummary(run))}</span>${run.where === 'local' ? '' : ` <span class="fine">${e(placeText(run))}</span>`}${metrics ? ` <span class="fine">${e(metrics)}</span>` : ''}${cancel && active ? ` <button type="button" class="quiet" data-action="lab-run-cancel" data-run="${e(run.id)}" data-confirm="Click again to cancel this run">Cancel</button>` : ''}<details class="run-log" id="run-log-${e(place)}-${e(run.id)}"><summary>Log</summary><p class="fine">${e(run.why)} · <code>${e(clip(run.command, 300))}</code> at ${e(run.commit.slice(0, 7))}${run.note ? ` · ${e(run.note)}` : ''}</p><pre class="run-log-text" data-run-log="${e(run.id)}"></pre></details></div>`;
 }
 
 /**

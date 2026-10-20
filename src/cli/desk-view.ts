@@ -21,6 +21,7 @@ import type { ComputeView } from './compute.ts';
 import type { ArchivedRun } from './archive.ts';
 import { placeNames } from './credentials.ts';
 import {
+  asker,
   diskRate,
   isOpen,
   isRunning,
@@ -1433,9 +1434,9 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           view: 'compute',
           kind: 'GPU pod',
           title: `Add a secret: ${missing.join(', ')}`,
-          why: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod that needs it. The pod waits until you add it in Compute.`,
+          why: `${asks(lease)} for a ${lease.gpu} pod that needs it. The pod waits until you add it in Compute.`,
           since: lease.requestedAt,
-          body: `<div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'The coordinator says' : 'Your reason'}</span> ${e(lease.reason)}</div>
+          body: `<div class="why"><span class="tag reading">${lease.requestedBy === 'person' ? 'Your reason' : `${asker(lease)} says`}</span> ${e(lease.reason)}</div>
   <div class="actions"><button type="button" class="primary" data-view="compute">Add it in Compute</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny the pod</button></div>`,
         });
       else if (lease.state === 'requested')
@@ -1443,7 +1444,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           key: `lease:${lease.id}`,
           view: 'compute',
           kind: 'GPU pod',
-          title: `${lease.requestedBy === 'coordinator' ? 'The coordinator asks' : 'You asked'} for a ${lease.gpu} pod`,
+          title: `${asks(lease)} for a ${lease.gpu} pod`,
           why: compute.settings.askBeforePod
             ? 'You approve each pod. Nothing is billed until you do.'
             : 'It does not fit your limits right now, for example because a pod already runs. Nothing is billed until you approve it.',
@@ -1576,7 +1577,7 @@ function leaseRequest(
   const cost = maxCost(lease.rate, lease.diskGb, lease.hours);
   const left = compute.budget.left;
   return `<dl class="facts"><div><dt>For</dt><dd>${e(podFor(lease, tasks))}</dd></div>${lease.secrets?.length ? `<div><dt>Secrets</dt><dd>${lease.secrets.map((name) => `<code>${e(name)}</code>`).join(', ')}, as environment variables on the pod</dd></div>` : ''}<div><dt>GPU</dt><dd>${e(lease.gpu)}, one GPU, Secure Cloud</dd></div><div><dt>Image</dt><dd><code>${e(lease.image)}</code></dd></div><div><dt>Rate</dt><dd>${usd(lease.rate)} per hour, the list price when the request came</dd></div><div><dt>At most</dt><dd>${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'}, ${usd(cost)} with the disk</dd></div>${left === null ? '' : `<div><dt>Left after it</dt><dd>${usd(Math.max(0, left - cost))} of ${usd(compute.settings.limitUsd ?? 0)}</dd></div>`}</dl>
-  <div class="why"><span class="tag reading">${lease.requestedBy === 'coordinator' ? 'The coordinator says' : 'Your reason'}</span> ${e(lease.reason)}</div>
+  <div class="why"><span class="tag reading">${lease.requestedBy === 'person' ? 'Your reason' : `${asker(lease)} says`}</span> ${e(lease.reason)}</div>
   <p class="fine">The pod runs any command as root, with internet access. Files that a task copies to it leave this computer. RunPod erases the disk of the pod when the pod stops. Verifold stops the pod after ${compute.settings.idleMinutes} idle minutes and when Verifold stops, and deletes it at the end of the lease or at your spend limit.</p>
   <div class="actions"><button type="button" class="primary" data-action="compute-lease-approve" data-lease="${e(lease.id)}">Approve, up to ${usd(cost)}</button><button type="button" data-action="compute-lease-deny" data-lease="${e(lease.id)}">Deny</button></div>`;
 }
@@ -2583,11 +2584,18 @@ const leaseStates: Record<Lease['state'], string> = {
   failed: 'Failed',
 };
 
-/** What a pod is for: the titles of its tasks. */
+/** What a pod is for: the titles of its tasks, or its lab directions. */
 function podFor(lease: Lease, tasks: readonly TaskRecord[]): string {
+  if (lease.directions?.length)
+    return `The lab's ${lease.directions.join(', ')}`;
   return lease.tasks.length
     ? lease.tasks.map((task) => sender(task, tasks)).join(', ')
     : 'No task';
+}
+
+/** "You asked", or "The coordinator asks", for a lease request. */
+function asks(lease: Lease): string {
+  return `${asker(lease)} ${lease.requestedBy === 'person' ? 'asked' : 'asks'}`;
 }
 
 /** The pods card: what is spent and reserved, the open leases with their controls, and earlier leases. */
