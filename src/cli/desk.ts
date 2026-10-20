@@ -742,8 +742,11 @@ async function labBring(
 ): Promise<BringList | string | null> {
   const commit = lab.bringCommit(direction);
   if (!commit) return null;
+  // The list changes with the bring-ins and with the direction's newest commit, for its newer work.
+  const head =
+    view.state.directions.find((entry) => entry.id === direction)?.head ?? '';
   const last = view.state.brought.at(-1);
-  const key = `${direction}|${commit}|${view.state.brought.length}|${last?.at ?? ''}`;
+  const key = `${direction}|${commit}|${head}|${view.state.brought.length}|${last?.path ?? ''}|${last?.at ?? ''}`;
   const known = reads.brings.get(key);
   if (known) return known;
   try {

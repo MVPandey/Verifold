@@ -4115,9 +4115,19 @@ body:has(.lab-screen) .menu-button {
   width: auto;
   margin: 0;
 }
-.lab-panel .bring-why {
+.lab-panel .bring-why,
+.lab-panel .bring-code-warn {
   flex-basis: 100%;
   padding-left: 22px;
+}
+/* A ticked file that can run code says so. */
+.lab-panel .bring-code-warn {
+  display: none;
+  color: var(--needs);
+  font-weight: 600;
+}
+.lab-panel .bring-files input:checked ~ .bring-code-warn {
+  display: block;
 }
 
 /* While you were away: a few lines on what changed, above Needs you. */
