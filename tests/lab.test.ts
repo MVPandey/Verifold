@@ -13,16 +13,33 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
-import { Lab, labLimits, type LabSessions } from '../src/cli/lab.ts';
+import {
+  Lab,
+  labLimits,
+  startLabOn,
+  type LabSessions,
+} from '../src/cli/lab.ts';
+import { RunTeam } from '../src/cli/team.ts';
+import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
+import { Coordinator } from '../src/cli/coordinator.ts';
+import { renderDesk } from '../src/cli/desk-view.ts';
+import { renderLab } from '../src/cli/desk-lab.ts';
+import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
-import { readRecord, type SessionView } from '../src/cli/session.ts';
+import {
+  readRecord,
+  SessionManager,
+  type SessionView,
+} from '../src/cli/session.ts';
 import { archiveRun, restoreRun } from '../src/cli/archive.ts';
-import { terminalInput, type CliIO } from '../src/cli/commands.ts';
+import { runCli, terminalInput, type CliIO } from '../src/cli/commands.ts';
+import { startDesk } from '../src/cli/desk.ts';
+import { TaskManager } from '../src/cli/tasks.ts';
 
 /**
  * A fake Claude Code for lab agents. Its folder name (such as d-1-circles)
@@ -823,6 +840,514 @@ await test('the person cannot open more directions than the limit, or post as an
   );
 });
 
+await test('the desk offers the lab, shows posts escaped, and takes lab actions only with its token', async (t) => {
+  const lab = await fixture(t);
+  const assets = join(lab.base, 'assets');
+  await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
+  await mkdir(join(assets, 'ui'));
+  for (const name of [
+    'desk.css',
+    'desk-client.js',
+    'desk-transcript.js',
+    'desk-terminal.js',
+    'desk-terminals.js',
+    'desk-lease.js',
+    'desk-map.js',
+    'desk-motion.js',
+    'manrope.ttf',
+    'symbol.webp',
+  ])
+    await writeFile(join(assets, 'cli', name), 'fixture asset');
+  for (const name of [
+    'purify.js',
+    'idiomorph.js',
+    'xterm.js',
+    'xterm.css',
+    'addon-fit.js',
+  ])
+    await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
+  await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  const tasks = new TaskManager(lab.root, {
+    ownerId: 'owner-1',
+    sessions: lab.sessions,
+  });
+  const stop = new AbortController();
+  const desk = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${assets}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    tasks,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const post = async (
+    body: unknown,
+    authorized = true,
+  ): Promise<[number, Record<string, unknown>]> => {
+    const response = await fetch(`${url.origin}/api/action`, {
+      method: 'POST',
+      headers: {
+        ...(authorized ? headers : {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    return [
+      response.status,
+      (await response.json().catch(() => ({}))) as Record<string, unknown>,
+    ];
+  };
+  const home = async (): Promise<string> =>
+    (
+      (await (
+        await fetch(`${url.origin}/api/view?view=home`, { headers })
+      ).json()) as { html: string }
+    ).html;
+
+  // A slow lab action answers at once or goes on in the background, so the
+  // test waits for its result, not for one answer.
+  const slow = async (
+    body: Record<string, unknown>,
+    done: () => boolean,
+  ): Promise<void> => {
+    const [status, reply] = await post(body);
+    if (status === 202) assert.deepEqual(reply, { ok: true, pending: true });
+    else assert.equal(status, 200);
+    await until(done);
+  };
+  // A project with no team at work offers the lab on Home.
+  assert.match(await home(), /data-action="lab-start"/);
+  // A desk that runs one session never offers the lab: it could not start one.
+  const viewer = new Lab(lab.root, {
+    sessions: lab.sessions,
+    timing,
+    runs: false,
+  });
+  await viewer.load();
+  const quietStop = new AbortController();
+  const quiet = await startDesk(
+    lab.root,
+    quietStop.signal,
+    pathToFileURL(`${assets}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    tasks,
+    undefined,
+    undefined,
+    undefined,
+    { lab: viewer },
+  );
+  t.after(async () => {
+    quietStop.abort();
+    await quiet.closed;
+    await viewer.close();
+  });
+  const quietUrl = new URL(quiet.url);
+  const quietHome = (
+    (await (
+      await fetch(`${quietUrl.origin}/api/view?view=home`, {
+        headers: { Authorization: `Bearer ${quietUrl.hash.slice(1)}` },
+      })
+    ).json()) as { html: string }
+  ).html;
+  assert.doesNotMatch(quietHome, /data-action="lab-start"/);
+  assert.equal(
+    (await post({ action: 'lab-start', question: 'Q?' }, false))[0],
+    401,
+  );
+  await slow(
+    { action: 'lab-start', question: 'Do months lie on a circle?' },
+    () => lab.lab.exists,
+  );
+  assert.deepEqual(await post({ action: 'lab-start', question: 'Again' }), [
+    409,
+    { error: 'The lab already runs.' },
+  ]);
+  const view = await home();
+  assert.match(view, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
+  // A lab run offers no research step, no coordinator, and no new task.
+  const page = async (name: string): Promise<string> =>
+    (
+      (await (
+        await fetch(`${url.origin}/api/view?view=${name}`, { headers })
+      ).json()) as { html: string }
+    ).html;
+  const plan = await page('research');
+  assert.match(plan, /A lab works on this run/);
+  assert.doesNotMatch(plan, /data-action="research"/);
+  assert.doesNotMatch(await page('tasks'), /Open the coordinator/);
+  assert.match(view, /Do months lie on a circle\?/);
+  // In a lab, Home's one box posts to the board: no Research or coordinator recipient.
+  assert.doesNotMatch(view, /id="message-text"/);
+  assert.match(view, /id="lab-text"/);
+
+  // Agent and person text is escaped. A mention of an unknown handle is refused.
+  await lab.lab.pause();
+  await slow(
+    { action: 'lab-direction-add', title: 'Circles', harness: 'claude' },
+    () => lab.lab.view()?.directions.length === 1,
+  );
+  assert.equal(
+    (
+      await post({
+        action: 'lab-post',
+        text: '<img src=x onerror=alert(1)> @claude-1 look here',
+      })
+    )[0],
+    200,
+  );
+  assert.deepEqual(lab.lab.view()?.posts.at(-1)?.mentions, ['a-1']);
+  assert.equal(
+    (await post({ action: 'lab-post', text: '@codex-4 hello' }))[0],
+    409,
+  );
+  const board = await home();
+  assert.match(board, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(board, /<img/);
+  assert.match(board, /claude-1 <span class="fine">Claude Code<\/span>/);
+  assert.match(
+    board,
+    /data-action="lab-direction-stop" data-lab-direction="d-1"/,
+  );
+  // The page opens an item on a click of these attributes before it sends an
+  // action, so no lab control may carry one.
+  const controls =
+    board.match(/<button[^>]*data-action="lab-[^"]*"[^>]*>/g) ?? [];
+  assert.ok(controls.length >= 4);
+  for (const control of controls)
+    assert.doesNotMatch(
+      control,
+      / data-(direction|view|panel|task-select|worker|attempt|message-to|dock|diff)=/,
+      control,
+    );
+  // A request that comes again with its key runs once.
+  const before = lab.lab.view()?.posts.length ?? 0;
+  const key = 'a1'.repeat(16);
+  assert.equal(
+    (await post({ action: 'lab-post', text: 'Once.', key }))[0],
+    200,
+  );
+  assert.equal(
+    (await post({ action: 'lab-post', text: 'Once.', key }))[0],
+    200,
+  );
+  assert.equal(lab.lab.view()?.posts.length, before + 1);
+  // A refused action keeps no answer under its key.
+  const refused = 'b2'.repeat(16);
+  for (let index = 0; index < 2; index++)
+    assert.equal(
+      (await post({ action: 'lab-post', text: '@codex-4 x', key: refused }))[0],
+      409,
+    );
+  // Each desk keeps its own keys: the same key on another desk is a new action.
+  const other = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${assets}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    tasks,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await other.closed;
+  });
+  const second = new URL(other.url);
+  assert.equal(
+    (
+      await fetch(`${second.origin}/api/action`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${second.hash.slice(1)}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'lab-post', text: 'Once.', key }),
+      })
+    ).status,
+    200,
+  );
+  assert.equal(lab.lab.view()?.posts.length, before + 2);
+  // The person's objection keeps its kind and wakes the direction's agent.
+  assert.equal(
+    (
+      await post({
+        action: 'lab-post',
+        text: 'Not convinced.',
+        kind: 'objection',
+        direction: 'd-1',
+      })
+    )[0],
+    200,
+  );
+  assert.equal(lab.lab.view()?.posts.at(-1)?.kind, 'objection');
+  // The reply line, with its control to stop replying, waits hidden until a Reply.
+  assert.match(
+    await home(),
+    /<p class="lab-replying" id="lab-replying" hidden>[\s\S]*data-action="lab-reply-clear"/,
+  );
+  assert.equal(
+    (await post({ action: 'lab-direction-stop', direction: 'd-1' }))[0],
+    200,
+  );
+  assert.match(await home(), /<span class="status">Stopped<\/span>/);
+});
+
+await test('one run has one team: research, the coordinator, tasks, and a lab keep apart', async (t) => {
+  const lab = await fixture(t);
+  let busy = false;
+  // The guard keeps no state: it asks the owners each time.
+  const owned: { lab?: Lab; coordinator?: Coordinator; tasks?: TaskManager } =
+    {};
+  const team = new RunTeam({
+    lab: () => owned.lab?.exists ?? false,
+    coordinator: async () =>
+      Boolean(
+        owned.coordinator?.view()?.state || (await owned.tasks?.list())?.length,
+      ),
+    researchBusy: () => busy,
+  });
+  // A research step that runs keeps the lab out, and the lab never cancels it.
+  busy = true;
+  assert.match((await team.refusal('lab')) ?? '', /Research is running/);
+  busy = false;
+  const tasks = new TaskManager(lab.root, {
+    ownerId: 'owner-1',
+    sessions: lab.sessions,
+    team,
+  });
+  const coordinator = new Coordinator(lab.root, {
+    tasks,
+    sessions: new SessionManager(lab.root, {
+      clientVersion: 'test',
+      ownerId: 'owner-1',
+      executables: { claude: join(lab.base, 'fake-claude') },
+    }),
+    team,
+  });
+  const shared = new Lab(lab.root, { sessions: lab.sessions, timing, team });
+  Object.assign(owned, { lab: shared, coordinator, tasks });
+  t.after(() => shared.close());
+  // A lab start that fails its own check leaves the run free.
+  await assert.rejects(shared.start(''), /Write the question/);
+  assert.equal(await team.refusal('lab'), null);
+  assert.equal(await team.refusal('coordinator'), null);
+  // The lab and the coordinator start at the same time: the first one under the lock wins, and the other is refused.
+  const [started, led] = await Promise.allSettled([
+    shared.start('A question.'),
+    coordinator.start({ objective: 'Go.', host: 'claude', guided: true }),
+  ]);
+  assert.equal(started.status, 'fulfilled');
+  assert.equal(led.status, 'rejected');
+  assert.match(
+    String(led.status === 'rejected' ? led.reason : ''),
+    /A lab works on this run/,
+  );
+  assert.equal(await team.refusal('lab'), 'The lab already runs.');
+  // No task, research step, or research message works on a lab's run.
+  await assert.rejects(
+    tasks.create({
+      title: 'A task',
+      objective: 'Do it.',
+      writable: ['notes'],
+      output: 'notes/out.md',
+      host: 'claude',
+    }),
+    /A lab works on this run/,
+  );
+  const research = new ResearchRunner(lab.root, {
+    signal: new AbortController().signal,
+    io: {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    },
+    team,
+    inbox: {
+      post: () => Promise.reject(new Error('A message was saved.')),
+      take: () => Promise.resolve([]),
+    },
+  });
+  await assert.rejects(research.start({ topic: 'More.' }), /A lab works/);
+  await assert.rejects(research.select('idea-1'), /A lab works/);
+  await assert.rejects(research.message('Hello.'), /A lab works/);
+  assert.equal(research.busy, false);
+  // A run that the coordinator's team owns keeps the lab out.
+  const other = new RunTeam({
+    lab: () => false,
+    coordinator: () => Promise.resolve(true),
+    researchBusy: () => false,
+  });
+  assert.match((await other.refusal('lab')) ?? '', /coordinator's team/);
+  // Only a lab start reads the coordinator's records: the others need only the lab's.
+  let reads = 0;
+  const counted = new RunTeam({
+    lab: () => false,
+    coordinator: () => {
+      reads += 1;
+      return Promise.resolve(false);
+    },
+    researchBusy: () => false,
+  });
+  await counted.refusal('coordinator');
+  await counted.refusal('research');
+  assert.equal(reads, 0);
+  await counted.refusal('lab');
+  assert.equal(reads, 1);
+});
+
+await test('a lab start that failed in the background shows on Home, and a running open marks itself for the page', async (t) => {
+  const lab = await fixture(t);
+  const at = new Date().toISOString();
+  const snapshot = await readDeskSnapshot(lab.root);
+  // The offer can be gone, for example when research took the run meanwhile: the failure still shows.
+  const home = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    labCanStart: false,
+    labWorks: [
+      {
+        action: 'lab-start',
+        label: 'Starting the lab',
+        at,
+        error: 'Research is running.',
+      },
+    ],
+  }).html;
+  assert.match(
+    home,
+    /data-lab-failed="lab-start">Starting the lab did not finish: Research is running\./,
+  );
+  assert.doesNotMatch(home, /data-action="lab-start"/);
+  // The page clears the open form once this mark is gone and no failure shows.
+  await lab.lab.start('A question.');
+  const opening = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    lab: lab.lab.view(),
+    labWorks: [
+      {
+        action: 'lab-direction-add',
+        label: 'Opening "Alpha"',
+        at,
+        error: null,
+      },
+    ],
+  }).html;
+  assert.match(
+    opening,
+    /data-lab-work="lab-direction-add">Opening (&quot;|")Alpha/,
+  );
+});
+
+await test('two research messages at once start one step, and neither is refused', async (t) => {
+  const lab = await fixture(t);
+  await changeWorkspace(lab.root, (current) => ({
+    ...current!,
+    research: { topic: 'Q?', autonomy: 'guided', phase: 'needs-plan' },
+  }));
+  const posted: unknown[] = [];
+  let starts = 0;
+  const research: ResearchRunner = new ResearchRunner(lab.root, {
+    signal: new AbortController().signal,
+    io: {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    },
+    team: new RunTeam({
+      lab: () => false,
+      coordinator: () => Promise.resolve(false),
+      researchBusy: () => research.busy,
+    }),
+    // The step fails at once: this test needs only how it starts.
+    harness: () => {
+      starts += 1;
+      return Promise.reject(new Error('No harness in this test.'));
+    },
+    inbox: {
+      post: (text) => {
+        posted.push(text);
+        return Promise.resolve();
+      },
+      take: () => Promise.resolve([]),
+    },
+  });
+  await Promise.all([research.message('First.'), research.message('Second.')]);
+  await research.settled();
+  // Both messages wait for research, in whichever order they arrived.
+  assert.deepEqual([...posted].sort(), ['First.', 'Second.']);
+  assert.ok(starts <= 1, `${starts} steps started`);
+});
+
+await test('Home in a lab still shows what needs the person, and the transcript of each agent', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: [{ name: 'WAIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  const at = new Date().toISOString();
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261002T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'running',
+      mode: 'ask',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: at,
+      events: [],
+      commands: [],
+      requests: [
+        {
+          id: 'R1',
+          native: 'n-1',
+          tool: 'Bash',
+          action: 'curl -sI https://example.org',
+          at,
+        },
+      ],
+    },
+  };
+  const html = renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+    session: worker,
+    workers: [worker],
+    controllable: true,
+    lab: lab.lab.view(),
+  } as never).html;
+  assert.match(html, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
+  assert.match(html, /Claude Code session asks to use Bash/);
+  // Home's one box posts to the board. The permission request is answered in its card.
+  assert.doesNotMatch(html, /id="message-text"/);
+  assert.match(html, /data-action="answer" data-request="R1"/);
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  assert.match(
+    html,
+    new RegExp(
+      `<summary>What claude-1 did</summary><div class="transcript-slot" data-source="session:${session}"`,
+    ),
+  );
+});
+
 await test('proof in a folder that the project ignores is pinned, and a turn that changes nothing adds no commit', async (t) => {
   const lab = await fixture(t, { gitignore: 'results/\n' });
   await lab.script('d-1-circles', [
@@ -1014,6 +1539,68 @@ await test('an agent cannot mention all, and the terminal and cancel leave lab a
     'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
   ]);
   assert.equal(lab.lab.view()?.directions[0]?.status, 'working');
+});
+
+await test('the lab view puts the newest activity first, and a crashed agent can be stopped', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('A question.');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await lab.lab.addDirection({ title: 'Beta', harness: 'claude' });
+  const first = await lab.lab.post({ text: 'Old point.', direction: 'd-1' });
+  await lab.lab.post({ text: 'Newer point.', direction: 'd-2' });
+  // A reply to the old point is the newest activity, so Alpha comes first.
+  await lab.lab.post({ text: 'A reply.', replyTo: first.id });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const crashed = {
+    ...view,
+    directions: view.directions.map((entry, index) =>
+      index === 0 ? { ...entry, status: 'crashed' as const } : entry,
+    ),
+  };
+  const html = renderLab(
+    crashed,
+    (value) => value,
+    () => '',
+  );
+  assert.ok(
+    html.indexOf('aria-label="Alpha"') < html.indexOf('aria-label="Beta"'),
+  );
+  const row = html.slice(
+    html.indexOf('<li class="lab-direction">'),
+    html.indexOf('</li>'),
+  );
+  assert.match(row, /Stopped by itself 3 times in an hour/);
+  assert.match(row, /data-action="lab-agent-restart"/);
+  assert.match(
+    row,
+    /data-action="lab-direction-stop" data-lab-direction="d-1"/,
+  );
+  // Each row has one shape: its text, agent, state, controls, then its transcript.
+  assert.match(
+    row,
+    /^<li class="lab-direction"><div class="lab-direction-text">[\s\S]*<\/div><span class="lab-agent">[\s\S]*<\/span><span class="status[^"]*">[^<]*<\/span><span class="lab-controls">/,
+  );
+  // The hourly turns come from the lab's limit.
+  const hourly = labLimits.wakeupsPerHour;
+  labLimits.wakeupsPerHour = 7;
+  t.after(() => {
+    labLimits.wakeupsPerHour = hourly;
+  });
+  const waiting = renderLab(
+    {
+      ...view,
+      directions: view.directions.map((entry) => ({
+        ...entry,
+        status: 'turns' as const,
+        until: '10:00',
+      })),
+    },
+    (value) => value,
+    () => '',
+  );
+  assert.match(waiting, /Waits until 10:00: 7 turns an hour/);
 });
 
 /** The lab's tool calls and its newest-commit rule, which these tests reach past `private`. */
@@ -1458,6 +2045,37 @@ await test('the person cannot resume or restart a lab agent, and a refused start
   assert.equal(lab.sessions.view(agent?.session ?? '')?.live, true);
 });
 
+await test('a lab that only shows offers no controls, long posts fold, and research from the CLI refuses a lab run', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('A question.');
+  await lab.lab.pause();
+  await lab.lab.post({ text: `${'Long log line. '.repeat(250)}The end.` });
+  const viewer = new Lab(lab.root, {
+    sessions: lab.sessions,
+    timing,
+    runs: false,
+  });
+  await viewer.load();
+  t.after(() => viewer.close());
+  const html = renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+    session: null,
+    controllable: true,
+    lab: viewer.view(),
+  }).html;
+  assert.match(html, /This desk runs one session, so it only shows the lab/);
+  assert.doesNotMatch(html, /data-action="lab-/);
+  assert.match(html, /<summary>Show the whole post<\/summary>/);
+  assert.match(html, /The end\./);
+  await assert.rejects(
+    runCli(['research', '--topic', 'Another question.'], lab.root, {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    }),
+    /A lab works on this run/,
+  );
+});
+
 await test('a failed turn keeps nothing that it read, so its post comes again, once', async (t) => {
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [
@@ -1687,4 +2305,25 @@ await test('while Start over parks the agents, a resume, a post, or a new direct
   await lab.reload();
   await lab.resume();
   assert.equal(lab.view()?.state.pausedAt, null);
+});
+
+await test('the question becomes the research topic only when the lab starts', async (t) => {
+  const fx = await fixture(t);
+  // A refused start leaves the project as it was.
+  await assert.rejects(startLabOn(fx.root, fx.lab, '   '), /question/);
+  assert.equal((await loadWorkspace(fx.root)).research, undefined);
+  await startLabOn(fx.root, fx.lab, 'Do LLMs store months on circles?');
+  assert.equal(
+    (await loadWorkspace(fx.root)).research?.topic,
+    'Do LLMs store months on circles?',
+  );
+  // A second start is refused and keeps the first question.
+  await assert.rejects(
+    startLabOn(fx.root, fx.lab, 'Another question?'),
+    /already runs/,
+  );
+  assert.equal(
+    (await loadWorkspace(fx.root)).research?.topic,
+    'Do LLMs store months on circles?',
+  );
 });

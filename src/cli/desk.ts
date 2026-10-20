@@ -48,7 +48,8 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
-import type { Lab } from './lab.ts';
+import { startLabOn, type Lab } from './lab.ts';
+import type { LabWork } from './desk-lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
@@ -362,7 +363,8 @@ async function changeRunNow(
   labRun: Lab | undefined,
   restore?: unknown,
 ): Promise<void> {
-  if (research?.running)
+  // A step that checks its input, or chooses a direction for the coordinator, counts as running too.
+  if (research?.busy)
     throw new SessionActionError(
       'Research is running. Wait for its step to end, or cancel it first.',
     );
@@ -378,6 +380,7 @@ async function changeRunNow(
   )
     throw new SessionActionError('Your session is running. End it first.');
   // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
+  const lab = labRun?.exists ?? false;
   const paused = (await labRun?.suspend()) ?? false;
   try {
     const state = coordinator?.view()?.state;
@@ -401,14 +404,200 @@ async function changeRunNow(
   try {
     await coordinator?.reload();
   } finally {
-    // The records moved, so the lab reads them again even when the coordinator's reload fails.
+    // The records moved, so the lab is read again even when the coordinator's reload fails.
     await labRun?.reload();
   }
   research?.clear();
   await sessions.forget();
   // A new run starts its research from the question. A restored run continues where it was.
-  if (restore === undefined && research && (await loadWorkspace(root)).research)
+  // After a lab, Home offers the lab again instead.
+  if (
+    restore === undefined &&
+    !lab &&
+    research &&
+    (await loadWorkspace(root)).research
+  )
     await research.start({});
+}
+
+/** The lab in a project owner's desk: the lab and the lab actions. */
+interface LabDesk {
+  lab: Lab | undefined;
+  /** Each lab request by its key, for a minute: a request that arrives twice runs once. */
+  readonly requests: Map<
+    string,
+    { readonly status: Promise<number>; readonly at: number }
+  >;
+  /** The lab actions that run in the background, and the ones that failed there. */
+  works: LabWork[];
+}
+
+/** How long a lab request's answer stays for the same request again. */
+const labAnswerMs = 60_000;
+
+/**
+ * Lab actions that can take long: a new folder, an agent's start, or every
+ * agent parking. An action that has not ended after `labWaitMs` goes on in
+ * the background, and the lab view shows it and its result.
+ */
+const slowLabActions: Readonly<Record<string, string>> = {
+  'lab-start': 'Starting the lab',
+  'lab-direction-add': 'Opening the direction',
+  'lab-pause': 'Pausing the lab',
+  'lab-resume': 'Resuming the lab',
+};
+const labWaitMs = 2_000;
+
+/** Actions that make a new folder or take the run: one runs at a time. */
+const openingLabActions: ReadonlySet<string> = new Set([
+  'lab-start',
+  'lab-direction-add',
+]);
+
+/** One lab action. The lab checks its input and its state. */
+async function labAction(
+  root: string,
+  lab: Lab,
+  body: Record<string, unknown>,
+): Promise<number> {
+  switch (body.action) {
+    case 'lab-start':
+      await startLabOn(root, lab, body.question);
+      return 200;
+    case 'lab-post':
+      await lab.post({
+        text: body.text,
+        kind: body.kind,
+        direction: body.direction,
+        replyTo: body.replyTo,
+      });
+      return 200;
+    case 'lab-direction-add':
+      await lab.addDirection({
+        title: body.title,
+        harness: body.harness,
+        bar: body.bar,
+      });
+      return 200;
+    case 'lab-direction-stop':
+      await lab.stopDirection(body.direction);
+      return 200;
+    case 'lab-agent-restart':
+      await lab.restartAgent(body.agent);
+      return 200;
+    case 'lab-pause':
+      await lab.pause();
+      return 200;
+    case 'lab-resume':
+      await lab.resume();
+      return 200;
+    default:
+      return 400;
+  }
+}
+
+function fail(message: string): never {
+  throw new SessionActionError(message);
+}
+
+/**
+ * One lab request. A request whose key came within the last minute gets the
+ * same answer and runs nothing. A slow action that has not ended after
+ * `labWaitMs` answers 202 and goes on in the background. A start or an open
+ * waits for the one that runs. A pause or a resume never waits: a resume
+ * ends the parks of a pause.
+ */
+async function labRequest(
+  desk: LabDesk,
+  body: Record<string, unknown>,
+  root: string,
+): Promise<number> {
+  const lab = desk.lab ?? fail('This desk runs no lab.');
+  if (!lab.runs)
+    fail(
+      'This desk runs one session, so the lab only shows here. Run verifold in the project folder to work in the lab.',
+    );
+  if (body.action === 'lab-dismiss') {
+    desk.works = desk.works.filter((work) => work.error === null);
+    return 200;
+  }
+  const key =
+    typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
+      ? body.key
+      : null;
+  const now = Date.now();
+  for (const [old, entry] of desk.requests)
+    if (entry.at < now - labAnswerMs) desk.requests.delete(old);
+  const known = key ? desk.requests.get(key) : undefined;
+  if (known) return known.status;
+  const slow =
+    typeof body.action === 'string' ? slowLabActions[body.action] : undefined;
+  let status: Promise<number>;
+  if (slow) {
+    const action = String(body.action);
+    const opening = desk.works.find(
+      (work) => work.error === null && openingLabActions.has(work.action),
+    );
+    if (opening && openingLabActions.has(action))
+      fail(`${opening.label} still runs. Wait for it to end.`);
+    const work: LabWork = {
+      action,
+      label:
+        action === 'lab-direction-add' &&
+        typeof body.title === 'string' &&
+        body.title.trim()
+          ? `Opening ${JSON.stringify(body.title.trim().slice(0, 120))}`
+          : slow,
+      at: new Date(now).toISOString(),
+      error: null,
+    };
+    // A new try of an action replaces its earlier failure.
+    desk.works = [
+      ...desk.works.filter(
+        (entry) => entry.action !== action || entry.error === null,
+      ),
+      work,
+    ];
+    let answered = false;
+    const done = labAction(root, lab, body).then(
+      (code) => {
+        desk.works = desk.works.filter((entry) => entry !== work);
+        return code;
+      },
+      (error: unknown) => {
+        // A failure after the 202 shows in the lab. One before it is the answer.
+        desk.works = desk.works.flatMap((entry) =>
+          entry !== work
+            ? [entry]
+            : answered
+              ? [
+                  {
+                    ...work,
+                    error:
+                      error instanceof Error ? error.message : 'Unknown error.',
+                  },
+                ]
+              : [],
+        );
+        throw error;
+      },
+    );
+    status = Promise.race([
+      done,
+      new Promise<number>((resolve) =>
+        setTimeout(() => resolve(202), labWaitMs).unref(),
+      ),
+    ]).finally(() => {
+      answered = true;
+    });
+    done.catch(() => {});
+  } else status = labAction(root, lab, body);
+  if (key) {
+    desk.requests.set(key, { status, at: now });
+    // A refused request keeps no answer: the same request again tries again.
+    status.catch(() => desk.requests.delete(key));
+  }
+  return status;
 }
 
 /** Run one desk action on the project owner. Returns 200, or 400 for an unknown action. */
@@ -421,8 +610,8 @@ async function act(
   compute: Compute | undefined,
   root: string,
   body: Record<string, unknown>,
-  memory?: ProjectMemory,
-  lab?: Lab,
+  memory: ProjectMemory | undefined,
+  labDesk: LabDesk,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -474,11 +663,16 @@ async function act(
       tasks,
       coordinator,
       memory,
-      lab,
+      labDesk.lab,
       body.action === 'restore' ? body.archive : undefined,
     );
+    // The lab actions of the earlier run, and their answers, do not belong to this one.
+    labDesk.works = [];
+    labDesk.requests.clear();
     return 200;
   }
+  if (typeof body.action === 'string' && body.action.startsWith('lab-'))
+    return labRequest(labDesk, body, root);
   // The message box: to research, the coordinator, a task agent, or a session that the person started.
   // The words can also start a new coordinator or a new agent.
   if (body.action === 'message') {
@@ -668,7 +862,11 @@ export async function startDesk(
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
   let project: string | null = root === null ? null : await realpath(root);
-  let lab = options.lab;
+  const labDesk: LabDesk = {
+    lab: options.lab,
+    requests: new Map(),
+    works: [],
+  };
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -861,7 +1059,7 @@ export async function startDesk(
             project ?? '',
             body,
             memory,
-            lab,
+            labDesk,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
@@ -873,7 +1071,14 @@ export async function startDesk(
           'Content-Type': 'application/json; charset=utf-8',
         })
         .end(
-          JSON.stringify(status === 200 ? { ok: true } : { error: message }),
+          JSON.stringify(
+            status === 200
+              ? { ok: true }
+              : // A slow lab action goes on in the background, and the lab view shows how it ends.
+                status === 202
+                ? { ok: true, pending: true }
+                : { error: message },
+          ),
         );
       return;
     }
@@ -1230,7 +1435,8 @@ export async function startDesk(
             workers,
             session: worker,
             // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
-            full: (sessions?.full ?? false) && !(lab?.canYield() ?? false),
+            full:
+              (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
             ...(sessions ? { agents: sessions.limit } : {}),
             terminals: await terminalSupport(),
             controllable: sessions !== undefined,
@@ -1238,6 +1444,19 @@ export async function startDesk(
             ...(research ? { research: research.view() } : {}),
             ...(coordinator ? { coordinator: coordinator.view() } : {}),
             ...(compute ? { compute: compute.view() } : {}),
+            ...(labDesk.lab
+              ? {
+                  lab: labDesk.lab.view(),
+                  labWorks: labDesk.works,
+                  // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
+                  labCanStart:
+                    labDesk.lab.runs &&
+                    !labDesk.lab.exists &&
+                    !coordinator?.view()?.state &&
+                    !taskList.length &&
+                    !(research?.busy ?? false),
+                }
+              : {}),
             ...(tasks ? { archives: await listArchives(root) } : {}),
             ...(tasks
               ? {
@@ -1327,7 +1546,7 @@ export async function startDesk(
       coordinator = lead;
       compute = pods;
       memory = notes;
-      lab = labOwner;
+      labDesk.lab = labOwner;
       project = resolved;
     },
     pages: pages.origin,

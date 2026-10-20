@@ -340,6 +340,8 @@ async function render(html: string): Promise<void> {
         field.value = value;
     }
     showThread();
+    showReply();
+    settleOpen();
     // A section that is new to the page keeps the state that the server gave it.
     for (const detail of content.querySelectorAll<HTMLDetailsElement>(
       'details[id]',
@@ -956,6 +958,82 @@ function taskRequest(button: HTMLElement): Record<string, unknown> {
   }
 }
 
+/** A direction opens in the background. Its form clears when the open ends well. */
+let opening = false;
+
+/**
+ * After a view refresh: an open that went on in the background has ended
+ * when the lab no longer shows it. One that worked clears its form. One
+ * that failed keeps it, so the person can try again.
+ */
+function settleOpen(): void {
+  if (!opening || content.querySelector('[data-lab-work="lab-direction-add"]'))
+    return;
+  opening = false;
+  if (content.querySelector('[data-lab-failed="lab-direction-add"]')) return;
+  for (const id of ['lab-title', 'lab-bar']) {
+    const element = document.getElementById(id);
+    if (element instanceof HTMLInputElement) element.value = '';
+  }
+}
+
+/** The lab's message box says which post the next post answers, with a control to stop replying. */
+function showReply(): void {
+  const post = field('lab-reply');
+  const note = document.getElementById('lab-reply-note');
+  const line = document.getElementById('lab-replying');
+  if (note) note.textContent = post ? `Replying to ${post}.` : '';
+  if (line) line.hidden = !post;
+}
+
+/** Reply to a post, or stop replying with an empty `post`. Nothing goes to the server yet. */
+function labReply(post: string): void {
+  const reply = document.getElementById('lab-reply');
+  if (reply instanceof HTMLInputElement) reply.value = post;
+  showReply();
+  document.getElementById('lab-text')?.focus();
+}
+
+/**
+ * A lab request with a new key for each click. The desk runs a request with
+ * a key that it saw in the last minute once, so a request that the network
+ * sends twice does nothing twice.
+ */
+function labKeyed(body: Record<string, unknown>): Record<string, unknown> {
+  const key = [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  return { ...body, key };
+}
+
+function labRequest(button: HTMLElement): Record<string, unknown> {
+  const action = button.dataset.action ?? '';
+  switch (action) {
+    case 'lab-start':
+      return { action, question: field('lab-question') };
+    case 'lab-post':
+      return {
+        action,
+        text: field('lab-text'),
+        direction: field('lab-direction'),
+        replyTo: field('lab-reply'),
+      };
+    case 'lab-direction-add':
+      return {
+        action,
+        title: field('lab-title'),
+        harness: field('lab-harness'),
+        bar: field('lab-bar'),
+      };
+    case 'lab-direction-stop':
+      return { action, direction: button.dataset.labDirection };
+    case 'lab-agent-restart':
+      return { action, agent: button.dataset.agent };
+    default:
+      return { action };
+  }
+}
+
 /** A compute action. The RunPod key and secret values go only into this request body. */
 function computeRequest(button: HTMLElement): Record<string, unknown> {
   const action = button.dataset.action ?? '';
@@ -1053,6 +1131,10 @@ function researchBody(kind: string | undefined): Record<string, unknown> {
 /** Send one session action. The server owns validation and the session state. */
 async function act(button: HTMLElement): Promise<void> {
   const action = button.dataset.action;
+  if (action === 'lab-reply' || action === 'lab-reply-clear') {
+    labReply(action === 'lab-reply' ? (button.dataset.post ?? '') : '');
+    return;
+  }
   const body =
     action === 'cancel' || action === 'end' || action === 'terminal-return'
       ? { action, session: button.dataset.session }
@@ -1096,7 +1178,9 @@ async function act(button: HTMLElement): Promise<void> {
                           ? taskRequest(button)
                           : action?.startsWith('compute-')
                             ? computeRequest(button)
-                            : { action };
+                            : action?.startsWith('lab-')
+                              ? labKeyed(labRequest(button))
+                              : { action };
   const selector = [
     ['action', action],
     ['request', button.dataset.request],
@@ -1114,6 +1198,8 @@ async function act(button: HTMLElement): Promise<void> {
     ['result', button.dataset.result],
     ['lease', button.dataset.lease],
     ['archive', button.dataset.archive],
+    ['lab-direction', button.dataset.labDirection],
+    ['agent', button.dataset.agent],
   ]
     .filter(([, value]) => value)
     .map(([key, value]) => `[data-${key}="${CSS.escape(value ?? '')}"]`)
@@ -1134,9 +1220,12 @@ async function act(button: HTMLElement): Promise<void> {
       },
       body: JSON.stringify(body),
       cache: 'no-store',
-      // A compute action waits for RunPod, for up to 8 seconds.
+      // A compute action waits for RunPod, for up to 8 seconds. A slow lab
+      // action answers within a few seconds and goes on in the background.
       signal: AbortSignal.timeout(
-        action?.startsWith('compute-') ? 15000 : 5000,
+        action?.startsWith('compute-') || action?.startsWith('lab-')
+          ? 15000
+          : 5000,
       ),
     });
     const reply: unknown = await response.json().catch(() => null);
@@ -1149,7 +1238,18 @@ async function act(button: HTMLElement): Promise<void> {
           ? reply.error
           : 'That did not work. Refresh, then try again.',
       );
-    actionLabel.textContent = name ? `Done: ${name}` : 'Done';
+    // A slow lab action goes on in the background. Its form stays, so nothing typed is lost if it fails.
+    const pending =
+      reply !== null &&
+      typeof reply === 'object' &&
+      'pending' in reply &&
+      reply.pending === true;
+    actionLabel.textContent = pending
+      ? `Still working: ${name || 'the action'}. The lab shows how it ends.`
+      : name
+        ? `Done: ${name}`
+        : 'Done';
+    if (pending && body.action === 'lab-direction-add') opening = true;
     failure = undefined;
     if (action === 'stop') showStopped();
     // A new agent from the message box becomes the agent that the box writes to.
@@ -1167,21 +1267,27 @@ async function act(button: HTMLElement): Promise<void> {
       opener = undefined;
       navigate({ view: 'task', panel: '' }, '#view-title', 'start');
     }
-    for (const id of [
-      'message-text',
-      'setup-answer',
-      'setup-feedback',
-      'task-edit-reason',
-      'answer-note',
-      ...(body.action === 'coordinator-rule'
-        ? [`rule-${String(body.check)}`]
-        : []),
-      ...(body.action === 'task-create'
-        ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
-            (name) => `task-new-${name}`,
-          )
-        : []),
-    ]) {
+    for (const id of pending
+      ? []
+      : [
+          'message-text',
+          'setup-answer',
+          'setup-feedback',
+          'task-edit-reason',
+          'answer-note',
+          ...(body.action === 'coordinator-rule'
+            ? [`rule-${String(body.check)}`]
+            : []),
+          ...(body.action === 'task-create'
+            ? ['title', 'objective', 'inputs', 'writable', 'output'].map(
+                (name) => `task-new-${name}`,
+              )
+            : []),
+          ...(body.action === 'lab-post' ? ['lab-text', 'lab-reply'] : []),
+          ...(body.action === 'lab-direction-add'
+            ? ['lab-title', 'lab-bar']
+            : []),
+        ]) {
       const element = document.getElementById(id);
       if (
         (element instanceof HTMLTextAreaElement ||
