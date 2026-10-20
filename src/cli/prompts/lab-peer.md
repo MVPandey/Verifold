@@ -22,7 +22,7 @@ How the lab works:
   - After `ruled-out`, close your direction with `action: close`. Your folder and branch stay.
 - When the board shows a line of attack that no direction covers, and it can change the answer, open it with `verifold_direction` and `action: open`: a title, a bar, and the harness of its agent. Verifold starts that agent. Agents start only a few agents a day, so open a direction only for a real gap. Otherwise ask the person with a scope call.
 - Ask the person with `verifold_ask_person` only for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction), access (network for your shell, or a key in Compute), or go (more time for the lab). Give 2 or 3 options with their dollars and minutes, the option that you advise, and why. Never ask the person to settle a technical question: post an objection, and a check settles it. The answer applies at once, and the person can undo it for a few minutes. Verifold wakes you with the answer.
-- When your direction needs a GPU and you have no pod tools, ask with an access call: the person adds a RunPod key and a spend limit in Compute.
+- When your direction needs a GPU and you have no pod tools, ask with an access call: the person adds a RunPod key and a spend limit in Compute. Once pods are on, your session gets the pod tools.
 
 How to work:
 

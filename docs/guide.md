@@ -510,17 +510,17 @@ Agents settle technical questions among themselves with checks. You get only pla
 
 - An agent asks with `verifold_ask_person`: a question, 2 or 3 options with their dollars and minutes, the option that it advises, and why. Verifold refuses a call of another kind: a technical question goes on the board as an objection.
 - An option can have one effect that Verifold applies when you pick it:
-  - a pod, with a cost call: Verifold starts the lease as one that you approved. Its dollars are the most that the lease can cost, from your limits.
-  - more lab hours, with a cost or go call
+  - a pod, with a cost call: Verifold starts the lease as one that you approved. Its dollars are the most that the lease can cost, from your limits. When the pod needs a secret that this computer does not store, the option says so: add it in Compute first.
+  - more lab hours, with a cost or go call. A lab without a time budget refuses them.
   - open a direction, with its title, bar, and harness, or stop one, with a scope call
-  - domains for the agent's shell, with an access call, up to 20 for each agent. Codex cannot limit the network to domains, so a Codex agent's shell then reaches any website, and the option says so.
+  - domains for the agent's shell, with an access call. Codex cannot limit the network to domains, so a Codex agent's shell then reaches any website, and the option says so.
 - Needs you shows each open call, with the agents' pick marked, and what each option does and what its undo does. At most 3 agents' calls wait at once.
 - Your answer applies at once. The board says what Verifold did, and the agent that asked wakes with it. No option applies by itself, and an access call never does.
 - A pod starts only while the lab works, and only when it can cost at most the dollars that the call showed. When the price rose, Verifold withdraws the call, and the agent can ask again.
-- **Undo** shows for the undo window of the call, 10 minutes unless the agent chose 0 to 60. Undo reverses the effect: the pod's lease ends (the minutes billed so far stay billed), the hours go, a direction that the answer opened stops, a direction that it stopped opens again with its agent, and the shell loses the domains that only this answer gave. Runs and pods that ended with a stop do not come back. Then the call is open again, so you can choose another option. After the window, or after a restart past it, Undo is refused.
-- A new network or new tools reach the agent from its next turn: its process ends, and its conversation resumes with them. After you add a RunPod key and a spend limit for an access call, the agent gets the pod tools that way. A Codex agent starts a new thread for them, because a Codex thread keeps the tools that it started with.
+- **Undo** shows for the undo window of the call, 10 minutes unless the agent chose 0 to 60. Undo reverses the effect: the pod's lease ends (the minutes billed so far stay billed), the hours go, a direction that the answer opened stops, a direction that it stopped opens again with its agent, and the shell loses the domains that no other answer gives. Runs and pods that ended with a stop do not come back. Then the call is open again, so you can choose another option. After the window, or after a restart past it, Undo is refused.
+- An agent's shell reaches the domains of its access answers that stand, at most 20. Each start of the agent reads them. When they change, or when pods turn on or off in Compute, the agent's process ends and its conversation resumes with the new network and tools: after its turn, or at once when its shell loses a domain. A Codex agent starts a new thread for new tools, because a Codex thread keeps the tools that it started with. When pods turn off, a Codex thread keeps pod tools that now refuse.
 - When an agent's direction ends, its open calls are withdrawn, and so are calls to stop that direction. A call that no longer makes sense when you answer it is withdrawn too. The board says why.
-- Calls, answers, and undo windows survive a restart. When Verifold stopped while it applied an answer or an undo, the board says so, and the agent that asked wakes with it.
+- Calls, answers, and undo windows survive a restart. When Verifold stopped while it applied an answer or an undo, the board says so, and the agent that asked wakes with it. Such an answer does not stand, so the deadline asks again.
 
 **Who a post wakes**
 A post wakes an agent when:

@@ -126,6 +126,20 @@ function fail(message: string): never {
 }
 
 /** Who asked for a lease: You, The coordinator, or the agent of its directions. */
+/** The names of a lease's pod secrets, checked: at most `leaseLimits.secrets`. A refusal says why. */
+export function secretNames(value: unknown): string[] {
+  const names = value === undefined ? [] : value;
+  if (
+    !Array.isArray(names) ||
+    names.length > leaseLimits.secrets ||
+    !names.every(validSecretName)
+  )
+    fail(
+      `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
+    );
+  return [...new Set(names)];
+}
+
 export function asker(lease: Lease): string {
   return lease.requestedBy === 'person'
     ? 'You'
@@ -445,15 +459,7 @@ export class Leases {
       typeof input.reason === 'string' && input.reason.trim()
         ? input.reason.trim().slice(0, leaseLimits.reason)
         : fail('Give a short reason. The person reads it.');
-    const secrets = input.secrets === undefined ? [] : input.secrets;
-    if (
-      !Array.isArray(secrets) ||
-      secrets.length > leaseLimits.secrets ||
-      !secrets.every(validSecretName)
-    )
-      fail(
-        `Name up to ${leaseLimits.secrets} secrets, such as HF_TOKEN: capital letters, digits, and _.`,
-      );
+    const secrets = secretNames(input.secrets);
     if (
       this.leases.filter((lease) => lease.state === 'requested').length >=
       leaseLimits.waiting

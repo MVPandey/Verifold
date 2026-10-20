@@ -36,7 +36,7 @@ import { boardLimits } from '../src/cli/board.ts';
 import { checkToolSpecs } from '../src/cli/lab-tools.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
-import { renderLab } from '../src/cli/desk-lab.ts';
+import { labCallNeeds, renderLab } from '../src/cli/desk-lab.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
 import {
@@ -60,6 +60,8 @@ import { ProjectMemory } from '../src/cli/memory.ts';
  * arrives, EXIT stop the process, and FAIL end the turn as failed. A call with
  * an `id` uses it as its tool-use ID. With a `resume-fails` file next to the
  * fake, a resume stops at once, as when the harness lost the conversation.
+ * With a `strict-tools` file, it calls only the Verifold tools that its
+ * launch gave it, and logs NO_SUCH_TOOL as the result of any other.
  */
 const claudeHost = `const fs = require('node:fs');
 const path = require('node:path');
@@ -88,9 +90,15 @@ const take = (text) => {
   fs.writeFileSync(usedFile, JSON.stringify([...used, index]));
   return script[index].calls;
 };
+const allowed = args.includes('--allowedTools') ? args[args.indexOf('--allowedTools') + 1].split(',') : [];
 const call = () => {
   const entry = calls[next];
   if (!entry) { running = false; return out({ type: 'result', subtype: 'success' }); }
+  if (entry.name.startsWith('verifold_') && fs.existsSync(path.join(base, 'strict-tools')) && !allowed.includes('mcp__verifold__' + entry.name)) {
+    fs.appendFileSync(path.join(log, 'results.jsonl'), JSON.stringify({ call: entry.name, result: { isError: true, content: [{ type: 'text', text: 'NO_SUCH_TOOL' }] } }) + '\\n');
+    next++;
+    return call();
+  }
   if (entry.name === 'WRITE') {
     fs.mkdirSync(path.dirname(entry.arguments.path), { recursive: true });
     fs.writeFileSync(entry.arguments.path, entry.arguments.text);
@@ -137,7 +145,11 @@ const codexSocket = fileURLToPath(
   new URL('./fixtures/codex-socket.cjs', import.meta.url),
 );
 
-/** A fake Codex app-server for lab agents, with the same scripts and logs as the fake Claude Code. */
+/**
+ * A fake Codex app-server for lab agents, with the same scripts and logs as
+ * the fake Claude Code. A thread keeps the tools that it started with, as in
+ * Codex: with a `strict-tools` file, it calls only those.
+ */
 const codexHost = `const fs = require('node:fs');
 const path = require('node:path');
 const base = path.dirname(process.argv[1]);
@@ -162,9 +174,15 @@ const take = (text) => {
   fs.writeFileSync(usedFile, JSON.stringify([...used, index]));
   return script[index].calls;
 };
+const threadTools = () => { try { return JSON.parse(fs.readFileSync(path.join(log, 'tools-' + thread + '.json'), 'utf8')); } catch { return []; } };
 const call = () => {
   const entry = calls[next];
   if (!entry) return out({ method: 'turn/completed', params: { turn: { id: turn, status: 'completed' } } });
+  if (entry.name.startsWith('verifold_') && fs.existsSync(path.join(base, 'strict-tools')) && !threadTools().includes(entry.name)) {
+    fs.appendFileSync(path.join(log, 'results.jsonl'), JSON.stringify({ call: entry.name, result: { contentItems: [{ text: 'NO_SUCH_TOOL' }] } }) + '\\n');
+    next++;
+    return call();
+  }
   if (entry.name === 'WRITE') {
     fs.mkdirSync(path.dirname(entry.arguments.path), { recursive: true });
     fs.writeFileSync(entry.arguments.path, entry.arguments.text);
@@ -186,6 +204,7 @@ onLine((line) => {
   if (message.method === 'thread/start') {
     fs.appendFileSync(path.join(log, 'threads.jsonl'), JSON.stringify({ method: 'start', params: message.params }) + '\\n');
     thread = 'codex-thread-' + process.pid;
+    fs.writeFileSync(path.join(log, 'tools-' + thread + '.json'), JSON.stringify((message.params.dynamicTools || []).map((tool) => tool.name)));
     out({ id: message.id, result: { thread: { id: thread } } });
   }
   if (message.method === 'thread/resume') {
@@ -408,14 +427,17 @@ async function until(
 /**
  * Open directions while the lab is paused, so their IDs and post numbers are
  * known, then resume. `gpuApproved`: the person approved a GPU pod already,
- * so pod requests follow the Compute limits.
+ * so pod requests follow the Compute limits. `hours`: a time budget.
  */
 async function open(
   fixture: Fixture,
   directions: { title: string; harness: 'claude' | 'codex' }[],
-  options: { readonly gpuApproved?: boolean } = {},
+  options: { readonly gpuApproved?: boolean; readonly hours?: number } = {},
 ): Promise<void> {
-  await fixture.lab.start('Do LLMs store months on circles?');
+  await fixture.lab.start(
+    'Do LLMs store months on circles?',
+    options.hours ? { hours: options.hours } : {},
+  );
   await fixture.lab.pause();
   // An answered call that started a pod stands for the person's approval.
   if (options.gpuApproved) {
@@ -5354,7 +5376,7 @@ await test('an agent asks the person a call: a technical question, a wrong effec
       calls: [],
     },
   ]);
-  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }], { hours: 1 });
   await until(
     async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 6,
   );
@@ -5411,11 +5433,14 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   // An access call never applies by itself.
   await delay(300);
   assert.equal(lab.lab.view()?.state.calls[1]?.state, 'open');
-  assert.deepEqual(lab.lab.view()?.directions[0]?.agent.network, []);
+  assert.doesNotMatch(
+    await readFile(join(lab.base, 'logs', 'd-1-alpha', 'args.json'), 'utf8'),
+    /allowedDomains/,
+  );
 
   // The answer applies at once, the board says so, and the agent wakes with it.
   await lab.lab.answerCall('c-1', 0);
-  assert.equal(lab.lab.view()?.state.budget?.hours, 4);
+  assert.equal(lab.lab.view()?.state.budget?.hours, 5);
   await until(async () =>
     (await lab.inputs('d-1-alpha')).some((input) =>
       input.includes(
@@ -5439,9 +5464,9 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   await lab.lab.answerCall('c-3', '1');
   assert.equal(lab.lab.view()?.state.directions.length, 1);
   await assert.rejects(lab.lab.undoCall('c-3'), /c-3 has no answer to undo\./);
-  // The undo of the hours takes them back: the lab had no time budget before.
+  // The undo of the hours gives back the time budget before the answer.
   await lab.lab.undoCall('c-1');
-  assert.equal(lab.lab.view()?.state.budget, null);
+  assert.equal(lab.lab.view()?.state.budget?.hours, 1);
   // The call is open again, so the person can choose another option.
   assert.equal(lab.lab.view()?.state.calls[0]?.state, 'open');
   assert.equal(lab.lab.view()?.state.calls[0]?.answer, null);
@@ -5451,74 +5476,145 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   );
 });
 
-await test("an access call gives the agent's shell its domains from its next turn, its undo takes them back, and Codex's option says any website", async (t) => {
+await test("an access answer gives the agent's shell its domains while it stands: undo, a failed save, and an undo during a start", async (t) => {
   const lab = await fixture(t);
-  const access: Call = {
+  const access = (question: string, domains: string[]): Call => ({
     name: 'verifold_ask_person',
     arguments: {
       kind: 'access',
-      question: 'Let me install packages?',
+      question,
       options: [
-        { label: 'Open PyPI', effect: { domains: ['pypi.org'] } },
+        { label: 'Open them', effect: { domains } },
         { label: 'No network' },
       ],
       pick: 0,
-      why: 'Needs numpy.',
+      why: 'Needs packages.',
     },
-  };
-  await lab.script('d-1-alpha', [{ calls: [access] }]);
-  await lab.script('d-2-beta', [{ calls: [access] }]);
+  });
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        access('A?', ['pypi.org']),
+        access('B?', ['pypi.org', 'hf.co']),
+        {
+          name: 'verifold_ask_person',
+          arguments: {
+            kind: 'go',
+            question: 'More time?',
+            options: [{ label: 'Yes', effect: { hours: 2 } }, { label: 'No' }],
+            pick: 0,
+            why: 'Seeds.',
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.script('d-2-beta', [{ calls: [access('C?', ['pypi.org'])] }]);
   await open(lab, [
     { title: 'Alpha', harness: 'claude' },
     { title: 'Beta', harness: 'codex' },
   ]);
-  await until(() => lab.lab.view()?.state.calls.length === 2);
-  const byAlpha = lab.lab
-    .view()
-    ?.state.calls.find((call) => call.by === 'a-1')?.id;
-  const html = await labHome(lab);
+  await until(() => lab.lab.view()?.state.calls.length === 3);
+  // A lab without a time budget refuses more hours.
+  assert.equal(
+    (await claudeResults(lab, 'd-1-alpha'))[2],
+    'This lab has no time budget, so more hours change nothing. Give the options without hours.',
+  );
+  const [a, b] = (lab.lab.view()?.state.calls ?? [])
+    .filter((call) => call.by === 'a-1')
+    .map((call) => call.id);
   assert.match(
-    html,
+    await labHome(lab),
     /Codex: any website\. Codex cannot limit the network to pypi\.org, so codex-1&#39;s shell can reach any website\./,
   );
-  const settings = async (): Promise<string> => {
+  const domains = async (): Promise<string[]> => {
     const args = JSON.parse(
       await readFile(join(lab.base, 'logs', 'd-1-alpha', 'args.json'), 'utf8'),
     ) as string[];
-    return args[args.indexOf('--settings') + 1] ?? '';
+    const settings = JSON.parse(
+      args[args.indexOf('--settings') + 1] ?? '{}',
+    ) as { sandbox?: { network?: { allowedDomains?: string[] } } };
+    return settings.sandbox?.network?.allowedDomains ?? [];
   };
-  assert.doesNotMatch(await settings(), /allowedDomains/);
   const launches = async (): Promise<number> =>
     (await lab.lines('d-1-alpha', 'launches.jsonl')).length;
-  const before = await launches();
-  await lab.lab.answerCall(byAlpha, 0);
-  assert.deepEqual(lab.lab.view()?.directions[0]?.agent.network, ['pypi.org']);
-  // Its process ends, and it resumes its conversation with the domains.
-  await until(async () => (await launches()) > before);
-  assert.deepEqual(
+  // Each answer that changes the domains restarts the process with them.
+  const answered = async (
+    change: () => Promise<void>,
+    expected: string[],
+  ): Promise<void> => {
+    const before = await launches();
+    await change();
+    await until(async () => (await launches()) > before);
+    await until(
+      async () => JSON.stringify(await domains()) === JSON.stringify(expected),
+    );
+  };
+  assert.deepEqual(await domains(), []);
+  await answered(() => lab.lab.answerCall(a, 0), ['pypi.org']);
+  assert.equal(
     (await lab.lines('d-1-alpha', 'launches.jsonl')).at(-1),
     'resume',
   );
-  assert.match(await settings(), /"allowedDomains":\["pypi\.org"\]/);
-  await until(async () =>
-    (await lab.inputs('d-1-alpha')).some((input) =>
-      input.includes("claude-1's shell can reach pypi.org from its next turn."),
-    ),
+  await answered(() => lab.lab.answerCall(b, 0), ['hf.co', 'pypi.org']);
+  // B still gives pypi.org, so the undo of A changes nothing.
+  const steady = await launches();
+  await lab.lab.undoCall(a);
+  await delay(300);
+  assert.equal(await launches(), steady);
+  assert.deepEqual(await domains(), ['hf.co', 'pypi.org']);
+  // No answer that stands gives a domain any more.
+  await answered(() => lab.lab.undoCall(b), []);
+
+  // An answer that the lab cannot save gives no domain.
+  const folder = join(lab.root, '.verifold');
+  await chmod(folder, 0o500);
+  try {
+    await assert.rejects(lab.lab.answerCall(a, 0));
+  } finally {
+    await chmod(folder, 0o700);
+  }
+  assert.equal(
+    lab.lab.view()?.state.calls.find((call) => call.id === a)?.state,
+    'open',
   );
-  const answered = await launches();
-  await lab.lab.undoCall(byAlpha);
-  assert.deepEqual(lab.lab.view()?.directions[0]?.agent.network, []);
-  await until(async () => (await launches()) > answered);
-  assert.doesNotMatch(await settings(), /allowedDomains/);
-  // A stopped direction's open call is withdrawn.
-  await lab.lab.stopDirection('d-2');
-  const beta = lab.lab.view()?.state.calls.find((call) => call.by === 'a-2');
-  assert.equal(beta?.state, 'withdrawn');
-  assert.equal(beta?.note, 'd-2 stopped.');
-  await assert.rejects(
-    lab.lab.answerCall(beta?.id, 0),
-    /waits for no answer now/,
-  );
+  await delay(300);
+  assert.deepEqual(await domains(), []);
+
+  // An undo while the process starts reaches the process that started.
+  await answered(() => lab.lab.answerCall(a, 0), ['pypi.org']);
+  const pool = lab.sessions as unknown as {
+    resumeAgent: LabSessions['resumeAgent'];
+  };
+  const resume = pool.resumeAgent.bind(lab.sessions);
+  let reached = (): void => {};
+  const starting = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const networks: unknown[] = [];
+  pool.resumeAgent = async (...args) => {
+    networks.push(args[2]);
+    reached();
+    await gate;
+    return resume(...args);
+  };
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  await lab.sessions.park(session);
+  await lab.lab.post({ text: 'Go on.', direction: 'd-1' });
+  await starting;
+  // The start runs in the lab's queue, so the undo waits for it.
+  const undone = lab.lab.undoCall(a);
+  release();
+  await undone;
+  // The start had pypi.org, so its process ends, and the next start has no domain.
+  await until(() => networks.length === 2);
+  assert.deepEqual(networks, [['pypi.org'], []]);
+  await until(async () => (await domains()).length === 0);
+  pool.resumeAgent = resume;
 });
 
 await test("the lab's first GPU pod asks the person: the answer starts the lease, its undo ends it and asks again, and later pods follow the limits", async (t) => {
@@ -5655,7 +5751,9 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
         options: [
           {
             label: 'Rent it',
-            effect: { pod: { gpuType: 'NVIDIA A40', hours: 2 } },
+            effect: {
+              pod: { gpuType: 'NVIDIA A40', hours: 2, secrets: ['HF_TOKEN'] },
+            },
           },
           { label: 'No' },
         ],
@@ -5665,6 +5763,13 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
     ).text,
     /^Asked the person in c-2\./,
   );
+  // The call says which secret the pod needs before the person answers.
+  const needs = (stored: string[]): string =>
+    labCallNeeds(lab.lab.view()!, stored)
+      .map((need) => need.body)
+      .join('');
+  assert.match(needs([]), /Needs HF_TOKEN in Compute first\./);
+  assert.doesNotMatch(needs(['HF_TOKEN']), /Needs HF_TOKEN/);
   quote = 5.7;
   await assert.rejects(
     lab.lab.answerCall('c-2', 0),
@@ -5683,13 +5788,13 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   ]);
 });
 
-await test('without a RunPod key or a spend limit, a pod request asks the person for them, and once pods are on the agent gets the pod tools', async (t) => {
+await test('an agent that started with pods off gets the pod tools once pods are on, and a Codex thread starts again only for new tools', async (t) => {
   let on = false;
   const compute: LabCompute = {
     describe: () => Promise.resolve('{}'),
-    requestPod: () => Promise.reject(new Error('Pods are off.')),
-    podCost: () => Promise.reject(new Error('Pods are off.')),
-    startPod: () => Promise.reject(new Error('Pods are off.')),
+    requestPod: () => Promise.reject(new Error('Not now.')),
+    podCost: () => Promise.resolve(2),
+    startPod: () => Promise.reject(new Error('Not now.')),
     podsOn: () => on,
     leases: {
       list: () => [],
@@ -5701,50 +5806,68 @@ await test('without a RunPod key or a spend limit, a pod request asks the person
     podRuns: () => ({}) as PodRuns,
   };
   const lab = await fixture(t, { compute });
-  await lab.script('d-1-alpha', [
-    {
-      calls: [
-        {
-          name: 'verifold_request_pod',
-          arguments: { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' },
-        },
-      ],
-    },
-  ]);
-  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
-  await until(
-    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 1,
-  );
-  assert.equal(
-    (await claudeResults(lab, 'd-1-alpha'))[0],
-    'Pods are off: the person has no RunPod key or no spend limit in Compute. Verifold asked them in c-1 to add them. Verifold wakes you with the answer.',
-  );
-  const call = lab.lab.view()?.state.calls[0];
-  assert.equal(call?.kind, 'access');
-  assert.equal(
-    call?.question,
-    'Add a RunPod key and a spend limit in Compute?',
-  );
-  const tools = async (): Promise<string> => {
-    const args = JSON.parse(
-      await readFile(join(lab.base, 'logs', 'd-1-alpha', 'args.json'), 'utf8'),
-    ) as string[];
-    return args[args.indexOf('--allowedTools') + 1] ?? '';
+  // The fakes call only the tools that their launch gave them.
+  await writeFile(join(lab.base, 'strict-tools'), '');
+  const request: Call = {
+    name: 'verifold_request_pod',
+    arguments: { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' },
   };
-  assert.doesNotMatch(await tools(), /verifold_request_pod/);
+  const ask: Call = {
+    name: 'verifold_ask_person',
+    arguments: {
+      kind: 'access',
+      question: 'Add a RunPod key?',
+      options: [{ label: 'I added it' }, { label: 'No GPU' }],
+      pick: 0,
+      why: 'Seeds need a GPU.',
+    },
+  };
+  for (const folder of ['d-1-alpha', 'd-2-beta'])
+    await lab.script(folder, [
+      { calls: [request, ask] },
+      { when: 'The person chose "I added it"', calls: [request] },
+    ]);
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'codex' },
+  ]);
+  await until(() => lab.lab.view()?.state.calls.length === 2);
+  // Neither agent has the pod tools yet.
+  assert.equal((await claudeResults(lab, 'd-1-alpha'))[0], 'NO_SUCH_TOOL');
+  const codex = async (): Promise<string[]> =>
+    (
+      (await lab.lines('d-2-beta', 'results.jsonl')) as {
+        result: { contentItems?: { text: string }[] };
+      }[]
+    ).map((entry) => entry.result.contentItems?.[0]?.text ?? '');
+  assert.equal((await codex())[0], 'NO_SUCH_TOOL');
+  const threads = async (): Promise<string[]> =>
+    (
+      (await lab.lines('d-2-beta', 'threads.jsonl')) as { method: string }[]
+    ).map((entry) => entry.method);
+  assert.deepEqual(await threads(), ['start']);
+  // The person adds a key and a spend limit in Compute, then answers.
   on = true;
-  await lab.lab.answerCall('c-1', 0);
-  // Its process ends, and its conversation resumes with the pod tools.
-  await until(async () =>
-    (await lab.inputs('d-1-alpha')).some((input) =>
-      input.includes('[call] The person chose "I added them" on c-1.'),
-    ),
-  );
-  assert.deepEqual(
+  const calls = lab.lab.view()?.state.calls ?? [];
+  for (const call of calls) await lab.lab.answerCall(call.id, 0);
+  // Each agent's next pod request reaches Verifold: the lab's first pod is a call.
+  const first = (text: string): boolean =>
+    text.startsWith("The lab's first GPU pod waits for the person");
+  await until(async () => (await claudeResults(lab, 'd-1-alpha')).some(first));
+  await until(async () => (await codex()).some(first));
+  // Claude Code resumed its conversation with the new tools; Codex started a new thread for them.
+  assert.equal(
     (await lab.lines('d-1-alpha', 'launches.jsonl')).at(-1),
     'resume',
   );
-  assert.match(await tools(), /mcp__verifold__verifold_request_pod/);
+  assert.deepEqual(await threads(), ['start', 'start']);
+  // An answer that changes no tool keeps the Codex thread.
+  const pod = lab.lab
+    .view()
+    ?.state.calls.find((call) => call.by === 'a-2' && call.kind === 'cost');
+  await lab.lab.answerCall(pod?.id, 1);
+  await delay(400);
+  assert.deepEqual(await threads(), ['start', 'start']);
 });
 
 await test('a scope call opens or stops a direction, and its undo reverses it', async (t) => {
@@ -5830,7 +5953,7 @@ await test('calls and their undo windows survive a restart, and an undo after it
     },
   });
   await lab.script('d-1-alpha', [{ calls: [more('First?'), more('Second?')] }]);
-  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }], { hours: 1 });
   await until(() => lab.lab.view()?.state.calls.length === 2);
   await lab.lab.answerCall('c-1', 0);
   await lab.lab.answerCall('c-2', 0);
@@ -5853,13 +5976,14 @@ await test('calls and their undo windows survive a restart, and an undo after it
       ['c-2', 'answered', 'hours'],
     ],
   );
-  assert.equal(lab.lab.view()?.state.budget?.hours, 4);
+  assert.equal(lab.lab.view()?.state.budget?.hours, 5);
   await assert.rejects(
     lab.lab.undoCall('c-2'),
     /The time to undo c-2 ended at/,
   );
+  // c-2 changed the budget after c-1, so the undo takes c-1's hours off.
   await lab.lab.undoCall('c-1');
-  assert.equal(lab.lab.view()?.state.budget?.hours, 2);
+  assert.equal(lab.lab.view()?.state.budget?.hours, 3);
   // An answer that Verifold stopped while it applied it has no undo, and the board says so.
   await lab.restart(async () => {
     const file = join(lab.root, '.verifold', 'lab.json');
@@ -5883,4 +6007,80 @@ await test('calls and their undo windows survive a restart, and an undo after it
       ?.posts.some((post) => post.text.startsWith('c-2: Verifold stopped')),
   );
   await assert.rejects(lab.lab.undoCall('c-2'), /c-2 has no answer to undo\./);
+});
+
+await test('answers of pods survive the cut of old calls, and a Continue that Verifold did not finish applying asks again', async (t) => {
+  const lab = await fixture(t, { hourMs: 300 });
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
+  await until(() => lab.lab.view()?.state.calls[0]?.state === 'open', 10_000);
+  const deadline = lab.lab.view()?.state.calls[0]?.deadline;
+  await lab.restart(async () => {
+    const file = join(lab.root, '.verifold', 'lab.json');
+    const saved = JSON.parse(await readFile(file, 'utf8')) as {
+      calls: Record<string, unknown>[];
+    };
+    const asked = saved.calls[0] ?? {};
+    const at = new Date().toISOString();
+    const pod = {
+      ...asked,
+      id: 'c-1',
+      kind: 'cost',
+      deadline: null,
+      options: [
+        {
+          label: 'Rent it',
+          usd: 1,
+          minutes: null,
+          effect: {
+            type: 'pod',
+            gpuType: 'NVIDIA A40',
+            hours: 1,
+            secrets: [],
+          },
+        },
+        { label: 'No', usd: 0, minutes: null, effect: null },
+      ],
+      state: 'answered',
+      answer: { option: 0, at },
+      applied: { type: 'pod', lease: 'lease-1' },
+      note: 'Verifold started lease-1.',
+    };
+    const old = Array.from({ length: 500 }, (_, index) => ({
+      ...asked,
+      id: `c-${index + 2}`,
+      state: 'withdrawn',
+      note: 'Old.',
+    }));
+    // The answer to Continue was saved, but not what it changed.
+    const continued = {
+      ...asked,
+      id: 'c-502',
+      state: 'answered',
+      answer: { option: 0, at },
+      applied: null,
+      note: null,
+    };
+    saved.calls = [pod, ...old, continued];
+    await writeFile(file, JSON.stringify(saved));
+  });
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.equal(calls[0]?.id, 'c-1');
+  assert.equal(
+    calls.find((call) => call.id === 'c-2'),
+    undefined,
+  );
+  assert.match(
+    calls.find((call) => call.id === 'c-502')?.note ?? '',
+    /^Verifold stopped while it applied this answer/,
+  );
+  // That answer does not stand, so the deadline asks again.
+  await until(() =>
+    Boolean(
+      lab.lab
+        .view()
+        ?.state.calls.some(
+          (call) => call.state === 'open' && call.deadline === deadline,
+        ),
+    ),
+  );
 });

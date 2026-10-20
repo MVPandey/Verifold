@@ -231,7 +231,7 @@ export const labPodToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_request_pod',
     description:
-      "Ask for a GPU pod lease for your direction: one GPU of an allowed type, for a number of hours. Pods cost the person money, so ask only when your next runs need a GPU. Verifold refuses a request that does not fit the person's limits. A request inside the limits starts at once, unless the person approves each pod. The reply says which. Verifold wakes you when the pod is ready.",
+      "Ask for a GPU pod lease for your direction: one GPU of an allowed type, for a number of hours. Pods cost the person money, so ask only when your next runs need a GPU. Verifold refuses a request that does not fit the person's limits. The lab's first pod is a call to the person: Verifold asks them and wakes you with the answer. After they approve one, a request inside the limits starts at once, unless the person approves each pod. The reply says which. Verifold wakes you when the pod is ready.",
     inputSchema: {
       type: 'object',
       properties: {
