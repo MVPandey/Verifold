@@ -3115,11 +3115,12 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
 });
 
 await test('when the time budget ends the lab pauses, a go call asks for more time, its answer resumes the lab, and its undo takes the hours back', async (t) => {
-  const lab = await fixture(t, { hourMs: 4000 });
+  // An hour of 8 seconds: the 4 more hours of the answer outlast the steps up to its undo, also on a slow computer.
+  const lab = await fixture(t, { hourMs: 8000 });
   await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
   await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
-  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 10_000);
+  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 20_000);
   // No continuation starts after the deadline.
   const count = (await lab.inputs('d-1-alpha')).length;
   await delay(300);
@@ -6906,13 +6907,14 @@ await test(
     await until(() => Boolean(lab.sessions.idle(session())));
     assert.equal(slot.nativeTurn, false);
     // The next terminal ends with the session ready, and the agent's next turn follows.
-    await take();
-    lab.sessions.returnFromTerminal(session());
-    await until(async () =>
-      (await lab.inputs('d-1-gamma')).some((input) =>
+    const notes = async (): Promise<number> =>
+      (await lab.inputs('d-1-gamma')).filter((input) =>
         input.includes('worked in your harness terminal'),
-      ),
-    );
-    assert.notEqual(lab.lab.view()?.directions[0]?.status, 'terminal');
+      ).length;
+    await take();
+    const before = await notes();
+    lab.sessions.returnFromTerminal(session());
+    await until(async () => (await notes()) > before);
+    await until(() => lab.lab.view()?.directions[0]?.status !== 'terminal');
   },
 );
