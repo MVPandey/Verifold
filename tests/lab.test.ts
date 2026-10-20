@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
-import { Lab, labLimits } from '../src/cli/lab.ts';
+import { Lab, labLimits, type LabSessions } from '../src/cli/lab.ts';
 import { RunTeam } from '../src/cli/team.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
@@ -26,7 +26,11 @@ import { renderDesk } from '../src/cli/desk-view.ts';
 import { renderLab } from '../src/cli/desk-lab.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
-import { readRecord, SessionManager } from '../src/cli/session.ts';
+import {
+  readRecord,
+  SessionManager,
+  type SessionView,
+} from '../src/cli/session.ts';
 import { archiveRun, restoreRun } from '../src/cli/archive.ts';
 import { runCli, terminalInput, type CliIO } from '../src/cli/commands.ts';
 import { startDesk } from '../src/cli/desk.ts';
@@ -1101,7 +1105,8 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
   t.after(() => shared.close());
   // A lab start that fails its own check leaves the run free.
   await assert.rejects(shared.start(''), /Write the question/);
-  assert.equal(await team.team(), null);
+  assert.equal(await team.refusal('lab'), null);
+  assert.equal(await team.refusal('coordinator'), null);
   // The lab and the coordinator start at the same time: the first one under the lock wins, and the other is refused.
   const [started, led] = await Promise.allSettled([
     shared.start('A question.'),
@@ -1113,7 +1118,7 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
     String(led.status === 'rejected' ? led.reason : ''),
     /A lab works on this run/,
   );
-  assert.equal(await team.team(), 'lab');
+  assert.equal(await team.refusal('lab'), 'The lab already runs.');
   // No task, research step, or research message works on a lab's run.
   await assert.rejects(
     tasks.create({
@@ -1149,6 +1154,105 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
     researchBusy: () => false,
   });
   assert.match((await other.refusal('lab')) ?? '', /coordinator's team/);
+  // Only a lab start reads the coordinator's records: the others need only the lab's.
+  let reads = 0;
+  const counted = new RunTeam({
+    lab: () => false,
+    coordinator: () => {
+      reads += 1;
+      return Promise.resolve(false);
+    },
+    researchBusy: () => false,
+  });
+  await counted.refusal('coordinator');
+  await counted.refusal('research');
+  assert.equal(reads, 0);
+  await counted.refusal('lab');
+  assert.equal(reads, 1);
+});
+
+await test('a lab start that failed in the background shows on Home, and a running open marks itself for the page', async (t) => {
+  const lab = await fixture(t);
+  const at = new Date().toISOString();
+  const snapshot = await readDeskSnapshot(lab.root);
+  // The offer can be gone, for example when research took the run meanwhile: the failure still shows.
+  const home = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    labCanStart: false,
+    labWorks: [
+      {
+        action: 'lab-start',
+        label: 'Starting the lab',
+        at,
+        error: 'Research is running.',
+      },
+    ],
+  }).html;
+  assert.match(
+    home,
+    /data-lab-failed="lab-start">Starting the lab did not finish: Research is running\./,
+  );
+  assert.doesNotMatch(home, /data-action="lab-start"/);
+  // The page clears the open form once this mark is gone and no failure shows.
+  await lab.lab.start('A question.');
+  const opening = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+    lab: lab.lab.view(),
+    labWorks: [
+      {
+        action: 'lab-direction-add',
+        label: 'Opening "Alpha"',
+        at,
+        error: null,
+      },
+    ],
+  }).html;
+  assert.match(
+    opening,
+    /data-lab-work="lab-direction-add">Opening (&quot;|")Alpha/,
+  );
+});
+
+await test('two research messages at once start one step, and neither is refused', async (t) => {
+  const lab = await fixture(t);
+  await changeWorkspace(lab.root, (current) => ({
+    ...current!,
+    research: { topic: 'Q?', autonomy: 'guided', phase: 'needs-plan' },
+  }));
+  const posted: unknown[] = [];
+  let starts = 0;
+  const research: ResearchRunner = new ResearchRunner(lab.root, {
+    signal: new AbortController().signal,
+    io: {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+    },
+    team: new RunTeam({
+      lab: () => false,
+      coordinator: () => Promise.resolve(false),
+      researchBusy: () => research.busy,
+    }),
+    // The step fails at once: this test needs only how it starts.
+    harness: () => {
+      starts += 1;
+      return Promise.reject(new Error('No harness in this test.'));
+    },
+    inbox: {
+      post: (text) => {
+        posted.push(text);
+        return Promise.resolve();
+      },
+      take: () => Promise.resolve([]),
+    },
+  });
+  await Promise.all([research.message('First.'), research.message('Second.')]);
+  await research.settled();
+  // Both messages wait for research, in whichever order they arrived.
+  assert.deepEqual([...posted].sort(), ['First.', 'Second.']);
+  assert.ok(starts <= 1, `${starts} steps started`);
 });
 
 await test('Home in a lab still shows what needs the person, and the transcript of each agent', async (t) => {
@@ -1471,6 +1575,16 @@ interface LabInside {
     direction: unknown,
     made: { readonly commit: string; readonly order: number },
   ): Promise<boolean>;
+  update(
+    id: string,
+    change: (agent: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void>;
+  begin(id: string, read: null): void;
+  rt(id: string): {
+    turning: boolean;
+    turn: number;
+    launch: { readonly at: number; turns: number } | null;
+  };
 }
 
 await test('directions take turns when they outnumber the slots, and an agent at its hourly turns gives its slot', async (t) => {
@@ -1518,7 +1632,7 @@ await test('directions take turns when they outnumber the slots, and an agent at
   assert.deepEqual(await counts(), before);
 });
 
-await test('a turn whose process stops brings its posts again, and the new conversation reads them', async (t) => {
+await test('a turn whose process stops brings its posts again, and the resumed conversation reads them', async (t) => {
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [
     { calls: [] },
@@ -1532,12 +1646,40 @@ await test('a turn whose process stops brings its posts again, and the new conve
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
   await lab.lab.post({ text: '@claude-1 check layer 12.' });
-  // The turn with the post stops. The agent starts a new conversation, and its next digest carries the post again.
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 5, 8000);
+  // The turn with the post stops. The harness keeps the conversation, so the
+  // agent resumes it, and its next digest carries the post again.
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
   const inputs = await lab.inputs('d-1-alpha');
   assert.match(inputs[2] ?? '', /check layer 12/);
-  assert.match(inputs[3] ?? '', /The question:/);
-  assert.match(inputs[4] ?? '', /check layer 12/);
+  assert.match(inputs[3] ?? '', /check layer 12/);
+  assert.match(inputs[3] ?? '', /started it again with your conversation/);
+  assert.doesNotMatch(inputs.join('\n'), /The question:[\s\S]*The question:/);
+  assert.deepEqual((await lab.lines('d-1-alpha', 'launches.jsonl')).slice(-1), [
+    'resume',
+  ]);
+});
+
+await test('a conversation that cannot resume starts new, without the notes about the earlier one', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [{ calls: [{ name: 'EXIT' }] }]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The process stops. Before the lab starts it again, its session record goes, so nothing can resume.
+  await until(
+    () => (lab.lab.view()?.directions[0]?.agent.restarts.length ?? 0) === 1,
+  );
+  await delay(50);
+  await rm(
+    join(
+      lab.root,
+      '.verifold',
+      'sessions',
+      `${lab.lab.view()?.directions[0]?.agent.session}.json`,
+    ),
+  );
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 8000);
+  const inputs = await lab.inputs('d-1-alpha');
+  assert.match(inputs[1] ?? '', /The question:/);
+  assert.doesNotMatch(inputs.join('\n'), /started it again/);
 });
 
 await test('a refused read brings no digest again, and a repeated unread read gets its first answer', async (t) => {
@@ -1663,6 +1805,9 @@ await test('a lab agent resumes only through the lab, and a full pool parks an a
   );
   // The commit after its turn ends too.
   await delay(200);
+  // The desk shows the person's Resume and Start again: the agent can give its slot.
+  assert.equal(lab.sessions.full, true);
+  assert.equal(lab.lab.canYield(), true);
   // The person's session needs the only slot: the agent parks and keeps its conversation.
   const person = await lab.sessions.start({
     host: 'claude',
@@ -1958,4 +2103,112 @@ await test('an agent whose first prompt fails waits, and the agent after it star
   await until(async () => (await lab.inputs('d-2-beta')).length >= 1);
   assert.equal((await lab.inputs('d-1-alpha')).length, 0);
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+});
+
+await test('a commit that fails is not a turn without change: the agent hears why, and its turns go on', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  // Git cannot take the folder's index, so each commit after a turn fails.
+  const lock = join(lab.root, '.git', 'worktrees', 'd-1-alpha', 'index.lock');
+  await writeFile(lock, '');
+  await lab.lab.resume();
+  // Turns that change nothing would wait a minute after the second one. These do not count.
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
+  assert.match(
+    (await lab.inputs('d-1-alpha'))[1] ?? '',
+    /could not commit your folder after your last turn/,
+  );
+  assert.equal(lab.lab.view()?.directions[0]?.agent.idleStreak, 0);
+  await rm(lock);
+});
+
+await test('a digest of long posts stays within what a turn takes: long posts are cut and say where the rest is', async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
+  await lab.lab.pause();
+  // Each quote doubles in the digest's JSON quoting: 20 such posts would pass 100,000 characters.
+  const long = '"'.repeat(boardLimits.personText);
+  for (let index = 0; index < 20; index += 1)
+    await lab.lab.post({ text: long });
+  await lab.lab.resume();
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha')).some((input) =>
+        input.includes('cut: verifold_board with view thread'),
+      ),
+    8000,
+  );
+  for (const input of await lab.inputs('d-1-alpha'))
+    assert.ok(input.length < 100_000, `A turn of ${input.length} characters.`);
+});
+
+await test('a park that ends after a resume and a new turn leaves that turn alone, and Start over waits for the parks', async (t) => {
+  const fx = await fixture(t);
+  let parks = 0;
+  let release: () => void = () => {};
+  let gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const sessions: LabSessions = {
+    full: false,
+    view: () =>
+      ({ live: true, record: { status: 'running' } }) as unknown as SessionView,
+    idle: () => false,
+    startAgent: () => Promise.reject(new Error('Not in this test.')),
+    resumeAgent: () => Promise.resolve(),
+    park: async () => {
+      parks += 1;
+      await gate;
+      return true;
+    },
+    continueTask: () => {},
+    steer: () => false,
+    endTask: () => {},
+  };
+  const lab = new Lab(fx.root, { sessions, timing, runs: false });
+  t.after(() => lab.close());
+  await lab.start('A question.');
+  await lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  const inside = lab as unknown as LabInside;
+  await inside.update('a-1', (agent) => ({
+    ...agent,
+    session: '20260101T000000000Z-deadbeef',
+  }));
+  inside.begin('a-1', null);
+  inside.rt('a-1').launch = { at: Date.now(), turns: 0 };
+  // The park of turn 1 waits. Meanwhile the person resumes, and turn 2 starts.
+  const pausing = lab.pause();
+  await until(() => parks === 1);
+  await lab.resume();
+  inside.begin('a-1', null);
+  release();
+  await pausing;
+  assert.equal(inside.rt('a-1').turning, true);
+  assert.equal(inside.rt('a-1').turn, 2);
+  // A park of the turn that still runs stops it: its digest comes again.
+  gate = Promise.resolve();
+  await lab.pause();
+  assert.equal(inside.rt('a-1').turning, false);
+  // Start over waits for the parks of a pause that still runs.
+  await lab.resume();
+  inside.begin('a-1', null);
+  gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  parks = 0;
+  const second = lab.pause();
+  await until(() => parks === 1);
+  let suspended = false;
+  const suspending = lab.suspend().then(() => {
+    suspended = true;
+  });
+  await delay(100);
+  assert.equal(suspended, false);
+  release();
+  await second;
+  await suspending;
+  assert.equal(suspended, true);
 });

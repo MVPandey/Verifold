@@ -38,7 +38,7 @@ import { TaskManager, type TaskPlace } from './tasks.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
-import { Lab, labOnDisk } from './lab.ts';
+import { Lab, labOnDisk, startLabOn } from './lab.ts';
 import { labWorks, RunTeam } from './team.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
@@ -668,6 +668,7 @@ async function serveDesk(
           await memory.write().catch(() => {
             /* The coordinator still starts. A task input that is missing is refused with its name. */
           });
+          // A start that the run's guard refuses throws its reason, which research shows, and the messages stay.
           await owned.coordinator?.startForDirection(await loadWorkspace(root));
           // The messages that waited for research wait for the coordinator now, also one that the person starts later.
           await tasks.passToCoordinator();
@@ -761,7 +762,6 @@ async function serveDesk(
             compute,
             memory,
             lab,
-            team,
           );
         else {
           desk = await startDesk(
@@ -775,7 +775,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
-            { stop: () => quit.abort(), reuse: run.owner?.desk, lab, team },
+            { stop: () => quit.abort(), reuse: run.owner?.desk, lab },
           );
           await announce(
             desk,
@@ -913,22 +913,8 @@ async function startLab(
       );
       return;
     }
-    // The setup question stays with the project, so Home offers it again after Start over.
-    if (!workspace.research)
-      await changeWorkspace(root, (current) => {
-        if (!current) throw new Error('Run init first.');
-        return current.research
-          ? current
-          : {
-              ...current,
-              research: {
-                topic: asked,
-                autonomy: research?.autonomy ?? 'guided',
-                phase: 'needs-plan',
-              },
-            };
-      });
-    await lab.start(asked);
+    // The same start as the desk's: the setup question stays with the project.
+    await startLabOn(root, lab, asked, research?.autonomy);
     io.progress?.(
       'The lab started. Open a direction in the desk: each one gets its own agent.',
     );

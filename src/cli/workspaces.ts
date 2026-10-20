@@ -148,9 +148,11 @@ function git(
   });
 }
 
-function tooMany(): WorkspaceError {
+function tooMany(lab = false): WorkspaceError {
   return new WorkspaceError(
-    `The task folder changed more than ${limits.files} files, so Verifold saved no version. Move generated files out of the writable paths, or list them in a .gitignore there.`,
+    lab
+      ? `Your direction's folder changed more than ${limits.files} files, so Verifold could not commit it. Move generated files out of the folder, or list them in a .gitignore there. Until then, other agents read your previous commit.`
+      : `The task folder changed more than ${limits.files} files, so Verifold saved no version. Move generated files out of the writable paths, or list them in a .gitignore there.`,
   );
 }
 
@@ -438,7 +440,9 @@ async function ownExclusions(
  * the files that the task's own `.gitignore` ignores stay out. Files above the
  * size limit stay out of the commit and are listed. `named` files count even
  * when a `.gitignore` ignores them. With `empty: false`, a workspace without
- * changes keeps its commit.
+ * changes keeps its commit. A lab folder (`lab`) also leaves out files with
+ * more than one hard link: Git reads files outside any sandbox, so a link to
+ * a file outside the folder must not reach a commit that agents read.
  */
 async function commitAll(
   target: string,
@@ -447,8 +451,14 @@ async function commitAll(
   options: {
     readonly named?: readonly string[];
     readonly empty?: boolean;
+    readonly lab?: boolean;
   } = {},
-): Promise<{ readonly commit: string; readonly skipped: readonly string[] }> {
+): Promise<{
+  readonly commit: string;
+  readonly skipped: readonly string[];
+  readonly linked: readonly string[];
+}> {
+  const lab = options.lab ?? false;
   // Git refuses a path that does not exist. A writable folder can be new.
   const forced: string[] = [];
   for (const path of writable)
@@ -484,15 +494,20 @@ async function commitAll(
   const pending = new Set(
     all.filter((entry) => !inScope(entry.slice(3).replace(/\/$/, ''), folders)),
   );
-  if (pending.size > limits.files) throw tooMany();
+  if (pending.size > limits.files) throw tooMany(lab);
   const skipped: string[] = [];
+  const linked: string[] = [];
   for (const entry of pending) {
     const file = entry.slice(3);
     const stats = await lstat(join(target, file)).catch(() => null);
-    if (stats?.isFile() && stats.size > limits.fileBytes) skipped.push(file);
+    if (lab && stats?.isFile() && stats.nlink > 1) linked.push(file);
+    else if (stats?.isFile() && stats.size > limits.fileBytes)
+      skipped.push(file);
   }
   const exclude = [
-    ...[...skipped, ...own.seen].map((file) => `:(exclude,literal)${file}`),
+    ...[...skipped, ...linked, ...own.seen].map(
+      (file) => `:(exclude,literal)${file}`,
+    ),
     ...caches,
   ];
   await git(target, ['add', '--all', '--', '.', ...exclude]);
@@ -509,7 +524,10 @@ async function commitAll(
   const named: string[] = [];
   for (const path of options.named ?? []) {
     const stats = await lstat(join(target, path)).catch(() => null);
-    if (stats?.isFile() && stats.size <= limits.fileBytes) named.push(path);
+    if (lab && stats?.isFile() && stats.nlink > 1) {
+      if (!linked.includes(path)) linked.push(path);
+    } else if (stats?.isFile() && stats.size <= limits.fileBytes)
+      named.push(path);
   }
   if (named.length)
     await git(target, [
@@ -522,10 +540,10 @@ async function commitAll(
   const staged = await list(target, ['diff', '--cached', '--name-only', '-z']);
   if (staged.length > limits.files) {
     await git(target, ['reset', '--quiet']);
-    throw tooMany();
+    throw tooMany(lab);
   }
   if (!staged.length && options.empty === false)
-    return { commit: await head(target), skipped };
+    return { commit: await head(target), skipped, linked };
   await git(target, [
     'commit',
     '--quiet',
@@ -534,7 +552,7 @@ async function commitAll(
     '-m',
     message,
   ]);
-  return { commit: await head(target), skipped };
+  return { commit: await head(target), skipped, linked };
 }
 
 /**
@@ -630,20 +648,22 @@ export function commitVersion(
  * Commit everything in a lab direction's folder, so other agents can read its
  * files at this commit. The `named` files, such as the proof of a post, count
  * even when the project ignores them. A folder without changes keeps its
- * commit. Returns the commit.
+ * commit. Files with more than one hard link stay out. Returns the commit and
+ * the files that stayed out for that reason.
  */
 export async function snapshot(
   root: string,
   workspace: Workspace,
   message: string,
   named: readonly string[] = [],
-): Promise<string> {
-  return (
-    await commitAll(join(root, workspace.path), ['.'], message, {
-      named,
-      empty: false,
-    })
-  ).commit;
+): Promise<{ readonly commit: string; readonly linked: readonly string[] }> {
+  const { commit, linked } = await commitAll(
+    join(root, workspace.path),
+    ['.'],
+    message,
+    { named, empty: false, lab: true },
+  );
+  return { commit, linked };
 }
 
 /**
@@ -790,9 +810,10 @@ export async function folderState(
  * Verifold never opens the path itself. Git adds it to a private index that
  * is not the folder's own. Git does not follow a symbolic link: a link is
  * stored as a link, and a path through a linked folder is refused. So an
- * agent cannot make Verifold read a file outside its folder by a link. Null
- * when the path is not a regular file in the folder, or it is larger than
- * Verifold commits.
+ * agent cannot make Verifold read a file outside its folder by a link. A
+ * hard link is not a link to Git, so a file with more than one hard link is
+ * refused. Null when the path is not a regular file in the folder, or it is
+ * larger than Verifold commits.
  */
 export async function readCurrent(
   root: string,
@@ -800,9 +821,13 @@ export async function readCurrent(
   path: string,
 ): Promise<Buffer | null> {
   const target = join(root, workspace.path);
-  // A size check only: the content comes from Git, never from this path.
+  // A size and link check only: the content comes from Git, never from this path.
   const stats = await lstat(join(target, path)).catch(() => null);
   if (!stats?.isFile() || stats.size > limits.fileBytes) return null;
+  if (stats.nlink > 1)
+    throw new WorkspaceError(
+      `${path} has more than one hard link, so Verifold does not read it. Write a separate copy of the file instead.`,
+    );
   const index = join(
     tmpdir(),
     `verifold-index-${randomBytes(8).toString('hex')}`,
