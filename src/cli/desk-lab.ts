@@ -83,6 +83,13 @@ export function renderLabWork(
     .join('');
 }
 
+/** A post's kind in words. The person's question is a message. */
+function kindLabel(post: Post): string {
+  return post.author === 'person' && post.kind === 'question'
+    ? 'Message'
+    : kindWords[post.kind];
+}
+
 const kindWords: Record<PostKind, string> = {
   plan: 'Plan of record',
   claim: 'Claim',
@@ -516,11 +523,10 @@ function postHtml(
 ): string {
   const { runs } = view;
   const mark = checkable.has(post.kind) ? checkMark(post, view, ledger) : null;
-  const person = post.author === 'person';
   const note = post.kind === 'status';
   const kind = note
     ? ''
-    : ` <span class="chip kind-${post.kind}">${person && post.kind === 'question' ? 'Message' : kindWords[post.kind]}</span>`;
+    : ` <span class="chip kind-${post.kind}">${kindLabel(post)}</span>`;
   const plan =
     post.kind === 'plan' && view.state.plan?.post === post.id
       ? planTable(view, name)
@@ -739,10 +745,8 @@ export function renderLab(
     (entry) => entry.direction.state === 'open',
   );
   const gpu = options.gpu ?? null;
-  // The page keeps the two costs that the person last saw, so a later visit can say what the lab spent since.
-  const spent = `${view.claudeUsd.toFixed(6)},${(gpu?.spent ?? 0).toFixed(6)}`;
   return `<div class="lab-screen">
-  <header class="lab-head" data-spent="${spent}"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, gpu))}</p></div><span class="actions">${searchButton}${pause}</span></header>
+  <header class="lab-head"><div class="lab-head-text"><h1 id="view-title" tabindex="-1">${e(state.question)}</h1><p class="lab-facts">Day ${labDay(state.startedAt)}${due} · ${e(costLine(view, gpu))}</p></div><span class="actions">${searchButton}${pause}</span></header>
   ${runs ? '' : '<p class="notice">This desk runs one session, so it only shows the lab. Run verifold in the project folder to work in the lab.</p>'}${paused}${renderLabWork(options.works ?? [], clock)}
   ${options.away ? awayDigest(view, options.away, gpu, clock) : ''}${needsLine(options.needs ?? [])}${undoLines(view)}${options.extra ?? ''}
   <section class="lab-section" aria-labelledby="directions-title"><h2 id="directions-title" class="lab-label">Directions</h2>
@@ -1049,7 +1053,7 @@ export function diffPanel(
 
 /** Search opens in the side panel. ⌘K, or Ctrl+K off a Mac, opens it from anywhere in the desk. */
 const searchButton =
-  '<button type="button" class="quiet" data-panel="search" data-focus="lab-search" aria-keyshortcuts="Meta+K Control+K">Search <kbd class="search-key"><span class="key-mac">⌘K</span><span class="key-other">Ctrl+K</span></kbd></button>';
+  '<button type="button" class="quiet" id="lab-search-open" data-panel="search" data-focus="lab-search" aria-keyshortcuts="Meta+K Control+K">Search <kbd class="search-key"><span class="key-mac">⌘K</span><span class="key-other">Ctrl+K</span></kbd></button>';
 
 /** Hits that a search shows at most. */
 const searchLimit = 50;
@@ -1120,10 +1124,7 @@ export function searchPanel(
     const shown = new Set(boardPosts(view).map((post) => post.id));
     for (const post of view.posts) {
       const author = authorName(view, post.author);
-      const kind =
-        post.author === 'person' && post.kind === 'question'
-          ? 'Message'
-          : kindWords[post.kind];
+      const kind = kindLabel(post);
       if (!has(`${post.id} ${post.kind} ${kind} ${author} ${post.text}`))
         continue;
       const id = shown.has(post.id)
@@ -1232,8 +1233,12 @@ function awayDigest(
     leading: 2,
     open: 3,
   };
-  const changed = view.state.directions
-    .flatMap((direction) => {
+  const disputed = new Set(
+    openDisputes(view).map((dispute) => dispute.target.id),
+  );
+  // Each line links to its row, so only the directions that have a row.
+  const changed = view.directions
+    .flatMap(({ direction }) => {
       const news = posts.filter(
         (post) => post.direction === direction.id && post.kind !== 'status',
       ).length;
@@ -1250,10 +1255,11 @@ function awayDigest(
       if (!noted && !opened && !ended) return [];
       const row = `<a href="#row-${e(direction.id)}">${e(direction.title)}</a>`;
       const { verdict, evidence } = direction;
+      const dispute = evidence !== null && disputed.has(evidence.post);
       // The agent's evidence goes in brackets, so its words keep their own case.
       const said = [
         verdict !== 'open' && evidence
-          ? `${verdictText(verdict, false)} (${e(evidence.text.replace(/[.!?…]+$/u, ''))}).`
+          ? `${verdictText(verdict, dispute)} (${e(evidence.text.replace(/[.!?…]+$/u, ''))}).`
           : opened
             ? `New. ${direction.openedBy === 'person' ? 'You' : e(authorName(view, direction.openedBy))} opened it.`
             : 'Not settled yet.',
@@ -1267,14 +1273,19 @@ function awayDigest(
       ]
         .filter(Boolean)
         .join(' ');
-      const glyph = ended
-        ? '×'
-        : verdict === 'open' && opened
+      // The mark is the row's: a direction that ended keeps its verdict's mark.
+      const glyph = dispute
+        ? verdictMarks.disputed
+        : verdict === 'open' && opened && !ended
           ? '+'
           : verdictMarks[verdict];
       return [
         {
-          rank: ended ? 5 : missed ? 2 : order[verdict] + (opened ? 1 : 0),
+          rank: ended
+            ? 5
+            : dispute || missed
+              ? 0
+              : order[verdict] + (opened ? 1 : 0),
           html: `<li><span class="away-mark" aria-hidden="true">${glyph}</span><span>${row}: ${said}</span></li>`,
         },
       ];
@@ -1302,7 +1313,7 @@ function awayDigest(
       ? ''
       : `Spent since then: ≈${usd(Math.max(0, claude) + Math.max(0, pods))} (Claude Code ≈${usd(Math.max(0, claude))}${gpu ? `, GPU ${usd(Math.max(0, pods))}` : ''}).`;
   const quiet = !changed.length && !counts.length;
-  return `<section class="lab-away" aria-labelledby="away-title"><div class="away-head"><h2 id="away-title">While you were away</h2><button type="button" class="link" data-away-dismiss>Dismiss</button></div>
+  return `<section class="lab-away" aria-labelledby="away-title"><div class="away-head"><h2 id="away-title">While you were away</h2><button type="button" class="link" data-action="lab-away-dismiss">Dismiss</button></div>
   <p class="fine">Since ${e(clock(away.since))}${fresh ? `. The lab started at ${e(clock(view.state.startedAt))}` : ''}.</p>
   ${quiet ? '<p>Nothing changed.</p>' : ''}${
     changed.length

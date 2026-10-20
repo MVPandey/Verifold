@@ -6598,6 +6598,20 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
   const evidence =
     lab.lab.view()?.posts.find((post) => post.kind === 'evidence')?.id ?? '';
   assert.match(evidence, /^p-\d+$/);
+  // The person's last look at this lab was 2 hours ago.
+  const lookFile = join(lab.root, '.verifold', 'lab', 'look.json');
+  const left = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  await writeFile(
+    lookFile,
+    JSON.stringify({
+      schemaVersion: 1,
+      lab: lab.lab.view()?.state.startedAt,
+      at: left,
+      claude: 0,
+      gpu: 0,
+      away: null,
+    }),
+  );
   const stop = new AbortController();
   const desk = await startDesk(
     lab.root,
@@ -6721,9 +6735,34 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     '/api/view?panel=search&q=a&q=b',
     `/api/view?panel=search&q=${'x'.repeat(101)}`,
     '/api/view?panel=search&q=a%07b',
-    '/api/view?since=2026-10-20T09:00:00.000Z&spent=1',
+    '/api/view?look=2',
+    '/api/view?look=1&look=1',
   ])
     assert.equal((await get(path)).status, 400, path);
+  // A view that the person cannot see changes nothing. The first look after 2 hours lists what changed, until the person dismisses it.
+  const viewed = async (look: boolean): Promise<string> =>
+    (
+      (await (await get(`/api/view${look ? '?look=1' : ''}`)).json()) as {
+        html: string;
+      }
+    ).html;
+  assert.doesNotMatch(await viewed(false), /While you were away/);
+  assert.match(await viewed(true), /While you were away/);
+  assert.match(await viewed(false), /While you were away/);
+  await until(async () =>
+    (await readFile(lookFile, 'utf8')).includes(`"since":"${left}"`),
+  );
+  const saved = JSON.parse(await readFile(lookFile, 'utf8')) as {
+    at: string;
+  };
+  assert.ok(Date.now() - Date.parse(saved.at) < 60_000);
+  const dismissed = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'lab-away-dismiss', key: 'a7'.repeat(16) }),
+  });
+  assert.equal(dismissed.status, 200);
+  assert.doesNotMatch(await viewed(true), /While you were away/);
   // With the token, the search finds the post in the panel.
   const found = (
     (await (await get('/api/view?panel=search&q=NOTES')).json()) as {
@@ -7252,6 +7291,10 @@ await test('while you were away: a line for each direction with news, the counts
       directions,
       calls: [screenCall(hours(1))],
     },
+    directions: view.directions.map((entry, index) => ({
+      ...entry,
+      direction: directions[index] ?? entry.direction,
+    })),
   };
   const gpu = { spent: 1.5, limit: 20 };
   const clock = (value: string): string => value;
@@ -7265,7 +7308,7 @@ await test('while you were away: a line for each direction with news, the counts
   );
   assert.match(
     digest,
-    /<h2 id="away-title">While you were away<\/h2><button type="button" class="link" data-away-dismiss>Dismiss<\/button>/,
+    /<h2 id="away-title">While you were away<\/h2><button type="button" class="link" data-action="lab-away-dismiss">Dismiss<\/button>/,
   );
   assert.ok(digest.includes(`Since ${left}.`));
   // The most settled first: a verdict, a new direction, then one that ended.
@@ -7275,7 +7318,7 @@ await test('while you were away: a line for each direction with news, the counts
   assert.deepEqual(lines, [
     '<span class="away-mark" aria-hidden="true">↗</span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;/i&gt;</a>: Leading (acc 0.7). 2 new posts.</span>',
     '<span class="away-mark" aria-hidden="true">+</span><span><a href="#row-d-2">Helix</a>: New. You opened it.</span>',
-    '<span class="away-mark" aria-hidden="true">×</span><span><a href="#row-d-3">Frequency</a>: Not settled yet. You stopped it.</span>',
+    '<span class="away-mark" aria-hidden="true">○</span><span><a href="#row-d-3">Frequency</a>: Not settled yet. You stopped it.</span>',
   ]);
   assert.match(
     digest,
@@ -7291,10 +7334,40 @@ await test('while you were away: a line for each direction with news, the counts
     /Spent since then: ≈\$2\.50 \(Claude Code ≈\$1\.50, GPU \$1\.00\)\./,
   );
   assert.ok(!digest.includes('<i>'));
-  // The header keeps the two costs that the page saw.
+  // An open dispute on a row's evidence comes first, with the row's mark.
+  const check: Check = {
+    id: 'k-1',
+    claim: 'p-90',
+    objections: ['p-91'],
+    holdsUp: false,
+    direction: 'd-1',
+    run: 'r-9',
+    commit: 'a'.repeat(40),
+    harness: 'codex',
+    sameHarness: false,
+    agent: 'a-9',
+    handle: 'codex-9',
+    model: null,
+    state: 'queued',
+    outcome: null,
+    method: null,
+    result: null,
+    note: null,
+    queuedAt: hours(1),
+    startedAt: null,
+    endedAt: null,
+    restarts: 0,
+    session: null,
+    generation: 'g',
+    start: null,
+    blind: true,
+  };
   assert.match(
-    html,
-    /<header class="lab-head" data-spent="2\.610000,1\.500000">/,
+    renderLab({ ...seeded, checks: [check] }, clock, {
+      gpu,
+      away: { since: left, spent: { claude: 1.11, gpu: 0.5 } },
+    }),
+    /<ul class="away-lines"><li><span class="away-mark" aria-hidden="true">⚠<\/span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;\/i&gt;<\/a>: Disputed \(acc 0\.7\)\. 2 new posts\.<\/span><\/li>/,
   );
   // A baseline above today's costs fits no cost line. A lab that started since then counts from its start.
   assert.doesNotMatch(
@@ -7323,39 +7396,30 @@ await test('while you were away: a line for each direction with news, the counts
   });
   assert.match(quiet, /<p>Nothing changed\.<\/p>/);
   assert.doesNotMatch(quiet, /Spent since then/);
-  // Home shows it only with the costs of the last look. A plain return of a page shows none.
+  // Home shows the time away that the lab's owner gives it, and none without.
   const snapshot = await readDeskSnapshot(lab.root);
-  const live = { session: null, controllable: true, lab: seeded } as never;
-  const frame = parseFrame(
-    'home',
-    null,
-    left,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    '1.11,0.5',
-  );
-  assert.deepEqual(frame?.spent, { claude: 1.11, gpu: 0.5 });
-  assert.ok(frame);
+  const live = (away: unknown) =>
+    ({
+      session: null,
+      controllable: true,
+      lab: seeded,
+      labAway: away,
+    }) as never;
   assert.match(
-    renderDesk(snapshot, undefined, null, live, frame).html,
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      live({ since: left, spent: { claude: 1.11, gpu: 0.5 } }),
+    ).html,
     /While you were away/,
   );
   assert.doesNotMatch(
-    renderDesk(snapshot, undefined, null, live, {
+    renderDesk(snapshot, undefined, null, live(null), {
       view: 'home',
       panel: null,
       since: left,
     }).html,
     /While you were away/,
   );
-  for (const spent of ['1.11', '1,2,3', '-1,2', '1e3,2'])
-    assert.equal(
-      parseFrame('home', null, left, null, null, null, null, null, null, spent),
-      null,
-      spent,
-    );
 });

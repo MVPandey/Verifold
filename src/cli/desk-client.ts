@@ -34,8 +34,6 @@ let view = 'home';
 let panel = '';
 /** When the page last went to the background for 5 minutes or more. Home lists what changed after it. */
 let since: string | undefined;
-/** A lab's two costs when the person left at `since`, as its header gave them. Only a lab's return sets it. */
-let spent: string | undefined;
 let hiddenAt: number | undefined;
 /** The words of the lab's search panel. They last for this tab. */
 let searchQuery: string | undefined;
@@ -95,7 +93,6 @@ try {
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   view = sessionStorage.getItem('verifold-desk-view') ?? 'home';
   since = sessionStorage.getItem('verifold-desk-since') ?? undefined;
-  spent = sessionStorage.getItem('verifold-desk-spent') ?? undefined;
   searchQuery = sessionStorage.getItem('verifold-desk-q') ?? undefined;
   panel = sessionStorage.getItem('verifold-desk-panel') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
@@ -217,7 +214,8 @@ function viewQuery(): string {
   if (panel === 'diff' && selectedProof) query.set('proof', selectedProof);
   if (panel === 'search' && searchQuery) query.set('q', searchQuery);
   if (since) query.set('since', since);
-  if (since && spent) query.set('spent', spent);
+  // The lab's owner counts each refresh that the person can see as a look, so a return after a while lists what changed.
+  if (!document.hidden) query.set('look', '1');
   if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
 }
@@ -592,9 +590,6 @@ async function refresh(): Promise<void> {
   if (loading || stopped) return;
   clearTimeout(timer);
   loading = true;
-  // Only a refresh that the person can see from its start counts as a look at the lab.
-  const looking = !document.hidden;
-  if (looking) checkAway();
   const wanted = viewQuery();
   request = new AbortController();
   const deadline = setTimeout(() => request?.abort(), 5000);
@@ -615,8 +610,10 @@ async function refresh(): Promise<void> {
         panel = '';
         selected = undefined;
         selectedTask = undefined;
+        searchQuery = undefined;
         remember('view', undefined);
         remember('panel', undefined);
+        remember('q', undefined);
         throw new Error(
           'That item is no longer available. The desk shows Home.',
         );
@@ -640,7 +637,6 @@ async function refresh(): Promise<void> {
     if (wanted !== viewQuery() || stopped) return;
     if (reply.html !== lastHtml) await render(reply.html);
     focusPending();
-    if (looking) noteSeen();
     const title =
       'title' in reply && typeof reply.title === 'string' ? reply.title : '';
     const stage =
@@ -681,70 +677,6 @@ async function refresh(): Promise<void> {
         },
         wanted !== viewQuery() ? 0 : 2000,
       );
-  }
-}
-
-/** A person who comes back to a lab after this long sees on Home what changed. */
-const awayMs = 30 * 60_000;
-
-/** The last look of this browser at a lab, from any tab: when, and the header's two costs then. */
-function lastLook():
-  | { readonly at: number; readonly spent: string }
-  | undefined {
-  try {
-    const seen: unknown = JSON.parse(
-      localStorage.getItem('verifold-desk-lab-seen') ?? 'null',
-    );
-    if (
-      !seen ||
-      typeof seen !== 'object' ||
-      !('at' in seen) ||
-      typeof seen.at !== 'string' ||
-      !('spent' in seen) ||
-      typeof seen.spent !== 'string'
-    )
-      return undefined;
-    const at = Date.parse(seen.at);
-    return Number.isFinite(at) ? { at, spent: seen.spent } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Before a refresh that the person can see: a last look at a lab 30 minutes
- * ago or more makes Home list what changed since then, until the person
- * dismisses it. A gap in the looks counts too, such as a computer that slept
- * with the page open.
- */
-function checkAway(): void {
-  const seen = lastLook();
-  if (!seen || Date.now() - seen.at < awayMs) return;
-  since = new Date(seen.at).toISOString();
-  spent = seen.spent;
-  remember('since', since);
-  remember('spent', spent);
-}
-
-/**
- * After a refresh that the person saw: this look at the lab is the last one,
- * with the header's two costs. A last look that got old while the refresh
- * ran, as when the computer slept, counts as time away first.
- */
-function noteSeen(): void {
-  const head = content.querySelector<HTMLElement>('.lab-head[data-spent]');
-  if (document.hidden || !head?.dataset.spent) return;
-  checkAway();
-  try {
-    localStorage.setItem(
-      'verifold-desk-lab-seen',
-      JSON.stringify({
-        at: new Date().toISOString(),
-        spent: head.dataset.spent,
-      }),
-    );
-  } catch {
-    /* Without browser storage, the next visit lists nothing. */
   }
 }
 
@@ -1736,7 +1668,7 @@ document.addEventListener('click', (event) => {
     )
   )
     document.body.classList.remove('dock-open', 'dock-expanded');
-  // A post that the search found opens on Home. On a narrow screen the panel covers the board, so it closes.
+  // A post that the search found opens on Home, with the search beside it. On a narrow screen the panel covers the board, so it closes.
   const found =
     event.target instanceof Element
       ? event.target.closest<HTMLElement>('a[data-post-link]')
@@ -1746,7 +1678,7 @@ document.addEventListener('click', (event) => {
     navigate(
       {
         view: 'home',
-        ...(matchMedia('(max-width: 860px)').matches ? { panel: '' } : {}),
+        panel: matchMedia('(max-width: 860px)').matches ? '' : panel,
       },
       `#post-${CSS.escape(found.dataset.postLink)}`,
       'center',
@@ -1754,15 +1686,6 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (!(target instanceof HTMLElement)) return;
-  if (target.hasAttribute('data-away-dismiss')) {
-    since = undefined;
-    spent = undefined;
-    remember('since', undefined);
-    remember('spent', undefined);
-    pendingFocus = '#view-title';
-    void refresh();
-    return;
-  }
   if (target.matches('a.skip')) {
     event.preventDefault();
     document.getElementById('view')?.focus();
@@ -1954,7 +1877,9 @@ document.addEventListener('keydown', (event) => {
   }
   // In the search, Escape closes it. Its words stay for the next search.
   const searching =
-    event.target instanceof HTMLElement && event.target.id === 'lab-search';
+    event.target instanceof HTMLElement &&
+    event.target.id === 'lab-search' &&
+    !event.isComposing;
   if (
     !panel ||
     document.body.classList.contains('t-locked') ||
@@ -2032,7 +1957,8 @@ content.addEventListener('input', (event) => {
     event.target.id !== 'lab-search'
   )
     return;
-  const value = event.target.value.trim();
+  // The desk refuses control characters, such as a pasted tab, so they become spaces.
+  const value = event.target.value.replace(/\p{Cc}/gu, ' ').trim();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     searchQuery = value || undefined;
@@ -2045,7 +1971,8 @@ document.documentElement.classList.toggle('mac', mac);
 // ⌘K, or Ctrl+K off a Mac, opens the lab's search from anywhere in the desk. In the search it selects the words.
 document.addEventListener('keydown', (event) => {
   if (
-    event.key.toLowerCase() !== 'k' ||
+    // The key's place, so the shortcut works with any keyboard layout.
+    (event.code !== 'KeyK' && event.key.toLowerCase() !== 'k') ||
     event.altKey ||
     event.shiftKey ||
     (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey) ||
@@ -2118,18 +2045,18 @@ content.addEventListener('keydown', (event) => {
     void act(send);
 });
 // A person who comes back after 5 minutes or more sees on Home what changed while they were away.
-// A lab counts from its last look instead, after 30 minutes or more away: the refresh checks it.
+// A lab's owner keeps the person's last look itself, so this counts only without a lab.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
     return;
   }
-  const lab = content.querySelector('[data-panel="search"]') !== null;
-  if (!lab && hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
+  if (hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
     since = new Date(hiddenAt).toISOString();
     remember('since', since);
   }
   hiddenAt = undefined;
+  // A refresh at once counts the look.
   void refresh();
 });
 window.addEventListener('resize', drawMaps);
