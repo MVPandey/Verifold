@@ -1463,10 +1463,13 @@ export class Lab {
       }).catch(() => {});
       return direction.id;
     });
-    // No agent works for the direction any more, so its pods end and billing stops. The end waits for the compute's queue, outside the lab's.
+    // No agent works for the direction any more, so its pods end and billing stops, and a request that waits is withdrawn. The end waits for the compute's queue, outside the lab's.
     const compute = this.options.compute;
     for (const lease of compute?.leases.list() ?? [])
-      if (lease.directions?.includes(stopped) && isOpenLease(lease))
+      if (
+        lease.directions?.includes(stopped) &&
+        (isOpenLease(lease) || lease.state === 'requested')
+      )
         void compute?.leases
           .end(lease.id, 'person', `you stopped ${stopped}.`)
           .catch((error: unknown) =>
@@ -2391,7 +2394,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         await this.ownDirection(id, generation);
         return this.pods().describe();
       case 'verifold_request_pod': {
-        const direction = await this.ownDirection(id, generation);
+        const direction = await this.ownDirection(id, generation, true);
         return this.pods().requestPod({
           by: 'agent',
           gpu: args.gpuType,
@@ -2423,11 +2426,23 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     }
   }
 
-  /** The direction of an agent whose session works for the lab, read in the lab's queue. */
-  private ownDirection(id: string, generation: string): Promise<string> {
-    return this.serial(
-      () => (this.usable(id, generation) ?? fail(stoppedText)).direction,
-    );
+  /**
+   * The direction of an agent whose session works for the lab, read in the
+   * lab's queue. With `working`, a paused lab or one past its time budget
+   * refuses, as for a run.
+   */
+  private ownDirection(
+    id: string,
+    generation: string,
+    working = false,
+  ): Promise<string> {
+    return this.serial(() => {
+      const agent = this.usable(id, generation) ?? fail(stoppedText);
+      const state = this.current();
+      if (working && (state.pausedAt || this.ended(state)))
+        fail('The lab is paused, so no pod starts now.');
+      return agent.direction;
+    });
   }
 
   private pods(): LabCompute {
@@ -2459,6 +2474,14 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
   /** The pod of a lease stops: its runs end, and their outputs come back first. */
   podStops(lease: string): Promise<void> {
     return this.ledger.podStops(lease);
+  }
+
+  /**
+   * The background work that ends the pod runs of an earlier owner, or null
+   * when there is none. Lease recovery waits for it, because it stops pods.
+   */
+  get podRunsRecovering(): Promise<void> | null {
+    return this.ledger.pending;
   }
 
   /**
