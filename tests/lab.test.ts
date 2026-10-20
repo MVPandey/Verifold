@@ -47,12 +47,13 @@ import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { checkToolSpecs } from '../src/cli/lab-tools.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
+import { parseFrame, renderDesk } from '../src/cli/desk-view.ts';
 import {
   costLine,
   labCallNeeds,
   renderLab,
   runPanel,
+  searchPanel,
 } from '../src/cli/desk-lab.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
@@ -104,7 +105,9 @@ const args = process.argv.slice(2);
 const name = path.basename(process.cwd());
 const log = path.join(base, 'logs', name);
 fs.mkdirSync(log, { recursive: true });
-fs.writeFileSync(path.join(log, 'args.json'), JSON.stringify(args));
+// A test reads the arguments while a later launch writes them: a rename gives it the old file or the new one, never a part.
+fs.writeFileSync(path.join(log, 'args.json.tmp'), JSON.stringify(args));
+fs.renameSync(path.join(log, 'args.json.tmp'), path.join(log, 'args.json'));
 fs.writeFileSync(path.join(log, 'env.json'), JSON.stringify(process.env));
 fs.appendFileSync(path.join(log, 'launches.jsonl'), JSON.stringify(args.includes('--resume') ? 'resume' : 'start') + '\\n');
 if (args.includes('--resume') && fs.existsSync(path.join(base, 'resume-fails'))) process.exit(1);
@@ -207,7 +210,8 @@ const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
 const name = path.basename(process.cwd());
 const log = path.join(base, 'logs', name);
 fs.mkdirSync(log, { recursive: true });
-fs.writeFileSync(path.join(log, 'args.json'), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(log, 'args.json.tmp'), JSON.stringify(process.argv.slice(2)));
+fs.renameSync(path.join(log, 'args.json.tmp'), path.join(log, 'args.json'));
 fs.writeFileSync(path.join(log, 'env.json'), JSON.stringify(process.env));
 const usedFile = path.join(log, 'used.json');
 let calls = [];
@@ -3005,7 +3009,7 @@ await test('the first agent posts the plan of record, and the lab opens its dire
   const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(
     html,
-    /<article class="post" id="post-p-1">[\s\S]*<span class="chip kind-plan">Plan of record<\/span>/,
+    /<article class="post" id="post-p-1" tabindex="-1">[\s\S]*<span class="chip kind-plan">Plan of record<\/span>/,
   );
   assert.match(
     html,
@@ -5703,11 +5707,13 @@ await test("an access answer gives the agent's shell its domains while it stands
   };
   const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
   await lab.sessions.park(session);
-  await lab.lab.post({ text: 'Go on.', direction: 'd-1' });
+  // The lab can start the agent for its earlier events before this post: the post then waits behind the held start in the lab's queue.
+  const posted = lab.lab.post({ text: 'Go on.', direction: 'd-1' });
   await starting;
   // The start runs in the lab's queue, so the undo waits for it.
   const undone = lab.lab.undoCall(a);
   release();
+  await posted;
   await undone;
   // The start had pypi.org, so its process ends, and the next start has no domain.
   await until(() => networks.length === 2);
@@ -6597,6 +6603,20 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
   const evidence =
     lab.lab.view()?.posts.find((post) => post.kind === 'evidence')?.id ?? '';
   assert.match(evidence, /^p-\d+$/);
+  // The person's last look at this lab was 2 hours ago.
+  const lookFile = join(lab.root, '.verifold', 'lab', 'look.json');
+  const left = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  await writeFile(
+    lookFile,
+    JSON.stringify({
+      schemaVersion: 1,
+      lab: lab.lab.view()?.state.startedAt,
+      at: left,
+      claude: 0,
+      gpu: 0,
+      away: null,
+    }),
+  );
   const stop = new AbortController();
   const desk = await startDesk(
     lab.root,
@@ -6624,6 +6644,7 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     '/api/view?panel=run&run=r-1',
     '/api/view?panel=diff&direction=d-1',
     '/api/view?panel=agent&agent=a-1',
+    '/api/view?panel=search&q=notes',
     '/api/run-log?run=r-1',
     '/api/lab-diff?direction=d-1&file=notes.md',
   ])
@@ -6716,8 +6737,49 @@ await test("the desk serves a lab's depth only with its token: the run and diff 
     '/api/view?panel=diff&direction=d-1&proof=x',
     '/api/view?panel=run&run=x',
     '/api/view?panel=agent&agent=a-1&agent=a-2',
+    '/api/view?panel=search&q=a&q=b',
+    `/api/view?panel=search&q=${'x'.repeat(101)}`,
+    '/api/view?panel=search&q=a%07b',
+    '/api/view?look=2',
+    '/api/view?look=1&look=1',
   ])
     assert.equal((await get(path)).status, 400, path);
+  // A view that the person cannot see changes nothing. The first look after 2 hours lists what changed, until the person dismisses it.
+  const viewed = async (look: boolean): Promise<string> =>
+    (
+      (await (await get(`/api/view${look ? '?look=1' : ''}`)).json()) as {
+        html: string;
+      }
+    ).html;
+  assert.doesNotMatch(await viewed(false), /While you were away/);
+  assert.match(await viewed(true), /While you were away/);
+  assert.match(await viewed(false), /While you were away/);
+  await until(async () =>
+    (await readFile(lookFile, 'utf8')).includes(`"since":"${left}"`),
+  );
+  const saved = JSON.parse(await readFile(lookFile, 'utf8')) as {
+    at: string;
+  };
+  assert.ok(Date.now() - Date.parse(saved.at) < 60_000);
+  const dismissed = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'lab-away-dismiss', key: 'a7'.repeat(16) }),
+  });
+  assert.equal(dismissed.status, 200);
+  assert.doesNotMatch(await viewed(true), /While you were away/);
+  // With the token, the search finds the post in the panel.
+  const found = (
+    (await (await get('/api/view?panel=search&q=NOTES')).json()) as {
+      html: string;
+    }
+  ).html;
+  assert.match(
+    found,
+    new RegExp(
+      `data-post-link="${evidence}">${evidence}</a>[\\s\\S]*<mark>Notes</mark>\\.`,
+    ),
+  );
   // An unknown run or agent opens a panel that says so.
   assert.match(
     (
@@ -6848,6 +6910,63 @@ await test(
   },
 );
 
+await test('a session that a park ends counts as busy until its record is saved, so the lab resumes its conversation', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [] },
+    { when: 'Zebrafish', calls: [] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const session = (): string =>
+    lab.lab.view()?.directions[0]?.agent.session ?? '';
+  await until(() => Boolean(session() && lab.sessions.idle(session())));
+  const first = session();
+  // The park's record waits at a gate, so the saved record is still the one before the park.
+  const slot = (
+    lab.sessions as unknown as {
+      slots: {
+        view(): SessionView | null;
+        writing: Promise<void> | null;
+        save(): void;
+      }[];
+    }
+  ).slots.find((entry) => entry.view()?.record.id === first);
+  assert.ok(slot);
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  slot.writing = gate.then(() => {
+    slot.writing = null;
+    slot.save();
+  });
+  t.after(release);
+  const parked = lab.sessions.park(first);
+  await until(() => lab.sessions.view(first)?.live === false);
+  assert.equal(lab.sessions.view(first)?.starting, true);
+  // A post waits for the agent, so a scheduler that saw no process would start a new conversation.
+  await lab.lab.post({ text: '@claude-1 Zebrafish.' });
+  const lab_ = lab.lab as unknown as { kick(): void };
+  for (let tries = 0; tries < 5; tries++) {
+    lab_.kick();
+    await delay(80);
+  }
+  assert.equal(session(), first);
+  assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), ['start']);
+  release();
+  await parked;
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('Zebrafish'),
+    ),
+  );
+  assert.equal(session(), first);
+  assert.deepEqual(await lab.lines('d-1-alpha', 'launches.jsonl'), [
+    'start',
+    'resume',
+  ]);
+});
+
 await test(
   'a Claude Code agent whose process starts again after its terminal keeps one session and one process',
   { skip: terminals },
@@ -6964,3 +7083,516 @@ await test(
     await until(() => lab.lab.view()?.directions[0]?.status !== 'terminal');
   },
 );
+
+/** A run record for a screen test: done on this computer, with its command and times. */
+function screenRun(id: string, more: Partial<RunRecord> = {}): RunRecord {
+  const at = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    id,
+    agent: 'a-1',
+    key: `k-${id}`,
+    direction: 'd-1',
+    harness: 'claude',
+    commit: 'a'.repeat(40),
+    command: 'python probe.py',
+    why: 'A seed for the bar.',
+    status: 'done',
+    exitCode: 0,
+    queuedAt: at,
+    startedAt: at,
+    endedAt: at,
+    minutes: 10,
+    want: [],
+    metrics: {},
+    outputs: [],
+    config: 'c',
+    output: null,
+    log: { bytes: 0, cut: false },
+    process: null,
+    cancelledBy: null,
+    note: null,
+    told: true,
+    folder: `run-${id.slice(2)}-1a2b3c4d`,
+    where: 'local',
+    ...more,
+  };
+}
+
+/** A post for a screen test, in d-1 unless `more` says otherwise. */
+function screenPost(
+  id: string,
+  author: string,
+  kind: 'claim' | 'objection' | 'question' | 'evidence' | 'status',
+  text: string,
+  at: string,
+  more: Record<string, unknown> = {},
+): LabView['posts'][number] {
+  return {
+    schemaVersion: 1,
+    id,
+    at,
+    author,
+    kind,
+    text,
+    mentions: [],
+    artifacts: [],
+    direction: 'd-1',
+    ...more,
+  };
+}
+
+/** A call for a screen test that waits for the person. */
+function screenCall(at: string, more: Partial<LabCall> = {}): LabCall {
+  return {
+    id: 'c-1',
+    at,
+    by: 'a-1',
+    direction: 'd-1',
+    kind: 'cost',
+    question: 'Rent a <b>GPU</b> for the probe?',
+    options: [
+      { label: 'Rent <i>it</i>', usd: 1.4, minutes: 40, effect: null },
+      { label: 'Use this Mac', usd: 0, minutes: 360, effect: null },
+    ],
+    pick: 0,
+    why: 'Seeds now.',
+    undoMinutes: 10,
+    deadline: null,
+    state: 'open',
+    answer: null,
+    undoUntil: null,
+    applied: null,
+    note: null,
+    ...more,
+  };
+}
+
+await test('search finds posts, runs, and calls in any case, needs each word, marks them, escapes every hit, and shows the newest 50', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do months lie on a circle?', { hours: 8 });
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Circles', harness: 'claude' });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const at = (minutes: number): string =>
+    new Date(Date.UTC(2026, 9, 20, 9, minutes)).toISOString();
+  const clock = (value: string): string => value.slice(11, 16);
+  const seeded: LabView = {
+    ...view,
+    posts: [
+      ...view.posts,
+      screenPost(
+        'p-90',
+        'a-1',
+        'claim',
+        'The PROBE <script>x</script> wins.',
+        at(3),
+      ),
+      screenPost(
+        'p-91',
+        'person',
+        'question',
+        'Is the probe <b>fair</b>?',
+        at(4),
+      ),
+    ],
+    ledger: [
+      screenRun('r-9', {
+        command: 'python <probe>.py --seed "1"',
+        queuedAt: at(5),
+        startedAt: at(5),
+      }),
+    ],
+    state: { ...view.state, calls: [screenCall(at(7))] },
+  };
+  const panel = searchPanel(seeded, 'probe', clock);
+  assert.equal(panel.title, 'Search the lab');
+  const hits = [...panel.body.matchAll(/<li class="hit">[\s\S]*?<\/li>/g)].map(
+    (match) => match[0],
+  );
+  // The newest first: the call, the run, then the two posts.
+  assert.equal(hits.length, 4);
+  assert.match(
+    hits[0] ?? '',
+    /Cost call<\/span> c-1 · claude-1 · <time[^>]*>09:07<\/time> · waits for you/,
+  );
+  assert.match(
+    hits[0] ?? '',
+    /Rent a &lt;b&gt;GPU&lt;\/b&gt; for the <mark>probe<\/mark>\? \(Rent &lt;i&gt;it&lt;\/i&gt;, Use this Mac\)/,
+  );
+  assert.match(hits[0] ?? '', /data-view="needs">Answer it in Needs you</);
+  assert.match(
+    hits[1] ?? '',
+    /data-panel="run" data-run="r-9">r-9<\/button>[\s\S]*<code>python &lt;<mark>probe<\/mark>&gt;\.py --seed &quot;1&quot;<\/code>/,
+  );
+  assert.match(
+    hits[2] ?? '',
+    /<a href="#post-p-91" data-post-link="p-91">p-91<\/a> · You/,
+  );
+  assert.match(
+    hits[2] ?? '',
+    /<span class="chip kind-question">Message<\/span>/,
+  );
+  assert.match(
+    hits[3] ?? '',
+    /The <mark>PROBE<\/mark> &lt;script&gt;x&lt;\/script&gt; wins\./,
+  );
+  assert.match(panel.body, /4 hits, the newest first\./);
+  for (const raw of ['<script', '<b>', '<i>', '<probe>'])
+    assert.ok(!panel.body.includes(raw), raw);
+  // Each word must match. An ID finds its run, in any case.
+  assert.equal(
+    searchPanel(seeded, 'probe  WINS', clock).body.match(/<li class="hit">/g)
+      ?.length,
+    1,
+  );
+  assert.match(searchPanel(seeded, 'R-9', clock).body, /data-run="r-9"/);
+  // A pattern character is plain text, and the words go back into the field escaped.
+  const odd = searchPanel(seeded, '"><b> (.*', clock).body;
+  assert.match(odd, /value="&quot;&gt;&lt;b&gt; \(\.\*"/);
+  assert.match(odd, /No post, run, or call has these words\./);
+  assert.match(searchPanel(seeded, undefined, clock).body, /Type a word/);
+  // 130 posts: the newest 50 hits show, and an old post that the board leaves out shows its whole text.
+  const long = `needle ${'word '.repeat(60)}end of the old post`;
+  const many: LabView = {
+    ...seeded,
+    ledger: [],
+    posts: Array.from({ length: 130 }, (_, index) =>
+      screenPost(
+        `p-${index + 1}`,
+        'a-1',
+        'evidence',
+        index ? `Seed ${index}` : long,
+        new Date(Date.UTC(2026, 9, 20, 9, 0, index)).toISOString(),
+      ),
+    ),
+  };
+  const capped = searchPanel(many, 'seed', clock).body;
+  assert.equal(capped.match(/<li class="hit">/g)?.length, 50);
+  assert.match(
+    capped,
+    /The newest 50 of 129 hits\. Add a word to find fewer\./,
+  );
+  const old = searchPanel(many, 'needle', clock).body;
+  assert.doesNotMatch(old, /data-post-link/);
+  assert.match(
+    old,
+    /<details id="hit-p-1"><summary>Show the whole post<\/summary><p class="pre">needle [\s\S]*end of the old post<\/p><\/details>/,
+  );
+  // Only the newest 50 hits render, and whole texts of old posts share a byte budget.
+  const aged = (index: number): LabView['posts'][number] =>
+    screenPost(
+      `p-${index + 1}`,
+      'a-1',
+      'evidence',
+      index < 200 ? `needle ${'<'.repeat(3990)}` : `Other ${index}`,
+      new Date(Date.UTC(2026, 9, 20, 8, 0, 0, index)).toISOString(),
+    );
+  const heavy: LabView = {
+    ...seeded,
+    ledger: [],
+    posts: Array.from({ length: 400 }, (_, index) => aged(index)),
+  };
+  const budgeted = searchPanel(heavy, 'needle', clock).body;
+  assert.equal(budgeted.match(/<li class="hit">/g)?.length, 50);
+  assert.ok(Buffer.byteLength(budgeted) < 400_000);
+  const whole = budgeted.match(/<details id="hit-/g)?.length ?? 0;
+  assert.ok(whole > 0 && whole < 50, String(whole));
+  assert.match(
+    budgeted,
+    /The whole post is on the board, in \.verifold\/board\/p-\d+\.json\./,
+  );
+  assert.match(budgeted, /The newest 50 of 200 hits\./);
+  // A question that no research step took stays in the Ask stage.
+  await changeWorkspace(lab.root, (current) => ({
+    ...current!,
+    research: {
+      topic: 'Do months lie on a circle?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+  }));
+  assert.equal(
+    renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
+      session: null,
+      controllable: true,
+    }).stage,
+    'Ask: asked',
+  );
+  // A search has at most 100 printable characters.
+  assert.equal(
+    parseFrame(
+      'home',
+      'search',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      'x'.repeat(100),
+    )?.q,
+    'x'.repeat(100),
+  );
+  for (const q of ['x'.repeat(101), 'a\u0007b'])
+    assert.equal(
+      parseFrame('home', 'search', null, null, null, null, null, null, q),
+      null,
+    );
+});
+
+await test('while you were away: a line for each direction with news, the counts, and costs that add up to the header', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do months lie on a circle?', { hours: 8 });
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Circles <i>x</i>', harness: 'claude' });
+  await lab.lab.addDirection({ title: 'Helix', harness: 'codex' });
+  await lab.lab.addDirection({ title: 'Frequency', harness: 'claude' });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const hours = (count: number): string =>
+    new Date(Date.now() - count * 3_600_000).toISOString();
+  const left = hours(3);
+  const evidence = { text: 'acc 0.7.', post: 'p-90', run: 'r-9' };
+  const directions = view.state.directions.map((direction) =>
+    direction.id === 'd-1'
+      ? {
+          ...direction,
+          openedAt: hours(5),
+          verdict: 'leading' as const,
+          evidence,
+        }
+      : direction.id === 'd-2'
+        ? { ...direction, openedAt: hours(1), openedBy: 'person' }
+        : {
+            ...direction,
+            openedAt: hours(5),
+            state: 'stopped' as const,
+            stoppedAt: hours(1),
+          },
+  );
+  const seeded: LabView = {
+    ...view,
+    claudeUsd: 2.61,
+    posts: [
+      screenPost('p-80', 'a-1', 'claim', 'Before you left.', hours(4)),
+      screenPost('p-90', 'a-1', 'claim', 'The probe wins.', hours(1)),
+      screenPost('p-91', 'a-2', 'objection', 'One seed.', hours(1), {
+        replyTo: 'p-90',
+      }),
+      screenPost('p-92', 'verifold', 'status', 'A note.', hours(1)),
+    ],
+    ledger: [
+      screenRun('r-8', { endedAt: hours(4) }),
+      screenRun('r-9', { status: 'failed', exitCode: 1, endedAt: hours(1) }),
+    ],
+    state: {
+      ...view.state,
+      startedAt: hours(6),
+      directions,
+      calls: [screenCall(hours(1))],
+    },
+    directions: view.directions.map((entry, index) => ({
+      ...entry,
+      direction: directions[index] ?? entry.direction,
+    })),
+  };
+  const gpu = { spent: 1.5, limit: 20 };
+  const clock = (value: string): string => value;
+  const html = renderLab(seeded, clock, {
+    gpu,
+    away: { since: left, spent: { claude: 1.11, gpu: 0.5 } },
+  });
+  const digest = html.slice(
+    html.indexOf('<section class="lab-away"'),
+    html.indexOf('</section>', html.indexOf('<section class="lab-away"')),
+  );
+  assert.match(
+    digest,
+    /<h2 id="away-title">While you were away<\/h2><button type="button" class="link" data-action="lab-away-dismiss">Dismiss<\/button>/,
+  );
+  assert.ok(digest.includes(`Since ${left}.`));
+  // The most settled first: a verdict, a new direction, then one that ended.
+  const lines = [...digest.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(lines, [
+    '<span class="away-mark" aria-hidden="true">↗</span><span><a href="#row-d-1">Circles &lt;i&gt;x&lt;/i&gt;</a>: Leading (acc 0.7). 2 new posts.</span>',
+    '<span class="away-mark" aria-hidden="true">+</span><span><a href="#row-d-2">Helix</a>: New. You opened it.</span>',
+    '<span class="away-mark" aria-hidden="true">○</span><span><a href="#row-d-3">Frequency</a>: Not settled yet. You stopped it.</span>',
+  ]);
+  assert.match(
+    digest,
+    /2 posts, 1 run ended \(1 failed: <button type="button" class="link" data-panel="run" data-run="r-9">r-9<\/button>\), 1 call for you\./,
+  );
+  // The costs since then add up to the header's growth: ≈$4.11 now, ≈$1.61 then.
+  assert.match(
+    html,
+    /≈\$4\.11 spent \(Claude Code ≈\$2\.61, GPU \$1\.50 of \$20\.00\)/,
+  );
+  assert.match(
+    digest,
+    /Spent since then: ≈\$2\.50 \(Claude Code ≈\$1\.50, GPU \$1\.00\)\./,
+  );
+  assert.ok(!digest.includes('<i>'));
+  // An open dispute on a row's evidence comes first, with the row's mark, also when its row is second.
+  const check: Check = {
+    id: 'k-1',
+    claim: 'p-90',
+    objections: ['p-91'],
+    holdsUp: false,
+    direction: 'd-2',
+    run: 'r-9',
+    commit: 'a'.repeat(40),
+    harness: 'claude',
+    sameHarness: false,
+    agent: 'a-9',
+    handle: 'claude-9',
+    model: null,
+    state: 'queued',
+    outcome: null,
+    method: null,
+    result: null,
+    note: null,
+    queuedAt: hours(1),
+    startedAt: null,
+    endedAt: null,
+    restarts: 0,
+    session: null,
+    generation: 'g',
+    start: null,
+    blind: true,
+  };
+  const contested = directions.map((direction) =>
+    direction.id === 'd-1'
+      ? {
+          ...direction,
+          verdict: 'holds-up' as const,
+          evidence: { text: 'acc 0.8', post: 'p-80', run: null },
+        }
+      : direction.id === 'd-2'
+        ? { ...direction, verdict: 'leading' as const, evidence }
+        : direction,
+  );
+  const disputedHtml = renderLab(
+    {
+      ...seeded,
+      checks: [check],
+      state: { ...seeded.state, directions: contested, checks: [check] },
+      directions: seeded.directions.map((entry, index) => ({
+        ...entry,
+        direction: contested[index] ?? entry.direction,
+      })),
+    },
+    clock,
+    { gpu, away: { since: left, spent: { claude: 1.11, gpu: 0.5 } } },
+  );
+  const disputedLines = [
+    ...disputedHtml.matchAll(/<li><span class="away-mark"[\s\S]*?<\/li>/g),
+  ].map((match) => match[0]);
+  assert.equal(
+    disputedLines[0],
+    '<li><span class="away-mark" aria-hidden="true">⚠</span><span><a href="#row-d-2">Helix</a>: Disputed (acc 0.7).</span></li>',
+  );
+  assert.match(
+    disputedLines[1] ?? '',
+    /✓[\s\S]*Circles[\s\S]*Holds up \(acc 0\.8\)/,
+  );
+  // A note of Verifold alone, such as a verdict, gives its direction a line.
+  const noted = directions.map((direction) =>
+    direction.id === 'd-3'
+      ? { ...direction, state: 'open' as const, stoppedAt: null }
+      : direction,
+  );
+  assert.match(
+    renderLab(
+      {
+        ...seeded,
+        posts: [
+          screenPost(
+            'p-95',
+            'verifold',
+            'status',
+            'A verdict note.',
+            hours(1),
+            {
+              direction: 'd-3',
+            },
+          ),
+        ],
+        state: { ...seeded.state, directions: noted },
+        directions: seeded.directions.map((entry, index) => ({
+          ...entry,
+          direction: noted[index] ?? entry.direction,
+        })),
+      },
+      clock,
+      { gpu, away: { since: left, spent: { claude: 1.11, gpu: 0.5 } } },
+    ),
+    /<a href="#row-d-3">Frequency<\/a>: Not settled yet\.<\/span>/,
+  );
+  // At most 5 failed runs link to their panel. The rest are counted.
+  const failing = renderLab(
+    {
+      ...seeded,
+      ledger: Array.from({ length: 7 }, (_, index) =>
+        screenRun(`r-${index + 1}`, {
+          status: 'failed',
+          exitCode: 1,
+          endedAt: hours(1),
+        }),
+      ),
+    },
+    clock,
+    { gpu, away: { since: left, spent: { claude: 1.11, gpu: 0.5 } } },
+  );
+  assert.match(
+    failing,
+    /7 runs ended \(7 failed: (<button type="button" class="link" data-panel="run" data-run="r-\d">r-\d<\/button>, ){5}2 more\)/,
+  );
+  // Money spent always shows, also when nothing else changed.
+  const now = new Date().toISOString();
+  const spentOnly = renderLab(seeded, clock, {
+    gpu,
+    away: { since: now, spent: { claude: 2.61, gpu: 0.5 } },
+  });
+  assert.match(spentOnly, /<p>No post, run, or call came\.<\/p>/);
+  assert.match(
+    spentOnly,
+    /Spent since then: ≈\$1\.00 \(Claude Code ≈\$0\.00, GPU \$1\.00\)\./,
+  );
+  // Nothing new and nothing spent: one quiet line.
+  const quiet = renderLab(seeded, clock, {
+    gpu,
+    away: { since: now, spent: { claude: 2.61, gpu: 1.5 } },
+  });
+  assert.match(quiet, /<p>Nothing changed\.<\/p>/);
+  assert.doesNotMatch(quiet, /Spent since then/);
+  // Home shows the time away that the lab's owner gives it, and none without.
+  const snapshot = await readDeskSnapshot(lab.root);
+  const live = (away: unknown) =>
+    ({
+      session: null,
+      controllable: true,
+      lab: seeded,
+      labAway: away,
+    }) as never;
+  assert.match(
+    renderDesk(
+      snapshot,
+      undefined,
+      null,
+      live({ since: left, spent: { claude: 1.11, gpu: 0.5 } }),
+    ).html,
+    /While you were away/,
+  );
+  assert.doesNotMatch(
+    renderDesk(snapshot, undefined, null, live(null), {
+      view: 'home',
+      panel: null,
+      since: left,
+    }).html,
+    /While you were away/,
+  );
+});

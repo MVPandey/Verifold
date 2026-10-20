@@ -49,6 +49,8 @@ import {
   renderLabStart,
   renderLabWork,
   runPanel,
+  searchPanel,
+  type Away,
   type LabDiff,
   type LabWork,
   type Panel,
@@ -101,6 +103,8 @@ export interface DeskSession {
   readonly labAgent?: SessionView | null;
   /** What the direction of the diff panel changed. */
   readonly labDiff?: LabDiff | null;
+  /** The person came back to the lab after a while: Home lists what changed. */
+  readonly labAway?: Away | null;
 }
 
 export interface TaskView {
@@ -135,10 +139,11 @@ export const deskPanels = [
   'direction',
   'coordinator',
   'new-task',
-  // A lab's depth: a run, a direction's diff, and an agent.
+  // A lab's depth: a run, a direction's diff, an agent, and its search.
   'run',
   'diff',
   'agent',
+  'search',
 ] as const;
 export type DeskPanel = (typeof deskPanels)[number];
 
@@ -158,6 +163,8 @@ export interface DeskFrame {
   readonly agent?: string;
   /** The person cleared finished tasks: done and cancelled tasks leave the map and the rail. */
   readonly hideFinished?: boolean;
+  /** The words of a lab's search panel. */
+  readonly q?: string;
 }
 
 /** The frame from the query of /api/view, or null when a value is unknown. No view means Home. */
@@ -170,6 +177,7 @@ export function parseFrame(
   run: string | null = null,
   agent: string | null = null,
   proof: string | null = null,
+  q: string | null = null,
 ): DeskFrame | null {
   const shown = deskViews.find((entry) => entry === (view ?? 'home'));
   const opened = deskPanels.find((entry) => entry === panel) ?? null;
@@ -180,6 +188,8 @@ export function parseFrame(
   // Direction IDs are lowercase slugs, as the research report contract says.
   const idea =
     direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
+  // A search has at most 100 printable characters.
+  const words = q === null || ([...q].length <= 100 && !/\p{Cc}/u.test(q));
   return shown &&
     (panel === null || opened) &&
     (since === null || time) &&
@@ -187,7 +197,8 @@ export function parseFrame(
     (finished === null || finished === 'hidden') &&
     (run === null || runId.test(run)) &&
     (agent === null || agentId.test(agent)) &&
-    (proof === null || proofRef(proof) !== null)
+    (proof === null || proofRef(proof) !== null) &&
+    words
     ? {
         view: shown,
         panel: opened,
@@ -197,6 +208,7 @@ export function parseFrame(
         ...(run ? { run } : {}),
         ...(agent ? { agent } : {}),
         ...(proof ? { proof } : {}),
+        ...(q ? { q } : {}),
       }
     : null;
 }
@@ -1625,7 +1637,7 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
  * What this lab's pods cost so far, and the project's limit. Pods of tasks,
  * and of earlier labs before Start over, are not this lab's.
  */
-function labGpu(
+export function labGpu(
   compute: ComputeView,
   startedAt: string,
 ): { spent: number; limit: number | null } {
@@ -3217,6 +3229,13 @@ function progress(workspace: Workspace, live: DeskSession): Progress {
       notes[0] = 'No question yet';
       return { current: 0, notes, waits: false, working: false };
     }
+    // A question that no research step took yet, such as one that a lab keeps, is still asked.
+    if (
+      !searching &&
+      !research.latestAttempt &&
+      research.phase === 'needs-plan'
+    )
+      return { current: 0, notes, waits: false, working: false };
     // Research, its optional plan stop, and a choice of direction belong to the plan.
     const waits =
       !searching &&
@@ -3499,7 +3518,9 @@ function renderRail(
       (view) =>
         `<li><button type="button" data-view="${view}"${view === frame.view || (view === 'tasks' && frame.view === 'task') ? ' aria-current="page"' : ''}>${viewIcons[view]}<span>${viewNames[view]}</span>${count(view)}</button></li>`,
     )
-    .join('')}</ul>
+    .join(
+      '',
+    )}${live.lab ? `<li><button type="button" data-panel="search" data-focus="lab-search" aria-pressed="${frame.panel === 'search'}" aria-keyshortcuts="Meta+K Control+K">${viewIcons.research}<span>Search</span></button></li>` : ''}</ul>
   <div class="rail-team"><div class="rail-title"><h2>Team</h2></div>${team.length ? `<ul class="team">${team.join('')}</ul>` : '<p class="fine">No agent works now.</p>'}</div>
 </nav>`;
 }
@@ -3658,14 +3679,21 @@ function renderPanel(
   });
   let shown: Panel;
   const lab = live.lab;
-  if (panel === 'run' || panel === 'diff' || panel === 'agent')
+  if (
+    panel === 'run' ||
+    panel === 'diff' ||
+    panel === 'agent' ||
+    panel === 'search'
+  )
     shown = !lab
       ? gone('Lab', 'No lab', 'This project has no lab.')
       : panel === 'run'
         ? runPanel(lab, frame.run, clock)
         : panel === 'diff'
           ? diffPanel(lab, direction, frame.proof, live.labDiff ?? null)
-          : labAgentPanel(lab, frame.agent, live, tasks);
+          : panel === 'search'
+            ? searchPanel(lab, frame.q, clock)
+            : labAgentPanel(lab, frame.agent, live, tasks);
   else if (panel === 'worker')
     shown = live.session
       ? workerPanel(live.session, live, tasks)
@@ -3737,6 +3765,8 @@ export function renderDesk(
   work: { done: number; total: number } | null;
   /** A project owner runs the team, so the top bar offers Stop the team. */
   stoppable: boolean;
+  /** The project has a lab. Its owner keeps the person's last look, so the page sends no time away of its own. */
+  lab: boolean;
 } {
   const { workspace, attempts } = snapshot;
   const active = attempts.filter((attempt) => attempt.activity === 'recent');
@@ -3817,6 +3847,7 @@ export function renderDesk(
                           ? labGpu(live.compute, live.lab.state.startedAt)
                           : null,
                         extra: `${renderPodsLine(live.compute)}${renderPaused(live)}`,
+                        away: live.labAway ?? null,
                       })
                     : renderHome(
                         snapshot,
@@ -3853,6 +3884,7 @@ export function renderDesk(
     needs: needs.map(({ key, title }) => ({ key, title })),
     work: at.work ?? null,
     stoppable: live.archives !== undefined,
+    lab: Boolean(live.lab),
   };
 }
 

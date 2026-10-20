@@ -250,7 +250,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.match(lines.at(-1) ?? '', /^Detached\. The team keeps working\./);
   assert.ok(await liveOwner(root));
   // A second terminal attaches to the same owner, without a second owner.
-  // --lab starts nothing in an owner that runs, and says where to start it.
+  // --lab in a project that has an owner starts nothing, and says where to start a lab.
   const again: string[] = [];
   const againUrls: string[] = [];
   const second = runCli(
@@ -263,6 +263,11 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.ok(
     again.some((line) =>
       line.startsWith('Verifold already works in the background'),
+    ),
+  );
+  assert.ok(
+    again.includes(
+      "--lab is no longer needed for a new project, which starts a lab after setup. Here it starts a lab on the project's question.",
     ),
   );
   assert.ok(
@@ -401,7 +406,7 @@ await test('verifold owner runs only with the control that Verifold gives it', a
   assert.equal(existsSync(join(root, '.verifold', 'owner.json')), false);
 });
 
-await test('an owner started with --lab starts a lab on the question of setup', async (t) => {
+await test('an owner that setup started starts a lab on the question of setup, and no research', async (t) => {
   const { root, keys, assets } = await project(t);
   const control = await newControl();
   t.after(() => removeSocket(control));
@@ -423,7 +428,6 @@ await test('an owner started with --lab starts a lab on the question of setup', 
             JSON.stringify({
               ...control,
               research: { topic: 'Do months lie on a circle?' },
-              lab: true,
             }),
           ),
       },
@@ -470,6 +474,49 @@ await test('an owner started with --lab starts a lab on the question of setup', 
   await done.catch(() => {});
 });
 
+await test('an owner started with --lab in a project without a lab starts one on its saved question', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await changeWorkspace(root, (current) => ({
+    ...current!,
+    research: {
+      topic: 'Do weekdays lie on a circle?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+  }));
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  const owner = new AbortController();
+  const done = runCli(
+    ['owner'],
+    root,
+    {
+      interactive: false,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      browse: () => Promise.resolve(true),
+      deskAssets: assets,
+      background: {
+        keys,
+        start: () => Promise.reject(new Error('The owner starts no owner.')),
+        input: () => Promise.resolve(JSON.stringify({ ...control, lab: true })),
+      },
+    },
+    owner.signal,
+  );
+  t.after(async () => {
+    owner.abort();
+    await done.catch(() => {});
+  });
+  await until(() => existsSync(join(root, '.verifold', 'lab.json')));
+  const lab = JSON.parse(
+    await readFile(join(root, '.verifold', 'lab.json'), 'utf8'),
+  ) as { question: string };
+  assert.equal(lab.question, 'Do weekdays lie on a circle?');
+  owner.abort();
+  await done.catch(() => {});
+});
+
 await test('a lab that cannot start leaves the owner running and says why', async (t) => {
   const { root, keys, assets } = await project(t);
   const control = await newControl();
@@ -492,7 +539,6 @@ await test('a lab that cannot start leaves the owner running and says why', asyn
             JSON.stringify({
               ...control,
               research: { topic: 'x'.repeat(5000) },
-              lab: true,
             }),
           ),
       },
@@ -516,7 +562,7 @@ await test('a lab that cannot start leaves the owner running and says why', asyn
   await done.catch(() => {});
 });
 
-await test('--lab in a project that has a lab starts nothing new and says so', async (t) => {
+await test('an owner with a question of setup in a project that has a lab starts nothing new and says so', async (t) => {
   const { root, keys, assets } = await project(t);
   await mkdir(join(root, '.verifold', 'lab', 'agents'), { recursive: true });
   await writeFile(
@@ -550,7 +596,6 @@ await test('--lab in a project that has a lab starts nothing new and says so', a
             JSON.stringify({
               ...control,
               research: { topic: 'Another question.' },
-              lab: true,
             }),
           ),
       },

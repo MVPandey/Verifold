@@ -32,9 +32,14 @@ const stopButton = requiredElement(document, '#stop-team', HTMLElement);
 /** The open view and panel. Like the selections, they last for this tab. */
 let view = 'home';
 let panel = '';
-/** When the page last went to the background for 5 minutes or more. Home lists what changed after it. */
+/** When the page last went to the background for 5 minutes or more. Home lists what changed after it. A lab's owner keeps the time away itself. */
 let since: string | undefined;
+/** The last view was of a project with a lab. */
+let labShown = false;
 let hiddenAt: number | undefined;
+/** The words of the lab's search panel. They last for this tab. */
+let searchQuery: string | undefined;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
@@ -90,6 +95,7 @@ try {
   } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   view = sessionStorage.getItem('verifold-desk-view') ?? 'home';
   since = sessionStorage.getItem('verifold-desk-since') ?? undefined;
+  searchQuery = sessionStorage.getItem('verifold-desk-q') ?? undefined;
   panel = sessionStorage.getItem('verifold-desk-panel') ?? '';
   selected = sessionStorage.getItem('verifold-desk-attempt') ?? undefined;
   selectedTask = sessionStorage.getItem('verifold-desk-task') ?? undefined;
@@ -208,7 +214,10 @@ function viewQuery(): string {
   if (panel === 'run' && selectedRun) query.set('run', selectedRun);
   if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
   if (panel === 'diff' && selectedProof) query.set('proof', selectedProof);
-  if (since) query.set('since', since);
+  if (panel === 'search' && searchQuery) query.set('q', searchQuery);
+  if (since && !labShown) query.set('since', since);
+  // The lab's owner counts each refresh that the person can see as a look, so a return after a while lists what changed.
+  if (!document.hidden) query.set('look', '1');
   if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
 }
@@ -603,8 +612,10 @@ async function refresh(): Promise<void> {
         panel = '';
         selected = undefined;
         selectedTask = undefined;
+        searchQuery = undefined;
         remember('view', undefined);
         remember('panel', undefined);
+        remember('q', undefined);
         throw new Error(
           'That item is no longer available. The desk shows Home.',
         );
@@ -633,6 +644,7 @@ async function refresh(): Promise<void> {
     const stage =
       'stage' in reply && typeof reply.stage === 'string' ? reply.stage : '';
     const needs = needsFrom(reply);
+    labShown = 'lab' in reply && reply.lab === true;
     projectTitle.textContent = title || 'Research desk';
     stageLabel.textContent = stage;
     stageLabel.hidden = !stage;
@@ -1659,6 +1671,23 @@ document.addEventListener('click', (event) => {
     )
   )
     document.body.classList.remove('dock-open', 'dock-expanded');
+  // A post that the search found opens on Home, with the search beside it. On a narrow screen the panel covers the board, so it closes.
+  const found =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('a[data-post-link]')
+      : null;
+  if (found?.dataset.postLink) {
+    event.preventDefault();
+    navigate(
+      {
+        view: 'home',
+        panel: matchMedia('(max-width: 860px)').matches ? '' : panel,
+      },
+      `#post-${CSS.escape(found.dataset.postLink)}`,
+      'center',
+    );
+    return;
+  }
   if (!(target instanceof HTMLElement)) return;
   if (target.matches('a.skip')) {
     event.preventDefault();
@@ -1837,6 +1866,12 @@ document.addEventListener('keydown', (event) => {
 // Escape closes the phone menu, then the panel. In a text field it does nothing, so a draft stays.
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || event.defaultPrevented) return;
+  // A search field clears itself on Escape. Here Escape keeps the words and closes the search.
+  const searching =
+    event.target instanceof HTMLElement &&
+    event.target.id === 'lab-search' &&
+    !event.isComposing;
+  if (searching) event.preventDefault();
   if (document.body.classList.contains('rail-open')) {
     closeRail();
     menuButton.focus();
@@ -1849,10 +1884,12 @@ document.addEventListener('keydown', (event) => {
     document.body.classList.remove('dock-open', 'dock-expanded');
     return;
   }
+  // In the search, Escape closes it. Its words stay for the next search.
   if (
     !panel ||
     document.body.classList.contains('t-locked') ||
-    (event.target instanceof Element &&
+    (!searching &&
+      event.target instanceof Element &&
       event.target.closest('input, textarea, select'))
   )
     return;
@@ -1916,6 +1953,64 @@ content.addEventListener('input', (event) => {
   if (event.target instanceof HTMLElement && event.target.id === 'lab-text')
     showMentions();
 });
+// The lab's search asks the desk a moment after the person stops typing.
+content.addEventListener('input', (event) => {
+  if (
+    !(event.target instanceof HTMLInputElement) ||
+    event.target.id !== 'lab-search'
+  )
+    return;
+  // The desk refuses control characters, such as a pasted tab, so they become spaces.
+  const value = event.target.value.replace(/\p{Cc}/gu, ' ').trim();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = value || undefined;
+    remember('q', searchQuery);
+    void refresh();
+  }, 250);
+});
+const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+/**
+ * The K of ⌘K by the letter that the layout gives, so Colemak and Dvorak keep
+ * their own shortcuts. A layout without Latin letters falls back to the key's
+ * place. Autofill can send a keydown without a key.
+ */
+function isSearchKey(event: KeyboardEvent): boolean {
+  const key = typeof event.key === 'string' ? event.key : '';
+  return /^[a-z]$/i.test(key)
+    ? key.toLowerCase() === 'k'
+    : key.length === 1 && event.code === 'KeyK';
+}
+document.documentElement.classList.toggle('mac', mac);
+// ⌘K, or Ctrl+K off a Mac, opens the lab's search from anywhere in the desk. In the search it selects the words.
+document.addEventListener('keydown', (event) => {
+  if (
+    !isSearchKey(event) ||
+    event.altKey ||
+    event.shiftKey ||
+    (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey) ||
+    (event.target instanceof Element &&
+      event.target.closest('.terminal-screen'))
+  )
+    return;
+  const trigger = content.querySelector<HTMLElement>('[data-panel="search"]');
+  if (!trigger) return;
+  event.preventDefault();
+  const field = document.getElementById('lab-search');
+  if (panel === 'search' && field instanceof HTMLInputElement) {
+    field.focus();
+    field.select();
+    return;
+  }
+  // Closing the search returns focus to where it was, or to the view's title.
+  const from = document.activeElement;
+  opener =
+    from instanceof HTMLElement && content.contains(from)
+      ? selectorOf(from)
+      : undefined;
+  closeRail();
+  navigate({ panel: 'search' }, '#lab-search');
+});
 // A press on a name takes it before the box loses focus.
 content.addEventListener('mousedown', (event) => {
   const item =
@@ -1963,17 +2058,23 @@ content.addEventListener('keydown', (event) => {
     void act(send);
 });
 // A person who comes back after 5 minutes or more sees on Home what changed while they were away.
+// In a lab, the owner keeps the last look and the page's look=1 counts it, so the page sets no since.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
     return;
   }
-  if (hiddenAt !== undefined && Date.now() - hiddenAt >= 5 * 60_000) {
+  if (
+    !labShown &&
+    hiddenAt !== undefined &&
+    Date.now() - hiddenAt >= 5 * 60_000
+  ) {
     since = new Date(hiddenAt).toISOString();
     remember('since', since);
-    void refresh();
   }
   hiddenAt = undefined;
+  // A refresh at once counts the look.
+  void refresh();
 });
 window.addEventListener('resize', drawMaps);
 // A toggle does not bubble either. An opened run log loads at once.

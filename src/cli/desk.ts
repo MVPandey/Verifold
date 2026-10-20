@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   deskPage,
+  labGpu,
   parseFrame,
   renderDesk,
   renderSetup,
@@ -53,8 +54,13 @@ import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
 import { directionId, proofRef, runId } from './board.ts';
 import { startLabOn, type Lab, type LabView } from './lab.ts';
-import type { LabDiff, LabWork } from './desk-lab.ts';
-import { changeWorkspace, loadWorkspace } from './storage.ts';
+import type { Away, LabDiff, LabWork } from './desk-lab.ts';
+import {
+  changeWorkspace,
+  loadWorkspace,
+  readJson,
+  writePrivateFile,
+} from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
 
@@ -434,6 +440,142 @@ interface LabDesk {
   >;
   /** The lab actions that run in the background, and the ones that failed there. */
   works: LabWork[];
+  /** The person's last look at the lab, loaded once for each lab. */
+  look?:
+    | { readonly lab: string; readonly loaded: Promise<LabLook> }
+    | undefined;
+  /** Saves of the look, one after another. */
+  saving: Promise<void>;
+}
+
+/** A person who comes back to a lab after this long sees on Home what changed. */
+const awayMs = 30 * 60_000;
+
+/** A look is saved at most this often. A new time away is saved at once. */
+const lookSaveMs = 60_000;
+
+/**
+ * The person's last look at a lab, with the header's two costs then, and the
+ * time away that Home lists until the person dismisses it. It lives in
+ * .verifold/lab/look.json, so it lasts across tabs, browsers, and restarts
+ * of Verifold, and Start over archives it with the lab.
+ */
+interface LabLook {
+  /** The start of the lab that it belongs to. */
+  readonly lab: string;
+  at: number;
+  claude: number;
+  gpu: number;
+  away: Away | null;
+  saved: number;
+}
+
+const lookPath = (root: string): string =>
+  join(root, '.verifold', 'lab', 'look.json');
+
+/** A dollar amount in a saved look, or null. */
+function dollars(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+/** The saved look of this lab, or a new one. A file of another lab or one that is not valid counts as none. */
+async function readLook(root: string, lab: string): Promise<LabLook> {
+  const fresh: LabLook = {
+    lab,
+    at: 0,
+    claude: 0,
+    gpu: 0,
+    away: null,
+    saved: 0,
+  };
+  const saved: unknown = await readJson(lookPath(root)).catch(() => null);
+  if (!saved || typeof saved !== 'object') return fresh;
+  const entry = saved as Record<string, unknown>;
+  const at = typeof entry.at === 'string' ? Date.parse(entry.at) : NaN;
+  const claude = dollars(entry.claude);
+  const gpu = dollars(entry.gpu);
+  if (
+    entry.lab !== lab ||
+    !Number.isFinite(at) ||
+    claude === null ||
+    gpu === null
+  )
+    return fresh;
+  const away =
+    entry.away && typeof entry.away === 'object'
+      ? (entry.away as Record<string, unknown>)
+      : null;
+  const spent =
+    away?.spent && typeof away.spent === 'object'
+      ? (away.spent as Record<string, unknown>)
+      : null;
+  const since = typeof away?.since === 'string' ? away.since : '';
+  const before = { claude: dollars(spent?.claude), gpu: dollars(spent?.gpu) };
+  return {
+    ...fresh,
+    at,
+    claude,
+    gpu,
+    away:
+      Number.isFinite(Date.parse(since)) &&
+      before.claude !== null &&
+      before.gpu !== null
+        ? {
+            since: new Date(since).toISOString(),
+            spent: { claude: before.claude, gpu: before.gpu },
+          }
+        : null,
+  };
+}
+
+/** The look of the lab that the desk shows, loaded once. */
+function lookOf(root: string, desk: LabDesk, lab: string): Promise<LabLook> {
+  if (desk.look?.lab !== lab) desk.look = { lab, loaded: readLook(root, lab) };
+  return desk.look.loaded;
+}
+
+/** Save a look after the saves before it. A save that fails leaves the look in memory. */
+function saveLook(root: string, desk: LabDesk, look: LabLook): void {
+  look.saved = Date.now();
+  const body = `${JSON.stringify({
+    schemaVersion: 1,
+    lab: look.lab,
+    at: new Date(look.at).toISOString(),
+    claude: look.claude,
+    gpu: look.gpu,
+    away: look.away,
+  })}\n`;
+  desk.saving = desk.saving
+    .then(() => writePrivateFile(lookPath(root), body))
+    .catch(() => {});
+}
+
+/**
+ * The person looks at the lab's desk now, with the header's two costs. A last
+ * look 30 minutes ago or more becomes the time away that Home lists, also
+ * when the computer slept with the page open. Returns that time away.
+ */
+async function noteLook(
+  root: string,
+  desk: LabDesk,
+  view: LabView,
+  gpu: number,
+): Promise<Away | null> {
+  const look = await lookOf(root, desk, view.state.startedAt);
+  const now = Date.now();
+  const back = look.at > 0 && now - look.at >= awayMs;
+  if (back)
+    look.away = {
+      since: new Date(look.at).toISOString(),
+      spent: { claude: look.claude, gpu: look.gpu },
+    };
+  look.at = now;
+  look.claude = view.claudeUsd;
+  look.gpu = gpu;
+  if (back || now - look.saved >= lookSaveMs) saveLook(root, desk, look);
+  return look.away;
 }
 
 /** How long a lab request's answer stays for the same request again. */
@@ -626,6 +768,15 @@ async function labRequest(
     desk.works = desk.works.filter((work) => work.error === null);
     return 200;
   }
+  if (body.action === 'lab-away-dismiss') {
+    const view = lab.view();
+    if (view) {
+      const look = await lookOf(root, desk, view.state.startedAt);
+      look.away = null;
+      saveLook(root, desk, look);
+    }
+    return 200;
+  }
   const key =
     typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
       ? body.key
@@ -761,6 +912,8 @@ async function act(
   }
   if (body.action === 'start-over' || body.action === 'restore') {
     if (!tasks) return 400;
+    // A save of the last look ends before the lab moves, so no look lands in the next run.
+    await labDesk.saving;
     await changeRun(
       root,
       sessions,
@@ -774,6 +927,7 @@ async function act(
     // The lab actions of the earlier run, and their answers, do not belong to this one.
     labDesk.works = [];
     labDesk.requests.clear();
+    labDesk.look = undefined;
     return 200;
   }
   if (typeof body.action === 'string' && body.action.startsWith('lab-'))
@@ -971,6 +1125,7 @@ export async function startDesk(
     lab: options.lab,
     requests: new Map(),
     works: [],
+    saving: Promise.resolve(),
   };
   const labReads: LabReads = { records: new Map(), diffs: new Map() };
   if (project) await readDeskSnapshot(project);
@@ -1515,7 +1670,10 @@ export async function startDesk(
       url.searchParams.get('run'),
       url.searchParams.get('agent'),
       url.searchParams.get('proof'),
+      url.searchParams.get('q'),
     );
+    // The page sends look=1 while the person can see it.
+    const look = url.searchParams.get('look');
     const keys = [
       'attempt',
       'task',
@@ -1528,12 +1686,15 @@ export async function startDesk(
       'run',
       'agent',
       'proof',
+      'q',
+      'look',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
       (chosenTask !== undefined && !validTaskId(chosenTask)) ||
       (chosenWorker !== undefined && !validSessionId(chosenWorker)) ||
       !frame ||
+      (look !== null && look !== '1') ||
       [...url.searchParams.keys()].some((key) => !keys.includes(key)) ||
       keys.some((key) => url.searchParams.getAll(key).length > 1)
     ) {
@@ -1610,81 +1771,87 @@ export async function startDesk(
         workers[0] ??
         null;
       const labView = labDesk.lab?.view() ?? null;
-      const body = JSON.stringify(
-        renderDesk(
-          snapshot,
-          selected,
-          report,
-          {
-            workers,
-            session: worker,
-            // The lab's depth reads only for the panel that is open.
-            ...(labView && frame.panel === 'agent'
-              ? {
-                  labAgent: await labSession(
-                    root,
-                    sessions,
-                    labView,
-                    frame.agent,
-                    labReads,
-                  ),
-                }
-              : {}),
-            ...(labDesk.lab &&
-            labView &&
-            frame.panel === 'diff' &&
-            frame.direction
-              ? {
-                  labDiff: await labDiff(
-                    labDesk.lab,
-                    labView,
-                    frame.direction,
-                    frame.proof,
-                    labReads,
-                  ),
-                }
-              : {}),
-            // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
-            full:
-              (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
-            ...(sessions ? { agents: sessions.limit } : {}),
-            terminals: await terminalSupport(),
-            controllable: sessions !== undefined,
-            paused: sessions?.paused() ?? [],
-            ...(research ? { research: research.view() } : {}),
-            ...(coordinator ? { coordinator: coordinator.view() } : {}),
-            ...(compute ? { compute: compute.view() } : {}),
-            ...(labDesk.lab
-              ? {
-                  lab: labView,
-                  labWorks: labDesk.works,
-                  // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
-                  labCanStart:
-                    labDesk.lab.runs &&
-                    !labDesk.lab.exists &&
-                    !coordinator?.view()?.state &&
-                    !taskList.length &&
-                    !(research?.busy ?? false),
-                }
-              : {}),
-            ...(tasks ? { archives: await listArchives(root) } : {}),
-            ...(tasks
-              ? {
-                  tasks: {
-                    list: taskList,
-                    selected: task ?? null,
-                    idle: workers
-                      .filter((view) => sessions?.idle(view.record.id))
-                      .map((view) => view.record.id),
-                    resumable,
-                    messages: (await tasks.messageList()).slice(-300),
-                  },
-                }
-              : {}),
-          },
-          frame,
-        ),
-      );
+      // The lab's owner keeps the person's last look. A desk of one session only shows the lab.
+      const gpu =
+        labView && compute
+          ? labGpu(compute.view(), labView.state.startedAt).spent
+          : 0;
+      const labAway =
+        labView && labDesk.lab?.runs
+          ? look === '1'
+            ? await noteLook(root, labDesk, labView, gpu)
+            : (await lookOf(root, labDesk, labView.state.startedAt)).away
+          : null;
+      const live: Parameters<typeof renderDesk>[3] = {
+        workers,
+        session: worker,
+        // The lab's depth reads only for the panel that is open.
+        ...(labView && frame.panel === 'agent'
+          ? {
+              labAgent: await labSession(
+                root,
+                sessions,
+                labView,
+                frame.agent,
+                labReads,
+              ),
+            }
+          : {}),
+        ...(labDesk.lab && labView && frame.panel === 'diff' && frame.direction
+          ? {
+              labDiff: await labDiff(
+                labDesk.lab,
+                labView,
+                frame.direction,
+                frame.proof,
+                labReads,
+              ),
+            }
+          : {}),
+        // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
+        full: (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
+        ...(sessions ? { agents: sessions.limit } : {}),
+        terminals: await terminalSupport(),
+        controllable: sessions !== undefined,
+        paused: sessions?.paused() ?? [],
+        ...(research ? { research: research.view() } : {}),
+        ...(coordinator ? { coordinator: coordinator.view() } : {}),
+        ...(compute ? { compute: compute.view() } : {}),
+        ...(labDesk.lab
+          ? {
+              lab: labView,
+              labAway,
+              labWorks: labDesk.works,
+              // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
+              labCanStart:
+                labDesk.lab.runs &&
+                !labDesk.lab.exists &&
+                !coordinator?.view()?.state &&
+                !taskList.length &&
+                !(research?.busy ?? false),
+            }
+          : {}),
+        ...(tasks ? { archives: await listArchives(root) } : {}),
+        ...(tasks
+          ? {
+              tasks: {
+                list: taskList,
+                selected: task ?? null,
+                idle: workers
+                  .filter((view) => sessions?.idle(view.record.id))
+                  .map((view) => view.record.id),
+                resumable,
+                messages: (await tasks.messageList()).slice(-300),
+              },
+            }
+          : {}),
+      };
+      const render = (shown: NonNullable<typeof frame>): string =>
+        JSON.stringify(renderDesk(snapshot, selected, report, live, shown));
+      let body = render(frame);
+      // A panel that would make the view too big closes, so the view still loads.
+      if (Buffer.byteLength(body) > 2_000_000 && frame.panel)
+        body = render({ ...frame, panel: null });
       if (Buffer.byteLength(body) > 2_000_000)
         throw new Error('Desk view exceeds its output limit.');
       response
@@ -1724,8 +1891,10 @@ export async function startDesk(
     server.closeAllConnections();
     server.close();
   };
-  const closed = once(server, 'close').then(() => {
+  // The desk closes after the last save of the person's look.
+  const closed = once(server, 'close').then(async () => {
     signal.removeEventListener('abort', stop);
+    await labDesk.saving;
   });
   signal.addEventListener('abort', stop, { once: true });
   if (signal.aborted) stop();

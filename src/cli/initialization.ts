@@ -34,6 +34,11 @@ export interface InitializationOptions {
   readonly workspaceSpecified?: boolean;
   /** The harness commands on PATH, which the CLI looks up. With both, a new team has a helper by default. */
   readonly harnesses?: readonly HarnessName[];
+  /**
+   * A lab starts on the question after setup. A lab has no stop before its
+   * work, so setup does not offer the research stop.
+   */
+  readonly lab?: boolean;
 }
 export interface Initialization {
   readonly root: string;
@@ -243,6 +248,13 @@ export async function initializeProject(
   let research: Initialization['research'] = null;
   // The research plan waits for the person only when they ask for that stop.
   let askFirst = parseAutonomy(options.autonomy) === 'guided';
+  // A lab follows setup, and a lab has no stop before its work.
+  if (options.lab && askFirst) {
+    askFirst = false;
+    io.progress?.(
+      'A lab starts after this setup, and a lab has no stop before its work, so --autonomy guided changes nothing here. It applies to verifold init and verifold research.',
+    );
+  }
   let projectReviewed = false;
   let topicFromBrief = false;
   if (!options.setupOnly && io.interactive) {
@@ -290,18 +302,19 @@ export async function initializeProject(
             ? resolve(homedir(), selected.slice(2))
             : resolve(cwd, selected);
       }
-      askFirst = /^(y|yes)$/i.test(
-        (
-          await io.ask(
-            'Ask you before the source search? Research then waits for your approval of its plan. [y/N]: ',
-            {
-              kind: 'confirm',
-              yes: 'Ask me before the source search',
-              no: 'Search without a stop',
-            },
-          )
-        ).trim(),
-      );
+      if (!options.lab)
+        askFirst = /^(y|yes)$/i.test(
+          (
+            await io.ask(
+              'Ask you before the source search? Research then waits for your approval of its plan. [y/N]: ',
+              {
+                kind: 'confirm',
+                yes: 'Ask me before the source search',
+                no: 'Search without a stop',
+              },
+            )
+          ).trim(),
+        );
     }
   }
   if (
@@ -436,12 +449,23 @@ export async function initializeProject(
       ...(model ? { model } : {}),
       ...(helper && helper !== host ? { helper } : {}),
       ...(context ? { context } : {}),
+      // The question stays with the project from the start, so Home offers it with Start the lab even when the lab cannot start.
+      ...(options.lab && research
+        ? {
+            research: {
+              topic: research.topic,
+              autonomy: research.autonomy,
+              phase: 'needs-plan' as const,
+            },
+          }
+        : {}),
       candidates: [],
       selectedId: null,
     },
     topic,
     context,
     signal,
+    options.lab === true && research !== null,
   );
   return { root, workspace, research };
 }
