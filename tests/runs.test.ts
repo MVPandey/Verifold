@@ -5,6 +5,7 @@ import { createServer } from 'node:net';
 import {
   chmod,
   mkdir,
+  readdir,
   mkdtemp,
   readFile,
   realpath,
@@ -17,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
-  bubblewrap,
+  localSandbox,
   RunLedger,
   runLimits,
   seatbelt,
@@ -124,6 +125,13 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
   return made;
 }
 
+/** The run folders that are left in the project. */
+async function runFolders(root: string): Promise<string[]> {
+  return (await readdir(join(root, '.verifold', 'workspaces'))).filter((name) =>
+    name.startsWith('run-'),
+  );
+}
+
 async function until(check: () => boolean, ms = 10_000): Promise<void> {
   const end = Date.now() + ms;
   while (!check()) {
@@ -146,7 +154,7 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
       'echo hi > out/a.txt',
       'echo deep > out/sub/b.txt',
       'echo "$VERIFOLD_RUN $TMPDIR" > out/env.txt',
-      'echo "${RUNPOD_API_KEY:-none} ${ANTHROPIC_API_KEY:-none}" >> out/env.txt',
+      'echo "${RUNPOD_API_KEY:-none} ${ANTHROPIC_API_KEY:-none} ${SSH_AUTH_SOCK:-none} ${DBUS_SESSION_BUS_ADDRESS:-none}" >> out/env.txt',
       'echo "$VERIFOLD_COMMIT" >> out/env.txt',
       'git rev-parse --show-toplevel >/dev/null 2>&1 || echo "no repository" >> out/env.txt',
     ].join('\n'),
@@ -158,22 +166,21 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
   );
   const { ledger, ended } = fx.ledger();
   t.after(() => ledger.close());
-  const saved = {
-    runpod: process.env.RUNPOD_API_KEY,
-    key: process.env.ANTHROPIC_API_KEY,
-  };
-  process.env.RUNPOD_API_KEY = 'secret-runpod';
-  process.env.ANTHROPIC_API_KEY = 'secret-anthropic';
+  const names = [
+    'RUNPOD_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'SSH_AUTH_SOCK',
+    'DBUS_SESSION_BUS_ADDRESS',
+  ] as const;
+  const saved = names.map((name) => [name, process.env[name]] as const);
+  for (const name of names) process.env[name] = `set-${name}`;
   let started: RunRecord;
   try {
     started = await fx.start(ledger, 'sh train.sh', {
       want: ['out', 'missing.txt'],
     });
   } finally {
-    for (const [name, value] of [
-      ['RUNPOD_API_KEY', saved.runpod],
-      ['ANTHROPIC_API_KEY', saved.key],
-    ] as const)
+    for (const [name, value] of saved)
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
   }
@@ -209,7 +216,7 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
   const env = await readFile(join(record, 'outputs', 'out', 'env.txt'), 'utf8');
   assert.match(
     env,
-    /^r-1 .*run-1\/tmp\nnone none\n[0-9a-f]{40}\nno repository\n$/,
+    /^r-1 .*run-1-[0-9a-f]{8}\/tmp\nnone none none none\n[0-9a-f]{40}\nno repository\n$/,
   );
   assert.equal(env.split('\n')[2], run?.commit);
   const log = await readFile(join(record, 'log.txt'), 'utf8');
@@ -226,14 +233,7 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
   await again.load(true);
   assert.deepEqual(again.get('r-1'), run);
   // Nothing of the run's folder stays.
-  assert.equal(
-    existsSync(join(fx.root, '.verifold', 'workspaces', 'run-1')),
-    false,
-  );
-  assert.equal(
-    existsSync(join(fx.root, '.verifold', 'workspaces', 'run-1.done')),
-    false,
-  );
+  assert.deepEqual(await runFolders(fx.root), []);
   // The agent heard of it once.
   assert.equal(ended.length, 1);
   assert.equal(run?.told, true);
@@ -308,7 +308,10 @@ await test('runs are cancelled, limited, and refused without a sandbox, and a re
   await ledger.load(true);
   assert.equal((await fx.start(ledger, 'true')).id, 'r-3');
   const closed = fx.ledger({ sandbox: null }).ledger;
-  await assert.rejects(fx.start(closed, 'true'), /no sandbox for runs/);
+  await assert.rejects(
+    fx.start(closed, 'true'),
+    /Local runs need the macOS sandbox/,
+  );
 });
 
 await test('a new owner ends a run that an earlier owner left running, with its process', async (t) => {
@@ -322,7 +325,7 @@ await test('a new owner ends a run that an earlier owner left running, with its 
     fx.root,
     '.verifold',
     'workspaces',
-    'run-1',
+    earlier.ledger.get('r-1')?.folder ?? '',
     'tree',
     'locked',
   );
@@ -336,10 +339,7 @@ await test('a new owner ends a run that an earlier owner left running, with its 
   assert.equal(run?.told, false);
   assert.match(run?.note ?? '', /Verifold stopped while the run ran/);
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
-  assert.equal(
-    existsSync(join(fx.root, '.verifold', 'workspaces', 'run-1')),
-    false,
-  );
+  assert.deepEqual(await runFolders(fx.root), []);
   await earlier.ledger.close();
   // A process that only shows the lab reads the records and stops nothing.
   const viewer = fx.ledger().ledger;
@@ -390,29 +390,6 @@ await test('outputs leave out links and files with more than one link, and a lon
     middle,
     /\[Verifold cut \d+ bytes of the log here\. The last \d+ bytes follow\.\]/,
   );
-});
-
-await test('bubblewrap hides the credential paths, keeps the run in its folder, and has no network', () => {
-  const start = bubblewrap('/usr/bin/bwrap')({
-    command: 'make',
-    folder: '/p/.verifold/workspaces/run-1',
-    cwd: '/p/.verifold/workspaces/run-1/tree',
-    denied: [
-      { path: '/home/u/.ssh', folder: true },
-      { path: '/home/u/.netrc', folder: false },
-    ],
-  });
-  assert.equal(start.file, '/usr/bin/bwrap');
-  const args = start.args.join(' ');
-  assert.match(args, /--unshare-all/);
-  assert.match(args, /--ro-bind \/ \//);
-  assert.match(args, /--tmpfs \/home\/u\/\.ssh/);
-  assert.match(args, /--ro-bind \/dev\/null \/home\/u\/\.netrc/);
-  assert.match(
-    args,
-    /--bind \/p\/\.verifold\/workspaces\/run-1 \/p\/\.verifold\/workspaces\/run-1 --chdir \/p\/\.verifold\/workspaces\/run-1\/tree \/bin\/sh -c make$/,
-  );
-  assert.doesNotMatch(args, /--share-net/);
 });
 
 await test(
@@ -527,8 +504,44 @@ await test('one output that cannot be copied leaves the other outputs and the me
   );
   assert.match(run?.note ?? '', /Verifold could not copy out\/locked\./);
   // The folder without permissions goes too.
+  assert.deepEqual(await runFolders(fx.root), []);
+});
+
+await test('each run gets a folder that no later run gets, also after Start over', async (t) => {
+  const fx = await fixture(t);
+  const first = fx.ledger();
+  t.after(() => first.ledger.close());
+  await fx.start(first.ledger, 'true');
+  await until(() => first.ended.length === 1);
+  const before = first.ledger.get('r-1')?.folder ?? '';
+  assert.match(before, /^run-1-[0-9a-f]{8}$/);
+  // Start over moves the records away, so the next lab starts at r-1 again.
+  await rm(join(fx.root, '.verifold', 'lab'), { recursive: true });
+  const next = fx.ledger();
+  t.after(() => next.ledger.close());
+  await next.ledger.load(true);
+  await fx.start(next.ledger, 'true');
+  await until(() => next.ended.length === 1);
+  const after = next.ledger.get('r-1')?.folder ?? '';
+  assert.match(after, /^run-1-[0-9a-f]{8}$/);
+  assert.notEqual(after, before);
+});
+
+await test('a run that a signal ends says which signal', async (t) => {
+  const fx = await fixture(t);
+  const { ledger, ended } = fx.ledger();
+  t.after(() => ledger.close());
+  await fx.start(ledger, 'kill -9 $$');
+  await until(() => ended.length === 1);
+  const run = ledger.get('r-1');
+  assert.equal(run?.status, 'failed');
+  assert.equal(run?.exitCode, null);
+  assert.match(run?.note ?? '', /Killed by SIGKILL\./);
+});
+
+await test('only macOS runs locally', () => {
   assert.equal(
-    existsSync(join(fx.root, '.verifold', 'workspaces', 'run-1.done')),
-    false,
+    localSandbox() !== null,
+    process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec'),
   );
 });

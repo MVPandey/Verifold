@@ -24,6 +24,7 @@ import {
   type LabSessions,
 } from '../src/cli/lab.ts';
 import { RunTeam } from '../src/cli/team.ts';
+import type { Sandbox } from '../src/cli/runs.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
@@ -262,6 +263,8 @@ async function fixture(
     readonly harnesses?: readonly ('claude' | 'codex')[];
     /** One hour of a time budget, short in a test. */
     readonly hourMs?: number;
+    /** The sandbox of runs. Default: none at all, so a run's command runs as it is. Null: no runs. */
+    readonly sandbox?: Sandbox | null;
   } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
@@ -321,7 +324,10 @@ async function fixture(
       sessions,
       quota,
       // Runs need no sandbox here: the ledger's own tests check the sandbox.
-      sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
+      sandbox:
+        options.sandbox === undefined
+          ? (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] })
+          : options.sandbox,
       timing: options.hourMs ? { ...timing, hourMs: options.hourMs } : timing,
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
@@ -819,6 +825,28 @@ await test('lab agents run with the strict limits and without RunPod or pod secr
       'verifold_cancel_run',
     ],
   );
+  assert.match(
+    (await lab.inputs('d-1-alpha'))[0] ?? '',
+    /Runs on this computer:/,
+  );
+});
+
+await test('without a sandbox for runs, agents get no run tools and run experiments in their harness', async (t) => {
+  const lab = await fixture(t, { sandbox: null });
+  await open(lab, [{ title: 'Beta', harness: 'codex' }]);
+  await until(async () => (await lab.inputs('d-1-beta')).length >= 1);
+  const thread = (
+    (await lab.lines('d-1-beta', 'threads.jsonl')) as {
+      params: { dynamicTools: { name: string }[] };
+    }[]
+  )[0]?.params;
+  assert.deepEqual(
+    thread?.dynamicTools.map((tool) => tool.name),
+    ['verifold_board', 'verifold_post', 'verifold_read'],
+  );
+  const first = (await lab.inputs('d-1-beta'))[0] ?? '';
+  assert.doesNotMatch(first, /verifold_run|Runs on this computer/);
+  assert.match(first, /run experiments that fit on this computer/);
 });
 
 await test('start over moves the lab and its board into the archive', async (t) => {
@@ -3114,4 +3142,41 @@ await test('runs stop when the agent or the person cancels them, or the directio
   await until(() => status('r-4') === 'cancelled');
   assert.equal(lab.lab.view()?.ledger[3]?.cancelledBy, 'person');
   await assert.rejects(lab.lab.cancelRun('r-4'), /r-4 already ended/);
+});
+
+await test('a direction stops also while one of its runs ends', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'Long.' },
+        },
+        {
+          // A process outside the run's group keeps the pipes open, so the run ends for 2 seconds after its exit.
+          name: 'verifold_run',
+          arguments: {
+            command: "perl -MPOSIX -e 'POSIX::setsid(); sleep 4' & sleep 0.5",
+            why: 'Short.',
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const status = (id: string): string | undefined =>
+    lab.lab.view()?.ledger.find((run) => run.id === id)?.status;
+  await until(() => status('r-2') === 'running', 10_000);
+  // r-2's shell exits after half a second. Its record ends about 2 seconds later.
+  await delay(900);
+  assert.equal(status('r-1'), 'running');
+  assert.equal(status('r-2'), 'running');
+  await lab.lab.stopDirection('d-1');
+  const view = lab.lab.view();
+  assert.equal(view?.state.directions[0]?.state, 'stopped');
+  assert.ok(view?.directions[0]?.agent.stoppedAt);
+  assert.match(view?.posts.at(-1)?.text ?? '', /The person stopped "Alpha"\./);
+  await until(() => status('r-1') === 'cancelled' && status('r-2') === 'done');
+  assert.equal(lab.lab.view()?.ledger[1]?.cancelledBy, null);
 });
