@@ -41,7 +41,7 @@ import type { LabView } from './lab.ts';
 import { labWorks } from './team.ts';
 import {
   stateOf,
-  labBudgetNeed,
+  labCallNeeds,
   minutesText,
   renderLab,
   renderLabStart,
@@ -1242,8 +1242,13 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   const record = snapshot.attempts.find((entry) => entry.id === latest)?.record;
   const since = record?.finishedAt ?? record?.startedAt ?? null;
   const phase = workspace.research?.phase;
-  const budget = live.lab ? labBudgetNeed(live.lab) : null;
-  if (budget) items.push({ ...budget, view: 'home', kind: 'Time budget' });
+  for (const call of live.lab
+    ? labCallNeeds(
+        live.lab,
+        live.compute?.secrets.map((secret) => secret.name) ?? null,
+      )
+    : [])
+    items.push({ ...call, view: 'home' });
   // A lab run has no research to continue.
   if (
     live.research &&

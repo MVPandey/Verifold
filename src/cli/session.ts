@@ -1201,15 +1201,20 @@ export class SessionManager {
     readonly tools: AgentTools;
     /** A checker: more paths that it cannot read. */
     readonly denyRead?: readonly string[];
+    /** The domains that its shell commands may reach, after the person's call. */
+    readonly network?: readonly string[];
   }): Promise<string> {
     this.ready();
     if (input.denyRead && !input.denyRead.every(denyPath))
       fail('A path that a session cannot read is not valid.');
+    if (input.network && !input.network.every(validDomain))
+      fail('A domain that a session may reach is not valid.');
     const record: SessionRecord = {
       ...fresh(input.host, input.model ?? null, 'strict'),
       agent: input.agent,
       cwd: relative(this.root, input.cwd).split('\\').join('/'),
       ...(input.denyRead?.length ? { denyRead: input.denyRead } : {}),
+      ...(input.network?.length ? { network: input.network } : {}),
     };
     const parsed = parseRecord(record);
     if (!parsed?.cwd || !parsed.agent)
@@ -1254,8 +1259,16 @@ export class SessionManager {
       : null;
   }
 
-  /** Continue a paused session in a new harness process. A coordinator gets its tools again. */
-  async resume(id: unknown, tools?: AgentTools): Promise<void> {
+  /**
+   * Continue a paused session in a new harness process. A coordinator gets
+   * its tools again. A lab agent gets its tools and the domains of its shell:
+   * the new process takes them also when the person changed them.
+   */
+  async resume(
+    id: unknown,
+    tools?: AgentTools,
+    network?: readonly string[],
+  ): Promise<void> {
     const generation = this.generation;
     this.ready();
     const saved =
@@ -1268,7 +1281,14 @@ export class SessionManager {
       fail('That session cannot resume. Choose a paused session.');
     // Another start can begin while the record loads.
     this.ready();
-    this.current = { ...saved, status: 'starting', endedAt: null };
+    const { network: before, ...kept } = saved;
+    const domains = saved.agent && network ? network : before;
+    this.current = {
+      ...kept,
+      ...(domains?.length ? { network: domains } : {}),
+      status: 'starting',
+      endedAt: null,
+    };
     this.tools = tools;
     this.event(
       'status',
