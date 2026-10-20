@@ -25,6 +25,7 @@ import {
   labToolsVersion,
   planLimits,
   planToolSpec,
+  runToolSpecs,
 } from './lab-tools.ts';
 import { loadPrompt } from './prompts.ts';
 import type { LimitSignal } from './quota.ts';
@@ -1381,9 +1382,18 @@ export class Lab {
         ),
       };
       await this.stateFile.save();
+      // A run that ends now needs no cancel. One run never stops the stop.
       for (const run of this.ledger.list())
         if (run.direction === direction.id && runActive(run))
-          this.ledger.cancel(run.id, 'person');
+          try {
+            this.ledger.cancel(run.id, 'person');
+          } catch (error) {
+            // A refusal says that the run ends now. Anything else is logged.
+            if (!(error instanceof SessionActionError))
+              this.options.progress?.(
+                `Verifold could not cancel ${run.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+              );
+          }
       if (agent) {
         this.loops.get(agent.id)?.cancel();
         this.forget(agent.id);
@@ -2110,7 +2120,11 @@ export class Lab {
       : opener
         ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and a bar changes before a result, never after it.'
         : '';
-    return `${await loadPrompt('lab-peer')}${role}
+    // Without a sandbox for runs, agents run experiments in their own harness.
+    const runs = this.ledger.sandboxed
+      ? `\n\n${await loadPrompt('lab-runs')}`
+      : '';
+    return `${await loadPrompt('lab-peer')}${runs}${role}
 
 The question:
 ${state.question}
@@ -2137,6 +2151,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     return {
       specs: [
         ...labToolSpecs,
+        ...(this.ledger.sandboxed ? runToolSpecs : []),
         ...(this.state?.opener === id ? [planToolSpec] : []),
         ...(this.options.memory ? [noteToolSpec] : []),
       ],

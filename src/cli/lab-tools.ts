@@ -134,6 +134,10 @@ export const labToolSpecs: readonly AgentTool[] = [
       additionalProperties: false,
     },
   },
+];
+
+/** The run tools. Only a lab on a computer with a sandbox for runs offers them. */
+export const runToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_run',
     description:

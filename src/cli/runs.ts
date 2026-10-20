@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import {
   chmod,
@@ -11,7 +11,6 @@ import {
   realpath,
   rename,
   rm,
-  stat,
   writeFile,
   type FileHandle,
 } from 'node:fs/promises';
@@ -31,9 +30,10 @@ import { checkoutAt, commitPattern, type Workspace } from './workspaces.ts';
  * code, the time, and the metrics. Other agents and the person check a claim
  * against it.
  *
- * A run works on its own copy of the commit, in `.verifold/workspaces/run-N`,
- * inside the computer's sandbox: it writes only in that folder, has no
- * network, and cannot read the credential paths. Its record, log, and copied
+ * A run works on its own copy of the commit, in a folder under
+ * `.verifold/workspaces` that no other run gets, inside the macOS sandbox: it
+ * writes only in that folder, has no network, and cannot read the credential
+ * paths. Other systems run nothing locally. Its record, log, and copied
  * outputs stay in `.verifold/lab/runs/r-N/`, where the run cannot write. When
  * the process ends, Verifold moves the run's folder out of the sandbox's
  * writable path before it reads anything from it, so a process that outlived
@@ -94,7 +94,7 @@ export function runActive(run: RunRecord): boolean {
 }
 
 export const noSandboxText =
-  'This computer has no sandbox for runs: sandbox-exec on macOS, or bubblewrap on Linux. Verifold runs nothing here.';
+  'Local runs need the macOS sandbox, and this computer has none, so Verifold runs nothing here. Use a pod.';
 
 export interface RunOutput {
   /** The path in the run's folder, and in `outputs/`. */
@@ -142,12 +142,12 @@ export interface RunRecord {
   readonly note: string | null;
   /** Its agent heard that it ended. After a restart, an agent that did not hears it then. */
   readonly told: boolean;
-}
-
-/** A path that the run's sandbox cannot read: a credential folder or file, by its real path. */
-export interface DeniedPath {
-  readonly path: string;
-  readonly folder: boolean;
+  /**
+   * The run's own folder under `.verifold/workspaces`, such as
+   * `run-3-1a2b3c4d`. No other run gets it, also after Start over, so a
+   * process that outlived an earlier run cannot write in a later one.
+   */
+  readonly folder: string;
 }
 
 /** One run for the sandbox to start. */
@@ -157,7 +157,8 @@ export interface SandboxSpec {
   readonly folder: string;
   /** The working folder: the commit's files, inside `folder`. */
   readonly cwd: string;
-  readonly denied: readonly DeniedPath[];
+  /** Real paths of credential folders and files that the run cannot read. */
+  readonly denied: readonly string[];
 }
 
 /** The program and arguments that start one run inside a sandbox. */
@@ -207,10 +208,7 @@ export const seatbelt: Sandbox = (spec) => ({
     seatbeltProfile(spec.denied.length),
     '-D',
     `RUN=${spec.folder}`,
-    ...spec.denied.flatMap((entry, index) => [
-      '-D',
-      `DENY_${index}=${entry.path}`,
-    ]),
+    ...spec.denied.flatMap((path, index) => ['-D', `DENY_${index}=${path}`]),
     '/bin/sh',
     '-c',
     spec.command,
@@ -218,77 +216,49 @@ export const seatbelt: Sandbox = (spec) => ({
 });
 
 /**
- * A run inside bubblewrap: the system read-only, the run's folder writable,
- * the credential paths hidden, and no network. Its own PID namespace ends
- * every process of the run when the run ends.
+ * The sandbox of this computer: Seatbelt on macOS, or none. Other systems
+ * run nothing locally until a sandbox there closes local sockets too.
  */
-export function bubblewrap(bwrap: string): Sandbox {
-  return (spec) => ({
-    file: bwrap,
-    args: [
-      '--unshare-all',
-      '--die-with-parent',
-      '--new-session',
-      '--ro-bind',
-      '/',
-      '/',
-      '--dev',
-      '/dev',
-      '--proc',
-      '/proc',
-      ...spec.denied.flatMap((entry) =>
-        entry.folder
-          ? ['--tmpfs', entry.path]
-          : ['--ro-bind', '/dev/null', entry.path],
-      ),
-      '--bind',
-      spec.folder,
-      spec.folder,
-      '--chdir',
-      spec.cwd,
-      '/bin/sh',
-      '-c',
-      spec.command,
-    ],
-  });
-}
-
-/** The sandbox of this computer: Seatbelt on macOS, bubblewrap on Linux when it is installed, or none. */
 export function localSandbox(): Sandbox | null {
-  if (process.platform === 'darwin')
-    return existsSync('/usr/bin/sandbox-exec') ? seatbelt : null;
-  if (process.platform === 'linux') {
-    const bwrap = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap'].find(
-      (path) => existsSync(path),
-    );
-    return bwrap ? bubblewrap(bwrap) : null;
-  }
-  return null;
+  return process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')
+    ? seatbelt
+    : null;
 }
 
 /** The credential paths that exist, by their real paths, so a link to one is closed too. */
-export async function deniedPaths(home = homedir()): Promise<DeniedPath[]> {
-  const found = new Map<string, DeniedPath>();
+export async function deniedPaths(home = homedir()): Promise<string[]> {
+  const found = new Set<string>();
   for (const path of credentialPaths) {
     const real = await realpath(join(home, path.slice(2))).catch(() => null);
-    if (!real) continue;
-    const stats = await stat(real).catch(() => null);
-    if (stats) found.set(real, { path: real, folder: stats.isDirectory() });
+    if (real) found.add(real);
   }
-  return [...found.values()];
+  return [...found];
 }
+
+/** Variables that point at local sockets and desktop sessions. A run has no use for them. */
+const sessionVariables = [
+  'SSH_AUTH_SOCK',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'DISPLAY',
+  'WAYLAND_DISPLAY',
+  'XDG_RUNTIME_DIR',
+];
 
 /**
  * The environment of a run: a child's environment without the keys of the
  * harnesses and the cloud accounts, which a run without network cannot use,
- * and without Git's variables. Git in the run finds no repository above its
- * folder, so a script that records the commit reads `VERIFOLD_COMMIT`.
+ * without Git's variables, and without local sockets. Git in the run finds no
+ * repository above its folder, so a script that records the commit reads
+ * `VERIFOLD_COMMIT`.
  */
 function runEnvironment(run: RunRecord, folder: string): NodeJS.ProcessEnv {
   const environment = childEnvironment();
   for (const name of Object.keys(environment))
     if (
-      /^(ANTHROPIC|OPENAI|CLAUDE|CODEX|AWS|AZURE|GOOGLE|GEMINI|GIT)_/.test(name)
+      /^(ANTHROPIC|OPENAI|CLAUDE|CODEX|AWS|AZURE|GOOGLE|GEMINI|GIT)_/.test(
+        name,
+      ) ||
+      sessionVariables.includes(name)
     )
       delete environment[name];
   return {
@@ -356,7 +326,9 @@ function parseRun(value: Record<string, unknown> | null): RunRecord | null {
       )) ||
     !(value.cancelledBy === null || text(value.cancelledBy)) ||
     !(value.note === null || text(value.note)) ||
-    typeof value.told !== 'boolean'
+    typeof value.told !== 'boolean' ||
+    !text(value.folder) ||
+    !/^run-[1-9]\d{0,5}-[0-9a-f]{8}$/.test(value.folder)
   )
     return null;
   const shown = outputs.flatMap((entry: unknown) => {
@@ -407,6 +379,7 @@ function parseRun(value: Record<string, unknown> | null): RunRecord | null {
     cancelledBy: value.cancelledBy,
     note: value.note,
     told: value.told,
+    folder: value.folder,
   };
 }
 
@@ -641,21 +614,26 @@ export class RunLedger {
     ).length;
   }
 
-  private get folder(): string {
+  /** The records of the runs. */
+  private get store(): string {
     return join(this.root, '.verifold', 'lab', 'runs');
   }
 
-  private paths(id: string): {
-    readonly record: string;
+  /** A run's record folder, with its log and outputs. */
+  private record(id: string): string {
+    return join(this.store, id);
+  }
+
+  /** A run's folder, where the sandbox writes, and where it moves when the run ends. */
+  private trees(run: RunRecord): {
     readonly folder: string;
     readonly kept: string;
   } {
     const workspaces = join(this.root, '.verifold', 'workspaces');
     return {
-      record: join(this.folder, id),
-      folder: join(workspaces, `run-${number(id)}`),
+      folder: join(workspaces, run.folder),
       // Outside the sandbox's writable path: a component that the run's folder name does not start.
-      kept: join(workspaces, `run-${number(id)}.done`),
+      kept: join(workspaces, `${run.folder}.done`),
     };
   }
 
@@ -670,7 +648,7 @@ export class RunLedger {
     this.closed = false;
     let names: string[] = [];
     try {
-      names = await readdir(this.folder);
+      names = await readdir(this.store);
     } catch {
       /* No run yet. */
     }
@@ -678,7 +656,7 @@ export class RunLedger {
       this.last = Math.max(this.last, number(name));
       let value: Record<string, unknown> | null = null;
       try {
-        const path = join(this.folder, name, 'run.json');
+        const path = join(this.record(name), 'run.json');
         const stats = await lstat(path);
         if (stats.isFile() && stats.size <= 1_000_000)
           value = object(JSON.parse(await readFile(path, 'utf8')));
@@ -695,7 +673,7 @@ export class RunLedger {
       if (run.process)
         await stopRecordedProcess(run.process.pid, run.process.processStart);
       // A folder that cannot go stays. The record ends all the same.
-      await this.clear(run.id).catch(() => {});
+      await this.clear(run).catch(() => {});
       const next: RunRecord = {
         ...run,
         status: 'interrupted',
@@ -775,8 +753,9 @@ export class RunLedger {
         cancelledBy: null,
         note: null,
         told: false,
+        folder: `run-${number(id)}-${randomBytes(4).toString('hex')}`,
       };
-      await mkdir(this.paths(id).record, { recursive: true, mode: 0o700 });
+      await mkdir(this.record(id), { recursive: true, mode: 0o700 });
       await this.save(run);
       this.records.set(id, run);
       this.starting.set(id, null);
@@ -807,18 +786,14 @@ export class RunLedger {
     workspace: Workspace,
     started: (run: RunRecord) => void,
   ): Promise<void> {
-    const paths = this.paths(run.id);
+    const paths = this.trees(run);
     let log: RunLog | null = null;
     // Verifold stopped the run. Its exit code then does not count.
     let stop: Live['stop'] = null;
-    let exit: { code: number | null; error: string | null } = {
-      code: null,
-      error: null,
-    };
+    let exit: Exit = { code: null, signal: null, error: null };
     // The process started, so its folder holds its work.
     let ran = false;
     try {
-      await this.clear(run.id);
       const tree = join(paths.folder, 'tree');
       await mkdir(tree, { recursive: true, mode: 0o700 });
       await mkdir(join(paths.folder, 'tmp'), { mode: 0o700 });
@@ -832,7 +807,9 @@ export class RunLedger {
         cwd: join(folder, 'tree'),
         denied: await deniedPaths(this.options.home),
       });
-      log = new RunLog(await open(join(paths.record, 'log.txt'), 'w', 0o600));
+      log = new RunLog(
+        await open(join(this.record(run.id), 'log.txt'), 'w', 0o600),
+      );
       stop = this.starting.get(run.id) ?? null;
       if (stop) return;
       const child = spawn(file, args, {
@@ -841,14 +818,14 @@ export class RunLedger {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: runEnvironment(run, folder),
       });
-      const exited = new Promise<{ code: number | null; error: string | null }>(
-        (resolve) => {
-          child.once('error', (error) =>
-            resolve({ code: null, error: error.message }),
-          );
-          child.once('exit', (code) => resolve({ code, error: null }));
-        },
-      );
+      const exited = new Promise<Exit>((resolve) => {
+        child.once('error', (error) =>
+          resolve({ code: null, signal: null, error: error.message }),
+        );
+        child.once('exit', (code, signal) =>
+          resolve({ code, signal, error: null }),
+        );
+      });
       const current = log;
       // Every chunk reaches the log before its stream reads more.
       const ends = (
@@ -925,6 +902,7 @@ export class RunLedger {
     } catch (error) {
       exit = {
         code: null,
+        signal: null,
         error: error instanceof Error ? error.message : 'unknown error',
       };
     } finally {
@@ -938,7 +916,7 @@ export class RunLedger {
             note: `Verifold could not read the run's folder: ${error instanceof Error ? error.message : 'unknown error'}`,
           }))
         : { metrics: new Map(), outputs: [], note: null };
-      await this.clear(run.id).catch(() => {});
+      await this.clear(run).catch(() => {});
       started(
         await this.options.serial(async () => {
           const metrics = [
@@ -970,6 +948,8 @@ export class RunLedger {
             note:
               [
                 exit.error ? `The run did not start: ${exit.error}` : '',
+                // Such as an out-of-memory kill or a crash: no exit code.
+                exit.signal && !stop ? `Killed by ${exit.signal}.` : '',
                 stop === 'cancelled' && this.reasons.get(run.id)
                   ? `Cancelled: ${this.reasons.get(run.id)}`
                   : '',
@@ -998,7 +978,7 @@ export class RunLedger {
    * files with one link count, and no link is followed.
    */
   private async keep(run: RunRecord): Promise<Collected> {
-    const paths = this.paths(run.id);
+    const paths = this.trees(run);
     const collected: Collected = {
       metrics: new Map(),
       outputs: [],
@@ -1081,7 +1061,7 @@ export class RunLedger {
           runLimits.outputBytes - bytes,
         );
         if (!content) return;
-        const target = join(paths.record, 'outputs', rel);
+        const target = join(this.record(run.id), 'outputs', rel);
         await mkdir(dirname(target), { recursive: true, mode: 0o700 });
         await writeFile(target, content, { flag: 'wx', mode: 0o600 });
         copied.add(rel);
@@ -1128,8 +1108,8 @@ export class RunLedger {
    * A run can leave folders without write permission, so a removal that
    * fails makes the folders writable for their owner and tries once more.
    */
-  private async clear(id: string): Promise<void> {
-    const paths = this.paths(id);
+  private async clear(run: RunRecord): Promise<void> {
+    const paths = this.trees(run);
     for (const path of [paths.folder, paths.kept])
       await rm(path, { recursive: true, force: true }).catch(async () => {
         await writable(path);
@@ -1206,7 +1186,7 @@ export class RunLedger {
     let handle: FileHandle;
     try {
       handle = await open(
-        join(this.paths(id).record, 'log.txt'),
+        join(this.record(id), 'log.txt'),
         constants.O_RDONLY | constants.O_NOFOLLOW,
       );
     } catch {
@@ -1229,10 +1209,17 @@ export class RunLedger {
 
   private save(run: RunRecord): Promise<void> {
     return writePrivateFile(
-      join(this.paths(run.id).record, 'run.json'),
+      join(this.record(run.id), 'run.json'),
       `${JSON.stringify(run, null, 2)}\n`,
     );
   }
+}
+
+/** How a run's process ended, or why it did not start. */
+interface Exit {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly error: string | null;
 }
 
 /** Part of a run's log. */

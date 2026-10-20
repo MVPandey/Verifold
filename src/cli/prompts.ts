@@ -24,6 +24,7 @@ const promptIds = [
   'coordinator',
   'lab-peer',
   'lab-opener',
+  'lab-runs',
 ] as const;
 
 export type PromptId = (typeof promptIds)[number];
