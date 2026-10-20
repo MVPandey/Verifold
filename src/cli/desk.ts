@@ -26,8 +26,10 @@ import type { ResearchReport } from './research.ts';
 import {
   SessionActionError,
   hostName,
+  readRecord,
   sessionTranscript,
   validSessionId,
+  type SessionView,
 } from './session.ts';
 import type { SessionPool } from './workers.ts';
 import { TranscriptFile, type TranscriptLog } from './transcript.ts';
@@ -49,8 +51,8 @@ import {
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
 import { runId } from './board.ts';
-import { startLabOn, type Lab } from './lab.ts';
-import type { LabWork } from './desk-lab.ts';
+import { startLabOn, type Lab, type LabView } from './lab.ts';
+import type { LabDiff, LabWork } from './desk-lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
@@ -506,6 +508,11 @@ async function labAction(
     case 'lab-call-undo':
       await lab.undoCall(body.call);
       return 200;
+    case 'lab-terminal-open':
+      if (!validLease(body.lease))
+        fail('The desk sent an invalid input lease.');
+      await lab.openTerminal(body.agent, body.lease);
+      return 200;
     default:
       return 400;
   }
@@ -513,6 +520,35 @@ async function labAction(
 
 function fail(message: string): never {
   throw new SessionActionError(message);
+}
+
+/** What a direction changed, for the diff panel, or null when Verifold cannot read its branch. */
+async function labDiff(lab: Lab, direction: string): Promise<LabDiff | null> {
+  const shown = await lab.directionDiff(direction).catch(() => null);
+  return shown
+    ? { direction, from: shown.from, to: shown.to, files: shown.files }
+    : null;
+}
+
+/**
+ * The session of a lab agent or checker for the agent panel: its slot's
+ * view, or its saved record when no slot holds it now. Null before it starts.
+ */
+async function labSession(
+  root: string,
+  sessions: SessionPool | undefined,
+  view: LabView,
+  agent: string | undefined,
+): Promise<SessionView | null> {
+  const id =
+    view.directions.find((entry) => entry.agent.id === agent)?.agent.session ??
+    view.checks.find((check) => check.agent === agent)?.session ??
+    null;
+  if (!id) return null;
+  const known = sessions?.view(id);
+  if (known) return known;
+  const record = await readRecord(root, id);
+  return record ? { record, live: false, saveFailed: false } : null;
 }
 
 /**
@@ -1356,6 +1392,46 @@ export async function startDesk(
         .end(JSON.stringify(log));
       return;
     }
+    if (url.pathname === '/api/lab-diff') {
+      if (!authorized) {
+        response.writeHead(401).end();
+        return;
+      }
+      const direction = url.searchParams.get('direction') ?? '';
+      const file = url.searchParams.get('file') ?? '';
+      if (
+        !/^d-[1-9]\d{0,3}$/.test(direction) ||
+        !file ||
+        file.length > 300 ||
+        [...url.searchParams.keys()].some(
+          (key) => key !== 'direction' && key !== 'file',
+        ) ||
+        url.searchParams.getAll('file').length > 1
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      try {
+        const shown = await labDesk.lab?.directionDiff(direction, file);
+        if (!shown?.diff) {
+          response.writeHead(404).end();
+          return;
+        }
+        response
+          .writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify(shown.diff));
+      } catch (error) {
+        if (!(error instanceof SessionActionError)) throw error;
+        response
+          .writeHead(404, {
+            'Content-Type': 'application/json; charset=utf-8',
+          })
+          .end(JSON.stringify({ error: error.message }));
+      }
+      return;
+    }
     if (url.pathname !== '/api/view') {
       response.writeHead(404).end();
       return;
@@ -1373,6 +1449,8 @@ export async function startDesk(
       url.searchParams.get('since'),
       url.searchParams.get('direction'),
       url.searchParams.get('finished'),
+      url.searchParams.get('run'),
+      url.searchParams.get('agent'),
     );
     const keys = [
       'attempt',
@@ -1383,6 +1461,8 @@ export async function startDesk(
       'since',
       'direction',
       'finished',
+      'run',
+      'agent',
     ];
     if (
       (selected !== undefined && !validAttemptId(selected)) ||
@@ -1464,6 +1544,7 @@ export async function startDesk(
           .at(0) ??
         workers[0] ??
         null;
+      const labView = labDesk.lab?.view() ?? null;
       const body = JSON.stringify(
         renderDesk(
           snapshot,
@@ -1472,6 +1553,20 @@ export async function startDesk(
           {
             workers,
             session: worker,
+            // The lab's depth reads only for the panel that is open.
+            ...(labView && frame.panel === 'agent'
+              ? {
+                  labAgent: await labSession(
+                    root,
+                    sessions,
+                    labView,
+                    frame.agent,
+                  ),
+                }
+              : {}),
+            ...(labDesk.lab && frame.panel === 'diff' && frame.direction
+              ? { labDiff: await labDiff(labDesk.lab, frame.direction) }
+              : {}),
             // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
             full:
               (sessions?.full ?? false) && !(labDesk.lab?.canYield() ?? false),
@@ -1484,7 +1579,7 @@ export async function startDesk(
             ...(compute ? { compute: compute.view() } : {}),
             ...(labDesk.lab
               ? {
-                  lab: labDesk.lab.view(),
+                  lab: labView,
                   labWorks: labDesk.works,
                   // The offer shows when the run's guard would let a lab start here: the same records, read once for this view.
                   labCanStart:

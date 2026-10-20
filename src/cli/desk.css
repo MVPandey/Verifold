@@ -3433,49 +3433,593 @@ body:not(:has(.rail)) .menu-button {
 }
 
 /* ---------- The lab ---------- */
-/* One row for each direction: its title, agent, state, and controls. Its transcript opens below it. */
-.lab-directions {
-  list-style: none;
-  padding: 0;
+/*
+ * A lab's Home is one quiet column: the header, the Needs-you line, the
+ * directions, the board, and the message box. The views and the team open
+ * from the menu, as on a phone. Depth opens in the side panel.
+ */
+.frame:has(.lab-screen) {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
-.lab-direction {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: 4px 14px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
+.frame:has(.lab-screen) #view {
+  grid-column: 1;
+  padding-bottom: 0;
 }
-.lab-direction:first-child {
-  border-top: 0;
+.frame:has(.lab-screen) .panel {
+  grid-column: 2;
 }
-.lab-direction-text {
+.frame:has(.lab-screen) .rail {
+  position: fixed;
+  top: var(--top);
+  bottom: 0;
+  left: 0;
+  z-index: 16;
+  width: min(288px, 86vw);
+  display: none;
+  box-shadow: var(--shadow);
+}
+body.rail-open .frame:has(.lab-screen) .rail {
+  display: flex;
+}
+body.rail-open:has(.lab-screen)::after {
+  content: '';
+  position: fixed;
+  inset: var(--top) 0 0;
+  z-index: 14;
+  background: var(--scrim);
+}
+body:has(.lab-screen) .menu-button {
+  display: inline-grid;
+}
+.lab-screen {
+  max-width: 760px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
+  gap: 16px;
+}
+button.link {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--violet);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* The header: the question, the day, the deadline, the money, and Pause. It stays in view. */
+.lab-head {
+  position: sticky;
+  top: -22px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  margin: -22px -32px 0;
+  padding: 16px 32px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--paper);
+}
+.lab-head-text {
+  flex: 1;
   min-width: 0;
 }
-.lab-agent {
+.lab-head h1 {
+  font-size: 19px;
+}
+.lab-facts {
+  max-width: none;
+  margin-top: 2px;
+  color: var(--muted);
   font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
 }
-.lab-controls {
+.lab-facts strong {
+  color: var(--ink);
+}
+
+/* Needs you: one amber line. It opens in place to the decision. */
+.lab-needs {
+  border: 1px solid var(--needs-line);
+  border-radius: 12px;
+  background: var(--needs-bg);
+}
+.lab-needs > details > summary {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+  color: var(--ink);
+  list-style: none;
 }
-.lab-controls:empty {
+.lab-needs > details > summary::-webkit-details-marker {
   display: none;
 }
-.lab-direction .lab-activity,
-.lab-direction .lab-runs {
-  grid-column: 1 / -1;
+.needs-label {
+  flex: none;
+  color: var(--needs);
+  font-size: 12.5px;
+  font-weight: 700;
 }
-/* A run: its ID and state on one line, its log folded under it. */
-.lab-run {
+.needs-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 650;
+}
+.decide {
+  flex: none;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 700;
+}
+.lab-needs details[open] .decide {
+  display: none;
+}
+.needs-body {
+  padding: 0 16px 14px;
+}
+.needs-body > * + * {
+  margin-top: 10px;
+}
+.needs-more {
+  padding: 0 16px 12px;
+}
+.lab-needs.none {
+  max-width: none;
+  padding: 10px 16px;
+  border-color: transparent;
+  background: var(--ok-bg);
+  color: var(--green);
+  font-weight: 650;
+}
+.lab-undo {
+  padding: 8px 12px;
+  border-left: 3px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  background: var(--ok-bg);
   font-size: 13px;
 }
-.lab-run + .lab-run {
+
+/* A plain call: each option a large button with its cost and time. The agents' pick has a badge. */
+.call-options {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+.call-option {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  text-align: left;
+}
+.call-option.picked {
+  border: 2px solid var(--violet);
+  background: var(--lavender);
+}
+.option-label {
+  font-size: 14.5px;
+  font-weight: 700;
+}
+.option-facts {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.pick {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--violet);
+  color: var(--surface);
+  font-size: 12px;
+  font-weight: 700;
+}
+.key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  vertical-align: 1px;
+}
+.call-options .fine {
+  margin: 4px 2px 0;
+}
+.call-why {
+  font-size: 14px;
+}
+
+/* A section label: Directions, Board. */
+.lab-label {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+/* One row for each direction: verdict, title and evidence, agent, and its check or state. It opens in place. */
+.lab-rows {
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.lab-row + .lab-row {
+  border-top: 1px solid var(--border);
+}
+.lab-row > details > summary {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) auto minmax(0, 170px);
+  align-items: center;
+  gap: 4px 14px;
+  padding: 12px 16px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  list-style: none;
+}
+.lab-row > details > summary::-webkit-details-marker {
+  display: none;
+}
+.lab-row > details[open] > summary,
+.lab-row > details > summary:hover {
+  background: var(--sunken);
+}
+.lab-row.disputed > details > summary {
+  background: var(--needs-bg);
+}
+.lab-row:target > details > summary {
+  box-shadow: inset 0 0 0 2px var(--violet);
+}
+.row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.row-main strong {
+  font-size: 14.5px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.row-line {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.row-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.row-state {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.row-state.active {
+  color: var(--violet);
+}
+.row-state.failed {
+  color: var(--red);
+}
+.row-more {
+  padding: 4px 16px 14px calc(112px + 30px);
+}
+.row-more > * + * {
+  margin-top: 8px;
+}
+.lab-add {
+  margin-top: 8px;
+}
+
+/* A verdict: a mark and a word. The word says it; the color helps. */
+.verdict {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.v-holds-up {
+  color: var(--green);
+}
+.v-leading {
+  color: var(--tint-ink);
+}
+.v-open,
+.v-ruled-out {
+  color: var(--muted);
+}
+.v-disputed {
+  color: var(--needs);
+}
+
+/* The harness of an agent, as a round mark with its initials. */
+.who {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+.who-claude {
+  background: var(--violet);
+  color: var(--surface);
+}
+.who-codex {
+  background: var(--ink);
+  color: var(--surface);
+}
+.who-person {
+  background: var(--needs);
+  color: var(--surface);
+  font-size: 10px;
+}
+.who-verifold {
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+
+/* Open disputes, pinned at the top of the board. */
+.lab-pinned {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 0;
+  list-style: none;
+}
+.lab-pinned li {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--needs-line);
+  border-radius: 0 10px 10px 0;
+  background: var(--needs-bg);
+  font-size: 13px;
+}
+.pinned-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pinned-text > * + * {
+  margin-top: 2px;
+}
+
+/* The board: threads by direction. Each post has its author, its kind, its text, and its proof. */
+.lab-thread + .lab-thread {
+  margin-top: 18px;
+}
+.lab-thread > h3 {
+  margin-bottom: 4px;
+  font-size: 12.5px;
+}
+.lab-thread > h3 a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.lab-thread > h3 a:hover {
+  text-decoration: underline;
+}
+.post {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+}
+.post-body {
+  min-width: 0;
+}
+.post-body > * + * {
   margin-top: 4px;
+}
+.post-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 13.5px;
+}
+.post-head time,
+.post-mark {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.post.note {
+  color: var(--muted);
+  font-size: 13px;
+}
+.proofs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.proof {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+span.proof {
+  color: var(--muted);
+}
+.proof.run-running,
+.proof.run-queued {
+  border-color: var(--tint-line);
+  color: var(--tint-ink);
+}
+.proof.run-failed,
+.proof.run-timed-out {
+  border-color: var(--caution-line);
+  color: var(--caution);
+}
+/* Reply shows when a post is under the pointer or holds focus. On a touch screen it always shows. */
+.reply {
+  font-size: 12.5px;
+}
+@media (hover: hover) {
+  .post-body > .reply {
+    opacity: 0;
+  }
+  .post-body:hover > .reply,
+  .post-body:focus-within > .reply {
+    opacity: 1;
+  }
+}
+.replies {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--tint-line);
+}
+.chip.kind-claim,
+.chip.kind-evidence,
+.chip.kind-rerun,
+.chip.kind-plan {
+  border-color: var(--tint-line);
+  background: var(--lavender);
+  color: var(--tint-ink);
+}
+.chip.kind-ruled-out {
+  color: var(--muted);
+}
+.plan-table {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.plan-table td .fine {
+  display: inline;
+}
+.plan-table th[scope='row'],
+.metrics th[scope='row'] {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  color: var(--ink);
+  vertical-align: top;
+  white-space: normal;
+}
+
+/* The message box stays at the bottom of the view. The names list opens above it. */
+.lab-compose {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 12px 0 14px;
+  background: linear-gradient(transparent, var(--paper) 14px);
+}
+.compose-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.compose-row:focus-within {
+  border-color: var(--violet);
+}
+.compose-row textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 160px;
+  padding: 7px 8px;
+  border: 0;
+  background: none;
+  resize: none;
+  field-sizing: content;
+}
+.compose-row textarea:focus-visible {
+  outline: none;
+}
+.compose-row button {
+  min-height: 36px;
+}
+.lab-compose > .fine {
+  margin-top: 4px;
+}
+.lab-replying {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lab-replying[hidden] {
+  display: none;
+}
+.mentions {
+  position: absolute;
+  bottom: calc(100% - 8px);
+  left: 0;
+  max-width: 100%;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.mentions li {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mentions li[aria-selected='true'] {
+  background: var(--lavender);
+}
+
+/* A run in the panel: its facts, its metrics, and its log. */
+.facts {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 6px 12px;
+  font-size: 13px;
+}
+.facts dt {
+  color: var(--muted);
+}
+.facts dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .run-log-text {
   max-height: 360px;
@@ -3487,111 +4031,50 @@ body:not(:has(.rail)) .menu-button {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.chip.run-running,
-.chip.run-queued {
-  border-color: var(--tint-line);
-  background: var(--lavender);
-  color: var(--tint-ink);
-}
-.chip.run-failed,
-.chip.run-timed-out {
-  border-color: var(--caution-line);
-  background: var(--caution-bg);
-  color: var(--caution);
-}
-/* Open disputes: one line each, with where its check is. */
-.lab-disputes ul {
-  display: grid;
-  gap: 10px;
-  padding-left: 0;
-  list-style: none;
-}
-.lab-disputes .pre {
-  margin: 2px 0;
-}
-/* A direction's verdict: what its agent says of it now. */
-.chip.verdict-holds-up {
-  border-color: var(--green);
-  background: var(--ok-bg);
-  color: var(--green);
-}
-.chip.verdict-leading {
-  border-color: var(--tint-line);
-  background: var(--lavender);
-  color: var(--tint-ink);
-}
-/* On a phone the title takes the first line, the agent and its state the next, then the controls. A long state wraps. */
-@media (max-width: 600px) {
-  .lab-direction {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .lab-direction-text,
-  .lab-direction .lab-controls {
-    grid-column: 1 / -1;
-  }
-  .lab-direction .status {
-    white-space: normal;
-  }
-}
-.lab-replying {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 13px;
-}
-.lab-replying[hidden] {
-  display: none;
+.outputs {
+  padding-left: 18px;
 }
 
-/* The board: threads by direction, each post one point with its proof. */
-.lab-thread {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 14px;
+/* On a phone a row's verdict and agent share the first line, its title the next, then its state. */
+@media (max-width: 860px) {
+  .lab-head {
+    margin: -16px -16px 0;
+    padding: 12px 16px 10px;
+    top: -16px;
+  }
 }
-.lab-thread > h3 {
-  font-size: 13px;
-  color: var(--muted);
-}
-.post {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-}
-.post > * + * {
-  margin-top: 6px;
-}
-.post.note {
-  border-style: dashed;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-}
-.post .proof {
-  padding-left: 18px;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-.replies {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-left: 14px;
-  border-left: 2px solid var(--tint-line);
-}
-.chip.kind-claim,
-.chip.kind-evidence,
-.chip.kind-rerun {
-  border-color: var(--tint-line);
-  background: var(--lavender);
-  color: var(--tint-ink);
-}
-.chip.kind-ruled-out {
-  color: var(--muted);
-}
-.lab-compose textarea {
-  min-height: 72px;
+@media (max-width: 600px) {
+  /* On a phone the header scrolls away, so the rows and the board get the screen. */
+  .lab-head {
+    position: static;
+  }
+  .lab-head h1 {
+    font-size: 17px;
+  }
+  .lab-row > details > summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 12px;
+  }
+  .lab-row .verdict {
+    grid-row: 1;
+  }
+  .row-who {
+    grid-row: 1;
+    grid-column: 2;
+  }
+  .row-main {
+    grid-column: 1 / -1;
+  }
+  .row-state {
+    grid-column: 1 / -1;
+  }
+  .row-more {
+    padding: 4px 12px 12px;
+  }
+  .needs-title {
+    font-size: 14px;
+  }
+  .lab-needs > details > summary {
+    flex-wrap: wrap;
+  }
 }
