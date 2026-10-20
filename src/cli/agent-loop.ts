@@ -37,6 +37,8 @@ export interface WakeLimits {
   readonly events: number;
   /** Events that arrive within this time join one wakeup. */
   readonly debounceMs: number;
+  /** A digest that did not go out is tried again after this time. Without it, the next event wakes the agent. */
+  readonly retryMs?: number;
 }
 
 export interface WakeOwner<E extends WakeEvent, R extends WakeRecord<E>> {
@@ -92,7 +94,8 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     this.serial(async () => {
       const record = this.owner.record();
       if (!record) return;
-      const first = (record.events.at(-1)?.seq ?? 0) + 1;
+      // After the cursor too: an owner can drop events that no digest carried.
+      const first = Math.max(record.events.at(-1)?.seq ?? 0, record.cursor) + 1;
       const at = new Date().toISOString();
       // The schedule comes first: the events are in memory even if the save fails.
       const saving = this.owner.save({
@@ -132,17 +135,22 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
 
   /**
    * The session's turn ended, or its process stopped. New events wake it.
-   * Returns true when a turn without events ran into a used-up usage window:
-   * nothing comes again by itself, so the owner adds an event.
+   * `interrupted`: the turn did not end by itself, for example its process
+   * stopped or the session paused, so its events come again. Returns true
+   * when a turn without events ran into a used-up usage window: nothing comes
+   * again by itself, so the owner adds an event.
    */
-  turnEnded(): boolean {
+  turnEnded(interrupted = false): boolean {
     // A failed read can hide what an event was about, so its events come once more.
-    // A turn that ran into a used-up usage window did no work, so its events come again after the reset.
+    // A turn that ran into a used-up usage window, or that stopped, did not finish its work, so its events come again.
     const carried = this.carried;
     this.carried = null;
-    if (carried?.usedUp && carried.events.length)
+    if (carried?.events.length && (carried.usedUp || interrupted))
       this.add(
-        carried.events.map((event) => ({ ...event, again: 'limit' as const })),
+        carried.events.map((event) => ({
+          ...event,
+          again: carried.usedUp ? ('limit' as const) : (true as const),
+        })),
       );
     else if (!carried?.usedUp && carried?.readFailed) {
       const again = carried.events.filter((event) => !event.again);
@@ -220,6 +228,7 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
           cursor: record.cursor,
           wakeups: record.wakeups,
         });
+      if (this.limits.retryMs !== undefined) this.schedule(this.limits.retryMs);
       return;
     }
     this.carried = { events: sent, readFailed: false, usedUp: false };

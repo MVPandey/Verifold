@@ -48,6 +48,7 @@ import {
 } from './tasks.ts';
 import { coordinatorContext, type Coordinator } from './coordinator.ts';
 import type { Compute } from './compute.ts';
+import type { Lab } from './lab.ts';
 import { changeWorkspace, loadWorkspace } from './storage.ts';
 import { validAgents } from './contracts.ts';
 import { startPageServer, type PageServer } from './pages.ts';
@@ -66,6 +67,7 @@ export interface DeskServer {
     coordinator: Coordinator,
     compute: Compute,
     memory: ProjectMemory,
+    lab?: Lab,
   ): Promise<void>;
   /** The origin of the page server, the only other origin that the desk frames. */
   readonly pages: string;
@@ -305,6 +307,9 @@ async function startCoordinator(
   });
 }
 
+/** The projects whose run moves now. */
+const changing = new Set<string>();
+
 /**
  * Start over, or bring back an archived run. Nothing may run: no research
  * step, no task turn, and no session of the person. The coordinator stops,
@@ -320,10 +325,43 @@ async function changeRun(
   tasks: TaskManager,
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
+  labRun: Lab | undefined,
   restore?: unknown,
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
     throw new SessionActionError('Choose an archive from Records.');
+  // One Start over or restore at a time: a second one would move the records while the first moves them.
+  if (changing.has(root))
+    throw new SessionActionError(
+      'Start over or a restore already runs. Wait for it to end.',
+    );
+  changing.add(root);
+  try {
+    await changeRunNow(
+      root,
+      sessions,
+      research,
+      tasks,
+      coordinator,
+      memory,
+      labRun,
+      restore,
+    );
+  } finally {
+    changing.delete(root);
+  }
+}
+
+async function changeRunNow(
+  root: string,
+  sessions: SessionPool,
+  research: ResearchRunner | undefined,
+  tasks: TaskManager,
+  coordinator: Coordinator | undefined,
+  memory: ProjectMemory | undefined,
+  labRun: Lab | undefined,
+  restore?: unknown,
+): Promise<void> {
   if (research?.running)
     throw new SessionActionError(
       'Research is running. Wait for its step to end, or cancel it first.',
@@ -333,21 +371,39 @@ async function changeRun(
     throw new SessionActionError(
       'A task turn is running. Stop it first, or wait for its version.',
     );
-  if (sessions.views().some((view) => view.live && !view.record.task))
+  if (
+    sessions
+      .views()
+      .some((view) => view.live && !view.record.task && !view.record.agent)
+  )
     throw new SessionActionError('Your session is running. End it first.');
-  const state = coordinator?.view()?.state;
-  if (state && !state.stoppedAt) await coordinator?.stop();
-  for (const task of list)
-    if (task.state === 'open' || task.state === 'review')
-      await tasks.cancel(task.id);
-  // The memory keeps what this run did, decided, and found, as an earlier run.
-  await memory?.freeze(
-    `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
-  );
-  if (restore === undefined) await archiveRun(root);
-  else await restoreRun(root, restore);
+  // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
+  const paused = (await labRun?.suspend()) ?? false;
+  try {
+    const state = coordinator?.view()?.state;
+    if (state && !state.stoppedAt) await coordinator?.stop();
+    for (const task of list)
+      if (task.state === 'open' || task.state === 'review')
+        await tasks.cancel(task.id);
+    // The memory keeps what this run did, decided, and found, as an earlier run.
+    await memory?.freeze(
+      `archived ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+    );
+    if (restore === undefined) await archiveRun(root);
+    else await restoreRun(root, restore);
+  } catch (error) {
+    // The records moved in part or not at all. The lab reads them again and works as before.
+    await labRun?.reload();
+    if (paused) await labRun?.resume().catch(() => {});
+    throw error;
+  }
   memory?.schedule();
-  await coordinator?.reload();
+  try {
+    await coordinator?.reload();
+  } finally {
+    // The records moved, so the lab reads them again even when the coordinator's reload fails.
+    await labRun?.reload();
+  }
   research?.clear();
   await sessions.forget();
   // A new run starts its research from the question. A restored run continues where it was.
@@ -366,6 +422,7 @@ async function act(
   root: string,
   body: Record<string, unknown>,
   memory?: ProjectMemory,
+  lab?: Lab,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -417,6 +474,7 @@ async function act(
       tasks,
       coordinator,
       memory,
+      lab,
       body.action === 'restore' ? body.archive : undefined,
     );
     return 200;
@@ -434,6 +492,8 @@ async function act(
       const id = body.to.slice('session:'.length);
       if (sessions.view(id)?.record.task)
         throw new SessionActionError('Write to a task agent by its task.');
+      if (sessions.view(id)?.record.agent)
+        throw new SessionActionError('Write to a lab agent on the board.');
       const text = typeof body.text === 'string' ? body.text : '';
       // A running turn takes the message. A waiting session, or a turn that ended first, gets it as its next turn.
       if (
@@ -593,6 +653,8 @@ export async function startDesk(
   memory?: ProjectMemory,
   options: {
     readonly stop?: () => void;
+    /** The lab of the project owner. */
+    readonly lab?: Lab;
     readonly reuse?:
       | {
           readonly port: number;
@@ -606,6 +668,7 @@ export async function startDesk(
   signal.throwIfAborted();
   // In setup mode the project does not exist yet. attach() sets it.
   let project: string | null = root === null ? null : await realpath(root);
+  let lab = options.lab;
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -798,6 +861,7 @@ export async function startDesk(
             project ?? '',
             body,
             memory,
+            lab,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;
@@ -1130,7 +1194,10 @@ export async function startDesk(
           /* Missing or unsafe reports remain unavailable. */
         }
       }
-      const workers = sessions?.views() ?? [];
+      // Lab agents belong to the lab view. The person reaches them on the board.
+      const workers = (sessions?.views() ?? []).filter(
+        (view) => !view.record.agent,
+      );
       // A version in review whose agent paused when Verifold stopped can still get changes.
       const resumable: string[] = [];
       for (const entry of taskList) {
@@ -1162,7 +1229,8 @@ export async function startDesk(
           {
             workers,
             session: worker,
-            full: sessions?.full ?? false,
+            // A lab agent that had its turn gives its slot to the person's session, so the pool is not full for them.
+            full: (sessions?.full ?? false) && !(lab?.canYield() ?? false),
             ...(sessions ? { agents: sessions.limit } : {}),
             terminals: await terminalSupport(),
             controllable: sessions !== undefined,
@@ -1241,7 +1309,16 @@ export async function startDesk(
       launchCodes.set(code, Date.now() + 120_000);
       return `${origin}/#launch-${code}`;
     },
-    attach: async (next, owner, runner, taskManager, lead, pods, notes) => {
+    attach: async (
+      next,
+      owner,
+      runner,
+      taskManager,
+      lead,
+      pods,
+      notes,
+      labOwner,
+    ) => {
       const resolved = await realpath(next);
       await readDeskSnapshot(resolved);
       sessions = owner;
@@ -1250,6 +1327,7 @@ export async function startDesk(
       coordinator = lead;
       compute = pods;
       memory = notes;
+      lab = labOwner;
       project = resolved;
     },
     pages: pages.origin,

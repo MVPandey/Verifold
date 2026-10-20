@@ -146,6 +146,8 @@ export interface SessionRecord {
   readonly cwd?: string;
   /** A task session: the domains that its shell commands may reach. */
   readonly network?: readonly string[];
+  /** A lab agent's session: the agent ID. The agent works in the folder of its direction. */
+  readonly agent?: string;
 }
 
 export interface SessionView {
@@ -183,8 +185,14 @@ export interface SessionManagerOptions {
     /** The last agent text of the turn. A model claim. */
     reply?: string,
   ) => void;
-  /** A turn ended, a resumed session became ready, or the harness process exited. */
-  readonly onTurnEnd?: (record: SessionRecord) => void;
+  /**
+   * A turn ended, a resumed session became ready, or the harness process
+   * exited. `outcome` says how a turn ended, as the harness reported it.
+   */
+  readonly onTurnEnd?: (
+    record: SessionRecord,
+    outcome?: 'completed' | 'interrupted' | 'failed',
+  ) => void;
   /** The harness reported its plan's usage window. The window belongs to the account, not to this session. */
   readonly onLimit?: (host: HarnessName, signal: LimitSignal) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
@@ -608,6 +616,10 @@ function parseRecord(value: unknown): SessionRecord | null {
     /^\.verifold\/workspaces\/[a-z0-9][a-z0-9-]{0,80}$/.test(record.cwd)
       ? { cwd: record.cwd }
       : {}),
+    ...(typeof record.agent === 'string' &&
+    /^a-[1-9]\d{0,3}$/.test(record.agent)
+      ? { agent: record.agent }
+      : {}),
   };
 }
 
@@ -668,6 +680,27 @@ function conversation(record: SessionRecord): boolean {
   );
 }
 
+/** A paused or interrupted session whose harness holds its conversation, so it can resume. */
+export function resumable(record: SessionRecord): boolean {
+  return (
+    (record.status === 'paused' || record.status === 'interrupted') &&
+    conversation(record)
+  );
+}
+
+/**
+ * A lab agent's session that can resume. A process that stopped by itself
+ * leaves its conversation with the harness, so the lab resumes it too.
+ */
+export function agentResumable(record: SessionRecord): boolean {
+  return (
+    resumable(record) ||
+    (Boolean(record.agent) &&
+      (record.status === 'ended' || record.status === 'failed') &&
+      conversation(record))
+  );
+}
+
 async function recordIds(root: string): Promise<string[]> {
   let names: string[];
   try {
@@ -688,10 +721,11 @@ export async function loadPaused(root: string): Promise<PausedSession[]> {
   const paused: PausedSession[] = [];
   for (const id of await recordIds(root)) {
     const record = await readRecord(root, id);
-    // A task session belongs to its task. The task offers its own next step.
+    // A task session belongs to its task, and a lab agent's session to the lab. Each offers its own next step.
     if (
       (record?.status === 'paused' || record?.status === 'interrupted') &&
       !record.task &&
+      !record.agent &&
       record.mode !== 'coordinator' &&
       record.events.some((event) => event.kind === 'you')
     )
@@ -789,6 +823,71 @@ const inTerminal =
 
 const taskSession =
   'This session belongs to a task. Use the task actions in the desk: accept, ask for changes, or reject.';
+
+const agentSession =
+  'This session belongs to an agent of the lab. Write to it on the board.';
+
+/** The checked input of a plain session's start, or an error the person can read. */
+export function startInput(input: {
+  readonly host: unknown;
+  readonly mode: unknown;
+  readonly model?: unknown;
+  readonly prompt: unknown;
+}): {
+  readonly host: HarnessName;
+  readonly mode: 'ask' | 'auto';
+  readonly model: string | undefined;
+  readonly prompt: string;
+} {
+  const host =
+    input.host === 'claude' || input.host === 'codex'
+      ? input.host
+      : fail('Choose Claude Code or Codex.');
+  const mode =
+    input.mode === 'ask' || input.mode === 'auto'
+      ? input.mode
+      : fail('Choose Ask me or Auto.');
+  const model: unknown =
+    input.model === undefined || input.model === '' ? undefined : input.model;
+  try {
+    validateModel(model);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : 'Invalid model.');
+  }
+  if (
+    typeof input.prompt !== 'string' ||
+    !input.prompt.trim() ||
+    input.prompt.length > 100_000
+  )
+    fail('Write a message for the harness, up to 100,000 characters.');
+  return { host, mode, model, prompt: input.prompt.trim() };
+}
+
+/**
+ * Why the person cannot resume or restart this session, or null when they
+ * can. A lab agent's session resumes only through the lab.
+ */
+export async function refusal(
+  root: string,
+  id: unknown,
+  action: 'resume' | 'restart',
+): Promise<string | null> {
+  const saved =
+    typeof id === 'string' && validSessionId(id)
+      ? await readRecord(root, id)
+      : null;
+  if (saved?.agent) return agentSession;
+  if (action === 'resume')
+    return saved && resumable(saved)
+      ? null
+      : 'That session cannot resume. Choose a paused session.';
+  return saved &&
+    (saved.status === 'paused' || saved.status === 'interrupted') &&
+    !conversation(saved) &&
+    saved.events.some((event) => event.kind === 'you')
+    ? null
+    : 'That session cannot start again. Resume it, or start a new session.';
+}
 
 /** A new session record, before its first launch. */
 function fresh(
@@ -914,6 +1013,7 @@ export class SessionManager {
         'Open the terminal between turns. Wait for the turn to end, or cancel it.',
       );
     if (record.mode === 'coordinator') fail('The coordinator has no terminal.');
+    if (record.agent) fail(agentSession);
     const native =
       record.nativeSessionId ??
       fail('The harness has not reported its session yet.');
@@ -1021,22 +1121,7 @@ export class SessionManager {
     readonly prompt: unknown;
   }): Promise<void> {
     this.ready();
-    const host =
-      input.host === 'claude' || input.host === 'codex'
-        ? input.host
-        : fail('Choose Claude Code or Codex.');
-    const mode =
-      input.mode === 'ask' || input.mode === 'auto'
-        ? input.mode
-        : fail('Choose Ask me or Auto.');
-    const model =
-      input.model === undefined || input.model === '' ? undefined : input.model;
-    try {
-      validateModel(model);
-    } catch (error) {
-      fail(error instanceof Error ? error.message : 'Invalid model.');
-    }
-    const prompt = this.text(input.prompt);
+    const { host, mode, model, prompt } = startInput(input);
     this.current = fresh(host, model ?? null, mode);
     this.tools = undefined;
     this.event('you', prompt);
@@ -1071,6 +1156,38 @@ export class SessionManager {
     this.event(
       'status',
       `Verifold started ${input.task.id} in its task folder, in Strict mode.`,
+    );
+    await this.launch(input.prompt);
+    return record.id;
+  }
+
+  /**
+   * Start a strict session for a lab agent, in the folder of its direction.
+   * The harness limits writes to that folder and asks nothing. Returns the
+   * session ID.
+   */
+  async startAgent(input: {
+    readonly host: HarnessName;
+    readonly model?: string;
+    readonly prompt: string;
+    readonly cwd: string;
+    readonly agent: string;
+    readonly tools: AgentTools;
+  }): Promise<string> {
+    this.ready();
+    const record: SessionRecord = {
+      ...fresh(input.host, input.model ?? null, 'strict'),
+      agent: input.agent,
+      cwd: relative(this.root, input.cwd).split('\\').join('/'),
+    };
+    const parsed = parseRecord(record);
+    if (!parsed?.cwd || !parsed.agent)
+      fail('A lab agent needs the folder of its direction.');
+    this.current = record;
+    this.tools = input.tools;
+    this.event(
+      'status',
+      `Verifold started ${input.agent} in the folder of its direction, in Strict mode.`,
     );
     await this.launch(input.prompt);
     return record.id;
@@ -1114,10 +1231,9 @@ export class SessionManager {
       typeof id === 'string' && validSessionId(id)
         ? await readRecord(this.root, id)
         : null;
-    if (
-      (saved?.status !== 'paused' && saved?.status !== 'interrupted') ||
-      !conversation(saved)
-    )
+    // A lab agent resumes only through the lab, which gives it its tools, also after its process stopped.
+    if (saved?.agent && !tools) fail(agentSession);
+    if (!saved || !(saved.agent ? agentResumable(saved) : resumable(saved)))
       fail('That session cannot resume. Choose a paused session.');
     // Another start can begin while the record loads.
     this.ready();
@@ -1173,6 +1289,8 @@ export class SessionManager {
         ? await readRecord(this.root, id)
         : null;
     const prompt = saved?.events.find((event) => event.kind === 'you')?.text;
+    // A lab agent starts again only through the lab, which gives it its tools.
+    if (saved?.agent) fail(agentSession);
     if (
       (saved?.status !== 'paused' && saved?.status !== 'interrupted') ||
       conversation(saved) ||
@@ -1200,6 +1318,7 @@ export class SessionManager {
 
   send(value: unknown): void {
     if (this.current?.task) fail(taskSession);
+    if (this.current?.agent) fail(agentSession);
     if (this.current?.mode === 'coordinator')
       fail('Send the coordinator a message under Coordinator.');
     this.continueTask(value);
@@ -1246,6 +1365,7 @@ export class SessionManager {
   }
 
   cancel(): void {
+    if (this.current?.agent) fail(agentSession);
     if (this.native) fail(inTerminal);
     const record = this.current;
     if (!this.host || !record || record.status === 'idle')
@@ -1262,6 +1382,7 @@ export class SessionManager {
 
   end(reason = 'You ended the session.'): void {
     if (this.current?.task) fail(taskSession);
+    if (this.current?.agent) fail(agentSession);
     this.endTask(reason);
   }
 
@@ -1314,7 +1435,11 @@ export class SessionManager {
     );
   }
 
-  /** Pause a live session and wait for its record. Returns false when the last save failed. */
+  /**
+   * Pause a live session and wait for its record. Returns false when the last
+   * save failed. The manager stays usable, so a lab can park an idle agent and
+   * give its slot to another one.
+   */
   async close(): Promise<boolean> {
     this.generation++;
     // A launch, for example after a terminal, can still be saving its record. It must not start a harness after this.
@@ -1731,7 +1856,7 @@ export class SessionManager {
             undefined,
             lastReply(this.current ?? record),
           );
-        if (this.current) this.options.onTurnEnd?.(this.current);
+        if (this.current) this.options.onTurnEnd?.(this.current, event.status);
         break;
       case 'notice':
         this.event('notice', event.text);

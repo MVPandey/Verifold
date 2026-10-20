@@ -1,14 +1,7 @@
-import { randomBytes } from 'node:crypto';
-import {
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  readFile,
-  rename,
-  rm,
-} from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writePrivateFile } from './storage.ts';
+import { commitPattern } from './workspaces.ts';
 
 /**
  * The lab's board: posts from the agents, the person, and Verifold. Each post
@@ -33,6 +26,8 @@ export type Artifact =
   | {
       /** A figure is a file with an image or PDF extension. */
       readonly type: 'file' | 'figure';
+      /** The direction whose folder holds the commit. */
+      readonly direction?: string;
       readonly path: string;
       readonly commit: string;
       readonly sha256: string;
@@ -40,6 +35,7 @@ export type Artifact =
     }
   | {
       readonly type: 'diff';
+      readonly direction?: string;
       readonly from: string;
       readonly to: string;
       readonly paths: readonly string[];
@@ -88,6 +84,8 @@ export const boardLimits = {
   paths: 10,
   /** Lines in one digest. */
   digest: 30,
+  /** Posts after an agent's read mark that it has read already, such as a post steered into its turn. */
+  seen: 500,
 };
 
 const kinds: readonly PostKind[] = [
@@ -107,14 +105,16 @@ const proofKinds: ReadonlySet<PostKind> = new Set([
   'rerun',
   'ruled-out',
 ]);
-const postId = /^p-[1-9]\d{0,5}$/;
+export const postId = /^p-[1-9]\d{0,5}$/;
 const postFile = /^p-[1-9]\d{0,5}\.json$/;
-const agentId = /^a-[1-9]\d{0,3}$/;
-const directionId = /^d-[1-9]\d{0,3}$/;
-const commit = /^[0-9a-f]{40}$/;
+export const agentId = /^a-[1-9]\d{0,3}$/;
+export const directionId = /^d-[1-9]\d{0,3}$/;
+/** A commit: SHA-1, or SHA-256 in a repository that uses it. */
+export const commitId = commitPattern;
 const figure = /\.(png|jpe?g|gif|svg|webp|pdf)$/i;
 
-function object(value: unknown): Record<string, unknown> | null {
+/** A JSON object, or null for anything else. */
+export function object(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
@@ -132,6 +132,13 @@ function safePath(value: unknown): value is string {
   );
 }
 
+/** The direction field of an artifact, when it names a valid direction. */
+function folder(value: unknown): { readonly direction?: string } {
+  return typeof value === 'string' && directionId.test(value)
+    ? { direction: value }
+    : {};
+}
+
 function parseArtifact(value: unknown): Artifact | null {
   const entry = object(value);
   if (!entry) return null;
@@ -140,7 +147,7 @@ function parseArtifact(value: unknown): Artifact | null {
     safePath(entry.path) &&
     (entry.type === 'file' || figure.test(entry.path)) &&
     typeof entry.commit === 'string' &&
-    commit.test(entry.commit) &&
+    commitId.test(entry.commit) &&
     typeof entry.sha256 === 'string' &&
     /^[0-9a-f]{64}$/.test(entry.sha256) &&
     Number.isSafeInteger(entry.bytes) &&
@@ -148,6 +155,7 @@ function parseArtifact(value: unknown): Artifact | null {
   )
     return {
       type: entry.type,
+      ...folder(entry.direction),
       path: entry.path,
       commit: entry.commit,
       sha256: entry.sha256,
@@ -156,9 +164,9 @@ function parseArtifact(value: unknown): Artifact | null {
   if (
     entry.type === 'diff' &&
     typeof entry.from === 'string' &&
-    commit.test(entry.from) &&
+    commitId.test(entry.from) &&
     typeof entry.to === 'string' &&
-    commit.test(entry.to) &&
+    commitId.test(entry.to) &&
     Array.isArray(entry.paths) &&
     entry.paths.length > 0 &&
     entry.paths.length <= boardLimits.paths &&
@@ -166,6 +174,7 @@ function parseArtifact(value: unknown): Artifact | null {
   )
     return {
       type: 'diff',
+      ...folder(entry.direction),
       from: entry.from,
       to: entry.to,
       paths: entry.paths,
@@ -259,7 +268,8 @@ function check(entry: Record<string, unknown>): Post | string {
   };
 }
 
-function number(id: string): number {
+/** The number in an ID such as p-12, d-3, or a-2. */
+export function number(id: string): number {
   return Number(id.slice(2));
 }
 
@@ -272,28 +282,53 @@ function artifactText(artifact: Artifact): string {
   switch (artifact.type) {
     case 'file':
     case 'figure':
-      return `${artifact.type} ${artifact.path} at ${short(artifact.commit)}`;
+      return `${artifact.type} ${artifact.path}${artifact.direction ? ` in ${artifact.direction}` : ''} at ${short(artifact.commit)}`;
     case 'diff':
-      return `diff ${short(artifact.from)}..${short(artifact.to)} (${artifact.paths.join(', ')})`;
+      return `diff${artifact.direction ? ` in ${artifact.direction}` : ''} ${short(artifact.from)}..${short(artifact.to)} (${artifact.paths.join(', ')})`;
     case 'run':
       return `run ${artifact.run}`;
   }
 }
 
 /**
+ * A post's text, JSON-quoted. With `fold`, a quoted text longer than `fold`
+ * characters is cut, and the line says where the whole post is.
+ */
+function quoted(post: Post, fold?: number): string {
+  const whole = JSON.stringify(post.text);
+  if (fold === undefined || whole.length <= fold) return whole;
+  let cut = post.text.slice(0, fold);
+  while (cut && JSON.stringify(cut).length > fold)
+    cut = cut.slice(0, Math.floor(cut.length * 0.8));
+  // A cut between the two halves of a surrogate pair would leave half a character.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${JSON.stringify(`${cut}…`)} (cut: verifold_board with view thread and post ${post.id} shows the whole post)`;
+}
+
+/**
  * One digest line for a post. The post's text is JSON-quoted, so a line break
- * or a quote in it cannot look like a line from Verifold.
+ * or a quote in it cannot look like a line from Verifold. `forYou` marks a post
+ * that wakes the reader. `fold` cuts a long text.
  */
 export function postLine(
   post: Post,
   name: (author: string) => string = (author) => author,
+  forYou = false,
+  fold?: number,
 ): string {
-  return `- ${post.id} [${post.kind}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${JSON.stringify(post.text)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
+  return `- ${post.id} [${post.kind}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
+}
+
+/** What an agent has read: every post through `readThrough`, and the posts in `seen` after it. */
+export interface ReadState {
+  readonly readThrough: number;
+  readonly seen: readonly string[];
 }
 
 export class Board {
   private readonly directory: string;
   private posts: Post[] = [];
+  private readonly byId = new Map<string, Post>();
   /** The highest post number in the folder at load, valid or not, so a new post never replaces a file. */
   private last = 0;
 
@@ -301,7 +336,11 @@ export class Board {
     this.directory = join(root, '.verifold', 'board');
   }
 
-  /** Read the posts once. An unreadable, oversized, or invalid file is skipped. */
+  /**
+   * Read the posts once. An unreadable, oversized, or invalid file is skipped.
+   * A reply must answer an earlier post that loaded, so replies never form a
+   * cycle: a reply to anything else loads as a post without `replyTo`.
+   */
   async load(): Promise<void> {
     let names: string[];
     try {
@@ -314,7 +353,9 @@ export class Board {
     const numbers = names
       .map((name) => Number(name.slice(2, -5)))
       .sort((a, b) => a - b);
+    // Readers outside a queue see the old posts until all new ones loaded.
     const posts: Post[] = [];
+    const byId = new Map<string, Post>();
     for (const value of numbers.slice(0, boardLimits.posts)) {
       try {
         const path = join(this.directory, `p-${value}.json`);
@@ -322,14 +363,25 @@ export class Board {
         if (!stats.isFile() || stats.size > boardLimits.file) continue;
         const entry = object(JSON.parse(await readFile(path, 'utf8')));
         const post = entry && entry.schemaVersion === 1 ? check(entry) : null;
-        if (post && typeof post !== 'string' && post.id === `p-${value}`)
-          posts.push(post);
+        if (!post || typeof post === 'string' || post.id !== `p-${value}`)
+          continue;
+        const { replyTo, ...rest } = post;
+        const kept = replyTo && !byId.has(replyTo) ? rest : post;
+        posts.push(kept);
+        byId.set(kept.id, kept);
       } catch {
         /* Skip an unreadable post. */
       }
     }
     this.posts = posts;
+    this.byId.clear();
+    for (const [id, post] of byId) this.byId.set(id, post);
     this.last = numbers.at(-1) ?? 0;
+  }
+
+  private index(post: Post): void {
+    this.posts.push(post);
+    this.byId.set(post.id, post);
   }
 
   /** All posts, oldest first. */
@@ -338,7 +390,7 @@ export class Board {
   }
 
   get(id: string): Post | undefined {
-    return this.posts.find((post) => post.id === id);
+    return this.byId.get(id);
   }
 
   /** The number of the newest post, or 0. A new agent's read cursor starts here. */
@@ -374,23 +426,9 @@ export class Board {
     if (Buffer.byteLength(body) > boardLimits.file)
       throw new Error('The post is too large. Make it shorter.');
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const temporary = join(
-      this.directory,
-      `.p.${randomBytes(4).toString('hex')}.tmp`,
-    );
-    try {
-      const file = await open(temporary, 'wx', 0o600);
-      try {
-        await file.writeFile(body);
-      } finally {
-        await file.close();
-      }
-      await rename(temporary, join(this.directory, `${post.id}.json`));
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    await writePrivateFile(join(this.directory, `${post.id}.json`), body);
     this.last += 1;
-    this.posts.push(post);
+    this.index(post);
     return post;
   }
 
@@ -427,28 +465,74 @@ export class Board {
   }
 
   /**
-   * The digest lines of an agent's unread posts: the posts after `readThrough`
-   * that others wrote. Posts that wake the agent come first, then the others
-   * in order, in at most `boardLimits.digest` lines.
+   * The digest of an agent's unread posts, and the read state after it.
+   * Unread posts are the posts after `readThrough` that others wrote and that
+   * are not in `seen`. The posts that wake the agent come first, then the
+   * others, each oldest first, in at most `limit` lines and `budget`
+   * characters; a post that wakes the agent says so. When they do not fit, the
+   * last line says how many more wait: `readThrough` stops before the oldest post that did not fit, and the
+   * posts shown after it go into `seen`. If `seen` would pass its limit, the
+   * read mark moves past the oldest posts that did not fit instead, so no post
+   * that was shown comes again.
    */
   digest(
     agent: BoardAgent,
-    readThrough: number,
-    name?: (author: string) => string,
-  ): string[] {
+    read: ReadState,
+    options: {
+      readonly limit?: number;
+      readonly name?: (author: string) => string;
+      /** Cut each post's quoted text at this length. */
+      readonly fold?: number;
+      /** Characters of all lines, each with its newline. The first post always shows. */
+      readonly budget?: number;
+    } = {},
+  ): { readonly lines: string[]; readonly read: ReadState } {
+    const seen = new Set(read.seen);
     const unread = this.posts.filter(
-      (post) => number(post.id) > readThrough && post.author !== agent.id,
+      (post) =>
+        number(post.id) > read.readThrough &&
+        post.author !== agent.id &&
+        !seen.has(post.id),
     );
-    const ordered = [
-      ...unread.filter((post) => this.wakes(post, agent)),
-      ...unread.filter((post) => !this.wakes(post, agent)),
-    ];
-    if (ordered.length <= boardLimits.digest)
-      return ordered.map((post) => postLine(post, name));
-    const shown = boardLimits.digest - 1;
-    return [
-      ...ordered.slice(0, shown).map((post) => postLine(post, name)),
-      `- ${ordered.length - shown} more unread posts. Read them with verifold_board.`,
-    ];
+    const limit = options.limit ?? boardLimits.digest;
+    // It never takes the only line.
+    const room =
+      unread.length <= limit ? unread.length : Math.max(1, limit - 1);
+    const waking = new Set(unread.filter((post) => this.wakes(post, agent)));
+    const ordered = [...waking, ...unread.filter((post) => !waking.has(post))];
+    const budget = options.budget ?? Infinity;
+    // The line that says how many more wait needs its room too.
+    const more = (count: number): string =>
+      `- ${count} more unread posts. Read them with verifold_board.`;
+    const shown: Post[] = [];
+    const lines: string[] = [];
+    let used = 0;
+    for (const post of ordered) {
+      if (shown.length >= room) break;
+      const line = postLine(post, options.name, waking.has(post), options.fold);
+      const rest = ordered.length - shown.length - 1;
+      const reserve = rest > 0 ? more(ordered.length).length + 1 : 0;
+      if (shown.length && used + line.length + 1 + reserve > budget) break;
+      shown.push(post);
+      lines.push(line);
+      used += line.length + 1;
+    }
+    const shownIds = new Set(shown.map((post) => post.id));
+    const left = unread.filter((post) => !shownIds.has(post.id));
+    let through = left.length
+      ? number(left[0]?.id ?? 'p-1') - 1
+      : Math.max(read.readThrough, this.latest());
+    let after = [...seen, ...shownIds].filter((id) => number(id) > through);
+    if (after.length > boardLimits.seen) {
+      through = Math.max(...shown.map((post) => number(post.id)));
+      after = [];
+    }
+    return {
+      lines: [...lines, ...(left.length ? [more(left.length)] : [])],
+      read: {
+        readThrough: Math.max(read.readThrough, through),
+        seen: after,
+      },
+    };
   }
 }

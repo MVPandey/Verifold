@@ -302,13 +302,30 @@ await test('a post wakes the agents that it is for, and the rest wait for the di
   );
   assert.deepEqual(store.targets(agentAll, agents), []);
 
-  // Posts that wake the agent come first. The agent's own posts are left out.
-  const lines = store.digest(a1, 0);
+  // The posts that wake the agent come first and say so, then the rest; each group oldest first. The agent's own posts are left out.
+  const { lines } = store.digest(a1, { readThrough: 0, seen: [] });
   assert.deepEqual(
-    lines.map((line) => line.slice(2, line.indexOf(' ', 2))),
-    ['p-2', 'p-4', 'p-6', 'p-7', 'p-3', 'p-5'],
+    lines.map((line) => line.slice(2, line.indexOf(']') + 1)),
+    [
+      'p-2 [question, for you]',
+      'p-4 [objection, for you]',
+      'p-6 [question, for you]',
+      'p-7 [question, for you]',
+      'p-3 [claim]',
+      'p-5 [question]',
+    ],
   );
-  assert.deepEqual(store.digest(a1, store.latest()), []);
+  assert.deepEqual(
+    store.digest(a1, { readThrough: store.latest(), seen: [] }).lines,
+    [],
+  );
+  // A post that the agent read already, such as one steered into its turn, does not come again.
+  assert.deepEqual(
+    store
+      .digest(a1, { readThrough: 3, seen: ['p-4', 'p-6'] })
+      .lines.map((line) => line.slice(2, line.indexOf(' ', 2))),
+    ['p-7', 'p-5'],
+  );
 });
 
 await test('a digest quotes each post on one line and stops at 30 lines', async (t) => {
@@ -338,10 +355,137 @@ await test('a digest quotes each post on one line and stops at 30 lines', async 
         artifacts: [],
       }),
     );
-  const lines = store.digest({ id: 'a-1', direction: 'd-1' }, 0);
-  assert.equal(lines.length, boardLimits.digest);
+  const agent = { id: 'a-1', direction: 'd-1' };
+  const first = store.digest(agent, { readThrough: 0, seen: [] });
+  assert.equal(first.lines.length, boardLimits.digest);
   assert.equal(
-    lines.at(-1),
+    first.lines.at(-1),
     '- 12 more unread posts. Read them with verifold_board.',
   );
+  // The posts that did not fit stay unread, and the shown ones do not come again.
+  assert.equal(first.read.readThrough, 29);
+  const second = store.digest(agent, first.read);
+  assert.deepEqual(
+    second.lines.map((line) => line.slice(2, line.indexOf(' ', 2))),
+    Array.from({ length: 12 }, (_, index) => `p-${index + 30}`),
+  );
+  assert.equal(second.read.readThrough, store.latest());
+  assert.deepEqual(second.read.seen, []);
+  assert.deepEqual(store.digest(agent, second.read).lines, []);
+});
+
+await test('a digest that overflows shows the post for the agent first, and the rest come oldest first in the next reads', async (t) => {
+  const { board: store } = await board(t);
+  const agent = { id: 'a-1', direction: 'd-1' };
+  for (let index = 0; index < 35; index += 1)
+    await store.add(
+      post({
+        author: 'a-2',
+        kind: 'question',
+        direction: 'd-2',
+        text: `Q${index}`,
+        artifacts: [],
+      }),
+    );
+  // The newest post mentions the agent: it comes first, so the agent sees why it woke.
+  const mention = await store.add(
+    post({
+      author: 'a-2',
+      kind: 'question',
+      direction: 'd-2',
+      mentions: ['a-1'],
+      artifacts: [],
+    }),
+  );
+  const first = store.digest(agent, { readThrough: 0, seen: [] });
+  assert.match(
+    first.lines[0] ?? '',
+    new RegExp(`^- ${mention.id} \\[question, for you\\]`),
+  );
+  assert.match(first.lines[1] ?? '', /^- p-1 /);
+  // The read mark stops before the first post that did not fit, and the mention shown after it is in seen.
+  assert.equal(first.read.readThrough, 28);
+  assert.deepEqual(first.read.seen, [mention.id]);
+  const second = store.digest(agent, first.read);
+  assert.deepEqual(
+    second.lines.map((line) => line.slice(2, line.indexOf(' ', 2))),
+    Array.from({ length: 7 }, (_, index) => `p-${index + 29}`),
+  );
+  assert.deepEqual(store.digest(agent, second.read).lines, []);
+});
+
+await test('a reply to a missing or later post loads without its reply, so replies never form a cycle', async (t) => {
+  const { board: store, root } = await board(t);
+  await store.add(post({ author: 'a-2', kind: 'question', artifacts: [] }));
+  const folder = join(root, '.verifold', 'board');
+  const write = (id: string, replyTo: string): Promise<void> =>
+    writeFile(
+      join(folder, `${id}.json`),
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        at: new Date().toISOString(),
+        author: 'a-2',
+        kind: 'question',
+        text: 'Loop.',
+        replyTo,
+        mentions: [],
+        artifacts: [],
+      }),
+    );
+  await write('p-2', 'p-3');
+  await write('p-3', 'p-2');
+  await write('p-4', 'p-1');
+  const reloaded = new Board(root);
+  await reloaded.load();
+  assert.equal(reloaded.get('p-2')?.replyTo, undefined);
+  assert.equal(reloaded.get('p-3')?.replyTo, 'p-2');
+  assert.equal(reloaded.get('p-4')?.replyTo, 'p-1');
+});
+
+await test('a digest of one line still shows one post, and the next read shows the next', async (t) => {
+  const { board: store } = await board(t);
+  const agent = { id: 'a-1', direction: 'd-1' };
+  for (const text of ['One.', 'Two.', 'Three.'])
+    await store.add(
+      post({ author: 'a-2', kind: 'question', text, artifacts: [] }),
+    );
+  const first = store.digest(agent, { readThrough: 0, seen: [] }, { limit: 1 });
+  assert.match(first.lines[0] ?? '', /^- p-1 .*"One\."$/);
+  assert.equal(
+    first.lines[1],
+    '- 2 more unread posts. Read them with verifold_board.',
+  );
+  const second = store.digest(agent, first.read, { limit: 1 });
+  assert.match(second.lines[0] ?? '', /^- p-2 .*"Two\."$/);
+});
+
+await test('a digest stays within its character budget, and the posts that did not fit stay unread', async (t) => {
+  const { board: store } = await board(t);
+  const agent = { id: 'a-1', direction: 'd-1' };
+  for (let index = 0; index < 5; index += 1)
+    await store.add(
+      post({
+        author: 'a-2',
+        kind: 'question',
+        text: `${index}`.repeat(200),
+        artifacts: [],
+      }),
+    );
+  const budget = 600;
+  const first = store.digest(agent, { readThrough: 0, seen: [] }, { budget });
+  const size = first.lines.reduce((sum, line) => sum + line.length + 1, 0);
+  assert.ok(size <= budget, `${size} characters`);
+  assert.equal(first.lines.length, 3);
+  assert.equal(
+    first.lines.at(-1),
+    '- 3 more unread posts. Read them with verifold_board.',
+  );
+  // Only the shown posts count as read.
+  assert.equal(first.read.readThrough, 2);
+  const second = store.digest(agent, first.read, { budget });
+  assert.match(second.lines[0] ?? '', /^- p-3 /);
+  // One post always shows, even when it alone passes the budget.
+  const one = store.digest(agent, { readThrough: 0, seen: [] }, { budget: 10 });
+  assert.match(one.lines[0] ?? '', /^- p-1 /);
 });

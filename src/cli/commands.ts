@@ -38,6 +38,7 @@ import { TaskManager, type TaskPlace } from './tasks.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
+import { Lab } from './lab.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
@@ -272,7 +273,10 @@ export function terminalInput(
 ): void {
   const value = line.trim();
   if (!value) return;
-  const live = sessions.views().filter((view) => view.live);
+  // Lab agents take posts on the board, not terminal input.
+  const live = sessions
+    .views()
+    .filter((view) => view.live && !view.record.agent);
   const requests = live.flatMap((view) => view.record.requests);
   /** The one live session that fits, or a message that names where to act. */
   const only = (
@@ -558,6 +562,7 @@ async function serveDesk(
       const owned: {
         tasks?: TaskManager;
         coordinator?: Coordinator;
+        lab?: Lab;
         session?: string;
       } = {};
       // Usage windows belong to the harness accounts. Every session reports them here.
@@ -569,7 +574,14 @@ async function serveDesk(
         agents:
           (await loadWorkspace(root).catch(() => null))?.agents ??
           defaultAgents,
-        onLimit: (host, signal) => quota.record(host, signal),
+        onLimit: (host, signal) => {
+          quota.record(host, signal);
+          owned.lab?.limited(host, signal);
+        },
+        // Lab agents' turns go to the lab. Task turns come through onTaskTurn.
+        onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
+        // The person's own session that finds every slot taken gets the slot of a lab agent that had its turn. Tasks never do: a lab run has no tasks.
+        makeRoom: () => owned.lab?.yieldSlot() ?? Promise.resolve(false),
         onTaskTurn: (task, turn, detail, reply) =>
           void owned.tasks
             ?.turnEnded(task, turn, detail, reply)
@@ -585,7 +597,7 @@ async function serveDesk(
             owned.tasks?.answered(task.id, event.text, true).catch(() => {});
           // The events of task workers stay in the desk. A session that the person controls prints its events here.
           const line =
-            io.interactive && !view?.record.task
+            io.interactive && !view?.record.task && !view?.record.agent
               ? feedLine(event, view ? hostName(view.record.host) : undefined)
               : null;
           if (line) io.progress?.(line);
@@ -669,6 +681,20 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
+      // The lab's agents share the worker slots with tasks and plain sessions.
+      const lab = new Lab(root, {
+        sessions,
+        memory,
+        quota,
+        model: async (host) => {
+          const workspace = await loadWorkspace(root).catch(() => null);
+          return workspace?.host === host ? (workspace.model ?? null) : null;
+        },
+        // A process that runs one session of the person shows the lab. Its agents work only with the project's owner.
+        runs: session === undefined,
+        ...(io.progress ? { progress: io.progress } : {}),
+      });
+      owned.lab = lab;
       // While an agent works or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
       const awake = new KeepAwake();
       const working = setInterval(() => {
@@ -689,12 +715,15 @@ async function serveDesk(
       try {
         await sessions.load();
         await coordinator.load();
+        await lab.load();
         await compute.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
         await compute.leases.recover();
         compute.watch();
         const stopped = await tasks.settle();
+        // Agents whose direction is open resume one at a time, each with a digest.
+        lab.resumeAll();
         if (stopped)
           io.progress?.(
             `Verifold stopped earlier while ${stopped === 1 ? 'a task was' : `${stopped} tasks were`} running. Review the saved work in the desk.`,
@@ -710,6 +739,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
+            lab,
           );
         else {
           desk = await startDesk(
@@ -723,7 +753,7 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
-            { stop: () => quit.abort(), reuse: run.owner?.desk },
+            { stop: () => quit.abort(), reuse: run.owner?.desk, lab },
           );
           await announce(
             desk,
@@ -787,6 +817,7 @@ async function serveDesk(
         await runner.settled();
         // The coordinator pauses first, so no wakeup starts a task while the workers stop.
         const coordinatorSaved = await coordinator.close();
+        await lab.close();
         if (!(await sessions.close()) || !coordinatorSaved)
           io.progress?.(
             'Verifold could not save the last change to the session record in .verifold/sessions/.',

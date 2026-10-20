@@ -22,6 +22,7 @@ const promptIds = [
   'interview-quick',
   'task-worker',
   'coordinator',
+  'lab-peer',
 ] as const;
 
 export type PromptId = (typeof promptIds)[number];
