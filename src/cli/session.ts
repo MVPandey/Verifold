@@ -1022,9 +1022,11 @@ export class SessionManager {
    * Hand the session to the harness's own terminal, between turns. Claude Code
    * allows one process for a conversation, so its structured process stops
    * first and starts again when the terminal ends. A Codex terminal attaches to
-   * the same app-server, which keeps reporting its events.
+   * the same app-server, which keeps reporting its events. A lab agent's
+   * session opens only through the lab (`agent`), which gives the agent no
+   * turn meanwhile.
    */
-  async takeTerminal(lease: string): Promise<void> {
+  async takeTerminal(lease: string, agent = false): Promise<void> {
     const record = this.current;
     const host = this.host;
     if (this.native) fail('The terminal is open. Take input in it.');
@@ -1034,7 +1036,7 @@ export class SessionManager {
         'Open the terminal between turns. Wait for the turn to end, or cancel it.',
       );
     if (record.mode === 'coordinator') fail('The coordinator has no terminal.');
-    if (record.agent) fail(agentSession);
+    if (record.agent && !agent) fail(agentSession);
     const native =
       record.nativeSessionId ??
       fail('The harness has not reported its session yet.');
@@ -1125,9 +1127,12 @@ export class SessionManager {
     if (!record) return;
     this.event('status', 'You returned to Verifold.');
     if (record.task) this.options.onTaskTurn?.(record.task, 'terminal');
+    // Claude Code's process starts again, and its start tells the lab that the session is ready.
     if (record.host === 'claude') void this.resumeAfterTerminal();
-    else if (this.host)
+    else if (this.host) {
       this.patch((current) => ({ ...current, status: 'idle' }));
+      if (record.agent && this.current) this.options.onTurnEnd?.(this.current);
+    }
   }
 
   /** Start the structured Claude Code process again on the same conversation. */

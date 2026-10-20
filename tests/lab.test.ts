@@ -20,23 +20,39 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
 import {
+  addSpend,
   Lab,
   labLimits,
   startLabOn,
+  type Call as LabCall,
+  type Check,
   type LabCompute,
   type LabSessions,
   type LabState,
+  type LabView,
 } from '../src/cli/lab.ts';
 import { RunTeam } from '../src/cli/team.ts';
-import type { PodRuns, Sandbox, SandboxSpec } from '../src/cli/runs.ts';
+import type {
+  PodRuns,
+  RunRecord,
+  Sandbox,
+  SandboxSpec,
+} from '../src/cli/runs.ts';
 import type { Lease } from '../src/cli/leases.ts';
+import type { ComputeView } from '../src/cli/compute.ts';
+import { ptyLibrary } from '../src/cli/terminals.ts';
 import { secretGuard } from '../src/cli/runpod.ts';
 import { ResearchRunner } from '../src/cli/research-runner.ts';
 import { boardLimits } from '../src/cli/board.ts';
 import { checkToolSpecs } from '../src/cli/lab-tools.ts';
 import { Coordinator } from '../src/cli/coordinator.ts';
 import { renderDesk } from '../src/cli/desk-view.ts';
-import { labCallNeeds, renderLab } from '../src/cli/desk-lab.ts';
+import {
+  costLine,
+  labCallNeeds,
+  renderLab,
+  runPanel,
+} from '../src/cli/desk-lab.ts';
 import { readDeskSnapshot } from '../src/cli/desk-records.ts';
 import { Quota } from '../src/cli/quota.ts';
 import {
@@ -61,9 +77,25 @@ import { ProjectMemory } from '../src/cli/memory.ts';
  * an `id` uses it as its tool-use ID. With a `resume-fails` file next to the
  * fake, a resume stops at once, as when the harness lost the conversation.
  * With a `strict-tools` file, it calls only the Verifold tools that its
- * launch gave it, and logs NO_SUCH_TOOL as the result of any other.
+ * launch gave it, and logs NO_SUCH_TOOL as the result of any other. A call
+ * named COST sets the cost estimate of its results. Without -p it is the
+ * terminal: it prints its arguments, echoes lines, and exits on /exit.
  */
-const claudeHost = `const fs = require('node:fs');
+const claudeHost = `if (!process.argv.includes('-p')) {
+  process.stdin.setRawMode?.(true);
+  process.stdout.write('fake tui ' + process.argv.slice(2).join(' ') + '\\r\\n');
+  let typed = '';
+  process.stdin.on('data', (chunk) => {
+    for (const char of chunk.toString()) {
+      if (char !== '\\r' && char !== '\\n') { typed += char; continue; }
+      if (typed === '/exit') process.exit(0);
+      process.stdout.write('echo ' + typed + '\\r\\n');
+      typed = '';
+    }
+  });
+  return;
+}
+const fs = require('node:fs');
 const path = require('node:path');
 const base = path.dirname(process.argv[1]);
 const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
@@ -81,6 +113,7 @@ let calls = [];
 let next = 0;
 let running = false;
 let turn = 0;
+let cost = null;
 const take = (text) => {
   let script = [];
   try { script = JSON.parse(fs.readFileSync(path.join(base, 'scripts', name + '.json'), 'utf8')); } catch {}
@@ -93,7 +126,7 @@ const take = (text) => {
 const allowed = args.includes('--allowedTools') ? args[args.indexOf('--allowedTools') + 1].split(',') : [];
 const call = () => {
   const entry = calls[next];
-  if (!entry) { running = false; return out({ type: 'result', subtype: 'success' }); }
+  if (!entry) { running = false; return out({ type: 'result', subtype: 'success', ...(cost === null ? {} : { total_cost_usd: cost }) }); }
   if (entry.name.startsWith('verifold_') && fs.existsSync(path.join(base, 'strict-tools')) && !allowed.includes('mcp__verifold__' + entry.name)) {
     fs.appendFileSync(path.join(log, 'results.jsonl'), JSON.stringify({ call: entry.name, result: { isError: true, content: [{ type: 'text', text: 'NO_SUCH_TOOL' }] } }) + '\\n');
     next++;
@@ -106,6 +139,7 @@ const call = () => {
     return call();
   }
   if (entry.name === 'WAIT') return;
+  if (entry.name === 'COST') { cost = entry.arguments.usd; next++; return call(); }
   if (entry.name === 'EXIT') process.exit(1);
   if (entry.name === 'FAIL') { running = false; return out({ type: 'result', subtype: 'error_during_execution', is_error: true }); }
   out({ type: 'control_request', request_id: 'mcp-' + turn + '-' + next, request: { subtype: 'mcp_message', server_name: 'verifold', message: { jsonrpc: '2.0', id: 100 + next, method: 'tools/call', params: { name: entry.name, arguments: entry.arguments, _meta: { 'claudecode/toolUseId': entry.id ?? ('toolu-' + process.pid + '-' + turn + '-' + next) } } } } });
@@ -141,6 +175,12 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   call();
 });`;
 
+/** A lab agent's terminal needs a PTY library. */
+const terminals =
+  typeof (await ptyLibrary()) === 'string'
+    ? 'no PTY library on this platform'
+    : false;
+
 const codexSocket = fileURLToPath(
   new URL('./fixtures/codex-socket.cjs', import.meta.url),
 );
@@ -148,9 +188,18 @@ const codexSocket = fileURLToPath(
 /**
  * A fake Codex app-server for lab agents, with the same scripts and logs as
  * the fake Claude Code. A thread keeps the tools that it started with, as in
- * Codex: with a `strict-tools` file, it calls only those.
+ * Codex: with a `strict-tools` file, it calls only those. With --remote it
+ * is the terminal, as the fake Claude Code is without -p.
  */
-const codexHost = `const fs = require('node:fs');
+const codexHost = `if (process.argv.includes('--remote')) {
+  process.stdin.setRawMode?.(true);
+  process.stdout.write('fake tui ' + process.argv.slice(2).join(' ') + '\\r\\n');
+  process.stdin.on('data', (chunk) => {
+    if (chunk.toString().includes('/exit')) process.exit(0);
+  });
+  return;
+}
+const fs = require('node:fs');
 const path = require('node:path');
 const base = path.dirname(process.argv[1]);
 const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
@@ -1089,12 +1138,12 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
   assert.match(text(4), /from 1 to 240, or up to 1440 on a pod\./);
   await until(() => lab.lab.view()?.ledger[0]?.status === 'done');
   assert.deepEqual(lab.lab.view()?.ledger[0]?.metrics, { acc: 0.9 });
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
+  // The run's panel says where it ran.
+  const panel = runPanel(lab.lab.view()!, 'r-1', (value) => value);
+  assert.match(
+    panel.body,
+    /<dt>Where<\/dt><dd>on lease-1 \(NVIDIA A40\)<\/dd>/,
   );
-  assert.match(html, /<span class="fine">on lease-1 \(NVIDIA A40\)<\/span>/);
   // The agent has the pod tools and the pod part of its prompt.
   const thread = (
     (await lab.lines('d-1-alpha', 'threads.jsonl')) as {
@@ -1352,7 +1401,11 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
     { error: 'The lab already runs.' },
   ]);
   const view = await home();
-  assert.match(view, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
+  // The lab's header is its question.
+  assert.match(
+    view,
+    /<h1 id="view-title" tabindex="-1">Do months lie on a circle\?<\/h1>/,
+  );
   // A lab run offers no research step, no coordinator, and no new task.
   const page = async (name: string): Promise<string> =>
     (
@@ -1392,7 +1445,10 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   const board = await home();
   assert.match(board, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(board, /<img/);
-  assert.match(board, /claude-1 <span class="fine">Claude Code<\/span>/);
+  assert.match(
+    board,
+    /<span class="who who-claude" role="img" aria-label="Claude Code" title="Claude Code">Cl<\/span><span class="row-handle">claude-1<\/span>/,
+  );
   assert.match(
     board,
     /data-action="lab-direction-stop" data-lab-direction="d-1"/,
@@ -1533,7 +1589,7 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
     (await post({ action: 'lab-direction-stop', direction: 'd-1' }))[0],
     200,
   );
-  assert.match(await home(), /<span class="status">Stopped<\/span>/);
+  assert.match(await home(), /<span class="row-state">Stopped<\/span>/);
 });
 
 await test('one run has one team: research, the coordinator, tasks, and a lab keep apart', async (t) => {
@@ -1761,16 +1817,41 @@ await test('Home in a lab still shows what needs the person, and the transcript 
     controllable: true,
     lab: lab.lab.view(),
   } as never).html;
-  assert.match(html, /<h1 id="view-title" tabindex="-1">Lab<\/h1>/);
-  assert.match(html, /Claude Code session asks to use Bash/);
-  // Home's one box posts to the board. The permission request is answered in its card.
-  assert.doesNotMatch(html, /id="message-text"/);
-  assert.match(html, /data-action="answer" data-request="R1"/);
-  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
   assert.match(
     html,
+    /<h1 id="view-title" tabindex="-1">Do LLMs store months on circles\?<\/h1>/,
+  );
+  // The request is the one thing that needs the person, so the Needs-you line shows it.
+  assert.match(
+    html,
+    /<span class="needs-label">Needs you<\/span><span class="needs-title">Claude Code session asks to use Bash<\/span>/,
+  );
+  // Home's one box posts to the board. The permission request is answered in its line.
+  assert.doesNotMatch(html, /id="message-text"/);
+  assert.match(html, /data-action="answer" data-request="R1"/);
+  // Each agent's row opens its panel, which holds its transcript.
+  assert.match(html, /data-panel="agent" data-agent="a-1">What claude-1 did/);
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  const panel = renderDesk(
+    await readDeskSnapshot(lab.root),
+    undefined,
+    null,
+    {
+      session: null,
+      controllable: true,
+      lab: lab.lab.view(),
+      labAgent: lab.sessions.view(session),
+    },
+    { view: 'home', panel: 'agent', agent: 'a-1' },
+  ).html;
+  assert.match(
+    panel,
+    /<p class="kind">Lab agent<\/p><h2 id="panel-title" tabindex="-1">claude-1<\/h2>/,
+  );
+  assert.match(
+    panel,
     new RegExp(
-      `<summary>What claude-1 did</summary><div class="transcript-slot" data-source="session:${session}"`,
+      `<div class="transcript-slot[^"]*" data-source="session:${session}"`,
     ),
   );
 });
@@ -1986,16 +2067,12 @@ await test('the lab view puts the newest activity first, and a crashed agent can
       index === 0 ? { ...entry, status: 'crashed' as const } : entry,
     ),
   };
-  const html = renderLab(
-    crashed,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(crashed, (value) => value);
   assert.ok(
     html.indexOf('aria-label="Alpha"') < html.indexOf('aria-label="Beta"'),
   );
   const row = html.slice(
-    html.indexOf('<li class="lab-direction">'),
+    html.indexOf('<li class="lab-row'),
     html.indexOf('</li>'),
   );
   assert.match(row, /Stopped by itself 3 times in an hour/);
@@ -2004,10 +2081,10 @@ await test('the lab view puts the newest activity first, and a crashed agent can
     row,
     /data-action="lab-direction-stop" data-lab-direction="d-1"/,
   );
-  // Each row has one shape: its text, agent, state, controls, then its transcript.
+  // Each row has one shape: its verdict, its title and line, its agent, and its state; its controls open under it.
   assert.match(
     row,
-    /^<li class="lab-direction"><div class="lab-direction-text">[\s\S]*<\/div><span class="lab-agent">[\s\S]*<\/span><span class="status[^"]*">[^<]*<\/span><span class="lab-controls">/,
+    /^<li class="lab-row" id="row-d-1"><details id="row-open-d-1"><summary><span class="verdict v-open"><span aria-hidden="true">○<\/span> Not settled<\/span><span class="row-main"><strong>Alpha<\/strong><\/span><span class="row-who">[\s\S]*<\/span><span class="row-state failed">Stopped by itself 3 times in an hour<\/span><\/summary><div class="row-more">/,
   );
   // The hourly turns come from the lab's limit.
   const hourly = labLimits.wakeupsPerHour;
@@ -2025,7 +2102,6 @@ await test('the lab view puts the newest activity first, and a crashed agent can
       })),
     },
     (value) => value,
-    () => '',
   );
   assert.match(waiting, /Waits until 10:00: 7 turns an hour/);
 });
@@ -2631,6 +2707,7 @@ await test('a park that ends after a resume and a new turn leaves that turn alon
     idle: () => false,
     startAgent: () => Promise.reject(new Error('Not in this test.')),
     resumeAgent: () => Promise.resolve(),
+    takeAgentTerminal: () => Promise.resolve(),
     park: async () => {
       parks += 1;
       await gate;
@@ -2699,6 +2776,7 @@ await test('while Start over parks the agents, a resume, a post, or a new direct
     idle: () => false,
     startAgent: () => Promise.reject(new Error('Not in this test.')),
     resumeAgent: () => Promise.resolve(),
+    takeAgentTerminal: () => Promise.resolve(),
     park: async () => {
       parks += 1;
       await gate;
@@ -2919,23 +2997,20 @@ await test('the first agent posts the plan of record, and the lab opens its dire
     /Only the agent that opened the lab changes its plan/,
   );
 
-  // The desk shows the plan first, with each bar.
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
+  // The plan is a post on the board, with each bar under it.
+  const html = renderLab(lab.lab.view()!, (value) => value);
+  assert.match(
+    html,
+    /<article class="post" id="post-p-1">[\s\S]*<span class="chip kind-plan">Plan of record<\/span>/,
   );
-  assert.match(html, /<h2 id="plan-title">Plan of record<\/h2>/);
   assert.match(
     html,
     /<th scope="row">Helix<\/th><td>it beats a circle for years · 3 runs · noise ±0\.02<\/td>/,
   );
   assert.match(html, /Engels 2024 <span class="fine">\(known\)<\/span>/);
   assert.match(html, /data-action="lab-reply" data-post="p-1"/);
-  assert.match(html, /<p class="fine lab-time">Due .* left<\/p>/);
-  assert.ok(
-    html.indexOf('id="plan-title"') < html.indexOf('id="directions-title"'),
-  );
+  assert.match(html, /Reply to change the plan\. A reply wakes claude-1\./);
+  assert.match(html, /<p class="lab-facts">Day 1 · Due <strong>/);
 });
 
 await test('a reply to the plan wakes its author, and a change of the plan wakes the agents whose directions it changed', async (t) => {
@@ -3025,13 +3100,9 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
   );
   // When the plan's author stops, the plan stays as it is, and the desk says so.
   await lab.lab.stopDirection('d-1');
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /claude-1 no longer works, so the plan stays as it is\./);
-  assert.doesNotMatch(html, /Reply to the plan/);
+  assert.doesNotMatch(html, /Reply to change the plan/);
   // The plan's table marks the stopped direction.
   assert.match(
     html,
@@ -3082,7 +3153,7 @@ await test('when the time budget ends the lab pauses, a go call asks for more ti
   );
   assert.match(
     html,
-    /<button type="button" data-action="lab-call-answer" data-call="c-1" data-option="0">Continue 4 more hours<\/button>/,
+    /<button type="button" class="call-option" data-action="lab-call-answer" data-call="c-1" data-option="0"><span class="option-label"><span class="key" aria-hidden="true">1<\/span> Continue 4 more hours<\/span>/,
   );
   assert.match(
     html,
@@ -3114,7 +3185,7 @@ await test('when the time budget ends the lab pauses, a go call asks for more ti
   html = await desk();
   assert.match(
     html,
-    /You chose "Continue 4 more hours" on c-1\. <button type="button" class="quiet" data-action="lab-call-undo" data-call="c-1">Undo<\/button>/,
+    /You chose "Continue 4 more hours" on c-1\. <button type="button" class="link" data-action="lab-call-undo" data-call="c-1">Undo<\/button>/,
   );
   // The undo gives back the time budget before the answer: the lab is past
   // its deadline again, pauses, and the same call asks again.
@@ -3455,19 +3526,20 @@ await test('an agent runs an experiment, its end wakes the agent, and a claim ci
     git(lab.root, 'show', `${run?.commit ?? ''}:train.sh`).split('\n')[0],
     'echo "METRIC acc=0.7"',
   );
-  // The desk shows the run on its row and on the claim, with its log one click away.
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  // The desk shows the run on its row and on the claim. Its panel has its log.
+  const html = renderLab(lab.lab.view()!, (value) => value);
+  const button =
+    /<button type="button" class="proof run-done" data-panel="run" data-run="r-1">r-1 · acc=0\.7<\/button>/g;
+  assert.equal(html.match(button)?.length, 2);
+  const panel = runPanel(lab.lab.view()!, 'r-1', (value) => value);
+  assert.equal(panel.title, 'Run r-1');
+  assert.match(panel.sub, /exit 0 in 0 min/);
+  assert.match(panel.body, /<tr><th scope="row">acc<\/th><td>0\.7<\/td><\/tr>/);
   assert.match(
-    html,
-    /<span class="chip run-done">r-1<\/span> <span>exit 0 in 0 min<\/span> <span class="fine">acc=0\.7<\/span>/,
+    panel.body,
+    /<code>out\/r\.txt<\/code> <span class="fine">7 bytes<\/span>/,
   );
-  assert.match(html, /id="run-log-d-1-r-1"/);
-  assert.match(html, /id="run-log-p-\d+-r-1"/);
-  assert.match(html, /data-run-log="r-1"/);
+  assert.match(panel.body, /id="panel-log-r-1" open>[\s\S]*data-run-log="r-1"/);
   assert.match(
     await lab.lab.runLog('r-1').then((log) => log?.text ?? ''),
     /METRIC acc=0\.7/,
@@ -3818,12 +3890,11 @@ await test('an agent gives its own direction a verdict with proof, and closes it
     /Its agent closed that direction already/,
   );
   // The desk shows the verdict with its evidence, and no Stop.
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
+  const html = renderLab(lab.lab.view()!, (value) => value);
+  assert.match(
+    html,
+    /<span class="verdict v-ruled-out"><span aria-hidden="true">×<\/span> Ruled out<\/span>/,
   );
-  assert.match(html, /<span class="chip verdict-ruled-out">Ruled out<\/span>/);
   assert.match(html, /3 seeds spread 0\.2 · p-5/);
   assert.match(html, /Closed by its agent/);
   assert.doesNotMatch(html, /data-action="lab-direction-stop"/);
@@ -4460,11 +4531,7 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
       input.includes('Holds: acc 0.7 on my rerun.'),
     ),
   );
-  const html = renderLab(
-    view,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(view, (value) => value);
   assert.doesNotMatch(html, /Open disputes/);
   assert.match(html, /reran r-2 \(Codex\): acc=0\.7/);
   // The checker's session ended after its post.
@@ -4562,13 +4629,15 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
     ),
   );
   assert.equal(lab.lab.view()?.checks.length, 1);
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
+  const html = renderLab(lab.lab.view()!, (value) => value);
+  assert.match(
+    html,
+    /verdict v-holds-up"><span aria-hidden="true">✓<\/span> Holds up</,
   );
-  assert.match(html, /chip verdict-holds-up">Holds up</);
-  assert.match(html, /acc 0\.7 · p-3 · r-1 · reran r-2 \(Codex\): acc=0\.7/);
+  assert.match(
+    html,
+    /acc 0\.7 · p-3 · r-1<\/span>[\s\S]*?<span class="row-state">reran r-2 \(Codex\): acc=0\.7<\/span>/,
+  );
   // A newer check of the post runs: an ask for holds-up now waits for it, and the mark shows it first.
   await lab.script('k-2', [
     {
@@ -4610,11 +4679,7 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
   assert.match(again?.text ?? '', /^d-1 is leading now\. Check k-2 runs/);
   assert.equal(lab.lab.view()?.state.directions[0]?.verdict, 'leading');
   assert.equal(lab.lab.view()?.checks[1]?.holdsUp, true);
-  const later = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  const later = renderLab(lab.lab.view()!, (value) => value);
   assert.match(later, /codex-2 checks it/);
 });
 
@@ -4695,11 +4760,7 @@ await test('a rerun that does not hold takes back the verdict, and the claim can
     assert.equal(entry.ok, false);
     assert.match(entry.text, /p-3 did not hold on its check k-1\./);
   }
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /did not hold on r-2 \(Codex\)/);
   assert.doesNotMatch(html, /Open disputes/);
   // The rerun that did not hold is no evidence: not for leading, not for holds-up.
@@ -4790,11 +4851,7 @@ await test('with one harness a fresh session of the same harness checks, and a c
   assert.ok(settings.sandbox.filesystem.denyRead.includes('~/.claude'));
   assert.ok(settings.permissions.deny.includes(`Read(/${board}/**)`));
   // The desk pins the dispute while the check runs.
-  let html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  let html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /Open disputes/);
   assert.match(html, /claude-3 \(Claude Code\) checks it now/);
   // 60 short minutes later the check fails, and the dispute stays open.
@@ -4815,11 +4872,7 @@ await test('with one harness a fresh session of the same harness checks, and a c
         ),
     ),
   );
-  html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /Open disputes/);
   assert.match(html, /Check k-1 failed: claude-3 posted no rerun/);
   await until(
@@ -4897,11 +4950,7 @@ await test("a checker posts one rerun only, reads only the claim's commit, and r
   assert.equal(check?.state, 'done');
   assert.equal(check?.method, 'code-read');
   // A code-read settles the dispute, and its mark says how it checked.
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /read the code only \(Codex\)/);
   assert.equal(
     lab.lab.view()?.posts.filter((post) => post.kind === 'rerun').length,
@@ -4984,13 +5033,13 @@ await test('one check runs at a time, a second objection joins the open check, a
       ),
   );
   // The claim had its checks, so its objections stay replies. The evidence can get one more check, so its dispute stays pinned.
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
+  const html = renderLab(lab.lab.view()!, (value) => value);
+  const pinned = html.slice(
+    html.indexOf('<ul class="lab-pinned"'),
+    html.indexOf('</ul>', html.indexOf('<ul class="lab-pinned"')),
   );
-  assert.match(html, new RegExp(`${evidence} is in dispute`));
-  assert.doesNotMatch(html, new RegExp(`${claim} is in dispute`));
+  assert.match(pinned, new RegExp(`href="#post-${evidence}"`));
+  assert.doesNotMatch(pinned, new RegExp(`href="#post-${claim}"`));
 });
 
 await test('a check that ran when Verifold stopped starts again once with a fresh session, and fails after a second stop', async (t) => {
@@ -5141,11 +5190,7 @@ await test('an objection to a post whose check runs waits for a new check: the r
   assert.deepEqual(checks[1]?.objections, [second.id]);
   assert.equal(checks[1]?.state, 'queued');
   // Both objections stay open on the desk until a check answers them.
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /Open disputes/);
   assert.match(html, /First\./);
   assert.match(html, /Second\./);
@@ -5211,11 +5256,7 @@ await test('in a project whose path has pattern characters, a checker is not bli
   );
   assert.ok(denied.includes('~/.claude'));
   assert.ok(!denied.some((path) => path.includes('exp [v2] (final)')));
-  const html = renderLab(
-    lab.lab.view()!,
-    (value) => value,
-    () => '',
-  );
+  const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /the checker could read project records/);
 });
 
@@ -5287,12 +5328,19 @@ async function claudeResults(lab: Fixture, folder: string): Promise<string[]> {
 }
 
 /** Home of the desk, with the lab. */
-async function labHome(lab: Fixture): Promise<string> {
-  return renderDesk(await readDeskSnapshot(lab.root), undefined, null, {
-    session: null,
-    controllable: true,
-    lab: lab.lab.view(),
-  }).html;
+/** Needs you in full: every call of the lab, with its options. Home's line shows the first one. */
+async function labNeeds(lab: Fixture): Promise<string> {
+  return renderDesk(
+    await readDeskSnapshot(lab.root),
+    undefined,
+    null,
+    {
+      session: null,
+      controllable: true,
+      lab: lab.lab.view(),
+    },
+    { view: 'needs', panel: null },
+  ).html;
 }
 
 await test('an agent asks the person a call: a technical question, a wrong effect, and a fourth call are refused, and the answer wakes the agent', async (t) => {
@@ -5416,18 +5464,18 @@ await test('an agent asks the person a call: a technical question, a wrong effec
       ),
   );
   // Needs you shows each call escaped, with the agents' pick and what each option does.
-  const html = await labHome(lab);
+  const html = await labNeeds(lab);
   assert.match(html, /More time for &lt;b&gt;3 seeds&lt;\/b&gt;\?/);
   assert.doesNotMatch(html, /<b>3 seeds/);
   assert.match(
     html,
-    /<button type="button" class="primary" data-action="lab-call-answer" data-call="c-1" data-option="0">Four more hours &lt;b&gt;now&lt;\/b&gt;<\/button> <span class="fine">No cost · 4 h<\/span>/,
+    /<button type="button" class="call-option picked" data-action="lab-call-answer" data-call="c-1" data-option="0"><span class="option-label"><span class="key" aria-hidden="true">1<\/span> Four more hours &lt;b&gt;now&lt;\/b&gt;<\/span><span class="option-facts">No cost · 4 h<\/span><span class="pick">The agents' pick<\/span><\/button>/,
   );
-  assert.match(html, /claude-1 advises "Four more hours/);
+  assert.match(html, /Why claude-1 picks it: /);
   assert.match(html, /Lets claude-1&#39;s shell reach pypi\.org\./);
   assert.match(
     html,
-    /<button type="button" class="primary" data-action="lab-call-answer" data-call="c-3" data-option="1">Not now<\/button>/,
+    /<button type="button" class="call-option picked" data-action="lab-call-answer" data-call="c-3" data-option="1"><span class="option-label"><span class="key" aria-hidden="true">2<\/span> Not now<\/span>/,
   );
   assert.match(html, /Your answer applies at once, and it has no undo\./);
   // An access call never applies by itself.
@@ -5524,7 +5572,7 @@ await test("an access answer gives the agent's shell its domains while it stands
     .filter((call) => call.by === 'a-1')
     .map((call) => call.id);
   assert.match(
-    await labHome(lab),
+    await labNeeds(lab),
     /Codex: any website\. Codex cannot limit the network to pypi\.org, so codex-1&#39;s shell can reach any website\./,
   );
   const domains = async (): Promise<string[]> => {
@@ -5689,7 +5737,7 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   );
   assert.equal(call?.options[0]?.usd, 3.2);
   assert.match(
-    await labHome(lab),
+    await labNeeds(lab),
     /Starts a NVIDIA A40 pod for 2 hours for d-1\. Undo ends the pod\. The minutes billed so far stay billed\./,
   );
   // A paused lab starts no pod, also from a call.
@@ -5919,7 +5967,7 @@ await test('a scope call opens or stops a direction, and its undo reverses it', 
   ]);
   await until(() => lab.lab.view()?.state.calls.length === 2);
   assert.match(
-    await labHome(lab),
+    await labNeeds(lab),
     /Stops d-2\. Its runs and pods end\. Undo opens it again with its agent\. Runs and pods that ended do not come back\./,
   );
   await lab.lab.answerCall('c-1', 0);
@@ -6084,3 +6132,538 @@ await test('answers of pods survive the cut of old calls, and a Continue that Ve
     ),
   );
 });
+
+await test("Claude Code's cost estimate adds up across an agent's processes and sessions", () => {
+  const record = (id: string, costUsd: number | null) =>
+    ({ id, costUsd }) as Parameters<typeof addSpend>[1];
+  const first = addSpend(
+    undefined,
+    record('20261020T100000000Z-aaaaaaaa', 0.5),
+  );
+  assert.deepEqual(first, {
+    usd: 0.5,
+    session: '20261020T100000000Z-aaaaaaaa',
+    seen: 0.5,
+  });
+  // In one process the estimate grows: only the growth is new.
+  const grown = addSpend(first, record('20261020T100000000Z-aaaaaaaa', 0.8));
+  assert.equal(grown?.usd, 0.8);
+  // A lower estimate of the same session started from zero in a new process: all of it is new.
+  const resumed = addSpend(grown, record('20261020T100000000Z-aaaaaaaa', 0.2));
+  assert.equal(resumed?.usd, 1);
+  // A new session starts from zero.
+  const fresh = addSpend(resumed, record('20261020T100000000Z-bbbbbbbb', 0.3));
+  assert.ok(Math.abs((fresh?.usd ?? 0) - 1.3) < 1e-9);
+  // No estimate, or the same one again, changes nothing.
+  assert.equal(
+    addSpend(fresh, record('20261020T100000000Z-bbbbbbbb', null)),
+    fresh,
+  );
+  assert.equal(
+    addSpend(fresh, record('20261020T100000000Z-bbbbbbbb', 0.3)),
+    fresh,
+  );
+});
+
+await test('the lab adds up the cost estimates of its Claude Code agents for the header', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    { calls: [{ name: 'COST', arguments: { usd: 0.4 } }] },
+  ]);
+  await lab.script('d-2-beta', [
+    { calls: [{ name: 'COST', arguments: { usd: 0.25 } }] },
+  ]);
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  await until(() => Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 0.65) < 1e-9);
+  const view = lab.lab.view()!;
+  assert.equal(
+    costLine(view, { spent: 1.2, limit: 20 }),
+    '≈$1.85 spent (Claude Code ≈$0.65, GPU $1.20 of $20.00) · Codex usage not counted',
+  );
+  assert.equal(
+    costLine(view, null),
+    '≈$0.65 spent (Claude Code ≈$0.65) · Codex usage not counted',
+  );
+  // The estimate lasts across a restart of Verifold.
+  await lab.restart();
+  assert.ok(Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 0.65) < 1e-9);
+});
+
+await test('the main screen: one header, a Needs-you line in its order, a disputed row, and every agent text escaped', async (t) => {
+  const lab = await fixture(t);
+  await lab.lab.start('Do <b>months</b> lie on a circle?', { hours: 8 });
+  await lab.lab.pause();
+  await lab.lab.addDirection({
+    title: 'Circles <img src=x onerror=alert(1)>',
+    harness: 'claude',
+    bar: 'it beats <i>the SAE</i>',
+  });
+  await lab.lab.addDirection({ title: 'Helix', harness: 'codex' });
+  const view = lab.lab.view();
+  assert.ok(view);
+  const at = new Date().toISOString();
+  const commit = 'a'.repeat(40);
+  const run: RunRecord = {
+    schemaVersion: 1,
+    id: 'r-9',
+    agent: 'a-1',
+    key: 'k',
+    direction: 'd-1',
+    harness: 'claude',
+    commit,
+    command: 'python <probe>.py --seed "1"',
+    why: 'A seed <for> the bar.',
+    status: 'done',
+    exitCode: 0,
+    queuedAt: at,
+    startedAt: at,
+    endedAt: at,
+    minutes: 10,
+    want: [],
+    metrics: { '<acc>': 0.7 },
+    outputs: [{ path: 'out/<x>.json', bytes: 12, sha256: 'f'.repeat(64) }],
+    config: 'c',
+    output: null,
+    log: { bytes: 0, cut: false },
+    process: null,
+    cancelledBy: null,
+    note: null,
+    told: true,
+    folder: 'run-9-1a2b3c4d',
+    where: 'local',
+  };
+  const post = (
+    id: string,
+    author: string,
+    kind: 'claim' | 'objection',
+    text: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    schemaVersion: 1 as const,
+    id,
+    at,
+    author,
+    kind,
+    text,
+    mentions: [],
+    artifacts: [],
+    direction: 'd-1',
+    ...extra,
+  });
+  const claim = post(
+    'p-90',
+    'a-1',
+    'claim',
+    'The probe <script>x</script> wins.',
+    {
+      artifacts: [
+        { type: 'run', run: 'r-9' },
+        { type: 'file', path: 'out/<x>.json', commit, direction: 'd-1' },
+      ],
+    },
+  );
+  const objection = post('p-91', 'a-2', 'objection', 'One <b>seed</b>.', {
+    replyTo: 'p-90',
+  });
+  const check: Check = {
+    id: 'k-1',
+    claim: 'p-90',
+    objections: ['p-91'],
+    holdsUp: false,
+    direction: 'd-1',
+    run: 'r-9',
+    commit,
+    harness: 'codex',
+    sameHarness: false,
+    agent: 'a-3',
+    handle: 'codex-2',
+    model: null,
+    state: 'queued',
+    outcome: null,
+    method: null,
+    result: null,
+    note: null,
+    queuedAt: at,
+    startedAt: null,
+    endedAt: null,
+    restarts: 0,
+    session: null,
+    generation: 'g',
+    start: null,
+    blind: true,
+  };
+  const call: LabCall = {
+    id: 'c-1',
+    at,
+    by: 'a-2',
+    direction: 'd-2',
+    kind: 'cost',
+    question: 'Rent a <b>GPU</b>?',
+    options: [
+      { label: 'Rent <i>it</i>', usd: 1.4, minutes: 40, effect: null },
+      { label: 'Use this Mac', usd: 0, minutes: 360, effect: null },
+    ],
+    pick: 0,
+    why: 'Seeds <u>now</u>.',
+    undoMinutes: 10,
+    deadline: null,
+    state: 'open',
+    answer: null,
+    undoUntil: null,
+    applied: null,
+    note: null,
+  };
+  const evidence = { text: 'acc <0.7>', post: 'p-90', run: 'r-9' };
+  const directions = view.state.directions.map((direction) =>
+    direction.id === 'd-1'
+      ? { ...direction, verdict: 'leading' as const, evidence }
+      : direction,
+  );
+  const seeded: LabView = {
+    ...view,
+    claudeUsd: 2.61,
+    posts: [...view.posts, claim, objection],
+    ledger: [run],
+    checks: [check],
+    handles: { ...view.handles, 'a-3': 'codex-2' },
+    state: { ...view.state, directions, checks: [check], calls: [call] },
+    directions: view.directions.map((entry, index) => ({
+      ...entry,
+      direction: directions[index] ?? entry.direction,
+      status: index === 1 ? ('crashed' as const) : entry.status,
+    })),
+  };
+  const lease = (id: string, secrets: string[]): Lease =>
+    ({
+      schemaVersion: 1,
+      id,
+      state: 'requested',
+      requestedBy: 'agent',
+      reason: 'Train.',
+      tasks: [],
+      directions: ['d-1'],
+      secrets,
+      gpu: 'NVIDIA A40',
+      image: 'runpod/pytorch',
+      diskGb: 20,
+      hours: 1,
+      rate: 0.4,
+      requestedAt: at,
+      history: [],
+      notice: null,
+    }) as unknown as Lease;
+  const compute = {
+    key: null,
+    keyring: null,
+    secrets: [],
+    settings: { limitUsd: 20, askBeforePod: true, idleMinutes: 10 },
+    gpus: null,
+    gpusAt: null,
+    leases: [lease('lease-1', []), lease('lease-2', ['HF_TOKEN'])],
+    budget: { limit: 20, spent: 0.65, reserved: 0, left: 19.35, rate: 0 },
+    problem: null,
+  } as unknown as ComputeView;
+  const worker = {
+    live: true,
+    saveFailed: false,
+    record: {
+      id: '20261002T120000000Z-abcdef12',
+      host: 'claude',
+      status: 'running',
+      mode: 'ask',
+      reportedMode: null,
+      model: null,
+      costUsd: null,
+      nativeSessionId: null,
+      startedAt: at,
+      events: [],
+      commands: [],
+      requests: [{ id: 'R1', native: 'n-1', tool: 'Bash', action: 'ls', at }],
+    },
+  };
+  const live = {
+    session: worker,
+    workers: [worker],
+    controllable: true,
+    compute,
+    lab: seeded,
+  } as never;
+  const snapshot = await readDeskSnapshot(lab.root);
+  const html = renderDesk(snapshot, undefined, null, live).html;
+  // One header: the question, the day, the deadline, and the money, which adds up.
+  assert.match(
+    html,
+    /<h1 id="view-title" tabindex="-1">Do &lt;b&gt;months&lt;\/b&gt; lie on a circle\?<\/h1><p class="lab-facts">Day 1 · Due <strong>[^<]+<\/strong> · ≈\$3\.26 spent \(Claude Code ≈\$2\.61, GPU \$0\.65 of \$20\.00\) · Codex usage not counted<\/p>/,
+  );
+  // The Needs-you line shows the call first, and counts the rest.
+  assert.match(
+    html,
+    /<span class="needs-label">Needs you<\/span><span class="needs-title">Rent a &lt;b&gt;GPU&lt;\/b&gt;\?<\/span>/,
+  );
+  assert.match(html, /4 more things need you/);
+  const needs = renderDesk(snapshot, undefined, null, live, {
+    view: 'needs',
+    panel: null,
+  }).html;
+  const order = [...needs.matchAll(/<h3>([^<]*)<\/h3>/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(order, [
+    'Rent a &lt;b&gt;GPU&lt;/b&gt;?',
+    'codex-1 stopped by itself',
+    'Add a secret: HF_TOKEN',
+    'The agent of d-1 asks for a NVIDIA A40 pod',
+    'Claude Code session asks to use Bash',
+  ]);
+  // The row whose evidence is disputed says so, and the pinned dispute links to it.
+  const row = html.slice(
+    html.indexOf('<li class="lab-row disputed" id="row-d-1">'),
+    html.indexOf('</li>', html.indexOf('id="row-d-1"')),
+  );
+  assert.match(
+    row,
+    /<span class="verdict v-disputed"><span aria-hidden="true">⚠<\/span> Disputed<\/span><span class="row-main"><strong>Circles &lt;img src=x onerror=alert\(1\)&gt;<\/strong><span class="row-line">acc &lt;0\.7&gt; · p-90 · r-9<\/span>/,
+  );
+  assert.match(row, /<span class="row-state">check k-1 waits<\/span>/);
+  assert.match(
+    html,
+    /<ul class="lab-pinned" aria-label="Open disputes"><li>[\s\S]*href="#post-p-90">p-90<\/a> by claude-1, the evidence of <a href="#row-d-1">Circles &lt;img src=x onerror=alert\(1\)&gt;<\/a>: The probe &lt;script&gt;x&lt;\/script&gt; wins\./,
+  );
+  assert.match(html, /codex-1 objects: One &lt;b&gt;seed&lt;\/b&gt;\./);
+  // Proof opens in the panel, and a file names its path.
+  assert.match(
+    html,
+    /<button type="button" class="proof run-done" data-panel="run" data-run="r-9">r-9 · &lt;acc&gt;=0\.7<\/button>/,
+  );
+  assert.match(
+    html,
+    /<span class="proof" title="out\/&lt;x&gt;\.json at aaaaaaa in d-1">file · out\/&lt;x&gt;\.json<\/span>/,
+  );
+  // No agent text reaches the page as markup.
+  for (const raw of ['<img', '<script', '<b>', '<i>', '<u>', '<acc>', '<x>'])
+    assert.ok(!html.includes(raw), raw);
+  // The run's panel escapes its command, metrics, and outputs too.
+  const panel = renderDesk(snapshot, undefined, null, live, {
+    view: 'home',
+    panel: 'run',
+    run: 'r-9',
+  }).html;
+  assert.match(
+    panel,
+    /<code>python &lt;probe&gt;\.py --seed &quot;1&quot;<\/code>/,
+  );
+  assert.match(panel, /<th scope="row">&lt;acc&gt;<\/th><td>0\.7<\/td>/);
+  for (const raw of ['<probe>', '<acc>', '<x>', '<for>'])
+    assert.ok(!panel.includes(raw), raw);
+  // The lab's Home is one column: the rail opens from the menu. A project without a lab keeps its Home.
+  assert.match(html, /<div class="lab-screen">/);
+  const plain = renderDesk(snapshot, undefined, null, {
+    session: null,
+    controllable: true,
+  }).html;
+  assert.doesNotMatch(plain, /lab-screen/);
+  assert.match(plain, /<h1 id="view-title" tabindex="-1">Home<\/h1>/);
+});
+
+await test("the desk serves a lab's depth only with its token: the run and diff panels, a file's diff, and the terminal", async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'WRITE',
+          arguments: { path: 'notes.md', text: '<b>hello</b>\n' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => {
+    const direction = lab.lab.view()?.state.directions[0];
+    return Boolean(direction && direction.head !== direction.workspace.start);
+  });
+  const stop = new AbortController();
+  const desk = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${await deskAssets(lab.base)}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const get = (path: string, authorized = true): Promise<Response> =>
+    fetch(`${url.origin}${path}`, authorized ? { headers } : {});
+  // Without the token nothing opens.
+  for (const path of [
+    '/api/view?panel=run&run=r-1',
+    '/api/view?panel=diff&direction=d-1',
+    '/api/view?panel=agent&agent=a-1',
+    '/api/run-log?run=r-1',
+    '/api/lab-diff?direction=d-1&file=notes.md',
+  ])
+    assert.equal((await get(path, false)).status, 401, path);
+  const action = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'lab-terminal-open',
+      agent: 'a-1',
+      lease: 'c'.repeat(16),
+    }),
+  });
+  assert.equal(action.status, 401);
+  // With it, the diff panel lists the changed file, and the file's diff comes as text.
+  const panel = (
+    (await (await get('/api/view?panel=diff&direction=d-1')).json()) as {
+      html: string;
+    }
+  ).html;
+  assert.match(
+    panel,
+    /data-lab-diff="notes\.md" data-lab-direction="d-1" aria-pressed="false"><code>notes\.md<\/code><\/button> <span class="fine change-added">added<\/span>/,
+  );
+  const shown = (await (
+    await get('/api/lab-diff?direction=d-1&file=notes.md')
+  ).json()) as { text: string; cut: boolean };
+  assert.match(shown.text, /\+<b>hello<\/b>/);
+  assert.equal(shown.cut, false);
+  assert.equal(
+    (await get('/api/lab-diff?direction=d-1&file=README.md')).status,
+    404,
+  );
+  for (const path of [
+    '/api/lab-diff?direction=x&file=notes.md',
+    '/api/lab-diff?direction=d-1',
+    '/api/lab-diff?direction=d-1&file=a&file=b',
+    '/api/lab-diff?direction=d-1&file=notes.md&more=1',
+    '/api/view?panel=run&run=x',
+    '/api/view?panel=agent&agent=a-1&agent=a-2',
+  ])
+    assert.equal((await get(path)).status, 400, path);
+  // An unknown run or agent opens a panel that says so.
+  assert.match(
+    (
+      (await (await get('/api/view?panel=run&run=r-7')).json()) as {
+        html: string;
+      }
+    ).html,
+    /<h2 id="panel-title" tabindex="-1">No such run<\/h2>/,
+  );
+  // The plain terminal action refuses a lab agent's session: the lab owns its turns.
+  const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+  const plain = await fetch(`${url.origin}/api/action`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'terminal-open',
+      session,
+      lease: 'c'.repeat(16),
+    }),
+  });
+  assert.equal(plain.status, 409);
+  assert.match(
+    ((await plain.json()) as { error: string }).error,
+    /belongs to an agent of the lab/,
+  );
+});
+
+await test(
+  "the person takes a lab agent's terminal between its turns, and the agent's next turn follows",
+  { skip: terminals },
+  async (t) => {
+    const lab = await fixture(t);
+    const lease = 'c'.repeat(16);
+    await lab.script('d-1-alpha', [
+      { calls: [] },
+      { when: 'worked in your harness terminal', calls: [] },
+    ]);
+    await lab.script('d-2-beta', [{ calls: [{ name: 'WAIT' }] }]);
+    await lab.script('d-3-gamma', [
+      { calls: [] },
+      { when: 'worked in your harness terminal', calls: [] },
+    ]);
+    await open(lab, [
+      { title: 'Alpha', harness: 'claude' },
+      { title: 'Beta', harness: 'claude' },
+      { title: 'Gamma', harness: 'codex' },
+    ]);
+    await until(async () => (await lab.inputs('d-2-beta')).length === 1);
+    const idle = (): boolean => {
+      const session = lab.lab.view()?.directions[0]?.agent.session;
+      return Boolean(session && lab.sessions.idle(session));
+    };
+    await until(idle);
+    // An agent in its turn, a checker, and an unknown agent have no terminal here.
+    await assert.rejects(
+      lab.lab.openTerminal('a-2', lease),
+      /claude-2 is not between turns/,
+    );
+    await assert.rejects(
+      lab.lab.openTerminal('a-9', lease),
+      /Only the agent of an open direction has a terminal here/,
+    );
+    const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+    const native = lab.sessions.view(session)?.record.nativeSessionId ?? '';
+    // The lab settles the turn that ended first, such as its commit.
+    await until(() =>
+      lab.lab.openTerminal('a-1', lease).then(
+        () => true,
+        () => false,
+      ),
+    );
+    await until(() => lab.lab.view()?.directions[0]?.status === 'terminal');
+    let text = '';
+    let next = 0;
+    await until(async () => {
+      const output = await lab.sessions.terminal(session)?.read(next, 200);
+      text += output?.data ?? '';
+      next = output?.next ?? next;
+      return /fake tui --resume/.test(text);
+    });
+    assert.match(text, new RegExp(`--resume ${native}`));
+    // A post for the agent waits while the person holds its terminal.
+    const inputs = (await lab.inputs('d-1-alpha')).length;
+    await lab.lab.post({ text: '@claude-1 Look at this.' });
+    await delay(300);
+    assert.equal((await lab.inputs('d-1-alpha')).length, inputs);
+    // When the terminal ends, the agent resumes its conversation and its next turn follows.
+    lab.sessions.terminal(session)?.write(lease, '/exit\r');
+    await until(async () =>
+      (await lab.inputs('d-1-alpha')).some((input) =>
+        input.includes('worked in your harness terminal'),
+      ),
+    );
+    const turn = (await lab.inputs('d-1-alpha')).at(-1) ?? '';
+    assert.match(turn, /Look at this\./);
+    assert.equal(lab.lab.view()?.directions[0]?.agent.session, session);
+    // A Codex terminal attaches to the agent's app-server, and the next turn follows its end too.
+    const codex = lab.lab.view()?.directions[2]?.agent.session ?? '';
+    await until(() =>
+      lab.lab.openTerminal('a-3', lease).then(
+        () => true,
+        () => false,
+      ),
+    );
+    await until(() => lab.lab.view()?.directions[2]?.status === 'terminal');
+    lab.sessions.returnFromTerminal(codex);
+    await until(async () =>
+      (await lab.inputs('d-3-gamma')).some((input) =>
+        input.includes('worked in your harness terminal'),
+      ),
+    );
+  },
+);

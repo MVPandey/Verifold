@@ -39,6 +39,18 @@ let selected: string | undefined;
 let selectedTask: string | undefined;
 let selectedWorker: string | undefined;
 let selectedDirection: string | undefined;
+/** The run and the agent of the lab's panels. */
+let selectedRun: string | undefined;
+let selectedAgent: string | undefined;
+/** The file of a direction's diff that the lab's diff pane shows, kept across page renders. */
+let shownLabDiff:
+  | {
+      readonly direction: string;
+      readonly file: string;
+      readonly text: string;
+      readonly cut: boolean;
+    }
+  | undefined;
 /** The diff that the review pane shows, kept across page renders. */
 let shownDiff:
   | {
@@ -73,6 +85,8 @@ try {
   selectedWorker = sessionStorage.getItem('verifold-desk-worker') ?? undefined;
   selectedDirection =
     sessionStorage.getItem('verifold-desk-direction') ?? undefined;
+  selectedRun = sessionStorage.getItem('verifold-desk-run') ?? undefined;
+  selectedAgent = sessionStorage.getItem('verifold-desk-agent') ?? undefined;
   detail = localStorage.getItem('verifold-desk-detail') ?? 'summary';
   pane = localStorage.getItem('verifold-desk-pane') ?? 'summary';
   records = localStorage.getItem('verifold-desk-records') ?? 'all';
@@ -177,8 +191,10 @@ function viewQuery(): string {
   if (view === 'task' && selectedTask) query.set('task', selectedTask);
   // A worker that left its slot is not an error. The server shows another one.
   if (panel === 'worker' && selectedWorker) query.set('worker', selectedWorker);
-  if (panel === 'direction' && selectedDirection)
+  if ((panel === 'direction' || panel === 'diff') && selectedDirection)
     query.set('direction', selectedDirection);
+  if (panel === 'run' && selectedRun) query.set('run', selectedRun);
+  if (panel === 'agent' && selectedAgent) query.set('agent', selectedAgent);
   if (since) query.set('since', since);
   if (finished === 'hidden') query.set('finished', 'hidden');
   return query.toString();
@@ -191,9 +207,13 @@ function panelKey(): string {
       ? selectedWorker
       : panel === 'attempt'
         ? selected
-        : panel === 'direction'
+        : panel === 'direction' || panel === 'diff'
           ? selectedDirection
-          : '';
+          : panel === 'run'
+            ? selectedRun
+            : panel === 'agent'
+              ? selectedAgent
+              : '';
   return `${panel}:${item ?? ''}`;
 }
 
@@ -247,7 +267,11 @@ const morphing = {
           (node.matches('.diff-pane[data-page]') &&
             next instanceof HTMLElement &&
             next.dataset.task === node.dataset.task &&
-            next.dataset.version === node.dataset.version))
+            next.dataset.version === node.dataset.version) ||
+          // A direction's diff keeps the file that the page loaded into it.
+          (node.matches('.lab-diff-pane[data-file]') &&
+            next instanceof HTMLElement &&
+            next.dataset.labDirection === node.dataset.labDirection))
       ),
     beforeNodeRemoved: (node: Node) =>
       !(
@@ -368,6 +392,7 @@ async function render(html: string): Promise<void> {
     }
     rendered = { view: viewKey(), panel: panelKey() };
     showReview();
+    showLabDiff();
     showRunLogs();
     drawMaps();
     mountTranscripts(content, () => token);
@@ -383,6 +408,8 @@ async function render(html: string): Promise<void> {
         target instanceof HTMLInputElement)
     )
       target.setSelectionRange(caret[0] ?? null, caret[1] ?? null);
+    // After focus returns: the names list follows the text at the cursor.
+    showMentions();
     lastHtml = html;
     showChanges(content, places, same);
   };
@@ -753,31 +780,12 @@ function showReview(): void {
       String(button.dataset.diff === shownDiff.file),
     );
   if (shownDiff.page && pane.dataset.page === shownDiff.page) return;
-  const head = document.createElement('p');
-  head.className = 'diff-head';
-  const name = document.createElement('code');
-  name.textContent = shownDiff.file;
-  head.append(name);
-  const pre = document.createElement('pre');
-  pre.className = 'diff';
-  for (const line of shownDiff.text.split('\n')) {
-    const row = document.createElement('span');
-    row.className = line.startsWith('@@')
-      ? 'd-hunk'
-      : line.startsWith('+++') || line.startsWith('---')
-        ? 'd-meta'
-        : line.startsWith('+')
-          ? 'd-add'
-          : line.startsWith('-')
-            ? 'd-del'
-            : '';
-    row.textContent = `${line}\n`;
-    pre.append(row);
-  }
-  const cut = document.createElement('p');
-  cut.className = 'fine';
-  cut.textContent = 'The diff stops at 512 KB.';
-  const changes = shownDiff.cut ? [pre, cut] : [pre];
+  const [head, ...changes] = diffNodes(
+    shownDiff.file,
+    shownDiff.text,
+    shownDiff.cut,
+  );
+  if (!head) return;
   if (!shownDiff.page) {
     delete pane.dataset.page;
     pane.replaceChildren(head, ...changes);
@@ -806,6 +814,170 @@ function showReview(): void {
   summary.textContent = 'The changes';
   fold.append(summary, ...changes);
   pane.replaceChildren(head, note, frame, fold);
+}
+
+/** A file's name, its diff with each line marked, and a note when the diff was cut. All text goes in as text. */
+function diffNodes(file: string, text: string, cut: boolean): HTMLElement[] {
+  const head = document.createElement('p');
+  head.className = 'diff-head';
+  const name = document.createElement('code');
+  name.textContent = file;
+  head.append(name);
+  const pre = document.createElement('pre');
+  pre.className = 'diff';
+  for (const line of text.split('\n')) {
+    const row = document.createElement('span');
+    row.className = line.startsWith('@@')
+      ? 'd-hunk'
+      : line.startsWith('+++') || line.startsWith('---')
+        ? 'd-meta'
+        : line.startsWith('+')
+          ? 'd-add'
+          : line.startsWith('-')
+            ? 'd-del'
+            : '';
+    row.textContent = `${line}\n`;
+    pre.append(row);
+  }
+  const note = document.createElement('p');
+  note.className = 'fine';
+  note.textContent = 'The diff stops at 512 KB.';
+  return cut ? [head, pre, note] : [head, pre];
+}
+
+/** The lab's diff pane shows the file that the person chose, and its button says so. */
+function showLabDiff(): void {
+  const pane = content.querySelector<HTMLElement>('.lab-diff-pane');
+  if (!pane) return;
+  const shown =
+    shownLabDiff?.direction === pane.dataset.labDirection
+      ? shownLabDiff
+      : undefined;
+  for (const button of content.querySelectorAll<HTMLElement>('[data-lab-diff]'))
+    button.setAttribute(
+      'aria-pressed',
+      String(button.dataset.labDiff === shown?.file),
+    );
+  if (!shown || pane.dataset.file === shown.file) return;
+  pane.dataset.file = shown.file;
+  pane.replaceChildren(...diffNodes(shown.file, shown.text, shown.cut));
+}
+
+/** Load the diff of one file of a lab direction into its pane. */
+async function loadLabDiff(button: HTMLElement): Promise<void> {
+  const direction = button.dataset.labDirection ?? '';
+  const file = button.dataset.labDiff ?? '';
+  try {
+    const response = await fetch(
+      `/api/lab-diff?${new URLSearchParams({ direction, file }).toString()}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    const reply = (await response.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    if (!response.ok || typeof reply.text !== 'string')
+      throw new Error(
+        typeof reply.error === 'string' ? reply.error : 'No diff.',
+      );
+    shownLabDiff = {
+      direction,
+      file,
+      text: reply.text,
+      cut: reply.cut === true,
+    };
+    showLabDiff();
+  } catch (error) {
+    actionLabel.textContent =
+      error instanceof Error && error.name !== 'TimeoutError'
+        ? error.message
+        : 'The desk did not answer. Run verifold in the project folder to check that it still runs.';
+  }
+}
+
+/** Show one pane of the worker panel: summary, details, terminal, or commands. The choice lasts for this browser. */
+function choosePane(value: string): void {
+  pane = ['details', 'terminal', 'commands'].includes(value)
+    ? value
+    : 'summary';
+  showDetail();
+  placeTerminals();
+  refreshTranscripts();
+  try {
+    localStorage.setItem('verifold-desk-pane', pane);
+  } catch {
+    /* The choice lasts until reload when browser storage is unavailable. */
+  }
+}
+
+/** Put a name, such as @claude-1, at the start of the lab's message box, and the cursor after the text. */
+function mention(name: string): void {
+  const text = document.getElementById('lab-text');
+  if (!(text instanceof HTMLTextAreaElement)) return;
+  if (!text.value.split(/\s+/).includes(name))
+    text.value = `${name} ${text.value}`.trimEnd() + ' ';
+  text.focus();
+  text.setSelectionRange(text.value.length, text.value.length);
+}
+
+/** The @name that ends just before the cursor in the lab's message box, or nothing. */
+function mentionWord(text: HTMLTextAreaElement): string | undefined {
+  return /(?:^|\s)(@[\w-]*)$/.exec(
+    text.value.slice(0, text.selectionStart),
+  )?.[1];
+}
+
+/**
+ * The names under the lab's message box: the ones that start with the
+ * @name at the cursor. One of them is chosen, and Enter or Tab takes it.
+ */
+function showMentions(move = 0): void {
+  const text = document.getElementById('lab-text');
+  const list = document.getElementById('lab-mentions');
+  if (!(text instanceof HTMLTextAreaElement) || !list) return;
+  const word =
+    document.activeElement === text
+      ? mentionWord(text)?.toLowerCase()
+      : undefined;
+  const items = Array.from(
+    list.querySelectorAll<HTMLElement>('[role="option"]'),
+  );
+  const shown = items.filter((item) => {
+    const value = item.dataset.value ?? '';
+    item.hidden = !word || !value.startsWith(word) || value === word;
+    return !item.hidden;
+  });
+  list.hidden = !shown.length;
+  text.setAttribute('aria-expanded', String(shown.length > 0));
+  const current = shown.findIndex(
+    (item) => item.getAttribute('aria-selected') === 'true',
+  );
+  const next = shown.length
+    ? (Math.max(current, 0) + move + shown.length) % shown.length
+    : -1;
+  for (const item of items)
+    item.setAttribute('aria-selected', String(item === shown[next]));
+  if (shown[next]) text.setAttribute('aria-activedescendant', shown[next].id);
+  else text.removeAttribute('aria-activedescendant');
+}
+
+/** Take a name from the list: it replaces the @name at the cursor. */
+function takeMention(item: HTMLElement): void {
+  const text = document.getElementById('lab-text');
+  const value = item.dataset.value;
+  if (!(text instanceof HTMLTextAreaElement) || !value) return;
+  const before = text.value.slice(0, text.selectionStart);
+  const word = mentionWord(text) ?? '';
+  const start = before.length - word.length;
+  text.value = `${text.value.slice(0, start)}${value} ${text.value.slice(text.selectionStart)}`;
+  const at = start + value.length + 1;
+  text.setSelectionRange(at, at);
+  text.focus();
+  showMentions();
 }
 
 /** Load the diff of one file in a version into the review pane. */
@@ -1026,9 +1198,10 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
       return {
         action,
         text: field('lab-text'),
-        direction: field('lab-direction'),
         replyTo: field('lab-reply'),
       };
+    case 'lab-terminal-open':
+      return { action, agent: button.dataset.agent, lease: viewLease() };
     case 'lab-direction-add':
       return {
         action,
@@ -1451,7 +1624,16 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (target.dataset.panel) {
-    target.closest('details')?.removeAttribute('open');
+    // A lab panel names its item: a run, an agent, or a direction's diff.
+    if (target.dataset.run) remember('run', (selectedRun = target.dataset.run));
+    if (target.dataset.agent)
+      remember('agent', (selectedAgent = target.dataset.agent));
+    if (target.dataset.panel === 'diff' && target.dataset.labDirection)
+      remember('direction', (selectedDirection = target.dataset.labDirection));
+    if (target.dataset.pane) choosePane(target.dataset.pane);
+    // A row's controls stay open, so the row keeps its place.
+    if (!target.closest('.lab-row'))
+      target.closest('details')?.removeAttribute('open');
     opener = selectorOf(target);
     const focus = target.dataset.focus;
     navigate(
@@ -1483,6 +1665,11 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (target.dataset.diff) void loadDiff(target);
+  if (target.dataset.labDiff) void loadLabDiff(target);
+  if (target.dataset.labMention) {
+    mention(target.dataset.labMention);
+    return;
+  }
   if (target.dataset.messageTo) {
     writeTo(target.dataset.messageTo, target.dataset.about);
     return;
@@ -1493,19 +1680,7 @@ document.addEventListener('click', (event) => {
       document.getElementById('message-text')?.focus();
     return;
   }
-  if (target.dataset.pane) {
-    pane = ['details', 'terminal', 'commands'].includes(target.dataset.pane)
-      ? target.dataset.pane
-      : 'summary';
-    showDetail();
-    placeTerminals();
-    refreshTranscripts();
-    try {
-      localStorage.setItem('verifold-desk-pane', pane);
-    } catch {
-      /* The choice lasts until reload when browser storage is unavailable. */
-    }
-  }
+  if (target.dataset.pane) choosePane(target.dataset.pane);
   // A new tab gets its own input lease, so it starts read-only. It keeps this tab's session storage.
   if (target.dataset.terminalTab)
     window.open(
@@ -1637,6 +1812,77 @@ content.addEventListener('focusin', (event) => {
     (event.target.id === 'message-text' || event.target.id === 'message-to')
   )
     document.body.classList.add('dock-expanded');
+});
+// In the lab's message box, the names list takes the arrows, Enter, Tab, and Escape while it is open.
+content.addEventListener('keydown', (event) => {
+  if (
+    !(event.target instanceof HTMLTextAreaElement) ||
+    event.target.id !== 'lab-text' ||
+    event.isComposing
+  )
+    return;
+  const list = document.getElementById('lab-mentions');
+  const chosen = list?.querySelector<HTMLElement>('[aria-selected="true"]');
+  if (list && !list.hidden) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      showMentions(event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === 'Tab') && chosen) {
+      event.preventDefault();
+      takeMention(chosen);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      list.hidden = true;
+      event.target.setAttribute('aria-expanded', 'false');
+      return;
+    }
+  }
+  // Enter sends. Shift+Enter starts a new line.
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    const send = content.querySelector<HTMLElement>('[data-action="lab-post"]');
+    if (send && !(send instanceof HTMLButtonElement && send.disabled))
+      void act(send);
+  }
+});
+content.addEventListener('input', (event) => {
+  if (event.target instanceof HTMLElement && event.target.id === 'lab-text')
+    showMentions();
+});
+// A press on a name takes it before the box loses focus.
+content.addEventListener('mousedown', (event) => {
+  const item =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('#lab-mentions [role="option"]')
+      : null;
+  if (!item) return;
+  event.preventDefault();
+  takeMention(item);
+});
+// 1, 2, or 3 chooses an option of the call that is open in Needs you, outside a text field.
+document.addEventListener('keydown', (event) => {
+  if (
+    !['1', '2', '3'].includes(event.key) ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    (event.target instanceof Element &&
+      event.target.closest(
+        'input, textarea, select, [contenteditable], .terminal-screen',
+      ))
+  )
+    return;
+  const option = content.querySelector<HTMLElement>(
+    `details[data-lab-call][open] [data-action="lab-call-answer"][data-option="${Number(event.key) - 1}"]`,
+  );
+  if (!option || (option instanceof HTMLButtonElement && option.disabled))
+    return;
+  event.preventDefault();
+  void act(option);
 });
 // Enter sends a message. Shift+Enter starts a new line.
 content.addEventListener('keydown', (event) => {
