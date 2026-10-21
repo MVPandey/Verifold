@@ -20,12 +20,11 @@ import type { RunTeam } from './team.ts';
 import {
   isDraft,
   isQuestion,
-  memoryText,
-  noteToolSpec,
   replaced,
   type TaskEvent,
   type TaskManager,
 } from './tasks.ts';
+import { memoryText, noteToolSpec } from './memory.ts';
 import { ResultsStore, type Results } from './results.ts';
 import type { Compute } from './compute.ts';
 import { loadWorkspace } from './storage.ts';

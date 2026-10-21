@@ -22,8 +22,25 @@ import {
 import { PodShell, podLimits, type PodTarget } from './pod-shell.ts';
 import { PodGoneError, type PodRuns } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
-import type { PodTools, TaskPlace } from './tasks.ts';
 import { SessionActionError } from './session.ts';
+
+/** Where a task works: its folder in this computer and the paths that it may write. */
+export interface TaskPlace {
+  readonly id: string;
+  readonly folder: string;
+  readonly writable: readonly string[];
+}
+
+/** GPU pod tools for workers. A project with pods on offers them to each new worker. */
+export interface PodTools {
+  readonly on: () => boolean;
+  readonly specs: readonly AgentTool[];
+  readonly call: (
+    task: TaskPlace,
+    name: string,
+    input: Record<string, unknown>,
+  ) => Promise<string>;
+}
 
 /** Limits for pods in one project. Only the person changes them. Without a spend limit, pods stay off. */
 export interface ComputeSettings {

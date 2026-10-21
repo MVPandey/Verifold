@@ -137,6 +137,39 @@ export const strictClaudeEnvironment = {
   CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: '1',
 } as const;
 
+/**
+ * What the harness enforces in a strict session: a task's, or a lab agent's
+ * in the `folder` of its direction. Only credential reads are limited.
+ */
+export function restrictions(
+  host: HarnessName,
+  net: { readonly domains: readonly string[] } | null | undefined,
+  folder = 'task folder',
+): string[] {
+  const domains = net?.domains.join(', ');
+  const credentials =
+    "cannot read credential files: SSH keys, Verifold's credentials, the RunPod, GitHub, and AWS logins, Git and netrc passwords, the logins of both harnesses, and the macOS login keychain. Other reads are not limited.";
+  return host === 'claude'
+    ? [
+        `Shell commands can write only in the ${folder} and in temporary folders (Claude Code sandbox).`,
+        domains
+          ? `Shell commands can reach only these domains: ${domains} (Claude Code sandbox).`
+          : 'Shell commands cannot reach the network (Claude Code sandbox).',
+        `File tools can edit only in the ${folder}. Claude Code denies other edits without a prompt (permission rules, dontAsk mode).`,
+        'Other tools that need permission are denied, except web search and web fetch.',
+        `Shell commands and file tools ${credentials}`,
+      ]
+    : [
+        `Shell commands and file changes can write only in the ${folder} and in temporary folders (Codex permission profile).`,
+        domains
+          ? `Shell commands can reach the network. Codex cannot limit it to the task's domains (${domains}).`
+          : 'Shell commands cannot reach the network (Codex permission profile).',
+        'Codex asks for no approvals. An action outside the sandbox fails (approval policy never).',
+        'Codex does not report a command that its sandbox blocks, so the transcript can miss a blocked attempt.',
+        `Shell commands ${credentials}`,
+      ];
+}
+
 /** Observed protocol events. Agent text is a model claim; the other events come from the protocol. */
 export type HostEvent =
   | {

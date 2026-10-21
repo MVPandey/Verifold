@@ -85,11 +85,10 @@ import {
   type SessionRecord,
   type SessionView,
 } from './session.ts';
-import { validDomain, type AgentTools } from './session-hosts.ts';
+import { restrictions, validDomain, type AgentTools } from './session-hosts.ts';
 import { changeWorkspace, writePrivateFile } from './storage.ts';
 import type { RunTeam } from './team.ts';
-import { memoryText, noteToolSpec, restrictions } from './tasks.ts';
-import type { LabProgress } from './memory.ts';
+import { memoryText, noteToolSpec, type LabProgress } from './memory.ts';
 import {
   allocate,
   changes,
