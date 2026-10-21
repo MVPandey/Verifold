@@ -34,7 +34,8 @@ import { installedHarnesses, runHarness } from './harness.ts';
 import { nextResearchAction } from './desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
-import { TaskManager, type TaskPlace } from './tasks.ts';
+import { TaskManager } from './tasks.ts';
+import { ResultsStore } from './results.ts';
 import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
@@ -63,7 +64,7 @@ import {
   type Control,
   type ControlClient,
 } from './control.ts';
-import { Compute } from './compute.ts';
+import { Compute, type TaskPlace } from './compute.ts';
 import { KeepAwake } from './awake.ts';
 import { KeyStore, type KeyStoreOptions } from './credentials.ts';
 import { spent, type Lease } from './leases.ts';
@@ -655,6 +656,11 @@ async function serveDesk(
         root,
         () => owned.tasks?.list() ?? Promise.resolve([]),
         () => owned.lab?.progress() ?? null,
+        async () => {
+          const store = new ResultsStore(root);
+          await store.load();
+          return store.current();
+        },
       );
       const remember = (): void => memory.schedule();
       const tasks = new TaskManager(root, {
