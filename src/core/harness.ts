@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -62,7 +62,8 @@ export interface HarnessRequest {
   /**
    * The harness answers from the prompt alone, for a prompt that holds text
    * from outside: Claude Code gets no built-in tools and no MCP servers, and
-   * Codex gets no web search.
+   * Codex gets no web search, and none of the person's MCP servers, plugins,
+   * or apps.
    */
   readonly textOnly?: boolean;
 }
@@ -334,6 +335,66 @@ export function validateModel(
     );
 }
 
+/** A name that Codex's `-c` option reads as one key. It reads no quoted keys. */
+const codexKey = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Codex settings for one text-only call: plugins and apps off, and each MCP
+ * server of the person's configuration off by name, as a Codex session turns
+ * them off. An empty `mcp_servers` table does not replace the person's
+ * servers. A list that cannot be read, or a server name that `-c` cannot
+ * hold, stops the call. Probed on Codex 0.160.0.
+ */
+async function codexTextOnly(
+  executable: string,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<string[]> {
+  const off = ['-c', 'features.plugins=false', '-c', 'features.apps=false'];
+  const refused = new Error(
+    "Verifold could not read Codex's MCP servers, so it did not run this request.",
+  );
+  const listed = await new Promise<unknown>((resolve, reject) => {
+    execFile(
+      executable,
+      [...off, 'mcp', 'list', '--json'],
+      {
+        cwd,
+        env: childEnvironment(),
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024,
+        signal,
+        timeout: 10_000,
+      },
+      (error, stdout) => {
+        // A cancelled listing rejects with Node's AbortError, as the call would.
+        if (error) reject(signal.aborted ? error : refused);
+        else
+          try {
+            resolve(JSON.parse(stdout));
+          } catch {
+            reject(refused);
+          }
+      },
+    );
+  });
+  const names = Array.isArray(listed)
+    ? listed.map((entry) =>
+        record(entry) && typeof entry.name === 'string' ? entry.name : '',
+      )
+    : null;
+  if (!names) throw refused;
+  const odd = names.find((name) => !codexKey.test(name));
+  if (odd !== undefined)
+    throw new Error(
+      `Codex has an MCP server named ${JSON.stringify(odd)}, which Verifold cannot turn off for one request, so it did not run this request.`,
+    );
+  return [
+    ...off,
+    ...names.flatMap((name) => ['-c', `mcp_servers.${name}.enabled=false`]),
+  ];
+}
+
 /**
  * Run one host request with the user's host configuration and permissions.
  * Prompts use stdin and are limited to 2 MiB. Output is read line by line, and
@@ -373,7 +434,13 @@ export async function runHarness(
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
       : [
-          ...(request.textOnly ? [] : ['--search']),
+          ...(request.textOnly
+            ? await codexTextOnly(
+                options.executable ?? request.host,
+                request.cwd,
+                request.signal,
+              )
+            : ['--search']),
           'exec',
           '--skip-git-repo-check',
           '--color',

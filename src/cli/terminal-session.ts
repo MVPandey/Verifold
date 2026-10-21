@@ -11,14 +11,14 @@ import {
   terminalMessage,
   tint,
 } from './terminal.ts';
-import { visibleWidth } from './terminal-layout.ts';
+import { terminalColumns, visibleWidth } from './terminal-layout.ts';
 
 /** Redraw only the active component. Completed work remains in scrollback. */
 class LiveRegion {
   private lines: readonly string[] = [];
 
   clear(): void {
-    const width = Math.max(1, stderr.columns || 80);
+    const width = terminalColumns(stderr.columns);
     const rows = this.lines.reduce(
       (sum, line) => sum + Math.max(1, Math.ceil(visibleWidth(line) / width)),
       0,
@@ -54,25 +54,41 @@ export class TerminalSession {
   async welcome(): Promise<void> {
     const region = new LiveRegion();
     const fits = (): boolean =>
-      terminalBanner(true, !this.color, stderr.columns).split('\n').length <=
+      terminalBanner(true, !this.color, terminalColumns(stderr.columns)).split(
+        '\n',
+      ).length <=
       (stderr.rows || 24) - 1;
     if (this.motion && fits()) {
       for (const frame of [0, 1, 2]) {
         if (!fits()) break;
-        region.draw(terminalBanner(true, !this.color, stderr.columns, frame));
+        region.draw(
+          terminalBanner(
+            true,
+            !this.color,
+            terminalColumns(stderr.columns),
+            frame,
+          ),
+        );
         await delay(65, undefined, { signal: this.signal });
       }
-    } else stderr.write(terminalBanner(true, !this.color, stderr.columns));
+    } else
+      stderr.write(
+        terminalBanner(true, !this.color, terminalColumns(stderr.columns)),
+      );
   }
 
   progress(value: string): void {
     this.activity?.clear();
-    stderr.write(`${terminalMessage(value, this.color, stderr.columns)}\n\n`);
+    stderr.write(
+      `${terminalMessage(value, this.color, terminalColumns(stderr.columns))}\n\n`,
+    );
   }
 
   async ask(question: string): Promise<string> {
     this.signal.throwIfAborted();
-    stderr.write(`${paragraph(question.trim(), stderr.columns)}\n`);
+    stderr.write(
+      `${paragraph(question.trim(), terminalColumns(stderr.columns))}\n`,
+    );
     const input = createInterface({ input: stdin, output: stderr });
     input.on('SIGINT', this.cancel);
     input.on('close', this.cancel);
@@ -109,7 +125,7 @@ export class TerminalSession {
           choices,
           index,
           this.color,
-          stderr.columns,
+          terminalColumns(stderr.columns),
           stderr.rows,
         ),
       );
@@ -180,14 +196,14 @@ export class TerminalSession {
         tint(
           paragraph(
             `${frames[frame++ % frames.length]} ${label}`,
-            stderr.columns,
+            terminalColumns(stderr.columns),
           ),
           this.color,
         ),
         muted(
           paragraph(
             `${Math.floor((Date.now() - started) / 1000)}s elapsed · ctrl+c to cancel`,
-            stderr.columns,
+            terminalColumns(stderr.columns),
           ),
           this.color,
         ),

@@ -2,6 +2,7 @@
 import { stdin, stdout, stderr } from 'node:process';
 import { runCli } from './cli/commands.ts';
 import { paragraph } from './cli/terminal.ts';
+import { terminalColumns } from './cli/terminal-layout.ts';
 import { TerminalSession } from './cli/terminal-session.ts';
 import { LabTerminal } from './cli/terminal-view.ts';
 import { stripVTControlCharacters } from 'node:util';
@@ -178,7 +179,7 @@ try {
         : {}),
       out: (value) => {
         stdout.write(
-          `${terminal && stdout.isTTY && ['init', 'research'].includes(process.argv[2] ?? '') ? paragraph(value, stdout.columns) : value}\n`,
+          `${terminal && stdout.isTTY && ['init', 'research'].includes(process.argv[2] ?? '') ? paragraph(value, terminalColumns(stdout.columns)) : value}\n`,
         );
       },
     },

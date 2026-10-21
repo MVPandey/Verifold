@@ -2,6 +2,16 @@ import { stripVTControlCharacters } from 'node:util';
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
+/**
+ * A terminal's width in cells. A terminal that reports no width, or 0, as a
+ * pseudo-terminal without a size does, gets the common default of 80.
+ */
+export function terminalColumns(columns: number | undefined): number {
+  return columns !== undefined && Number.isFinite(columns) && columns >= 1
+    ? Math.floor(columns)
+    : 80;
+}
+
 /** Remove terminal controls and invisible format characters, and expand tabs. */
 export function plainText(value: string): string {
   return stripVTControlCharacters(value)
