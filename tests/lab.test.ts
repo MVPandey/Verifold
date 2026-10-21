@@ -373,6 +373,8 @@ async function fixture(
     readonly hourMs?: number;
     /** One minute of a run's or a check's time limit, short in a test. */
     readonly minuteMs?: number;
+    /** The wait before an agent whose process stopped starts again. */
+    readonly retryMs?: number;
     /** The project folder's name. */
     readonly folder?: string;
     /** The sandbox of runs. Default: none at all, so a run's command runs as it is. Null: no runs. */
@@ -451,6 +453,7 @@ async function fixture(
         ...timing,
         ...(options.hourMs ? { hourMs: options.hourMs } : {}),
         ...(options.minuteMs ? { minuteMs: options.minuteMs } : {}),
+        ...(options.retryMs ? { retryMs: options.retryMs } : {}),
       },
       ...(options.compute ? { compute: options.compute } : {}),
       ...(options.model ? { model: options.model } : {}),
@@ -901,7 +904,12 @@ await test('after a restart each agent resumes its session with a digest, and no
     ),
   );
   await until(async () => (await lab.inputs('d-2-beta')).length >= 2);
-  await delay(200);
+  // Both turns end before the restart. A turn that a restart stops brings its digest again.
+  await until(
+    () =>
+      lab.lab.view()?.directions.every((entry) => entry.status === 'idle') ===
+      true,
+  );
   await lab.restart();
   const restarted = async (folder: string): Promise<string | undefined> =>
     (await lab.inputs(folder)).find((input) =>
@@ -2420,7 +2428,9 @@ await test('a turn whose process stops brings its posts again, and the resumed c
 });
 
 await test('a conversation that cannot resume starts new, without the notes about the earlier one', async (t) => {
-  const lab = await fixture(t);
+  // The record goes before the lab starts the agent again. The test's own steps take
+  // longer than the usual 300 ms wait on a busy computer, so the wait is longer here.
+  const lab = await fixture(t, { retryMs: 3000 });
   await lab.script('d-1-alpha', [{ calls: [{ name: 'EXIT' }] }]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   // The process stops. Before the lab starts it again, its session record goes, so nothing can resume.
@@ -2436,7 +2446,7 @@ await test('a conversation that cannot resume starts new, without the notes abou
       `${lab.lab.view()?.directions[0]?.agent.session}.json`,
     ),
   );
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 8000);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 20_000);
   const inputs = await lab.inputs('d-1-alpha');
   assert.match(inputs[1] ?? '', /The question:/);
   assert.doesNotMatch(inputs.join('\n'), /started it again/);
@@ -3753,6 +3763,8 @@ await test('a later plan records its version, the plan before it, and what chang
   assert.equal(first?.post, 'p-1');
   assert.equal(first?.version, 1);
   assert.equal(first?.changed, undefined);
+  // The reply comes after the planner's turn: the fake harness runs its scripts only in a new turn.
+  await until(() => lab.lab.view()?.directions[0]?.status === 'idle');
   await lab.lab.post({ text: 'Give Helix 4 runs.', replyTo: 'p-1' });
   await until(() => lab.lab.view()?.state.plan?.version === 2, 20_000);
   const second = lab.lab.view()?.state.plan;
@@ -6392,8 +6404,11 @@ await test("an access answer gives the agent's shell its domains while it stands
     const before = await launches();
     await change();
     await until(async () => (await launches()) > before);
+    // A new process can be in the middle of writing args.json.
     await until(
-      async () => JSON.stringify(await domains()) === JSON.stringify(expected),
+      async () =>
+        JSON.stringify(await domains().catch(() => null)) ===
+        JSON.stringify(expected),
     );
   };
   assert.deepEqual(await domains(), []);

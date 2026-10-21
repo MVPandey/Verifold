@@ -57,6 +57,12 @@ interface Fixture {
   readonly workspace: Workspace;
   /** Commit the direction's folder, as the lab does before a run. */
   commit(): Promise<string>;
+  /**
+   * Wait for the work in the lab's queue, such as the saves after a run
+   * ends. Its agent hears the end before the last save, so a test waits for
+   * this before another ledger reads the records.
+   */
+  settled(): Promise<void>;
   ledger(options?: {
     readonly sandbox?: Sandbox | null;
     readonly minuteMs?: number;
@@ -90,6 +96,9 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
     workspace,
     commit: async () =>
       (await snapshot(root, workspace, 'Verifold: test')).commit,
+    settled: async () => {
+      await queue;
+    },
     ledger: (options = {}) => {
       const ended: RunRecord[] = [];
       const ledger = new RunLedger(root, {
@@ -230,6 +239,7 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
     '600',
   );
   // The record on disk is the same, and a new ledger reads it.
+  await fx.settled();
   const again = fx.ledger().ledger;
   await again.load(true);
   assert.deepEqual(again.get('r-1'), run);
@@ -514,6 +524,7 @@ await test('each run gets a folder that no later run gets, also after Start over
   t.after(() => first.ledger.close());
   await fx.start(first.ledger, 'true');
   await until(() => first.ended.length === 1);
+  await fx.settled();
   const before = first.ledger.get('r-1')?.folder ?? '';
   assert.match(before, /^run-1-[0-9a-f]{8}$/);
   // Start over moves the records away, so the next lab starts at r-1 again.

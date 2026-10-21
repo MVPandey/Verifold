@@ -16,6 +16,8 @@ function agent(start: Partial<Record> = {}): {
   record: () => Record;
   sent: (readonly QueuedEvent<WakeEvent>[])[];
   failNext: () => void;
+  /** Sends tried, also the ones that threw. */
+  attempts: () => number;
 } {
   let record: Record = {
     cursor: 0,
@@ -26,6 +28,7 @@ function agent(start: Partial<Record> = {}): {
   };
   const sent: (readonly QueuedEvent<WakeEvent>[])[] = [];
   let fail = false;
+  let attempts = 0;
   const loop = new WakeLoop<WakeEvent, Record>(
     {
       record: () => (record.stopped ? null : record),
@@ -35,6 +38,7 @@ function agent(start: Partial<Record> = {}): {
       },
       ready: () => true,
       send: (events) => {
+        attempts += 1;
         if (fail) {
           fail = false;
           throw new Error('The session is busy.');
@@ -51,7 +55,21 @@ function agent(start: Partial<Record> = {}): {
     failNext: () => {
       fail = true;
     },
+    attempts: () => attempts,
   };
+}
+
+/**
+ * Wait until `check` holds. A wakeup runs on a timer, and `close()` cancels
+ * a timer that has not fired, so a test waits for the wakeup itself, not for
+ * a fixed time that a busy computer can exceed.
+ */
+async function until(check: () => boolean, ms = 10_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error('The wakeup did not come in time.');
+    await delay(5);
+  }
 }
 
 await test('the wake loop joins close events, caps a digest, and keeps its record bounded', async () => {
@@ -61,7 +79,7 @@ await test('the wake loop joins close events, caps a digest, and keeps its recor
     { kind: 'post', text: 'three' },
     { kind: 'post', text: 'four' },
   ]);
-  await delay(80);
+  await until(() => sent.length === 1);
   await loop.close();
   assert.equal(sent.length, 1);
   assert.deepEqual(
@@ -79,23 +97,23 @@ await test('the wake loop joins close events, caps a digest, and keeps its recor
 });
 
 await test('a failed send keeps the events for the next wakeup, and the hourly limit holds the rest', async () => {
-  const { loop, record, sent, failNext } = agent();
+  const { loop, record, sent, failNext, attempts } = agent();
   failNext();
   loop.add([{ kind: 'person', text: 'Look at seed 2.' }], 0);
-  await delay(20);
+  await until(() => attempts() === 1);
   await loop.close();
   assert.equal(sent.length, 0);
   assert.equal(record().cursor, 0);
   assert.deepEqual(record().wakeups, []);
   loop.schedule(0);
-  await delay(20);
+  await until(() => sent.length === 1);
   await loop.close();
   assert.equal(sent.length, 1);
   // Two wakeups an hour: the third waits, and the loop says until when.
   loop.add([{ kind: 'post', text: 'b' }], 0);
-  await delay(20);
+  await until(() => sent.length === 2);
   loop.add([{ kind: 'post', text: 'c' }], 0);
-  await delay(20);
+  await until(() => loop.limitedUntil !== null);
   await loop.close();
   assert.equal(sent.length, 2);
   assert.ok(loop.limitedUntil && Date.parse(loop.limitedUntil) > Date.now());
@@ -106,14 +124,18 @@ await test('a failed send keeps the events for the next wakeup, and the hourly l
 await test('events of a turn whose read failed come once more, marked again', async () => {
   const { loop, record, sent } = agent();
   loop.add([{ kind: 'post', text: 'p-3' }], 0);
-  await delay(20);
+  await until(() => sent.length === 1);
   loop.readFailed();
   loop.turnEnded();
-  await delay(80);
+  await until(() => sent.length === 2);
   loop.readFailed();
   loop.turnEnded();
-  await delay(80);
+  // close() waits for the loop's queue, so an event added again would show here.
   await loop.close();
+  assert.equal(
+    record().events.filter((event) => event.seq > record().cursor).length,
+    0,
+  );
   assert.equal(sent.length, 2);
   assert.deepEqual(
     sent[1]?.map((event) => [event.text, event.again]),
