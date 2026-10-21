@@ -27,6 +27,7 @@ import {
   verdicts,
 } from '../lab-tools.ts';
 import type { LabPod } from '../compute.ts';
+import type { PersonProfile } from '../agency.ts';
 import { type Cause, type Lease, secretNames } from '../leases.ts';
 import {
   type PodRuns,
@@ -635,6 +636,12 @@ export interface LabOptions {
   readonly quota?: { parked(host: HarnessName): string | null };
   /** The model that the project chose for a harness, if any. */
   readonly model?: (host: HarnessName) => Promise<string | null>;
+  /**
+   * The person's profile, read when a prompt is built. The planner gets the
+   * whole of it. Every other agent and each checker gets only how the
+   * person wants agents to write to them.
+   */
+  readonly person?: () => Promise<PersonProfile | null>;
   /**
    * The harnesses of the project's team, the main one first. A lab's first
    * agent runs on the main one and posts the plan of record, and a plan's

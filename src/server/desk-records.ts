@@ -1,7 +1,6 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-// eslint-disable-next-line no-restricted-imports -- old global profile, replaced in A2 (#282)
-import { readMemory } from '../cli/agency.ts';
+import { readMemory } from '../core/agency.ts';
 import { parseWorkspace, type Workspace } from '../core/contracts.ts';
 import { validateModel } from '../core/harness.ts';
 import {

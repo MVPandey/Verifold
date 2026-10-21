@@ -22,7 +22,9 @@ import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
-import { ComingSoon, NotFound, Notice } from './screens/Notice.tsx';
+import { NotFound, Notice } from './screens/Notice.tsx';
+import { SetupPage } from './screens/Setup.tsx';
+import { setupActions, type SetupActions } from './setup.ts';
 import { PostPage } from './screens/PostPage.tsx';
 import { SearchDialog } from './screens/SearchDialog.tsx';
 import { TurnScreen } from './screens/TurnScreen.tsx';
@@ -56,6 +58,7 @@ function useNow(fast: boolean): number {
 
 /** Answer and bring-in actions for a page without a token: each one is refused. */
 const signedOutAnswers = answerActions(null);
+const signedOutSetup = setupActions(null);
 
 /** How often a visible page tells Verifold that the person looks, as the desk's page does. */
 export const lookMs = 60_000;
@@ -124,6 +127,7 @@ export function Screen({
   actions,
   agentActions,
   answers = signedOutAnswers,
+  setup = signedOutSetup,
 }: {
   readonly state: LabState;
   readonly route: Route;
@@ -131,6 +135,7 @@ export function Screen({
   readonly actions: LabActions;
   readonly agentActions: AgentActions;
   readonly answers?: AnswerActions;
+  readonly setup?: SetupActions;
 }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
@@ -158,7 +163,17 @@ export function Screen({
       </Notice>
     );
   if (route.page === 'unknown') return <NotFound />;
-  if (route.page === 'first-run') return <ComingSoon page={route.page} />;
+  if (route.page === 'setup')
+    return (
+      <SetupPage
+        step={route.step}
+        actions={setup}
+        project={snapshot?.project ?? ''}
+      />
+    );
+  // Without a project, the app is the first run. Its first open step opens.
+  if (snapshot && !snapshot.project)
+    return <SetupPage step={null} actions={setup} project="" />;
   if (!snapshot)
     return connection === 'unreachable' ? (
       <Notice title="Can't reach Verifold. Is it running?">
@@ -179,7 +194,8 @@ export function Screen({
       <Notice title={`${snapshot.project} has no lab yet`}>
         <p>
           Start one from the desk for now: <a href="/">open the desk</a>. The
-          new app's first-run and Ask pages come in a later step.
+          new app's Ask page comes in a later step. You can{' '}
+          <a href={href.setup('agents')}>change your profile</a> here.
         </p>
       </Notice>
     );
@@ -299,6 +315,7 @@ export function App({
   const [actions] = useState(() => labActions(token));
   const [agent] = useState(() => agentActions(token));
   const [answers] = useState(() => answerActions(token));
+  const [setup] = useState(() => setupActions(token));
   const [app] = useState(() => appActions(token));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
   const lab =
@@ -332,6 +349,7 @@ export function App({
         actions={actions}
         agentActions={agent}
         answers={answers}
+        setup={setup}
       />
       {searching && lab && (
         <SearchDialog

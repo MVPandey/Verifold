@@ -1,0 +1,642 @@
+/* The first run. Values follow the v9 canvas artboards "1 Agents", "2 About you" and "4 GPU money". */
+.header__brand {
+  margin-left: -6px;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.header__note {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.setup {
+  flex-grow: 1;
+  display: flex;
+  justify-content: center;
+  padding: 40px 16px 48px;
+}
+
+.setup__column {
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step__label {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--accent-ink);
+}
+
+.step__bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.step__segment {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-faint);
+}
+
+.step__segment--done {
+  background: var(--accent);
+}
+
+.step__title {
+  margin: 6px 0 0;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.step__lead {
+  margin: 0;
+  font-size: 17px;
+  color: var(--ink-2);
+}
+
+.setup__note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.setup__line {
+  margin: 0;
+  font-size: 14px;
+}
+
+.setup__error {
+  font-size: 14px;
+  color: var(--need-ink);
+}
+
+.setup__problem {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--need-bg);
+  color: var(--need-ink);
+  font-size: 14px;
+}
+
+.setup__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.setup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+
+.setup__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.setup__subtitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.setup__meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.button--big {
+  min-height: 48px;
+  padding: 0 28px;
+  border-radius: 12px;
+  font-size: 16px;
+}
+
+.button--small {
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.button--outline {
+  min-height: 44px;
+  padding: 0 20px;
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 800;
+}
+
+.button--outline:hover {
+  color: var(--accent-deep);
+}
+
+.link-button {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent-deep);
+}
+
+.link-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.link-button--quiet {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.select {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 600 15px var(--font);
+}
+
+/* Step 1: agents */
+.agents {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.agent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.agent:last-child {
+  border-bottom: 0;
+}
+
+.agent__body {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent__name {
+  font-size: 17px;
+}
+
+.agent__model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent__model .muted {
+  font-size: 14px;
+}
+
+.agent__note {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.agent__use {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-weight: 700;
+}
+
+.agent__use input,
+.prices__allow input,
+.keyform__file input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.pill {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.pill--ok {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.pill--need {
+  background: var(--need-bg);
+  color: var(--need-ink);
+}
+
+/* Step 2: about you */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chat__line {
+  display: flex;
+  gap: 12px;
+}
+
+.chat__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat__name {
+  font-size: 14px;
+}
+
+.chat__question {
+  font-size: 17px;
+}
+
+.chat__busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 42px;
+  font-size: 14px;
+  color: var(--accent-deep);
+}
+
+.chat__busy .dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  white-space: normal;
+}
+
+.choice-chip {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--control);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.choice-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.profile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1.5px solid var(--accent-line);
+  border-radius: 14px;
+}
+
+.profile__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile__title {
+  margin: 0;
+  flex-grow: 1;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.profile__fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile__field {
+  display: grid;
+  grid-template-columns: minmax(0, 150px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.profile__field dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.profile__field dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.profile__input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  font: 500 15px/1.4 var(--font);
+  color: var(--ink);
+  resize: vertical;
+}
+
+.profile__note {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.profile__text {
+  margin: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.composer__box--setup {
+  align-items: flex-end;
+}
+
+.composer__input--setup {
+  min-height: 44px;
+  padding: 11px 0;
+  line-height: 1.4;
+  resize: none;
+}
+
+/* Step 3: GPU money */
+.keyline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.keyline__icon {
+  display: inline-flex;
+  color: var(--ok-ink);
+}
+
+.keyline__text {
+  flex: 1 1 220px;
+}
+
+.keyline__problem {
+  color: var(--need-ink);
+}
+
+.keyform {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.keyform__label {
+  font-weight: 800;
+}
+
+.keyform__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.keyform__input {
+  flex: 1 1 240px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  font: 500 15px var(--mono);
+  color: var(--ink);
+}
+
+.keyform__note {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.keyform__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.prices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prices__box {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.prices__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.prices__table th {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+.prices__table td {
+  padding: 7px 14px;
+}
+
+.prices__name {
+  font-weight: 700;
+}
+
+.prices__table .prices__number {
+  text-align: right;
+}
+
+.prices__table .prices__allow {
+  width: 64px;
+  text-align: center;
+}
+
+.limits {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.limit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.limit__label {
+  flex: 1 1 260px;
+}
+
+.limit__value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.limit__input {
+  width: 90px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  font: 600 15px var(--font);
+  color: var(--ink);
+}
+
+.limits__more {
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.limits__more summary {
+  min-height: 32px;
+  font-weight: 700;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.limits__more .limit {
+  margin-top: 12px;
+}
+
+/* After the last step */
+.done {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.done__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.done__item:last-child {
+  border-bottom: 0;
+}
+
+.done__name {
+  flex: 1 1 160px;
+  font-weight: 700;
+}
+
+.done__ok {
+  color: var(--ok-ink);
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .step__title {
+    font-size: 28px;
+  }
+
+  .profile__field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

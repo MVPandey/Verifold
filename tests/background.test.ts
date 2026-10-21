@@ -40,8 +40,12 @@ for (const name of ['claude', 'codex'])
     mode: 0o700,
   });
 process.env.PATH = `${fakeBin}:${process.env.PATH ?? ''}`;
+// An owner reads the person's profile in the home folder for each prompt. These tests use an empty home of their own.
+process.env.HOME = await mkdtemp(join(tmpdir(), 'verifold-fake-home-'));
+const fakeHome = process.env.HOME;
 process.on('exit', () => {
   rmSync(fakeBin, { recursive: true, force: true });
+  rmSync(fakeHome, { recursive: true, force: true });
 });
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {

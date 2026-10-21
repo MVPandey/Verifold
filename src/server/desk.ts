@@ -72,6 +72,7 @@ import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi } from './api.ts';
 import { labScreen, type LabScreen } from './screen.ts';
 import type { Snapshot } from '../protocol/api.ts';
+import type { FirstRun } from './setup.ts';
 import { contentType, readJsonBody, record } from './http.ts';
 
 export interface DeskServer {
@@ -1202,6 +1203,8 @@ export async function startDesk(
     readonly api?: { readonly pollMs?: number; readonly heartbeatMs?: number };
     /** The new app's build: index.html and assets/. Without one, /app/ is not served. */
     readonly appRoot?: URL;
+    /** The first run, which the app shows with or without a project. */
+    readonly firstRun?: FirstRun;
   } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
@@ -1419,6 +1422,7 @@ export async function startDesk(
             memory,
             labDesk,
           ),
+        options.firstRun,
       );
       return;
     }
