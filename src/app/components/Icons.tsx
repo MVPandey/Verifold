@@ -84,6 +84,27 @@ export function Ring(): ReactNode {
   );
 }
 
+const chevrons = {
+  left: 'M15 6l-6 6 6 6',
+  right: 'M9 6l6 6-6 6',
+  down: 'M6 9l6 6 6-6',
+} as const;
+
+/** An arrowhead: the back link's, or a fold's, closed (right) or open (down). */
+export function Chevron({
+  to,
+  size = 16,
+}: {
+  readonly to: keyof typeof chevrons;
+  readonly size?: number;
+}): ReactNode {
+  return (
+    <Icon size={size} width={size < 16 ? 2.4 : 2.2}>
+      <path d={chevrons[to]} />
+    </Icon>
+  );
+}
+
 export function Up(): ReactNode {
   return (
     <Icon size={15} width={2.6}>
