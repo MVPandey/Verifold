@@ -1,5 +1,7 @@
 import { createConnection, type Socket } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 
 /**
  * A minimal WebSocket client over a Unix socket, for the Codex app-server.
@@ -148,4 +150,31 @@ export function connectUnixWebSocket(
     socket.on('error', (error) => finish(error.message));
     socket.on('close', () => finish('socket closed'));
   });
+}
+
+/**
+ * Connect to a server that is still starting, such as a new Codex
+ * app-server. Its socket file can appear a moment before the server accepts
+ * connections, and on a busy computer that moment is longer. So a missing
+ * file or a failed connection is tried again every 50 ms while `alive()`
+ * holds, until `deadline` (a `Date.now()` time). Then the last failure ends
+ * the wait.
+ */
+export async function connectWhenListening(
+  path: string,
+  options: { readonly alive: () => boolean; readonly deadline: number },
+  onMessage: (text: string) => void,
+  onClose: (reason: string) => void,
+): Promise<UnixWebSocket> {
+  for (;;) {
+    let failure: unknown = new Error(`No socket at ${path}.`);
+    if (existsSync(path))
+      try {
+        return await connectUnixWebSocket(path, onMessage, onClose);
+      } catch (error) {
+        failure = error;
+      }
+    if (!options.alive() || Date.now() + 50 > options.deadline) throw failure;
+    await delay(50);
+  }
 }

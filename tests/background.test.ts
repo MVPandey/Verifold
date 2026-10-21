@@ -250,8 +250,14 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.equal((await stat(saved)).mode & 0o777, 0o600);
   assert.equal((await stat(keys)).mode & 0o777, 0o700);
   assert.ok((await readFile(saved, 'utf8')).includes(key));
-  const log = await readFile(join(root, '.verifold', 'owner.log'), 'utf8');
-  assert.match(log, /Commands in this terminal/);
+  // The terminal gets the line from the owner, and the owner's log gets it on its own, a moment apart.
+  await until(async () =>
+    (
+      await readFile(join(root, '.verifold', 'owner.log'), 'utf8').catch(
+        () => '',
+      )
+    ).includes('Commands in this terminal'),
+  );
   for (const name of ['owner.json', 'owner.log'])
     for (const secret of [key, token])
       assert.ok(

@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
+import { connectWhenListening, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import {
@@ -1389,15 +1389,14 @@ function codex(options: HostOptions): HostSession {
         emit({ type: 'limit', ...usedUp });
     }
   };
-  // Connect when the socket appears. A server that never listens counts as a failed start.
+  // Connect when the server listens. A server that never listens in 15 seconds counts as a failed start.
+  const exited = (): boolean =>
+    child.exitCode !== null || child.signalCode !== null;
   void (async () => {
-    for (let tries = 0; tries < 300 && !existsSync(socket); tries++) {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
     try {
-      connection = await connectUnixWebSocket(
+      connection = await connectWhenListening(
         socket,
+        { alive: () => !exited(), deadline: Date.now() + 15_000 },
         (text) => {
           let message: unknown;
           try {
@@ -1416,6 +1415,8 @@ function codex(options: HostOptions): HostSession {
       for (const text of queue ?? []) connection.send(text);
       queue = null;
     } catch {
+      // A Codex that exited reports its exit itself.
+      if (exited()) return;
       emit({
         type: 'notice',
         text: 'Could not connect to Codex. Check that it is installed and signed in.',

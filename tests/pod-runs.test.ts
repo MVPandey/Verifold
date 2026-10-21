@@ -48,6 +48,12 @@ function git(cwd: string, ...args: string[]): string {
 
 interface Fixture extends FakePod {
   readonly workspace: Workspace;
+  /**
+   * Wait for the work in the lab's queue, such as the saves after a run
+   * ends. Its agent hears the end before the last save, so a test waits for
+   * this before another ledger reads the records.
+   */
+  settled(): Promise<void>;
   /** The ledger that the lease's stop asks to end its runs. */
   ledger(minuteMs?: number): { ledger: RunLedger; ended: RunRecord[] };
   /** A ready lease of d-1, whose pod has the secret HF_TOKEN. */
@@ -85,6 +91,9 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
   const made: Fixture = {
     ...fake,
     workspace,
+    settled: async () => {
+      await queue;
+    },
     ledger: (minuteMs) => {
       const ended: RunRecord[] = [];
       const ledger = new RunLedger(root, {
@@ -253,7 +262,8 @@ await test('a pod run that is cancelled or past its time stops with its process 
     ['part.txt'],
   );
   assert.ok(run && (await gone(fx, run)));
-  // A run past its time limit stops the same way.
+  // A run past its time limit stops the same way. Its ledger reads r-1 as it ended.
+  await fx.settled();
   const timed = fx.ledger(500);
   await timed.ledger.load(true);
   await fx.start(timed.ledger, 'sleep 30', { minutes: 1 });

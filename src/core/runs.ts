@@ -1537,7 +1537,12 @@ export class RunLedger {
     };
   }
 
-  /** Record a run's end in the lab's queue, and tell its agent. */
+  /**
+   * Record a run's end in the lab's queue, then tell its agent. The end is
+   * on disk before the agent hears it, so no reader of the record, and no
+   * owner after a restart, finds a run running that its agent knows ended.
+   * An agent that was not told hears it after the next start.
+   */
   private end(
     run: RunRecord,
     outcome: Parameters<RunLedger['result']>[1],
@@ -1547,10 +1552,12 @@ export class RunLedger {
       this.cancelled.delete(run.id);
       this.reasons.delete(run.id);
       this.records.set(run.id, next);
-      const saved = this.options.ended(next) ? { ...next, told: true } : next;
-      this.records.set(run.id, saved);
-      await this.save(saved).catch(() => {});
-      return saved;
+      await this.save(next).catch(() => {});
+      if (!this.options.ended(next)) return next;
+      const told = { ...next, told: true };
+      this.records.set(run.id, told);
+      await this.save(told).catch(() => {});
+      return told;
     });
   }
 

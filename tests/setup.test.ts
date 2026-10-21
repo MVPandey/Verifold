@@ -364,14 +364,20 @@ for (const background of [false, true])
       html,
       /<h1 id="view-title" tabindex="-1">Fast graph search on CPUs<\/h1>/,
     );
-    assert.equal(
-      (
-        JSON.parse(
-          await readFile(join(project, '.verifold', 'lab.json'), 'utf8'),
-        ) as { question: string }
-      ).question,
-      'Fast graph search on CPUs',
-    );
+    // The page shows the lab from memory. Its state file can follow a moment later.
+    let question = '';
+    for (let tries = 0; tries < 500 && !question; tries++) {
+      try {
+        question = (
+          JSON.parse(
+            await readFile(join(project, '.verifold', 'lab.json'), 'utf8'),
+          ) as { question: string }
+        ).question;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    assert.equal(question, 'Fast graph search on CPUs');
     assert.equal(asked.length, 0);
     // After setup, the setup transcript is gone with the setup desk.
     assert.equal(

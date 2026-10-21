@@ -1,5 +1,4 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +11,7 @@ import {
   type CodexCall,
 } from './models.ts';
 import { watchdog } from './session-hosts.ts';
-import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
+import { connectWhenListening, type UnixWebSocket } from './unix-websocket.ts';
 
 /** One model that the first run offers for a harness. */
 export interface ModelChoice {
@@ -177,10 +176,6 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
   const timer = setTimeout(() => finish(null), commandMs);
   let connection: UnixWebSocket | null = null;
   try {
-    while (!existsSync(socket)) {
-      if (child.exitCode !== null || Date.now() > deadline) return null;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
     const answers = new Map<
       number,
       {
@@ -190,8 +185,12 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
     >();
     let nextId = 1;
     const opened = await Promise.race([
-      connectUnixWebSocket(
+      connectWhenListening(
         socket,
+        {
+          alive: () => child.exitCode === null && child.signalCode === null,
+          deadline,
+        },
         (text) => {
           let message: unknown;
           try {

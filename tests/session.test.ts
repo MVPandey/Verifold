@@ -94,6 +94,17 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   }
 });`;
 
+/**
+ * The JSON lines of a fake harness's log. A fake can be in the middle of
+ * writing a line, so only lines that end with a newline count.
+ */
+async function jsonLines<T>(path: string): Promise<T[]> {
+  return (await readFile(path, 'utf8'))
+    .split('\n')
+    .slice(0, -1)
+    .map((line) => JSON.parse(line) as T);
+}
+
 /** The fake Codex app-servers listen on a Unix socket, like Codex. */
 const codexSocket = fileURLToPath(
   new URL('./fixtures/codex-socket.cjs', import.meta.url),
@@ -275,7 +286,11 @@ async function project(
   }
 }
 
-/** Wait for the session of a manager, or the first worker of a pool. */
+/**
+ * Wait for the session of a manager, or the first worker of a pool. A fake
+ * harness is a new Node process, and a busy computer can take seconds to
+ * start one, so the limit only ends a test that is stuck.
+ */
 async function until(
   sessions: SessionManager | SessionPool,
   check: (record: SessionRecord) => boolean,
@@ -283,7 +298,8 @@ async function until(
   const current = (): SessionRecord | undefined =>
     (sessions instanceof SessionPool ? sessions.views()[0] : sessions.view())
       ?.record;
-  for (let tries = 0; tries < 200; tries++) {
+  const end = Date.now() + 15_000;
+  while (Date.now() <= end) {
     const record = current();
     if (record && check(record)) return record;
     await delay(20);
@@ -484,10 +500,9 @@ await test('Claude Code requests reach the person, and the answer returns to the
     assert.ok(second);
     assert.equal(second.outcome, 'denied');
     assert.equal(decisionLabel(second, 'claude'), 'You denied');
-    const answers = (await readFile(join(root, 'answers.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as { response: Record<string, unknown> });
+    const answers = await jsonLines<{ response: Record<string, unknown> }>(
+      join(root, 'answers.jsonl'),
+    );
     assert.deepEqual(answers[0]?.response, {
       behavior: 'allow',
       updatedInput: {
@@ -1236,13 +1251,10 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     assert.ok(
       stopped.events.some((event) => event.text.includes('was cancelled')),
     );
-    const sent = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as { method?: string; params?: { model?: string } },
-      );
+    const sent = await jsonLines<{
+      method?: string;
+      params?: { model?: string };
+    }>(join(root, 'rpc.jsonl'));
     const slowThread = sent.findIndex(
       (message) => message.params?.model === 'slow-thread',
     );
@@ -1558,16 +1570,10 @@ await test('a resumed Codex thread ignores events from the paused process', asyn
     await delay(300);
     assert.equal(sessions.view()?.live, true);
     assert.equal(sessions.view()?.record.status, 'idle');
-    const sent = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as {
-            method?: string;
-            params?: { threadId?: string; approvalsReviewer?: string };
-          },
-      );
+    const sent = await jsonLines<{
+      method?: string;
+      params?: { threadId?: string; approvalsReviewer?: string };
+    }>(join(root, 'rpc.jsonl'));
     const resumed = sent.find((message) => message.method === 'thread/resume');
     assert.equal(resumed?.params?.threadId, 'thread-1');
     assert.equal(resumed?.params?.approvalsReviewer, 'auto_review');
