@@ -129,6 +129,8 @@ export interface SessionRecord {
   readonly mode: SessionMode;
   /** The mode that the harness reports, which can differ from the requested mode. */
   readonly reportedMode: string | null;
+  /** The model that the harness reports at the start of its latest process. */
+  readonly reportedModel?: string;
   readonly nativeSessionId: string | null;
   readonly status: SessionStatus;
   readonly startedAt: string;
@@ -601,6 +603,9 @@ function parseRecord(value: unknown): SessionRecord | null {
       typeof record.reportedMode === 'string'
         ? clean(record.reportedMode, 40)
         : null,
+    ...(typeof record.reportedModel === 'string' && record.reportedModel
+      ? { reportedModel: clean(record.reportedModel, 200) }
+      : {}),
     nativeSessionId:
       typeof record.nativeSessionId === 'string'
         ? nativeId(record.nativeSessionId)
@@ -1655,6 +1660,8 @@ export class SessionManager {
         mode: record.mode,
         clientVersion: this.options.clientVersion,
         ...(record.model ? { model: record.model } : {}),
+        // Codex picks the most capable model for a lab agent or checker without one. The lab names Claude Code's model.
+        ...(record.agent && !record.model ? { bestModel: true } : {}),
         ...(prompt === undefined ? {} : { prompt }),
         ...(native && (prompt === undefined || resume)
           ? { resume: native }
@@ -1799,6 +1806,7 @@ export class SessionManager {
           reportedMode: event.mode
             ? clean(event.mode, 40)
             : current.reportedMode,
+          ...(event.model ? { reportedModel: clean(event.model, 200) } : {}),
           status: first ? (this.prompted ? 'running' : 'idle') : current.status,
         }));
         if (first)

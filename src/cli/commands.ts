@@ -39,6 +39,7 @@ import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
 import { Lab, labOnDisk, startLabOn } from './lab.ts';
+import { labModel } from './models.ts';
 import { labWorks, RunTeam } from './team.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
@@ -717,10 +718,8 @@ async function serveDesk(
         memory,
         quota,
         team,
-        model: async (host) => {
-          const workspace = await loadWorkspace(root).catch(() => null);
-          return workspace?.host === host ? (workspace.model ?? null) : null;
-        },
+        model: async (host) =>
+          labModel(host, await loadWorkspace(root).catch(() => null)),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);

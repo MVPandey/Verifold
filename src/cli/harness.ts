@@ -308,14 +308,20 @@ export function childEnvironment(): NodeJS.ProcessEnv {
   return environment;
 }
 
-/** Validate a host identifier without selecting or resolving a model for the user. */
+/**
+ * Validate a host identifier without selecting or resolving a model for the
+ * user. A short suffix in brackets, such as Claude Code's `opus[1m]` for a
+ * 1M context, is part of the identifier.
+ */
 export function validateModel(
   model: unknown,
 ): asserts model is string | undefined {
   if (
     model !== undefined &&
     (typeof model !== 'string' ||
-      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,199}$/.test(model))
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,189}(?:\[[a-z0-9]{1,8}\])?$/.test(
+        model,
+      ))
   )
     throw new Error(
       'Harness model must be a valid identifier of at most 200 characters.',
