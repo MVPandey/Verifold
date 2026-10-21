@@ -43,8 +43,16 @@ export type SetupSteps = Readonly<
 export interface AgencySettings {
   /** Null: the person chose no agents yet. */
   readonly agency: Agency | null;
-  /** Null: the person set no GPU limits yet. */
+  /** Null: the person set no GPU limits yet, or the saved ones are not valid. */
   readonly money: ProfileMoney | null;
+  /**
+   * Saved GPU limits that are not valid, and why. They read as not set, and
+   * the file keeps them until the person saves new ones.
+   */
+  readonly unreadMoney: {
+    readonly saved: unknown;
+    readonly reason: string;
+  } | null;
   readonly steps: SetupSteps;
 }
 
@@ -136,6 +144,10 @@ function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function harness(value: unknown): HarnessName | undefined {
   return value === 'claude' || value === 'codex' ? value : undefined;
 }
@@ -150,7 +162,8 @@ export async function loadSettings(directory: string): Promise<AgencySettings> {
       JSON.parse(await readMemory(join(directory, 'settings.json'))),
     );
   } catch (error) {
-    if (missing(error)) return { agency: null, money: null, steps: {} };
+    if (missing(error))
+      return { agency: null, money: null, unreadMoney: null, steps: {} };
     throw error;
   }
   let agency: Agency | null = null;
@@ -173,22 +186,24 @@ export async function loadSettings(directory: string): Promise<AgencySettings> {
         : {}),
     };
   }
+  // GPU limits that are not valid read as not set, so nothing that reads the settings stops on them.
   let money: ProfileMoney | null = null;
+  let unreadMoney: AgencySettings['unreadMoney'] = null;
   if (data.money !== undefined)
     try {
       money = parseProfileMoney(object(data.money));
-    } catch {
-      throw new Error(
-        `The GPU limits in ${join(directory, 'settings.json')} are not valid. Set them again in the first run.`,
-      );
+    } catch (error) {
+      unreadMoney = {
+        saved: data.money,
+        reason: error instanceof Error ? error.message : 'They are not valid.',
+      };
     }
   const steps: Partial<Record<SetupStep, 'done' | 'skipped'>> = {};
-  const saved =
-    data.steps && typeof data.steps === 'object' ? object(data.steps) : {};
+  const saved = record(data.steps) ? data.steps : {};
   for (const step of ['agents', 'about', 'money'] as const)
     if (saved[step] === 'done' || saved[step] === 'skipped')
       steps[step] = saved[step];
-  return { agency, money, steps };
+  return { agency, money, unreadMoney, steps };
 }
 
 export async function loadAgency(
@@ -307,7 +322,12 @@ export async function writeSettings(
     JSON.stringify(
       {
         ...next.agency,
-        ...(next.money ? { money: next.money } : {}),
+        // Limits that are not valid stay in the file until a save replaces them.
+        ...(next.money
+          ? { money: next.money }
+          : next.unreadMoney
+            ? { money: next.unreadMoney.saved }
+            : {}),
         ...(Object.keys(next.steps).length ? { steps: next.steps } : {}),
       },
       null,
@@ -328,10 +348,23 @@ export async function saveAgencyPreferences(
   );
 }
 
+/**
+ * A field's line that starts with `#`, after any backslashes, gets one more
+ * backslash in USER.md, so no line of a field reads as a heading.
+ * `unescapeLine` takes it off again.
+ */
+const escapeLine = (line: string): string =>
+  /^\\*#/.test(line) ? `\\${line}` : line;
+const unescapeLine = (line: string): string =>
+  /^\\+#/.test(line) ? line.slice(1) : line;
+
 /** The card as the Markdown of USER.md, one heading for each field. */
 export function cardMarkdown(card: ProfileCard): string {
   return `${(Object.keys(cardHeadings) as (keyof ProfileCard)[])
-    .map((field) => `## ${cardHeadings[field]}\n\n${card[field].trim()}\n`)
+    .map(
+      (field) =>
+        `## ${cardHeadings[field]}\n\n${card[field].trim().split('\n').map(escapeLine).join('\n')}\n`,
+    )
     .join('\n')}`;
 }
 
@@ -352,7 +385,7 @@ export function parseCard(markdown: string): ProfileCard | null {
             cardHeadings[field].toLowerCase() === heading.toLowerCase(),
         ) ?? null;
       if (current) fields[current] = [];
-    } else if (current) fields[current]?.push(line);
+    } else if (current) fields[current]?.push(unescapeLine(line));
   }
   if (!Object.keys(fields).length) return null;
   const field = (name: keyof ProfileCard): string =>
@@ -397,5 +430,31 @@ export async function personProfile(
   return {
     whole: lines.join('\n').slice(0, wholeLimit),
     style: card.talk || null,
+  };
+}
+
+/**
+ * A reader of the profile for the lab's prompts. It reads USER.md again only
+ * when the file changed: its inode, its change time, or its size.
+ */
+export function profileReader(
+  directory: string,
+): () => Promise<PersonProfile | null> {
+  let last: {
+    readonly key: string;
+    readonly value: PersonProfile | null;
+  } | null = null;
+  return async () => {
+    const info = await lstat(join(directory, 'USER.md')).catch(
+      (error: unknown) => {
+        if (missing(error)) return null;
+        throw error;
+      },
+    );
+    const key = info ? `${info.ino}:${info.mtimeMs}:${info.size}` : 'none';
+    if (last?.key === key) return last.value;
+    const value = await personProfile(directory);
+    last = { key, value };
+    return value;
   };
 }

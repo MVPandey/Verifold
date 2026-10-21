@@ -4,7 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { childEnvironment, type HarnessName } from './harness.ts';
-import { claudeOpus, codexModels, pickCodexModel } from './models.ts';
+import {
+  claudeOpus,
+  codexModels,
+  listCodexModels,
+  pickCodexModel,
+  type CodexCall,
+} from './models.ts';
 import { watchdog } from './session-hosts.ts';
 import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 
@@ -143,8 +149,9 @@ export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
 }
 
 /**
- * Codex's `model/list`, every page up to three, through a short-lived
- * app-server. Null when it does not answer in 10 seconds or refuses.
+ * Codex's `model/list`, through a short-lived app-server, read with the
+ * session's own paging. Null when it does not answer in 10 seconds or
+ * refuses.
  */
 async function codexModelList(executable: string): Promise<unknown[] | null> {
   const folder = await mkdtemp(join(tmpdir(), 'vf-'));
@@ -174,8 +181,13 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
       if (child.exitCode !== null || Date.now() > deadline) return null;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    const models: unknown[] = [];
-    const answers = new Map<number, (result: unknown) => void>();
+    const answers = new Map<
+      number,
+      {
+        readonly onResult: (result: Record<string, unknown>) => void;
+        readonly onError: (() => void) | undefined;
+      }
+    >();
     let nextId = 1;
     const opened = await Promise.race([
       connectUnixWebSocket(
@@ -188,8 +200,11 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
             return;
           }
           if (!record(message) || typeof message.id !== 'number') return;
-          if (message.error !== undefined) finish(null);
-          else answers.get(message.id)?.(message.result);
+          const answered = answers.get(message.id);
+          answers.delete(message.id);
+          if (message.error !== undefined)
+            (answered?.onError ?? (() => finish(null)))();
+          else answered?.onResult(record(message.result) ? message.result : {});
         },
         () => finish(null),
       ),
@@ -197,30 +212,11 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
     ]).catch(() => null);
     if (!opened || Array.isArray(opened)) return null;
     connection = opened;
-    const call = (
-      method: string,
-      params: Record<string, unknown>,
-      then: (result: unknown) => void,
-    ): void => {
+    const call: CodexCall = (method, params, onResult, onError) => {
       const id = nextId++;
-      answers.set(id, then);
+      answers.set(id, { onResult, onError });
       opened.send(JSON.stringify({ method, id, params }));
     };
-    const page = (cursor: string | undefined, count: number): void =>
-      call(
-        'model/list',
-        { limit: 100, ...(cursor ? { cursor } : {}) },
-        (result) => {
-          if (record(result) && Array.isArray(result.data))
-            models.push(...(result.data as unknown[]));
-          const next =
-            record(result) && typeof result.nextCursor === 'string'
-              ? result.nextCursor
-              : undefined;
-          if (next && count < 3) page(next, count + 1);
-          else finish(models);
-        },
-      );
     call(
       'initialize',
       {
@@ -229,7 +225,7 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
       },
       () => {
         opened.send(JSON.stringify({ method: 'initialized', params: {} }));
-        page(undefined, 1);
+        listCodexModels(call, finish);
       },
     );
     return await answer;

@@ -19,6 +19,7 @@ import {
 } from '../core/compute.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import {
+  installedHarnesses,
   runHarness,
   validateModel,
   type HarnessName,
@@ -92,6 +93,8 @@ export interface FirstRunOptions {
   readonly harness?: typeof runHarness;
   /** Tests use fakes. */
   readonly detect?: () => Promise<readonly HarnessStatus[]>;
+  /** The harness commands on the PATH. Tests use fakes. */
+  readonly installed?: () => Promise<readonly HarnessName[]>;
 }
 
 /**
@@ -107,11 +110,20 @@ export class FirstRun {
   private lines: ChatLine[] = [...opening];
   /** The draft card. Null: no draft, so the saved card shows. */
   private card: ProfileCard | null = null;
+  /** The person started the conversation again, so the saved card stays out of it until a new one replaces it. */
+  private fresh = false;
+  /** An answer is taken, or the agent writes, since this time. */
   private busy: string | null = null;
+  /** The card is being saved. The conversation takes nothing meanwhile. */
+  private holding = false;
+  /** Each start again and each save makes a new conversation. A reply for an older one is dropped. */
+  private generation = 0;
   private error: string | null = null;
   /** What a retry runs again: the last reply, with its note. */
   private retryNote: string | null | undefined;
   private reading: Promise<void> | null = null;
+  /** A key was stored while prices were read, so they are read once more. */
+  private readAgain = false;
   private saving: Promise<void> | null = null;
   private problem: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
@@ -171,7 +183,7 @@ export class FirstRun {
       },
       about: {
         lines: this.lines,
-        card: this.card ?? saved,
+        card: this.card ?? (this.fresh ? null : saved),
         saved: saved ? 'card' : markdown ? 'text' : null,
         text: markdown && !saved ? markdown : null,
         harness: chat?.host ?? null,
@@ -195,6 +207,9 @@ export class FirstRun {
         reading: this.reading !== null || this.saving !== null,
         problem: this.problem,
         limits: settings.money ?? profileMoneyDefaults,
+        unreadable: settings.unreadMoney
+          ? `The saved GPU limits are not valid: ${settings.unreadMoney.reason} They show the defaults until you save new ones.`
+          : null,
       },
     };
   }
@@ -235,7 +250,33 @@ export class FirstRun {
   private write(
     change: (current: AgencySettings) => AgencySettings,
   ): Promise<AgencySettings> {
-    return this.locked(() => writeSettings(this.options.directory, change));
+    return this.locked(async () =>
+      writeSettings(this.options.directory, await this.withLead(change)),
+    );
+  }
+
+  /**
+   * The change, with a lead harness when the settings have none, so an
+   * older Verifold can read the file: Claude Code when it is on the PATH,
+   * else Codex, with Codex as the helper when both are. `steps.agents`
+   * keeps the record that the person chose nothing.
+   */
+  private async withLead(
+    change: (current: AgencySettings) => AgencySettings,
+  ): Promise<(current: AgencySettings) => AgencySettings> {
+    const found = await (this.options.installed ?? installedHarnesses)();
+    const host: HarnessName =
+      found.includes('codex') && !found.includes('claude') ? 'codex' : 'claude';
+    const lead: Agency = {
+      host,
+      ...(host === 'claude' && found.includes('codex')
+        ? { helper: 'codex' as const }
+        : {}),
+    };
+    return (current) => {
+      const next = change(current);
+      return next.agency ? next : { ...next, agency: lead };
+    };
   }
 
   /**
@@ -279,7 +320,7 @@ export class FirstRun {
         if (this.retryNote === undefined) fail('Nothing waits for a retry.');
         return this.reply(this.retryNote);
       case 'setup-fill':
-        if (this.busy) fail('The agent still writes. Wait a moment.');
+        this.idle();
         if (!this.lines.some((line) => line.from === 'you'))
           fail('Answer the first question first.');
         this.card = answersCard(this.lines);
@@ -287,11 +328,10 @@ export class FirstRun {
         this.retryNote = undefined;
         return 200;
       case 'setup-restart':
-        if (this.busy) fail('The agent still writes. Wait a moment.');
-        this.lines = [...opening];
-        this.card = null;
-        this.error = null;
-        this.retryNote = undefined;
+        this.idle();
+        this.reset();
+        // A new conversation: the saved card stays saved until "Looks right" replaces it.
+        this.fresh = true;
         return 200;
       case 'setup-about':
         await this.saveAbout(body);
@@ -364,39 +404,69 @@ export class FirstRun {
     });
   }
 
+  /** Refuse a change of the conversation while an answer or a save runs. */
+  private idle(): void {
+    if (this.busy || this.holding)
+      fail(
+        'The agent still writes, or the card is being saved. Wait a moment.',
+      );
+  }
+
+  /** A new conversation. A reply for the one before is dropped when it comes. */
+  private reset(): void {
+    this.generation += 1;
+    this.lines = [...opening];
+    this.card = null;
+    this.error = null;
+    this.retryNote = undefined;
+  }
+
   /**
    * An answer, or, once a card shows, a note on it: on the draft, else on
    * the saved card. The person's edits of the card, if any, are what the
-   * note changes.
+   * note changes. The answer is taken before the first wait, so a second
+   * one at the same time is refused.
    */
   private async say(value: unknown, edited: unknown): Promise<number> {
-    if (this.busy) fail('The agent still writes. Wait for its reply.');
+    this.idle();
     const text = typeof value === 'string' ? value.trim() : '';
     if (!text) fail('Write an answer first.');
     if (text.length > answerLimit)
       fail(`Write at most ${answerLimit} characters.`);
-    if (!this.card) {
-      const markdown = await loadMemory(this.options.directory).catch(
-        () => null,
-      );
-      this.card = markdown ? parseCard(markdown) : null;
+    this.busy = new Date().toISOString();
+    this.error = null;
+    try {
+      if (!this.card && !this.fresh) {
+        const markdown = await loadMemory(this.options.directory).catch(
+          () => null,
+        );
+        this.card = markdown ? parseCard(markdown) : null;
+      }
+      if (this.card && edited !== undefined) this.card = cardOf(edited);
+    } catch (error) {
+      this.busy = null;
+      throw error;
     }
-    if (this.card && edited !== undefined) this.card = cardOf(edited);
     this.lines = [...this.lines, { from: 'you', text, suggestions: [] }];
-    return this.reply(this.card ? text : null);
+    return this.start(this.card ? text : null);
+  }
+
+  /** Ask the agent again. */
+  private reply(note: string | null): Promise<number> {
+    this.idle();
+    this.busy = new Date().toISOString();
+    this.error = null;
+    return this.start(note);
   }
 
   /** Start the next reply: a question or the card. The view shows it when it comes. */
-  private reply(note: string | null): Promise<number> {
-    if (this.busy) fail('The agent still writes. Wait for its reply.');
-    this.busy = new Date().toISOString();
-    this.error = null;
+  private start(note: string | null): Promise<number> {
     this.retryNote = note;
-    void this.turn(note);
+    void this.turn(note, this.generation);
     return Promise.resolve(202);
   }
 
-  private async turn(note: string | null): Promise<void> {
+  private async turn(note: string | null, generation: number): Promise<void> {
     try {
       const harness = await this.chatHarness();
       const step = await nextStep({
@@ -407,6 +477,8 @@ export class FirstRun {
         signal: this.options.signal,
         ...(this.options.harness ? { run: this.options.harness } : {}),
       });
+      // The person started again or saved meanwhile: this reply is for a conversation that ended.
+      if (generation !== this.generation) return;
       if ('card' in step) this.card = step.card;
       else
         this.lines = [
@@ -415,11 +487,12 @@ export class FirstRun {
             from: harness?.host ?? 'verifold',
             text: step.question,
             suggestions: step.suggestions,
+            ...(step.asks ? { asks: step.asks } : {}),
           },
         ];
       this.retryNote = undefined;
     } catch (error) {
-      if (this.options.signal.aborted) return;
+      if (this.options.signal.aborted || generation !== this.generation) return;
       this.error =
         error instanceof SessionActionError
           ? error.message
@@ -430,39 +503,45 @@ export class FirstRun {
   }
 
   private async saveAbout(body: Record<string, unknown>): Promise<void> {
-    if (this.busy) fail('The agent still writes. Wait a moment.');
-    if (body.keep === true) {
-      const markdown = await loadMemory(this.options.directory).catch(
-        () => null,
-      );
-      if (!markdown) fail('No profile is saved to keep.');
-      await this.write((current) => ({
-        ...current,
-        steps: { ...current.steps, about: 'done' },
-      }));
-      return;
+    this.idle();
+    // The conversation takes nothing until the save ends.
+    this.holding = true;
+    try {
+      if (body.keep === true) {
+        const markdown = await loadMemory(this.options.directory).catch(
+          () => null,
+        );
+        if (!markdown) fail('No profile is saved to keep.');
+        await this.write((current) => ({
+          ...current,
+          steps: { ...current.steps, about: 'done' },
+        }));
+      } else {
+        const card = cardOf(body.card);
+        const change = await this.withLead((current) => ({
+          ...current,
+          steps: { ...current.steps, about: 'done' },
+        }));
+        await this.locked(async () => {
+          await saveAgencyFile(
+            this.options.directory,
+            'USER.md',
+            cardMarkdown(card),
+          );
+          // A profile setup in the terminal sees an accepted profile too.
+          await saveAgencyFile(
+            this.options.directory,
+            'profile-state.json',
+            JSON.stringify({ schemaVersion: 1, status: 'accepted' }, null, 2),
+          );
+          await writeSettings(this.options.directory, change);
+        });
+        this.reset();
+      }
+      this.fresh = false;
+    } finally {
+      this.holding = false;
     }
-    const card = cardOf(body.card);
-    await this.locked(async () => {
-      await saveAgencyFile(
-        this.options.directory,
-        'USER.md',
-        cardMarkdown(card),
-      );
-      // A profile setup in the terminal sees an accepted profile too.
-      await saveAgencyFile(
-        this.options.directory,
-        'profile-state.json',
-        JSON.stringify({ schemaVersion: 1, status: 'accepted' }, null, 2),
-      );
-      await writeSettings(this.options.directory, (current) => ({
-        ...current,
-        steps: { ...current.steps, about: 'done' },
-      }));
-    });
-    this.lines = [...opening];
-    this.card = null;
-    this.retryNote = undefined;
   }
 
   /**
@@ -517,17 +596,24 @@ export class FirstRun {
   private readPrices(asked = true): Promise<number> {
     if (!this.options.compute.keySaved())
       fail('Add a RunPod key first. Prices come from RunPod with your key.');
-    if (this.reading) return Promise.resolve(202);
+    // A read that runs may use the key before this one, so one more read follows it.
+    if (this.reading) {
+      this.readAgain = true;
+      return Promise.resolve(202);
+    }
     this.problem = null;
     const work = this.options.compute.refreshGpus();
-    this.reading = work.then(
-      () => {
-        this.reading = null;
-      },
-      () => {
-        this.reading = null;
-      },
-    );
+    const done = (): void => {
+      this.reading = null;
+      if (!this.readAgain) return;
+      this.readAgain = false;
+      try {
+        this.readPrices(false).catch(() => {});
+      } catch {
+        /* The key is gone, so there is nothing to read. */
+      }
+    };
+    this.reading = work.then(done, done);
     return this.background(work, 'Verifold could not read the prices.', asked);
   }
 

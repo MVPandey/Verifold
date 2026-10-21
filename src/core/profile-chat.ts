@@ -19,6 +19,8 @@ export interface ChatLine {
   readonly text: string;
   /** Answers that the asker suggests. The person can pick one or write their own. */
   readonly suggestions: readonly string[];
+  /** `talk`: the question asks how agents should write to the person, so its answer is "Talk to me". */
+  readonly asks?: 'talk';
 }
 
 export const firstQuestion =
@@ -36,7 +38,11 @@ export const followUps = 2;
 export const answerLimit = 2000;
 
 export type ChatStep =
-  | { readonly question: string; readonly suggestions: readonly string[] }
+  | {
+      readonly question: string;
+      readonly suggestions: readonly string[];
+      readonly asks?: 'talk';
+    }
   | { readonly card: ProfileCard };
 
 /** The harness that runs the conversation, with the model that the person picked. */
@@ -50,21 +56,15 @@ function asked(lines: readonly ChatLine[]): number {
   return Math.max(0, lines.filter((line) => line.from !== 'you').length - 1);
 }
 
-/** Verifold's own card: the answers as the person wrote them. */
+/** Verifold's own steps: it asks how agents should talk, then fills the card from the answers. */
 function localStep(lines: readonly ChatLine[]): ChatStep {
-  const answers = lines.filter((line) => line.from === 'you');
-  if (answers.length < 2)
+  if (lines.filter((line) => line.from === 'you').length < 2)
     return {
       question: 'How should the agents talk to you?',
       suggestions: ['Short and direct', 'Show the reasoning', 'Like a paper'],
+      asks: 'talk',
     };
-  return {
-    card: {
-      workOn: (answers[0]?.text ?? '').slice(0, cardLimits.workOn),
-      explore: '',
-      talk: (answers[1]?.text ?? '').slice(0, cardLimits.talk),
-    },
-  };
+  return { card: answersCard(lines) };
 }
 
 function field(value: unknown, limit: number): string {
@@ -100,6 +100,7 @@ function parseStep(text: string, left: number): ChatStep {
           .map((entry) => field(entry, 80))
           .filter(Boolean)
           .slice(0, 3),
+        ...(reply.asks === 'talk' ? { asks: 'talk' as const } : {}),
       };
   }
   throw new SessionActionError(
@@ -157,16 +158,34 @@ ${JSON.stringify({
   }
 }
 
-/** The card from the answers alone, when the person does not wait for the agent. */
+/**
+ * The card from the answers alone: the first answer is what the person
+ * works on, the answer to a question about how agents should talk is "Talk
+ * to me", and any other answer is what to explore.
+ */
 export function answersCard(lines: readonly ChatLine[]): ProfileCard {
-  const answers = lines.filter((line) => line.from === 'you');
+  const parts: Record<keyof ProfileCard, string[]> = {
+    workOn: [],
+    explore: [],
+    talk: [],
+  };
+  let asked: ChatLine | undefined;
+  for (const line of lines) {
+    if (line.from !== 'you') {
+      asked = line;
+      continue;
+    }
+    const field = !parts.workOn.length
+      ? 'workOn'
+      : asked?.asks === 'talk'
+        ? 'talk'
+        : 'explore';
+    parts[field].push(line.text);
+    asked = undefined;
+  }
   return {
-    workOn: (answers[0]?.text ?? '').slice(0, cardLimits.workOn),
-    explore: answers
-      .slice(1)
-      .map((line) => line.text)
-      .join('\n')
-      .slice(0, cardLimits.explore),
-    talk: '',
+    workOn: parts.workOn.join('\n').slice(0, cardLimits.workOn),
+    explore: parts.explore.join('\n').slice(0, cardLimits.explore),
+    talk: parts.talk.join('\n').slice(0, cardLimits.talk),
   };
 }

@@ -41,8 +41,8 @@ for (const name of ['claude', 'codex'])
   });
 process.env.PATH = `${fakeBin}:${process.env.PATH ?? ''}`;
 // An owner reads the person's profile in the home folder for each prompt. These tests use an empty home of their own.
-process.env.HOME = await mkdtemp(join(tmpdir(), 'verifold-fake-home-'));
-const fakeHome = process.env.HOME;
+const fakeHome = await mkdtemp(join(tmpdir(), 'verifold-fake-home-'));
+process.env.HOME = fakeHome;
 process.on('exit', () => {
   rmSync(fakeBin, { recursive: true, force: true });
   rmSync(fakeHome, { recursive: true, force: true });
@@ -293,6 +293,23 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   );
   assert.equal(existsSync(join(root, '.verifold', 'lab.json')), false);
   assert.equal(opened.length, 1);
+  // A terminal that asks for another profile hears that the running owner keeps its own.
+  const other: string[] = [];
+  const third = runCli(
+    ['--app', '--no-open', '--agency-dir', join(root, 'other-profile')],
+    root,
+    terminal(other, [], []),
+  );
+  await until(() =>
+    other.some((line) =>
+      line.startsWith(
+        `The running Verifold uses the profile in ${join(fakeHome, '.verifold', 'agency')}, so stop it with verifold stop`,
+      ),
+    ),
+  );
+  assert.ok(
+    !again.some((line) => line.startsWith('The running Verifold uses')),
+  );
   // verifold stop stops the owner. The attached terminal says so and ends.
   const said: string[] = [];
   await runCli(['stop'], root, {
@@ -303,6 +320,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   });
   assert.deepEqual(said, ['Verifold stopped.']);
   await second;
+  await third;
   assert.equal(again.at(-1), 'Verifold stopped.');
   await ownerDone;
   assert.equal(await liveOwner(root), null);

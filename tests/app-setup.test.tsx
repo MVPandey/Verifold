@@ -333,6 +333,8 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
   // Without an agent, a note cannot change the card: the person edits it.
   const local = step({ card, harness: null });
   assert.match(local, /No agent is signed in, so edit the card to change it\./);
+  // A saved card can be replaced by a new conversation.
+  assert.match(step({ card, saved: 'card' }), /Start the conversation again/);
   // A profile from an earlier version: keep it, or write a new one.
   const older = step({ saved: 'text', text: 'I study graphs.' });
   assert.match(older, /Your profile from an earlier version I study graphs\./);
@@ -397,6 +399,15 @@ await test('step 3 asks for a key without one, and with one shows the prices wit
     /Claude and Codex usage comes out of your plans\. Each project shows what Claude Code estimates its work cost\. When a plan’s usage limit runs out, the agents on it wait until it resets\./,
   );
   assert.match(shown, /Finish setup No GPUs for now/);
+  // Saved limits that are not valid: the step says so, with the defaults to save.
+  const unread = step({
+    unreadable:
+      'The saved GPU limits are not valid: Give the spend limit in USD as a number from 1 to 10000. They show the defaults until you save new ones.',
+  });
+  assert.match(
+    unread,
+    /role="alert"[^>]*>The saved GPU limits are not valid: Give the spend limit/,
+  );
 });
 
 await test('after the last step, each step says done or skipped, with a way to change it', () => {

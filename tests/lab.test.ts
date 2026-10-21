@@ -794,26 +794,43 @@ await test("the person's profile reaches the prompts: the planner reads all of i
     /The person asks agents to write to them this way: "Short and direct\."/,
   );
   assert.doesNotMatch(first, /CoT faithfulness/);
-  // The person changes "Talk to me". A digest says so once, when the lab has read the change.
-  person = { whole: 'The person works on: CoT', style: 'Numbers first.' };
-  const said = async (): Promise<string[]> =>
-    (await lab.inputs('d-2-alpha')).filter((input) =>
-      input.includes('write to them this way: "Numbers first."'),
-    );
-  /** Wake the agent with a post once its turns ended, and wait for its next prompt. */
-  const wake = async (text: string): Promise<string> => {
+  /** Wake the agent with a post once its turns ended, and wait for its prompt. */
+  const wake = async (text: string): Promise<void> => {
     await delay(300);
-    const before = (await lab.inputs('d-2-alpha')).length;
     await lab.lab.post({ text: `@claude-2 ${text}` });
-    await until(async () => (await lab.inputs('d-2-alpha')).length > before);
-    return (await lab.inputs('d-2-alpha')).at(-1) ?? '';
+    await until(async () =>
+      (await lab.inputs('d-2-alpha')).some((input) => input.includes(text)),
+    );
   };
-  for (let tries = 1; !(await said()).length; tries++) {
-    assert.ok(tries <= 3, 'The new style never reached the agent.');
-    await wake(`question ${tries}?`);
-  }
-  assert.doesNotMatch(await wake('one more?'), /write to them this way/);
-  assert.equal((await said()).length, 1);
+  /** The prompts since `from` that hold `line`. */
+  const holding = async (from: number, line: string): Promise<number> =>
+    (await lab.inputs('d-2-alpha'))
+      .slice(from)
+      .filter((input) => input.includes(line)).length;
+  // The agent keeps going for a turn, then waits for news.
+  await until(async () => (await lab.inputs('d-2-alpha')).length >= 2);
+  // The person changes "Talk to me": a digest says so once, and no later one again.
+  const changed = (await lab.inputs('d-2-alpha')).length;
+  person = { whole: 'The person works on: CoT', style: 'Numbers first.' };
+  const style =
+    'The person asks agents to write to them this way: "Numbers first."';
+  await wake('what is your bar?');
+  // The lab reads the profile as the digest is made, so the first one after the change has it.
+  assert.ok((await lab.inputs('d-2-alpha'))[changed]?.includes(style));
+  assert.equal(await holding(changed, style), 1);
+  await wake('and your noise?');
+  assert.equal(await holding(changed, style), 1);
+  // The person clears it, once the agent waits again: the next digest says so, once.
+  await delay(300);
+  const cleared = (await lab.inputs('d-2-alpha')).length;
+  person = { whole: 'The person works on: CoT', style: null };
+  const removed = 'The person removed their note on how to write to them.';
+  await wake('which seeds?');
+  assert.ok((await lab.inputs('d-2-alpha'))[cleared]?.includes(removed));
+  assert.equal(await holding(cleared, removed), 1);
+  await wake('which layer?');
+  assert.equal(await holding(cleared, removed), 1);
+  assert.equal(await holding(cleared, 'write to them this way'), 0);
 });
 
 await test('with no free slot, an idle agent parks for a new one, and resumes when a post wakes it', async (t) => {

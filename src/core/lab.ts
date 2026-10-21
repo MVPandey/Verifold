@@ -566,7 +566,7 @@ export class Lab {
    * the direction's newest commit then. A restart forgets them.
    */
   private readonly bringAt = new Map<string, BringLook>();
-  /** The person's profile as the last prompt read it. A digest, which cannot wait, uses this. */
+  /** The person's profile as the last prompt read it. */
   private person: PersonProfile | null = null;
 
   constructor(root: string, options: LabOptions) {
@@ -2184,15 +2184,21 @@ export class Lab {
           !this.holdsTerminal(agent.id) &&
           this.options.sessions.idle(agent.session),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
+        // The profile as it is now, so a changed "Talk to me" comes with this digest.
+        prepare: async () => {
+          await this.readPerson();
+        },
         send: (events, left) => {
           const agent = this.agent(id);
           const ask = this.quiet(id);
-          // A changed "Talk to me" reaches the agent with its next digest.
           const style = this.person?.style ?? null;
+          const before = this.rt(id).style;
           const restyle =
-            style !== null && this.rt(id).style !== style
-              ? `The person asks agents to write to them this way: ${JSON.stringify(style)}`
-              : '';
+            style === before || (style === null && before === undefined)
+              ? ''
+              : style === null
+                ? 'The person removed their note on how to write to them.'
+                : `The person asks agents to write to them this way: ${JSON.stringify(style)}`;
           // The posts get the room that the rest of the message leaves, so a
           // post that is not shown stays unread.
           const room =
@@ -2213,8 +2219,6 @@ export class Lab {
             this.digestText(agent, events, left, digest.lines, ask, restyle),
           );
           this.rt(id).style = style;
-          // The next digest uses the profile as it is then.
-          void this.readPerson();
           this.begin(id, digest.read);
           if (ask)
             void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(

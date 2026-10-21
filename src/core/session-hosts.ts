@@ -6,7 +6,7 @@ import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { childEnvironment, type HarnessName } from './harness.ts';
-import { pickCodexModel } from './models.ts';
+import { listCodexModels, pickCodexModel } from './models.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
@@ -1367,22 +1367,9 @@ function codex(options: HostOptions): HostSession {
    * capable model. A refused list starts it with the person's own model.
    */
   function chooseModel(config: Record<string, unknown>): void {
-    const models: unknown[] = [];
-    const page = (cursor: string | undefined, pages: number): void =>
-      call(
-        'model/list',
-        { limit: 100, ...(cursor ? { cursor } : {}) },
-        (result) => {
-          if (Array.isArray(result.data))
-            models.push(...(result.data as unknown[]));
-          const next = str(result.nextCursor);
-          // A list that never ends still starts the thread.
-          if (next && pages < 10) page(next, pages + 1);
-          else startThread(config, pickCodexModel(models));
-        },
-        () => startThread(config, undefined),
-      );
-    page(undefined, 1);
+    listCodexModels(call, (models) =>
+      startThread(config, models ? pickCodexModel(models) : undefined),
+    );
   }
 
   /** Start or resume the thread with the configuration that turns off the user's MCP servers. */

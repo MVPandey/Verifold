@@ -187,7 +187,8 @@ export function AboutStep({
   const after =
     (run: { submit: (value: null) => Promise<boolean> }) => (): void =>
       void run.submit(null).then((ok) => ok && refresh());
-  const started = about.lines.length > 1;
+  // A card, saved or drafted, can also be replaced by a new conversation.
+  const started = about.lines.length > 1 || about.card !== null;
   if (about.saved === 'text' && about.text && !started && !fresh)
     return (
       <>

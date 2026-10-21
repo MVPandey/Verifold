@@ -50,7 +50,7 @@ import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import {
   agencyDirectory,
   loadSettings,
-  personProfile,
+  profileReader,
 } from '../core/agency.ts';
 import {
   hostName,
@@ -791,7 +791,7 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
-      // The person's profile, read again for each prompt, so an edit reaches the agents.
+      // The person's profile, read for each prompt when it changed, so an edit reaches the agents.
       const agency = run.agency ?? agencyDirectory(root);
       // The lab's agents share the worker slots with tasks and plain sessions.
       const lab = new Lab(root, {
@@ -805,7 +805,7 @@ async function serveDesk(
             await loadWorkspace(root).catch(() => null),
             (await loadSettings(agency).catch(() => null))?.agency,
           ),
-        person: () => personProfile(agency),
+        person: profileReader(agency),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);
@@ -1246,6 +1246,8 @@ async function runOwner(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
   const { research, desk, lab, agency } = ownerStart(input);
+  // The profile that the lab reads. A terminal that attaches with another one hears so.
+  const profile = agency ?? agencyDirectory(root);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
   let early: { readonly progress: string; readonly feed?: true }[] | null = [];
@@ -1273,7 +1275,8 @@ async function runOwner(
     attached: (send) => {
       for (const message of early ?? []) send(message);
       early = null;
-      if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
+      if (url)
+        send({ url, ...(appUrl ? { app: appUrl } : {}), agency: profile });
       // A screen is fresh only while the watch runs for another terminal.
       if (unfollow && screen !== undefined) send({ screen });
       else watch();
@@ -1321,7 +1324,11 @@ async function runOwner(
                 'app' in shown && typeof shown.app === 'string'
                   ? shown.app
                   : undefined;
-              server.send({ url, ...(appUrl ? { app: appUrl } : {}) });
+              server.send({
+                url,
+                ...(appUrl ? { app: appUrl } : {}),
+                agency: profile,
+              });
             }
           } catch {
             /* Only the desk URL is output. */
@@ -1357,7 +1364,7 @@ async function runOwner(
         research,
         harness,
         lab,
-        ...(agency ? { agency } : {}),
+        agency: profile,
         owner: { control, keys: io.background.keys, desk },
       },
     );
@@ -1455,6 +1462,12 @@ async function attachTeam(
       else if ('screen' in message) io.screens?.show?.(message.screen, true);
       else if ('url' in message && !shown) {
         shown = true;
+        // An owner that ran already keeps the profile that it started with.
+        const wanted = start.agency ?? agencyDirectory(root);
+        if (message.agency && message.agency !== wanted)
+          io.progress?.(
+            `The running Verifold uses the profile in ${message.agency}, so stop it with verifold stop to use another.`,
+          );
         const app = start.app ? message.app : undefined;
         io.out(
           JSON.stringify({

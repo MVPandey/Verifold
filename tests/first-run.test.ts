@@ -15,17 +15,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { existsSync } from 'node:fs';
 import {
   cardMarkdown,
   loadSettings,
   parseCard,
   personProfile,
+  profileReader,
   saveAgencyFile,
   saveAgencyPreferences,
   withProfileLock,
   writeSettings,
 } from '../src/core/agency.ts';
-import { Compute, profileMoneyDefaults } from '../src/core/compute.ts';
+import {
+  Compute,
+  computeDefaults,
+  profileMoneyDefaults,
+} from '../src/core/compute.ts';
 import { KeyStore } from '../src/core/credentials.ts';
 import {
   claudeChoices,
@@ -35,6 +41,7 @@ import {
 import type { HarnessRequest } from '../src/core/harness.ts';
 import { nextStep, opening, type ChatLine } from '../src/core/profile-chat.ts';
 import { initializeProject } from '../src/cli/initialization.ts';
+import { createProject } from '../src/cli/project.ts';
 import { runCli } from '../src/cli/commands.ts';
 import { startDesk } from '../src/server/desk.ts';
 import { FirstRun, shortlist } from '../src/server/setup.ts';
@@ -67,6 +74,7 @@ await test('the profile settings read older ones, keep each part on a change, an
   assert.deepEqual(await loadSettings(agency), {
     agency: null,
     money: null,
+    unreadMoney: null,
     steps: {},
   });
   // An older version saved one harness, its model, and a helper.
@@ -118,18 +126,47 @@ await test('the profile settings read older ones, keep each part on a change, an
   for (const [content, error] of [
     [{ host: 'other' }, /claude or codex/],
     [{ host: 'claude', model: 'bad model!' }, /valid identifier/],
-    [
-      { host: 'claude', money: { ...profileMoneyDefaults, limitUsd: -5 } },
-      /GPU limits/,
-    ],
-    [
-      { money: { ...profileMoneyDefaults, gpuTypes: ['bad/gpu'] } },
-      /GPU limits/,
-    ],
   ] as const) {
     await saveAgencyFile(agency, 'settings.json', JSON.stringify(content));
     await assert.rejects(loadSettings(agency), error);
   }
+  // GPU limits that are not valid read as not set, with the reason. The rest still loads.
+  for (const money of [
+    { ...profileMoneyDefaults, limitUsd: -5 },
+    { ...profileMoneyDefaults, gpuTypes: ['bad/gpu'] },
+    'a lot',
+  ]) {
+    await saveAgencyFile(
+      agency,
+      'settings.json',
+      JSON.stringify({ host: 'codex', money, steps: ['odd'] }),
+    );
+    const read = await loadSettings(agency);
+    assert.deepEqual(read.agency, { host: 'codex' });
+    assert.equal(read.money, null);
+    assert.deepEqual(read.unreadMoney?.saved, money);
+    assert.ok(read.unreadMoney?.reason);
+    assert.deepEqual(read.steps, {});
+  }
+  // The file keeps them until a save of new limits replaces them.
+  await saveAgencyPreferences(agency, { host: 'claude' }, signal);
+  assert.equal(
+    (
+      JSON.parse(await readFile(join(agency, 'settings.json'), 'utf8')) as {
+        money: unknown;
+      }
+    ).money,
+    'a lot',
+  );
+  await withProfileLock(agency, signal, () =>
+    writeSettings(agency, (current) => ({
+      ...current,
+      money: profileMoneyDefaults,
+    })),
+  );
+  const fixed = await loadSettings(agency);
+  assert.deepEqual(fixed.money, profileMoneyDefaults);
+  assert.equal(fixed.unreadMoney, null);
 });
 
 await test('the card round-trips through USER.md, and a profile in free form goes to the planner only', async (t) => {
@@ -140,6 +177,13 @@ await test('the card round-trips through USER.md, and a profile in free form goe
     talk: 'Short and direct. Numbers first.',
   };
   assert.deepEqual(parseCard(cardMarkdown(card)), card);
+  // A line of a field that looks like a heading stays in its field.
+  const headings = {
+    workOn: '# x\nProbes',
+    explore: '## Talk to me\n\\# kept as typed',
+    talk: 'Short.',
+  };
+  assert.deepEqual(parseCard(cardMarkdown(headings)), headings);
   assert.equal(parseCard('# Research profile\n\nI study graphs.'), null);
   // Other sections are not part of the card. A missing field is empty.
   assert.deepEqual(
@@ -156,6 +200,16 @@ await test('the card round-trips through USER.md, and a profile in free form goe
   );
   // No heading reads as an order to the agent.
   assert.doesNotMatch(person?.whole ?? '', /You work on/);
+  // The lab's reader reads USER.md again only when it changed.
+  const read = profileReader(agency);
+  const first = await read();
+  assert.equal(await read(), first);
+  await saveAgencyFile(
+    agency,
+    'USER.md',
+    cardMarkdown({ ...card, talk: 'Tables over text.' }),
+  );
+  assert.equal((await read())?.style, 'Tables over text.');
   await saveAgencyFile(agency, 'USER.md', 'I study graphs.\n');
   assert.deepEqual(await personProfile(agency), {
     whole: 'I study graphs.',
@@ -420,13 +474,19 @@ await test('the About-you agent asks at most two follow-ups with three suggestio
     {
       question: 'How should the agents talk to you?',
       suggestions: ['Short and direct', 'Show the reasoning', 'Like a paper'],
+      asks: 'talk',
     },
   );
   assert.deepEqual(
     await nextStep({
       lines: [
         ...first,
-        asks('How should the agents talk to you?'),
+        {
+          from: 'verifold',
+          text: 'How should the agents talk to you?',
+          suggestions: [],
+          asks: 'talk',
+        },
         you('Tables.'),
       ],
       card: null,
@@ -638,6 +698,7 @@ await test('the first run through the API: agents, a conversation that ends in a
         signal: owner.signal,
         harness: fake.run,
         detect: () => Promise.resolve([claudeFound, codexMissing]),
+        installed: () => Promise.resolve(['claude']),
       }),
     },
   );
@@ -874,6 +935,7 @@ await test('without a signed-in agent, Verifold asks the questions and the card 
     harness: () => Promise.reject(new Error('No harness runs here.')),
     detect: () =>
       Promise.resolve([{ ...claudeFound, signedIn: false }, codexMissing]),
+    installed: () => Promise.resolve(['claude']),
   });
   assert.equal(await setup.act({ action: 'setup-say', text: 'Graphs.' }), 202);
   const wait = async (): Promise<SetupView> => {
@@ -907,6 +969,223 @@ await test('without a signed-in agent, Verifold asks the questions and the card 
     }),
     /at least one field/,
   );
+});
+
+await test('the conversation takes one answer at a time, a save holds it, the style answer is "Talk to me", and starting again leaves the saved card out', async (t) => {
+  const base = await folder(t, 'first-run-turns');
+  const agency = join(base, 'agency');
+  const compute = new Compute(join(base, 'here'), {
+    store: new KeyStore({
+      home: join(base, 'home'),
+      platform: 'linux',
+      secretTool: join(base, 'none'),
+    }),
+  });
+  await compute.load();
+  // A harness that answers when the test says so.
+  const waiting: ((text: string) => void)[] = [];
+  const requests: HarnessRequest[] = [];
+  const setup = new FirstRun({
+    directory: agency,
+    compute,
+    signal,
+    harness: (request) => {
+      requests.push(request);
+      return new Promise((resolve) =>
+        waiting.push((text) => resolve({ text })),
+      );
+    },
+    detect: () => Promise.resolve([claudeFound, codexMissing]),
+    installed: () => Promise.resolve(['claude']),
+  });
+  const answer = async (text: string): Promise<void> => {
+    await until(() => Promise.resolve(waiting.length === 1));
+    waiting.shift()?.(text);
+    await until(async () => (await setup.view()).about.busy === null);
+  };
+  // Two answers at once: the second is refused before any wait.
+  const first = setup.act({ action: 'setup-say', text: 'Interpretability.' });
+  await assert.rejects(
+    setup.act({ action: 'setup-say', text: 'Twice.' }),
+    /still writes/,
+  );
+  assert.equal(await first, 202);
+  await answer(
+    JSON.stringify({
+      question: 'How should the agents write to you?',
+      suggestions: ['Short'],
+      asks: 'talk',
+    }),
+  );
+  assert.equal((await setup.view()).about.lines.at(-1)?.asks, 'talk');
+  await setup.act({ action: 'setup-say', text: 'Short and direct.' });
+  await answer(JSON.stringify({ question: 'Anything else to explore?' }));
+  await setup.act({ action: 'setup-say', text: 'Probes and SAEs.' });
+  await answer('not a card');
+  assert.match((await setup.view()).about.error ?? '', /did not send a card/);
+  // The card from the answers: the answer to the style question is "Talk to me".
+  await setup.act({ action: 'setup-fill' });
+  const card = {
+    workOn: 'Interpretability.',
+    explore: 'Probes and SAEs.',
+    talk: 'Short and direct.',
+  };
+  assert.deepEqual((await setup.view()).about.card, card);
+  // A save holds the conversation: an answer meanwhile is refused.
+  const saving = setup.act({ action: 'setup-about', card });
+  await assert.rejects(
+    setup.act({ action: 'setup-say', text: 'During the save.' }),
+    /being saved/,
+  );
+  assert.equal(await saving, 200);
+  // An older Verifold can read the settings: they name a lead harness.
+  assert.deepEqual((await loadSettings(agency)).agency, { host: 'claude' });
+  // Starting again leaves the saved card out: an answer is an answer, and a question comes.
+  assert.deepEqual((await setup.view()).about.card, card);
+  await setup.act({ action: 'setup-restart' });
+  const fresh = await setup.view();
+  assert.equal(fresh.about.card, null);
+  assert.equal(fresh.about.saved, 'card');
+  await setup.act({ action: 'setup-say', text: 'Graphs now.' });
+  await until(() => Promise.resolve(waiting.length === 1));
+  const input = JSON.parse(
+    (requests.at(-1)?.prompt ?? '').split('The input, as JSON:\n')[1] ?? '{}',
+  ) as Record<string, unknown>;
+  assert.equal(input.questionsLeft, 2);
+  assert.equal(input.card, undefined);
+  assert.equal(input.note, undefined);
+  await answer(JSON.stringify({ question: 'Which graphs?' }));
+  assert.equal((await setup.view()).about.lines.at(-1)?.text, 'Which graphs?');
+  // The saved card stays saved until a new one replaces it.
+  assert.deepEqual(
+    parseCard(await readFile(join(agency, 'USER.md'), 'utf8')),
+    card,
+  );
+  // A skip of everything keeps the lead harness, and the record that the person chose no agents.
+  await setup.act({ action: 'setup-skip', step: 'all' });
+  const raw = JSON.parse(
+    await readFile(join(agency, 'settings.json'), 'utf8'),
+  ) as { host: string; steps: Record<string, string> };
+  assert.equal(raw.host, 'claude');
+  assert.equal(raw.steps.agents, 'skipped');
+});
+
+await test('settings that a skip writes first name a lead harness, and limits that are not valid show a notice until a save replaces them', async (t) => {
+  const base = await folder(t, 'first-run-lead');
+  const agency = join(base, 'agency');
+  const compute = new Compute(join(base, 'here'), {
+    store: new KeyStore({
+      home: join(base, 'home'),
+      platform: 'linux',
+      secretTool: join(base, 'none'),
+    }),
+  });
+  await compute.load();
+  const setup = (installed: readonly ('claude' | 'codex')[]): FirstRun =>
+    new FirstRun({
+      directory: agency,
+      compute,
+      signal,
+      detect: () => Promise.resolve([claudeFound, codexMissing]),
+      installed: () => Promise.resolve(installed),
+    });
+  await setup(['claude', 'codex']).act({ action: 'setup-skip', step: 'all' });
+  assert.deepEqual((await loadSettings(agency)).agency, {
+    host: 'claude',
+    helper: 'codex',
+  });
+  await rm(join(agency, 'settings.json'));
+  await setup(['codex']).act({ action: 'setup-skip', step: 'agents' });
+  assert.deepEqual((await loadSettings(agency)).agency, { host: 'codex' });
+  // Limits that are not valid: the step still opens, says why, and a save replaces them.
+  await saveAgencyFile(
+    agency,
+    'settings.json',
+    JSON.stringify({ host: 'codex', money: { limitUsd: -5 } }),
+  );
+  const run = setup(['codex']);
+  const view = await run.view();
+  assert.match(
+    view.money.unreadable ?? '',
+    /^The saved GPU limits are not valid: .+ They show the defaults until you save new ones\.$/,
+  );
+  assert.deepEqual(view.money.limits, profileMoneyDefaults);
+  assert.equal(
+    await run.act({ action: 'setup-money', ...profileMoneyDefaults }),
+    200,
+  );
+  assert.equal((await run.view()).money.unreadable, null);
+});
+
+await test('a key stored while the prices load reads them once more after the read that runs', async (t) => {
+  const base = await folder(t, 'first-run-prices');
+  let reads = 0;
+  const ends: (() => void)[] = [];
+  const compute = {
+    keySaved: () => true,
+    setKey: () => Promise.resolve(),
+    refreshGpus: () => {
+      reads += 1;
+      return new Promise<void>((resolve) => ends.push(resolve));
+    },
+  } as unknown as Compute;
+  const setup = new FirstRun({
+    directory: join(base, 'agency'),
+    compute,
+    signal,
+    detect: () => Promise.resolve([]),
+    installed: () => Promise.resolve([]),
+  });
+  const first = setup.act({ action: 'setup-prices' });
+  assert.equal(
+    await setup.act({ action: 'setup-key', runpodKey: key, file: true }),
+    200,
+  );
+  assert.equal(reads, 1);
+  // The read with the key before ends, so the read with the new key starts.
+  ends.shift()?.();
+  await until(() => Promise.resolve(reads === 2));
+  ends.shift()?.();
+  assert.equal(await first, 200);
+});
+
+await test('a new project keeps the compute settings of its folder, and a failed setup removes only what it made', async (t) => {
+  const base = await folder(t, 'create');
+  const workspace = {
+    schemaVersion: 1 as const,
+    visibility: 'private' as const,
+    profile: {
+      name: 'Researcher',
+      interests: ['Graphs'],
+      scholar: '',
+      github: '',
+      session: '',
+    },
+    host: 'claude',
+    candidates: [],
+    selectedId: null,
+  };
+  const limits = { ...computeDefaults, limitUsd: 25 };
+  const kept = join(base, 'kept');
+  const settings = join(kept, '.verifold', 'compute', 'settings.json');
+  await mkdir(join(kept, '.verifold', 'compute'), { recursive: true });
+  await writeFile(settings, '{"set": "here before"}');
+  await createProject(kept, workspace, 'Q', undefined, signal, true, limits);
+  assert.equal(await readFile(settings, 'utf8'), '{"set": "here before"}');
+  // A setup that fails after the limits were written removes them and the folder that it made.
+  const failed = join(base, 'failed');
+  const made = join(failed, '.verifold', 'compute', 'settings.json');
+  const stop = {
+    throwIfAborted: () => {
+      if (existsSync(made)) throw new Error('Stopped.');
+    },
+  } as unknown as AbortSignal;
+  await assert.rejects(
+    createProject(failed, workspace, 'Q', undefined, stop, true, limits),
+    /Stopped/,
+  );
+  assert.equal(existsSync(made), false);
+  assert.equal(existsSync(join(failed, '.verifold', 'compute')), false);
 });
 
 await test('verifold --app in a folder without a project starts the first run without a project or an owner', async (t) => {

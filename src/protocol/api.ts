@@ -806,6 +806,8 @@ export interface ChatLine {
   readonly text: string;
   /** Answers that the asker suggests. */
   readonly suggestions: readonly string[];
+  /** `talk`: the question asks how agents should write to the person. */
+  readonly asks?: 'talk';
 }
 
 /** The profile card. Each field can be empty. */
@@ -878,6 +880,8 @@ export interface SetupMoney {
   readonly problem: string | null;
   /** The saved limits, or the defaults before a save. */
   readonly limits: MoneyLimits;
+  /** Why the saved limits are not valid. The defaults show until a save replaces them. */
+  readonly unreadable?: string | null;
 }
 
 /**
