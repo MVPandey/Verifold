@@ -36,6 +36,8 @@ export function labActions(token: string | null): LabActions {
       answer: signedOut,
       words: signedOut,
       undo: signedOut,
+      skip: signedOut,
+      questions: signedOut,
     };
   return {
     post: (text, key) => act(token, 'lab-post', { text }, key),
@@ -46,6 +48,9 @@ export function labActions(token: string | null): LabActions {
     words: (call, text, key) =>
       act(token, 'lab-call-words', { call, text }, key),
     undo: (call, key) => act(token, 'lab-call-undo', { call }, key),
+    skip: (key) => act(token, 'lab-skip-questions', {}, key),
+    questions: (answers, key) =>
+      act(token, 'lab-questions-answer', { answers }, key),
   };
 }
 

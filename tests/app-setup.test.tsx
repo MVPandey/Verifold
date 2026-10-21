@@ -435,9 +435,18 @@ await test('after the last step, each step says done or skipped, with a way to c
     done,
     /Your agents Done Change About you Skipped Set it up Skills Not yet Set it up GPU money Done Change/,
   );
+  // Without a project, the first run ends on the Ask page.
+  assert.match(done, /Ask your question/);
   assert.match(
-    done,
-    /press Ctrl\+C in the terminal, then run verifold in this folder without --app/,
+    renderToStaticMarkup(
+      <DoneStep
+        view={view({
+          steps: { agents: 'done', about: 'skipped', money: 'done' },
+        })}
+        project=""
+      />,
+    ),
+    /href="#\/ask"/,
   );
   const set = text(
     <DoneStep

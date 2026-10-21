@@ -133,19 +133,24 @@ export function profileModel(
 
 /**
  * The model of a lab agent, planner, or checker. A project model for the
- * project's main harness wins, then the model that the person's profile
- * picked for the harness. Otherwise Claude Code gets `claudeModel`, and
- * Codex gets null: it picks its most capable model on its own app-server.
+ * harness wins, then the model that the person's profile picked for the
+ * harness. Otherwise Claude Code gets `claudeModel`, and Codex gets null: it
+ * picks its most capable model on its own app-server.
  */
 export async function labModel(
   host: HarnessName,
-  workspace: Pick<Workspace, 'host' | 'model'> | null,
+  workspace: Pick<
+    Workspace,
+    'host' | 'model' | 'helper' | 'helperModel'
+  > | null,
   agency: Pick<
     Agency,
     'host' | 'model' | 'helper' | 'helperModel'
   > | null = null,
 ): Promise<string | null> {
   if (workspace?.host === host && workspace.model) return workspace.model;
+  if (workspace?.helper === host && workspace.helperModel)
+    return workspace.helperModel;
   const picked = profileModel(host, agency);
   if (picked) return picked;
   return host === 'claude' ? claudeModel() : null;

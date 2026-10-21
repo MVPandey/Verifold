@@ -192,10 +192,6 @@
   gap: 3px;
 }
 
-.call__fact-source {
-  color: var(--muted);
-}
-
 .call__sent {
   margin: 0;
   font-size: 14px;

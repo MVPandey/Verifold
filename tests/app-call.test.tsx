@@ -212,6 +212,8 @@ const actions: LabActions = {
   answer: ok,
   words: ok,
   undo: ok,
+  skip: ok,
+  questions: ok,
 };
 
 function render(state: Snapshot, hash = '#/call/c-4'): string {
@@ -305,7 +307,7 @@ await test('the call opens as a modal dialog over the lab: who asked and when, t
   );
   assert.match(
     page,
-    /H100 \$3\.99\/h, A100 \$1\.79\/h · https:\/\/www\.runpod\.io\/pricing, 2026-10-08/,
+    /H100 \$3\.99\/h, A100 \$1\.79\/h · runpod\.io\/pricing · 2026-10-08/,
   );
   assert.match(
     page,

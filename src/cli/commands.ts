@@ -34,6 +34,7 @@ import { installedHarnesses, runHarness } from '../core/harness.ts';
 import { nextResearchAction } from '../desk/desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
+import { askStart, type Begun } from './ask-start.ts';
 import { FirstRun } from '../server/setup.ts';
 import { pluginsHome, skillLoader } from '../core/skills.ts';
 import { TaskManager } from '../legacy/tasks.ts';
@@ -502,6 +503,10 @@ interface DeskRun {
   readonly app?: boolean;
   /** The folder of the person's profile. Default: `~/.verifold/agency`. */
   readonly agency?: string;
+  /** The time budget, in hours, of a lab that starts on `research`. */
+  readonly hours?: number | undefined;
+  /** Open the desk on this port, with this token, so the tab of a closed desk keeps working. */
+  readonly reuse?: DeskPlace | undefined;
   /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
   readonly owner?: {
     readonly control: Control;
@@ -902,7 +907,7 @@ async function serveDesk(
             memory,
             {
               stop: () => quit.abort(),
-              reuse: run.owner?.desk,
+              reuse: run.owner?.desk ?? run.reuse,
               lab,
               // The app opens the first run here too, to change the profile.
               firstRun: new FirstRun({
@@ -943,7 +948,8 @@ async function serveDesk(
             'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
           );
         // The question of setup starts a lab: the lab is the default. --lab still starts one in a project that exists.
-        if (research || run.lab) await startLab(root, lab, research ?? {}, io);
+        if (research || run.lab)
+          await startLab(root, lab, research ?? {}, io, run.hours);
         io.listen?.(
           (line) =>
             terminalInput(sessions, line, io, {
@@ -1036,8 +1042,10 @@ async function serveDesk(
 }
 /**
  * `verifold --app` in a folder without a project: the app with no project,
- * for the first run. No owner starts, because no project exists yet. Ctrl+C
- * stops it.
+ * for the first run and the Ask page. No owner starts until the person asks
+ * a question. Then the desk closes, and the new project comes back with the
+ * desk's port and token, so a background owner takes over and the open tab
+ * keeps working. Ctrl+C stops it, and returns nothing.
  */
 async function serveStart(
   root: string,
@@ -1049,13 +1057,17 @@ async function serveStart(
     readonly agency: string;
     readonly harness: typeof runHarness;
   },
-): Promise<void> {
+): Promise<(Begun & { readonly desk: DeskPlace }) | undefined> {
   // The RunPod key belongs to this computer, so the first run stores it without a project.
   const compute = computeFor(root, io);
   await compute.load();
+  // The desk closes after the person starts a project.
+  const handed = new AbortController();
+  const deskSignal = AbortSignal.any([signal, handed.signal]);
+  const ask = askStart({ root, agency: run.agency, signal: deskSignal });
   const desk = await startDesk(
     null,
-    signal,
+    deskSignal,
     io.deskAssets,
     undefined,
     undefined,
@@ -1068,9 +1080,10 @@ async function serveStart(
       firstRun: new FirstRun({
         directory: run.agency,
         compute,
-        signal,
+        signal: deskSignal,
         harness: run.harness,
       }),
+      start: ask.start,
       ...(io.appAssets ? { appRoot: io.appAssets } : {}),
     },
   );
@@ -1111,8 +1124,25 @@ async function serveStart(
       io.progress?.(
         'Set up Verifold in the app. Type /app to open it again. Ctrl+C stops it.',
       );
-  }, signal);
+  }, deskSignal);
+  const begun = await Promise.race([
+    ask.begun,
+    desk.closed.then(() => undefined),
+  ]);
+  if (!begun) return undefined;
+  // ponytail: a short wait lets the answer to the start reach the page before the desk drops its connections. The page waits for the new desk either way.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const place = new URL(desk.url);
+  handed.abort();
   await desk.closed;
+  return {
+    ...begun,
+    desk: {
+      port: Number(place.port),
+      token: place.hash.slice(1),
+      pages: Number(new URL(desk.pages).port),
+    },
+  };
 }
 
 /** Status lines of the background owner in `.verifold/owner.log`, with the time. Over about 1 MB, the log moves to owner.log.1. */
@@ -1147,6 +1177,7 @@ async function startLab(
   lab: Lab,
   research: ResearchOptions,
   io: CliIO,
+  hours?: number,
 ): Promise<void> {
   if (lab.exists) {
     io.progress?.(
@@ -1163,7 +1194,13 @@ async function startLab(
       return;
     }
     // The same start as the desk's: the setup question stays with the project.
-    const planned = await startLabOn(root, lab, asked, research.autonomy);
+    const planned = await startLabOn(
+      root,
+      lab,
+      asked,
+      research.autonomy,
+      hours,
+    );
     io.progress?.(
       planned
         ? 'The lab started. Its first agent reads the question and posts a plan on the board in the desk.'
@@ -1182,6 +1219,7 @@ function ownerStart(value: unknown): {
   readonly desk: DeskPlace | undefined;
   readonly lab: boolean;
   readonly agency: string | undefined;
+  readonly hours: number | undefined;
 } {
   const data = (value ?? {}) as Record<string, unknown>;
   const research = (data.research ?? null) as Record<string, unknown> | null;
@@ -1225,6 +1263,11 @@ function ownerStart(value: unknown): {
       data.agency.length <= 4096
         ? data.agency
         : undefined,
+    // The time budget from the Ask page. The lab checks it again.
+    hours:
+      Number.isSafeInteger(data.hours) && (data.hours as number) > 0
+        ? (data.hours as number)
+        : undefined,
   };
 }
 
@@ -1251,7 +1294,7 @@ async function runOwner(
     throw new Error(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
-  const { research, desk, lab, agency } = ownerStart(input);
+  const { research, desk, lab, agency, hours } = ownerStart(input);
   // The profile that the lab reads. A terminal that attaches with another one hears so.
   const profile = agency ?? agencyDirectory(root);
   const quit = new AbortController();
@@ -1368,6 +1411,7 @@ async function runOwner(
       {
         noOpen: true,
         research,
+        hours,
         harness,
         lab,
         agency: profile,
@@ -1423,6 +1467,8 @@ async function attachTeam(
     readonly app?: boolean;
     /** The profile folder of `--agency-dir`. */
     readonly agency?: string | undefined;
+    /** The time budget, in hours, of the lab that starts on `research`. */
+    readonly hours?: number | undefined;
   },
 ): Promise<void> {
   const running = await liveOwner(root);
@@ -1449,6 +1495,7 @@ async function attachTeam(
           ...(start.desk ? { desk: start.desk } : {}),
           ...(start.lab ? { lab: true } : {}),
           ...(start.agency ? { agency: start.agency } : {}),
+          ...(start.hours ? { hours: start.hours } : {}),
         }),
       );
     } catch (error) {
@@ -1485,7 +1532,9 @@ async function attachTeam(
         );
         // After setup, the open tab moves to the background owner when it got the same port.
         if (start.desk && new URL(message.url).port === String(start.desk.port))
-          io.progress?.('The desk in your browser now shows the project.');
+          io.progress?.(
+            `The ${start.app ? 'app' : 'desk'} in your browser now shows the project.`,
+          );
         else if (start.noOpen)
           io.progress?.(
             app
@@ -2016,11 +2065,39 @@ export async function runCli(
         throw new Error(
           `--app opens the first run in the app, where you choose the rest. Run it without --${extra}.`,
         );
-      await serveStart(root, io, signal, {
+      const agency = agencyDirectory(cwd, values['agency-dir']);
+      const begun = await serveStart(root, io, signal, {
         noOpen: values['no-open'] ?? false,
-        agency: agencyDirectory(cwd, values['agency-dir']),
+        agency,
         harness,
       });
+      if (!begun) return;
+      io.progress?.(`The project is in ${begun.root}. Its lab starts now.`);
+      const research = {
+        topic: begun.question,
+        autonomy: 'autonomous' as const,
+      };
+      // The new project goes to a background owner on the same port and token, so the tab keeps working.
+      const background = io.interactive ? io.background : undefined;
+      if (background)
+        await attachTeam(begun.root, io, signal, background, {
+          noOpen: false,
+          research,
+          desk: begun.desk,
+          app: true,
+          agency,
+          hours: begun.hours,
+        });
+      else
+        await serveDesk(begun.root, io, signal, {
+          noOpen: true,
+          research,
+          hours: begun.hours,
+          harness,
+          app: true,
+          agency,
+          reuse: begun.desk,
+        });
       return;
     }
     const options: InitializationOptions = {

@@ -10,7 +10,8 @@ import type { SetupPage } from './setup.ts';
  * own page, with its replies. `#/d/<id>/run/<run>` is a direction's page
  * with a run marked in the turn that started it. The first run is
  * `#/setup/<step>`, and `#/setup` opens its first step without a record.
- * Any other fragment is a page that does not exist.
+ * `#/ask` asks the question of a new project, while Verifold runs without
+ * one. Any other fragment is a page that does not exist.
  */
 export type Route =
   | {
@@ -38,6 +39,7 @@ export type Route =
       /** Null: the first step without a record, or the end. */
       readonly step: SetupPage | null;
     }
+  | { readonly page: 'ask' }
   | { readonly page: 'unknown' };
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
@@ -75,6 +77,7 @@ export function parseRoute(hash: string): Route {
       : { page: 'unknown' };
   }
   if (path === '/answer') return { page: 'answer' };
+  if (path === '/ask') return { page: 'ask' };
   if (path === '/setup') return { page: 'setup', step: null };
   const setup = /^\/setup\/(agents|about|skills|money|done)$/.exec(path)?.[1];
   if (setup) return { page: 'setup', step: setup as SetupPage };
@@ -94,6 +97,7 @@ export const href = {
   run: (direction: string, run: string): string =>
     `#/d/${direction}/run/${run}`,
   setup: (step?: SetupPage): string => (step ? `#/setup/${step}` : '#/setup'),
+  ask: '#/ask',
 } as const;
 
 /**
