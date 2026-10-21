@@ -130,11 +130,18 @@ const call: Call = {
       label: 'Rent 1 H100 for 3 hours',
       usd: 11.97,
       minutes: 180,
-      effect: { type: 'pod', gpu: 'H100 SXM', hours: 3, secrets: 0 },
+      effect: {
+        type: 'pod',
+        gpu: 'H100 SXM',
+        hours: 3,
+        secrets: 0,
+        missing: 0,
+      },
     },
     { label: 'Use this Mac', usd: 0, minutes: 540, effect: null },
   ],
   pick: 0,
+  undoMinutes: 10,
   state: 'open',
   answer: null,
   words: null,
@@ -277,6 +284,9 @@ function story(fields: Partial<Lab> = {}): Snapshot {
 const actions: LabActions = {
   post: () => Promise.resolve({ ok: true }),
   pause: () => Promise.resolve({ ok: true }),
+  answer: () => Promise.resolve({ ok: true }),
+  words: () => Promise.resolve({ ok: true }),
+  undo: () => Promise.resolve({ ok: true }),
 };
 
 function render(
@@ -659,7 +669,7 @@ await test('routes: the pages that later steps build, and pages that do not exis
   assert.deepEqual(parseRoute(''), { page: 'lab' });
   assert.deepEqual(parseRoute('#/'), { page: 'lab' });
   assert.deepEqual(parseRoute('#/d/d-2'), { page: 'direction' });
-  assert.deepEqual(parseRoute('#/call/c-4'), { page: 'call' });
+  assert.deepEqual(parseRoute('#/call/c-4'), { page: 'call', id: 'c-4' });
   assert.deepEqual(parseRoute('#/answer'), { page: 'answer' });
   assert.deepEqual(parseRoute('#/first-run'), { page: 'first-run' });
   for (const hash of [

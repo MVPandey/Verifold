@@ -65,9 +65,12 @@ export function Warning(): ReactNode {
   );
 }
 
-export function Cross(): ReactNode {
+export function Cross({
+  size = 15,
+  width = 2.6,
+}: { readonly size?: number; readonly width?: number } = {}): ReactNode {
   return (
-    <Icon size={15} width={2.6}>
+    <Icon size={size} width={width}>
       <path d="M6 6l12 12M18 6L6 18" />
     </Icon>
   );

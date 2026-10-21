@@ -733,7 +733,9 @@ await test('the snapshot holds what the screens show, and no internal field, key
     since: at(50),
     spentThen: { plansUsd: 1.25, gpuUsd: 0 },
   });
-  // The open call names every asker, and a pod option counts its secrets.
+  // The open call names every asker, and a pod option counts its secrets
+  // and the ones this computer does not store yet. Its undo window shows
+  // before the person answers.
   const [waiting] = lab.needsYou;
   assert.ok(waiting);
   assert.deepEqual(
@@ -745,7 +747,9 @@ await test('the snapshot holds what the screens show, and no internal field, key
     gpu: 'NVIDIA H100 80GB HBM3',
     hours: 3,
     secrets: 1,
+    missing: 1,
   });
+  assert.equal(waiting.undoMinutes, 10);
   assert.equal(lab.answered[0]?.id, 'c-2');
   assert.equal(lab.answered[0]?.byVerifold, true);
   // The objection to p-2, which a running check takes, makes d-1 disputed.
@@ -818,6 +822,38 @@ await test('the snapshot holds what the screens show, and no internal field, key
     root,
   ])
     assert.equal(json.includes(hidden), false, `the snapshot shows ${hidden}`);
+});
+
+await test('a pod option says how many of its secrets this computer lacks, and storing one updates it', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const missing = async (reader: ApiReader): Promise<unknown> => {
+    const effect = parse(await reader.snapshot()).lab?.needsYou[0]?.options[0]
+      ?.effect;
+    return effect?.type === 'pod' ? effect.missing : 'no pod';
+  };
+  // Without Compute, Verifold cannot tell.
+  assert.equal(await missing(new ApiReader(sources(root, seededView))), null);
+  let secrets: ComputeView['secrets'] = [];
+  const reader = new ApiReader(
+    sources(root, seededView, {
+      compute: { view: () => ({ ...computeView(), secrets }) },
+    }),
+  );
+  assert.equal(await missing(reader), 1);
+  const before = await reader.signal();
+  secrets = [
+    {
+      name: 'RUNPOD_FAKE_SECRET',
+      place: 'keychain',
+      last4: 'cret',
+      savedAt: at(5),
+    },
+  ];
+  // The stored secret is part of the change signal, so a stream pushes the new count.
+  const after = await reader.signal();
+  assert.notDeepEqual(after, before);
+  assert.equal(await missing(reader), 0);
 });
 
 await test('a large lab stays inside the snapshot bound and says that it is trimmed', async (t) => {
@@ -1237,6 +1273,108 @@ async function deskAssets(root: string): Promise<URL> {
   await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   return pathToFileURL(`${assets}/cli/`);
 }
+
+await test('an answer that Verifold accepts and then fails shows why on the call, which is open again', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = seededView();
+  const change = (fields: Partial<Call>): void => {
+    current = {
+      ...current,
+      state: {
+        ...current.state,
+        calls: current.state.calls.map((entry) =>
+          entry.id === 'c-1' ? { ...entry, ...fields } : entry,
+        ),
+      },
+    };
+  };
+  let release = (): void => {};
+  const lab = {
+    runs: true,
+    view: () => current,
+    // As the lab does: the answer is saved, its pod starts outside the
+    // lab's queue, and a failure opens the call again and throws.
+    answerCall: async (_id: unknown, option: unknown) => {
+      change({
+        state: 'answered',
+        answer: { option: Number(option), at: at(50) },
+      });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      change({ state: 'open', answer: null });
+      throw new Error('RunPod has no H100 free now.');
+    },
+  } as unknown as Lab;
+  const sessions = {
+    view: () => null,
+    views: () => [],
+  } as unknown as SessionPool;
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    await deskAssets(root),
+    sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab, api: { pollMs: 40, heartbeatMs: 100 } },
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const api = `${url.origin}/api/v1`;
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const snapshot = async (): Promise<Snapshot> =>
+    (await (await fetch(`${api}/snapshot`, { headers })).json()) as Snapshot;
+
+  // The pod takes longer than the desk waits: the answer is accepted (202).
+  const accepted = await fetch(`${api}/actions/lab-call-answer`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ call: 'c-1', option: 0, key: 'a'.repeat(32) }),
+  });
+  assert.equal(accepted.status, 202);
+  assert.deepEqual(await accepted.json(), { ok: true, pending: true });
+  // Meanwhile the call says that its answer is applied, not that it is done.
+  const applying = await snapshot();
+  const saved = applying.lab?.answered.find((entry) => entry.id === 'c-1');
+  assert.equal(saved?.applying, true);
+  assert.equal(saved?.undoUntil, null);
+
+  release();
+  let failed: Snapshot | undefined;
+  await until(() => {
+    void snapshot().then((value) => {
+      failed = value;
+    });
+    return Boolean(failed?.lab?.works.some((work) => work.error));
+  });
+  const lab2 = failed?.lab;
+  assert.ok(lab2);
+  // The failure names its call and option, and the call waits again.
+  assert.deepEqual(
+    lab2.works.find((work) => work.error),
+    {
+      action: 'lab-call-answer',
+      label: 'Applying your answer',
+      at: lab2.works.find((work) => work.error)?.at,
+      error: 'RunPod has no H100 free now.',
+      call: 'c-1',
+      option: 0,
+    },
+  );
+  assert.equal(lab2.needsYou[0]?.id, 'c-1');
+  assert.equal(lab2.needsYou[0]?.state, 'open');
+  assert.equal(lab2.needsYou[0]?.applying, false);
+});
 
 await test('the API needs the token, pushes one snapshot for a burst of changes, pages the board and turns, and runs desk actions', async (t) => {
   // A long command output: a step sends only its last 4 KB.

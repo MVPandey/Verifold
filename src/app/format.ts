@@ -1,9 +1,7 @@
 import type { Asker, Harness } from '../protocol/api.ts';
 
-/** Dollars: whole amounts without cents, others with two decimals. */
-export function usd(value: number): string {
-  return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
-}
+/** Dollars, as the desk and the call words write them: "$25", "$11.97". */
+export { usd } from '../ui/call-words.ts';
 
 const minute = 60_000;
 

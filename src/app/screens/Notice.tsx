@@ -19,7 +19,6 @@ export function Notice({
 
 const later: Record<LaterPage, string> = {
   direction: 'A direction',
-  call: 'A call',
   answer: 'The answer',
   'first-run': 'Setting up',
 };
