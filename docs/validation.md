@@ -4,7 +4,7 @@ Updated 2026-09-11. This document describes required checks and their limits.
 
 ## Repository gate
 
-`make validate` checks for tracked private files, then runs formatting, type-aware ESLint, strict TypeScript, tests, CLI and website builds, and the packed CLI consumer check.
+`make validate` checks for tracked private files, then runs formatting, type-aware ESLint, strict TypeScript, tests, the CLI build, and the packed CLI consumer check.
 
 `npm run check:private` rejects agent research and coordination records in the Git index, including force-staged ignored files. Keep these records under `.local/agents/`. Ordinary public documentation remains in `docs/`.
 
@@ -67,6 +67,6 @@ A successful process exit does not establish valid output. Contract checks must 
 
 Earlier scaffold and request-file checks exercised profile storage, explicit selection, planning handoff, and local HTML output. They did not test live research adapters.
 
-The current website does not host the questionnaire. Earlier browser onboarding checks do not establish the current CLI behavior.
+Earlier browser onboarding checks do not establish the current CLI behavior.
 
 No validation described here establishes production readiness, scientific correctness, Automative execution, cloud synchronization, or publication support.
