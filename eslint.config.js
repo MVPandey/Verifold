@@ -39,7 +39,7 @@ export default tseslint.config(
   // is blocked until a rule allows it. cli may import anything. A marked line
   // names the step of #282 that removes it.
   {
-    files: ['src/core/**/*.ts'],
+    files: ['src/core/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -48,6 +48,41 @@ export default tseslint.config(
             {
               regex: '^\\.\\./(?!core/)',
               message: 'core imports only core.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // A core folder one level down, such as src/core/lab/, reaches the rest of core with ../.
+  {
+    files: ['src/core/*/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./\\.\\./(?!core/)',
+              message: 'core imports only core.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // A deeper core folder has no rule of its own yet, so it may import nothing until one is added.
+  {
+    files: ['src/core/*/*/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '.',
+              message:
+                'core folders nest one level deep. Add a layer rule for a deeper folder.',
             },
           ],
         },
