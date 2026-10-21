@@ -25,8 +25,7 @@
     "node": "^22.0.0 || ^24.0.0 || ^26.0.0"
   },
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "npm run build:cli && tsc --noEmit && vite build",
+    "build": "npm run build:cli && tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
