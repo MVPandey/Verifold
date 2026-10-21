@@ -136,8 +136,9 @@ export function appActions(token: string | null): AppActions {
 
 /**
  * The project's compute operations, as the desk's Compute panel runs them:
- * the pod settings, RunPod's prices, "Agents at once", and the person's
- * actions on a pod. Without a token, each one is refused at once.
+ * the pod settings that the person changed, RunPod's prices, "Agents at
+ * once", the person's actions on a pod, and Dismiss of the pod actions that
+ * failed in the background. Without a token, each one is refused at once.
  */
 export function computeActions(token: string | null): ComputeActions {
   if (!token)
@@ -146,12 +147,15 @@ export function computeActions(token: string | null): ComputeActions {
       prices: signedOut,
       agents: signedOut,
       pod: signedOut,
+      dismiss: signedOut,
     };
   return {
-    save: (settings, key) => act(token, 'compute-settings', settings, key),
+    save: (changes, base, key) =>
+      act(token, 'compute-settings', { ...changes, base }, key),
     prices: (key) => act(token, 'compute-gpus', {}, key),
     agents: (agents, key) => act(token, 'compute-agents', { agents }, key),
     pod: (action, lease, key) =>
       act(token, `compute-lease-${action}`, { lease }, key),
+    dismiss: (key) => act(token, 'compute-dismiss', {}, key),
   };
 }

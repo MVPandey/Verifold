@@ -70,13 +70,44 @@ export function podsLine(compute: ProjectCompute | undefined): string | null {
     : `${shown.length} pods running · ${usd(spentUsd)} so far · ${usd(compute.budget.rateUsd)} an hour`;
 }
 
-/** The GPU rows to show: the common ones and the allowed ones, or every one. */
+/**
+ * The GPU rows to show: the common types and those that the saved settings
+ * allow, then, with `all`, every other type. Each group keeps RunPod's order,
+ * the dearest first. The saved settings decide, so a row does not leave while
+ * the person unticks it.
+ */
 export function shownGpus(
   types: readonly GpuType[],
-  allowed: readonly string[],
+  saved: readonly string[],
   all: boolean,
 ): GpuRow[] {
-  return types.filter((gpu) => all || gpu.common || allowed.includes(gpu.id));
+  const first = (gpu: GpuType): boolean => gpu.common || saved.includes(gpu.id);
+  return [
+    ...types.filter(first),
+    ...(all ? types.filter((gpu) => !first(gpu)) : []),
+  ];
+}
+
+/** Why a pod waits for the person: a missing secret, the person's own rule, or the limits. */
+export function waitReason(pod: PodLease, settings: PodSettings): string {
+  if (pod.missingSecrets.length)
+    return pod.missingSecrets.length === 1
+      ? 'it waits for a secret'
+      : 'it waits for secrets';
+  return settings.askBeforePod
+    ? 'you approve each pod'
+    : 'it does not fit your limits now';
+}
+
+/** The GPU types that agents may rent: the saved ones, with the person's own ticks and unticks on top. */
+export function allowedNow(
+  saved: readonly string[],
+  added: readonly string[],
+  removed: readonly string[],
+): string[] {
+  return [...new Set([...saved, ...added])].filter(
+    (id) => !removed.includes(id),
+  );
 }
 
 /** The pod settings as the person types them. */
@@ -105,38 +136,46 @@ export function settingsText(settings: PodSettings): SettingsText {
   };
 }
 
+const numberFields = [
+  'maxUsdPerHour',
+  'maxHoursPerLease',
+  'idleMinutes',
+  'diskGb',
+] as const;
+
 /**
- * The settings to save from what the person typed, or why they cannot be
- * saved. An empty spend limit turns pods off. Verifold checks the ranges.
+ * The changes to send: each field that the person changed, and the allowed
+ * GPU types when they changed them, or why one cannot be saved. An empty
+ * spend limit turns pods off. Verifold checks the ranges.
  */
-export function settingsOf(
-  text: SettingsText,
-  gpuTypes: readonly string[],
-): PodSettings | string {
-  const numbers = {
-    maxUsdPerHour: numberOf(text.maxUsdPerHour),
-    maxHoursPerLease: numberOf(text.maxHoursPerLease),
-    idleMinutes: numberOf(text.idleMinutes),
-    diskGb: numberOf(text.diskGb),
-  };
-  const limitUsd = numberOf(text.limitUsd);
-  if (
-    Object.values(numbers).some((value) => value === null) ||
-    (limitUsd === null && text.limitUsd.trim())
-  )
-    return 'Give each limit as a number. Leave the spend limit empty to turn pods off.';
-  return {
-    limitUsd,
-    maxUsdPerHour: numbers.maxUsdPerHour ?? 0,
-    maxHoursPerLease: numbers.maxHoursPerLease ?? 0,
-    idleMinutes: numbers.idleMinutes ?? 0,
-    maxRunningPods: text.maxRunningPods === '2' ? 2 : 1,
-    gpuTypes,
-    images: text.images
+export function changesOf(
+  edits: Partial<SettingsText>,
+  gpuTypes: readonly string[] | null,
+): Partial<PodSettings> | string {
+  const changes: { -readonly [Key in keyof PodSettings]?: PodSettings[Key] } =
+    {};
+  for (const field of numberFields) {
+    const text = edits[field];
+    if (text === undefined) continue;
+    const value = numberOf(text);
+    if (value === null) return 'Give each limit as a number.';
+    changes[field] = value;
+  }
+  if (edits.limitUsd !== undefined) {
+    const limit = numberOf(edits.limitUsd);
+    if (limit === null && edits.limitUsd.trim())
+      return 'Give the spend limit as a number, or leave it empty to turn pods off.';
+    changes.limitUsd = limit;
+  }
+  if (edits.maxRunningPods !== undefined)
+    changes.maxRunningPods = edits.maxRunningPods === '2' ? 2 : 1;
+  if (edits.images !== undefined)
+    changes.images = edits.images
       .split('\n')
       .map((line) => line.trim())
-      .filter(Boolean),
-    diskGb: numbers.diskGb ?? 0,
-    askBeforePod: text.askBeforePod,
-  };
+      .filter(Boolean);
+  if (edits.askBeforePod !== undefined)
+    changes.askBeforePod = edits.askBeforePod;
+  if (gpuTypes) changes.gpuTypes = gpuTypes;
+  return changes;
 }

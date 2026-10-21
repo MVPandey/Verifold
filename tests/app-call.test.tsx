@@ -429,27 +429,39 @@ await test("Verifold's deadline call says who asks, and after words it says that
   assert.doesNotMatch(page, /See the thread/);
 });
 
-await test('a pod option says when a pod secret must be stored first', () => {
-  const needs = call({
-    options: [
-      {
-        label: 'Rent 1 H100 for 3 hours',
-        usd: 11.97,
-        minutes: 180,
-        effect: {
-          type: 'pod',
-          gpu: 'H100 SXM',
-          hours: 3,
-          secrets: 2,
-          missing: 1,
+await test('a pod option says when a pod secret must be stored first, with a command for each', () => {
+  const needs = (missing: number, missingNames?: string[]) =>
+    call({
+      options: [
+        {
+          label: 'Rent 1 H100 for 3 hours',
+          usd: 11.97,
+          minutes: 180,
+          effect: {
+            type: 'pod',
+            gpu: 'H100 SXM',
+            hours: 3,
+            secrets: 2,
+            missing,
+            ...(missingNames ? { missingNames } : {}),
+          },
         },
-      },
-      { label: 'Use this Mac', usd: 0, minutes: 540, effect: null },
-    ],
-  });
-  const page = text(dialog(render(snapshot({ needsYou: [needs] }))));
+        { label: 'Use this Mac', usd: 0, minutes: 540, effect: null },
+      ],
+    });
+  const page = (shown: ReturnType<typeof needs>): string =>
+    text(dialog(render(snapshot({ needsYou: [shown] }))));
   assert.match(
-    page,
+    page(needs(1, ['HF_TOKEN'])),
+    /Needs the pod secret HF_TOKEN, which this computer does not store yet\. Store it in a terminal with verifold runpod secret set HF_TOKEN ?\./,
+  );
+  assert.match(
+    page(needs(2, ['HF_TOKEN', 'WANDB_API_KEY'])),
+    /Needs the pod secrets HF_TOKEN and WANDB_API_KEY, which this computer does not store yet\. Store each one in a terminal with verifold runpod secret set HF_TOKEN and verifold runpod secret set WANDB_API_KEY ?\./,
+  );
+  // A Verifold that sends only the count still says how many.
+  assert.match(
+    page(needs(1)),
     /Needs 1 pod secret that this computer does not store yet\. Store each one in a terminal with verifold runpod secret set NAME ?\./,
   );
 });

@@ -13,7 +13,7 @@ import {
   costLine,
   failureOf,
   footLine,
-  missingLine,
+  missingSecrets,
   onBoard,
   optionForKey,
   optionLines,
@@ -34,6 +34,7 @@ import { FactSource, uniqueFacts } from '../components/FactsList.tsx';
 import { showPost } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { Cross } from '../components/Icons.tsx';
+import { SecretCommands } from '../components/Pods.tsx';
 import type { LabActions } from './LabHome.tsx';
 
 /**
@@ -188,7 +189,7 @@ function OpenCall({
           const option = call.options[index];
           if (!option) return null;
           const lines = optionLines(option, call, lab);
-          const missing = missingLine(option);
+          const missing = missingSecrets(option);
           const advised = call.pick === index;
           const cost = costLine(option);
           return (
@@ -214,8 +215,25 @@ function OpenCall({
               {lines && <p className="call__fine">{lines.does}</p>}
               {missing && (
                 <p className="call__fine call__fine--need">
-                  {missing} Store each one in a terminal with{' '}
-                  <code>verifold runpod secret set NAME</code>.
+                  {missing.names ? (
+                    <>
+                      Needs{' '}
+                      {missing.names.length === 1
+                        ? 'the pod secret'
+                        : 'the pod secrets'}{' '}
+                      {missing.names.join(' and ')}, which this computer does
+                      not store yet. Store{' '}
+                      {missing.names.length === 1 ? 'it' : 'each one'} in a
+                      terminal with <SecretCommands names={missing.names} />.
+                    </>
+                  ) : (
+                    <>
+                      Needs {missing.count} pod{' '}
+                      {missing.count === 1 ? 'secret' : 'secrets'} that this
+                      computer does not store yet. Store each one in a terminal
+                      with <code>verifold runpod secret set NAME</code>.
+                    </>
+                  )}
                 </p>
               )}
             </div>

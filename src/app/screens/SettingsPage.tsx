@@ -11,18 +11,17 @@ import { AppHeader } from '../components/AppHeader.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
 import { GpuTable, LimitField, readAt } from '../components/Limits.tsx';
-import { PodNotice, PodRequest, type OnPod } from '../components/Pods.tsx';
+import { PodNeeds, type OnPod, type PodActions } from '../components/Pods.tsx';
 import { clock, usd } from '../format.ts';
 import {
+  allowedNow,
+  changesOf,
   gpuName,
   podAsker,
-  podNotices,
   podStates,
   running,
-  settingsOf,
   settingsText,
   shownGpus,
-  waitingPods,
   type SettingsText,
 } from '../pods.ts';
 import { href } from '../route.ts';
@@ -30,13 +29,20 @@ import type { Connection } from '../store.ts';
 import { useAction } from '../useAction.ts';
 
 /** The settings page's actions: the project's compute operations, each with the key of the person's intent. */
-export interface ComputeActions {
-  /** Save every pod setting at once. */
-  readonly save: (settings: PodSettings, key: string) => Promise<ActOutcome>;
+export interface ComputeActions extends PodActions {
+  /**
+   * Save the pod settings that the person changed. `base` is the version
+   * that they edited: Verifold refuses the change when the settings changed
+   * since.
+   */
+  readonly save: (
+    changes: Partial<PodSettings>,
+    base: string,
+    key: string,
+  ) => Promise<ActOutcome>;
   /** Read RunPod's GPUs and prices again. */
   readonly prices: (key: string) => Promise<ActOutcome>;
   readonly agents: (agents: number, key: string) => Promise<ActOutcome>;
-  readonly pod: OnPod;
 }
 
 /**
@@ -87,7 +93,7 @@ export function SettingsPage({
                 compute={compute}
                 lab={snapshot.lab}
                 now={now}
-                onPod={actions.pod}
+                actions={actions}
               />
               <Limits compute={compute} actions={actions} />
               <AgentsAtOnce
@@ -236,15 +242,15 @@ function Pods({
   compute,
   lab,
   now,
-  onPod,
+  actions,
 }: {
   readonly compute: ProjectCompute;
   readonly lab: Lab | null;
   readonly now: number;
-  readonly onPod: OnPod;
+  readonly actions: PodActions;
 }): ReactNode {
   const { budget, settings, month } = compute;
-  const waiting = waitingPods(compute);
+  const onPod = actions.pod;
   const open = compute.pods.filter(
     (pod) => running(pod) || pod.state === 'stopped',
   );
@@ -270,19 +276,7 @@ function Pods({
           {compute.problem.text}
         </p>
       )}
-      {waiting.map((pod) => (
-        <PodRequest
-          key={pod.id}
-          pod={pod}
-          compute={compute}
-          lab={lab}
-          now={now}
-          onPod={onPod}
-        />
-      ))}
-      {podNotices(compute).map((pod) => (
-        <PodNotice key={`notice-${pod.id}`} pod={pod} now={now} onPod={onPod} />
-      ))}
+      <PodNeeds compute={compute} lab={lab} now={now} actions={actions} />
       {open.length ? (
         <PodTable pods={open} compute={compute} lab={lab} onPod={onPod} />
       ) : (
@@ -313,7 +307,12 @@ function Pods({
   );
 }
 
-/** The GPU limits and the GPUs that agents may rent, saved together. */
+/**
+ * The GPU limits and the GPUs that agents may rent, saved together. The form
+ * shows the saved settings with the person's own changes on top, so a change
+ * made elsewhere shows at once in the fields that they did not touch. Save
+ * sends only their changes, with the version that they edited.
+ */
 function Limits({
   compute,
   actions,
@@ -324,49 +323,76 @@ function Limits({
   const imagesId = useId();
   const podsId = useId();
   const askId = useId();
-  const incoming = JSON.stringify(compute.settings);
-  const [shown, setShown] = useState(incoming);
-  const [text, setText] = useState<SettingsText>(() =>
-    settingsText(compute.settings),
-  );
-  const [allowed, setAllowed] = useState<readonly string[]>(
-    compute.settings.gpuTypes,
-  );
-  const [dirty, setDirty] = useState(false);
+  const [edits, setEdits] = useState<Partial<SettingsText>>({});
+  const [added, setAdded] = useState<readonly string[]>([]);
+  const [removed, setRemoved] = useState<readonly string[]>([]);
+  // The version that the person's changes start from. Null: the version shown now.
+  const [base, setBase] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  // Settings that change elsewhere show here, unless the person changed the form.
-  if (!dirty && incoming !== shown) {
-    setShown(incoming);
-    setText(settingsText(compute.settings));
-    setAllowed(compute.settings.gpuTypes);
-  }
   const save = useAction(
-    (settings: PodSettings, key) => actions.save(settings, key),
+    (
+      value: { readonly changes: Partial<PodSettings>; readonly base: string },
+      key,
+    ) => actions.save(value.changes, value.base, key),
     (a, b) => JSON.stringify(a) === JSON.stringify(b),
   );
   const prices = useAction((_: null, key) => actions.prices(key));
-  const set = (field: keyof SettingsText) => (value: string | boolean) => {
-    setDirty(true);
+  const saved = compute.settings.gpuTypes;
+  const text = { ...settingsText(compute.settings), ...edits };
+  const allowed = allowedNow(saved, added, removed);
+  const touched = (): void => {
     setDone(false);
-    setText((current) => ({ ...current, [field]: value }));
+    if (base === null) setBase(compute.settingsVersion);
+  };
+  const set = (field: keyof SettingsText) => (value: string | boolean) => {
+    touched();
+    setEdits((current) => ({ ...current, [field]: value }));
+  };
+  const allow = (next: readonly string[]): void => {
+    touched();
+    const on = next.filter((id) => !allowed.includes(id));
+    const off = allowed.filter((id) => !next.includes(id));
+    setAdded((current) => [
+      ...current.filter((id) => !off.includes(id)),
+      ...on,
+    ]);
+    setRemoved((current) => [
+      ...current.filter((id) => !on.includes(id)),
+      ...off,
+    ]);
   };
   const cap = Number(text.maxUsdPerHour) || compute.settings.maxUsdPerHour;
   const types = compute.gpus?.types ?? [];
-  const rows = shownGpus(types, allowed, all);
+  const rows = shownGpus(types, saved, all);
+  const dirty =
+    Object.keys(edits).length > 0 || added.length > 0 || removed.length > 0;
   const submit = (): void => {
-    const settings = settingsOf(text, allowed);
-    if (typeof settings === 'string') {
-      setProblem(settings);
+    const changes = changesOf(
+      edits,
+      added.length || removed.length ? allowed : null,
+    );
+    if (typeof changes === 'string') {
+      setProblem(changes);
       return;
     }
     setProblem(null);
-    void save.submit(settings).then((ok) => {
-      if (!ok) return;
-      setDirty(false);
-      setDone(true);
-    });
+    void save
+      .submit({ changes, base: base ?? compute.settingsVersion })
+      .then((ok) => {
+        if (ok) {
+          setEdits({});
+          setAdded([]);
+          setRemoved([]);
+          setBase(null);
+          setDone(true);
+          return;
+        }
+        // The person sees the newest settings under their own changes. The
+        // next edit or Save starts from the version shown then.
+        setBase(null);
+      });
   };
   const error = problem ?? save.error ?? prices.error;
   return (
@@ -497,11 +523,7 @@ function Limits({
             <GpuTable
               rows={rows}
               allowed={allowed}
-              onAllow={(next) => {
-                setDirty(true);
-                setDone(false);
-                setAllowed(next);
-              }}
+              onAllow={allow}
               cap={cap}
               stock
             />
@@ -549,7 +571,7 @@ function Limits({
           <button
             type="button"
             className="button button--primary"
-            disabled={save.busy}
+            disabled={save.busy || !dirty}
             onClick={submit}
           >
             {save.busy ? 'Saving' : 'Save the GPU settings'}
@@ -565,7 +587,10 @@ function Limits({
   );
 }
 
-/** How many agents may work at the same time. */
+/**
+ * How many agents may work at the same time. The field shows the saved
+ * number until the person types, so a change made elsewhere shows at once.
+ */
 function AgentsAtOnce({
   value,
   onSave,
@@ -573,9 +598,11 @@ function AgentsAtOnce({
   readonly value: number | null;
   readonly onSave: ComputeActions['agents'];
 }): ReactNode {
-  const [text, setText] = useState(value === null ? '' : String(value));
+  // Null: the person is not editing, and the field shows `value`.
+  const [typed, setTyped] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const save = useAction((agents: number, key) => onSave(agents, key));
+  const text = typed ?? (value === null ? '' : String(value));
   const agents = Number(text);
   const valid = Number.isInteger(agents) && agents >= 1 && agents <= 8;
   return (
@@ -591,7 +618,7 @@ function AgentsAtOnce({
           label="Agents that work at the same time, 1 to 8"
           value={text}
           onChange={(next) => {
-            setText(next);
+            setTyped(next);
             setDone(false);
           }}
           min={1}
@@ -604,7 +631,11 @@ function AgentsAtOnce({
             className="button"
             disabled={save.busy || !valid || agents === value}
             onClick={() =>
-              void save.submit(agents).then((ok) => ok && setDone(true))
+              void save.submit(agents).then((ok) => {
+                if (!ok) return;
+                setTyped(null);
+                setDone(true);
+              })
             }
           >
             Save

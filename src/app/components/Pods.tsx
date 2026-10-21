@@ -1,8 +1,15 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import type { Lab, PodLease, ProjectCompute } from '../../protocol/api.ts';
 import type { ActOutcome } from '../api.ts';
 import { since, usd } from '../format.ts';
-import { gpuName, podAsker, podsLine } from '../pods.ts';
+import {
+  gpuName,
+  podAsker,
+  podNotices,
+  podsLine,
+  waitReason,
+  waitingPods,
+} from '../pods.ts';
 import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
 
@@ -21,6 +28,12 @@ export type OnPod = (
   key: string,
 ) => Promise<ActOutcome>;
 
+/** The pod actions that pages send: one action on a pod, and Dismiss of the actions that failed in the background. */
+export interface PodActions {
+  readonly pod: OnPod;
+  readonly dismiss: (key: string) => Promise<ActOutcome>;
+}
+
 /** A pod action for one button: the same intent keeps its key on a retry. */
 function usePod(onPod: OnPod) {
   return useAction(
@@ -30,10 +43,25 @@ function usePod(onPod: OnPod) {
   );
 }
 
+/** One command for each secret that a pod lacks. */
+export function SecretCommands({
+  names,
+}: {
+  readonly names: readonly string[];
+}): ReactNode {
+  return names.map((name, index) => (
+    <Fragment key={name}>
+      {index > 0 && (index === names.length - 1 ? ' and ' : ', ')}
+      <code>verifold runpod secret set {name}</code>
+    </Fragment>
+  ));
+}
+
 /**
  * A pod that waits for the person: who asks, the GPU, the most that it can
- * cost, why, and Approve and Deny. A pod that lacks a secret says how to
- * store it, and can only be denied until then.
+ * cost, why it waits, the asker's reason, and Approve and Deny. A pod that
+ * lacks a secret says how to store each one, and can only be denied until
+ * then. In a paused lab, the request says that an approved pod bills anyway.
  */
 export function PodRequest({
   pod,
@@ -61,10 +89,8 @@ export function PodRequest({
         </b>
         <span className="needs__meta">
           {pod.hours} {pod.hours === 1 ? 'hour' : 'hours'} at {usd(pod.rateUsd)}{' '}
-          an hour · waiting {since(pod.requestedAt, now)}
-          {compute.settings.askBeforePod
-            ? ' · you approve each pod'
-            : ' · it does not fit your limits now'}
+          an hour · waiting {since(pod.requestedAt, now)} ·{' '}
+          {waitReason(pod, compute.settings)}
         </span>
         <span className="pod-why">
           {who === 'You' ? 'Your reason' : `${who} says`}: {pod.reason.text}
@@ -74,8 +100,13 @@ export function PodRequest({
             The pod needs {missing.length === 1 ? 'the secret' : 'the secrets'}{' '}
             {missing.join(' and ')}, which this computer does not store yet.
             Store {missing.length === 1 ? 'it' : 'each one'} in a terminal with{' '}
-            <code>verifold runpod secret set {missing[0]}</code>, then approve
-            the pod.
+            <SecretCommands names={missing} />, then approve the pod.
+          </span>
+        )}
+        {lab?.paused && (
+          <span className="pod-missing">
+            The lab is paused, but a pod that you approve starts now, and RunPod
+            bills it.
           </span>
         )}
         {act.error && (
@@ -140,6 +171,93 @@ export function PodNotice({
         Dismiss
       </button>
     </div>
+  );
+}
+
+/** Pod actions that still run in the background, and the ones that failed there, with Dismiss. */
+export function PodWorks({
+  compute,
+  onDismiss,
+}: {
+  readonly compute: ProjectCompute;
+  readonly onDismiss: PodActions['dismiss'];
+}): ReactNode {
+  const dismiss = useAction((_: null, key) => onDismiss(key));
+  const works = compute.works;
+  if (!works.length) return null;
+  const failed = works.some((work) => work.error !== null);
+  return (
+    <div className="status status--muted pod-notice" role="status">
+      <span className="pod-notice__text">
+        {works.map((work) => (
+          <span
+            key={`${work.action}-${work.lease ?? ''}-${work.at}`}
+            className="pod-work"
+          >
+            {work.error === null ? (
+              `${work.label}…`
+            ) : (
+              <>
+                <b>{work.label} failed:</b> {work.error}
+              </>
+            )}
+          </span>
+        ))}
+        {dismiss.error && (
+          <span role="alert" className="needs__failure">
+            {' '}
+            {dismiss.error}
+          </span>
+        )}
+      </span>
+      {failed && (
+        <button
+          type="button"
+          className="link-button"
+          disabled={dismiss.busy}
+          onClick={() => void dismiss.submit(null)}
+        >
+          Dismiss
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** What the pods need from the person: the waiting requests, the pod actions in the background, and the notices. */
+export function PodNeeds({
+  compute,
+  lab,
+  now,
+  actions,
+}: {
+  readonly compute: ProjectCompute;
+  readonly lab: Lab | null;
+  readonly now: number;
+  readonly actions: PodActions;
+}): ReactNode {
+  return (
+    <>
+      {waitingPods(compute).map((pod) => (
+        <PodRequest
+          key={pod.id}
+          pod={pod}
+          compute={compute}
+          lab={lab}
+          now={now}
+          onPod={actions.pod}
+        />
+      ))}
+      <PodWorks compute={compute} onDismiss={actions.dismiss} />
+      {podNotices(compute).map((pod) => (
+        <PodNotice
+          key={`notice-${pod.id}`}
+          pod={pod}
+          now={now}
+          onPod={actions.pod}
+        />
+      ))}
+    </>
   );
 }
 
