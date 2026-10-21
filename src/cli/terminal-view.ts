@@ -2,7 +2,12 @@ import { createInterface, type Interface } from 'node:readline';
 import type { LabScreen } from '../server/screen.ts';
 import { enterLine, plainLines, prompt, viewLines } from './lab-view.ts';
 import { muted, terminalMessage, tint } from './terminal.ts';
-import { fitText, terminalColumns, visibleWidth } from './terminal-layout.ts';
+import {
+  fitText,
+  terminalColumns,
+  terminalRows,
+  visibleWidth,
+} from './terminal-layout.ts';
 
 /** The terminal's streams. Tests pass their own. */
 export interface ViewStreams {
@@ -160,7 +165,7 @@ export class LabTerminal {
       this.draws &&
       Boolean(this.screen) &&
       terminalColumns(this.output.columns) >= viewColumns &&
-      (this.output.rows ?? 24) >= viewRows
+      terminalRows(this.output.rows) >= viewRows
     );
   }
 
@@ -300,7 +305,7 @@ export class LabTerminal {
     this.last = this.now();
     const frame = viewLines(screen, {
       columns,
-      rows: this.output.rows ?? 24,
+      rows: terminalRows(this.output.rows),
       color: this.color,
       now: this.last,
       detaches: this.detaches,
