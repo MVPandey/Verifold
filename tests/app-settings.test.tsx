@@ -8,6 +8,7 @@ import type {
   PodLease,
   ProjectCompute,
   Snapshot,
+  Work,
 } from '../src/protocol/api.ts';
 import {
   agentActions,
@@ -17,11 +18,13 @@ import {
 import { Screen } from '../src/app/App.tsx';
 import { events, notesFor, freshMemory } from '../src/app/notify.ts';
 import {
+  allowedNow,
+  changesOf,
   podAsker,
   podsLine,
-  settingsOf,
   settingsText,
   shownGpus,
+  waitReason,
   waitingPods,
 } from '../src/app/pods.ts';
 import { href, parseRoute } from '../src/app/route.ts';
@@ -134,6 +137,7 @@ function compute(fields: Partial<ProjectCompute> = {}): ProjectCompute {
       diskGb: 50,
       askBeforePod: true,
     },
+    settingsVersion: 'v1',
     agentsAtOnce: 3,
     budget: { spentUsd: 4.2, heldUsd: 3.1, leftUsd: 17.7, rateUsd: 0.28 },
     month: { spentUsd: 37.2, limitUsd: 100, leftUsd: 59.7 },
@@ -209,6 +213,7 @@ function compute(fields: Partial<ProjectCompute> = {}): ProjectCompute {
       ],
     },
     problem: null,
+    works: [],
     ...fields,
   };
 }
@@ -232,6 +237,7 @@ const signedIn: ComputeActions = {
   prices: ok,
   agents: ok,
   pod: ok,
+  dismiss: ok,
 };
 
 function render(state: Snapshot, hash: string): string {
@@ -307,6 +313,19 @@ await test('the settings page shows the pods, the limits, the GPUs, and Agents a
   );
   assert.match(html, /value="25"/);
   assert.match(html, /value="3"/);
+  // Fields that the person does not edit show the newest saved values.
+  const newer = render(
+    snapshot(
+      compute({
+        settings: { ...compute().settings, limitUsd: 40 },
+        settingsVersion: 'v2',
+        agentsAtOnce: 5,
+      }),
+    ),
+    '#/settings',
+  );
+  assert.match(newer, /value="40"/);
+  assert.match(newer, /value="5"/);
 });
 
 await test('the settings page works without a lab, says when pods are off, and asks for a key first', () => {
@@ -358,27 +377,207 @@ await test('a waiting pod shows in Needs you on the lab home, and a running pod 
   assert.ok(!quiet.includes('pod running'));
 });
 
-await test('the settings form keeps what the person typed, and turns pods off with an empty limit', () => {
-  const settings = compute().settings;
-  const typed = settingsText(settings);
-  assert.deepEqual(settingsOf(typed, settings.gpuTypes), settings);
-  assert.equal(
-    (settingsOf({ ...typed, limitUsd: ' ' }, []) as { limitUsd: unknown })
-      .limitUsd,
-    null,
+await test('a paused lab keeps its paused bar beside a waiting pod, and the request says that the pod bills anyway', () => {
+  const paused: Lab = {
+    ...lab(),
+    paused: { at: ago(30), reason: 'person' },
+  };
+  const page = text(render({ ...snapshot(compute()), lab: paused }, '#/'));
+  for (const line of [
+    'claude-2 asks for a pod with one H100 SXM, up to $16.03',
+    'The lab is paused, but a pod that you approve starts now, and RunPod bills it.',
+    'Paused. Agents start no new turns until you resume.',
+  ])
+    assert.ok(page.includes(line), `missing: ${line}\n${page}`);
+  assert.ok(!text(render(snapshot(compute()), '#/')).includes('is paused'));
+});
+
+await test('a project without a lab shows the header, its pod requests, and its pods line, and notifies its pod requests', () => {
+  const html = render(snapshot(compute(), false), '#/');
+  assert.match(
+    html,
+    /<a class="header__link" href="#\/settings">Settings<\/a>/,
   );
-  assert.equal(
-    settingsOf({ ...typed, idleMinutes: 'soon' }, []),
-    'Give each limit as a number. Leave the spend limit empty to turn pods off.',
+  const page = text(html);
+  for (const line of [
+    'cot-faithfulness has no lab yet',
+    'You asked for a pod with one RTX A5000, up to $0.55',
+    'The agent of d-2 asks for a pod with one H100 SXM, up to $16.03',
+    'lease-2: Verifold copied the results of r-4 before it stopped the pod.',
+  ])
+    assert.ok(page.includes(line), `missing: ${line}\n${page}`);
+  assert.match(page, /1 pod running · \$0\.42 so far · ends \d\d:\d\d/);
+  // With no pod, the panel is empty, and the page hides it.
+  assert.match(
+    render(snapshot(compute({ pods: [] }), false), '#/'),
+    /<section class="pods-panel" aria-label="Pods"><\/section>/,
+  );
+  // The first pods only prime the notes. A new request then notifies once.
+  assert.deepEqual(notesFor(freshMemory, null, 'p', true, true), {
+    notes: [],
+    memory: freshMemory,
+  });
+  const first = notesFor(
+    freshMemory,
+    null,
+    'p',
+    true,
+    true,
+    compute({ pods: [] }),
+  );
+  assert.deepEqual(first.notes, []);
+  const next = notesFor(first.memory, null, 'p', true, true, compute());
+  assert.deepEqual(
+    next.notes.map((note) => note.body),
+    [
+      'You asked for a pod with one RTX A5000, up to $0.55.',
+      'The agent of d-2 asks for a pod with one H100 SXM, up to $16.03.',
+    ],
   );
   assert.deepEqual(
-    (settingsOf({ ...typed, images: ' a \n\n b ' }, []) as { images: unknown })
-      .images,
-    ['a', 'b'],
+    notesFor(next.memory, null, 'p', true, true, compute()).notes,
+    [],
   );
 });
 
-await test('pod words: who asked, the waiting pods, the running line, and the GPUs to show', () => {
+await test('pod actions in the background show while they run, and a failure stays until the person dismisses it', () => {
+  const running: Work = {
+    action: 'compute-lease-approve',
+    label: 'Starting the pod: lease-1',
+    at: ago(1),
+    error: null,
+    lease: 'lease-1',
+  };
+  const failed: Work = {
+    action: 'compute-lease-end',
+    label: 'Ending the pod: lease-2',
+    at: ago(2),
+    error: 'RunPod did not answer.',
+    lease: 'lease-2',
+  };
+  const works = compute({ works: [running, failed] });
+  for (const [shown, hash] of [
+    [snapshot(works), '#/'],
+    [snapshot(works), '#/settings'],
+    [snapshot(works, false), '#/'],
+  ] as const) {
+    const page = text(render(shown, hash));
+    assert.ok(page.includes('Starting the pod: lease-1…'), page);
+    assert.ok(
+      page.includes('Ending the pod: lease-2 failed: RunPod did not answer.'),
+      page,
+    );
+  }
+  const block = (shown: ProjectCompute): string =>
+    /<div class="status status--muted pod-notice" role="status">(.*?)<\/div>/.exec(
+      render(snapshot(shown), '#/'),
+    )?.[1] ?? '';
+  assert.match(block(works), />Dismiss<\/button>/);
+  // While an action only runs, there is nothing to dismiss.
+  assert.doesNotMatch(block(compute({ works: [running] })), /Dismiss/);
+  assert.equal(block(compute()), '');
+});
+
+await test('the settings form sends only what the person changed, and turns pods off with an empty limit', () => {
+  // Fields that the person did not touch stay out, so a change made elsewhere stays.
+  assert.deepEqual(changesOf({}, null), {});
+  assert.deepEqual(changesOf({ idleMinutes: ' 20 ', limitUsd: ' ' }, null), {
+    idleMinutes: 20,
+    limitUsd: null,
+  });
+  assert.deepEqual(changesOf({ images: ' a \n\n b ' }, null), {
+    images: ['a', 'b'],
+  });
+  assert.deepEqual(
+    changesOf({ maxRunningPods: '2', askBeforePod: false }, ['NVIDIA H200']),
+    { maxRunningPods: 2, askBeforePod: false, gpuTypes: ['NVIDIA H200'] },
+  );
+  assert.equal(
+    changesOf({ idleMinutes: 'soon' }, null),
+    'Give each limit as a number.',
+  );
+  assert.equal(
+    changesOf({ limitUsd: 'lots' }, null),
+    'Give the spend limit as a number, or leave it empty to turn pods off.',
+  );
+  // The GPUs: the saved ones, with the person's ticks and unticks on top.
+  assert.deepEqual(
+    allowedNow(
+      ['NVIDIA H200', 'NVIDIA RTX A5000'],
+      ['NVIDIA L4'],
+      ['NVIDIA H200'],
+    ),
+    ['NVIDIA RTX A5000', 'NVIDIA L4'],
+  );
+  assert.deepEqual(allowedNow(['NVIDIA L4'], ['NVIDIA L4'], []), ['NVIDIA L4']);
+  const off = { ...compute().settings, limitUsd: null };
+  assert.equal(settingsText(off).limitUsd, '');
+  assert.equal(settingsText(off).images, off.images.join('\n'));
+});
+
+await test('the GPU rows: common and saved types first, then every other type, each group the dearest first', () => {
+  const types = compute().gpus?.types ?? [];
+  const l4 = {
+    id: 'NVIDIA L4',
+    name: 'L4',
+    memoryGb: 24,
+    usdPerHour: 0.39,
+    stock: 'high' as const,
+    common: false,
+  };
+  // The saved settings decide: a row that the person unticks stays.
+  assert.deepEqual(
+    shownGpus(types, ['NVIDIA RTX A5000'], false).map((gpu) => gpu.id),
+    ['NVIDIA H200', 'NVIDIA H100 80GB HBM3', 'NVIDIA RTX A5000'],
+  );
+  // With every GPU, an allowed type that costs less still comes before a dearer one that is not allowed.
+  const listed = [...types.slice(0, 2), l4, ...types.slice(2)];
+  assert.deepEqual(
+    shownGpus(listed, ['NVIDIA RTX A4000'], true).map((gpu) => gpu.id),
+    [
+      'NVIDIA H200',
+      'NVIDIA H100 80GB HBM3',
+      'NVIDIA RTX A4000',
+      'NVIDIA L4',
+      'NVIDIA RTX A5000',
+    ],
+  );
+});
+
+await test('a waiting pod says why it waits: a secret, the person approves each pod, or the limits', () => {
+  const ask = compute().settings;
+  const auto = { ...ask, askBeforePod: false };
+  assert.equal(waitReason(pod(), ask), 'you approve each pod');
+  assert.equal(waitReason(pod(), auto), 'it does not fit your limits now');
+  const secret = pod({ secrets: ['HF_TOKEN'], missingSecrets: ['HF_TOKEN'] });
+  assert.equal(waitReason(secret, auto), 'it waits for a secret');
+  assert.equal(waitReason(secret, ask), 'it waits for a secret');
+  assert.equal(
+    waitReason(pod({ missingSecrets: ['HF_TOKEN', 'WANDB_API_KEY'] }), auto),
+    'it waits for secrets',
+  );
+  const page = text(
+    render(snapshot(compute({ settings: auto, pods: [secret] })), '#/'),
+  );
+  assert.ok(page.includes('it waits for a secret'), page);
+  assert.ok(!page.includes('it does not fit your limits now'), page);
+});
+
+await test('a pod that lacks several secrets shows one command for each', () => {
+  const two = pod({
+    secrets: ['HF_TOKEN', 'WANDB_API_KEY'],
+    missingSecrets: ['HF_TOKEN', 'WANDB_API_KEY'],
+  });
+  const page = text(render(snapshot(compute({ pods: [two] })), '#/'));
+  assert.ok(
+    page.includes(
+      'The pod needs the secrets HF_TOKEN and WANDB_API_KEY, which this computer does not store yet. Store each one in a terminal with verifold runpod secret set HF_TOKEN and verifold runpod secret set WANDB_API_KEY , then approve the pod.',
+    ),
+    page,
+  );
+});
+
+await test('pod words: who asked, the waiting pods, and the running line', () => {
   const shown = compute();
   assert.deepEqual(
     waitingPods(shown).map((entry) => entry.id),
@@ -402,12 +601,6 @@ await test('pod words: who asked, the waiting pods, the running line, and the GP
     ],
   });
   assert.equal(podsLine(two), '2 pods running · $1.50 so far · $0.28 an hour');
-  const types = shown.gpus?.types ?? [];
-  assert.deepEqual(
-    shownGpus(types, ['NVIDIA RTX A5000'], false).map((gpu) => gpu.id),
-    ['NVIDIA H200', 'NVIDIA H100 80GB HBM3', 'NVIDIA RTX A5000'],
-  );
-  assert.equal(shownGpus(types, [], true).length, 4);
 });
 
 await test('a pod that waits for the person notifies once, like a call', () => {
@@ -464,7 +657,7 @@ await test("the compute actions send the desk's action names with the intent key
     return Promise.resolve(new Response('{"ok":true}', { status: 200 }));
   };
   const live = computeActions('token');
-  await live.save(compute().settings, 'a');
+  await live.save({ limitUsd: 30, askBeforePod: false }, 'v1', 'a');
   await live.prices('b');
   await live.agents(5, 'c');
   for (const action of [
@@ -476,6 +669,7 @@ await test("the compute actions send the desk's action names with the intent key
     'dismiss',
   ] as const)
     await live.pod(action, 'lease-1', action);
+  await live.dismiss('d');
   assert.deepEqual(
     sent.map((entry) => entry.url),
     [
@@ -488,10 +682,19 @@ await test("the compute actions send the desk's action names with the intent key
       '/api/v1/actions/compute-lease-start',
       '/api/v1/actions/compute-lease-end',
       '/api/v1/actions/compute-lease-dismiss',
+      '/api/v1/actions/compute-dismiss',
     ],
   );
+  // Only the changed fields go, with the version that the person edited.
+  assert.deepEqual(sent[0]?.body, {
+    limitUsd: 30,
+    askBeforePod: false,
+    base: 'v1',
+    key: 'a',
+  });
   assert.deepEqual(sent[2]?.body, { agents: 5, key: 'c' });
   assert.deepEqual(sent[3]?.body, { lease: 'lease-1', key: 'approve' });
+  assert.deepEqual(sent[9]?.body, { key: 'd' });
   assert.deepEqual(await computeActions(null).agents(2, 'k'), {
     refused: 'This tab has no access key.',
   });

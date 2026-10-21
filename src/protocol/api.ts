@@ -165,6 +165,11 @@ export interface ProjectCompute {
     readonly problem: string | null;
   } | null;
   readonly settings: PodSettings;
+  /**
+   * The version of `settings`. A change sends the version that the person
+   * edited, and Verifold refuses it when the settings changed since then.
+   */
+  readonly settingsVersion: string;
   /** How many agents may work at once, 1 to 8. Null when this process cannot tell. */
   readonly agentsAtOnce: number | null;
   /** The project's pods against its spend limit. `leftUsd` is null without a limit. */
@@ -194,6 +199,8 @@ export interface ProjectCompute {
   } | null;
   /** The last problem that a check of the pods met. */
   readonly problem: { readonly at: string; readonly text: string } | null;
+  /** Pod actions that still run in the background, and the ones that failed there. */
+  readonly works: readonly Work[];
 }
 
 /** The lists of a lab that a snapshot can cut. Posts and turns have their own `more` flags. */
@@ -309,9 +316,9 @@ export interface Asker {
 
 /**
  * What an option does when the person picks it. A pod lists how many pod
- * secrets it gets, never their names, and how many of those this computer
- * does not store yet (null when Verifold cannot tell). A pod cannot start
- * until each one is stored in Compute.
+ * secrets it gets, how many of those this computer does not store yet (null
+ * when Verifold cannot tell), and the names of those, never their values. A
+ * pod cannot start until each one is stored.
  */
 export type Effect =
   | {
@@ -321,6 +328,8 @@ export type Effect =
       readonly secrets: number;
       /** Added after version 1: absent from an older server. */
       readonly missing?: number | null;
+      /** The names of the missing secrets, never their values. Added after version 1. */
+      readonly missingNames?: readonly string[];
     }
   | { readonly type: 'hours'; readonly hours: number }
   | {
@@ -729,6 +738,8 @@ export interface Work {
   readonly option?: number;
   /** The direction that the action is for, such as a bring-in's. Added after version 1. */
   readonly direction?: string;
+  /** The pod that a pod action is for. Added after version 1. */
+  readonly lease?: string;
 }
 
 export interface Away {
@@ -1251,10 +1262,14 @@ export interface ActionBodies {
     readonly key?: string;
   };
   /**
-   * Save the project's pod settings, every field at once. A change applies at
-   * once. Added after version 1.
+   * Change the project's pod settings that the body names. `base` is the
+   * `settingsVersion` that the person edited: when the settings changed
+   * since, nothing is saved. A change applies at once. Added after version 1.
    */
-  'compute-settings': PodSettings & { readonly key?: string };
+  'compute-settings': Partial<PodSettings> & {
+    readonly base?: string;
+    readonly key?: string;
+  };
   /** Read RunPod's GPUs and prices again. Added after version 1. */
   'compute-gpus': { readonly key?: string };
   /** How many agents may work at once, 1 to 8. Added after version 1. */
@@ -1271,6 +1286,8 @@ export interface ActionBodies {
   'compute-lease-end': { readonly lease: string; readonly key?: string };
   /** Dismiss a pod's notice. Added after version 1. */
   'compute-lease-dismiss': { readonly lease: string; readonly key?: string };
+  /** Dismiss the pod actions that failed in the background. Added after version 1. */
+  'compute-dismiss': { readonly key?: string };
   'lab-away-dismiss': Record<string, never>;
   /**
    * The person looks at the lab now. A look after 30 minutes or more away

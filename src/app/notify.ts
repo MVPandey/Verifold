@@ -56,10 +56,21 @@ export const freshMemory: NotifyMemory = { primed: false, seen: new Set() };
  * Each pod that waits for the person is an event too.
  */
 export function events(
-  lab: Lab,
+  lab: Lab | null,
   project: string,
   compute?: ProjectCompute,
 ): readonly Note[] {
+  const pods = (compute ? waitingPods(compute) : []).map((pod): Note => {
+    const who = podAsker(pod, lab);
+    return {
+      key: `pod:${pod.id}`,
+      title: `${project} needs you`,
+      body: `${who} ${who === 'You' ? 'asked' : 'asks'} for a pod with one ${compute ? gpuName(pod.gpu, compute) : pod.gpu}, up to ${usd(pod.maxUsd)}.`,
+      route: href.lab,
+    };
+  });
+  // A project without a lab still has its pods.
+  if (!lab) return pods;
   const calls = new Map(lab.needsYou.map((call) => [call.id, call]));
   const titles = new Map(
     lab.directions.map((direction) => [direction.id, direction.title]),
@@ -94,17 +105,7 @@ export function events(
         route: call ? href.call(id) : href.lab,
       };
     }),
-    ...(compute
-      ? waitingPods(compute).map((pod) => {
-          const who = podAsker(pod, lab);
-          return {
-            key: `pod:${pod.id}`,
-            title: `${project} needs you`,
-            body: `${who} ${who === 'You' ? 'asked' : 'asks'} for a pod with one ${gpuName(pod.gpu, compute)}, up to ${usd(pod.maxUsd)}.`,
-            route: href.lab,
-          };
-        })
-      : []),
+    ...pods,
     ...feed.holdsUp.map((id) => direction(id, 'holds-up')),
     ...feed.ruledOut.map((id) => direction(id, 'ruled-out')),
   ];
@@ -112,10 +113,10 @@ export function events(
 
 /**
  * The notes for a new snapshot, and what the page remembers after it. The
- * first lab that the page sees only primes the memory. After that, each new
- * event notifies once, if notes are on and the page is in the background.
- * An event that comes while the person looks is seen, and never notifies
- * later.
+ * first lab or pods that the page sees only prime the memory. After that,
+ * each new event notifies once, if notes are on and the page is in the
+ * background. An event that comes while the person looks is seen, and never
+ * notifies later.
  */
 export function notesFor(
   memory: NotifyMemory,
@@ -125,7 +126,7 @@ export function notesFor(
   on: boolean,
   compute?: ProjectCompute,
 ): { readonly notes: readonly Note[]; readonly memory: NotifyMemory } {
-  if (!lab) return { notes: [], memory };
+  if (!lab && !compute) return { notes: [], memory };
   const seen = new Set(memory.seen);
   const fresh = events(lab, project, compute).filter(
     (note) => !seen.has(note.key),

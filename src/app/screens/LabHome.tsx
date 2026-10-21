@@ -36,13 +36,8 @@ import {
   WorksLine,
 } from '../components/LabControls.tsx';
 import { NotifyLine } from '../components/NotifyLine.tsx';
-import {
-  PodNotice,
-  PodRequest,
-  PodsLine,
-  type OnPod,
-} from '../components/Pods.tsx';
-import { podNotices, waitingPods } from '../pods.ts';
+import { PodNeeds, PodsLine, type PodActions } from '../components/Pods.tsx';
+import { waitingPods } from '../pods.ts';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
 import type { AgentActions } from './DirectionPage.tsx';
@@ -83,8 +78,9 @@ export interface LabActions {
  * canvas ("8. The lab at work"). Depth opens on its own page. `show`: a post
  * on the board that a link to it (`#/board/<id>`) brings into view. Before
  * the plan, the planner's work and its questions take the place of the
- * directions ("6 Scoping"). With `onPod`, a pod that waits for the person
- * shows in Needs you, with Approve and Deny.
+ * directions ("6 Scoping"). With `pods`, a pod that waits for the person
+ * shows in Needs you, with Approve and Deny, and so do pod actions that
+ * failed in the background and pod notices.
  */
 export function LabHome({
   snapshot,
@@ -93,7 +89,7 @@ export function LabHome({
   now,
   actions,
   agentActions,
-  onPod,
+  pods,
   show = null,
 }: {
   readonly snapshot: Snapshot;
@@ -103,7 +99,7 @@ export function LabHome({
   readonly actions: LabActions;
   /** Without them, the lab before its plan shows as it does after it. */
   readonly agentActions?: AgentActions;
-  readonly onPod?: OnPod;
+  readonly pods?: PodActions;
   readonly show?: string | null;
 }): ReactNode {
   const agents = new Map(lab.agents.map((agent) => [agent.id, agent]));
@@ -121,7 +117,7 @@ export function LabHome({
   const announced = new Set(questions.map((call) => call.post));
   const [first, ...rest] = lab.needsYou.filter((call) => !asked.has(call.id));
   const compute = snapshot.compute;
-  const pods = compute && onPod ? waitingPods(compute) : [];
+  const waiting = compute && pods ? waitingPods(compute).length : 0;
   const tools = useContext(ToolsContext);
   const controls = useContext(ControlsContext);
   const [replyTo, setReplyTo] = useState<Post | null>(null);
@@ -165,19 +161,11 @@ export function LabHome({
               failure={failureOf(lab, first)?.text ?? null}
             />
           )}
-          {compute &&
-            onPod &&
-            pods.map((pod) => (
-              <PodRequest
-                key={pod.id}
-                pod={pod}
-                compute={compute}
-                lab={lab}
-                now={now}
-                onPod={onPod}
-              />
-            ))}
-          {first || pods.length ? null : lab.paused ? (
+          {compute && pods && (
+            <PodNeeds compute={compute} lab={lab} now={now} actions={pods} />
+          )}
+          {/* A waiting pod leaves the paused bar: a pod that the person approves starts in a paused lab too. */}
+          {first ? null : lab.paused ? (
             <StatusBar tone="muted">
               {lab.paused.reason === 'deadline'
                 ? 'The time budget ended, so the lab is paused.'
@@ -185,19 +173,11 @@ export function LabHome({
             </StatusBar>
           ) : (
             // Before the plan, the planner's own line says what happens.
-            !scoping && <StatusBar tone="ok">Nothing needs you.</StatusBar>
+            !scoping &&
+            !waiting && <StatusBar tone="ok">Nothing needs you.</StatusBar>
           )}
           {lab.paused?.reason === 'deadline' && lab.agentsHere && <MoreTime />}
           <WorksLine lab={lab} />
-          {onPod &&
-            podNotices(compute).map((pod) => (
-              <PodNotice
-                key={`notice-${pod.id}`}
-                pod={pod}
-                now={now}
-                onPod={onPod}
-              />
-            ))}
           <PodsLine compute={compute} />
           {lab.answered.map((call) => (
             <AnswerLine

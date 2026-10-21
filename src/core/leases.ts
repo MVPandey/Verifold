@@ -95,6 +95,8 @@ export interface Lease {
   readonly activeAt: string | null;
   /** Something that the person should know. Needs you lists it until the person dismisses it. */
   readonly notice: string | null;
+  /** When Verifold set the notice. Records from before this field have none. */
+  readonly noticeAt?: string | null;
   readonly history: readonly {
     readonly at: string;
     readonly by: Cause | 'verifold';
@@ -567,7 +569,13 @@ export class Leases {
     });
   }
 
-  private async save(lease: Lease): Promise<Lease> {
+  private async save(next: Lease): Promise<Lease> {
+    // A new notice keeps the time that it came, also when later events change the lease.
+    const before = this.leases.find((entry) => entry.id === next.id);
+    const lease =
+      next.notice === (before?.notice ?? null)
+        ? next
+        : { ...next, noticeAt: next.notice ? this.stamp() : null };
     await mkdir(this.folder, { recursive: true, mode: 0o700 });
     if (!(await lstat(this.folder)).isDirectory())
       fail('.verifold/compute/leases must be a folder, not a link.');

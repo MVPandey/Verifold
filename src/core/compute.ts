@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -275,6 +275,14 @@ export function parseSettings(
   };
 }
 
+/** A short fingerprint of a project's settings, which changes when any limit changes. */
+export function settingsVersion(settings: ComputeSettings): string {
+  return createHash('sha256')
+    .update(JSON.stringify(settings))
+    .digest('hex')
+    .slice(0, 16);
+}
+
 /** Replace a project's compute settings in one step. */
 export async function writeComputeSettings(
   root: string,
@@ -511,7 +519,7 @@ export class Compute {
     }
     if (missing.length)
       fail(
-        `Store ${missing.length === 1 ? 'the secret' : 'the secrets'} ${missing.join(' and ')} first, with \`verifold runpod secret set NAME\`. The pod of ${lease.id} needs ${missing.length === 1 ? 'it' : 'them'}.`,
+        `Store ${missing.length === 1 ? 'the secret' : 'the secrets'} ${missing.join(' and ')} first, with ${missing.map((name) => `\`verifold runpod secret set ${name}\``).join(' and ')}. The pod of ${lease.id} needs ${missing.length === 1 ? 'it' : 'them'}.`,
       );
     this.hidden.set(lease.id, values);
     return values;
@@ -1138,6 +1146,30 @@ export class Compute {
   saveSettings(input: Record<string, unknown>): Promise<void> {
     return this.serial(async () => {
       const settings = parseSettings(input, this.state.settings);
+      await writeComputeSettings(this.root, settings);
+      this.state = { ...this.state, settings };
+    });
+  }
+
+  /**
+   * Change the limits that `changes` names, and keep the others. `base`: the
+   * version of the settings that the person edited. When the settings changed
+   * since then, nothing is saved, so a newer change is never overwritten
+   * unseen.
+   */
+  changeSettings(
+    changes: Record<string, unknown>,
+    base: unknown,
+  ): Promise<void> {
+    return this.serial(async () => {
+      if (base !== undefined && base !== settingsVersion(this.state.settings))
+        fail(
+          'These settings changed while you edited them. Here is the new version.',
+        );
+      const settings = parseSettings(
+        { ...this.state.settings, ...changes },
+        this.state.settings,
+      );
       await writeComputeSettings(this.root, settings);
       this.state = { ...this.state, settings };
     });

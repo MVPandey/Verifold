@@ -27,7 +27,7 @@ import {
   awayNews,
   type Away as LabAway,
 } from '../core/away.ts';
-import { labGpu, type ComputeView } from '../core/compute.ts';
+import { labGpu, settingsVersion, type ComputeView } from '../core/compute.ts';
 import {
   isOpen,
   leaseLimits,
@@ -296,6 +296,8 @@ export interface ApiSources {
   readonly startProblem?: (() => string | null) | undefined;
   /** "Agents at once" of the project, when this process runs its worker slots. */
   readonly agentsAtOnce?: (() => number | null) | undefined;
+  /** The slow pod actions that run in the background, and the ones that failed there. */
+  readonly computeWorks?: (() => readonly Work[]) | undefined;
   /** The lab's reads that the snapshot keeps folded: a run's log, and a direction's diff. */
   readonly reads?: LabReadSource | undefined;
 }
@@ -640,6 +642,11 @@ function effect(value: CallEffect, stored: ReadonlySet<string> | null): Effect {
         missing: stored
           ? value.secrets.filter((name) => !stored.has(name)).length
           : null,
+        ...(stored
+          ? {
+              missingNames: value.secrets.filter((name) => !stored.has(name)),
+            }
+          : {}),
       };
     case 'hours':
       return { type: 'hours', hours: value.hours };
@@ -933,7 +940,10 @@ function podLease(
   now: number,
 ): PodLease {
   const secrets = lease.secrets ?? [];
-  const noticeAt = lease.notice ? (lease.history.at(-1)?.at ?? null) : null;
+  // Records from before `noticeAt` give the time of their last change.
+  const noticeAt = lease.notice
+    ? (lease.noticeAt ?? lease.history.at(-1)?.at ?? null)
+    : null;
   return {
     id: lease.id,
     state: lease.state,
@@ -1009,14 +1019,17 @@ function gpuTypes(view: ComputeView): ProjectCompute['gpus'] {
 function shapeCompute(
   view: ComputeView,
   agentsAtOnce: number | null,
+  works: readonly Work[],
   now: number,
 ): ProjectCompute {
   const stored = new Set(view.secrets.map((secret) => secret.name));
-  const newest = [...view.leases].reverse();
-  const current = newest.filter(
-    (lease) => isOpen(lease) || lease.state === 'requested' || lease.notice,
-  );
-  const earlier = newest.filter((lease) => !current.includes(lease));
+  const current: Lease[] = [];
+  const earlier: Lease[] = [];
+  for (const lease of [...view.leases].reverse())
+    (isOpen(lease) || lease.state === 'requested' || lease.notice
+      ? current
+      : earlier
+    ).push(lease);
   const { settings, budget, month } = view;
   return {
     keyStored: view.key
@@ -1033,6 +1046,7 @@ function shapeCompute(
       diskGb: settings.diskGb,
       askBeforePod: settings.askBeforePod,
     },
+    settingsVersion: settingsVersion(settings),
     agentsAtOnce,
     budget: {
       spentUsd: cents(budget.spent),
@@ -1056,6 +1070,14 @@ function shapeCompute(
     earlierCount: earlier.length,
     gpus: gpuTypes(view),
     problem: view.problem,
+    // The newest, as the lab's works.
+    works: works.slice(-apiLimits.works).map((work) => ({
+      action: work.action,
+      label: work.label,
+      at: work.at,
+      error: work.error,
+      ...(work.lease === undefined ? {} : { lease: work.lease }),
+    })),
   };
 }
 
@@ -1408,6 +1430,7 @@ export class ApiReader {
         compute.month ? cents(compute.month.spentUsd) : null,
         compute.month?.limitUsd,
         sources.agentsAtOnce?.(),
+        sources.computeWorks?.(),
       );
     if (!view || !root) return parts;
     parts.push(view.posts.length, view.posts.at(-1), ...view.ledger);
@@ -1485,6 +1508,7 @@ export class ApiReader {
           compute: shapeCompute(
             view,
             sources.agentsAtOnce?.() ?? null,
+            sources.computeWorks?.() ?? [],
             Date.now(),
           ),
         }
@@ -2041,6 +2065,7 @@ const actionNames = new Set<string>([
   'compute-lease-start',
   'compute-lease-end',
   'compute-lease-dismiss',
+  'compute-dismiss',
 ] satisfies ActionName[]);
 
 /** The first run's actions. The first run runs them, with or without a project. */

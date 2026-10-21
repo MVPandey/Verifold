@@ -99,11 +99,21 @@ export function footLine(call: Call, lab: Lab): string {
   return undoWords(call.undoMinutes, effect ? wordsOf(effect, lab) : null);
 }
 
-/** A pod option that cannot start yet: the pod secrets that this computer does not store. */
-export function missingLine(option: CallOption): string | null {
+/**
+ * A pod option that cannot start yet: how many pod secrets this computer
+ * does not store, and their names when Verifold sends them. Null: none is
+ * missing, or Verifold cannot tell.
+ */
+export function missingSecrets(option: CallOption): {
+  readonly count: number;
+  readonly names: readonly string[] | null;
+} | null {
   const effect = option.effect;
   if (effect?.type !== 'pod' || !effect.missing) return null;
-  return `Needs ${effect.missing} pod ${effect.missing === 1 ? 'secret' : 'secrets'} that this computer does not store yet.`;
+  return {
+    count: effect.missing,
+    names: effect.missingNames?.length ? effect.missingNames : null,
+  };
 }
 
 /**

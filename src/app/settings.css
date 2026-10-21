@@ -174,3 +174,22 @@
 .pods-line:hover {
   color: var(--accent-ink);
 }
+
+/* The pods of a project without a lab, above its notice. */
+.pods-panel {
+  width: 100%;
+  max-width: var(--column);
+  margin: 18px auto 0;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pods-panel:empty {
+  display: none;
+}
+
+.pod-work {
+  display: block;
+}

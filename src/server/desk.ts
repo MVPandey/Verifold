@@ -52,7 +52,11 @@ import {
 } from '../legacy/tasks.ts';
 import { coordinatorContext, type Coordinator } from '../legacy/coordinator.ts';
 import { labGpu, type Compute } from '../core/compute.ts';
-import { computeAction, setAgentsAtOnce } from './compute-actions.ts';
+import {
+  ComputeRequests,
+  computeAction,
+  setAgentsAtOnce,
+} from './compute-actions.ts';
 import { commitId, directionId, proofRef, runId } from '../core/board.ts';
 import {
   startLabOn,
@@ -907,6 +911,7 @@ async function act(
   body: Record<string, unknown>,
   memory: ProjectMemory | undefined,
   labDesk: LabDesk,
+  pods: ComputeRequests,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -1031,16 +1036,13 @@ async function act(
     await taskAction(tasks, body, coordinator);
     return 200;
   }
-  if (body.action === 'compute-agents') {
-    await setAgentsAtOnce(root, sessions, body.agents);
-    return 200;
-  }
-  if (
-    compute &&
-    typeof body.action === 'string' &&
-    body.action.startsWith('compute-')
-  )
-    return computeAction(compute, body);
+  if (typeof body.action === 'string' && body.action.startsWith('compute-'))
+    return pods.act(body, async () => {
+      if (body.action !== 'compute-agents')
+        return compute ? computeAction(compute, body) : 400;
+      await setAgentsAtOnce(root, sessions, body.agents);
+      return 200;
+    });
   if (
     coordinator &&
     tasks &&
@@ -1184,6 +1186,8 @@ export async function startDesk(
     diffs: new Map(),
     brings: new Map(),
   };
+  // The pod actions of this desk: one answer per intent, and the slow ones in the background.
+  const pods = new ComputeRequests();
   // The API reads the desk's current project, so a setup desk serves the project once attach() sets it.
   const apiReader = new ApiReader(() => ({
     root: project,
@@ -1199,6 +1203,7 @@ export async function startDesk(
     },
     startProblem: options.startProblem,
     agentsAtOnce: () => sessions?.limit ?? null,
+    computeWorks: () => pods.works,
     // The same reads as the desk's bring-in panel and its diffs.
     bring: {
       list: async (direction) => {
@@ -1398,6 +1403,7 @@ export async function startDesk(
             body,
             memory,
             labDesk,
+            pods,
           ),
         options.firstRun,
         // A project starts only once, from a desk that has none.
@@ -1442,6 +1448,7 @@ export async function startDesk(
             body,
             memory,
             labDesk,
+            pods,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;

@@ -30,6 +30,8 @@ import { DiffPage } from './screens/DiffPage.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
+import { AppHeader } from './components/AppHeader.tsx';
+import { PodNeeds, PodsLine } from './components/Pods.tsx';
 import { SetupPage } from './screens/Setup.tsx';
 import { SettingsPage, type ComputeActions } from './screens/SettingsPage.tsx';
 import { setupActions, type SetupActions } from './setup.ts';
@@ -231,7 +233,30 @@ export function Screen({
       />
     );
   const lab = snapshot.lab;
-  if (!lab) return <NoLab snapshot={snapshot} onStart={startLab} />;
+  if (!lab)
+    return (
+      <div className="page">
+        <AppHeader
+          project={snapshot.project}
+          lab={null}
+          now={now}
+          onPause={actions.pause}
+        />
+        {/* The pods need the person with or without a lab. */}
+        {snapshot.compute && (
+          <section className="pods-panel" aria-label="Pods">
+            <PodNeeds
+              compute={snapshot.compute}
+              lab={null}
+              now={now}
+              actions={compute}
+            />
+            <PodsLine compute={snapshot.compute} />
+          </section>
+        )}
+        <NoLab snapshot={snapshot} onStart={startLab} />
+      </div>
+    );
   if (route.page === 'lab' || route.page === 'call')
     return (
       <>
@@ -242,7 +267,7 @@ export function Screen({
           now={now}
           actions={actions}
           agentActions={agentActions}
-          onPod={compute.pod}
+          pods={compute}
           show={route.page === 'lab' ? (route.post ?? null) : null}
         />
         {route.page === 'call' && (
