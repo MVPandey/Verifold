@@ -999,11 +999,14 @@ function codex(options: HostOptions): HostSession {
       options.executable ?? 'codex',
       // A top-level -c reaches the app-server. Search does not use the sandbox's network.
       ...(options.liveSearch ? ['-c', 'web_search="live"'] : []),
+      // A skill's MCP dependencies would go into the person's own Codex settings.
+      // The same as `--disable`, which an older app-server may refuse.
+      ...(options.skills
+        ? ['-c', 'features.skill_mcp_dependency_install=false']
+        : []),
       'app-server',
       '--listen',
       `unix://${socket}`,
-      // A skill's MCP dependencies would go into the person's own Codex settings.
-      ...(options.skills ? ['--disable', 'skill_mcp_dependency_install'] : []),
     ],
     options,
   );
