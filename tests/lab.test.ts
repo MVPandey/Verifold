@@ -261,11 +261,21 @@ onLine((line) => {
   }
   if (message.method === 'initialize') out({ id: message.id, result: {} });
   if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
+  // Two pages of models, as Codex lists them. The most capable model is on the second page.
+  if (message.method === 'model/list') {
+    fs.appendFileSync(path.join(log, 'models.jsonl'), JSON.stringify(message.params) + '\\n');
+    if (fs.existsSync(path.join(base, 'models-fail'))) return out({ id: message.id, error: { code: -32601, message: 'Method not found' } });
+    if (!message.params.cursor) return out({ id: message.id, result: { data: [
+      { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true, hidden: false },
+      { id: 'gpt-6-astra-preview', model: 'gpt-6-astra-preview', hidden: true },
+    ], nextCursor: 'page-2' } });
+    return out({ id: message.id, result: { data: [{ id: 'gpt-6-astra', model: 'gpt-6-astra', isDefault: false }], nextCursor: null } });
+  }
   if (message.method === 'thread/start') {
     fs.appendFileSync(path.join(log, 'threads.jsonl'), JSON.stringify({ method: 'start', params: message.params }) + '\\n');
     thread = 'codex-thread-' + process.pid;
     fs.writeFileSync(path.join(log, 'tools-' + thread + '.json'), JSON.stringify((message.params.dynamicTools || []).map((tool) => tool.name)));
-    out({ id: message.id, result: { thread: { id: thread } } });
+    out({ id: message.id, result: { thread: { id: thread }, model: message.params.model || 'codex-default' } });
   }
   if (message.method === 'thread/resume') {
     fs.appendFileSync(path.join(log, 'threads.jsonl'), JSON.stringify({ method: 'resume' }) + '\\n');
@@ -360,6 +370,8 @@ async function fixture(
     /** The sandbox of runs. Default: none at all, so a run's command runs as it is. Null: no runs. */
     readonly sandbox?: Sandbox | null;
     readonly compute?: LabCompute;
+    /** The model for an agent of a harness, as the owner resolves it. */
+    readonly model?: (host: 'claude' | 'codex') => Promise<string | null>;
   } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
@@ -429,6 +441,7 @@ async function fixture(
         ...(options.minuteMs ? { minuteMs: options.minuteMs } : {}),
       },
       ...(options.compute ? { compute: options.compute } : {}),
+      ...(options.model ? { model: options.model } : {}),
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
     });
@@ -1029,6 +1042,71 @@ await test('without a sandbox for runs, agents get no run tools and run experime
   const first = (await lab.inputs('d-1-beta'))[0] ?? '';
   assert.doesNotMatch(first, /verifold_run|Runs on this computer/);
   assert.match(first, /run experiments that fit on this computer/);
+});
+
+await test('lab agents run Opus in Claude Code and the most capable Codex model', async (t) => {
+  // The owner answers for Claude Code, here with the person's own Opus
+  // default. Codex picks on the agent's own app-server: the most capable
+  // model on any page of its list.
+  let claudeAsks = 0;
+  const lab = await fixture(t, {
+    // A direction opens before its model is known, so its first conversation asks again.
+    model: (host) =>
+      Promise.resolve(
+        host === 'claude' && claudeAsks++ > 0 ? 'opus[1m]' : null,
+      ),
+  });
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'codex' },
+  ]);
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha')).length >= 1 &&
+      (await lab.inputs('d-2-beta')).length >= 1,
+  );
+  const args = JSON.parse(
+    await readFile(join(lab.base, 'logs', 'd-1-alpha', 'args.json'), 'utf8'),
+  ) as string[];
+  assert.equal(args[args.indexOf('--model') + 1], 'opus[1m]');
+  assert.equal((await lab.lines('d-2-beta', 'models.jsonl')).length, 2);
+  const thread = (
+    (await lab.lines('d-2-beta', 'threads.jsonl')) as {
+      params: { model?: string };
+    }[]
+  )[0]?.params;
+  assert.equal(thread?.model, 'gpt-6-astra');
+  // The session keeps the model that Codex reports, and the panel shows it.
+  const session = lab.lab.view()?.directions[1]?.agent.session ?? '';
+  await until(
+    () => lab.sessions.view(session)?.record.reportedModel === 'gpt-6-astra',
+  );
+});
+
+await test("a project model wins, and a refused model list keeps the person's own Codex model", async (t) => {
+  const named = await fixture(t, {
+    model: (host) => Promise.resolve(host === 'codex' ? 'gpt-custom' : null),
+  });
+  await open(named, [{ title: 'Beta', harness: 'codex' }]);
+  await until(async () => (await named.inputs('d-1-beta')).length >= 1);
+  const thread = (
+    (await named.lines('d-1-beta', 'threads.jsonl')) as {
+      params: { model?: string };
+    }[]
+  )[0]?.params;
+  assert.equal(thread?.model, 'gpt-custom');
+  assert.deepEqual(await named.lines('d-1-beta', 'models.jsonl'), []);
+
+  const refused = await fixture(t);
+  await writeFile(join(refused.base, 'models-fail'), '');
+  await open(refused, [{ title: 'Beta', harness: 'codex' }]);
+  await until(async () => (await refused.inputs('d-1-beta')).length >= 1);
+  const started = (
+    (await refused.lines('d-1-beta', 'threads.jsonl')) as {
+      params: { model?: string };
+    }[]
+  )[0]?.params;
+  assert.equal(started?.model, undefined);
 });
 
 await test('with pods, an agent asks for a pod for its own direction, runs on it, and wakes when the lease changes', async (t) => {
@@ -4525,12 +4603,15 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   // Codex denies the lab's records, the other folders, and both harnesses' transcripts.
   const threads = (await lab.lines('k-1', 'threads.jsonl')) as {
     params: {
+      model?: string;
       config: {
         permissions: Record<string, { filesystem: Record<string, string> }>;
       };
       dynamicTools: { name: string }[];
     };
   }[];
+  // A checker runs the most capable model too.
+  assert.equal(threads[0]?.params.model, 'gpt-6-astra');
   const denied =
     threads[0]?.params.config.permissions['verifold-strict']?.filesystem;
   for (const path of [
@@ -4881,7 +4962,11 @@ await test('a rerun that does not hold takes back the verdict, and the claim can
 
 await test('with one harness a fresh session of the same harness checks, and a check that runs out of time fails and keeps the dispute open', async (t) => {
   // With a team, the lab's first agent plans it (claude-1), so Alpha is d-2 (claude-2).
-  const lab = await fixture(t, { harnesses: ['claude'], minuteMs: 10 });
+  const lab = await fixture(t, {
+    harnesses: ['claude'],
+    minuteMs: 10,
+    model: (host) => Promise.resolve(host === 'claude' ? 'opus[1m]' : null),
+  });
   await claimWithRun(lab, [], 'd-2-alpha');
   // The checker never posts: its turn waits until its time ends.
   await lab.script('k-1', [{ calls: [{ name: 'WAIT' }] }]);
@@ -4909,6 +4994,8 @@ await test('with one harness a fresh session of the same harness checks, and a c
   const args = JSON.parse(
     await readFile(join(lab.base, 'logs', 'k-1', 'args.json'), 'utf8'),
   ) as string[];
+  // The checker gets the same model as the lab's other Claude Code agents.
+  assert.equal(args[args.indexOf('--model') + 1], 'opus[1m]');
   const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}') as {
     sandbox: { filesystem: { denyRead: string[] } };
     permissions: { deny: string[] };

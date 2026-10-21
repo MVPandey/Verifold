@@ -8663,6 +8663,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     const sessions = this.options.sessions;
     let saved: SessionRecord | null;
     let prompt: string | null;
+    let model: string | null = agent.model;
     try {
       // A Codex thread keeps its tools, so a thread with older tools, or
       // without the pod tools while pods are on, gives way to a new one.
@@ -8676,6 +8677,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           : null;
       prompt =
         saved && agentResumable(saved) ? null : await this.firstPrompt(agent);
+      // A new conversation of an agent without a model, such as one from
+      // before Verifold chose models, asks for the model again.
+      if (prompt !== null && model === null)
+        model = (await this.options.model?.(agent.host)) ?? null;
     } catch (error) {
       // The agent waits before its next try, so the agents after it start meanwhile.
       this.options.progress?.(
@@ -8727,7 +8732,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       } else {
         const session = await sessions.startAgent({
           host: agent.host,
-          ...(agent.model ? { model: agent.model } : {}),
+          ...(model ? { model } : {}),
           prompt: prompt ?? '',
           cwd: join(this.root, direction.workspace.path),
           agent: id,
