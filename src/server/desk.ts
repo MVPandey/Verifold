@@ -52,6 +52,11 @@ import {
 } from '../legacy/tasks.ts';
 import { coordinatorContext, type Coordinator } from '../legacy/coordinator.ts';
 import { labGpu, type Compute } from '../core/compute.ts';
+import {
+  ComputeRequests,
+  computeAction,
+  setAgentsAtOnce,
+} from './compute-actions.ts';
 import { commitId, directionId, proofRef, runId } from '../core/board.ts';
 import {
   startLabOn,
@@ -61,13 +66,7 @@ import {
 } from '../core/lab.ts';
 import type { Away } from '../core/away.ts';
 import type { LabDiff, LabWork } from '../desk/desk-lab.ts';
-import {
-  changeWorkspace,
-  loadWorkspace,
-  readJson,
-  writePrivateFile,
-} from '../core/storage.ts';
-import { validAgents } from '../core/contracts.ts';
+import { loadWorkspace, readJson, writePrivateFile } from '../core/storage.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi, type ProjectStart } from './api.ts';
 import { labScreen, type LabScreen } from './screen.ts';
@@ -204,56 +203,6 @@ async function taskAction(
 async function terminalSupport(): Promise<true | string> {
   const library = await ptyLibrary();
   return typeof library === 'string' ? library : true;
-}
-
-/** Compute actions. The key and secret values come only in a request body, and no reply or record holds them. */
-async function computeAction(
-  compute: Compute,
-  body: Record<string, unknown>,
-): Promise<number> {
-  switch (body.action) {
-    case 'compute-key-save':
-      await compute.setKey(body.key, body.file);
-      return 200;
-    case 'compute-key-check':
-      await compute.checkKey();
-      return 200;
-    case 'compute-key-remove':
-      await compute.removeKey();
-      return 200;
-    case 'compute-secret-save':
-      await compute.setSecret(body.name, body.value, body.file);
-      return 200;
-    case 'compute-secret-remove':
-      await compute.removeSecret(body.secret);
-      return 200;
-    case 'compute-gpus':
-      await compute.refreshGpus();
-      return 200;
-    case 'compute-settings':
-      await compute.saveSettings(body);
-      return 200;
-    case 'compute-lease-approve':
-      await compute.leases.approve(body.lease);
-      return 200;
-    case 'compute-lease-deny':
-      await compute.leases.deny(body.lease);
-      return 200;
-    case 'compute-lease-stop':
-      await compute.leases.stop(body.lease, 'person', 'you stopped it.');
-      return 200;
-    case 'compute-lease-start':
-      await compute.leases.start(body.lease, 'person', 'you started it.');
-      return 200;
-    case 'compute-lease-end':
-      await compute.leases.end(body.lease, 'person', 'you ended it.');
-      return 200;
-    case 'compute-lease-dismiss':
-      await compute.leases.dismiss(body.lease);
-      return 200;
-    default:
-      return 400;
-  }
 }
 
 /**
@@ -962,6 +911,7 @@ async function act(
   body: Record<string, unknown>,
   memory: ProjectMemory | undefined,
   labDesk: LabDesk,
+  pods: ComputeRequests,
 ): Promise<number> {
   if (body.action === 'setup') {
     if (!setup) return 400;
@@ -1086,26 +1036,13 @@ async function act(
     await taskAction(tasks, body, coordinator);
     return 200;
   }
-  if (body.action === 'compute-agents') {
-    const agents = body.agents;
-    if (!validAgents(agents))
-      throw new SessionActionError(
-        'Choose a whole number of agents from 1 to 8.',
-      );
-    await changeWorkspace(root, (current) => {
-      if (!current) throw new SessionActionError('The project has no record.');
-      return { ...current, agents };
+  if (typeof body.action === 'string' && body.action.startsWith('compute-'))
+    return pods.act(body, async () => {
+      if (body.action !== 'compute-agents')
+        return compute ? computeAction(compute, body) : 400;
+      await setAgentsAtOnce(root, sessions, body.agents);
+      return 200;
     });
-    // A lower limit stops no agent. New starts wait until fewer run.
-    sessions.limit = agents;
-    return 200;
-  }
-  if (
-    compute &&
-    typeof body.action === 'string' &&
-    body.action.startsWith('compute-')
-  )
-    return computeAction(compute, body);
   if (
     coordinator &&
     tasks &&
@@ -1249,6 +1186,8 @@ export async function startDesk(
     diffs: new Map(),
     brings: new Map(),
   };
+  // The pod actions of this desk: one answer per intent, and the slow ones in the background.
+  const pods = new ComputeRequests();
   // The API reads the desk's current project, so a setup desk serves the project once attach() sets it.
   const apiReader = new ApiReader(() => ({
     root: project,
@@ -1263,6 +1202,8 @@ export async function startDesk(
         : null;
     },
     startProblem: options.startProblem,
+    agentsAtOnce: () => sessions?.limit ?? null,
+    computeWorks: () => pods.works,
     // The same reads as the desk's bring-in panel and its diffs.
     bring: {
       list: async (direction) => {
@@ -1462,6 +1403,7 @@ export async function startDesk(
             body,
             memory,
             labDesk,
+            pods,
           ),
         options.firstRun,
         // A project starts only once, from a desk that has none.
@@ -1506,6 +1448,7 @@ export async function startDesk(
             body,
             memory,
             labDesk,
+            pods,
           );
         } catch (error) {
           if (!(error instanceof SessionActionError)) throw error;

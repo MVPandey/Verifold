@@ -25,7 +25,8 @@ import {
   type LabReadSource,
 } from '../src/server/api.ts';
 import { startDesk } from '../src/server/desk.ts';
-import { changeWorkspace } from '../src/core/storage.ts';
+import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
+import { fakePod, key as runpodKey } from './fake-pod.ts';
 import { computeDefaults, type ComputeView } from '../src/core/compute.ts';
 import { SessionActionError } from '../src/core/session.ts';
 import {
@@ -54,6 +55,7 @@ import {
   type Snapshot,
   type TurnDetail,
   type TurnPage,
+  type Work,
 } from '../src/protocol/api.ts';
 
 const at = (minute: number): string =>
@@ -359,7 +361,7 @@ function call(more: Partial<Call> = {}): Call {
           type: 'pod',
           gpuType: 'NVIDIA H100 80GB HBM3',
           hours: 3,
-          secrets: ['RUNPOD_FAKE_SECRET'],
+          secrets: ['HF_TOKEN'],
         },
       },
       { label: 'Use this Mac', usd: 0, minutes: 540, effect: null },
@@ -494,7 +496,8 @@ function lease(): Lease {
     reason: 'Seeds 2 and 3.',
     tasks: [],
     directions: ['d-1'],
-    secrets: ['RUNPOD_FAKE_SECRET'],
+    // A pod's secret names show in the snapshot, never their values.
+    secrets: ['HF_TOKEN'],
     gpu: 'NVIDIA H100 80GB HBM3',
     image: 'runpod/pytorch',
     diskGb: 50,
@@ -766,6 +769,7 @@ await test('the snapshot holds what the screens show, and no internal field, key
     hours: 3,
     secrets: 1,
     missing: 1,
+    missingNames: ['HF_TOKEN'],
   });
   assert.equal(waiting.undoMinutes, 10);
   assert.equal(lab.answered[0]?.id, 'c-2');
@@ -971,36 +975,68 @@ await test('a project without a lab: the snapshot holds its question and why its
   assert.equal('startProblem' in none, false);
 });
 
-await test('a pod option says how many of its secrets this computer lacks, and storing one updates it', async (t) => {
+await test('a pod option names the secrets that this computer lacks, and storing one updates it', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   const missing = async (reader: ApiReader): Promise<unknown> => {
     const effect = parse(await reader.snapshot()).lab?.needsYou[0]?.options[0]
       ?.effect;
-    return effect?.type === 'pod' ? effect.missing : 'no pod';
+    return effect?.type === 'pod'
+      ? { count: effect.missing, names: effect.missingNames }
+      : 'no pod';
   };
   // Without Compute, Verifold cannot tell.
-  assert.equal(await missing(new ApiReader(sources(root, seededView))), null);
+  assert.deepEqual(await missing(new ApiReader(sources(root, seededView))), {
+    count: null,
+    names: undefined,
+  });
   let secrets: ComputeView['secrets'] = [];
   const reader = new ApiReader(
     sources(root, seededView, {
       compute: { view: () => ({ ...computeView(), secrets }) },
     }),
   );
-  assert.equal(await missing(reader), 1);
+  assert.deepEqual(await missing(reader), { count: 1, names: ['HF_TOKEN'] });
   const before = await reader.signal();
   secrets = [
     {
-      name: 'RUNPOD_FAKE_SECRET',
+      name: 'HF_TOKEN',
       place: 'keychain',
-      last4: 'cret',
+      last4: 'oken',
       savedAt: at(5),
     },
   ];
   // The stored secret is part of the change signal, so a stream pushes the new count.
   const after = await reader.signal();
   assert.notDeepEqual(after, before);
-  assert.equal(await missing(reader), 0);
+  assert.deepEqual(await missing(reader), { count: 0, names: [] });
+});
+
+await test("the snapshot's pod actions in the background are the newest 20, and a change of them changes the signal", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let works: readonly Work[] = [];
+  const reader = new ApiReader(
+    sources(root, () => null, {
+      compute: { view: computeView },
+      computeWorks: () => works,
+    }),
+  );
+  assert.deepEqual(parse(await reader.snapshot()).compute?.works, []);
+  const before = await reader.signal();
+  works = Array.from({ length: 25 }, (_, index) => ({
+    action: 'compute-lease-end',
+    label: `Ending the pod: lease-${index + 1}`,
+    at: at(index),
+    error: 'RunPod did not answer.',
+    lease: `lease-${index + 1}`,
+  }));
+  assert.notDeepEqual(await reader.signal(), before);
+  const shown = parse(await reader.snapshot()).compute?.works ?? [];
+  assert.deepEqual(
+    [shown.length, shown[0]?.lease, shown.at(-1)],
+    [20, 'lease-6', works.at(-1)],
+  );
 });
 
 await test('a large lab stays inside the snapshot bound and says that it is trimmed', async (t) => {
@@ -2769,4 +2805,258 @@ await test('a dismiss clears only the background failures that the page names, a
   // An older page names nothing: every failure goes.
   assert.equal((await act('lab-dismiss', {}, 'd'.repeat(32))).status, 200);
   assert.deepEqual((await works())?.works, []);
+});
+
+await test("the settings page reads the project's pods and settings, and changes them through API v1", async (t) => {
+  const fake = await fakePod(t);
+  const root = await realpath(fake.root);
+  await changeWorkspace(root, () => ({
+    schemaVersion: 1,
+    visibility: 'private',
+    profile: {
+      name: 'R',
+      interests: ['Probes'],
+      scholar: '',
+      github: '',
+      session: '',
+    },
+    host: 'claude',
+    candidates: [],
+    selectedId: null,
+  }));
+  const sessions = {
+    limit: 3,
+    view: () => null,
+    views: () => [],
+  } as unknown as SessionPool;
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    await deskAssets(root),
+    sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    fake.compute,
+    undefined,
+    { api: { pollMs: 40, heartbeatMs: 100 } },
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const api = `${url.origin}/api/v1`;
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const read = async (): Promise<{ text: string; snapshot: Snapshot }> => {
+    const text = await (await fetch(`${api}/snapshot`, { headers })).text();
+    return { text, snapshot: JSON.parse(text) as Snapshot };
+  };
+  const compute = async () => {
+    const shown = (await read()).snapshot.compute;
+    assert.ok(shown);
+    return shown;
+  };
+  const act = (name: string, body: Record<string, unknown>, auth = headers) =>
+    fetch(`${api}/actions/${name}`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const refused = async (response: Response): Promise<string> => {
+    assert.equal(response.status, 409);
+    return ((await response.json()) as { error: string }).error;
+  };
+
+  // Without a lab, the project's pods and settings show. The key shows only its last four characters.
+  const first = await read();
+  assert.equal(first.snapshot.lab, null);
+  const shown = await compute();
+  assert.deepEqual(shown.keyStored, {
+    last4: runpodKey.slice(-4),
+    problem: null,
+  });
+  assert.equal(shown.settings.limitUsd, 10);
+  assert.deepEqual(shown.settings.gpuTypes, ['NVIDIA RTX A5000']);
+  assert.equal(shown.agentsAtOnce, 3);
+  assert.match(shown.settingsVersion, /^[a-f0-9]{16}$/);
+  assert.deepEqual(
+    [shown.pods, shown.earlier, shown.earlierCount, shown.gpus, shown.works],
+    [[], [], 0, null, []],
+  );
+  assert.doesNotMatch(first.text, new RegExp(runpodKey));
+
+  // RunPod's prices, read on request.
+  assert.equal((await act('compute-gpus', {})).status, 200);
+  assert.deepEqual((await compute()).gpus?.types, [
+    {
+      id: 'NVIDIA RTX A5000',
+      name: 'RTX A5000',
+      memoryGb: 24,
+      usdPerHour: 0.27,
+      stock: 'high',
+      common: false,
+    },
+  ]);
+
+  // The settings change at once, with the desk's checks and words.
+  const settings = {
+    limitUsd: 20,
+    maxUsdPerHour: 1,
+    maxHoursPerLease: 4,
+    idleMinutes: 15,
+    maxRunningPods: 1,
+    gpuTypes: ['NVIDIA RTX A5000'],
+    images: ['runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404'],
+    diskGb: 50,
+    askBeforePod: true,
+  };
+  assert.equal((await act('compute-settings', settings)).status, 200);
+  assert.deepEqual((await compute()).settings, settings);
+  assert.match(
+    await refused(
+      await act('compute-settings', { ...settings, maxUsdPerHour: 0 }),
+    ),
+    /rate cap in USD per hour/,
+  );
+  assert.equal((await compute()).settings.maxUsdPerHour, 1);
+  // The app sends only the fields that the person changed, with the version that they edited.
+  const version = (await compute()).settingsVersion;
+  assert.equal(
+    (await act('compute-settings', { idleMinutes: 30, base: version })).status,
+    200,
+  );
+  const changed = await compute();
+  assert.deepEqual(changed.settings, { ...settings, idleMinutes: 30 });
+  assert.notEqual(changed.settingsVersion, version);
+  // A form from before that change is refused, and the newer settings stay.
+  assert.equal(
+    await refused(
+      await act('compute-settings', { limitUsd: 5, base: version }),
+    ),
+    'These settings changed while you edited them. Here is the new version.',
+  );
+  assert.deepEqual((await compute()).settings, changed.settings);
+
+  // "Agents at once" goes into the project's record and its worker slots.
+  assert.equal((await act('compute-agents', { agents: 5 })).status, 200);
+  assert.equal((await compute()).agentsAtOnce, 5);
+  assert.equal((await loadWorkspace(root)).agents, 5);
+  assert.equal(
+    await refused(await act('compute-agents', { agents: 9 })),
+    'Choose a whole number of agents from 1 to 8.',
+  );
+
+  // A pod that waits for the person, then its life: approve, stop, start again, and end.
+  await fake.compute.leases.request({
+    by: 'agent',
+    gpu: 'NVIDIA RTX A5000',
+    hours: 2,
+    directions: ['d-1'],
+    reason: 'Train the probe on 3 seeds.',
+  });
+  const [waiting] = (await compute()).pods;
+  assert.ok(waiting);
+  assert.deepEqual(
+    [
+      waiting.id,
+      waiting.state,
+      waiting.asker,
+      waiting.directions,
+      waiting.reason.text,
+      waiting.hours,
+      waiting.missingSecrets,
+    ],
+    [
+      'lease-1',
+      'requested',
+      'agent',
+      ['d-1'],
+      'Train the probe on 3 seeds.',
+      2,
+      [],
+    ],
+  );
+  assert.ok(waiting.maxUsd > 0.54 && waiting.maxUsd < 0.6);
+  const state = async (lease: string) => {
+    const now = await compute();
+    return [...now.pods, ...now.earlier].find((pod) => pod.id === lease)?.state;
+  };
+  for (const [action, after] of [
+    ['approve', 'starting'],
+    ['stop', 'stopped'],
+    ['start', 'starting'],
+    ['end', 'ended'],
+  ] as const) {
+    assert.equal(
+      (await act(`compute-lease-${action}`, { lease: 'lease-1' })).status,
+      200,
+    );
+    assert.equal(await state('lease-1'), after);
+  }
+  const ended = await compute();
+  assert.deepEqual(
+    [ended.pods.length, ended.earlierCount, ended.earlier[0]?.ended?.reason],
+    [0, 1, 'you ended it.'],
+  );
+  // The snapshot holds no pod ID or address.
+  const text = (await read()).text;
+  assert.doesNotMatch(text, /pod1|podName|podId|"ssh"/);
+
+  // A pod that lacks a secret names it, and cannot start until the secret is stored.
+  await fake.compute.leases.request({
+    by: 'agent',
+    gpu: 'NVIDIA RTX A5000',
+    hours: 1,
+    directions: ['d-1'],
+    reason: 'A gated model.',
+    secrets: ['HF_TOKEN'],
+  });
+  const gated = (await compute()).pods.find((pod) => pod.id === 'lease-2');
+  assert.deepEqual(
+    [gated?.secrets, gated?.missingSecrets],
+    [['HF_TOKEN'], ['HF_TOKEN']],
+  );
+  assert.match(
+    await refused(await act('compute-lease-approve', { lease: 'lease-2' })),
+    /Store the secret HF_TOKEN first, with `verifold runpod secret set HF_TOKEN`\. The pod of lease-2 needs it\./,
+  );
+  // A retry with the same intent key gets the same answer, and runs nothing again.
+  const key = 'a'.repeat(32);
+  for (let index = 0; index < 2; index++)
+    assert.equal(
+      (await act('compute-lease-deny', { lease: 'lease-2', key })).status,
+      200,
+    );
+  assert.equal(await state('lease-2'), 'denied');
+  assert.equal(
+    await refused(
+      await act('compute-lease-deny', {
+        lease: 'lease-2',
+        key: 'b'.repeat(32),
+      }),
+    ),
+    'lease-2 does not wait for approval.',
+  );
+  assert.equal(
+    (await act('compute-lease-dismiss', { lease: 'lease-2' })).status,
+    200,
+  );
+  // Dismiss of the pod actions that failed in the background.
+  assert.equal((await act('compute-dismiss', {})).status, 200);
+  assert.deepEqual((await compute()).works, []);
+
+  // Without the token, nothing runs. The key and secret actions stay with the desk and the terminal.
+  assert.equal(
+    (await act('compute-agents', { agents: 2 }, { Authorization: 'Bearer no' }))
+      .status,
+    401,
+  );
+  assert.equal((await act('compute-key-save', { key: runpodKey })).status, 404);
+  assert.equal(
+    (await act('compute-secret-save', { name: 'HF_TOKEN', value: 'x' })).status,
+    404,
+  );
 });

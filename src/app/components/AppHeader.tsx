@@ -9,10 +9,10 @@ import { useAction } from '../useAction.ts';
 import { Logo, Magnifier } from './Icons.tsx';
 
 /**
- * The top bar: the project, the money line, search, pause, and a link to
- * the person's profile. The project switcher comes with a later slice of
- * #282, so the bar shows none until it works. Search shows when the app
- * gives it, as it does for a lab.
+ * The top bar: the project, the money line, search, pause, and links to the
+ * project's settings and the person's profile. The project switcher comes
+ * with a later slice of #282, so the bar shows none until it works. Search
+ * shows when the app gives it, as it does for a lab.
  */
 export function AppHeader({
   project,
@@ -61,6 +61,9 @@ export function AppHeader({
           {pause.error}
         </span>
       )}
+      <a className="header__link" href={href.settings}>
+        Settings
+      </a>
       <a className="header__link" href={href.setup('agents')}>
         Profile
       </a>

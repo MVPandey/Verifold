@@ -1790,7 +1790,7 @@ await test('the coordinator reads the compute limits and asks for a pod, and onl
   // A request that names a secret that is not stored asks the person for it.
   assert.match(
     answers[5]?.result.content[0]?.text ?? '',
-    /^Asked the person to add the secret HF_TOKEN in Compute for lease-2: .* Then the person approves the pod\./,
+    /^Asked the person to store the secret HF_TOKEN for lease-2: .* Then the person approves the pod\./,
   );
   assert.deepEqual(pods?.leases.get('lease-2').secrets, ['HF_TOKEN']);
   // The coordinator cannot approve: nothing was created at RunPod.

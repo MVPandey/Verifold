@@ -6,7 +6,7 @@ import { newKey } from '../intent.ts';
 import { href } from '../route.ts';
 import type { SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
-import { readAt } from './SetupMoney.tsx';
+import { readAt } from '../components/Limits.tsx';
 
 /** "A", "A and B", "A, B and C". */
 function list(items: readonly string[]): string {

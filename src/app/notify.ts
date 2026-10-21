@@ -1,11 +1,13 @@
-import type { Lab } from '../protocol/api.ts';
+import type { Lab, ProjectCompute } from '../protocol/api.ts';
+import { usd } from './format.ts';
+import { gpuName, podAsker, waitingPods } from './pods.ts';
 import { href } from './route.ts';
 
 /**
- * Desktop notifications, the decisions only. A note comes for each call that
- * waits for the person and each direction that holds up or is ruled out,
- * once, while the page is in the background, and only after the person
- * turned notes on. Events that the page found when it loaded never notify.
+ * Desktop notifications, the decisions only. A note comes for each call and
+ * each pod that waits for the person, and each direction that holds up or is
+ * ruled out, once, while the page is in the background, and only after the
+ * person turned notes on. Events that the page found when it loaded never notify.
  * The events come from the snapshot's `notify` lists, which no level cuts,
  * so a smaller snapshot neither hides a new event nor makes an old one new.
  */
@@ -51,8 +53,24 @@ export const freshMemory: NotifyMemory = { primed: false, seen: new Set() };
  * The events of a lab that a note can be about, as notes. An event that the
  * snapshot's lists leave out gets plain words and opens the page that can
  * show it. An older server sends no `notify`: then its lists are the events.
+ * Each pod that waits for the person is an event too.
  */
-export function events(lab: Lab, project: string): readonly Note[] {
+export function events(
+  lab: Lab | null,
+  project: string,
+  compute?: ProjectCompute,
+): readonly Note[] {
+  const pods = (compute ? waitingPods(compute) : []).map((pod): Note => {
+    const who = podAsker(pod, lab);
+    return {
+      key: `pod:${pod.id}`,
+      title: `${project} needs you`,
+      body: `${who} ${who === 'You' ? 'asked' : 'asks'} for a pod with one ${compute ? gpuName(pod.gpu, compute) : pod.gpu}, up to ${usd(pod.maxUsd)}.`,
+      route: href.lab,
+    };
+  });
+  // A project without a lab still has its pods.
+  if (!lab) return pods;
   const calls = new Map(lab.needsYou.map((call) => [call.id, call]));
   const titles = new Map(
     lab.directions.map((direction) => [direction.id, direction.title]),
@@ -87,6 +105,7 @@ export function events(lab: Lab, project: string): readonly Note[] {
         route: call ? href.call(id) : href.lab,
       };
     }),
+    ...pods,
     ...feed.holdsUp.map((id) => direction(id, 'holds-up')),
     ...feed.ruledOut.map((id) => direction(id, 'ruled-out')),
   ];
@@ -94,10 +113,10 @@ export function events(lab: Lab, project: string): readonly Note[] {
 
 /**
  * The notes for a new snapshot, and what the page remembers after it. The
- * first lab that the page sees only primes the memory. After that, each new
- * event notifies once, if notes are on and the page is in the background.
- * An event that comes while the person looks is seen, and never notifies
- * later.
+ * first lab or pods that the page sees only prime the memory. After that,
+ * each new event notifies once, if notes are on and the page is in the
+ * background. An event that comes while the person looks is seen, and never
+ * notifies later.
  */
 export function notesFor(
   memory: NotifyMemory,
@@ -105,10 +124,13 @@ export function notesFor(
   project: string,
   background: boolean,
   on: boolean,
+  compute?: ProjectCompute,
 ): { readonly notes: readonly Note[]; readonly memory: NotifyMemory } {
-  if (!lab) return { notes: [], memory };
+  if (!lab && !compute) return { notes: [], memory };
   const seen = new Set(memory.seen);
-  const fresh = events(lab, project).filter((note) => !seen.has(note.key));
+  const fresh = events(lab, project, compute).filter(
+    (note) => !seen.has(note.key),
+  );
   for (const note of fresh) seen.add(note.key);
   return {
     notes: memory.primed && on && background ? fresh : [],
@@ -124,12 +146,12 @@ export function notifyLine(state: NotifyState): {
   switch (state) {
     case 'on':
       return {
-        text: 'Desktop notifications are on: one for each call and each settled direction while this page is in the background.',
+        text: 'Desktop notifications are on: one for each call, each pod request, and each settled direction while this page is in the background.',
         button: 'Turn off',
       };
     case 'off':
       return {
-        text: 'Get a desktop notification for each call and each settled direction while this page is in the background.',
+        text: 'Get a desktop notification for each call, each pod request, and each settled direction while this page is in the background.',
         button: 'Turn on',
       };
     case 'blocked':

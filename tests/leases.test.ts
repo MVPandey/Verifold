@@ -523,6 +523,7 @@ await test('the spend limit, a rate above the cap, and a failed create end the l
   assert.match(lease.notice ?? '', /spend limit of \$10\.00 is reached/);
   await leases.dismiss(first);
   assert.equal(leases.get(first).notice, null);
+  assert.equal(leases.get(first).noticeAt, null);
 
   // A pod that bills above the cap is deleted at once.
   await compute.saveSettings({
@@ -576,8 +577,14 @@ await test('recovery adopts a pod whose create reply was lost, and stops a pod t
     recovered.notice ?? '',
     /ran while Verifold was not running, so Verifold stopped it\. That time cost about \$0\.2[78]/,
   );
+  // The notice keeps the time that it came, also when later events change the lease.
+  const noticeAt = new Date(clock.now).toISOString();
+  assert.equal(recovered.noticeAt, noticeAt);
+  clock.now += 5 * 60_000;
   // On exit, running pods stop.
   await later.leases.start(id, 'person', 'again');
+  assert.equal(later.leases.get(id).noticeAt, noticeAt);
+  assert.notEqual(later.leases.get(id).history.at(-1)?.at, noticeAt);
   await later.leases.poll();
   await later.leases.poll();
   assert.deepEqual(await later.close(), []);
@@ -734,7 +741,7 @@ await test('a pod gets the secrets that its request names, and a missing secret 
   // Without the secret, the pod does not start, and the request waits.
   await assert.rejects(
     compute.leases.approve(lease.id, 'verifold'),
-    /Add the secret HF_TOKEN in Compute first\. The pod of lease-1 needs it\./,
+    /Store the secret HF_TOKEN first, with `verifold runpod secret set HF_TOKEN`\. The pod of lease-1 needs it\./,
   );
   assert.equal(compute.leases.get(lease.id).state, 'requested');
   assert.ok(!api.calls.includes('POST /v2/pods'));
@@ -795,6 +802,20 @@ await test('when the person approves each pod, a new secret leaves the request f
   assert.equal(compute.leases.get(lease.id).state, 'requested');
   assert.ok(!api.calls.includes('POST /v2/pods'));
   assert.deepEqual(compute.missingSecrets(compute.leases.get(lease.id)), []);
+});
+
+await test('a pod that lacks several secrets names a command for each', async (t) => {
+  const { compute, api } = await setup(t, { askBeforePod: true });
+  const lease = await compute.leases.request({
+    ...ask,
+    secrets: ['HF_TOKEN', 'WANDB_API_KEY'],
+  });
+  await assert.rejects(
+    compute.leases.approve(lease.id),
+    /Store the secrets HF_TOKEN and WANDB_API_KEY first, with `verifold runpod secret set HF_TOKEN` and `verifold runpod secret set WANDB_API_KEY`\. The pod of lease-1 needs them\./,
+  );
+  assert.equal(compute.leases.get(lease.id).state, 'requested');
+  assert.ok(!api.calls.includes('POST /v2/pods'));
 });
 
 await test('the monthly limit refuses a pod that does not fit, counts every project, follows the profile, and starts at zero in a new month', async (t) => {

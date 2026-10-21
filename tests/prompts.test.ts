@@ -5,6 +5,7 @@ import { parseResearchPlan } from '../src/core/research-contracts.ts';
 import { parseReport } from '../src/legacy/research.ts';
 import {
   loadPrompt as corePrompt,
+  promptIds as corePromptIds,
   type PromptId as CorePromptId,
 } from '../src/core/prompts.ts';
 import {
@@ -118,5 +119,14 @@ await test('profile and research prompts preserve distinct tool permissions', as
   assert.match(
     await legacyPrompt('research-rules'),
     /Use your own tools, permissions, and native subagents/,
+  );
+});
+
+await test("the lab's prompts send the person to the project's settings, which the old desk called Compute", async () => {
+  for (const id of corePromptIds)
+    assert.doesNotMatch(await corePrompt(id), /\bCompute\b/, id);
+  assert.match(
+    await corePrompt('lab-peer'),
+    /a RunPod key, or a spend limit in the project's settings/,
   );
 });

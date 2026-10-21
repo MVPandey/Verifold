@@ -417,7 +417,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   });
   await assert.rejects(
     sessions.start({ host: 'codex', mode: 'auto', prompt: 'Third' }),
-    /2 agents run, the most that "Agents at once" allows\. Wait for one to end, or raise the setting in Compute\./,
+    /2 agents run, the most that "Agents at once" allows\. Wait for one to end, or raise it in the project's settings\./,
   );
   let requests: string[] = [];
   for (let tries = 0; tries < 1000 && requests.length < 2; tries++) {

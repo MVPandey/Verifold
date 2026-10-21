@@ -260,7 +260,7 @@ await test("the lab home puts the digest first, and shows search, Dismiss, and t
   assert.match(html, />Dismiss<\/button>/);
   assert.match(
     html,
-    /Get a desktop notification for each call and each settled direction/,
+    /Get a desktop notification for each call, each pod request, and each settled direction/,
   );
   assert.match(html, />Turn on<\/button>/);
   // Rendered without the tools, as other tests do, the page shows none of their controls.
