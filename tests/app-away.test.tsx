@@ -11,6 +11,9 @@ import type {
   Snapshot,
 } from '../src/protocol/api.ts';
 import { appActions } from '../src/app/actions.ts';
+import type { ActOutcome } from '../src/app/api.ts';
+import { Screen, lookMs, sendLooks } from '../src/app/App.tsx';
+import { clock } from '../src/app/format.ts';
 import {
   events,
   freshMemory,
@@ -18,15 +21,20 @@ import {
   notifyLine,
   notifyState,
 } from '../src/app/notify.ts';
+import { boardLink } from '../src/app/board.ts';
+import { parseRoute } from '../src/app/route.ts';
 import {
+  callRead,
   hitAction,
+  isMac,
   isSearchKey,
   isSearchResult,
   nextHit,
-  searchKeyLabel,
+  searchKey,
   searchPath,
 } from '../src/app/search.ts';
 import { AwayDigest } from '../src/app/components/AwayDigest.tsx';
+import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from '../src/app/screens/LabHome.tsx';
 import { Hit } from '../src/app/screens/SearchDialog.tsx';
 import { ToolsContext, type AppTools } from '../src/app/tools.ts';
@@ -242,9 +250,10 @@ await test("the lab home puts the digest first, and shows search, Dismiss, and t
   const digest = html.indexOf('While you were away');
   const needs = html.indexOf('Needs you');
   assert.ok(digest > 0 && needs > digest, 'The digest comes before Needs you.');
+  // The key that this computer uses: ⌘K on a Mac, Ctrl+K elsewhere.
   assert.match(
     html,
-    /<button type="button" class="button button--search" aria-keyshortcuts="Meta\+K Control\+K">/,
+    /<button type="button" class="button button--search" aria-keyshortcuts="(Meta|Control)\+K">/,
   );
   assert.match(html, />Dismiss<\/button>/);
   assert.match(
@@ -347,10 +356,62 @@ await test('notifications are off by default, ask nothing on load, and come once
   );
 });
 
-const hits: Record<string, SearchHit> = {
+await test('notifications follow the uncut notify lists: no burst when a trimmed lab grows back, and a call past the cap still tells', () => {
+  const ids = Array.from({ length: 60 }, (_, index) => `c-${index + 1}`);
+  const calls = (count: number): Call[] =>
+    ids.slice(0, count).map((id) => call(id, `Question ${id}?`));
+  const feed = { calls: ids, holdsUp: ['d-1'], ruledOut: ['d-3'] };
+  // The page loads while the lab is large: the snapshot keeps 5 of 60 calls and no direction.
+  const small = lab({
+    needsYou: calls(5),
+    directions: [],
+    omitted: { needsYou: 55, directions: 2 },
+    notify: feed,
+  });
+  const loaded = notesFor(freshMemory, small, 'Lab', true, true);
+  assert.deepEqual(loaded.notes, []);
+  // The level returns to full: 50 calls and both directions show again, and none of them is new.
+  const full = lab({
+    needsYou: calls(50),
+    omitted: { needsYou: 10 },
+    notify: feed,
+  });
+  const back = notesFor(loaded.memory, full, 'Lab', true, true);
+  assert.deepEqual(back.notes, []);
+  // A new call past the cap of 50 is in no list, but the feed has it: one note, in plain words, that opens the lab.
+  const past = lab({
+    needsYou: calls(50),
+    omitted: { needsYou: 11 },
+    notify: { ...feed, calls: [...ids, 'c-61'] },
+  });
+  assert.deepEqual(notesFor(back.memory, past, 'Lab', true, true).notes, [
+    {
+      key: 'call:c-61',
+      title: 'Lab needs you',
+      body: 'Call c-61 waits for your answer.',
+      route: '#/',
+    },
+  ]);
+  // A direction that settles while the snapshot leaves it out goes by its ID.
+  const settled = lab({
+    directions: [],
+    omitted: { directions: 3 },
+    notify: { ...feed, ruledOut: ['d-3', 'd-7'] },
+  });
+  assert.deepEqual(
+    notesFor(back.memory, settled, 'Lab', true, true).notes.map((note) => [
+      note.key,
+      note.body,
+      note.route,
+    ]),
+    [['settled:d-7:ruled-out', 'Direction d-7 is ruled out.', '#/d/d-7']],
+  );
+});
+
+const hits = {
   onBoard: {
     type: 'post',
-    id: 'p-9',
+    id: 'p-48',
     at: ago(30),
     kind: 'claim',
     label: 'Claim',
@@ -361,44 +422,16 @@ const hits: Record<string, SearchHit> = {
       { text: 'seed', mark: true },
       { text: ' 1.', mark: false },
     ],
-    whole: null,
-    cut: false,
   },
   older: {
     type: 'post',
-    id: 'p-2',
+    id: 'p-40',
     at: ago(600),
     kind: 'objection',
     label: 'Objection',
     author: 'codex-2',
     direction: null,
     snippet: [{ text: '…the control CoTs were shorter.', mark: false }],
-    whole: 'A long objection. The control CoTs were shorter.',
-    cut: false,
-  },
-  cut: {
-    type: 'post',
-    id: 'p-1',
-    at: ago(700),
-    kind: 'plan',
-    label: 'Plan of record',
-    author: 'claude-1',
-    direction: null,
-    snippet: [{ text: 'How I read it', mark: false }],
-    whole: null,
-    cut: true,
-  },
-  short: {
-    type: 'post',
-    id: 'p-3',
-    at: ago(500),
-    kind: 'question',
-    label: 'Message',
-    author: 'You',
-    direction: null,
-    snippet: [{ text: 'Try Gemma.', mark: false }],
-    whole: null,
-    cut: false,
   },
   run: {
     type: 'run',
@@ -419,53 +452,77 @@ const hits: Record<string, SearchHit> = {
     at: ago(12),
     label: 'Cost call',
     author: 'claude-2',
-    state: 'waits for you',
-    open: true,
+    state: 'open',
+    summary: 'waits for you',
+    question: 'Rent an H100 for the probe reruns?',
+    answer: null,
+    note: null,
     snippet: [{ text: 'Rent an H100 for the probe reruns?', mark: false }],
   },
-};
+  answered: {
+    type: 'call',
+    id: 'c-1',
+    at: ago(900),
+    label: 'Go call',
+    author: 'Verifold',
+    state: 'answered',
+    summary: 'you chose "Continue"',
+    question: 'Continue 4 more hours?',
+    answer: { option: 'Continue', at: ago(880) },
+    note: 'The budget is 12 hours now.',
+    snippet: [{ text: 'Continue 4 more hours? (Continue)', mark: false }],
+  },
+} satisfies Record<string, SearchHit>;
 
-await test('the search key, what each hit opens, and the arrow keys between the box and the hits', () => {
+await test('the search key: ⌘K on a Mac, Ctrl+K elsewhere and never in a text box, by the letter that the layout gives', () => {
   const key = (
     fields: Partial<{
       key: string;
+      code: string;
       metaKey: boolean;
       ctrlKey: boolean;
       altKey: boolean;
+      shiftKey: boolean;
     }>,
-  ) =>
-    isSearchKey({
-      key: 'k',
-      metaKey: false,
-      ctrlKey: false,
-      altKey: false,
-      ...fields,
-    });
-  assert.equal(key({ metaKey: true }), true);
-  assert.equal(key({ ctrlKey: true, key: 'K' }), true);
-  assert.equal(key({}), false);
-  assert.equal(key({ metaKey: true, altKey: true }), false);
-  assert.equal(searchKeyLabel('MacIntel'), '⌘K');
-  assert.equal(searchKeyLabel('Win32'), 'Ctrl+K');
-  assert.equal(searchKeyLabel('Linux x86_64'), 'Ctrl+K');
-
-  const board = new Set(['p-9']);
-  assert.deepEqual(hitAction(hits.onBoard as SearchHit, board), {
-    type: 'go',
-    route: '#/',
-    post: 'p-9',
-  });
-  assert.deepEqual(hitAction(hits.older as SearchHit, board), { type: 'read' });
-  assert.deepEqual(hitAction(hits.run as SearchHit, board), {
-    type: 'go',
-    route: '#/d/d-2',
-    post: null,
-  });
-  assert.deepEqual(hitAction(hits.call as SearchHit, board), {
-    type: 'go',
-    route: '#/call/c-4',
-    post: null,
-  });
+    mac: boolean,
+    typing = false,
+  ): boolean =>
+    isSearchKey(
+      {
+        key: 'k',
+        code: 'KeyK',
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        ...fields,
+      },
+      mac,
+      typing,
+    );
+  // On a Mac only ⌘K, also in a text box, since ⌘K edits no text.
+  assert.equal(key({ metaKey: true }, true), true);
+  assert.equal(key({ metaKey: true }, true, true), true);
+  assert.equal(key({ ctrlKey: true }, true), false);
+  assert.equal(key({ metaKey: true, ctrlKey: true }, true), false);
+  // Elsewhere only Ctrl+K, and not in a text box, where it is the box's own key.
+  assert.equal(key({ ctrlKey: true }, false), true);
+  assert.equal(key({ ctrlKey: true, key: 'K' }, false), true);
+  assert.equal(key({ ctrlKey: true }, false, true), false);
+  assert.equal(key({ metaKey: true }, false), false);
+  assert.equal(key({}, false), false);
+  assert.equal(key({ metaKey: true, altKey: true }, true), false);
+  assert.equal(key({ ctrlKey: true, shiftKey: true }, false), false);
+  // Dvorak puts K elsewhere: the letter counts. Without Latin letters, the key's place does.
+  assert.equal(key({ metaKey: true, key: 'k', code: 'KeyV' }, true), true);
+  assert.equal(key({ metaKey: true, key: 't', code: 'KeyK' }, true), false);
+  assert.equal(key({ ctrlKey: true, key: 'л', code: 'KeyK' }, false), true);
+  assert.equal(isMac('MacIntel'), true);
+  assert.equal(isMac('iPad'), true);
+  assert.equal(isMac('Win32'), false);
+  assert.equal(isMac('Linux x86_64'), false);
+  assert.deepEqual(searchKey(true), { label: '⌘K', aria: 'Meta+K' });
+  assert.deepEqual(searchKey(false), { label: 'Ctrl+K', aria: 'Control+K' });
 
   // -1 is the box: down goes to the first hit, up from the first goes back.
   assert.equal(nextHit(-1, 3, 'ArrowDown'), 0);
@@ -479,62 +536,216 @@ await test('the search key, what each hit opens, and the arrow keys between the 
     q: 'seed',
     note: '1 hit, the newest first.',
     total: 1,
-    hits: [hits.run as SearchHit],
+    hits: [hits.run],
   };
   assert.equal(isSearchResult(result), true);
   assert.equal(isSearchResult({ hits: [] }), false);
 });
 
-await test('a hit is a link to its page, or opens the whole of an older post in place, and marks what matched', () => {
+/** A snapshot at a small level: the board keeps the newest 5 of 50 posts, and the lists keep less. */
+function trimmed(): Snapshot {
+  const shown = snapshot({
+    board: {
+      posts: [44, 45, 46, 47, 48].map((number) => ({
+        id: `p-${number}`,
+        at: ago(60 - number),
+        author: 'a-1',
+        handle: 'claude-2',
+        harness: 'claude',
+        kind: 'claim',
+        direction: 'd-1',
+        text: `Claim ${number}.`,
+        replyTo: null,
+        mentions: [],
+        proof: [],
+      })),
+      more: true,
+    },
+    omitted: { directions: 3, needsYou: 4 },
+  });
+  return { ...shown, trimmed: true };
+}
+
+const agentStub: AgentActions = {
+  message: () => Promise.resolve({ ok: true }),
+  turns: () => Promise.resolve({ error: 'not in this test' }),
+  turn: () => Promise.resolve({ error: 'not in this test' }),
+  thread: () => Promise.resolve({ error: 'not in this test' }),
+};
+
+function screen(shown: Snapshot, hash: string): string {
+  return renderToStaticMarkup(
+    <Screen
+      state={{ snapshot: shown, connection: 'live', retrying: false }}
+      route={parseRoute(hash)}
+      now={now}
+      actions={actions}
+      agentActions={agentStub}
+    />,
+  );
+}
+
+await test('every hit opens from what this snapshot holds: a post on the board or on its own page, a run on its direction, and a call in its dialog or here', () => {
+  // A trimmed snapshot: p-40 is among the newest 50 posts, but the board holds the newest 5.
+  const small = trimmed();
+  const lab = small.lab;
+  assert.ok(lab);
+  assert.deepEqual(hitAction(hits.onBoard, lab), {
+    type: 'go',
+    route: '#/board/p-48',
+  });
+  assert.deepEqual(hitAction(hits.older, lab), {
+    type: 'go',
+    route: '#/post/p-40',
+  });
+  assert.deepEqual(hitAction(hits.run, lab), {
+    type: 'go',
+    route: '#/d/d-2/run/r-3',
+  });
+  assert.deepEqual(hitAction(hits.call, lab), {
+    type: 'go',
+    route: '#/call/c-4',
+  });
+  // A call that the snapshot does not hold never opens the dialog, which could not show it.
+  assert.deepEqual(hitAction(hits.answered, lab), { type: 'read' });
+
+  // The board link: the lab home, which brings the post into view and then takes its own address.
+  const home = screen(small, '#/board/p-48');
+  assert.match(home, /id="post-p-48"/);
+  assert.doesNotMatch(home, /Reading the post/);
+  assert.deepEqual(boardLink(lab, 'p-48'), { show: 'p-48', route: '#/' });
+  // A board link to a post that the board no longer holds opens the post's page instead.
+  assert.deepEqual(boardLink(lab, 'p-40'), {
+    show: null,
+    route: '#/post/p-40',
+  });
+  // A post's page reads the post, whatever the board holds.
+  for (const id of ['p-40', 'p-48']) {
+    const page = screen(small, `#/post/${id}`);
+    assert.match(page, /<h1 class="turn-head__title">A post<\/h1>/);
+    assert.match(page, /Reading the post…/);
+    assert.match(page, /<a class="back" href="#\/">/);
+    assert.doesNotMatch(page, /id="post-p-4\d"/);
+  }
+});
+
+await test('a hit is a link to its page, or shows a call that the snapshot leaves out in place, and marks what matched', () => {
+  const board = trimmed().lab;
+  assert.ok(board);
   const render = (hit: SearchHit, open = false): string =>
     renderToStaticMarkup(
       <Hit
         hit={hit}
-        action={hitAction(hit, new Set(['p-9']))}
+        action={hitAction(hit, board)}
         open={open}
         onGo={() => {}}
         onRead={() => {}}
       />,
     );
-  const onBoard = render(hits.onBoard as SearchHit);
-  assert.match(onBoard, /<a class="hit__open" href="#\/" data-hit="">/);
+  const onBoard = render(hits.onBoard);
+  assert.match(
+    onBoard,
+    /<a class="hit__open" href="#\/board\/p-48" data-hit="">/,
+  );
   assert.match(onBoard, /<span class="chip chip--claim">Claim<\/span>/);
   assert.match(onBoard, /smaller on <mark>seed<\/mark> 1\./);
+  assert.match(render(hits.older), /<a class="hit__open" href="#\/post\/p-40"/);
 
-  const closed = render(hits.older as SearchHit);
-  assert.match(
-    closed,
-    /<button type="button" class="hit__open" data-hit="" aria-expanded="false">/,
-  );
-  assert.match(closed, /Show the whole post/);
-  assert.doesNotMatch(closed, /A long objection/);
-  const opened = render(hits.older as SearchHit, true);
-  assert.match(
-    opened,
-    /aria-expanded="true"[^]*Hide the whole post[^]*<p class="hit__whole">A long objection\./,
-  );
-
-  assert.match(
-    render(hits.cut as SearchHit, true),
-    /Its whole text is in \.verifold\/board\/p-1\.json\./,
-  );
-  // A short older post shows all of its text already, so it opens nothing.
-  assert.match(
-    render(hits.short as SearchHit),
-    /<div class="hit__open hit__open--plain">/,
-  );
-
-  const run = render(hits.run as SearchHit);
-  assert.match(run, /href="#\/d\/d-2"/);
+  const run = render(hits.run);
+  assert.match(run, /href="#\/d\/d-2\/run\/r-3"/);
   assert.match(
     run,
     /<code class="hit__text hit__text--code">python probe_train\.py --<mark>seed<\/mark> 1<\/code>/,
   );
   assert.match(run, /exit 0 in 19 min/);
+  assert.match(render(hits.call), /href="#\/call\/c-4"[^]*waits for you/);
+
+  // A call that the snapshot leaves out: a button that shows its question, its answer, and when.
+  const closed = render(hits.answered);
   assert.match(
-    render(hits.call as SearchHit),
-    /href="#\/call\/c-4"[^]*waits for you/,
+    closed,
+    /<button type="button" class="hit__open" data-hit="" aria-expanded="false">/,
   );
+  assert.match(closed, /Show the call/);
+  assert.doesNotMatch(closed, /hit__read/);
+  const opened = render(hits.answered, true);
+  assert.match(opened, /aria-expanded="true"[^]*Hide the call/);
+  assert.match(
+    opened,
+    new RegExp(
+      `<div class="hit__read"><p class="hit__whole">Continue 4 more hours\\?</p><p class="hit__fine">You chose &quot;Continue&quot; at ${clock(ago(880))}\\. The budget is 12 hours now\\.</p></div>`,
+    ),
+  );
+  // Where each kind of call stands.
+  assert.equal(
+    callRead({ ...hits.answered, answer: { words: 'Stop at 6.' }, note: null }),
+    'You answered in your own words: "Stop at 6."',
+  );
+  assert.equal(
+    callRead({
+      ...hits.answered,
+      state: 'withdrawn',
+      answer: null,
+      note: 'The direction stopped.',
+    }),
+    'Withdrawn. The direction stopped.',
+  );
+  assert.equal(
+    callRead(hits.call),
+    'It waits for your answer, but this view of a large lab leaves it out.',
+  );
+  assert.equal(
+    callRead({ ...hits.answered, state: 'undoing', note: null }),
+    'Verifold is undoing your answer.',
+  );
+});
+
+await test('the page looks at once, each minute while it shows, and when it shows again, and stops for good after a refusal', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  class Page extends EventTarget {
+    visibilityState: DocumentVisibilityState = 'visible';
+  }
+  const page = new Page();
+  let answer: ActOutcome = { ok: true };
+  let looks = 0;
+  const logged: unknown[] = [];
+  t.mock.method(console, 'info', (line: unknown) => {
+    logged.push(line);
+  });
+  const settle = (): Promise<void> =>
+    new Promise((resolve) => setImmediate(resolve));
+  const stop = sendLooks(() => {
+    looks++;
+    return Promise.resolve(answer);
+  }, page);
+  t.after(stop);
+  assert.equal(looks, 1);
+  t.mock.timers.tick(lookMs);
+  assert.equal(looks, 2);
+  // A hidden page does not look, and looks again when it shows.
+  page.visibilityState = 'hidden';
+  t.mock.timers.tick(lookMs);
+  assert.equal(looks, 2);
+  page.visibilityState = 'visible';
+  page.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(looks, 3);
+  // A lost answer is no refusal: the looks go on.
+  answer = { lost: 'Verifold did not answer.' };
+  t.mock.timers.tick(lookMs);
+  await settle();
+  t.mock.timers.tick(lookMs);
+  assert.equal(looks, 5);
+  // A refusal, as from a Verifold without looks, stops them, with one line in the console.
+  answer = { refused: 'Verifold knows no such action.' };
+  t.mock.timers.tick(lookMs);
+  await settle();
+  assert.equal(looks, 6);
+  t.mock.timers.tick(lookMs * 5);
+  page.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(looks, 6);
+  assert.deepEqual(logged, [
+    "Verifold refused the page's look, so it sends no more: Verifold knows no such action.",
+  ]);
 });
 
 await test("the app's own actions: the search, Dismiss, and the look, each with the desk's token", async (t) => {

@@ -5,6 +5,7 @@ import {
   type ActionResult,
   type BringRead,
   type FileDiff,
+  type PostThread,
   type Snapshot,
   type TurnDetail,
   type TurnPage,
@@ -88,7 +89,7 @@ export interface StepQuery {
   readonly tools?: boolean;
 }
 
-/** The API paths of an agent's turns and of one turn's steps. */
+/** The API paths of an agent's turns, of one turn's steps, and of a post's thread. */
 export const paths = {
   turns: (agent: string, before: string): string =>
     `/api/v1/agents/${encodeURIComponent(agent)}/turns?before=${encodeURIComponent(before)}`,
@@ -106,6 +107,8 @@ export const paths = {
   /** One file's diff at the commit of a bring-in. */
   bringDiff: (direction: string, file: string, commit: string): string =>
     `/api/v1/directions/${encodeURIComponent(direction)}/bring/diff?${new URLSearchParams({ file, commit }).toString()}`,
+  /** A post and the replies below it. */
+  thread: (post: string): string => `/api/v1/posts/${encodeURIComponent(post)}`,
 } as const;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -116,6 +119,15 @@ export function isTurnPage(value: unknown): value is TurnPage {
   return (
     object(value) &&
     Array.isArray(value.turns) &&
+    typeof value.more === 'boolean'
+  );
+}
+
+export function isPostThread(value: unknown): value is PostThread {
+  return (
+    object(value) &&
+    Array.isArray(value.posts) &&
+    value.posts.length > 0 &&
     typeof value.more === 'boolean'
   );
 }

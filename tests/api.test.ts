@@ -41,14 +41,16 @@ import { boardLimits, type Post } from '../src/core/board.ts';
 import type { RunRecord } from '../src/core/runs.ts';
 import type { Lease } from '../src/core/leases.ts';
 import type { SessionPool } from '../src/core/workers.ts';
-import type {
-  Away,
-  BoardPage,
-  BringRead,
-  SearchResult,
-  Snapshot,
-  TurnDetail,
-  TurnPage,
+import {
+  searchQueryLimit,
+  type Away,
+  type BoardPage,
+  type BringRead,
+  type PostThread,
+  type SearchResult,
+  type Snapshot,
+  type TurnDetail,
+  type TurnPage,
 } from '../src/protocol/api.ts';
 
 const at = (minute: number): string =>
@@ -1130,14 +1132,24 @@ await test('a lab huge in every list stays in bound, counts what it left out, an
     sourceDate: null,
     checkedAt: at(1),
   }));
-  const calls = Array.from({ length: 300 }, (_, index) =>
+  const calls = Array.from({ length: 320 }, (_, index) =>
     call({ id: `c-${index + 1}`, joined: [] }),
   );
+  // Every third direction holds up, and the one after it is ruled out.
+  const settled = directions.map((entry, index) => ({
+    ...entry,
+    verdict:
+      index % 3 === 0
+        ? ('holds-up' as const)
+        : index % 3 === 1
+          ? ('ruled-out' as const)
+          : entry.verdict,
+  }));
   const view: LabView = {
     ...base,
     state: {
       ...base.state,
-      directions,
+      directions: settled,
       calls,
       checks,
       plan: { ...plan, facts },
@@ -1161,7 +1173,15 @@ await test('a lab huge in every list stays in bound, counts what it left out, an
     'checks',
   ] as const)
     assert.ok((omitted[list] ?? 0) > 0, `${list} is not cut`);
-  assert.equal((data.lab?.needsYou.length ?? 0) + (omitted.needsYou ?? 0), 300);
+  assert.equal((data.lab?.needsYou.length ?? 0) + (omitted.needsYou ?? 0), 320);
+  // What notifications follow is not cut with the lists: the newest 300 calls, and every settled direction.
+  const notify = data.lab?.notify;
+  assert.ok(notify);
+  assert.equal(notify.calls.length, 300);
+  assert.deepEqual([notify.calls[0], notify.calls.at(-1)], ['c-21', 'c-320']);
+  assert.equal(notify.holdsUp.length, 100);
+  assert.deepEqual(notify.holdsUp.slice(0, 2), ['d-1', 'd-4']);
+  assert.deepEqual(notify.ruledOut.slice(0, 2), ['d-2', 'd-5']);
   // Calls so large that no list fits: the snapshot keeps the money and the question, and says what it left out.
   const heavy: LabView = {
     ...view,
@@ -1182,6 +1202,9 @@ await test('a lab huge in every list stays in bound, counts what it left out, an
   assert.ok(lab);
   assert.equal(lab.needsYou.length, 0);
   assert.equal(lab.omitted.needsYou, 20);
+  // At the level that keeps no list, the notify lists are whole.
+  assert.equal(lab.notify?.calls.length, 20);
+  assert.equal(lab.notify.holdsUp.length, 100);
   assert.equal(lab.plan, null);
   assert.equal(lab.omitted.plan, 1);
   assert.equal(lab.money.plansUsd, 2.5);
@@ -2022,7 +2045,7 @@ await test('the time away names the first five directions with news, how many mo
   assert.equal(news.cost, 'Spent since then: ≈$0.50 (Claude Code ≈$0.50).');
 });
 
-await test('search finds posts, runs, and calls as the desk does, the newest first, with marked snippets, and whole older posts within a budget', async (t) => {
+await test('search finds posts, runs, and calls as the desk does, the newest first, with marked snippets, and each call with its question and answer', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   const reader = new ApiReader(sources(root, seededView));
@@ -2046,8 +2069,8 @@ await test('search finds posts, runs, and calls as the desk does, the newest fir
     { text: ' 1.', mark: false },
   ]);
   assert.deepEqual(
-    [claim.label, claim.author, claim.direction, claim.whole, claim.cut],
-    ['Claim', 'claude-1', 'd-1', null, false],
+    [claim.label, claim.author, claim.direction],
+    ['Claim', 'claude-1', 'd-1'],
   );
   const run = seed.hits[0];
   assert.ok(run?.type === 'run');
@@ -2057,13 +2080,44 @@ await test('search finds posts, runs, and calls as the desk does, the newest fir
     reader.search('seed probe')?.hits.map((hit) => hit.id),
     ['r-1'],
   );
-  // A call: its kind, who asked, and where it stands.
+  // A call: its kind, who asked, where it stands, and its question, so a page without the call can show it.
   const [found] = reader.search('H100')?.hits ?? [];
   assert.ok(found?.type === 'call');
   assert.deepEqual(
-    [found.id, found.label, found.author, found.state, found.open],
-    ['c-1', 'Cost call', 'claude-1', 'waits for you', true],
+    [found.id, found.label, found.author, found.state, found.summary],
+    ['c-1', 'Cost call', 'claude-1', 'open', 'waits for you'],
   );
+  assert.deepEqual(
+    [found.question, found.answer, found.note],
+    ['Rent an H100 for the probe reruns?', null, null],
+  );
+  // An answered call carries the option and when the person chose it.
+  const [answered] = reader.search('Continue')?.hits ?? [];
+  assert.ok(answered?.type === 'call');
+  assert.deepEqual(
+    [answered.id, answered.state, answered.summary, answered.answer],
+    [
+      'c-2',
+      'answered',
+      'you chose "Continue"',
+      { option: 'Continue', at: at(3) },
+    ],
+  );
+  // An answer in the person's own words has no time.
+  const words = new ApiReader(
+    sources(root, () => {
+      const view = seededView();
+      return {
+        ...view,
+        state: {
+          ...view.state,
+          calls: [call({ state: 'answered', words: 'Use the Mac.' })],
+        },
+      };
+    }),
+  ).search('H100')?.hits[0];
+  assert.ok(words?.type === 'call');
+  assert.deepEqual(words.answer, { words: 'Use the Mac.' });
   // No words: what to type, and no hits.
   assert.deepEqual(reader.search('  '), {
     q: '  ',
@@ -2071,36 +2125,53 @@ await test('search finds posts, runs, and calls as the desk does, the newest fir
     total: 0,
     hits: [],
   });
-  // Long older posts that the board's newest page leaves out come whole, until the budget runs out.
-  const long = `${'x'.repeat(100_000)} needle`;
-  const many = (): LabView => ({
-    ...seededView(),
-    posts: Array.from({ length: 60 }, (_, index) =>
-      post(
-        `p-${index + 1}`,
-        'a-1',
-        'claim',
-        index < 5 ? long : `Short ${index + 1}.`,
-      ),
-    ),
-  });
+});
+
+await test("a post's thread: the post and the replies below it at any depth, oldest first, within the page bound", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const reader = new ApiReader(sources(root, seededView));
+  const thread = reader.thread('p-2');
+  assert.ok(thread);
   assert.deepEqual(
-    new ApiReader(sources(root, many))
-      .search('needle')
-      ?.hits.map((hit) =>
-        hit.type === 'post' ? [hit.id, hit.whole === long, hit.cut] : null,
-      ),
+    thread.posts.map((entry) => [entry.id, entry.replyTo, entry.handle]),
     [
-      ['p-5', true, false],
-      ['p-4', true, false],
-      ['p-3', false, true],
-      ['p-2', false, true],
-      ['p-1', false, true],
+      ['p-2', null, 'claude-1'],
+      ['p-3', 'p-2', 'codex-1'],
     ],
+  );
+  assert.equal(thread.more, false);
+  // A reply's page starts at the reply. Its own post is one link up.
+  assert.deepEqual(
+    reader.thread('p-3')?.posts.map((entry) => entry.id),
+    ['p-3'],
+  );
+  assert.equal(reader.thread('p-99'), null);
+  // A long thread: replies to replies count, and the page keeps the oldest ones.
+  const long = (): LabView => {
+    const view = seededView();
+    return {
+      ...view,
+      posts: [
+        post('p-1', 'a-1', 'claim', 'A claim.'),
+        ...Array.from({ length: 60 }, (_, index) =>
+          post(`p-${index + 2}`, 'a-2', 'objection', `Reply ${index + 1}.`, {
+            replyTo: `p-${index + 1}`,
+          }),
+        ),
+      ],
+    };
+  };
+  const deep = new ApiReader(sources(root, long)).thread('p-1');
+  assert.ok(deep);
+  assert.equal(deep.posts.length, apiLimits.posts);
+  assert.deepEqual(
+    [deep.posts[1]?.id, deep.posts.at(-1)?.id, deep.more],
+    ['p-2', 'p-50', true],
   );
 });
 
-await test('a look after a time away starts the digest, a dismiss ends it, and search answers over HTTP with the token', async (t) => {
+await test("a look after a time away starts the digest, a dismiss ends it, and search and a post's thread answer over HTTP with the token", async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   const view = seededView();
@@ -2169,15 +2240,39 @@ await test('a look after a time away starts the digest, a dismiss ends it, and s
   assert.equal((await away())?.since, left);
   assert.equal((await action('lab-away-dismiss')).status, 200);
   assert.equal(await away(), null);
-  // Search needs the token, takes only `q`, and at most 100 characters.
+  // Search needs the token, takes only `q`, and as many characters as the search box.
   assert.equal((await fetch(`${api}/search?q=seed`)).status, 401);
   const found = (await (
     await fetch(`${api}/search?q=seed`, { headers })
   ).json()) as SearchResult;
   assert.equal(found.total, 3);
   assert.equal(
-    (await fetch(`${api}/search?q=${'a'.repeat(101)}`, { headers })).status,
+    (
+      await fetch(`${api}/search?q=${'a'.repeat(searchQueryLimit)}`, {
+        headers,
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await fetch(`${api}/search?q=${'a'.repeat(searchQueryLimit + 1)}`, {
+        headers,
+      })
+    ).status,
     400,
   );
   assert.equal((await fetch(`${api}/search?q=a&x=1`, { headers })).status, 404);
+  // A post's thread needs the token and a post ID, and takes no query.
+  assert.equal((await fetch(`${api}/posts/p-2`)).status, 401);
+  const thread = (await (
+    await fetch(`${api}/posts/p-2`, { headers })
+  ).json()) as PostThread;
+  assert.deepEqual(
+    thread.posts.map((entry) => entry.id),
+    ['p-2', 'p-3'],
+  );
+  assert.equal((await fetch(`${api}/posts/p-99`, { headers })).status, 404);
+  assert.equal((await fetch(`${api}/posts/x-2`, { headers })).status, 400);
+  assert.equal((await fetch(`${api}/posts/p-2?x=1`, { headers })).status, 404);
 });

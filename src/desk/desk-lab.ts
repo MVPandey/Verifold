@@ -53,6 +53,7 @@ import {
   type AwayLine,
 } from '../core/away.ts';
 import { openDisputes } from '../core/disputes.ts';
+import { searchQueryLimit } from '../protocol/api.ts';
 import { callLimits, checkableKinds } from '../core/lab-tools.ts';
 import {
   metricsText,
@@ -1093,7 +1094,7 @@ export function searchPanel(
     kind: '',
     title: 'Search the lab',
     sub: '',
-    body: `<div class="lab-panel lab-search"><label class="field" for="lab-search">Posts, runs, and calls</label><input id="lab-search" type="search" maxlength="100" autocomplete="off" spellcheck="false" value="${e(q ?? '')}" aria-describedby="lab-search-note"><p class="fine" id="lab-search-note" role="status">${e(note)}</p>${
+    body: `<div class="lab-panel lab-search"><label class="field" for="lab-search">Posts, runs, and calls</label><input id="lab-search" type="search" maxlength="${searchQueryLimit}" autocomplete="off" spellcheck="false" value="${e(q ?? '')}" aria-describedby="lab-search-note"><p class="fine" id="lab-search-note" role="status">${e(note)}</p>${
       words && found.length
         ? `<ol class="hits" aria-label="Hits">${found
             .slice(0, searchLimit)

@@ -14,6 +14,14 @@ const chips: Partial<Record<PostKind, string>> = {
   'ruled-out': 'Ruled out',
 };
 
+/** Bring a post on the page into view, and give it focus. */
+export function showPost(post: string): void {
+  const element = document.getElementById(`post-${post}`);
+  if (!element) return;
+  element.scrollIntoView({ block: 'center' });
+  element.focus({ preventScroll: true });
+}
+
 function who(post: Post): Who {
   if (post.author === 'person') return 'person';
   if (post.harness && post.handle)

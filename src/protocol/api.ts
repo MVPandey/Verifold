@@ -1,7 +1,8 @@
 /**
  * The desk API, version 1: the data that the server sends to the app, and
- * the actions that the app sends back. These are plain types with two
- * constants and no imports, so the server and the app can share them.
+ * the actions that the app sends back. These are plain types with a few
+ * constants and no imports, so the server, the desk, and the app can share
+ * them.
  *
  * Times are ISO 8601 strings. Money is in USD. The server never puts
  * internal record fields, keys, or paths outside the project into these
@@ -115,6 +116,23 @@ export interface Lab {
   readonly away: Away | null;
   /** How many items each cut list left out. A list that the snapshot did not cut is not named. */
   readonly omitted: Readonly<Partial<Record<LabList, number>>>;
+  /** What desktop notifications follow, uncut at every level. Added after version 1. */
+  readonly notify?: NotifyFeed;
+}
+
+/**
+ * The IDs of the events that a desktop notification can tell: each call that
+ * waits for the person and each settled direction. No level of the snapshot
+ * cuts these lists, so a page can tell a new event from an old one that a
+ * smaller snapshot left out. Each list holds at most the newest 300.
+ */
+export interface NotifyFeed {
+  /** The calls that wait for the person, as in `needsYou`. */
+  readonly calls: readonly string[];
+  /** The directions that hold up. */
+  readonly holdsUp: readonly string[];
+  /** The directions that are ruled out. */
+  readonly ruledOut: readonly string[];
 }
 
 export interface Money {
@@ -596,10 +614,6 @@ export type SearchHit =
       readonly direction: string | null;
       /** The text on one line around its first match. */
       readonly snippet: readonly SnippetPart[];
-      /** The whole text of a long post that the board's newest page leaves out, within the search's byte budget. */
-      readonly whole: string | null;
-      /** A long post past the byte budget: its whole text is in .verifold/board/<id>.json. */
-      readonly cut: boolean;
     }
   | {
       readonly type: 'run';
@@ -618,11 +632,25 @@ export type SearchHit =
       /** The kind in words, such as "Cost call". */
       readonly label: string;
       readonly author: string;
-      /** Where it stands, such as "waits for you" or what the person chose. */
-      readonly state: string;
-      readonly open: boolean;
+      readonly state: Call['state'];
+      /** Where it stands in words, such as "waits for you" or what the person chose. */
+      readonly summary: string;
+      readonly question: string;
+      /**
+       * The person's answer: the option that they chose and when, or their
+       * own words, which the lab does not time. Null before an answer.
+       */
+      readonly answer:
+        | { readonly option: string; readonly at: string }
+        | { readonly words: string }
+        | null;
+      /** Why it was withdrawn, or what Verifold did. */
+      readonly note: string | null;
       readonly snippet: readonly SnippetPart[];
     };
+
+/** The most characters of a search: the app's and the desk's search boxes, and `GET /api/v1/search`. */
+export const searchQueryLimit = 100;
 
 /**
  * `GET /api/v1/search?q=`: the lab's search, as the desk's panel runs it.
@@ -715,6 +743,18 @@ export interface FileDiff {
   /** Verifold cut the diff. */
   readonly trimmed: boolean;
   readonly commit: string;
+}
+
+/**
+ * `GET /api/v1/posts/:id`: a post and the replies below it at any depth,
+ * oldest first, as the lab's agents read a thread. A search hit for a post
+ * that the snapshot's board leaves out opens it. Added after version 1.
+ */
+export interface PostThread {
+  /** The post first, then at most 49 replies. */
+  readonly posts: readonly Post[];
+  /** More replies exist than `posts` holds. */
+  readonly more: boolean;
 }
 
 /**

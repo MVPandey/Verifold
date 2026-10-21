@@ -3,6 +3,7 @@ import {
   act,
   isBringRead,
   isFileDiff,
+  isPostThread,
   isTurnDetail,
   isTurnPage,
   load,
@@ -49,12 +50,13 @@ export function labActions(token: string | null): LabActions {
 }
 
 /**
- * The reads and writes of the direction and turn pages. A message to a
- * direction is a plain post in it, which wakes its agent (Board.wakes).
+ * The reads and writes of the direction, turn, and post pages. A message to
+ * a direction is a plain post in it, which wakes its agent (Board.wakes).
  * Without a token, each one is refused at once.
  */
 export function agentActions(token: string | null): AgentActions {
-  if (!token) return { message: signedOut, turns: unread, turn: unread };
+  if (!token)
+    return { message: signedOut, turns: unread, turn: unread, thread: unread };
   return {
     message: (direction, text, key) =>
       act(token, 'lab-post', { text, direction }, key),
@@ -62,6 +64,8 @@ export function agentActions(token: string | null): AgentActions {
       load(token, paths.turns(agent, before), isTurnPage, signal),
     turn: (agent, turn, query, signal) =>
       load(token, paths.turn(agent, turn, query), isTurnDetail, signal),
+    thread: (post, signal) =>
+      load(token, paths.thread(post), isPostThread, signal),
   };
 }
 

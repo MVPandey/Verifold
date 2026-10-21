@@ -22,6 +22,7 @@ import {
 import type { Message } from '../legacy/messages.ts';
 import type { CheckResult, Results } from '../legacy/results.ts';
 import { labGpu, type ComputeView } from '../core/compute.ts';
+import { searchQueryLimit } from '../protocol/api.ts';
 import { toolStep } from '../core/activity.ts';
 import type { ArchivedRun } from '../core/archive.ts';
 import { placeNames } from '../core/credentials.ts';
@@ -201,8 +202,9 @@ export function parseFrame(
   // Direction IDs are lowercase slugs, as the research report contract says.
   const idea =
     direction === null || /^[a-z0-9][a-z0-9-]{0,79}$/.test(direction);
-  // A search has at most 100 printable characters.
-  const words = q === null || ([...q].length <= 100 && !/\p{Cc}/u.test(q));
+  // A search has only printable characters, as many as the search box takes.
+  const words =
+    q === null || ([...q].length <= searchQueryLimit && !/\p{Cc}/u.test(q));
   return shown &&
     (panel === null || opened) &&
     (since === null || time) &&

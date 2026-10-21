@@ -5,18 +5,20 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
 } from 'react';
-import type {
-  SearchHit,
-  SearchResult,
-  SnippetPart,
+import {
+  searchQueryLimit,
+  type Lab,
+  type SearchHit,
+  type SearchResult,
+  type SnippetPart,
 } from '../../protocol/api.ts';
 import type { Loaded } from '../api.ts';
 import { clock } from '../format.ts';
-import { hitAction, nextHit, searchMax, type HitAction } from '../search.ts';
+import { callRead, hitAction, nextHit, type HitAction } from '../search.ts';
 import { Cross } from '../components/Icons.tsx';
-import { showPost } from './CallDialog.tsx';
 
 /** The words of the last search. They last for this tab, as on the desk. */
 const queryKey = 'verifold-app-q';
@@ -65,8 +67,7 @@ function HitHead({ hit }: { readonly hit: SearchHit }): ReactNode {
       : hit.type === 'run'
         ? { label: 'Run', kind: 'run' }
         : { label: hit.label, kind: 'call' };
-  const state =
-    hit.type === 'run' ? hit.summary : hit.type === 'call' ? hit.state : null;
+  const state = hit.type === 'post' ? null : hit.summary;
   return (
     <span className="hit__head">
       <span className={`chip chip--${chip.kind}`}>{chip.label}</span>
@@ -93,8 +94,9 @@ function HitText({ hit }: { readonly hit: SearchHit }): ReactNode {
 
 /**
  * One hit. A hit that opens a page is a link: Enter or a click goes there
- * and closes the search. An older post that the board does not show opens
- * its whole text here instead. A short one shows all of it already.
+ * and closes the search. A link opened in a new tab leaves the search open
+ * here. A call that the snapshot leaves out shows its question and answer
+ * here instead.
  */
 export function Hit({
   hit,
@@ -106,7 +108,7 @@ export function Hit({
   readonly hit: SearchHit;
   readonly action: HitAction;
   readonly open: boolean;
-  readonly onGo: (action: HitAction) => void;
+  readonly onGo: () => void;
   readonly onRead: () => void;
 }): ReactNode {
   if (action.type === 'go')
@@ -116,43 +118,41 @@ export function Hit({
           className="hit__open"
           href={action.route}
           data-hit=""
-          onClick={() => onGo(action)}
+          onClick={(event: MouseEvent) => {
+            if (
+              event.button === 0 &&
+              !event.metaKey &&
+              !event.ctrlKey &&
+              !event.shiftKey
+            )
+              onGo();
+          }}
         >
           <HitHead hit={hit} />
           <HitText hit={hit} />
         </a>
       </li>
     );
-  const post = hit.type === 'post' ? hit : null;
-  const more = post && (post.whole !== null || post.cut);
   return (
     <li className="hit">
-      {more ? (
-        <button
-          type="button"
-          className="hit__open"
-          data-hit=""
-          aria-expanded={open}
-          onClick={onRead}
-        >
-          <HitHead hit={hit} />
-          <HitText hit={hit} />
-          <span className="hit__more">
-            {open ? 'Hide the whole post' : 'Show the whole post'}
-          </span>
-        </button>
-      ) : (
-        <div className="hit__open hit__open--plain">
-          <HitHead hit={hit} />
-          <HitText hit={hit} />
+      <button
+        type="button"
+        className="hit__open"
+        data-hit=""
+        aria-expanded={open}
+        onClick={onRead}
+      >
+        <HitHead hit={hit} />
+        <HitText hit={hit} />
+        <span className="hit__more">
+          {open ? 'Hide the call' : 'Show the call'}
+        </span>
+      </button>
+      {open && hit.type === 'call' && (
+        <div className="hit__read">
+          <p className="hit__whole">{hit.question}</p>
+          <p className="hit__fine">{callRead(hit)}</p>
         </div>
-      )}
-      {open && post?.whole && <p className="hit__whole">{post.whole}</p>}
-      {open && post?.cut && (
-        <p className="hit__fine">
-          This post is too long to show here. Its whole text is in
-          .verifold/board/{post.id}.json.
-        </p>
       )}
     </li>
   );
@@ -162,14 +162,17 @@ export function Hit({
  * The search of the lab, over any page: posts, runs, and calls, the newest
  * first, as the desk's search panel finds them. ⌘K or Ctrl+K and the
  * header's Search button open it, and Escape closes it. The arrow keys move
- * between the box and the hits. `board`: the posts that the lab home shows.
+ * between the box and the hits. Where a hit opens depends on what `lab`,
+ * the page's snapshot, holds. The search closes as a dialog does, so the
+ * browser gives the focus back to where it was. A hit's page then takes
+ * it, after it renders.
  */
 export function SearchDialog({
-  board,
+  lab,
   run,
   onClose,
 }: {
-  readonly board: ReadonlySet<string>;
+  readonly lab: Lab;
   readonly run: (
     q: string,
     signal: AbortSignal,
@@ -179,8 +182,6 @@ export function SearchDialog({
   const ref = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLOListElement>(null);
-  // Set when a hit opens a page: the post to bring into view after the search is gone.
-  const leaving = useRef<HitAction | null>(null);
   const titleId = useId();
   const inputId = useId();
   const noteId = useId();
@@ -189,21 +190,13 @@ export function SearchDialog({
   const [read, setRead] = useState<string | null>(null);
   useEffect(() => {
     const dialog = ref.current;
-    const before = document.activeElement;
     if (dialog && !dialog.open) dialog.showModal();
     // showModal() gives focus to the dialog's first control, the close button: the box takes it.
     // The last words stay for this tab, selected, so new typing replaces them.
     input.current?.focus();
     input.current?.select();
     return () => {
-      const after = leaving.current;
       if (dialog?.open) dialog.close();
-      // After React removed the dialog, so the browser's own focus return cannot undo it.
-      setTimeout(() => {
-        if (after?.type === 'go' && after.post) showPost(after.post);
-        else if (!after && before instanceof HTMLElement && before.isConnected)
-          before.focus();
-      }, 0);
     };
   }, []);
   useEffect(() => {
@@ -226,10 +219,7 @@ export function SearchDialog({
       controller.abort();
     };
   }, [q, run]);
-  const go = (action: HitAction): void => {
-    leaving.current = action;
-    onClose();
-  };
+  const close = (): void => ref.current?.close();
   const keys = (event: KeyboardEvent<HTMLDialogElement>): void => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
     const items = [
@@ -254,10 +244,7 @@ export function SearchDialog({
       aria-labelledby={titleId}
       aria-modal="true"
       onKeyDown={keys}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
+      onClose={onClose}
     >
       <div className="search__top">
         <h2 id={titleId} className="search__title">
@@ -267,7 +254,7 @@ export function SearchDialog({
           type="button"
           className="button search__close"
           aria-label="Close the search"
-          onClick={onClose}
+          onClick={close}
         >
           <Cross size={18} width={2} />
         </button>
@@ -280,7 +267,7 @@ export function SearchDialog({
         id={inputId}
         className="search__input"
         type="search"
-        maxLength={searchMax}
+        maxLength={searchQueryLimit}
         autoComplete="off"
         spellCheck={false}
         value={q}
@@ -296,9 +283,9 @@ export function SearchDialog({
             <Hit
               key={`${hit.type}:${hit.id}`}
               hit={hit}
-              action={hitAction(hit, board)}
+              action={hitAction(hit, lab)}
               open={read === hit.id}
-              onGo={go}
+              onGo={close}
               onRead={() => setRead(read === hit.id ? null : hit.id)}
             />
           ))}
