@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 const files = (await readdir('tests'))
-  .filter((name) => name.endsWith('.test.ts'))
+  .filter((name) => /\.test\.tsx?$/.test(name))
   .map((name) => `tests/${name}`);
 if (!files.length) throw new Error('No test files found');
 // A hung test fails after 3 minutes with its name. On CI, TAP prints each
@@ -11,6 +11,9 @@ const result = spawnSync(
   process.execPath,
   [
     '--experimental-strip-types',
+    // The app's components are .tsx files. See scripts/tsx-hooks.mjs.
+    '--import',
+    './scripts/tsx-register.mjs',
     '--test',
     '--test-timeout=180000',
     ...(process.env.CI ? ['--test-reporter=tap'] : []),
