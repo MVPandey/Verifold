@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,7 +22,7 @@ import {
   type LabScreen,
 } from '../src/server/screen.ts';
 import { enterLine, plainLines, viewLines } from '../src/cli/lab-view.ts';
-import { LabTerminal } from '../src/cli/terminal-view.ts';
+import { LabTerminal, toColumn } from '../src/cli/terminal-view.ts';
 import { visibleWidth } from '../src/cli/terminal-layout.ts';
 import { terminalInput, type CliIO } from '../src/cli/commands.ts';
 import type { SessionPool } from '../src/core/workers.ts';
@@ -209,7 +210,13 @@ function screenOf(snapshot: Snapshot = story()): LabScreen {
 await test('the view shows the lab as the terminal artboard does, at 80 and 120 columns', () => {
   const screen = screenOf();
   assert.deepEqual(
-    viewLines(screen, { columns: 120, rows: 24, color: false, now }),
+    viewLines(screen, {
+      columns: 120,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }),
     [
       '',
       '  verifold  cot-faithfulness  · http://127.0.0.1:56933',
@@ -226,8 +233,20 @@ await test('the view shows the lab as the terminal artboard does, at 80 and 120 
     ],
   );
   for (const columns of [80, 120]) {
-    const plain = viewLines(screen, { columns, rows: 24, color: false, now });
-    const styled = viewLines(screen, { columns, rows: 24, color: true, now });
+    const plain = viewLines(screen, {
+      columns,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    });
+    const styled = viewLines(screen, {
+      columns,
+      rows: 24,
+      color: true,
+      now,
+      detaches: true,
+    });
     // Color changes no text, and no line reaches the last column.
     assert.deepEqual(styled.map(stripVTControlCharacters), plain);
     assert.ok(styled.some((line) => line.includes('\u001b[38;2;')));
@@ -239,6 +258,7 @@ await test('the view shows the lab as the terminal artboard does, at 80 and 120 
     rows: 24,
     color: false,
     now,
+    detaches: true,
   });
   assert.equal(
     narrow[4],
@@ -255,6 +275,7 @@ await test('the view shows the lab as the terminal artboard does, at 80 and 120 
       rows: 24,
       color: false,
       now,
+      detaches: true,
       notice: 'Your message is on the board.',
     }).includes('  Your message is on the board.'),
   );
@@ -275,7 +296,13 @@ await test('a short terminal keeps the directions that need a look, in the lab o
   assert.equal(screen.more, 6);
   assert.ok(screen.directions.some((entry) => entry.id === 'd-21'));
   assert.ok(screen.directions.some((entry) => entry.id === 'd-26'));
-  const lines = viewLines(screen, { columns: 80, rows: 20, color: false, now });
+  const lines = viewLines(screen, {
+    columns: 80,
+    rows: 20,
+    color: false,
+    now,
+    detaches: true,
+  });
   assert.ok(
     lines.length <= 20 - 2,
     'the view leaves a free row and the message line',
@@ -307,16 +334,26 @@ await test('the needs-you line, a lab without a call, and Enter on an empty line
   const second: Call = { ...call, id: 'c-5', question: 'More time?' };
   const both = screenOf(story({ needsYou: [call, second] }));
   assert.ok(
-    viewLines(both, { columns: 100, rows: 24, color: false, now }).includes(
+    viewLines(both, {
+      columns: 100,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes(
       '  Needs you  Rent an H100 for the probe reruns? $11.97 · 1 more call   enter: open it',
     ),
   );
   assert.equal(enterLine(both), '/app c-4');
   const calm = screenOf(story({ needsYou: [] }));
   assert.ok(
-    viewLines(calm, { columns: 80, rows: 24, color: false, now }).includes(
-      '  Nothing needs you.   enter: open the lab',
-    ),
+    viewLines(calm, {
+      columns: 80,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes('  Nothing needs you.   enter: open the lab'),
   );
   assert.equal(enterLine(calm), '/app');
   assert.equal(enterLine({ ...calm, app: false }), '/open');
@@ -324,13 +361,25 @@ await test('the needs-you line, a lab without a call, and Enter on an empty line
     story({ needsYou: [], paused: { at: ago(1), reason: 'deadline' } }),
   );
   assert.ok(
-    viewLines(ended, { columns: 80, rows: 24, color: false, now }).includes(
+    viewLines(ended, {
+      columns: 80,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes(
       '  The time budget ended, so the lab is paused.   enter: open the lab',
     ),
   );
   const planning = screenOf(story({ directions: [], needsYou: [] }));
   assert.ok(
-    viewLines(planning, { columns: 80, rows: 24, color: false, now }).includes(
+    viewLines(planning, {
+      columns: 80,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes(
       '  The planner is reading. Directions show here when the plan is ready.',
     ),
   );
@@ -504,7 +553,7 @@ await test('the terminal draws the view, keeps a message line, and opens the cal
   });
   const stop = new AbortController();
   t.after(() => stop.abort());
-  view.show(screenOf());
+  view.show(screenOf(), true);
   view.listen((line) => lines.push(line), stop.signal);
   assert.equal(view.viewing, true);
   const first = output.text();
@@ -535,6 +584,7 @@ await test('the terminal draws the view, keeps a message line, and opens the cal
       screenOf(
         story({ money: { plansUsd: index, gpuUsd: 0, gpuLimitUsd: null } }),
       ),
+      true,
     );
   await wait(150);
   assert.ok(output.text().split('\u001b[?2026h').length - before <= 1);
@@ -564,24 +614,24 @@ await test('a narrow terminal, NO_COLOR, and a project without a lab get plain l
   t.after(() => stop.abort());
   view.listen((line) => lines.push(line), stop.signal);
   // No lab: no view, and lines as the shell gives them.
-  view.show(null);
+  view.show(null, true);
   assert.equal(view.viewing, false);
   input.write('hello\n');
   await until(() => lines.length === 1);
-  view.show(screenOf());
+  view.show(screenOf(), true);
   assert.equal(view.viewing, true);
   output.columns = 50;
   output.emit('resize');
   assert.equal(view.viewing, false);
   // The lab as it is, line by line, then a line for each change.
-  assert.match(printed[0] ?? '', /too narrow for the live view/);
+  assert.match(printed[0] ?? '', /too small for the live view/);
   assert.deepEqual(printed.slice(1), plainLines(null, screenOf(), now));
   // Enter on an empty line still opens the call.
   input.write('\n');
   await until(() => lines.length === 2);
   assert.deepEqual(lines, ['hello', '/app c-4']);
   const count = printed.length;
-  view.show(screenOf(story({ needsYou: [] })));
+  view.show(screenOf(story({ needsYou: [] })), true);
   assert.equal(printed.length, count);
   output.columns = 80;
   output.emit('resize');
@@ -599,7 +649,7 @@ await test('a narrow terminal, NO_COLOR, and a project without a lab get plain l
     now: () => now,
   });
   quiet.listen(() => {}, stop.signal);
-  quiet.show(screenOf());
+  quiet.show(screenOf(), true);
   assert.equal(quiet.viewing, false);
   assert.equal(plain.output.text(), '');
   assert.equal(said.length, 5);
@@ -716,4 +766,190 @@ await test('a launch URL can open a page of the app after its one-time code', as
     server.launchUrl('/app/', 'javascript:alert(1)'),
     /\/app\/#launch-[0-9a-f]{48}$/,
   );
+});
+
+await test('every line fits at 60 to 64 columns, with a long price and 12 calls', () => {
+  const many: Call[] = Array.from({ length: 12 }, (_, index) => ({
+    ...call,
+    id: `c-${index + 1}`,
+    question: 'Rent four H100s for a week of probe reruns on every seed?',
+    options: [{ ...call.options[0]!, usd: 12345.67 }],
+  }));
+  const screen = screenOf(story({ needsYou: many }));
+  for (let columns = 60; columns <= 64; columns++) {
+    const lines = viewLines(screen, {
+      columns,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+      notice: 'Your message is on the board.',
+    });
+    for (const line of lines)
+      assert.ok(visibleWidth(line) < columns, `${columns}: ${line}`);
+    // The frame and the message line leave the free row.
+    assert.ok(lines.length + 1 <= 24 - 1);
+    const needs = lines.find((line) => line.startsWith('  Needs you'));
+    assert.match(needs ?? '', /\$12345\.67/);
+  }
+  // At 60 columns the keys go first, and the count of the other calls stays.
+  assert.ok(
+    viewLines(screen, {
+      columns: 60,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes('  Needs you  Rent four H100s for… $12345.67 · 11 more calls'),
+  );
+});
+
+await test('the keys line says what Ctrl+C does: detach from the owner, or stop Verifold', () => {
+  const screen = screenOf();
+  const keys = (detaches: boolean): string | undefined =>
+    viewLines(screen, {
+      columns: 100,
+      rows: 24,
+      color: false,
+      now,
+      detaches,
+    }).at(-1);
+  assert.equal(
+    keys(true),
+    '  /help: commands · ctrl+c: close this window (the lab keeps working)',
+  );
+  assert.equal(keys(false), '  /help: commands · ctrl+c: stop Verifold');
+});
+
+await test('calls that the smallest snapshot only counts still show, and Enter opens the lab', () => {
+  // A large lab's smallest snapshot keeps no call, only how many it left out.
+  const hidden = screenOf(story({ needsYou: [], omitted: { needsYou: 3 } }));
+  assert.equal(hidden.call, null);
+  assert.equal(hidden.calls, 3);
+  assert.ok(
+    viewLines(hidden, {
+      columns: 80,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes('  3 calls need you.   enter: open the lab'),
+  );
+  assert.equal(enterLine(hidden), '/app');
+  const shown = screenOf();
+  assert.deepEqual(plainLines(shown, hidden, now), [
+    '3 calls need you. Press Enter on an empty line to open the lab.',
+  ]);
+  // The same count says nothing again. A new count says it.
+  assert.deepEqual(plainLines(hidden, hidden, now), []);
+  const one = screenOf(story({ needsYou: [], omitted: { needsYou: 1 } }));
+  assert.deepEqual(plainLines(hidden, one, now), [
+    '1 call needs you. Press Enter on an empty line to open the lab.',
+  ]);
+});
+
+await test('a line of the session of the person, and a long message, stay in the scrollback above the view', async (t) => {
+  const { input, output } = fakeTerminal();
+  const view = new LabTerminal({
+    streams: { input, output },
+    color: false,
+    draws: true,
+    cancel: () => {},
+    print: () => {},
+    now: () => now,
+  });
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  view.show(screenOf(), true);
+  view.listen(() => {}, stop.signal);
+  const reply = `14:05  Claude Code · agent says: ${'All three seeds ran. '.repeat(20)}`;
+  view.progress(reply, true);
+  view.progress('Your message is on the board.');
+  await until(() => output.text().includes('  Your message is on the board.'));
+  const after = output.text();
+  // The session's line printed above the view, whole, and the next draw keeps it.
+  const above = after.lastIndexOf('agent says:');
+  assert.ok(above > 0 && above < after.lastIndexOf('  verifold  '));
+  assert.equal(
+    stripVTControlCharacters(after)
+      .replace(/\s+/g, ' ')
+      .includes(reply.replace(/\s+/g, ' ').trim()),
+    true,
+  );
+  // A message wider than the notice row goes above too. A short one stays in the row.
+  const long = `Verifold could not save the answer to c-4: ${'x'.repeat(120)}`;
+  view.progress(long);
+  const frame = output.text().slice(output.text().lastIndexOf('\u001b[?2026h'));
+  assert.ok(
+    frame.indexOf('Verifold could not save') < frame.indexOf('  verifold  '),
+  );
+  assert.ok(frame.includes('  Your message is on the board.'));
+});
+
+await test('the control channel marks session lines, and a line that is not an object is left out', async (t) => {
+  const control = await newControl();
+  t.after(() => removeSocket(control));
+  // An owner that sends odd lines first: the terminal keeps reading after them.
+  const owner = createServer((socket) => {
+    socket.write('5\n"text"\nnull\n[1]\ntrue\n');
+    socket.end(
+      `${JSON.stringify({ progress: 'line', feed: true })}\n${JSON.stringify({ progress: 'notice' })}\n`,
+    );
+  });
+  await new Promise<void>((resolve) => owner.listen(control.socket, resolve));
+  const shown: FromOwner[] = [];
+  const terminal = await connectControl(control, (message) =>
+    shown.push(message),
+  );
+  t.after(() => {
+    terminal.close();
+    owner.close();
+  });
+  await until(() => shown.length === 2);
+  assert.deepEqual(shown, [
+    { progress: 'line', feed: true },
+    { progress: 'notice' },
+  ]);
+});
+
+await test('a terminal that its own desk serves stops its watch when it closes, and the feed stops', async () => {
+  let reads = 0;
+  const reader = {
+    signal: () => {
+      reads++;
+      return Promise.resolve([reads]);
+    },
+    snapshot: () =>
+      Promise.resolve(
+        JSON.stringify({ project: 'p', lab: null, trimmed: false }),
+      ),
+  } as unknown as ApiReader;
+  const feed = new ApiFeed(reader, { pollMs: 10, heartbeatMs: 1000 });
+  const { input, output } = fakeTerminal();
+  const view = new LabTerminal({
+    streams: { input, output },
+    color: false,
+    draws: true,
+    cancel: () => {},
+    print: () => {},
+    now: () => now,
+  });
+  view.serve((show) => feed.watch(() => show(screenOf())));
+  const stop = new AbortController();
+  view.listen(() => {}, stop.signal);
+  await until(() => view.viewing && reads > 2);
+  stop.abort();
+  const count = reads;
+  await wait(80);
+  // No tick reads the lab after the terminal closed.
+  assert.ok(reads <= count + 1, `${reads - count} reads after the close`);
+  const settled = reads;
+  await wait(80);
+  assert.equal(reads, settled);
+  feed.close();
+});
+
+await test('a move to column 0 is a carriage return alone', () => {
+  assert.equal(toColumn(0), '\r');
+  assert.equal(toColumn(4), '\r\u001b[4C');
 });

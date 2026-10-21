@@ -13,11 +13,25 @@ export interface ViewStreams {
   };
 }
 
-/** The view needs this many columns. A narrower terminal gets plain lines. */
+/**
+ * Start a watch of the lab's screens, which gives each one to `show`.
+ * Returns the function that stops the watch.
+ */
+export type FollowScreens = (
+  show: (screen: LabScreen | null) => void,
+) => () => void;
+
+/** The view needs this many columns and rows. A smaller terminal gets plain lines. */
 export const viewColumns = 60;
+const viewRows = 12;
 
 /** At most five redraws a second. */
 const drawMs = 200;
+
+/** Move the cursor to `column` of its row. A move of 0 would move one. */
+export function toColumn(column: number): string {
+  return column > 0 ? `\r\u001b[${column}C` : '\r';
+}
 
 /**
  * The person's terminal on a project: a live view of its lab that redraws
@@ -37,6 +51,10 @@ export class LabTerminal {
   private handler: ((line: string) => void) | null = null;
   /** The newest screen. Undefined before the first one. */
   private screen: LabScreen | null | undefined;
+  /** Ctrl+C only detaches this terminal from a background owner. */
+  private detaches = true;
+  /** Stops the watch of the lab, when this terminal's own desk serves it. */
+  private unfollow: (() => void) | undefined;
   /** Line by line, while the view does not show. */
   private reader: Interface | null = null;
   /** The message line, while the view shows. */
@@ -82,21 +100,34 @@ export class LabTerminal {
     return this.line !== null;
   }
 
-  /** Read the person's lines until `signal` aborts. Only one reader at a time. */
+  /** Read the person's lines until `signal` aborts. Then the terminal is clean, and its watch of the lab stops. */
   listen(onLine: (line: string) => void, signal: AbortSignal): void {
     if (signal.aborted) return;
-    this.close();
     this.closed = false;
     this.handler = onLine;
+    this.output.removeListener('resize', this.resized);
     this.output.on('resize', this.resized);
     signal.addEventListener('abort', () => this.close(), { once: true });
     this.update();
   }
 
-  /** A new screen of the lab. Null: the project has no lab. */
-  show(screen: LabScreen | null): void {
+  /**
+   * The desk of this process serves the project: watch its lab until this
+   * terminal closes. Ctrl+C here stops Verifold.
+   */
+  serve(follow: FollowScreens): void {
+    this.unfollow?.();
+    this.unfollow = follow((screen) => this.show(screen, false));
+  }
+
+  /**
+   * A new screen of the lab. Null: the project has no lab. `detaches`:
+   * Ctrl+C only detaches this terminal, and the lab works on.
+   */
+  show(screen: LabScreen | null, detaches: boolean): void {
     const before = this.screen ?? null;
     this.screen = screen;
+    this.detaches = detaches;
     if (!this.line && screen && !this.fits())
       for (const line of plainLines(before, screen, this.now()))
         this.print(line);
@@ -104,16 +135,19 @@ export class LabTerminal {
   }
 
   /**
-   * A message from Verifold. While the view shows, a one-line message
-   * becomes the line under it, until a newer one comes, and a longer reply,
-   * such as the help, prints above it.
+   * A message for the person. While the view shows, a short message from
+   * Verifold becomes the line under it, until a newer one comes. A longer
+   * one, a reply such as the help, and a line of the person's own session
+   * (`keep`) print above the view, where they stay in the scrollback.
    */
-  progress(text: string): void {
+  progress(text: string, keep = false): void {
     if (!this.line) {
       this.print(text);
       return;
     }
-    if (text.includes('\n')) this.draw(text);
+    const row = (this.output.columns ?? 80) - 3;
+    if (keep || text.includes('\n') || visibleWidth(text) > row)
+      this.draw(text);
     else {
       this.notice = text;
       this.later();
@@ -125,11 +159,12 @@ export class LabTerminal {
     return (
       this.draws &&
       Boolean(this.screen) &&
-      (this.output.columns ?? 80) >= viewColumns
+      (this.output.columns ?? 80) >= viewColumns &&
+      (this.output.rows ?? 24) >= viewRows
     );
   }
 
-  /** Start or stop the view as the screen and the width allow, and keep a reader. */
+  /** Start or stop the view as the screen and the size allow, and keep a reader. */
   private update(): void {
     if (this.closed || !this.handler) return;
     if (this.fits()) {
@@ -142,7 +177,7 @@ export class LabTerminal {
       // The lab as it is now, then a line for each change.
       if (this.screen) {
         this.print(
-          'The terminal is too narrow for the live view. Verifold prints a line for each change until it is wider.',
+          'The terminal is too small for the live view. Verifold prints a line for each change until it is larger.',
         );
         for (const line of plainLines(null, this.screen, this.now()))
           this.print(line);
@@ -208,7 +243,7 @@ export class LabTerminal {
     this.sent = 0;
   }
 
-  /** Stop reading. The terminal is clean afterwards. */
+  /** Stop reading, and stop the watch of the lab. The terminal is clean afterwards. */
   private close(): void {
     this.stop();
     this.reader?.close();
@@ -216,6 +251,8 @@ export class LabTerminal {
     this.handler = null;
     this.closed = true;
     this.output.removeListener('resize', this.resized);
+    this.unfollow?.();
+    this.unfollow = undefined;
   }
 
   /** A line from the person. An empty line opens the call that waits, or the lab. */
@@ -244,7 +281,7 @@ export class LabTerminal {
 
   /**
    * Draw the frame and the message line in place of the last ones. `above`:
-   * a reply to print above the frame, where it stays.
+   * a message to print above the frame, where it stays.
    */
   private draw(above?: string): void {
     const line = this.line;
@@ -265,6 +302,7 @@ export class LabTerminal {
       rows: this.output.rows ?? 24,
       color: this.color,
       now: this.last,
+      detaches: this.detaches,
       notice: this.notice,
     });
     // The old frame wraps again when the terminal got narrower.
@@ -294,7 +332,7 @@ export class LabTerminal {
         `${frame.join('\n')}\n`,
         this.promptText(),
         message,
-        `\r\u001b[${cursor}C`,
+        toColumn(cursor),
         '\u001b[?2026l',
       ].join(''),
     );
@@ -313,7 +351,7 @@ export class LabTerminal {
     } else if (!this.empty && line.line === '') {
       this.empty = true;
       this.output.write(
-        `${muted(fitText(prompt.empty, columns - 2 - visibleWidth(prompt.text)), this.color)}\r\u001b[${visibleWidth(prompt.text)}C`,
+        `${muted(fitText(prompt.empty, columns - 2 - visibleWidth(prompt.text)), this.color)}${toColumn(visibleWidth(prompt.text))}`,
       );
     }
     if (this.held && visibleWidth(prompt.text + line.line) < columns - 1)
