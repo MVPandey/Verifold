@@ -1902,7 +1902,13 @@ function works(value: unknown): BuildsOn[] {
 export function todayLine(now = new Date()): string {
   const two = (value: number): string => String(value).padStart(2, '0');
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  return `Today is ${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())} (${now.toLocaleDateString('en-US', { weekday: 'long' })}), ${two(now.getHours())}:${two(now.getMinutes())} in the time zone ${zone}.`;
+  return `Today is ${localDay(now)} (${now.toLocaleDateString('en-US', { weekday: 'long' })}), ${two(now.getHours())}:${two(now.getMinutes())} in the time zone ${zone}.`;
+}
+
+/** A date as YYYY-MM-DD in this computer's time zone, the zone of `todayLine`. */
+function localDay(date: Date): string {
+  const two = (value: number): string => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
 }
 
 /** An optional text field: absent or empty gives null. */
@@ -4033,6 +4039,8 @@ export class Lab {
         ? "Your harness's usage window ran out in your last turn, so that turn did no work."
         : '',
       `Your direction: ${direction.id} ${JSON.stringify(direction.title)}, ${verdictLine(direction)}. Holds up if: ${barText(direction)}.`,
+      // The key or the spend limit can change while the session runs.
+      this.computeLine(),
       ask ?? '',
       'Continue your direction. Post what you find with proof. End your turn with one line on what you do next.',
     ]
@@ -4538,9 +4546,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       readonly cost: number;
     } | null,
   ): Promise<string> {
+    // With a key saved, the call asks only for the spend limit.
+    const keySaved = this.options.compute?.keySaved() ?? false;
     const question = pod
       ? `The lab's first GPU pod: ${pod.effect.gpuType} for ${pod.effect.hours} ${pod.effect.hours === 1 ? 'hour' : 'hours'}?`
-      : this.options.compute?.keySaved()
+      : keySaved
         ? 'Set a spend limit in Compute, so agents can rent GPUs?'
         : 'Add a RunPod key and a spend limit in Compute?';
     const call = await this.serial(() => {
@@ -4576,7 +4586,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             ]
           : [
               {
-                label: 'I added them',
+                label: keySaved ? 'I set a limit' : 'I added them',
                 usd: null,
                 minutes: null,
                 effect: null,
@@ -8034,7 +8044,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
             'Facts that the plan rests on. Check their dates before you use them:',
             ...plan.facts.map(
               (fact) =>
-                `- ${JSON.stringify(fact.claim)}: ${fact.source ? `source ${JSON.stringify(fact.source)}${fact.sourceDate ? ` of ${JSON.stringify(fact.sourceDate)}` : ''}` : 'unverified'}, checked ${fact.checkedAt.slice(0, 10)}.`,
+                `- ${JSON.stringify(fact.claim)}: ${fact.source ? `source ${JSON.stringify(fact.source)}${fact.sourceDate ? ` of ${JSON.stringify(fact.sourceDate)}` : ''}, listed ${localDay(new Date(fact.checkedAt))}` : 'unverified (no source)'}.`,
             ),
           ]
         : []),

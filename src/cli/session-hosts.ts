@@ -235,6 +235,12 @@ export interface HostOptions {
    * the app-server's `model/list` offers before the thread starts.
    */
   readonly bestModel?: boolean;
+  /**
+   * Codex only: the app-server searches the live web, not only the index that
+   * OpenAI keeps. Lab agents and checkers get it, for current facts. Task
+   * workers and the coordinator keep Codex's default.
+   */
+  readonly liveSearch?: boolean;
   /** The first request. A resumed session has none and waits for a follow-up. */
   readonly prompt?: string;
   /** Claude Code only: the session ID for a new conversation, chosen before launch. */
@@ -898,11 +904,8 @@ function codex(options: HostOptions): HostSession {
       '-e',
       watchdog,
       options.executable ?? 'codex',
-      // Live web search: by default Codex searches only an index that OpenAI
-      // keeps, and agents need current facts. Search does not use the
-      // sandbox's network. A top-level -c reaches the app-server.
-      '-c',
-      'web_search="live"',
+      // A top-level -c reaches the app-server. Search does not use the sandbox's network.
+      ...(options.liveSearch ? ['-c', 'web_search="live"'] : []),
       'app-server',
       '--listen',
       `unix://${socket}`,
