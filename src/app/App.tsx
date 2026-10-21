@@ -13,15 +13,17 @@ import {
   appActions,
   labActions,
 } from './actions.ts';
-import { needsTick } from './call.ts';
+import type { ActOutcome } from './api.ts';
+import { needsTick, typing } from './call.ts';
 import { href, parseRoute, type Route } from './route.ts';
-import { isSearchKey } from './search.ts';
+import { isSearchKey, onMac } from './search.ts';
 import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
 import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { ComingSoon, NotFound, Notice } from './screens/Notice.tsx';
+import { PostPage } from './screens/PostPage.tsx';
 import { SearchDialog } from './screens/SearchDialog.tsx';
 import { TurnScreen } from './screens/TurnScreen.tsx';
 import type { LabStore, LabState } from './store.ts';
@@ -56,33 +58,56 @@ function useNow(fast: boolean): number {
 const signedOutAnswers = answerActions(null);
 
 /** How often a visible page tells Verifold that the person looks, as the desk's page does. */
-const lookMs = 60_000;
+export const lookMs = 60_000;
 
 /**
  * Tell Verifold that the person looks at the lab: at once, each minute while
- * the page shows, and when it shows again. A look after 30 minutes or more
- * away starts the "While you were away" digest.
+ * `page` shows, and when it shows again. A look after 30 minutes or more
+ * away starts the "While you were away" digest. A refusal, such as from a
+ * Verifold that takes no looks, would come again for each look, so the
+ * looks stop after one, with a line in the console. Returns the stop.
  */
-function useLook(look: () => Promise<unknown>): void {
-  useEffect(() => {
-    const tell = (): void => {
-      if (document.visibilityState === 'visible') void look();
-    };
-    tell();
-    const timer = setInterval(tell, lookMs);
-    document.addEventListener('visibilitychange', tell);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', tell);
-    };
-  }, [look]);
+export function sendLooks(
+  look: () => Promise<ActOutcome>,
+  page: Pick<
+    Document,
+    'visibilityState' | 'addEventListener' | 'removeEventListener'
+  >,
+): () => void {
+  let stopped = false;
+  const tell = (): void => {
+    if (stopped || page.visibilityState !== 'visible') return;
+    void look().then((outcome) => {
+      if (stopped || !('refused' in outcome)) return;
+      stop();
+      console.info(
+        `Verifold refused the page's look, so it sends no more: ${outcome.refused}`,
+      );
+    });
+  };
+  const timer = setInterval(tell, lookMs);
+  const stop = (): void => {
+    stopped = true;
+    clearInterval(timer);
+    page.removeEventListener('visibilitychange', tell);
+  };
+  page.addEventListener('visibilitychange', tell);
+  tell();
+  return stop;
 }
 
-/** ⌘K, or Ctrl+K off a Mac, opens the search from any page. */
+function useLook(look: () => Promise<ActOutcome>): void {
+  useEffect(() => sendLooks(look, document), [look]);
+}
+
+/**
+ * ⌘K on a Mac, and Ctrl+K elsewhere, opens the search from any page. In a
+ * text box, Ctrl+K stays the box's own key.
+ */
 function useSearchKey(open: () => void): void {
   useEffect(() => {
     const key = (event: KeyboardEvent): void => {
-      if (!isSearchKey(event)) return;
+      if (!isSearchKey(event, onMac, typing(event.target))) return;
       event.preventDefault();
       open();
     };
@@ -167,6 +192,7 @@ export function Screen({
           connection={connection}
           now={now}
           actions={actions}
+          show={route.page === 'lab' ? (route.post ?? null) : null}
         />
         {route.page === 'call' && (
           <CallDialog
@@ -190,16 +216,32 @@ export function Screen({
         answerActions={answers}
       />
     );
+  if (route.page === 'post')
+    return (
+      <PostPage
+        key={route.id}
+        snapshot={snapshot}
+        lab={lab}
+        id={route.id}
+        connection={connection}
+        now={now}
+        actions={actions}
+        read={agentActions.thread}
+      />
+    );
   const direction = lab.directions.find(
     (entry) => entry.id === route.direction,
   );
   if (!direction)
     return (
-      <Notice title="This direction is not in the lab">
+      <Notice
+        title={
+          lab.omitted.directions !== undefined
+            ? 'This view of a large lab leaves out this direction'
+            : 'This direction is not in the lab'
+        }
+      >
         <p>
-          {lab.omitted.directions !== undefined
-            ? 'This view of a large lab leaves out some directions. '
-            : ''}
           <a href={href.lab}>Back to the lab</a>
         </p>
       </Notice>
@@ -215,7 +257,9 @@ export function Screen({
   };
   // Keyed by the route, so no state carries from one direction or turn to another.
   if (route.page === 'direction')
-    return <DirectionPage key={direction.id} {...page} />;
+    return (
+      <DirectionPage key={direction.id} {...page} run={route.run ?? null} />
+    );
   if (route.page === 'bring')
     return (
       <BringPage
@@ -256,24 +300,28 @@ export function App({
   const [agent] = useState(() => agentActions(token));
   const [answers] = useState(() => answerActions(token));
   const [app] = useState(() => appActions(token));
-  const lab = state.snapshot?.lab ?? null;
-  // The search opens only over a lab: before one, there is nothing to find.
+  // The search opens only over a lab that the page shows: without one, there is nothing to find.
+  const lab =
+    state.connection === 'signed-out' || state.connection === 'outdated'
+      ? null
+      : (state.snapshot?.lab ?? null);
+  const shown = lab !== null;
   const hasLab = useRef(false);
-  hasLab.current = lab !== null;
+  hasLab.current = shown;
   const [searching, setSearching] = useState(false);
   const openSearch = useCallback(() => {
     if (hasLab.current) setSearching(true);
   }, []);
+  // A search open when the lab goes stays closed when it comes back.
+  useEffect(() => {
+    if (!shown) setSearching(false);
+  }, [shown]);
   useSearchKey(openSearch);
   useLook(app.look);
   const notify = useNotify(state.snapshot);
   const tools = useMemo<AppTools>(
     () => ({ openSearch, dismissAway: app.dismissAway, notify }),
     [openSearch, app, notify],
-  );
-  const board = useMemo(
-    () => new Set(lab?.board.posts.map((post) => post.id)),
-    [lab],
   );
   return (
     <ToolsContext.Provider value={tools}>
@@ -287,7 +335,7 @@ export function App({
       />
       {searching && lab && (
         <SearchDialog
-          board={board}
+          lab={lab}
           run={app.search}
           onClose={() => setSearching(false)}
         />

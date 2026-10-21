@@ -49,10 +49,8 @@ import {
   searchLab,
   searchLimit,
   searchNote,
-  searchTextBytes,
   searchWords,
   snippetParts,
-  snippetWidth,
 } from '../core/search.ts';
 import {
   SessionActionError,
@@ -63,6 +61,7 @@ import { TranscriptFile, type TranscriptEntry } from '../core/transcript.ts';
 import { workspaceName } from '../core/workspaces.ts';
 import {
   protocolVersion,
+  searchQueryLimit,
   turnIdPattern,
   type ActionName,
   type Agent,
@@ -81,6 +80,7 @@ import {
   type Lab,
   type LabList,
   type Post,
+  type PostThread,
   type Proof,
   type Run,
   type SearchHit,
@@ -96,15 +96,15 @@ import { readJsonBody, record } from './http.ts';
 /**
  * The desk API, version 1, under /api/v1/: a snapshot of what the screens
  * show, a stream that sends it again when it changes, pages of the board, of
- * an agent's turns, and of a turn's steps, and actions. The desk's host,
- * origin, and token checks run before any of it. See src/protocol/api.ts for
- * the shapes.
+ * an agent's turns, and of a turn's steps, a post's thread, the search, and
+ * actions. The desk's host, origin, and token checks run before any of it.
+ * See src/protocol/api.ts for the shapes.
  */
 
 export const apiLimits = {
   /** Bytes of one snapshot. A bigger lab gets fewer items and characters. */
   snapshot: 512 * 1024,
-  /** Posts in a snapshot and in one page of the board. */
+  /** Posts in a snapshot, in one page of the board, and in one post's thread. */
   posts: 50,
   /** An agent's turns in a snapshot and in one page of turns. */
   turns: 20,
@@ -147,8 +147,8 @@ export const apiLimits = {
   bringGroups: 20,
   /** Paths of one bring-in in a bring-in read. */
   bringPaths: 50,
-  /** Characters of a search, as in the desk's search box. */
-  searchQuery: 100,
+  /** IDs in each list of the snapshot's `notify`, which no level cuts. */
+  notify: 300,
 };
 
 /** How many items of each list a snapshot keeps, and how much of each message. */
@@ -303,6 +303,9 @@ interface Loaded {
   readonly view: LabView;
   readonly agents: readonly AgentRef[];
   readonly compute: ComputeView | null;
+  /** The lab's GPU spend and limit. Null without pods to read. */
+  readonly gpu: ReturnType<typeof labGpu> | null;
+  readonly disputes: ReturnType<typeof openDisputes>;
   readonly works: readonly Work[];
   readonly away: Lab['away'];
   readonly turns: ReadonlyMap<string, readonly ActivityTurn[]>;
@@ -650,16 +653,22 @@ function broughtByDirection(
   return counts;
 }
 
+/** The lab's directions that hold up and that are ruled out, from one scan that the counts and the notify lists share. */
+interface Settled {
+  readonly holdsUp: readonly LabDirection[];
+  readonly ruledOut: readonly LabDirection[];
+}
+
 /** The lab's directions counted over all of them. Still open: open, with no verdict or a disputed one. */
 function directionCounts(
   directions: readonly LabDirection[],
+  settled: Settled,
   disputed: (entry: LabDirection) => boolean,
 ): DirectionCounts {
   return {
     total: directions.length,
-    holdsUp: directions.filter((entry) => entry.verdict === 'holds-up').length,
-    ruledOut: directions.filter((entry) => entry.verdict === 'ruled-out')
-      .length,
+    holdsUp: settled.holdsUp.length,
+    ruledOut: settled.ruledOut.length,
     open: directions.filter(
       (entry) =>
         entry.state === 'open' && (entry.verdict === 'open' || disputed(entry)),
@@ -743,21 +752,19 @@ function post(entry: BoardPost, handle: (agent: string) => string): Post {
 /**
  * The time away, with the news since then in the words of the desk's Home
  * (core/away.ts): the first directions with news, how many more, what came,
- * and what the lab spent.
+ * and what the lab spent. `gpu`: the GPU spend, or null without pods to read.
  */
 function awayOf(
   view: LabView,
   away: LabAway,
-  compute: ComputeView | null,
+  gpu: number | null,
+  disputes: Loaded['disputes'],
 ): NonNullable<Lab['away']> {
-  const disputed = new Set(
-    openDisputes(view).map((dispute) => dispute.target.id),
-  );
   const news = awayNews(
     view,
     away,
-    compute ? labGpu(compute, view.state.startedAt).spent : null,
-    disputed,
+    gpu,
+    new Set(disputes.map((dispute) => dispute.target.id)),
   );
   return {
     since: away.since,
@@ -838,7 +845,7 @@ function check(entry: LabCheck): CheckItem {
 
 /** The lab as the screens show it, within one level. */
 function shapeLab(loaded: Loaded, level: Level): Lab {
-  const { view } = loaded;
+  const { view, disputes } = loaded;
   const { state } = view;
   const proof = proofIndex(view);
   const omitted: Partial<Record<LabList, number>> = {};
@@ -855,20 +862,23 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     return newest ? list.slice(-max) : list.slice(0, max);
   };
   const handle = (agent: string): string => view.handles[agent] ?? agent;
-  const disputes = openDisputes(view);
   const disputed = (entry: LabDirection): boolean =>
     disputes.some(
       ({ target }) =>
         target.direction === entry.id || target.id === entry.evidence?.post,
     );
-  const gpu = loaded.compute
-    ? labGpu(loaded.compute, state.startedAt)
-    : { spent: 0, limit: null };
+  const gpu = loaded.gpu ?? { spent: 0, limit: null };
   const stored = loaded.compute
     ? new Set(loaded.compute.secrets.map((secret) => secret.name))
     : null;
   const waiting = (entry: LabCall): boolean =>
     entry.state === 'open' || entry.state === 'undoing';
+  const settled: Settled = {
+    holdsUp: state.directions.filter((entry) => entry.verdict === 'holds-up'),
+    ruledOut: state.directions.filter((entry) => entry.verdict === 'ruled-out'),
+  };
+  const newest = (list: readonly { readonly id: string }[]): string[] =>
+    list.slice(-apiLimits.notify).map((entry) => entry.id);
   const agents: Agent[] = keep(loaded.agents, level.agents, 'agents').map(
     (ref) => {
       const turns = loaded.turns.get(ref.id) ?? [];
@@ -941,7 +951,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         brought.get(entry.id),
       ),
     ),
-    directionCounts: directionCounts(state.directions, disputed),
+    directionCounts: directionCounts(state.directions, settled, disputed),
     agents,
     plan:
       plan && level.whole
@@ -993,6 +1003,11 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     })),
     away: loaded.away,
     omitted,
+    notify: {
+      calls: newest(state.calls.filter(waiting)),
+      holdsUp: newest(settled.holdsUp),
+      ruledOut: newest(settled.ruledOut),
+    },
   };
 }
 
@@ -1206,12 +1221,17 @@ export class ApiReader {
       if (reported) models.set(agent.id, reported);
     }
     const away = view.runs ? await sources.away() : null;
+    const compute = sources.compute?.view() ?? null;
+    const gpu = compute ? labGpu(compute, view.state.startedAt) : null;
+    const disputes = openDisputes(view);
     return {
       view,
       agents,
-      compute: sources.compute?.view() ?? null,
+      compute,
+      gpu,
+      disputes,
       works: sources.works,
-      away: away ? awayOf(view, away, sources.compute?.view() ?? null) : null,
+      away: away ? awayOf(view, away, gpu?.spent ?? null, disputes) : null,
       turns,
       models,
     };
@@ -1255,34 +1275,48 @@ export class ApiReader {
   }
 
   /**
+   * A post and the replies below it at any depth, oldest first, as the lab's
+   * agents read a thread: at most `apiLimits.posts` posts. Null without a
+   * lab, or when the lab has no such post.
+   */
+  thread(id: string): PostThread | null {
+    const view = this.sources().lab?.view();
+    const root = view?.posts.find((entry) => entry.id === id);
+    if (!view || !root) return null;
+    // A reply always comes after the post that it answers, so one pass finds every depth.
+    const below = new Set([root.id]);
+    const replies: BoardPost[] = [];
+    for (const entry of view.posts)
+      if (entry.replyTo && below.has(entry.replyTo)) {
+        below.add(entry.id);
+        replies.push(entry);
+      }
+    const room = apiLimits.posts - 1;
+    const handle = (agent: string): string => view.handles[agent] ?? agent;
+    return {
+      posts: [root, ...replies.slice(0, room)].map((entry) =>
+        post(entry, handle),
+      ),
+      more: replies.length > room,
+    };
+  }
+
+  /**
    * The lab's search (core/search.ts), as the desk's panel runs it: the
-   * newest hits with their marked snippets. A long post that the board's
-   * newest page leaves out comes with its whole text, within the search's
-   * byte budget. Null without a lab.
+   * newest hits with their marked snippets. A call hit carries its question
+   * and answer, so a page that does not hold the call can still show it.
+   * Null without a lab.
    */
   search(q: string): SearchResult | null {
     const view = this.sources().lab?.view();
     if (!view) return null;
     const words = searchWords(q);
     const found = words ? searchLab(view, words) : [];
-    const board = new Set(
-      view.posts.slice(-apiLimits.posts).map((entry) => entry.id),
-    );
-    let budget = searchTextBytes;
     const hits = !words
       ? []
       : found.slice(0, searchLimit).map((entry): SearchHit => {
           if ('post' in entry) {
             const { post } = entry;
-            let whole: string | null = null;
-            let cut = false;
-            if (!board.has(post.id) && post.text.length > snippetWidth) {
-              const bytes = Buffer.byteLength(post.text);
-              if (bytes <= budget) {
-                budget -= bytes;
-                whole = post.text;
-              } else cut = true;
-            }
             return {
               type: 'post',
               id: post.id,
@@ -1292,8 +1326,6 @@ export class ApiReader {
               author: authorName(view, post.author),
               direction: post.direction ?? null,
               snippet: snippetParts(post.text, words.any),
-              whole,
-              cut,
             };
           }
           if ('run' in entry) {
@@ -1309,14 +1341,26 @@ export class ApiReader {
             };
           }
           const { call } = entry;
+          const chosen = call.answer
+            ? call.options[call.answer.option]?.label
+            : undefined;
           return {
             type: 'call',
             id: call.id,
             at: call.at,
             label: callWords[call.kind],
             author: authorName(view, call.by),
-            state: callState(call),
-            open: call.state === 'open',
+            state: call.state,
+            summary: callState(call),
+            question: call.question,
+            // Words on Verifold's own open call go to the lab, and only an option answers it.
+            answer:
+              call.answer && chosen !== undefined
+                ? { option: chosen, at: call.answer.at }
+                : call.words !== null && call.state !== 'open'
+                  ? { words: call.words }
+                  : null,
+            note: call.note,
             snippet: snippetParts(callSearchText(call), words.any),
           };
         });
@@ -1712,12 +1756,22 @@ export async function answerApi(
     keys.every((key) => key === 'q')
   ) {
     const q = url.searchParams.get('q') ?? '';
-    if (q.length > apiLimits.searchQuery) {
+    if (q.length > searchQueryLimit) {
       response.writeHead(400).end();
       return;
     }
     const result = reader.search(q);
     if (result) json(response, 200, result);
+    else response.writeHead(404).end();
+    return;
+  }
+  if (first === 'posts' && parts.length === 2 && !keys.length) {
+    if (!second || !postId.test(second)) {
+      response.writeHead(400).end();
+      return;
+    }
+    const thread = reader.thread(second);
+    if (thread) json(response, 200, thread);
     else response.writeHead(404).end();
     return;
   }

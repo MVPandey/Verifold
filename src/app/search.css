@@ -97,13 +97,6 @@
   color: var(--ink);
 }
 
-.hit__open--plain,
-.hit__open--plain:hover {
-  border-color: var(--line);
-  background: var(--surface);
-  cursor: default;
-}
-
 .hit__head {
   display: flex;
   flex-wrap: wrap;
@@ -135,17 +128,26 @@
   color: var(--accent-ink);
 }
 
-.hit__whole {
+/* A call that the snapshot leaves out, read-only under its hit. */
+.hit__read {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin: 0 12px;
+}
+
+.hit__whole {
+  margin: 0;
   font-size: 14px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .hit__fine {
-  margin: 0 12px;
+  margin: 0;
   font-size: 13px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .chip--run,

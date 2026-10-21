@@ -6,6 +6,8 @@ import { href } from './route.ts';
  * waits for the person and each direction that holds up or is ruled out,
  * once, while the page is in the background, and only after the person
  * turned notes on. Events that the page found when it loaded never notify.
+ * The events come from the snapshot's `notify` lists, which no level cuts,
+ * so a smaller snapshot neither hides a new event nor makes an old one new.
  */
 
 /**
@@ -45,30 +47,48 @@ export interface NotifyMemory {
 
 export const freshMemory: NotifyMemory = { primed: false, seen: new Set() };
 
-/** The events of a lab that a note can be about, as notes. */
+/**
+ * The events of a lab that a note can be about, as notes. An event that the
+ * snapshot's lists leave out gets plain words and opens the page that can
+ * show it. An older server sends no `notify`: then its lists are the events.
+ */
 export function events(lab: Lab, project: string): readonly Note[] {
+  const calls = new Map(lab.needsYou.map((call) => [call.id, call]));
+  const titles = new Map(
+    lab.directions.map((direction) => [direction.id, direction.title]),
+  );
+  const settled = (verdict: 'holds-up' | 'ruled-out'): readonly string[] =>
+    lab.directions
+      .filter((direction) => direction.verdict === verdict)
+      .map((direction) => direction.id);
+  const feed = lab.notify ?? {
+    calls: [...calls.keys()],
+    holdsUp: settled('holds-up'),
+    ruledOut: settled('ruled-out'),
+  };
+  const direction = (id: string, verdict: 'holds-up' | 'ruled-out'): Note => {
+    const title = titles.get(id);
+    const name = title ? `"${title}"` : `Direction ${id}`;
+    return {
+      key: `settled:${id}:${verdict}`,
+      title: project,
+      body:
+        verdict === 'holds-up' ? `${name} holds up.` : `${name} is ruled out.`,
+      route: href.direction(id),
+    };
+  };
   return [
-    ...lab.needsYou.map((call) => ({
-      key: `call:${call.id}`,
-      title: `${project} needs you`,
-      body: call.question,
-      route: href.call(call.id),
-    })),
-    ...lab.directions.flatMap((direction) =>
-      direction.verdict === 'holds-up' || direction.verdict === 'ruled-out'
-        ? [
-            {
-              key: `settled:${direction.id}:${direction.verdict}`,
-              title: project,
-              body:
-                direction.verdict === 'holds-up'
-                  ? `"${direction.title}" holds up.`
-                  : `"${direction.title}" is ruled out.`,
-              route: href.direction(direction.id),
-            },
-          ]
-        : [],
-    ),
+    ...feed.calls.map((id) => {
+      const call = calls.get(id);
+      return {
+        key: `call:${id}`,
+        title: `${project} needs you`,
+        body: call?.question ?? `Call ${id} waits for your answer.`,
+        route: call ? href.call(id) : href.lab,
+      };
+    }),
+    ...feed.holdsUp.map((id) => direction(id, 'holds-up')),
+    ...feed.ruledOut.map((id) => direction(id, 'ruled-out')),
   ];
 }
 

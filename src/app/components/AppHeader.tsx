@@ -2,17 +2,10 @@ import { useContext, type ReactNode } from 'react';
 import type { Lab } from '../../protocol/api.ts';
 import type { ActOutcome } from '../api.ts';
 import { due, usd } from '../format.ts';
-import { searchKeyLabel } from '../search.ts';
+import { onMac, searchKey } from '../search.ts';
 import { ToolsContext } from '../tools.ts';
 import { useAction } from '../useAction.ts';
 import { Logo, Magnifier } from './Icons.tsx';
-
-/** The search key as this computer writes it: ⌘K on a Mac, Ctrl+K elsewhere. */
-function searchKey(): string {
-  return typeof navigator === 'undefined'
-    ? '⌘K'
-    : searchKeyLabel(navigator.platform);
-}
 
 /**
  * The top bar: the project, the money line, search, and pause. The project
@@ -32,6 +25,7 @@ export function AppHeader({
 }): ReactNode {
   const pause = useAction(onPause);
   const tools = useContext(ToolsContext);
+  const key = searchKey(onMac);
   return (
     <header className="header">
       <Logo />
@@ -42,12 +36,12 @@ export function AppHeader({
         <button
           type="button"
           className="button button--search"
-          aria-keyshortcuts="Meta+K Control+K"
+          aria-keyshortcuts={key.aria}
           onClick={tools.openSearch}
         >
           <Magnifier />
           Search
-          <kbd className="key">{searchKey()}</kbd>
+          <kbd className="key">{key.label}</kbd>
         </button>
       )}
       {lab?.agentsHere && (
