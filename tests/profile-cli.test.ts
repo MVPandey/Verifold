@@ -13,7 +13,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { ensureGlobalProfile } from '../src/cli/profile.ts';
-import { saveAgencyFile } from '../src/cli/agency.ts';
+import {
+  loadSettings,
+  saveAgencyFile,
+  withProfileLock,
+  writeSettings,
+} from '../src/core/agency.ts';
+import { profileMoneyDefaults } from '../src/core/compute.ts';
 import type { runHarness } from '../src/core/harness.ts';
 
 function parseObject(value: string): Record<string, unknown> {
@@ -146,6 +152,40 @@ await test('noninteractive profile setup rejects before any file creation', asyn
       /interactive terminal/,
     );
     assert.deepEqual(await readdir(root), []);
+  });
+});
+
+await test("profile setup in the terminal keeps the first run's helper, its model, the limits and the steps", async () => {
+  await temporary(async (root, agency) => {
+    await withProfileLock(agency, signal(), () =>
+      writeSettings(agency, (current) => ({
+        ...current,
+        agency: {
+          host: 'claude',
+          model: 'fable',
+          helper: 'codex',
+          helperModel: 'gpt-6.1-sol',
+        },
+        money: profileMoneyDefaults,
+        steps: { agents: 'done', money: 'done' },
+      })),
+    );
+    await runCli(
+      ['profile', '--setup', '--agency-dir', agency],
+      root,
+      io(['skip']),
+      signal(),
+      noHost,
+    );
+    const settings = await loadSettings(agency);
+    assert.deepEqual(settings.agency, {
+      host: 'claude',
+      model: 'fable',
+      helper: 'codex',
+      helperModel: 'gpt-6.1-sol',
+    });
+    assert.deepEqual(settings.money, profileMoneyDefaults);
+    assert.deepEqual(settings.steps, { agents: 'done', money: 'done' });
   });
 });
 

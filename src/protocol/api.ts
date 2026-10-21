@@ -44,7 +44,10 @@ export interface Snapshot {
   readonly rev: number;
   /** When the server built it. */
   readonly at: string;
-  /** The name of the project's folder. */
+  /**
+   * The name of the project's folder. Empty when Verifold runs without a
+   * project, as for the first run in a new folder.
+   */
   readonly project: string;
   /** Null: the project has no lab. */
   readonly lab: Lab | null;
@@ -757,6 +760,130 @@ export interface PostThread {
   readonly more: boolean;
 }
 
+/** A step of the first run. */
+export type SetupStep = 'agents' | 'about' | 'money';
+
+/**
+ * `GET /api/v1/setup`: the first run, which the app also opens later to
+ * change the profile. Each step saves on its own. Added after version 1.
+ */
+export interface SetupView {
+  /** Each step: `done`, `skipped`, or null when the person never saw it. */
+  readonly steps: Readonly<Record<SetupStep, 'done' | 'skipped' | null>>;
+  readonly agents: SetupAgents;
+  readonly about: SetupAbout;
+  readonly money: SetupMoney;
+}
+
+export interface SetupAgents {
+  /** Verifold looks for the harnesses now. Ask again in a moment. */
+  readonly checking: boolean;
+  /** Claude Code, then Codex. Empty before the first check ends. */
+  readonly tools: readonly AgentTool[];
+}
+
+/** A harness on this computer. Verifold reads no account fields, such as the email. */
+export interface AgentTool {
+  readonly harness: Harness;
+  readonly installed: boolean;
+  readonly version: string | null;
+  /** Null: Verifold could not tell. */
+  readonly signedIn: boolean | null;
+  /** Claude Code's plan, such as `max`. */
+  readonly plan: string | null;
+  /** The person uses it for research. */
+  readonly use: boolean;
+  /** The model picked for it. Null: the harness's own default. */
+  readonly model: string | null;
+  /** The models to offer, Verifold's pick first. */
+  readonly models: readonly { readonly id: string; readonly label: string }[];
+}
+
+/** One line of the "About you" conversation. */
+export interface ChatLine {
+  /** `verifold`: Verifold's own question. A harness: its question. */
+  readonly from: 'verifold' | 'you' | Harness;
+  readonly text: string;
+  /** Answers that the asker suggests. */
+  readonly suggestions: readonly string[];
+  /** `talk`: the question asks how agents should write to the person. */
+  readonly asks?: 'talk';
+}
+
+/** The profile card. Each field can be empty. */
+export interface ProfileCard {
+  readonly workOn: string;
+  readonly explore: string;
+  readonly talk: string;
+}
+
+export interface SetupAbout {
+  readonly lines: readonly ChatLine[];
+  /** The card to review: the draft, or the saved one. Null before either. */
+  readonly card: ProfileCard | null;
+  /** What the profile file holds now: a card, text in free form, or nothing. */
+  readonly saved: 'card' | 'text' | null;
+  /** The text in free form, when `saved` is `text`. */
+  readonly text: string | null;
+  /** The harness that asks and drafts. Null: none is signed in, so Verifold asks. */
+  readonly harness: Harness | null;
+  /** When the harness started its reply. Null: it does not work now. */
+  readonly busy: string | null;
+  /** Why the last reply failed. */
+  readonly error: string | null;
+  /** The most characters of an answer, and of each field of the card. */
+  readonly limits: {
+    readonly answer: number;
+    readonly workOn: number;
+    readonly explore: number;
+    readonly talk: number;
+  };
+}
+
+/** The GPU limits for new projects. `limitUsd` null: pods are off. */
+export interface MoneyLimits {
+  readonly limitUsd: number | null;
+  readonly maxUsdPerHour: number;
+  readonly maxHoursPerLease: number;
+  readonly idleMinutes: number;
+  readonly maxRunningPods: 1 | 2;
+  /** RunPod GPU type IDs that agents may rent. */
+  readonly gpuTypes: readonly string[];
+}
+
+/** A GPU type with RunPod's Secure Cloud list price. */
+export interface GpuPrice {
+  readonly id: string;
+  readonly name: string;
+  readonly memoryGb: number;
+  readonly usdPerHour: number;
+}
+
+export interface SetupMoney {
+  /** The stored RunPod key, without the key. */
+  readonly key: {
+    readonly last4: string;
+    readonly place: 'keychain' | 'secret-service' | 'file';
+    /** The last check with RunPod failed, and why. */
+    readonly problem: string | null;
+  } | null;
+  /** This computer has a keyring. Without one, a key goes into a private file. */
+  readonly keyring: boolean;
+  /** Common GPUs at RunPod's list prices, and when Verifold read them. Null before a read. */
+  readonly prices: {
+    readonly at: string;
+    readonly gpus: readonly GpuPrice[];
+  } | null;
+  /** Verifold reads the prices now. */
+  readonly reading: boolean;
+  /** Why the last read of the prices failed. */
+  readonly problem: string | null;
+  /** The saved limits, or the defaults before a save. */
+  readonly limits: MoneyLimits;
+  /** Why the saved limits are not valid. The defaults show until a save replaces them. */
+  readonly unreadable?: string | null;
+}
+
 /**
  * `POST /api/v1/actions/:name`: the body of each action. The server runs the
  * operation that the desk runs for the same action, with the same checks.
@@ -817,6 +944,46 @@ export interface ActionBodies {
    * dismisses it. Added after version 1.
    */
   'lab-look': Record<string, never>;
+  /** The first run's actions, added after version 1. Save the agents step. */
+  'setup-agents': {
+    readonly claude: { readonly use: boolean; readonly model?: string };
+    readonly codex: { readonly use: boolean; readonly model?: string };
+    readonly key?: string;
+  };
+  /** Look for the harnesses again. */
+  'setup-check': { readonly key?: string };
+  /**
+   * The person's answer, or, once a card is shown, a note that changes it.
+   * `card`: the card as the person edited it, which the note then changes.
+   */
+  'setup-say': {
+    readonly text: string;
+    readonly card?: ProfileCard;
+    readonly key?: string;
+  };
+  /** Ask the harness again after a failed reply. */
+  'setup-retry': { readonly key?: string };
+  /** Fill the card from the answers so far, without the harness. */
+  'setup-fill': { readonly key?: string };
+  /** Start the conversation again. The saved profile stays until a new one is saved. */
+  'setup-restart': { readonly key?: string };
+  /** Save the card to the profile, or keep the profile in free form as it is. */
+  'setup-about':
+    | { readonly card: ProfileCard; readonly key?: string }
+    | { readonly keep: true; readonly key?: string };
+  /** Check a RunPod key with RunPod, then store it outside every project. No answer holds it. */
+  'setup-key': {
+    readonly runpodKey: string;
+    /** Keep it in a private file instead of the keyring. */
+    readonly file?: boolean;
+    readonly key?: string;
+  };
+  /** Read RunPod's prices again. */
+  'setup-prices': { readonly key?: string };
+  /** Save the GPU limits for new projects. `limitUsd` null: no GPUs for now. */
+  'setup-money': MoneyLimits & { readonly key?: string };
+  /** Skip a step, or every step that the person did not finish. */
+  'setup-skip': { readonly step: SetupStep | 'all'; readonly key?: string };
 }
 
 export type ActionName = keyof ActionBodies;

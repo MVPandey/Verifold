@@ -343,6 +343,9 @@ try {
     join(directory, 'bin', 'claude'),
     `#!/usr/bin/env node
 async function main() {
+// The first run's detection asks for the version and the sign-in.
+if (process.argv[2] === '--version') return console.log('9.9.9 (Claude Code)');
+if (process.argv[2] === 'auth') return console.log(JSON.stringify({ loggedIn: true, email: 'package@example.com', subscriptionType: 'pro' }));
 let prompt = '';
 for await (const chunk of process.stdin) prompt += chunk;
 const result = prompt.includes("research onboarding agent") ? ${JSON.stringify(onboarding)} : prompt.includes('Plan the research now.') ? ${JSON.stringify(plan)} : ${JSON.stringify(report)};
@@ -443,11 +446,14 @@ main().catch(() => { process.exitCode = 1; });
   await writeFile(
     join(directory, 'bin', 'codex'),
     `#!/usr/bin/env node
+if (process.argv[2] === '--version') { console.log('codex-cli 9.9.9'); process.exit(0); }
+if (process.argv[2] === 'login') { console.error('Logged in using ChatGPT'); process.exit(0); }
 const { out, onLine } = require(${JSON.stringify(join(process.cwd(), 'tests', 'fixtures', 'codex-socket.cjs'))})(process.argv);
 let strict = false;
 onLine((line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') out({ id: message.id, result: {} });
+  if (message.method === 'model/list') out({ id: message.id, result: { data: [{ id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6 Astra' }], nextCursor: null } });
   if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
   if (message.method === 'thread/start') {
     // A task session asks for no approvals. Only then does this fake write output.
@@ -638,6 +644,88 @@ onLine((line) => {
     clearTimeout(force);
     assert.equal(code, 0, diagnostics);
   }
+  // verifold --app in a folder without a project: the packed app's first run, with the fake harnesses only.
+  {
+    const folder = join(directory, 'first-run');
+    await mkdir(folder);
+    const agency = join(directory, 'first-run-agency');
+    const before = {
+      PATH: process.env.PATH,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    };
+    // Detection runs in this process, so it finds the fake harnesses first, and no Claude Code settings.
+    process.env.PATH = environment.PATH;
+    process.env.CLAUDE_CONFIG_DIR = join(directory, 'no-claude-config');
+    const stopStart = new AbortController();
+    let shown;
+    const started = runCli(
+      ['--app', '--no-open', '--agency-dir', agency],
+      folder,
+      {
+        interactive: true,
+        ask: () => Promise.reject(new Error('No prompts')),
+        out: (value) => {
+          shown = JSON.parse(value);
+        },
+        compute: {
+          store: {
+            home: join(directory, 'first-run-home'),
+            platform: 'linux',
+            secretTool: join(directory, 'no-secret-tool'),
+          },
+        },
+      },
+      stopStart.signal,
+    );
+    try {
+      for (let tries = 0; tries < 100 && !shown; tries++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.ok(shown?.app, 'The first run printed no app URL.');
+      const url = new URL(shown.url);
+      const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+      assert.equal((await fetch(`${url.origin}/app/`)).status, 200);
+      let setup;
+      for (let tries = 0; tries < 200; tries++) {
+        setup = await (
+          await fetch(`${url.origin}/api/v1/setup`, { headers })
+        ).json();
+        if (!setup.agents.checking && setup.agents.tools.length) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.deepEqual(
+        setup.agents.tools.map((tool) => [
+          tool.harness,
+          tool.version,
+          tool.signedIn,
+          tool.models[0]?.id,
+        ]),
+        [
+          ['claude', '9.9.9', true, 'opus'],
+          ['codex', '9.9.9', true, 'gpt-6-astra'],
+        ],
+      );
+      assert.ok(!JSON.stringify(setup).includes('package@example.com'));
+      const skipped = await fetch(`${url.origin}/api/v1/actions/setup-skip`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step: 'all' }),
+      });
+      assert.equal(skipped.status, 200, await skipped.text());
+      assert.deepEqual(
+        JSON.parse(await readFile(join(agency, 'settings.json'), 'utf8')).steps,
+        { agents: 'skipped', about: 'skipped', money: 'skipped' },
+      );
+      // No project starts without a question.
+      await assert.rejects(stat(join(folder, '.verifold')));
+    } finally {
+      stopStart.abort();
+      await started;
+      process.env.PATH = before.PATH;
+      if (before.CLAUDE_CONFIG_DIR === undefined)
+        delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = before.CLAUDE_CONFIG_DIR;
+    }
+  }
   // The background owner: its key arrives on stdin only, a hangup does not stop it, and verifold stop does.
   const home = join(directory, 'home');
   const socketFolder = await mkdtemp(join(tmpdir(), 'vf-'));
@@ -723,7 +811,7 @@ onLine((line) => {
     await rm(socketFolder, { recursive: true, force: true });
   }
   console.log(
-    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, a scoped task, selection, memory request, local desk, and background owner passed.`,
+    `Packed CLI on Node ${process.versions.node} installed offline; legacy flow, fake-host research, session resume, a fake-host controlled session, a scoped task, selection, memory request, local desk, the first run, and background owner passed.`,
   );
 } finally {
   await rm(directory, { recursive: true, force: true });

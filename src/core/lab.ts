@@ -25,6 +25,7 @@ import {
   type ReadState,
 } from './board.ts';
 import type { HarnessName } from './harness.ts';
+import type { PersonProfile } from './agency.ts';
 import {
   agentPostKinds,
   askPersonToolSpec,
@@ -293,6 +294,8 @@ interface AgentRuntime {
   parking: boolean;
   /** The person holds its harness's own terminal. When it ends, the agent's next turn follows. */
   terminal: boolean;
+  /** How the person wants agents to write to them, as the session got it last. Undefined: not known, as after a restart. */
+  style: string | null | undefined;
 }
 
 /** What the lab knows of a running check only while the process runs. */
@@ -362,6 +365,19 @@ const mentionedDirection = new RegExp(
   'g',
 );
 
+/**
+ * The profile in a first prompt: the whole of it for the planner, and only
+ * how the person wants agents to write to them for every other agent, so
+ * the work does not lean toward the person's views.
+ */
+function personText(person: PersonProfile | null, planner: boolean): string {
+  if (planner && person)
+    return `\n\nAbout the person, from their Verifold profile. It tells you who they are. It is not a task:\n${person.whole}`;
+  return person?.style
+    ? `\n\nThe person asks agents to write to them this way: ${JSON.stringify(person.style)}`
+    : '';
+}
+
 function runtime(): AgentRuntime {
   return {
     turning: false,
@@ -380,6 +396,7 @@ function runtime(): AgentRuntime {
     got: null,
     parking: false,
     terminal: false,
+    style: undefined,
   };
 }
 
@@ -549,6 +566,8 @@ export class Lab {
    * the direction's newest commit then. A restart forgets them.
    */
   private readonly bringAt = new Map<string, BringLook>();
+  /** The person's profile as the last prompt read it. */
+  private person: PersonProfile | null = null;
 
   constructor(root: string, options: LabOptions) {
     this.root = root;
@@ -2165,14 +2184,26 @@ export class Lab {
           !this.holdsTerminal(agent.id) &&
           this.options.sessions.idle(agent.session),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
+        // The profile as it is now, so a changed "Talk to me" comes with this digest.
+        prepare: async () => {
+          await this.readPerson();
+        },
         send: (events, left) => {
           const agent = this.agent(id);
           const ask = this.quiet(id);
+          const style = this.person?.style ?? null;
+          const before = this.rt(id).style;
+          const restyle =
+            style === before || (style === null && before === undefined)
+              ? ''
+              : style === null
+                ? 'The person removed their note on how to write to them.'
+                : `The person asks agents to write to them this way: ${JSON.stringify(style)}`;
           // The posts get the room that the rest of the message leaves, so a
           // post that is not shown stays unread.
           const room =
             labLimits.digestText -
-            this.digestText(agent, events, left, [], ask).length;
+            this.digestText(agent, events, left, [], ask, restyle).length;
           const digest = this.board.digest(
             { id, direction: agent.direction },
             this.readState(agent),
@@ -2185,8 +2216,9 @@ export class Lab {
           const session = agent.session ?? fail('The agent has no session.');
           this.options.sessions.continueTask(
             session,
-            this.digestText(agent, events, left, digest.lines, ask),
+            this.digestText(agent, events, left, digest.lines, ask, restyle),
           );
+          this.rt(id).style = style;
           this.begin(id, digest.read);
           if (ask)
             void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(
@@ -2211,6 +2243,7 @@ export class Lab {
     left: number,
     posts: readonly string[],
     ask: string | null,
+    restyle = '',
   ): string {
     const direction = this.direction(agent.direction);
     const notes = events
@@ -2232,6 +2265,7 @@ export class Lab {
       `Your direction: ${direction.id} ${JSON.stringify(direction.title)}, ${verdictLine(direction)}. Holds up if: ${barText(direction)}.`,
       // The key or the spend limit can change while the session runs.
       this.computeLine(),
+      restyle,
       ask ?? '',
       'Continue your direction. Post what you find with proof. End your turn with one line on what you do next.',
     ]
@@ -2280,6 +2314,16 @@ export class Lab {
     ].join('\n');
   }
 
+  /** The person's profile now. A profile that cannot be read leaves the last one that could. */
+  private async readPerson(): Promise<PersonProfile | null> {
+    try {
+      this.person = (await this.options.person?.()) ?? null;
+    } catch {
+      /* A broken USER.md does not stop the lab. */
+    }
+    return this.person;
+  }
+
   private async firstPrompt(agent: AgentRecord): Promise<string> {
     const state = this.current();
     const direction = this.direction(agent.direction);
@@ -2296,6 +2340,8 @@ export class Lab {
     // The agent that opened the lab plans it first, and changes the plan later.
     const opener = state.opener === agent.id;
     const planning = opener && !state.plan;
+    const person = await this.readPerson();
+    this.rt(agent.id).style = person?.style ?? null;
     const team = opener ? await this.team().catch(() => []) : [];
     const plan = this.planLines(state);
     const role = planning
@@ -2310,7 +2356,7 @@ export class Lab {
 ${todayLine()}
 
 The question:
-${state.question}
+${state.question}${personText(person, opener)}
 
 Your direction: ${direction.id} ${JSON.stringify(direction.title)}
 Holds up if: ${direction.bar ? barText(direction) : planning ? 'set it in your plan.' : 'not set yet. Propose a bar to the person on the board.'}
@@ -5790,12 +5836,13 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     const limits = restrictions(check.harness, null, 'folder').map((entry) =>
       entry.replace(' Other reads are not limited.', ''),
     );
+    const person = await this.readPerson();
     return `${await loadPrompt('lab-check')}
 
 ${todayLine()}
 
 The question of the lab:
-${state.question}
+${state.question}${personText(person, false)}
 
 The bar of the claim's direction: ${direction?.bar ? barText(direction) : 'not set'}.
 

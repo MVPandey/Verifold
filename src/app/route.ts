@@ -1,4 +1,5 @@
 import { turnIdPattern } from '../protocol/api.ts';
+import type { SetupPage } from './setup.ts';
 
 /**
  * The app's pages, from the URL fragment. The lab home is `#/`, a direction
@@ -7,12 +8,10 @@ import { turnIdPattern } from '../protocol/api.ts';
  * direction's bring-in is `#/d/<id>/bring`. `#/board/<id>` is the lab home
  * with a post of its board brought into view, and `#/post/<id>` is a post's
  * own page, with its replies. `#/d/<id>/run/<run>` is a direction's page
- * with a run marked in the turn that started it. The page that a later
- * slice of #282 builds (the first run) shows a short "comes in a later
- * step" page until then. Any other fragment is a page that does not exist.
+ * with a run marked in the turn that started it. The first run is
+ * `#/setup/<step>`, and `#/setup` opens its first step without a record.
+ * Any other fragment is a page that does not exist.
  */
-export type LaterPage = 'first-run';
-
 export type Route =
   | {
       readonly page: 'lab';
@@ -34,7 +33,11 @@ export type Route =
   | { readonly page: 'post'; readonly id: string }
   | { readonly page: 'answer' }
   | { readonly page: 'bring'; readonly direction: string }
-  | { readonly page: 'first-run' }
+  | {
+      readonly page: 'setup';
+      /** Null: the first step without a record, or the end. */
+      readonly step: SetupPage | null;
+    }
   | { readonly page: 'unknown' };
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
@@ -72,7 +75,9 @@ export function parseRoute(hash: string): Route {
       : { page: 'unknown' };
   }
   if (path === '/answer') return { page: 'answer' };
-  if (path === '/first-run') return { page: 'first-run' };
+  if (path === '/setup') return { page: 'setup', step: null };
+  const setup = /^\/setup\/(agents|about|money|done)$/.exec(path)?.[1];
+  if (setup) return { page: 'setup', step: setup as SetupPage };
   return { page: 'unknown' };
 }
 
@@ -88,6 +93,7 @@ export const href = {
   post: (id: string): string => `#/post/${id}`,
   run: (direction: string, run: string): string =>
     `#/d/${direction}/run/${run}`,
+  setup: (step?: SetupPage): string => (step ? `#/setup/${step}` : '#/setup'),
 } as const;
 
 /**

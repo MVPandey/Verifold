@@ -1,6 +1,6 @@
 import { loadPrompt } from './prompts.ts';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
-import { resolve, join } from 'node:path';
+import { isAbsolute, resolve, join } from 'node:path';
 import {
   appendFile,
   writeFile,
@@ -34,6 +34,7 @@ import { installedHarnesses, runHarness } from '../core/harness.ts';
 import { nextResearchAction } from '../desk/desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
+import { FirstRun } from '../server/setup.ts';
 import { TaskManager } from '../legacy/tasks.ts';
 import { ResultsStore } from '../legacy/results.ts';
 import { defaultAgents, SessionPool } from '../core/workers.ts';
@@ -46,7 +47,11 @@ import { labModel } from '../core/models.ts';
 import { labWorks, RunTeam } from '../core/team.ts';
 import { withTranscript } from '../core/transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
-import { agencyDirectory } from './agency.ts';
+import {
+  agencyDirectory,
+  loadSettings,
+  profileReader,
+} from '../core/agency.ts';
 import {
   hostName,
   reconcileSessions,
@@ -116,6 +121,8 @@ export interface CliIO {
   readonly browse?: (url: string, signal: AbortSignal) => Promise<boolean>;
   /** The folder of desk page files. Tests use fixtures. The default is the installed package. */
   readonly deskAssets?: URL;
+  /** The folder of the app's build. Tests use fixtures. The default is the installed package. */
+  readonly appAssets?: URL;
   readonly select?: (
     question: string,
     choices: readonly Choice[],
@@ -211,7 +218,9 @@ verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model 
 Options: --workspace path (default: the current folder), --help, --version
 
 In a project that exists, --app opens the new app, a preview of the next desk,
-instead of the desk. Type /app in the terminal to open it later.
+instead of the desk. Type /app in the terminal to open it later. In a folder
+without a project, --app opens the app's first run: your agents, a short
+profile, and the GPU limits that new projects start with.
 
 Setup connects your harness, asks for a project folder and your question, and has
 the harness draft a research brief for you to review. Then it creates literature/,
@@ -490,6 +499,8 @@ interface DeskRun {
   readonly lab?: boolean;
   /** `--app`: open the new app (a preview) instead of the desk. */
   readonly app?: boolean;
+  /** The folder of the person's profile. Default: `~/.verifold/agency`. */
+  readonly agency?: string;
   /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
   readonly owner?: {
     readonly control: Control;
@@ -780,6 +791,8 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
+      // The person's profile, read for each prompt when it changed, so an edit reaches the agents.
+      const agency = run.agency ?? agencyDirectory(root);
       // The lab's agents share the worker slots with tasks and plain sessions.
       const lab = new Lab(root, {
         sessions,
@@ -787,7 +800,12 @@ async function serveDesk(
         quota,
         team,
         model: async (host) =>
-          labModel(host, await loadWorkspace(root).catch(() => null)),
+          labModel(
+            host,
+            await loadWorkspace(root).catch(() => null),
+            (await loadSettings(agency).catch(() => null))?.agency,
+          ),
+        person: profileReader(agency),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);
@@ -876,7 +894,18 @@ async function serveDesk(
             coordinator,
             compute,
             memory,
-            { stop: () => quit.abort(), reuse: run.owner?.desk, lab },
+            {
+              stop: () => quit.abort(),
+              reuse: run.owner?.desk,
+              lab,
+              // The app opens the first run here too, to change the profile.
+              firstRun: new FirstRun({
+                directory: agency,
+                compute,
+                signal: deskSignal,
+                harness,
+              }),
+            },
           );
           await announce(
             desk,
@@ -999,6 +1028,87 @@ async function serveDesk(
     await desk?.closed;
   }
 }
+/**
+ * `verifold --app` in a folder without a project: the app with no project,
+ * for the first run. No owner starts, because no project exists yet. Ctrl+C
+ * stops it.
+ */
+async function serveStart(
+  root: string,
+  io: CliIO,
+  signal: AbortSignal,
+  run: {
+    readonly noOpen: boolean;
+    /** The folder of the person's profile. */
+    readonly agency: string;
+    readonly harness: typeof runHarness;
+  },
+): Promise<void> {
+  // The RunPod key belongs to this computer, so the first run stores it without a project.
+  const compute = computeFor(root, io);
+  await compute.load();
+  const desk = await startDesk(
+    null,
+    signal,
+    io.deskAssets,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      firstRun: new FirstRun({
+        directory: run.agency,
+        compute,
+        signal,
+        harness: run.harness,
+      }),
+      ...(io.appAssets ? { appRoot: io.appAssets } : {}),
+    },
+  );
+  const app = desk.appUrl;
+  if (!app) {
+    throw new Error(
+      'This Verifold package has no app build. Run verifold without --app.',
+    );
+  }
+  io.out(
+    JSON.stringify({
+      url: desk.url,
+      app,
+      visibility: 'private',
+      readOnly: false,
+    }),
+  );
+  const open = (): Promise<boolean> =>
+    (io.browse ?? openDeskBrowser)(desk.launchUrl('/app/'), signal);
+  io.progress?.(
+    run.noOpen
+      ? 'Open the printed app URL to set up Verifold. Keep this terminal open. Ctrl+C stops it.'
+      : (await open())
+        ? 'Set up Verifold in your browser. Keep this terminal open. Ctrl+C stops it.'
+        : 'The browser could not open. Open the printed app URL. Keep this terminal open.',
+  );
+  io.listen?.((line) => {
+    const value = line.trim();
+    if (value === '/app' || value === '/open')
+      void open().then((opened) =>
+        io.progress?.(
+          opened
+            ? 'The app opened in your browser.'
+            : 'The browser could not open. Open the printed app URL.',
+        ),
+      );
+    else if (value)
+      io.progress?.(
+        'Set up Verifold in the app. Type /app to open it again. Ctrl+C stops it.',
+      );
+  }, signal);
+  await desk.closed;
+}
+
 /** Status lines of the background owner in `.verifold/owner.log`, with the time. Over about 1 MB, the log moves to owner.log.1. */
 function ownerLog(root: string): (line: string) => void {
   const path = join(root, '.verifold', 'owner.log');
@@ -1065,6 +1175,7 @@ function ownerStart(value: unknown): {
   readonly research: ResearchOptions | undefined;
   readonly desk: DeskPlace | undefined;
   readonly lab: boolean;
+  readonly agency: string | undefined;
 } {
   const data = (value ?? {}) as Record<string, unknown>;
   const research = (data.research ?? null) as Record<string, unknown> | null;
@@ -1101,6 +1212,13 @@ function ownerStart(value: unknown): {
           }
         : undefined,
     lab: data.lab === true,
+    // The profile folder of `--agency-dir`, as an absolute path.
+    agency:
+      typeof data.agency === 'string' &&
+      isAbsolute(data.agency) &&
+      data.agency.length <= 4096
+        ? data.agency
+        : undefined,
   };
 }
 
@@ -1127,7 +1245,9 @@ async function runOwner(
     throw new Error(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
-  const { research, desk, lab } = ownerStart(input);
+  const { research, desk, lab, agency } = ownerStart(input);
+  // The profile that the lab reads. A terminal that attaches with another one hears so.
+  const profile = agency ?? agencyDirectory(root);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
   let early: { readonly progress: string; readonly feed?: true }[] | null = [];
@@ -1155,7 +1275,8 @@ async function runOwner(
     attached: (send) => {
       for (const message of early ?? []) send(message);
       early = null;
-      if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
+      if (url)
+        send({ url, ...(appUrl ? { app: appUrl } : {}), agency: profile });
       // A screen is fresh only while the watch runs for another terminal.
       if (unfollow && screen !== undefined) send({ screen });
       else watch();
@@ -1203,7 +1324,11 @@ async function runOwner(
                 'app' in shown && typeof shown.app === 'string'
                   ? shown.app
                   : undefined;
-              server.send({ url, ...(appUrl ? { app: appUrl } : {}) });
+              server.send({
+                url,
+                ...(appUrl ? { app: appUrl } : {}),
+                agency: profile,
+              });
             }
           } catch {
             /* Only the desk URL is output. */
@@ -1239,6 +1364,7 @@ async function runOwner(
         research,
         harness,
         lab,
+        agency: profile,
         owner: { control, keys: io.background.keys, desk },
       },
     );
@@ -1289,6 +1415,8 @@ async function attachTeam(
     readonly desk?: DeskPlace;
     readonly lab?: boolean;
     readonly app?: boolean;
+    /** The profile folder of `--agency-dir`. */
+    readonly agency?: string | undefined;
   },
 ): Promise<void> {
   const running = await liveOwner(root);
@@ -1314,6 +1442,7 @@ async function attachTeam(
           ...(start.research ? { research: start.research } : {}),
           ...(start.desk ? { desk: start.desk } : {}),
           ...(start.lab ? { lab: true } : {}),
+          ...(start.agency ? { agency: start.agency } : {}),
         }),
       );
     } catch (error) {
@@ -1333,6 +1462,12 @@ async function attachTeam(
       else if ('screen' in message) io.screens?.show?.(message.screen, true);
       else if ('url' in message && !shown) {
         shown = true;
+        // An owner that ran already keeps the profile that it started with.
+        const wanted = start.agency ?? agencyDirectory(root);
+        if (message.agency && message.agency !== wanted)
+          io.progress?.(
+            `The running Verifold uses the profile in ${message.agency}, so stop it with verifold stop to use another.`,
+          );
         const app = start.app ? message.app : undefined;
         io.out(
           JSON.stringify({
@@ -1731,7 +1866,10 @@ export async function runCli(
       key !== 'workspace' &&
       !(
         launch &&
-        (key === 'no-open' || key === 'agency-dir' || key === 'lab')
+        (key === 'no-open' ||
+          key === 'agency-dir' ||
+          key === 'lab' ||
+          key === 'app')
       ) &&
       !allowed[command]?.includes(key)
     )
@@ -1789,7 +1927,8 @@ export async function runCli(
     return;
   }
   if (command === 'ui') {
-    if (launch) {
+    // The app has its own first run, so --app skips the profile setup in the terminal.
+    if (launch && !values.app) {
       const workspace = await loadWorkspace(root);
       await ensureGlobalProfile(
         agencyDirectory(cwd, values['agency-dir']),
@@ -1808,9 +1947,24 @@ export async function runCli(
     const noOpen = values['no-open'] ?? false;
     const lab = values.lab ?? false;
     const app = values.app ?? false;
+    const agency =
+      values['agency-dir'] === undefined
+        ? undefined
+        : agencyDirectory(cwd, values['agency-dir']);
     if (io.interactive && io.background)
-      await attachTeam(root, io, signal, io.background, { noOpen, lab, app });
-    else await serveDesk(root, io, signal, { noOpen, lab, app });
+      await attachTeam(root, io, signal, io.background, {
+        noOpen,
+        lab,
+        app,
+        agency,
+      });
+    else
+      await serveDesk(root, io, signal, {
+        noOpen,
+        lab,
+        app,
+        ...(agency ? { agency } : {}),
+      });
     return;
   }
   if (command === 'owner') {
@@ -1839,6 +1993,30 @@ export async function runCli(
     return;
   }
   if (command === 'init') {
+    if (values.app) {
+      // Only a bare launch reaches here with --app.
+      const extra = (
+        [
+          'profile',
+          'host',
+          'model',
+          'topic',
+          'autonomy',
+          'setup-only',
+          'lab',
+        ] as const
+      ).find((key) => values[key] !== undefined);
+      if (extra)
+        throw new Error(
+          `--app opens the first run in the app, where you choose the rest. Run it without --${extra}.`,
+        );
+      await serveStart(root, io, signal, {
+        noOpen: values['no-open'] ?? false,
+        agency: agencyDirectory(cwd, values['agency-dir']),
+        harness,
+      });
+      return;
+    }
     const options: InitializationOptions = {
       ...(values.profile !== undefined ? { profile: values.profile } : {}),
       ...(values.host !== undefined ? { host: values.host } : {}),

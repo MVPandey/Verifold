@@ -1,14 +1,14 @@
 import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
+import { setupProfile } from './agency.ts';
 import {
   loadAgency,
   agencyDirectory,
   loadMemory,
   loadProfileState,
   saveAgencyPreferences,
-  setupProfile,
   type Agency,
-} from './agency.ts';
+} from '../core/agency.ts';
 import { choose } from './choices.ts';
 import { runHarness, validateModel } from '../core/harness.ts';
 import type { CliIO } from './commands.ts';
@@ -67,7 +67,18 @@ export async function profileCommand(
       options.model ?? (agency?.host === host ? agency.model : undefined);
     const model = modelInput === 'default' ? undefined : modelInput;
     validateModel(model);
-    agency = { host, ...(model ? { model } : {}) };
+    // The helper and its model stay: this setup changes only the harness that drafts the profile.
+    const helper = agency?.helper !== host ? agency?.helper : undefined;
+    agency = {
+      host,
+      ...(model ? { model } : {}),
+      ...(helper
+        ? {
+            helper,
+            ...(agency?.helperModel ? { helperModel: agency.helperModel } : {}),
+          }
+        : {}),
+    };
     io.progress?.(
       `Profile harness: ${host} (${model ?? 'host default model'}). Existing project settings stay unchanged.`,
     );

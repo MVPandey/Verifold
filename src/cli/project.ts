@@ -2,6 +2,7 @@ import { lstat, mkdir, open, rm, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Workspace } from '../core/contracts.ts';
 import { changeWorkspace, loadWorkspace } from '../core/storage.ts';
+import { writeComputeSettings, type ComputeSettings } from '../core/compute.ts';
 
 const folders = {
   literature: 'Source notes, papers, and citation provenance.',
@@ -65,11 +66,26 @@ export async function createProject(
   signal: AbortSignal,
   /** A lab starts on the question after setup, so the guide in .verifold.md describes the lab. */
   lab = false,
+  /** The project's first GPU limits, copied from the person's profile. */
+  compute?: ComputeSettings,
 ): Promise<Workspace> {
   await checkProjectDirectory(root);
   const created: string[] = [];
   let markerCreated = false;
+  // What this call made for the GPU limits, so a rollback removes only that.
+  let limitsCreated = false;
+  let computeCreated = false;
   const marker = join(root, '.verifold.md');
+  const computeFolder = join(root, '.verifold', 'compute');
+  const limits = join(computeFolder, 'settings.json');
+  const exists = (path: string): Promise<boolean> =>
+    lstat(path).then(
+      () => true,
+      (error: unknown) => {
+        if (missing(error)) return false;
+        throw error;
+      },
+    );
   return changeWorkspace(
     root,
     (current) => {
@@ -115,10 +131,21 @@ export async function createProject(
         } finally {
           await file.close();
         }
+        // Compute settings that the folder holds already, such as from a key set here, stay as they are.
+        if (compute && !(await exists(limits))) {
+          computeCreated = !(await exists(computeFolder));
+          limitsCreated = true;
+          await writeComputeSettings(root, compute);
+        }
         signal.throwIfAborted();
       },
       rollback: async () => {
         if (markerCreated) await rm(marker, { force: true });
+        if (limitsCreated) await rm(limits, { force: true });
+        if (computeCreated)
+          await rmdir(computeFolder).catch(() => {
+            /* Keep a folder that holds other files. */
+          });
         for (const path of created.reverse()) {
           // Never recursively delete: another process may have added user work.
           try {
