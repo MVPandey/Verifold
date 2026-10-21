@@ -35,6 +35,7 @@ import {
   askPersonToolSpec,
   callKinds,
   callLimits,
+  callNeeds,
   checkableKinds,
   checkLimits,
   checkMethods,
@@ -452,6 +453,14 @@ export interface Spend {
 }
 
 export type CallKind = (typeof callKinds)[number];
+export type CallNeed = (typeof callNeeds)[number];
+
+/** An agent that asks a call, with the direction that it works on and why it asks. */
+export interface CallAsker {
+  readonly agent: string;
+  readonly direction: string | null;
+  readonly why: string;
+}
 
 /** What an option of a call does when the person picks it. Verifold applies it. */
 export type CallEffect =
@@ -507,7 +516,11 @@ export interface Call {
   readonly by: string;
   /** The direction of the agent that asked. */
   readonly direction: string | null;
+  /** Agents that asked the same thing later. The answer reaches them too, and an effect for a shell applies to theirs. */
+  readonly joined: readonly CallAsker[];
   readonly kind: CallKind;
+  /** What the call asks for when no option effect says it. Calls with the same need join. */
+  readonly need: CallNeed | null;
   readonly question: string;
   readonly options: readonly CallOption[];
   /** The option that the agents advise. Null: Verifold asks, and advises none. */
@@ -524,6 +537,10 @@ export interface Call {
    */
   readonly state: 'open' | 'answered' | 'undoing' | 'withdrawn';
   readonly answer: { readonly option: number; readonly at: string } | null;
+  /** The person's answer in their own words instead of an option. No option applies, and it has no undo. */
+  readonly words: string | null;
+  /** The board post that says that the call waits for the person. Replies to the call go in its thread. */
+  readonly post: string | null;
   /** Until then the person can undo the answer. Null: no undo. */
   readonly undoUntil: string | null;
   /** What the answer changed. Null with an effect: Verifold stopped while it applied it. */
@@ -1026,6 +1043,48 @@ function chosenEffect(call: Call): CallEffect | null {
     : null;
 }
 
+/** The agents that asked a call: the first, then those that joined. Verifold's own call has none. */
+export function askers(call: Call): string[] {
+  return [
+    ...(call.by === 'verifold' ? [] : [call.by]),
+    ...call.joined.map((asker) => asker.agent),
+  ];
+}
+
+/**
+ * Two calls ask for the same thing: the same kind, the same need, and the
+ * same effects, with domains compared as sets. A pod is for one direction,
+ * so a call with a pod joins no other. A call with no need and no effect
+ * says nothing that Verifold can compare, so it joins none either.
+ */
+function sameAsk(
+  a: Pick<Call, 'kind' | 'need' | 'options'>,
+  b: Pick<Call, 'kind' | 'need' | 'options'>,
+): boolean {
+  const effects = (call: typeof a): string[] | null => {
+    const list = call.options.flatMap((option) =>
+      option.effect ? [option.effect] : [],
+    );
+    return list.some((effect) => effect.type === 'pod')
+      ? null
+      : list
+          .map((effect) =>
+            JSON.stringify(
+              effect.type === 'domains'
+                ? { ...effect, domains: [...effect.domains].sort() }
+                : effect,
+            ),
+          )
+          .sort();
+  };
+  const [first, second] = [effects(a), effects(b)];
+  if (a.kind !== b.kind || a.need !== b.need || !first || !second) return false;
+  return (
+    (a.need !== null || first.length > 0) &&
+    first.join('\n') === second.join('\n')
+  );
+}
+
 /** The answer of a call stands: the person answered, and Verifold applied its effect, when it has one. */
 export function stands(call: Call): boolean {
   return (
@@ -1051,7 +1110,7 @@ function networkOf(state: LabState, agent: string): string[] {
     ...new Set(
       state.calls.flatMap((call) => {
         const effect = chosenEffect(call);
-        return call.by === agent &&
+        return askers(call).includes(agent) &&
           stands(call) &&
           call.applied?.type === 'domains' &&
           effect?.type === 'domains'
@@ -1326,7 +1385,31 @@ function parseCall(value: unknown): Call | null {
       typeof entry.direction === 'string' && directionId.test(entry.direction)
         ? entry.direction
         : null,
+    joined: Array.isArray(entry.joined)
+      ? entry.joined.flatMap((item) => {
+          const asker = object(item);
+          return asker &&
+            typeof asker.agent === 'string' &&
+            agentId.test(asker.agent)
+            ? [
+                {
+                  agent: asker.agent,
+                  direction:
+                    typeof asker.direction === 'string' &&
+                    directionId.test(asker.direction)
+                      ? asker.direction
+                      : null,
+                  why:
+                    typeof asker.why === 'string'
+                      ? asker.why.slice(0, callLimits.why)
+                      : '',
+                },
+              ]
+            : [];
+        })
+      : [],
     kind,
+    need: callNeeds.find((item) => item === entry.need) ?? null,
     question: entry.question.slice(0, callLimits.question),
     options,
     pick:
@@ -1350,6 +1433,14 @@ function parseCall(value: unknown): Call | null {
       (option as number) < options.length &&
       at
         ? { option: option as number, at }
+        : null,
+    words:
+      typeof entry.words === 'string' && entry.words.trim()
+        ? entry.words.slice(0, callLimits.words)
+        : null,
+    post:
+      typeof entry.post === 'string' && postId.test(entry.post)
+        ? entry.post
         : null,
     undoUntil: recordTime(entry.undoUntil),
     applied: parseApplied(entry.applied),
@@ -3113,18 +3204,30 @@ export class Lab {
         stopReason: how === 'stopped' ? 'person' : 'closed',
       }));
     }
-    // The calls of its agent, and calls to stop it, no longer make sense.
-    for (const call of this.state.calls)
+    // Calls to stop it, and calls that no agent of another open direction
+    // asked too, no longer make sense.
+    const asked = (call: Call): boolean =>
+      [call.direction, ...call.joined.map((asker) => asker.direction)].some(
+        (id) =>
+          id !== direction.id &&
+          this.state?.directions.find((entry) => entry.id === id)?.state ===
+            'open',
+      );
+    for (const call of this.state.calls) {
+      if (call.state !== 'open') continue;
+      const mine = askers(call).includes(direction.agent);
       if (
-        call.state === 'open' &&
-        (call.by === direction.agent ||
-          call.options.some(
-            (option) =>
-              option.effect?.type === 'stop' &&
-              option.effect.direction === direction.id,
-          ))
+        (mine && !asked(call)) ||
+        call.options.some(
+          (option) =>
+            option.effect?.type === 'stop' &&
+            option.effect.direction === direction.id,
+        )
       )
         await this.withdraw(call, `${direction.id} ${how}.`).catch(() => {});
+      else if (mine)
+        await this.leaveCall(call, direction.agent).catch(() => {});
+    }
     // A full board refuses the note. The direction ends all the same.
     await this.add({
       author: 'verifold',
@@ -4460,6 +4563,13 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         'Settle this on the board: post an objection, and a check breaks the tie.',
       );
     const options = callOptions(args.options, kind);
+    const need =
+      args.need === undefined || args.need === null
+        ? null
+        : (callNeeds.find((entry) => entry === args.need) ??
+          fail('Give need as pods, or leave it out.'));
+    if (need === 'pods' && kind !== 'access')
+      fail('need pods goes with an access call.');
     const draft = {
       question: text(args.question, callLimits.question, 'the question'),
       why: text(args.why, callLimits.why, 'why you advise your pick'),
@@ -4492,7 +4602,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       });
       priced.push({ ...option, usd: Number(cost.toFixed(2)) });
     }
-    const call = await this.serial(() => {
+    const { call, joined } = await this.serial(async () => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       const state = this.current();
       for (const { effect } of priced) {
@@ -4519,17 +4629,70 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             'This lab has no time budget, so more hours change nothing. Give the options without hours.',
           );
       }
-      return this.recordCall({
+      // A call that asks what an open call asks already joins it, so the person answers once.
+      const same = this.sameOpenCall({ kind, need, options: priced });
+      if (same) {
+        if (askers(same).includes(agent.id))
+          fail(
+            `Your call ${same.id} asks this already. Verifold wakes you with the answer.`,
+          );
+        await this.joinCall(same, agent, draft.why);
+        return { call: same, joined: true };
+      }
+      const call = await this.recordCall({
         by: agent.id,
         direction: agent.direction,
         kind,
+        need,
         options: priced,
         deadline: null,
         ...draft,
       });
+      return { call, joined: false };
     });
     this.progressed(id, generation);
-    return `Asked the person in ${call.id}. Verifold wakes you with the answer. Meanwhile, go on with work that does not need it.`;
+    return joined
+      ? `${this.name(call.by)} asked the person the same in ${call.id}, so your call joined it. Its answer reaches you too: Verifold wakes you with it. Meanwhile, go on with work that does not need it.`
+      : `Asked the person in ${call.id}. Verifold wakes you with the answer. Meanwhile, go on with work that does not need it.`;
+  }
+
+  /** An open call of an agent that asks for the same thing, or undefined. In the lab's queue. */
+  private sameOpenCall(
+    ask: Pick<Call, 'kind' | 'need' | 'options'>,
+  ): Call | undefined {
+    return this.current().calls.find(
+      (entry) =>
+        entry.state === 'open' &&
+        entry.by !== 'verifold' &&
+        sameAsk(entry, ask),
+    );
+  }
+
+  /** An agent joins an open call that asks what it asks. The answer reaches it too. In the lab's queue. */
+  private async joinCall(
+    call: Call,
+    agent: Pick<AgentRecord, 'id' | 'direction'>,
+    why: string,
+  ): Promise<void> {
+    await this.changeCall(call.id, (entry) => ({
+      ...entry,
+      joined: [
+        ...entry.joined,
+        { agent: agent.id, direction: agent.direction, why },
+      ],
+    }));
+    await this.add({
+      author: 'verifold',
+      kind: 'status',
+      ...(agent.direction ? { direction: agent.direction } : {}),
+      ...(call.post ? { replyTo: call.post } : {}),
+      text: clip(
+        `${this.name(agent.id)} asks the same (${call.id}).`,
+        boardLimits.text,
+      ),
+      mentions: [],
+      artifacts: [],
+    }).catch(() => {});
   }
 
   /**
@@ -4553,61 +4716,75 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       : keySaved
         ? 'Set a spend limit in Compute, so agents can rent GPUs?'
         : 'Add a RunPod key and a spend limit in Compute?';
-    const call = await this.serial(() => {
+    const ask = {
+      kind: pod ? 'cost' : 'access',
+      // While pods are off, one call turns them on for the whole lab.
+      need: pod ? null : 'pods',
+      options: pod
+        ? [
+            {
+              label: `Rent it, for at most ${usd(pod.cost)}`,
+              usd: Number(pod.cost.toFixed(2)),
+              minutes: null,
+              effect: pod.effect,
+            },
+            { label: 'No pod now', usd: 0, minutes: null, effect: null },
+          ]
+        : [
+            {
+              label: keySaved ? 'I set a limit' : 'I added them',
+              usd: null,
+              minutes: null,
+              effect: null,
+            },
+            {
+              label: 'No GPU for this lab',
+              usd: null,
+              minutes: null,
+              effect: null,
+            },
+          ],
+    } satisfies Pick<Call, 'kind' | 'need' | 'options'>;
+    const { call, joined } = await this.serial(async () => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       const waiting = this.current().calls.find(
         (entry) =>
           entry.state === 'open' &&
-          entry.by === agent.id &&
-          entry.kind === (pod ? 'cost' : 'access') &&
-          // A pod request asks with a pod option, or, while pods are off, with no effect at all.
+          askers(entry).includes(agent.id) &&
+          entry.kind === ask.kind &&
+          // A pod request asks with a pod option, or, while pods are off, with need pods or no effect at all.
           (pod
             ? entry.options.some((option) => option.effect?.type === 'pod')
-            : entry.options.every((option) => option.effect === null)),
+            : entry.need === 'pods' ||
+              entry.options.every((option) => option.effect === null)),
       );
       if (waiting)
         fail(
           `Your call ${waiting.id} waits for the person already. Verifold wakes you with the answer.`,
         );
-      return this.recordCall({
+      const same = this.sameOpenCall(ask);
+      if (same) {
+        await this.joinCall(same, agent, clip(why, callLimits.why));
+        return { call: same, joined: true };
+      }
+      const call = await this.recordCall({
         by: agent.id,
         direction: agent.direction,
-        kind: pod ? 'cost' : 'access',
+        ...ask,
         question,
-        options: pod
-          ? [
-              {
-                label: `Rent it, for at most ${usd(pod.cost)}`,
-                usd: Number(pod.cost.toFixed(2)),
-                minutes: null,
-                effect: pod.effect,
-              },
-              { label: 'No pod now', usd: 0, minutes: null, effect: null },
-            ]
-          : [
-              {
-                label: keySaved ? 'I set a limit' : 'I added them',
-                usd: null,
-                minutes: null,
-                effect: null,
-              },
-              {
-                label: 'No GPU for this lab',
-                usd: null,
-                minutes: null,
-                effect: null,
-              },
-            ],
         pick: 0,
         why: clip(why, callLimits.why),
         undoMinutes: callLimits.defaultUndo,
         deadline: null,
       });
+      return { call, joined: false };
     });
     this.progressed(id, generation);
     return pod
       ? `The lab's first GPU pod waits for the person: Verifold asked them in ${call.id}, with the most that it can cost, ${usd(pod.cost)}. Nothing is billed before they answer. Verifold wakes you with the answer.`
-      : `${this.podsOffText()} Verifold asked the person in ${call.id}. Verifold wakes you with the answer.`;
+      : joined
+        ? `${this.podsOffText()} ${this.name(call.by)} asked the person already in ${call.id}, and your request joined it. Verifold wakes you with the answer.`
+        : `${this.podsOffText()} Verifold asked the person in ${call.id}. Verifold wakes you with the answer.`;
   }
 
   /**
@@ -4621,6 +4798,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       | 'by'
       | 'direction'
       | 'kind'
+      | 'need'
       | 'question'
       | 'options'
       | 'pick'
@@ -4643,8 +4821,11 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       ...fields,
       id: `c-${Math.max(0, ...state.calls.map((entry) => number(entry.id))) + 1}`,
       at: new Date().toISOString(),
+      joined: [],
       state: 'open',
       answer: null,
+      words: null,
+      post: null,
       undoUntil: null,
       applied: null,
       note: null,
@@ -4653,19 +4834,64 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       ...state,
       calls: keptCalls([...state.calls, call]),
     });
-    if (call.by !== 'verifold')
-      await this.add({
-        author: 'verifold',
-        kind: 'status',
-        ...(call.direction ? { direction: call.direction } : {}),
-        text: clip(
-          `${this.name(call.by)} asks the person (${call.id}): ${call.question}`,
-          boardLimits.text,
-        ),
-        mentions: [],
-        artifacts: [],
-      }).catch(() => {});
+    if (call.by !== 'verifold') await this.announce(call);
     return call;
+  }
+
+  /**
+   * The board line that says that an agent's call waits for the person, in
+   * the direction of its first asker. The line starts the call's thread:
+   * joins and a typed answer reply to it. In the lab's queue.
+   */
+  private async announce(
+    call: Pick<Call, 'id' | 'by' | 'direction' | 'question'>,
+  ): Promise<void> {
+    const post = await this.add({
+      author: 'verifold',
+      kind: 'status',
+      ...(call.direction ? { direction: call.direction } : {}),
+      text: clip(
+        `${this.name(call.by)} asks the person (${call.id}): ${call.question}`,
+        boardLimits.text,
+      ),
+      mentions: [],
+      artifacts: [],
+    }).catch(() => null);
+    if (post)
+      await this.changeCall(call.id, (entry) => ({
+        ...entry,
+        post: post.id,
+      })).catch(() => {});
+  }
+
+  /**
+   * An asker's direction ended while another asker's direction is open: the
+   * asker leaves the call, so no answer reaches it or its shell. When it
+   * asked first, the next asker takes its place, with its direction and its
+   * why, and the call's thread starts again in that direction. In the lab's
+   * queue.
+   */
+  private async leaveCall(call: Call, agent: string): Promise<void> {
+    if (call.by !== agent) {
+      await this.changeCall(call.id, (entry) => ({
+        ...entry,
+        joined: entry.joined.filter((asker) => asker.agent !== agent),
+      }));
+      return;
+    }
+    const open = (id: string | null): boolean =>
+      this.current().directions.find((entry) => entry.id === id)?.state ===
+      'open';
+    const next = call.joined.find((asker) => open(asker.direction));
+    if (!next) return;
+    const moved = {
+      by: next.agent,
+      direction: next.direction,
+      why: next.why || call.why,
+      joined: call.joined.filter((asker) => asker !== next),
+    };
+    await this.changeCall(call.id, (entry) => ({ ...entry, ...moved }));
+    await this.announce({ ...call, ...moved });
   }
 
   private callById(id: unknown): Call {
@@ -4687,7 +4913,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     });
   }
 
-  /** A line on the board about a call, which also wakes the agent that asked. In the lab's queue. */
+  /** A line on the board about a call, which also wakes every agent that asked it. In the lab's queue. */
   private async tell(call: Call, line: string): Promise<void> {
     await this.add({
       author: 'verifold',
@@ -4697,9 +4923,16 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       mentions: [],
       artifacts: [],
     }).catch(() => {});
-    const agent = this.agents.get(call.by);
-    if (agent && this.active(agent))
-      this.loop(agent.id).add([{ kind: 'call', text: line }], 0);
+    this.wakeAskers(call, line);
+  }
+
+  /** Each agent that asked a call and still works gets the line. */
+  private wakeAskers(call: Call, line: string): void {
+    for (const id of askers(call)) {
+      const agent = this.agents.get(id);
+      if (agent && this.active(agent))
+        this.loop(agent.id).add([{ kind: 'call', text: line }], 0);
+    }
   }
 
   /** Withdraw an open call that no longer makes sense, in the lab's queue. */
@@ -4719,7 +4952,12 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       state.directions.find((entry) => entry.id === id)?.state === 'open';
     if (call.deadline && call.deadline !== state.budget?.deadline)
       return 'The lab got more time.';
-    if (call.by !== 'verifold' && !open(call.direction))
+    if (
+      call.by !== 'verifold' &&
+      ![call.direction, ...call.joined.map((asker) => asker.direction)].some(
+        open,
+      )
+    )
       return `${call.direction ?? 'Its direction'} no longer works for the lab.`;
     if (effect?.type === 'stop' && !open(effect.direction))
       return `${effect.direction} is not open any more.`;
@@ -4774,6 +5012,70 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     } finally {
       this.applying.delete(call.id);
     }
+  }
+
+  /**
+   * The person answers a call in their own words instead of an option. No
+   * option applies, so there is nothing to undo. Each agent that asked wakes
+   * with the words. The board keeps them in the call's thread, where they
+   * wake no one. Verifold's own deadline call asks for more time or the end
+   * of the lab, and only an option does either: words on it go to the whole
+   * lab, and the call stays open until the person picks an option.
+   */
+  async answerCallInWords(id: unknown, words: unknown): Promise<void> {
+    await this.serial(async () => {
+      const call = this.callById(id);
+      if (call.state !== 'open') fail(`${call.id} waits for no answer now.`);
+      const body = text(words, callLimits.words, 'your answer');
+      const stale = this.stale(call, null);
+      if (stale) {
+        await this.withdraw(call, stale);
+        fail(`Verifold withdrew ${call.id}: ${stale}`);
+      }
+      if (call.by === 'verifold') {
+        // The post is what reaches the agents, so a board that refuses it refuses the words.
+        await this.add({
+          author: 'person',
+          kind: 'question',
+          text: body,
+          mentions: [],
+          artifacts: [],
+        });
+        await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
+        return;
+      }
+      await this.changeCall(call.id, (entry) => ({
+        ...entry,
+        state: 'answered',
+        words: body,
+      }));
+      // The record of the answer on the board. A full board refuses it; the call keeps the words.
+      if (call.post)
+        await this.add({
+          author: 'person',
+          kind: 'question',
+          replyTo: call.post,
+          text: body,
+          mentions: [],
+          artifacts: [],
+        }).catch(() => {});
+      else
+        await this.add({
+          author: 'verifold',
+          kind: 'status',
+          ...(call.direction ? { direction: call.direction } : {}),
+          text: clip(
+            `The person answered ${call.id} in their own words: ${JSON.stringify(body)}`,
+            boardLimits.text,
+          ),
+          mentions: [],
+          artifacts: [],
+        }).catch(() => {});
+      this.wakeAskers(
+        call,
+        `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(body)}. This is their decision: follow it, or ask again with new options when it is unclear.`,
+      );
+    });
   }
 
   /** Apply a saved answer and record what it did. The answer is in `applying` meanwhile. */
@@ -4839,7 +5141,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             ),
           );
       }
-      const did = applied ? this.appliedText(applied) : '';
+      const did = applied ? this.appliedText(applied, call) : '';
       if (did)
         await this.changeCall(call.id, (entry) => ({
           ...entry,
@@ -4847,7 +5149,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         })).catch(() => {});
       // New domains, or the pod tools after a key: the agent's process ends
       // before the answer reaches it, so the answer comes with its next start.
-      this.checkProcess(call.by);
+      for (const agent of askers(call)) this.checkProcess(agent);
       await this.tell(
         call,
         `The person chose ${JSON.stringify(chosen?.label ?? '')} on ${call.id}.${did ? ` ${did}` : ''}`,
@@ -4874,7 +5176,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         state: 'undoing',
       }));
       // An answer that undoes no longer stands: a domain that only it gave closes now.
-      this.checkProcess(call.by);
+      for (const agent of askers(call)) this.checkProcess(agent);
       return call;
     });
     let did = '';
@@ -4901,7 +5203,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         ),
       );
       const stale = this.stale(call, null);
-      this.checkProcess(call.by);
+      for (const agent of askers(call)) this.checkProcess(agent);
       await this.tell(
         call,
         `The person undid their answer to ${call.id}.${did ? ` ${did}` : ''}${stale ? '' : ' The call is open again.'}`,
@@ -5005,21 +5307,25 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       case 'domains':
         // The answer itself gives the domains, once it is saved.
         return this.serial(() => {
-          const agent = this.agent(call.by);
-          if (
-            new Set([...networkOf(this.current(), agent.id), ...effect.domains])
-              .size > callLimits.domains
-          )
-            fail(
-              `${agent.handle}'s shell would reach more than ${callLimits.domains} domains. Undo an earlier access call first.`,
-            );
-          return { type: 'domains', agent: agent.id };
+          for (const id of askers(call)) {
+            const agent = this.agent(id);
+            if (
+              new Set([
+                ...networkOf(this.current(), agent.id),
+                ...effect.domains,
+              ]).size > callLimits.domains
+            )
+              fail(
+                `${agent.handle}'s shell would reach more than ${callLimits.domains} domains. Undo an earlier access call first.`,
+              );
+          }
+          return { type: 'domains', agent: call.by };
         });
     }
   }
 
   /** What an answer changed, in words for the board. */
-  private appliedText(applied: CallApplied): string {
+  private appliedText(applied: CallApplied, call: Call): string {
     switch (applied.type) {
       case 'pod':
         return `Verifold started ${applied.lease}.`;
@@ -5029,12 +5335,16 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         return `Verifold opened ${applied.direction}.`;
       case 'stop':
         return `Verifold stopped ${applied.direction}.`;
-      case 'domains': {
-        const agent = this.agents.get(applied.agent);
-        return agent?.host === 'codex'
-          ? `${agent.handle}'s shell can reach any website from its next turn: Codex cannot limit the network to domains.`
-          : `${this.name(applied.agent)}'s shell can reach ${this.state ? networkOf(this.state, applied.agent).join(', ') : 'the domains'} from its next turn.`;
-      }
+      case 'domains':
+        // Each agent that asked gets the domains.
+        return askers(call)
+          .map((id) => {
+            const agent = this.agents.get(id);
+            return agent?.host === 'codex'
+              ? `${agent.handle}'s shell can reach any website from its next turn: Codex cannot limit the network to domains.`
+              : `${this.name(id)}'s shell can reach ${this.state ? networkOf(this.state, id).join(', ') : 'the domains'} from its next turn.`;
+          })
+          .join(' ');
     }
   }
 
@@ -5067,15 +5377,19 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         // The undo took the answer out of those that stand, so its domains went with it.
         return this.serial(() => {
           const effect = chosenEffect(call);
-          const left = networkOf(this.current(), applied.agent);
-          const removed =
-            effect?.type === 'domains'
-              ? effect.domains.filter((domain) => !left.includes(domain))
-              : [];
-          this.checkProcess(applied.agent);
-          return removed.length
-            ? `${this.name(applied.agent)}'s shell loses ${removed.join(', ')}.`
-            : `${this.name(applied.agent)}'s shell keeps its domains: other answers gave them too.`;
+          return askers(call)
+            .map((id) => {
+              const left = networkOf(this.current(), id);
+              const removed =
+                effect?.type === 'domains'
+                  ? effect.domains.filter((domain) => !left.includes(domain))
+                  : [];
+              this.checkProcess(id);
+              return removed.length
+                ? `${this.name(id)}'s shell loses ${removed.join(', ')}.`
+                : `${this.name(id)}'s shell keeps its domains: other answers gave them too.`;
+            })
+            .join(' ');
         });
     }
   }
@@ -5226,6 +5540,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       by: 'verifold',
       direction: null,
       kind: 'go',
+      need: null,
       question: `The time budget of ${total} ${total === 1 ? 'hour' : 'hours'} ended. Continue ${more} more hours?`,
       options: [
         {

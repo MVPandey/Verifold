@@ -1325,6 +1325,12 @@ function labRequest(button: HTMLElement): Record<string, unknown> {
       };
     case 'lab-call-undo':
       return { action, call: button.dataset.call };
+    case 'lab-call-words':
+      return {
+        action,
+        call: button.dataset.call,
+        text: field(`lab-call-words-${button.dataset.call ?? ''}`),
+      };
     case 'lab-bring-look':
       return { action, direction: button.dataset.labDirection };
     case 'lab-bring':
@@ -1655,6 +1661,9 @@ async function act(button: HTMLElement): Promise<void> {
               )
             : []),
           ...(body.action === 'lab-post' ? ['lab-text', 'lab-reply'] : []),
+          ...(body.action === 'lab-call-words'
+            ? [`lab-call-words-${String(body.call)}`]
+            : []),
           ...(body.action === 'lab-direction-add'
             ? ['lab-title', 'lab-bar']
             : []),

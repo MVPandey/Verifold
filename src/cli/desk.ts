@@ -653,6 +653,9 @@ async function labAction(
     case 'lab-call-undo':
       await lab.undoCall(body.call);
       return 200;
+    case 'lab-call-words':
+      await lab.answerCallInWords(body.call, body.text);
+      return 200;
     case 'lab-terminal-open':
       if (!validLease(body.lease))
         fail('The desk sent an invalid input lease.');
