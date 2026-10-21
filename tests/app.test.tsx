@@ -636,6 +636,13 @@ await test('the shared token module keeps a token, exchanges a launch code, and 
   at('#launch-c0de');
   assert.deepEqual(readFragment(''), { token: 'a'.repeat(64), launch: 'c0de' });
   assert.equal(replaced.at(-1), '/app/');
+  // The terminal opens a call: the page after the code becomes the fragment.
+  at('#launch-c0de/call/c-3');
+  assert.deepEqual(readFragment('#/'), {
+    token: 'a'.repeat(64),
+    launch: 'c0de',
+  });
+  assert.equal(replaced.at(-1), '/app/#/call/c-3');
 
   // A cut-off answer to the launch exchange: no token, and the app shows the signed-out notice.
   kept.clear();

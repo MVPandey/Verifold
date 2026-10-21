@@ -3,8 +3,8 @@ import { stdin, stdout, stderr } from 'node:process';
 import { runCli } from './cli/commands.ts';
 import { paragraph } from './cli/terminal.ts';
 import { TerminalSession } from './cli/terminal-session.ts';
+import { LabTerminal } from './cli/terminal-view.ts';
 import { stripVTControlCharacters } from 'node:util';
-import { createInterface } from 'node:readline';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { open } from 'node:fs/promises';
@@ -120,6 +120,16 @@ const terminal = interactive
       color && process.env.VERIFOLD_REDUCED_MOTION !== '1',
     )
   : null;
+// The live view of a lab needs color and cursor movement, so NO_COLOR and TERM=dumb get plain lines.
+const lab = terminal
+  ? new LabTerminal({
+      streams: { input: stdin, output: stderr },
+      color,
+      draws: color,
+      cancel,
+      print: (value) => terminal.progress(value),
+    })
+  : null;
 try {
   if (
     terminal &&
@@ -151,17 +161,18 @@ try {
       },
       // Harness tool events belong in the desk, so the terminal skips them.
       progress: (value, source) => {
-        if (source !== 'tool') terminal?.progress(value);
+        if (source !== 'tool') lab?.progress(value);
       },
-      ...(terminal
+      ...(lab
         ? {
-            listen: (onLine: (line: string) => void, signal: AbortSignal) => {
-              // Line mode keeps shell editing and Ctrl+C. Menus are finished before this starts.
-              const input = createInterface({ input: stdin, terminal: false });
-              input.on('line', onLine);
-              signal.addEventListener('abort', () => input.close(), {
-                once: true,
-              });
+            // The lines of the person's own session stay in the scrollback.
+            feed: (line: string) => lab.progress(line, true),
+            // Menus are finished before this starts. Plain mode reads lines as the shell gives them.
+            listen: (onLine: (line: string) => void, signal: AbortSignal) =>
+              lab.listen(onLine, signal),
+            screens: {
+              show: lab.show.bind(lab),
+              serve: lab.serve.bind(lab),
             },
           }
         : {}),

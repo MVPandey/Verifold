@@ -8,6 +8,8 @@ export const palette = {
   lavender: '183;148;246',
   sky: '96;165;250',
   mint: '52;211;153',
+  // What needs the person, as the v9 terminal artboard shows it.
+  amber: '243;194;107',
 } as const;
 export type Tone = keyof typeof palette;
 
@@ -45,6 +47,15 @@ const styles = {
   url: ['\u001b[2m', '\u001b[22m'],
 } as const;
 type Piece = readonly [text: string, style?: keyof typeof styles];
+
+/**
+ * Bold, with the strong style of inline Markdown. Unlike `tint` and `muted`,
+ * it keeps the styles inside `value`, so `value` must be text that these
+ * helpers made or plain text: it removes no terminal controls.
+ */
+export function strong(value: string, color: boolean): string {
+  return color ? `${styles.strong[0]}${value}${styles.strong[1]}` : value;
+}
 
 const inlineMarkdown =
   /`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<![\w*])\*(?![\s*])([^*\n]+?)\*(?![\w*])|(?<![\w_])_(?![\s_])([^_\n]+?)_(?![\w_])|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;

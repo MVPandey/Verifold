@@ -40,6 +40,8 @@ import { defaultAgents, SessionPool } from '../core/workers.ts';
 import { Quota } from '../core/quota.ts';
 import { Coordinator } from '../legacy/coordinator.ts';
 import { Lab, labOnDisk, startLabOn } from '../core/lab.ts';
+import type { LabScreen } from '../server/screen.ts';
+import type { FollowScreens } from './terminal-view.ts';
 import { labModel } from '../core/models.ts';
 import { labWorks, RunTeam } from '../core/team.ts';
 import { withTranscript } from '../core/transcript.ts';
@@ -104,6 +106,8 @@ export interface CliIO {
   readonly out: (value: string) => void;
   /** `agent`: text from the harness. `tool`: a harness event that Verifold observed. */
   readonly progress?: (value: string, source?: 'agent' | 'tool') => void;
+  /** A line of the person's own session, which a terminal keeps in its scrollback. Without it, the line goes to `progress`. */
+  readonly feed?: (line: string) => void;
   /** Review a draft brief with direct editing. Only the desk provides it. */
   readonly review?: (brief: string, final: boolean) => Promise<BriefDecision>;
   /** Mark the current setup step for a view that shows it. */
@@ -137,6 +141,24 @@ export interface CliIO {
   ) => void;
   /** Background owners. Only the executable provides it. Without it, the desk runs in this process. */
   readonly background?: Background;
+  /**
+   * The lab for a terminal's live view. Only a terminal, or a background
+   * owner for its terminals, provides it.
+   */
+  readonly screens?: {
+    /**
+     * A screen of the lab from a background owner, again after each change
+     * of it: null when the project has no lab. `detaches`: Ctrl+C only
+     * detaches this terminal, and the lab works on.
+     */
+    readonly show?: (screen: LabScreen | null, detaches: boolean) => void;
+    /**
+     * The desk of this process serves the project. `follow` starts a watch
+     * of the lab's screens and returns its stop. The view owns the watch,
+     * and stops it when it closes.
+     */
+    readonly serve?: (follow: FollowScreens) => void;
+  };
 }
 
 export interface Background {
@@ -220,7 +242,8 @@ const terminalHelp = (
   background: boolean,
 ): string => `Commands in this terminal:
 - \`/open\`: open the desk in your browser.
-- \`/app\`: open the new app, a preview of the next desk, in your browser.
+- \`/app\`: open the new app, a preview of the next desk, in your browser. Add the ID of a call, for example \`/app c-3\`, to open that call.
+- Enter on an empty line, in a lab: open the call that waits for you, or else the lab, in the new app.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
 - \`/research\`: continue research. In a project without research, add the question.
@@ -232,7 +255,7 @@ const terminalHelp = (
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
-When the agent waits for you, other text goes to it as a follow-up. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in the top bar of the desk.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
+When the agent of your session waits for you, other text goes to it as a follow-up. Without a session, in a lab, other text goes to the board as your message. Write @claude-2 in it to write to that agent. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in the top bar of the desk.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
 
 const requestHint =
   'Type a to allow once or d to deny. The desk shows the full request.';
@@ -270,13 +293,18 @@ export function feedLine(event: SessionEvent, worker?: string): string | null {
 export interface TerminalControls {
   /** Open the desk in a browser with a new one-time code. */
   readonly open: () => void;
-  /** Open the new app, a preview, in a browser with a new one-time code. */
-  readonly openApp: () => void;
+  /**
+   * Open the new app, a preview, in a browser with a new one-time code.
+   * `call`: the ID of a call to open there, such as c-3.
+   */
+  readonly openApp: (call?: string) => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
   /** The terminal is attached to a background owner. */
   readonly background?: boolean;
   readonly research?: ResearchRunner;
+  /** The project's lab. Text that is not a command goes to its board. */
+  readonly lab?: Pick<Lab, 'exists' | 'post'>;
 }
 
 /** Terminal controls call the same session operations as the desk. */
@@ -335,6 +363,12 @@ export function terminalInput(
         );
     } else if (value === '/open') controls.open();
     else if (value === '/app') controls.openApp();
+    else if (/^\/app c-[1-9][0-9]{0,5}$/.test(value))
+      controls.openApp(value.slice(5));
+    else if (value.startsWith('/app '))
+      io.progress?.(
+        'Write /app and the ID of a call, for example /app c-3, or /app alone.',
+      );
     else if (value === '/help')
       io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
@@ -394,7 +428,12 @@ export function terminalInput(
         'The session is working. Wait for the turn to end, or type /cancel.',
       );
       if (id) sessions.send(id, value);
-    } else
+    } else if (controls.lab?.exists)
+      // The same post as the app's box. A mention such as @claude-2 wakes that agent.
+      controls.lab
+        .post({ text: value })
+        .then(() => io.progress?.('Your message is on the board.'), report);
+    else
       io.progress?.(
         'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
       );
@@ -487,10 +526,13 @@ async function serveDesk(
   const stop = new AbortController();
   const deskSignal = AbortSignal.any([running, stop.signal]);
   let desk: DeskServer | undefined;
-  const open = async (app = run.app === true): Promise<boolean> =>
+  const open = async (
+    app = run.app === true,
+    call?: string,
+  ): Promise<boolean> =>
     desk
       ? (io.browse ?? openDeskBrowser)(
-          desk.launchUrl(app ? '/app/' : '/'),
+          desk.launchUrl(app ? '/app/' : '/', call && `/call/${call}`),
           deskSignal,
         )
       : false;
@@ -642,7 +684,7 @@ async function serveDesk(
             io.interactive && !view?.record.task && !view?.record.agent
               ? feedLine(event, view ? hostName(view.record.host) : undefined)
               : null;
-          if (line) io.progress?.(line);
+          if (line) (io.feed ?? io.progress)?.(line);
           // The session that `verifold session` started decides when this command ends.
           if (!owned.session || view?.record.id !== owned.session) return;
           const { status } = view.record;
@@ -843,6 +885,18 @@ async function serveDesk(
               : 'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
           );
         }
+        // A view follows the lab. Without a lab, it builds nothing, after one last screen that says so.
+        const server = desk;
+        io.screens?.serve?.((show) => {
+          let shown = false;
+          return server.screens(
+            (screen) => {
+              shown = screen !== null;
+              show(screen);
+            },
+            () => lab.exists || shown,
+          );
+        });
         const paused = sessions.paused().length;
         if (paused && !session)
           io.progress?.(
@@ -861,6 +915,7 @@ async function serveDesk(
               host,
               background: run.owner !== undefined,
               research: runner,
+              lab,
               open: () => {
                 void open(false).then((opened) =>
                   io.progress?.(
@@ -870,17 +925,19 @@ async function serveDesk(
                   ),
                 );
               },
-              openApp: () => {
+              openApp: (call) => {
                 if (!desk?.appUrl) {
                   io.progress?.(
                     'The new app is not available here. Type /open for the desk.',
                   );
                   return;
                 }
-                void open(true).then((opened) =>
+                void open(true, call).then((opened) =>
                   io.progress?.(
                     opened
-                      ? 'The new app opened in your browser.'
+                      ? call
+                        ? `Call ${call} opened in the new app in your browser.`
+                        : 'The new app opened in your browser.'
                       : 'The browser could not open. Open the printed URL, and add app/ after its port.',
                   ),
                 );
@@ -1073,17 +1130,41 @@ async function runOwner(
   const { research, desk, lab } = ownerStart(input);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
-  let early: string[] | null = [];
+  let early: { readonly progress: string; readonly feed?: true }[] | null = [];
   let url: string | undefined;
   /** The app's URL, when the package has the app's build. */
   let appUrl: string | undefined;
+  /**
+   * The lab's screens, built only while a terminal is attached: the desk's
+   * watch, its stop while it runs, and its newest screen.
+   */
+  let follow: FollowScreens | undefined;
+  let unfollow: (() => void) | undefined;
+  let screen: LabScreen | null | undefined;
+  /** A new watch sends a fresh screen to every terminal at once. */
+  const watch = (): void => {
+    if (unfollow || !follow || !server.terminals()) return;
+    unfollow = follow((next) => {
+      screen = next;
+      server.send({ screen: next });
+    });
+  };
   let onLine: ((line: string) => void) | undefined;
   const waiting: string[] = [];
   const server = await serveControl(control, {
     attached: (send) => {
-      for (const line of early ?? []) send({ progress: line });
+      for (const message of early ?? []) send(message);
       early = null;
       if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
+      // A screen is fresh only while the watch runs for another terminal.
+      if (unfollow && screen !== undefined) send({ screen });
+      else watch();
+    },
+    detached: () => {
+      if (server.terminals()) return;
+      unfollow?.();
+      unfollow = undefined;
+      screen = undefined;
     },
     message: (message) => {
       if ('stop' in message) quit.abort();
@@ -1092,10 +1173,13 @@ async function runOwner(
     },
   });
   const log = ownerLog(root);
-  const progress = (value: string): void => {
+  const progress = (value: string, feed = false): void => {
     log(value);
-    if (early && early.length < 50) early.push(value);
-    server.send({ progress: value });
+    const message = feed
+      ? { progress: value, feed: true as const }
+      : { progress: value };
+    if (early && early.length < 50) early.push(message);
+    server.send(message);
   };
   try {
     await serveDesk(
@@ -1129,6 +1213,7 @@ async function runOwner(
         progress: (value, source) => {
           if (source !== 'tool') progress(value);
         },
+        feed: (line) => progress(line, true),
         listen: (handler, until) => {
           onLine = handler;
           for (const line of waiting.splice(0)) handler(line);
@@ -1139,6 +1224,13 @@ async function runOwner(
             },
             { once: true },
           );
+        },
+        // The desk's watch of the lab runs only while a terminal is attached to show it.
+        screens: {
+          serve: (start) => {
+            follow = start;
+            watch();
+          },
         },
       },
       AbortSignal.any([signal, quit.signal]),
@@ -1234,7 +1326,11 @@ async function attachTeam(
   client = await reach(
     control,
     (message) => {
-      if ('progress' in message) io.progress?.(message.progress);
+      if ('progress' in message)
+        (message.feed ? (io.feed ?? io.progress) : io.progress)?.(
+          message.progress,
+        );
+      else if ('screen' in message) io.screens?.show?.(message.screen, true);
       else if ('url' in message && !shown) {
         shown = true;
         const app = start.app ? message.app : undefined;

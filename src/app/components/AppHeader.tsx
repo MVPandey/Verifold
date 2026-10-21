@@ -1,7 +1,7 @@
-import { useContext, type ReactNode } from 'react';
+import { Fragment, useContext, type ReactNode } from 'react';
 import type { Lab } from '../../protocol/api.ts';
+import { moneyLine } from '../../ui/lab-lines.ts';
 import type { ActOutcome } from '../api.ts';
-import { due, usd } from '../format.ts';
 import { onMac, searchKey } from '../search.ts';
 import { ToolsContext } from '../tools.ts';
 import { useAction } from '../useAction.ts';
@@ -71,23 +71,24 @@ export function MoneyLine({
   readonly lab: Lab;
   readonly now: number;
 }): ReactNode {
-  const { money, budget } = lab;
+  const parts = moneyLine(lab.money, lab.budget?.deadline ?? null, now);
   return (
     <span className="header__money">
-      {budget && (
-        <>
-          <span className="muted">Due</span> <b>{due(budget.deadline, now)}</b>
-          {' · '}
-        </>
-      )}
-      <b>≈{usd(money.plansUsd)}</b> <span className="muted">plans</span>
-      {' · '}
-      <b>{usd(money.gpuUsd)}</b>{' '}
-      <span className="muted">
-        {money.gpuLimitUsd === null
-          ? 'GPU'
-          : `of ${usd(money.gpuLimitUsd)} GPU`}
-      </span>
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 && ' · '}
+          {part.map((piece, at) => (
+            <Fragment key={at}>
+              {at > 0 && ' '}
+              {piece.strong ? (
+                <b>{piece.text}</b>
+              ) : (
+                <span className="muted">{piece.text}</span>
+              )}
+            </Fragment>
+          ))}
+        </Fragment>
+      ))}
     </span>
   );
 }

@@ -70,6 +70,8 @@ import {
 import { validAgents } from '../core/contracts.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi } from './api.ts';
+import { labScreen, type LabScreen } from './screen.ts';
+import type { Snapshot } from '../protocol/api.ts';
 import { contentType, readJsonBody, record } from './http.ts';
 
 export interface DeskServer {
@@ -79,9 +81,19 @@ export interface DeskServer {
   readonly appUrl: string | null;
   /**
    * A URL with a one-time code for a browser launch. Each code works once, for
-   * two minutes. `/app/` opens the new app instead of the desk.
+   * two minutes. `/app/` opens the new app instead of the desk. `route`: a
+   * page of the app to open, such as /call/c-3.
    */
-  launchUrl(path?: '/' | '/app/'): string;
+  launchUrl(path?: '/' | '/app/', route?: string): string;
+  /**
+   * Give `show` the lab's screen for a terminal's live view, at the next tick
+   * and after each change of it. While `wanted` is false, the desk builds
+   * no screen. Returns the function that stops it.
+   */
+  screens(
+    show: (screen: LabScreen | null) => void,
+    wanted?: () => boolean,
+  ): () => void;
   /** Switch a setup desk to the project that setup created. */
   attach(
     root: string,
@@ -2045,12 +2057,27 @@ export async function startDesk(
   return {
     url: `${origin}/#${token}`,
     appUrl: app.size ? `${origin}/app/#${token}` : null,
-    launchUrl: (path = '/') => {
+    launchUrl: (path = '/', route = '') => {
       for (const [code, expires] of launchCodes)
         if (expires <= Date.now()) launchCodes.delete(code);
       const code = randomBytes(24).toString('hex');
       launchCodes.set(code, Date.now() + 120_000);
-      return `${origin}${path === '/app/' && app.size ? path : '/'}#launch-${code}`;
+      const toApp = path === '/app/' && app.size > 0;
+      // The page reads the route after the code, once it has the token.
+      const page = toApp && /^\/[\w/.-]{1,200}$/.test(route) ? route : '';
+      return `${origin}${toApp ? path : '/'}#launch-${code}${page}`;
+    },
+    screens: (show, wanted) => {
+      const place = { origin, app: app.size > 0 };
+      let last = '';
+      return apiFeed.watch((latest) => {
+        const screen = labScreen(JSON.parse(latest.text) as Snapshot, place);
+        // A snapshot changes more often than its screen does.
+        const shown = JSON.stringify(screen);
+        if (shown === last) return;
+        last = shown;
+        show(screen);
+      }, wanted);
     },
     attach: async (
       next,
