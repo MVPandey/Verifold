@@ -7,6 +7,7 @@ import {
   type PostKind,
 } from './board.ts';
 import {
+  askers,
   barSummary,
   budgetEnded,
   defaultLabHours,
@@ -25,7 +26,7 @@ import {
   type Verdict,
 } from './lab.ts';
 import { usd } from './leases.ts';
-import { checkableKinds, checkLimits } from './lab-tools.ts';
+import { callLimits, checkableKinds, checkLimits } from './lab-tools.ts';
 import {
   metricsText,
   placeText,
@@ -848,12 +849,26 @@ const callWords = {
   go: 'Go call',
 } as const;
 
-/** The host of the agent that asked a call, from the lab's view. */
-function askerHost(view: LabView, call: Call): string | null {
+/** The host of a lab agent, from the lab's view. */
+function hostOf(view: LabView, agent: string): string | null {
   return (
-    view.directions.find((entry) => entry.agent.id === call.by)?.agent.host ??
+    view.directions.find((entry) => entry.agent.id === agent)?.agent.host ??
     null
   );
+}
+
+/** Names as a list: "a", "a and b", or "a, b and c". */
+function andList(names: readonly string[]): string {
+  return names.length > 1
+    ? `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`
+    : (names[0] ?? '');
+}
+
+/** "claude-1's shell", or "the shells of claude-1 and codex-1". */
+function shells(names: readonly string[]): string {
+  return names.length === 1
+    ? `${names[0] ?? ''}'s shell`
+    : `the shells of ${andList(names)}`;
 }
 
 /**
@@ -865,7 +880,6 @@ function effectLines(
   call: Call,
   view: LabView,
 ): { readonly does: string; readonly undo: string } {
-  const who = view.handles[call.by] ?? call.by;
   switch (effect.type) {
     case 'pod':
       return {
@@ -887,14 +901,27 @@ function effectLines(
         does: `Stops ${effect.direction}. Its runs and pods end.`,
         undo: 'Undo opens it again with its agent. Runs and pods that ended do not come back.',
       };
-    case 'domains':
+    case 'domains': {
+      // Each agent that asked gets the domains. Codex cannot limit them.
+      const name = (id: string): string => view.handles[id] ?? id;
+      const all = askers(call);
+      const codex = all.filter((id) => hostOf(view, id) === 'codex');
+      const others = all.filter((id) => !codex.includes(id));
+      const domains = effect.domains.join(', ');
       return {
-        does:
-          askerHost(view, call) === 'codex'
-            ? `Codex: any website. Codex cannot limit the network to ${effect.domains.join(', ')}, so ${who}'s shell can reach any website.`
-            : `Lets ${who}'s shell reach ${effect.domains.join(', ')}.`,
-        undo: `Undo takes these domains back. Either way, ${who} continues its conversation in a new process.`,
+        does: [
+          others.length
+            ? `Lets ${shells(others.map(name))} reach ${domains}.`
+            : '',
+          codex.length
+            ? `Codex: any website. Codex cannot limit the network to ${domains}, so ${shells(codex.map(name))} can reach any website.`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+        undo: `Undo takes these domains back. Either way, ${all.length === 1 ? `${name(all[0] ?? '')} continues its conversation in a new process` : `${andList(all.map(name))} continue their conversations in new processes`}.`,
       };
+    }
   }
 }
 
@@ -952,15 +979,20 @@ export function labCallNeeds(
       const about = view.state.directions.find(
         (entry) => entry.id === call.direction,
       );
+      const same = call.joined.map(
+        (asker) => view.handles[asker.agent] ?? asker.agent,
+      );
+      const words = `lab-call-words-${call.id}`;
       return {
         key: `lab-call:${call.id}`,
         kind: callWords[call.kind],
         title: call.question,
-        why: `${asker} asks${about ? `, for ${about.title}` : ''} (${call.id}).`,
+        why: `${asker} asks${about ? `, for ${about.title}` : ''} (${call.id}).${same.length ? ` ${andList(same)} ${same.length === 1 ? 'asks' : 'ask'} the same.` : ''}`,
         since: call.at,
         body: `<p class="call-why">${call.pick === null ? `${e(asker)} says: ` : `Why ${e(asker)} picks it: `}${e(call.why)}</p>
   <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view, stored)).join('')}</ul>
-  <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}. If you do not answer, nothing happens.` : 'Your answer applies at once, and it has no undo. If you do not answer, nothing happens.'}</p>`,
+  <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}. If you do not answer, nothing happens.` : 'Your answer applies at once, and it has no undo. If you do not answer, nothing happens.'}</p>
+  ${call.by === 'verifold' && call.words ? '<p class="fine" role="status">Your words went to the lab. Pick an option to give it more time or end it.</p>' : ''}<div class="call-words"><label class="field" for="${e(words)}">Or tell them what to do instead</label><textarea id="${e(words)}" rows="2" maxlength="${callLimits.words}"></textarea><div class="actions"><button type="button" data-action="lab-call-words" data-call="${e(call.id)}">Send answer</button></div></div>`,
       };
     });
 }
@@ -1186,7 +1218,7 @@ export function searchPanel(
     for (const call of view.state.calls)
       if (
         has(
-          `${call.id} ${call.kind} ${callWords[call.kind]} ${authorName(view, call.by)} ${call.question} ${call.options.map((option) => option.label).join(' ')}`,
+          `${call.id} ${call.kind} ${callWords[call.kind]} ${authorName(view, call.by)} ${call.question} ${call.options.map((option) => option.label).join(' ')} ${call.words ?? ''}`,
         )
       )
         found.push({ at: call.at, call });
@@ -1228,7 +1260,9 @@ export function searchPanel(
           ? 'withdrawn'
           : call.state === 'undoing'
             ? 'Verifold undoes your answer'
-            : `you chose "${chosen ?? ''}"`;
+            : chosen === undefined && call.words
+              ? `you answered "${clip(call.words, 120)}"`
+              : `you chose "${chosen ?? ''}"`;
     return `<li class="hit"><p class="hit-head"><span class="chip">${callWords[call.kind]}</span> ${e(call.id)} · ${e(authorName(view, call.by))} · <time datetime="${e(call.at)}">${e(clock(call.at))}</time> · ${e(state)}</p><p class="hit-text">${snippet(`${call.question} (${labels.join(', ')})`, any)}</p>${call.state === 'open' ? '<p><button type="button" class="link" data-view="needs">Answer it in Needs you</button></p>' : ''}</li>`;
   };
   const note = !words
@@ -1451,7 +1485,11 @@ export function answerPanel(
       stands(call) && call.answer
         ? call.options[call.answer.option]
         : undefined;
-    return option ? [option.label] : [];
+    return option
+      ? [option.label]
+      : stands(call) && call.words
+        ? [`"${clip(call.words, 120)}"`]
+        : [];
   });
   const open = view.directions.filter(
     (entry) => entry.direction.state === 'open',

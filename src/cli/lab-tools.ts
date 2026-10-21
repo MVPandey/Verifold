@@ -493,6 +493,9 @@ export const directionToolSpec: AgentTool = {
 /** The kinds of call for the person. A technical question goes on the board, and a check settles it. */
 export const callKinds = ['cost', 'scope', 'access', 'go'] as const;
 
+/** What a call asks for when no option effect says it. `pods`: turn on GPU pods. Calls with the same need join. */
+export const callNeeds = ['pods'] as const;
+
 /** The limits of a call. The tool schema and the lab's checks use the same ones. */
 export const callLimits = {
   /** Calls that wait for the person at once. Verifold's own deadline call does not count. */
@@ -500,6 +503,8 @@ export const callLimits = {
   question: 160,
   label: 80,
   why: 280,
+  /** The person's answer in their own words. */
+  words: 2000,
   options: { min: 2, max: 3 },
   usd: 10_000,
   minutes: 100_000,
@@ -518,11 +523,17 @@ export const callLimits = {
 export const askPersonToolSpec: AgentTool = {
   name: 'verifold_ask_person',
   description:
-    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction), access (network for your shell, or a key in Compute), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 or 3 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, hours with cost or go, direction with scope, and domains with access. pick is the option that you advise, and why says why. The person's answer applies at once, and they can undo it within undoMinutes (default 10). Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
+    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction), access (network for your shell, or a key in Compute), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 or 3 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, hours with cost or go, direction with scope, and domains with access. pick is the option that you advise, and why says why. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
   inputSchema: {
     type: 'object',
     properties: {
       kind: { type: 'string', enum: callKinds },
+      need: {
+        type: 'string',
+        enum: callNeeds,
+        description:
+          'pods: you ask the person to turn on GPU pods, with a RunPod key and a spend limit in Compute. Only with access. One call serves the lab: calls with need pods join.',
+      },
       question: { type: 'string', maxLength: callLimits.question },
       options: {
         type: 'array',
