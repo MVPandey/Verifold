@@ -2,7 +2,7 @@
 
 The MIT license in `LICENSE` applies to the Verifold harness and its supporting files:
 
-- `src/cli.ts`, and the source folders `src/cli/`, `src/core/`, `src/desk/`, `src/legacy/`, and `src/server/`.
+- `src/cli.ts`, and the source folders `src/cli/`, `src/core/`, `src/desk/`, `src/legacy/`, `src/protocol/`, and `src/server/`.
 - The shared CLI dependency `src/ui/dom.ts`.
 - The compiled equivalents included in the `verifold` npm package.
 - `scripts/`, `tests/`, `.githooks/`, and `.github/`.

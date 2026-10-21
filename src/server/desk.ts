@@ -11,7 +11,6 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   deskPage,
-  labGpu,
   parseFrame,
   renderDesk,
   renderSetup,
@@ -52,7 +51,7 @@ import {
   type TaskManager,
 } from '../legacy/tasks.ts';
 import { coordinatorContext, type Coordinator } from '../legacy/coordinator.ts';
-import type { Compute } from '../core/compute.ts';
+import { labGpu, type Compute } from '../core/compute.ts';
 import { commitId, directionId, proofRef, runId } from '../core/board.ts';
 import {
   startLabOn,
@@ -69,6 +68,7 @@ import {
 } from '../core/storage.ts';
 import { validAgents } from '../core/contracts.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
+import { ApiFeed, ApiReader, answerApi } from './api.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -1166,6 +1166,8 @@ export async function startDesk(
           readonly pages?: number | undefined;
         }
       | undefined;
+    /** How often the API's stream builds the snapshot, and sends a heartbeat. Tests set them short. */
+    readonly api?: { readonly pollMs?: number; readonly heartbeatMs?: number };
   } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
@@ -1182,6 +1184,21 @@ export async function startDesk(
     diffs: new Map(),
     brings: new Map(),
   };
+  // The API reads the desk's current project, so a setup desk serves the project once attach() sets it.
+  const apiReader = new ApiReader(() => ({
+    root: project,
+    lab: labDesk.lab,
+    compute,
+    session: (id) => sessions?.view(id) ?? null,
+    works: labDesk.works,
+    away: async () => {
+      const view = labDesk.lab?.view();
+      return project && view
+        ? (await lookOf(project, labDesk, view.state.startedAt)).away
+        : null;
+    },
+  }));
+  const apiFeed = new ApiFeed(apiReader, options.api);
   if (project) await readDeskSnapshot(project);
   const token = options.reuse?.token ?? randomBytes(32).toString('hex');
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -1336,6 +1353,30 @@ export async function startDesk(
           'Content-Type': 'application/json; charset=utf-8',
         })
         .end(valid ? JSON.stringify({ token }) : '{}');
+      return;
+    }
+    if (url.pathname.startsWith('/api/v1/')) {
+      await answerApi(
+        request,
+        response,
+        url,
+        authorized,
+        apiFeed,
+        apiReader,
+        (body) =>
+          act(
+            sessions,
+            research,
+            setup,
+            tasks,
+            coordinator,
+            compute,
+            project ?? '',
+            body,
+            memory,
+            labDesk,
+          ),
+      );
       return;
     }
     if (
@@ -1953,6 +1994,7 @@ export async function startDesk(
     throw error;
   }
   const stop = (): void => {
+    apiFeed.close();
     server.closeAllConnections();
     server.close();
   };
