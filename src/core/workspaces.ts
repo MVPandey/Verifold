@@ -33,6 +33,11 @@ export interface Workspace {
   readonly start: string;
 }
 
+/** What the person calls a workspace: its branch, or its folder when it has none. */
+export function workspaceName(workspace: Workspace): string {
+  return workspace.branch ?? workspace.path;
+}
+
 /** A commit ID: SHA-1 or SHA-256. */
 export const commitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 

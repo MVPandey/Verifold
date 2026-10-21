@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
+import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
 import { threads } from '../board.ts';
 import type { Connection } from '../store.ts';
@@ -97,7 +98,7 @@ export function LabHome({
                   Directions
                 </h2>
                 <a className="section__link" href={href.answer}>
-                  {lab.signoff ? 'The answer' : 'The answer so far'}
+                  {signedOff(lab) ? 'The answer' : 'The answer so far'}
                 </a>
               </div>
               <div className="rows">

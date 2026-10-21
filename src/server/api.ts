@@ -25,6 +25,7 @@ import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
 import {
   askers,
+  bringGroups,
   labLimits,
   type BringList as LabBringList,
   type Brought,
@@ -41,6 +42,7 @@ import {
   type SessionView,
 } from '../core/session.ts';
 import { TranscriptFile, type TranscriptEntry } from '../core/transcript.ts';
+import { workspaceName } from '../core/workspaces.ts';
 import {
   protocolVersion,
   turnIdPattern,
@@ -55,6 +57,7 @@ import {
   type CallOption,
   type CheckItem,
   type Direction,
+  type DirectionCounts,
   type Effect,
   type FileDiff,
   type Lab,
@@ -142,7 +145,7 @@ interface Level {
   readonly runs: number;
   readonly checks: number;
   readonly works: number;
-  /** It keeps the plan, the sign-off, and the whole question. */
+  /** It keeps the plan and the whole question. */
   readonly whole: boolean;
 }
 
@@ -165,7 +168,8 @@ const full: Level = {
 
 /**
  * A snapshot uses the first level that fits `apiLimits.snapshot`. The last
- * level keeps no list, no plan, and a cut question, so it always fits.
+ * level keeps no list, no plan, a cut question, and of the sign-off only its
+ * time and line, so it always fits.
  */
 const levels: readonly Level[] = [
   full,
@@ -627,6 +631,23 @@ function broughtByDirection(
   return counts;
 }
 
+/** The lab's directions counted over all of them. Still open: open, with no verdict or a disputed one. */
+function directionCounts(
+  directions: readonly LabDirection[],
+  disputed: (entry: LabDirection) => boolean,
+): DirectionCounts {
+  return {
+    total: directions.length,
+    holdsUp: directions.filter((entry) => entry.verdict === 'holds-up').length,
+    ruledOut: directions.filter((entry) => entry.verdict === 'ruled-out')
+      .length,
+    open: directions.filter(
+      (entry) =>
+        entry.state === 'open' && (entry.verdict === 'open' || disputed(entry)),
+    ).length,
+  };
+}
+
 function direction(
   entry: LabDirection,
   disputed: (entry: LabDirection) => boolean,
@@ -825,8 +846,9 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   );
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
-  if (state.signoff && !level.whole) omitted.signoff = 1;
   const brought = broughtByDirection(state.brought);
+  const directions = keep(state.directions, level.directions, 'directions');
+  const kept = new Set(directions.map((entry) => entry.id));
   return {
     question: level.whole
       ? state.question
@@ -858,15 +880,15 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     )
       .reverse()
       .map((entry) => call(entry, handle, stored)),
-    directions: keep(state.directions, level.directions, 'directions').map(
-      (entry) =>
-        direction(
-          entry,
-          disputed,
-          keep(entry.buildsOn, level.buildsOn, 'buildsOn'),
-          brought.get(entry.id),
-        ),
+    directions: directions.map((entry) =>
+      direction(
+        entry,
+        disputed,
+        keep(entry.buildsOn, level.buildsOn, 'buildsOn'),
+        brought.get(entry.id),
+      ),
     ),
+    directionCounts: directionCounts(state.directions, disputed),
     agents,
     plan:
       plan && level.whole
@@ -892,19 +914,21 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     })),
     runs: keep(view.ledger, level.runs, 'runs', true).map(run),
     checks: keep(view.checks, level.checks, 'checks', true).map(check),
-    signoff:
-      state.signoff && level.whole
-        ? {
-            at: state.signoff.at,
-            note: state.signoff.note,
-            directions: state.signoff.directions.map((entry) => ({
+    // A sign-off is small, so every level keeps it: the answer never looks unsigned.
+    signoff: state.signoff
+      ? {
+          at: state.signoff.at,
+          note: state.signoff.note,
+          directions: state.signoff.directions
+            .filter((entry) => kept.has(entry.id))
+            .map((entry) => ({
               id: entry.id,
               verdict: entry.verdict,
               commit: entry.commit,
               check: entry.check,
             })),
-          }
-        : null,
+        }
+      : null,
     works: keep(loaded.works, level.works, 'works', true).map((work) => ({
       action: work.action,
       label: work.label,
@@ -912,6 +936,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       error: work.error,
       ...(work.call === undefined ? {} : { call: work.call }),
       ...(work.option === undefined ? {} : { option: work.option }),
+      ...(work.direction === undefined ? {} : { direction: work.direction }),
     })),
     away: loaded.away,
     omitted,
@@ -964,15 +989,15 @@ function same(a: readonly unknown[], b: readonly unknown[]): boolean {
 /** A bring-in list as the API sends it, within its bound. */
 function bringList(list: LabBringList, branch: string): BringList {
   const files = list.files.slice(0, apiLimits.bringFiles);
+  const left = list.left.slice(0, apiLimits.bringFiles);
   return {
     direction: list.direction,
     branch,
     commit: list.commit,
     working: list.working,
     newer: list.newer,
-    left: list.left
-      .slice(0, apiLimits.bringFiles)
-      .map((file) => ({ path: file.path, why: file.why })),
+    left: left.map((file) => ({ path: file.path, why: file.why })),
+    leftOmitted: list.left.length - left.length,
     files: files.map((file) => ({
       path: file.path,
       change: file.change,
@@ -987,28 +1012,12 @@ function bringList(list: LabBringList, branch: string): BringList {
   };
 }
 
-/** A direction's bring-ins, oldest first: the files that keep each one as their base, by its time and commit. */
+/** A direction's newest bring-ins, oldest first, within their bounds. */
 function bringHistory(
   brought: readonly Brought[],
   direction: string,
 ): BringGroup[] {
-  const groups = new Map<
-    string,
-    { readonly at: string; readonly commit: string; readonly paths: string[] }
-  >();
-  for (const entry of brought) {
-    if (entry.direction !== direction) continue;
-    const key = `${entry.at}|${entry.commit}`;
-    const group = groups.get(key) ?? {
-      at: entry.at,
-      commit: entry.commit,
-      paths: [],
-    };
-    group.paths.push(entry.path);
-    groups.set(key, group);
-  }
-  return [...groups.values()]
-    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+  return bringGroups(brought, direction)
     .slice(-apiLimits.bringGroups)
     .map((group) => ({
       at: group.at,
@@ -1305,7 +1314,7 @@ export class ApiReader {
     return {
       list:
         read && typeof read === 'object'
-          ? bringList(read, entry.workspace.branch ?? entry.workspace.path)
+          ? bringList(read, workspaceName(entry.workspace))
           : null,
       error: typeof read === 'string' ? read : null,
       history: bringHistory(view.state.brought, id),

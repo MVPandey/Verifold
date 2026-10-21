@@ -8,6 +8,7 @@ import type {
   Call,
   CheckItem,
   Direction,
+  FileDiff,
   Lab,
   Post,
   Run,
@@ -20,15 +21,21 @@ import {
   bringWork,
   broughtLine,
   checkLine,
+  chosenFiles,
   findings,
   firstTicked,
   runsLine,
+  sameBring,
+  signedOff,
   stillOpen,
   stoppedWithout,
   yourCalls,
+  type BringIntent,
 } from '../src/app/answer.ts';
-import { isBringRead, isFileDiff, paths } from '../src/app/api.ts';
+import { isBringRead, isFileDiff, paths, type Loaded } from '../src/app/api.ts';
+import { DiffReads, otherWork, type DiffShown } from '../src/app/diffs.ts';
 import { clock } from '../src/app/format.ts';
+import { intentFor } from '../src/app/intent.ts';
 import { href, parseRoute } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
 import {
@@ -380,26 +387,70 @@ await test('a check line says how the newest rerun went, and nothing when the pa
 });
 
 await test("the answer's status, open items, calls, and runs read from the lab's records", () => {
+  // A leading direction is not still open: the status counts what the "Still open" list shows.
   assert.equal(
     answerStatus(lab()),
-    'The answer, draft · 1 of 4 directions hold up · 1 ruled out · 2 still open',
+    'The answer, draft · 1 of 4 directions hold up · 1 ruled out · 1 still open',
+  );
+  assert.deepEqual(
+    stillOpen(lab()).map((entry) => entry.id),
+    ['d-4'],
   );
   assert.equal(
     answerStatus(lab({ signoff: { at: ago(5), note: null, directions: [] } })),
-    `Signed off at ${clock(ago(5))} · 1 of 4 directions hold up · 1 ruled out · 2 still open`,
+    `Signed off at ${clock(ago(5))} · 1 of 4 directions hold up · 1 ruled out · 1 still open`,
   );
   assert.equal(
     answerStatus(lab({ directions: [] })),
     'The answer, draft · no direction yet',
   );
   assert.deepEqual(
-    stillOpen(lab()).map((entry) => entry.id),
-    ['d-4'],
-  );
-  assert.deepEqual(
     stoppedWithout(lab()).map((entry) => entry.id),
     [],
   );
+  // A disputed direction that holds up is still open, and the status counts it, as the list does.
+  const disputed = lab({
+    directions: [
+      direction('d-1', 'The CoT names what drives the answer', 'a-1', {
+        verdict: 'holds-up',
+        disputed: true,
+      }),
+      direction('d-2', 'The CoT matches what probes read inside', 'a-2', {
+        verdict: 'leading',
+      }),
+      direction('d-4', 'Gains survive pressure from a monitor', 'a-4'),
+    ],
+  });
+  assert.deepEqual(
+    stillOpen(disputed).map((entry) => entry.id),
+    ['d-1', 'd-4'],
+  );
+  assert.equal(
+    answerStatus(disputed),
+    'The answer, draft · 1 of 3 directions hold up · 2 still open',
+  );
+
+  // Verifold counts all the directions, also those that a large lab's view leaves out.
+  assert.equal(
+    answerStatus(
+      lab({
+        directionCounts: { total: 112, holdsUp: 30, ruledOut: 40, open: 6 },
+        omitted: { directions: 108 },
+      }),
+    ),
+    'The answer, draft · 30 of 112 directions hold up · 40 ruled out · 6 still open',
+  );
+  // An older server sends no counts: a view that leaves directions out does not count them.
+  assert.equal(
+    answerStatus(lab({ omitted: { directions: 108 } })),
+    'The answer, draft · this view leaves out some directions',
+  );
+
+  // A sign-off that an older server left out of a large lab is still a sign-off, never a draft.
+  const trimmed = lab({ signoff: null, omitted: { signoff: 1 } });
+  assert.ok(signedOff(trimmed));
+  assert.ok(!signedOff(lab()));
+  assert.match(answerStatus(trimmed), /^Signed off · /);
 
   // Answered is newest first; the person's calls read oldest first. One still applies, one was withdrawn.
   const calls = yourCalls(
@@ -439,9 +490,17 @@ await test('the answer page shows the tagged findings, what is open, the calls, 
     /<h1 class="answer-head__title">Can cheap training make a CoT faithful\?<\/h1>/,
   );
   assert.match(shown, /The answer, draft · 1 of 4 directions hold up/);
-  assert.match(html, /class="tag tag--data">Data</);
-  assert.match(html, /class="tag tag--reasoning">Our reasoning</);
-  assert.match(html, /class="tag tag--literature">Literature</);
+  assert.match(html, /class="finding__tag finding__tag--data">Data</);
+  assert.match(
+    html,
+    /class="finding__tag finding__tag--reasoning">Our reasoning</,
+  );
+  assert.match(
+    html,
+    /class="finding__tag finding__tag--literature">Literature</,
+  );
+  // One run map for the page: each finding's runs show by their labels.
+  assert.match(html, /<span class="proof">Run r-4<\/span>/);
   // A source links only as a web address, and reads short.
   assert.match(
     html,
@@ -465,7 +524,11 @@ await test('the answer page shows the tagged findings, what is open, the calls, 
   );
   assert.match(html, /The answer in one line \(optional\)/);
   assert.match(html, /maxLength="280"/);
-  assert.match(html, />Sign off<\/button>/);
+  // Only a submit signs off: the box and its button are one form.
+  assert.match(
+    html,
+    /<form class="signoff__form"><label[^>]*>The answer in one line \(optional\)<\/label><div class="signoff__row"><input[^>]*\/><button type="submit" class="button button--primary">Sign off<\/button><\/div><\/form>/,
+  );
   // No button for what does not exist.
   assert.doesNotMatch(shown, /Export|Ask a follow-up/);
 
@@ -481,6 +544,15 @@ await test('the answer page shows the tagged findings, what is open, the calls, 
   assert.match(
     text(signed),
     /You signed off at .*A new sign-off replaces it\./,
+  );
+
+  // A sign-off that the view left out never reads as a draft, and offers no sign-off over it.
+  const trimmed = text(render(snapshot({ omitted: { signoff: 1 } })));
+  assert.doesNotMatch(trimmed, /draft|Sign off when you agree/);
+  assert.doesNotMatch(render(snapshot({ omitted: { signoff: 1 } })), /<form/);
+  assert.match(
+    trimmed,
+    /You signed off\. This view of a large lab leaves out the details\./,
   );
 
   // A view that only shows the lab offers neither sign-off nor bring-in.
@@ -516,6 +588,7 @@ await test('a bring-in shows its files: code files start unticked with the warni
         why: "It is a file that Verifold can't copy safely.",
       },
     ],
+    leftOmitted: 2,
     files: [
       {
         path: '.githooks/pre-commit',
@@ -612,7 +685,7 @@ await test('a bring-in shows its files: code files start unticked with the warni
   assert.match(text(html), /Brought in at /);
   assert.match(
     text(html),
-    /Left out of this commit, so they cannot come in: shared\.md/,
+    /Left out of this commit, so they cannot come in: shared\.md It is a file that Verifold can't copy safely\. and 2 more/,
   );
   assert.match(
     text(html),
@@ -747,6 +820,7 @@ await test('the lab home links to the answer, and a bring-in refreshes when its 
         label: 'Bringing in the files',
         at: ago(1),
         error: null,
+        direction: 'd-1',
       },
       {
         action: 'lab-call-answer',
@@ -757,11 +831,202 @@ await test('the lab home links to the answer, and a bring-in refreshes when its 
     ],
   });
   assert.notEqual(bringKey(working, d1), base);
-  assert.equal(bringWork(working)?.label, 'Bringing in the files');
-  assert.equal(bringWork(shown), null);
+  assert.equal(bringWork(working, 'd-1')?.label, 'Bringing in the files');
+  assert.equal(bringWork(shown, 'd-1'), null);
   assert.equal(
     broughtLine(d1),
     `2 files brought in, last at ${clock(ago(20))}`,
   );
   assert.equal(broughtLine({ ...d1, brought: null }), null);
+});
+
+await test('each bring-in page shows only the work of its own direction', () => {
+  const two = lab({
+    works: [
+      {
+        action: 'lab-bring-look',
+        label: 'Taking the newest work',
+        at: ago(3),
+        error: 'The folder of d-1 is gone.',
+        direction: 'd-1',
+      },
+      {
+        action: 'lab-bring',
+        label: 'Bringing in the files',
+        at: ago(1),
+        error: null,
+        direction: 'd-2',
+      },
+    ],
+  });
+  assert.equal(bringWork(two, 'd-1')?.error, 'The folder of d-1 is gone.');
+  assert.equal(bringWork(two, 'd-2')?.label, 'Bringing in the files');
+  assert.equal(bringWork(two, 'd-3'), null);
+  // A bring-in of another direction does not read this one's files again.
+  const [d1, d2] = two.directions;
+  assert.ok(d1 && d2);
+  const quiet = lab({ works: [] });
+  assert.notEqual(bringKey(two, d1), bringKey(quiet, d1));
+  assert.equal(
+    bringKey(lab({ works: two.works.slice(1) }), d1),
+    bringKey(quiet, d1),
+  );
+  assert.notEqual(bringKey(two, d2), bringKey(quiet, d2));
+});
+
+await test('after a bring-in nothing stays ticked, and a file that came in is never chosen again', () => {
+  const commit = 'c'.repeat(40);
+  const file = (path: string, since: string | null) => ({
+    path,
+    change: 'added' as const,
+    bytes: 1,
+    ticked: since === null,
+    out: null,
+    why: null,
+    since,
+    code: false,
+  });
+  const read = (files: ReturnType<typeof file>[]): BringRead => ({
+    list: {
+      direction: 'd-1',
+      branch: 'verifold/d-1',
+      commit,
+      working: false,
+      newer: false,
+      left: [],
+      leftOmitted: 0,
+      files,
+      omitted: 0,
+    },
+    error: null,
+    history: [],
+  });
+  const before = read([file('a.md', null), file('b.md', null)]);
+  assert.deepEqual([...chosenFiles(before, null)], ['a.md', 'b.md']);
+  // a.md came in meanwhile, from another tab: a tick of it is not sent again.
+  const after = read([file('a.md', ago(1)), file('b.md', null)]);
+  const ticked = { commit, paths: new Set(['a.md', 'b.md']) };
+  assert.deepEqual([...chosenFiles(after, ticked)], ['b.md']);
+  // After the bring-in the page clears its ticks: a second click has nothing to send.
+  assert.deepEqual([...chosenFiles(after, { commit, paths: new Set() })], []);
+  // Ticks of another commit do not count: the page ticks first again.
+  assert.deepEqual(
+    [...chosenFiles(after, { commit: 'd'.repeat(40), paths: new Set() })],
+    ['b.md'],
+  );
+  assert.deepEqual([...chosenFiles(null, ticked)], []);
+});
+
+await test('a retry of a bring-in after its commit changed is a new intent with a new key', () => {
+  let made = 0;
+  const make = (): string => `key-${++made}`;
+  const sent: BringIntent = { commit: 'c'.repeat(40), files: ['a.md'] };
+  const first = intentFor(null, sent, make, sameBring);
+  // The answer was lost: the same commit and files, in new arrays, keep the key.
+  assert.equal(
+    intentFor(
+      first,
+      { commit: 'c'.repeat(40), files: ['a.md'] },
+      make,
+      sameBring,
+    ).key,
+    'key-1',
+  );
+  // The person looked again and the commit moved: the same files are a new bring-in.
+  const moved = intentFor(
+    first,
+    { commit: 'd'.repeat(40), files: ['a.md'] },
+    make,
+    sameBring,
+  );
+  assert.equal(moved.key, 'key-2');
+  assert.equal(moved.value.commit, 'd'.repeat(40));
+  // Other files are a new bring-in too, also when one name holds a line break.
+  assert.equal(
+    intentFor(
+      first,
+      { commit: 'c'.repeat(40), files: ['a.md', 'b.md'] },
+      make,
+      sameBring,
+    ).key,
+    'key-3',
+  );
+  assert.ok(
+    !sameBring(
+      { commit: 'c', files: ['a\nb'] },
+      { commit: 'c', files: ['a', 'b'] },
+    ),
+  );
+});
+
+await test('a diff shows only for the commit that the page shows, since the person may tick a code file from it', async () => {
+  const reads: {
+    path: string;
+    commit: string;
+    signal: AbortSignal;
+    answer: (result: Loaded<FileDiff>) => void;
+  }[] = [];
+  let shown: { commit: string | null; open: ReadonlyMap<string, DiffShown> } = {
+    commit: null,
+    open: new Map(),
+  };
+  const diffs = new DiffReads(
+    (path, commit, signal) =>
+      new Promise((resolve) => {
+        reads.push({ path, commit, signal, answer: resolve });
+      }),
+    (commit, open) => {
+      shown = { commit, open };
+    },
+  );
+  const settle = (): Promise<void> =>
+    new Promise((resolve) => setImmediate(resolve));
+  const a = 'a'.repeat(40);
+  const b = 'b'.repeat(40);
+  const hook = '.githooks/pre-commit';
+  const diff = (text: string, commit: string): Loaded<FileDiff> => ({
+    value: { text, trimmed: false, commit },
+  });
+
+  // The person opens the hook's diff at a, and the agent's newer work moves the page to b.
+  diffs.toggle(a, hook);
+  assert.equal(shown.open.get(hook), 'loading');
+  diffs.at(b);
+  const [old] = reads;
+  assert.ok(old?.signal.aborted, 'the read of the old commit stops');
+  assert.deepEqual([shown.commit, shown.open.size], [b, 0]);
+  // They open it again at b. The late answer of a never shows.
+  diffs.toggle(b, hook);
+  old.answer(diff('+echo old', a));
+  await settle();
+  assert.equal(shown.open.get(hook), 'loading');
+  reads[1]?.answer(diff('+echo new', b));
+  await settle();
+  assert.deepEqual(shown.open.get(hook), diff('+echo new', b));
+
+  // An answer of another commit than the one asked for shows as an error, not as the diff.
+  diffs.toggle(b, 'a.md');
+  reads[2]?.answer(diff('+a', a));
+  await settle();
+  assert.deepEqual(shown.open.get('a.md'), { error: otherWork });
+
+  // Closing a diff stops its read, and opening it again reads it anew.
+  diffs.toggle(b, 'b.md');
+  diffs.toggle(b, 'b.md');
+  assert.ok(reads[3]?.signal.aborted);
+  assert.equal(shown.open.has('b.md'), false);
+  diffs.toggle(b, 'b.md');
+  reads[3]?.answer(diff('+stale', b));
+  reads[4]?.answer(diff('+b', b));
+  await settle();
+  assert.deepEqual(shown.open.get('b.md'), diff('+b', b));
+
+  // Leaving the page stops every read.
+  diffs.toggle(b, 'c.md');
+  diffs.stop();
+  assert.ok(reads[5]?.signal.aborted);
+  assert.deepEqual(
+    reads.map((read) => read.commit),
+    [a, b, b, b, b, b],
+  );
 });

@@ -5,7 +5,6 @@ import type {
   Direction,
   Lab,
   PostKind,
-  Run,
   Snapshot,
   Turn,
   TurnDetail,
@@ -23,6 +22,7 @@ import { Avatar } from '../components/Avatar.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
+import { RunChip } from '../components/RunChip.tsx';
 import { StepList } from '../components/StepList.tsx';
 import { TurnMessage } from '../components/TurnMessage.tsx';
 import { Verdict } from '../components/Verdict.tsx';
@@ -124,15 +124,6 @@ const postNames: Record<PostKind, string> = {
   status: 'Note',
 };
 
-/** A run as a chip: "Run r-3", or with how it ended when that is not a clean exit. */
-export function runLabel(run: Run): string {
-  if (run.status !== 'done') return `Run ${run.id} · ${run.status}`;
-  if (run.exitCode === 0) return `Run ${run.id}`;
-  return run.exitCode === null
-    ? `Run ${run.id} · ended`
-    : `Run ${run.id} · exit ${run.exitCode}`;
-}
-
 /**
  * What a turn left behind: the runs and posts that its tool calls made. A
  * run or post that the snapshot leaves out shows by its ID. An older server
@@ -160,14 +151,9 @@ function TurnProof({
           }
         : {})}
     >
-      {runIds.map((id) => {
-        const run = runs.get(id);
-        return (
-          <span key={id} className="proof">
-            {run ? runLabel(run) : `Run ${id}`}
-          </span>
-        );
-      })}
+      {runIds.map((id) => (
+        <RunChip key={id} id={id} runs={runs} />
+      ))}
       {postIds.map((id) => {
         const post = posts.get(id);
         return (

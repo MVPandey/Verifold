@@ -9281,6 +9281,18 @@ await test("the app's API brings files in and signs off with the desk's checks, 
     1,
   );
 
+  // A second click at the same commit, with a new key, brings nothing in again: its time and the history stay.
+  const record = lab.lab.view()?.state.brought;
+  await refused(
+    { direction: 'd-1', commit, files: ['a.md'], key: 'b'.repeat(32) },
+    /^Nothing came in\. a\.md already came in with this content\.$/,
+  );
+  assert.deepEqual(lab.lab.view()?.state.brought, record);
+  assert.deepEqual(
+    (await json<BringRead>(get('/directions/d-1/bring'))).history,
+    after.history,
+  );
+
   // The sign-off, through the API.
   assert.equal((await act('lab-signoff', { note: 'Partly yes.' })).status, 200);
   const signed = await json<Snapshot>(get('/snapshot'));

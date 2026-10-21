@@ -1,11 +1,18 @@
-import { useId, useState, type ReactNode } from 'react';
-import type { BringRead, FileDiff, Lab, Snapshot } from '../../protocol/api.ts';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import type {
+  BringRead,
+  FileDiff,
+  Lab,
+  Run,
+  Snapshot,
+} from '../../protocol/api.ts';
 import type { ActOutcome, Loaded } from '../api.ts';
 import {
   answerStatus,
   broughtLine,
   findings,
   runsLine,
+  signedOff,
   stillOpen,
   stoppedWithout,
   tagNames,
@@ -20,8 +27,8 @@ import { useAction } from '../useAction.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
+import { RunChip } from '../components/RunChip.tsx';
 import { Verdict } from '../components/Verdict.tsx';
-import { runLabel } from './DirectionPage.tsx';
 import type { LabActions } from './LabHome.tsx';
 
 /** What the answer and bring-in pages ask of Verifold: the desk's own actions and reads for them. */
@@ -67,18 +74,21 @@ export function shortSource(url: string): string {
 
 function TagChip({ tag }: { readonly tag: Finding['tag'] }): ReactNode {
   if (!tag) return null;
-  return <span className={`tag tag--${tag}`}>{tagNames[tag]}</span>;
+  return (
+    <span className={`finding__tag finding__tag--${tag}`}>{tagNames[tag]}</span>
+  );
 }
 
 /** One finding: its tag, then the direction and its evidence, or a source of the plan, with its links. */
 function FindingRow({
   finding,
   lab,
+  runs,
 }: {
   readonly finding: Finding;
   readonly lab: Lab;
+  readonly runs: ReadonlyMap<string, Run>;
 }): ReactNode {
-  const runs = new Map(lab.runs.map((run) => [run.id, run]));
   const { direction, source } = finding;
   const brought = direction ? broughtLine(direction) : null;
   return (
@@ -107,14 +117,9 @@ function FindingRow({
               brought ||
               lab.agentsHere) && (
               <span className="finding__links">
-                {finding.runs.map((id) => {
-                  const run = runs.get(id);
-                  return (
-                    <span key={id} className="proof">
-                      {run ? runLabel(run) : `Run ${id}`}
-                    </span>
-                  );
-                })}
+                {finding.runs.map((id) => (
+                  <RunChip key={id} id={id} runs={runs} />
+                ))}
                 {finding.post && (
                   <a className="proof" href={href.lab}>
                     On the board
@@ -203,7 +208,9 @@ function SignOff({
   const id = useId();
   const [note, setNote] = useState('');
   const action = useAction(onSignOff);
-  const sign = async (): Promise<void> => {
+  // Only a submit signs off: the button, or Enter. Browsers do not submit on the Enter that ends a word in an input method.
+  const sign = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
     const sent = note;
     if (action.busy) return;
     if (await action.submit(sent.trim()))
@@ -221,40 +228,35 @@ function SignOff({
         A sign-off stops no agent: pause the lab, or stop its directions, for
         that.
       </p>
-      <label htmlFor={id} className="signoff__label">
-        The answer in one line (optional)
-      </label>
-      <div className="signoff__row">
-        <input
-          id={id}
-          className="signoff__input"
-          type="text"
-          value={note}
-          {...(lab.signoffLimit === undefined
-            ? {}
-            : { maxLength: lab.signoffLimit })}
-          onChange={(event) => setNote(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void sign();
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="button button--primary"
-          disabled={action.busy}
-          onClick={() => void sign()}
-        >
-          Sign off
-        </button>
-      </div>
-      {action.error && (
-        <span role="alert" className="composer__error">
-          {action.error}
-        </span>
-      )}
+      <form className="signoff__form" onSubmit={(event) => void sign(event)}>
+        <label htmlFor={id} className="signoff__label">
+          The answer in one line (optional)
+        </label>
+        <div className="signoff__row">
+          <input
+            id={id}
+            className="signoff__input"
+            type="text"
+            value={note}
+            {...(lab.signoffLimit === undefined
+              ? {}
+              : { maxLength: lab.signoffLimit })}
+            onChange={(event) => setNote(event.target.value)}
+          />
+          <button
+            type="submit"
+            className="button button--primary"
+            disabled={action.busy}
+          >
+            Sign off
+          </button>
+        </div>
+        {action.error && (
+          <span role="alert" className="composer__error">
+            {action.error}
+          </span>
+        )}
+      </form>
     </section>
   );
 }
@@ -283,6 +285,7 @@ export function AnswerPage({
   const found = findings(lab);
   const calls = yourCalls(lab);
   const stopped = stoppedWithout(lab);
+  const runs = new Map(lab.runs.map((run) => [run.id, run]));
   const line = lab.signoff?.note ?? null;
   return (
     <div className="page">
@@ -321,7 +324,12 @@ export function AnswerPage({
             {found.length > 0 ? (
               <ol className="findings">
                 {found.map((finding) => (
-                  <FindingRow key={finding.key} finding={finding} lab={lab} />
+                  <FindingRow
+                    key={finding.key}
+                    finding={finding}
+                    lab={lab}
+                    runs={runs}
+                  />
                 ))}
               </ol>
             ) : (
@@ -358,7 +366,11 @@ export function AnswerPage({
               ? `${calls.join(' · ')}. The agents made the rest, all on the board.`
               : 'none. The agents made every choice, all on the board.'}
           </p>
-          {lab.agentsHere ? (
+          {lab.agentsHere && !lab.signoff && signedOff(lab) ? (
+            <p className="answer-line muted">
+              You signed off. This view of a large lab leaves out the details.
+            </p>
+          ) : lab.agentsHere ? (
             <SignOff lab={lab} onSignOff={answerActions.signOff} />
           ) : (
             <p className="answer-line muted">

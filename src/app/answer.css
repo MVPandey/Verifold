@@ -110,7 +110,7 @@
   font-weight: 700;
 }
 
-.tag {
+.finding__tag {
   flex: none;
   align-self: flex-start;
   padding: 1px 8px;
@@ -119,17 +119,17 @@
   font-weight: 800;
 }
 
-.tag--data {
+.finding__tag--data {
   background: var(--ok-bg);
   color: var(--ok-ink);
 }
 
-.tag--literature {
+.finding__tag--literature {
   background: var(--rerun-bg);
   color: var(--rerun-ink);
 }
 
-.tag--reasoning {
+.finding__tag--reasoning {
   background: var(--accent-tint);
   color: var(--accent-deep);
 }
@@ -163,6 +163,12 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
+  gap: 10px;
+}
+
+.signoff__form {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 

@@ -5,12 +5,18 @@ import type {
   BringList,
   BringRead,
   Direction,
-  FileDiff,
   Lab,
   Snapshot,
 } from '../../protocol/api.ts';
-import type { Loaded } from '../api.ts';
-import { bringKey, bringWork, firstTicked } from '../answer.ts';
+import {
+  bringKey,
+  bringWork,
+  chosenFiles,
+  sameBring,
+  type BringIntent,
+  type Ticks,
+} from '../answer.ts';
+import { DiffReads, type DiffShown } from '../diffs.ts';
 import { clock } from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
@@ -25,8 +31,8 @@ import type { LabActions } from './LabHome.tsx';
 export const codeWarning =
   'This file can run code on your computer. Bring it in only if its diff looks right.';
 
-/** A file's diff on the page: being read, read, or why not. */
-export type DiffShown = Loaded<FileDiff> | 'loading';
+/** No diff is open. */
+const noDiffs: ReadonlyMap<string, DiffShown> = new Map();
 
 function DiffBox({ diff }: { readonly diff: DiffShown }): ReactNode {
   if (diff === 'loading') return <p className="more">Reading the diff…</p>;
@@ -209,6 +215,9 @@ export function BringFiles({
                 <span className="muted">{file.why}</span>
               </li>
             ))}
+            {list.leftOmitted > 0 && (
+              <li className="muted">and {list.leftOmitted} more</li>
+            )}
           </ul>
         </>
       )}
@@ -288,16 +297,8 @@ export function BringPage({
   const list = shown?.list ?? null;
   const commit = list?.commit ?? null;
   // The person's ticks belong to the commit that they looked at.
-  const [ticks, setTicks] = useState<{
-    readonly commit: string;
-    readonly paths: ReadonlySet<string>;
-  } | null>(null);
-  const chosen: ReadonlySet<string> =
-    commit && ticks?.commit === commit
-      ? ticks.paths
-      : shown
-        ? firstTicked(shown)
-        : new Set();
+  const [ticks, setTicks] = useState<Ticks | null>(null);
+  const chosen = chosenFiles(shown, ticks);
   const tick = (path: string, on: boolean): void => {
     if (!commit) return;
     const next = new Set(chosen);
@@ -306,28 +307,23 @@ export function BringPage({
     setTicks({ commit, paths: next });
   };
 
-  const [diffs, setDiffs] = useState<ReadonlyMap<string, DiffShown>>(
-    () => new Map(),
+  // The open diffs, each of a file at the commit shown. A diff of other work never shows.
+  const [diffs, setDiffs] = useState<{
+    readonly commit: string | null;
+    readonly shown: ReadonlyMap<string, DiffShown>;
+  }>({ commit: null, shown: noDiffs });
+  const reads = useRef<DiffReads | null>(null);
+  reads.current ??= new DiffReads(
+    (path, at, signal) => answerActions.diff(direction.id, path, at, signal),
+    (at, open) => setDiffs({ commit: at, shown: open }),
   );
-  useEffect(() => setDiffs(new Map()), [commit]);
+  useEffect(() => {
+    reads.current?.at(commit);
+  }, [commit]);
+  useEffect(() => () => reads.current?.stop(), []);
+  const open = diffs.commit === commit ? diffs.shown : noDiffs;
   const toggleDiff = (path: string): void => {
-    if (!commit) return;
-    if (diffs.has(path)) {
-      const next = new Map(diffs);
-      next.delete(path);
-      setDiffs(next);
-      return;
-    }
-    setDiffs(new Map(diffs).set(path, 'loading'));
-    void answerActions
-      .diff(direction.id, path, commit)
-      .then((result) =>
-        setDiffs((current) =>
-          current.get(path) === 'loading'
-            ? new Map(current).set(path, result)
-            : current,
-        ),
-      );
+    if (commit) reads.current?.toggle(commit, path);
   };
 
   const look = useAction<string>((id, intent) =>
@@ -339,23 +335,24 @@ export function BringPage({
   };
   // A bring-in that runs on in the background shows in the work line, not as done.
   const pending = useRef(false);
-  const bring = useAction<string>(async (files, intent) => {
-    if (!commit) return { refused: 'Show the files first.' };
+  const bring = useAction<BringIntent>(async (sent, intent) => {
     const outcome = await answerActions.bring(
       direction.id,
-      commit,
-      files.split('\n'),
+      sent.commit,
+      sent.files,
       intent,
     );
     pending.current = 'ok' in outcome && outcome.pending === true;
     return outcome;
-  });
+  }, sameBring);
   const [done, setDone] = useState<string | null>(null);
   const doBring = async (): Promise<void> => {
     const files = [...chosen].sort();
-    if (!files.length || bring.busy) return;
+    if (!commit || !files.length || bring.busy) return;
     setDone(null);
-    if (await bring.submit(files.join('\n'))) {
+    if (await bring.submit({ commit, files })) {
+      // The files were sent: nothing stays ticked, so a second click sends nothing.
+      setTicks({ commit, paths: new Set() });
       if (!pending.current)
         setDone(
           `Brought in ${files.length} ${files.length === 1 ? 'file' : 'files'}. ${files.length === 1 ? 'It is' : 'They are'} in your project folder now.`,
@@ -364,7 +361,7 @@ export function BringPage({
     }
   };
 
-  const work = bringWork(lab);
+  const work = bringWork(lab, direction.id);
   const can = list ? list.files.filter((file) => file.out === null) : [];
   return (
     <div className="page">
@@ -417,7 +414,7 @@ export function BringPage({
               agentName={agentName}
               chosen={chosen}
               onTick={tick}
-              diffs={diffs}
+              diffs={open}
               onDiff={toggleDiff}
               onLook={() => void doLook()}
               lookBusy={look.busy}

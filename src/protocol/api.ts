@@ -87,6 +87,11 @@ export interface Lab {
   /** The newest calls that the person answered or that ended, newest first. */
   readonly answered: readonly Call[];
   readonly directions: readonly Direction[];
+  /**
+   * The lab's directions counted over all of them, also those that the
+   * snapshot leaves out. Added after version 1.
+   */
+  readonly directionCounts?: DirectionCounts;
   /** The agents of the directions, then the checkers. */
   readonly agents: readonly Agent[];
   readonly plan: Plan | null;
@@ -98,6 +103,11 @@ export interface Lab {
   readonly runs: readonly Run[];
   /** The newest checks, oldest first. */
   readonly checks: readonly CheckItem[];
+  /**
+   * The person's sign-off, or null before one. A snapshot keeps it at every
+   * size, with the directions that the snapshot keeps. An older server could
+   * leave it out of a large lab: it then named `signoff` in `omitted`.
+   */
   readonly signoff: Signoff | null;
   /** Lab actions that still run in the background, and ones that failed there. */
   readonly works: readonly Work[];
@@ -191,6 +201,15 @@ export interface Call {
 }
 
 export type Verdict = 'open' | 'leading' | 'holds-up' | 'ruled-out';
+
+/** How many directions a lab has, and how many of them hold up, are ruled out, or are still open. */
+export interface DirectionCounts {
+  readonly total: number;
+  readonly holdsUp: number;
+  readonly ruledOut: number;
+  /** Open, with no verdict or with a disputed one. */
+  readonly open: number;
+}
 
 export interface Direction {
   readonly id: string;
@@ -524,6 +543,8 @@ export interface Work {
   readonly call?: string;
   /** The option that an answer picked. Added after version 1. */
   readonly option?: number;
+  /** The direction that the action is for, such as a bring-in's. Added after version 1. */
+  readonly direction?: string;
 }
 
 export interface Away {
@@ -569,6 +590,8 @@ export interface BringList {
   readonly newer: boolean;
   /** Files of the folder that the commit leaves out, and why. */
   readonly left: readonly { readonly path: string; readonly why: string }[];
+  /** Files of `left` that the list leaves out past its bound. */
+  readonly leftOmitted: number;
   /** By path. */
   readonly files: readonly BringFile[];
   /** Files that the list leaves out past its bound. */
