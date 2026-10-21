@@ -11,15 +11,21 @@ import type {
 import { labActions } from '../src/app/actions.ts';
 import {
   callView,
+  closeHow,
   costLine,
   decideId,
-  effectLines,
+  failureOf,
+  fromLab,
+  needsTick,
+  onBoard,
   optionForKey,
+  optionLines,
   optionOrder,
   returnFocus,
   typing,
   undoLeft,
 } from '../src/app/call.ts';
+import { costWords, undoWords } from '../src/ui/call-words.ts';
 import { parseRoute } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
@@ -124,6 +130,8 @@ function call(fields: Partial<Call> = {}): Call {
     ],
     pick: 0,
     undoMinutes: 10,
+    wordsLimit: 2000,
+    applying: false,
     state: 'open',
     answer: null,
     words: null,
@@ -267,31 +275,32 @@ await test('the call opens as a modal dialog over the lab: who asked and when, t
     ),
   );
   const page = text(box);
-  assert.match(page, /Needs you · asked by claude-2 and codex-2 · 12 min ago/);
+  assert.match(page, /Needs you · claude-2 and codex-2 asked · 12 min ago/);
   assert.match(page, /The filter shrank the gap 34% on one seed\./);
-  // A joined asker's own reason shows under the first one.
   // The thread link ends the last reason.
   assert.match(
     page,
     /codex-2: One seed can be luck; rerun with a length-matched control\. See the thread/,
   );
-  // Each option: its label, cost and time, and what it does in Verifold's words.
+  // Each option: its label, cost and time, and in Verifold's words what it does.
   assert.match(
     page,
-    /Rent 1 H100 for 3 hours \$11\.97 · about 3 h The agents' pick/,
+    /Rent 1 H100 for 3 hours About \$11\.97 · 3 h The agents' pick/,
   );
-  // Each option says what it does; the last line says how to take it back.
-  assert.match(page, /Starts a pod with H100 SXM for 3 hours\./);
+  assert.match(
+    page,
+    /Starts an H100 SXM pod for 3 hours for "The CoT matches what probes read inside"\./,
+  );
   assert.doesNotMatch(page, /Undo ends the pod/);
-  assert.match(page, /Use this Mac \$0 · about 9 h/);
+  assert.match(page, /Use this Mac No cost · 9 h/);
   assert.equal(page.match(/The agents' pick/g)?.length, 1);
   // Keyboard users learn the number keys from the buttons.
   assert.match(box, /aria-keyshortcuts="1"/);
   assert.match(box, /aria-keyshortcuts="3"/);
-  // The facts behind it: the money, and the plan's checked facts with their sources.
+  // The facts behind it: the money against the project's limit, and the plan's checked facts.
   assert.match(
     page,
-    /GPU spent so far: \$4\.20 of this lab's \$25\. Plans so far: about \$3\.10\./,
+    /GPU spent so far: \$4\.20 of the project's \$25 GPU limit\. Plans so far: about \$3\.10\./,
   );
   assert.match(
     page,
@@ -301,13 +310,18 @@ await test('the call opens as a modal dialog over the lab: who asked and when, t
     page,
     /Qwen3\.5-9B has official SAEs · unverified \(no source\)/,
   );
-  assert.match(page, /Or tell them what to do instead/);
+  // The words box: a labelled multiline composer with the server's limit.
+  assert.match(
+    box,
+    /<label for="[^"]+" class="composer__label">Or tell them what to do instead<\/label>/,
+  );
   assert.match(box, /<textarea[^>]*maxLength="2000"/);
+  // The last line says how to take back the agents' pick, a pod.
   assert.match(
     page,
     /Undo within 10 minutes stops the GPU, and you pay only the minutes used\. If you don't answer, nothing is bought\./,
   );
-  // A call with no pod says plainly how long its answer can be undone.
+  // A call whose pick starts no pod says plainly how long its answer can be undone.
   const scope = call({
     kind: 'scope',
     question: 'Stop the helix direction?',
@@ -332,6 +346,24 @@ await test('the call opens as a modal dialog over the lab: who asked and when, t
   );
 });
 
+await test("the last line describes the chosen option, or the agents' pick before an answer, not any pod on the call", () => {
+  // The agents advise the Mac, so before an answer the line is not about a GPU.
+  const mac = call({ pick: 2 });
+  assert.match(
+    text(dialog(render(snapshot({ needsYou: [mac] })))),
+    /Your answer applies at once\. You can undo it for 10 minutes\./,
+  );
+  // No pick: the line names no option's undo.
+  assert.match(
+    text(dialog(render(snapshot({ needsYou: [call({ pick: null })] })))),
+    /Your answer applies at once\. You can undo it for 10 minutes\./,
+  );
+  assert.equal(
+    undoWords(10, { type: 'pod', gpu: 'H100 SXM', hours: 3 }),
+    "Undo within 10 minutes stops the GPU, and you pay only the minutes used. If you don't answer, nothing is bought.",
+  );
+});
+
 await test("the agents' pick comes first, and the number keys follow the order shown", () => {
   const advised = call({ pick: 2 });
   const order = optionOrder(advised);
@@ -346,6 +378,7 @@ await test("the agents' pick comes first, and the number keys follow the order s
   assert.equal(optionForKey('1', order, true), null);
   assert.equal(typing({ tagName: 'TEXTAREA' }), true);
   assert.equal(typing({ tagName: 'BUTTON' }), false);
+  assert.equal(typing({ tagName: 'DIALOG' }), false);
   assert.equal(typing(null), false);
   // With no pick, the agents' order stays.
   assert.deepEqual(optionOrder(call({ pick: null })), [0, 1, 2]);
@@ -354,7 +387,7 @@ await test("the agents' pick comes first, and the number keys follow the order s
     page.indexOf('Use this Mac') < page.indexOf('Rent 1 H100'),
     'the pick shows first',
   );
-  assert.match(page, /Use this Mac \$0 · about 9 h The agents' pick/);
+  assert.match(page, /Use this Mac No cost · 9 h The agents' pick/);
 });
 
 await test("Verifold's deadline call says who asks, and after words it says that an option is still needed", () => {
@@ -383,6 +416,7 @@ await test("Verifold's deadline call says who asks, and after words it says that
     dialog(render(snapshot({ needsYou: [deadline] }), '#/call/c-9')),
   );
   assert.match(page, /Needs you · Verifold asks · 12 min ago/);
+  assert.match(page, /Continue 4 more hours 4 h/);
   assert.match(page, /Gives the lab 4 more hours\./);
   assert.match(
     page,
@@ -417,7 +451,85 @@ await test('a pod option says when a pod secret must be stored first', () => {
   );
 });
 
-await test('an answer can be undone in the dialog and on the lab home while its window is open, and not after', () => {
+await test('an answer that failed after Verifold took it shows why, on the call and on the needs-you line', () => {
+  const failed = {
+    action: 'lab-call-answer',
+    label: 'Applying your answer',
+    at: ago(1),
+    error: 'RunPod has no H100 free now.',
+    call: 'c-4',
+    option: 0,
+  };
+  const open = snapshot({ works: [failed] });
+  const box = text(dialog(render(open)));
+  assert.match(
+    box,
+    /The pod did not start: RunPod has no H100 free now\. The call is open again\./,
+  );
+  const home = text(render(open, '#/'));
+  assert.match(home, /The pod did not start: RunPod has no H100 free now\./);
+  // An option with no pod fails in plainer words.
+  const plain = snapshot({ works: [{ ...failed, option: 2 }] });
+  assert.match(
+    text(dialog(render(plain))),
+    /Your answer did not go through: RunPod has no H100 free now\./,
+  );
+  // Another call's failure, or one from before the person answered again, does not show here.
+  const elsewhere = lab({ works: [{ ...failed, call: 'c-5' }] });
+  assert.equal(failureOf(elsewhere, call()), null);
+  const answered = call({
+    state: 'answered',
+    answer: { option: 1, at: ago(0) },
+    undoUntil: later(9),
+  });
+  assert.equal(failureOf(lab({ works: [failed] }), answered), null);
+  // An undo that failed shows on the answer it could not take back.
+  const undoFailed = {
+    ...failed,
+    action: 'lab-call-undo',
+    label: 'Undoing your answer',
+    error: 'The pod would not stop.',
+  };
+  const kept = snapshot({
+    needsYou: [],
+    answered: [answered],
+    works: [undoFailed],
+  });
+  assert.match(
+    text(render(kept, '#/')),
+    /You chose “Rent 1 A100 for 5 hours” on “Rent an H100 for the probe reruns\?”\. Undo .*The undo did not go through: The pod would not stop\./,
+  );
+});
+
+await test('while Verifold applies an answer, the call says what starts, not a final choice', () => {
+  const starting = call({
+    state: 'answered',
+    answer: { option: 0, at: ago(0) },
+    applying: true,
+  });
+  const state = snapshot({ needsYou: [], answered: [starting] });
+  const box = text(dialog(render(state)));
+  assert.match(box, /Applying your answer/);
+  assert.match(box, /Starting the pod for “Rent 1 H100 for 3 hours”…/);
+  assert.doesNotMatch(box, /You chose|Answered|Undo/);
+  assert.match(
+    text(render(state, '#/')),
+    /Starting the pod for “Rent 1 H100 for 3 hours”… on “Rent an H100 for the probe reruns\?”/,
+  );
+  // Then the undo line, once the undo window is set.
+  const started = { ...starting, applying: false, undoUntil: later(10) };
+  assert.match(
+    text(dialog(render(snapshot({ needsYou: [], answered: [started] })))),
+    /You chose “Rent 1 H100 for 3 hours”\. Undo 9 min left\./,
+  );
+  // The page counts the seconds while an answer applies or can be undone, and not otherwise.
+  assert.equal(needsTick(lab({ answered: [starting] }), now), true);
+  assert.equal(needsTick(lab({ answered: [started] }), now), true);
+  assert.equal(needsTick(lab(), now), false);
+  assert.equal(needsTick(null, now), false);
+});
+
+await test('an answer can be undone in the dialog and on the lab home while its window is open, and not in its last seconds', () => {
   const chosen = call({
     state: 'answered',
     answer: { option: 0, at: ago(5) },
@@ -428,16 +540,24 @@ await test('an answer can be undone in the dialog and on the lab home while its 
   assert.match(page, /Answered/);
   assert.match(
     page,
-    /You chose “Rent 1 H100 for 3 hours”\. Undo 5 min left\. Undo ends the pod\. The minutes billed so far stay billed\. Then the call asks again\./,
+    /You chose “Rent 1 H100 for 3 hours”\. Undo 4 min left\. Undo ends the pod\. The minutes billed so far stay billed\. Then the call asks again\./,
   );
   assert.match(page, /Back to the lab/);
-  // On the lab home, the undo line names the call.
+  // On the lab home, the line names the call.
   const home = text(render(open, '#/'));
   assert.match(
     home,
-    /You chose “Rent 1 H100 for 3 hours” on “Rent an H100 for the probe reruns\?”\. Undo 5 min left\./,
+    /You chose “Rent 1 H100 for 3 hours” on “Rent an H100 for the probe reruns\?”\. Undo 4 min left\./,
   );
-  assert.equal(undoLeft(chosen, now), 5);
+  // Seconds count down under a minute, and the last 2 seconds count as closed.
+  assert.equal(undoLeft({ ...chosen, undoUntil: later(1) }, now), 58_000);
+  assert.equal(
+    undoLeft(
+      { ...chosen, undoUntil: new Date(now + 1_500).toISOString() },
+      now,
+    ),
+    null,
+  );
   // After the window: the choice, with no undo, and nothing on the home.
   const closed = snapshot({
     needsYou: [],
@@ -449,18 +569,23 @@ await test('an answer can be undone in the dialog and on the lab home while its 
   assert.doesNotMatch(text(render(closed, '#/')), /You chose/);
 });
 
-await test('words, a withdrawn call, an undo in progress, and an unknown call each say what became of the call', () => {
+await test('each settled call has the label of its state: answered, words, undoing, withdrawn, or none for an unknown call', () => {
+  const label = (html: string): string =>
+    /class="call__label call__label--([a-z]+)">([^<]*)</
+      .exec(dialog(html))
+      ?.slice(1)
+      .join(':') ?? '';
   const words = call({
     state: 'answered',
     words: 'Run one seed on the A100 first, then decide.',
   });
-  const answered = text(
-    dialog(render(snapshot({ needsYou: [], answered: [words] }))),
-  );
-  assert.match(answered, /You answered in your own words:/);
-  assert.match(answered, /Run one seed on the A100 first, then decide\./);
+  const answered = render(snapshot({ needsYou: [], answered: [words] }));
+  assert.equal(label(answered), 'done:Answered');
+  const said = text(dialog(answered));
+  assert.match(said, /You answered in your own words:/);
+  assert.match(said, /Run one seed on the A100 first, then decide\./);
   assert.match(
-    answered,
+    said,
     /claude-2 and codex-2 get your words with the next turn\. No option applied\./,
   );
   assert.equal(
@@ -468,68 +593,177 @@ await test('words, a withdrawn call, an undo in progress, and an unknown call ea
     'words',
   );
 
-  const withdrawn = call({
-    state: 'withdrawn',
-    note: 'Its direction closed.',
-  });
+  const withdrawn = call({ state: 'withdrawn', note: 'Its direction closed.' });
+  const gone = render(snapshot({ needsYou: [], answered: [withdrawn] }));
+  assert.equal(label(gone), 'quiet:Withdrawn');
   assert.match(
-    text(dialog(render(snapshot({ needsYou: [], answered: [withdrawn] })))),
+    text(dialog(gone)),
     /Verifold withdrew this call: Its direction closed\./,
   );
+  assert.doesNotMatch(text(dialog(gone)), /Answered/);
 
   const undoing = call({ state: 'undoing', answer: { option: 0, at: ago(2) } });
-  assert.match(
-    text(dialog(render(snapshot({ needsYou: [undoing] })))),
-    /Undoing your answer\./,
-  );
+  const back = render(snapshot({ needsYou: [undoing] }));
+  assert.equal(label(back), 'busy:Undoing your answer');
+  assert.match(text(dialog(back)), /Undoing your answer…/);
 
-  const gone = text(dialog(render(snapshot(), '#/call/c-77')));
-  assert.match(gone, /This call is not in the lab/);
+  const unknown = render(snapshot(), '#/call/c-77');
+  assert.equal(label(unknown), 'quiet:');
+  assert.match(text(dialog(unknown)), /This call is not in the lab/);
+  assert.doesNotMatch(text(dialog(unknown)), /Answered/);
 });
 
-await test("Verifold's words for each kind of effect, as the desk says them", () => {
+await test('fields that an older server leaves out do not break the dialog', () => {
+  const old: Call = {
+    ...call(),
+    options: [
+      {
+        label: 'Rent 1 H100 for 3 hours',
+        usd: 11.97,
+        minutes: 180,
+        effect: { type: 'pod', gpu: 'H100 SXM', hours: 3, secrets: 1 },
+      },
+      { label: 'Use this Mac', usd: 0, minutes: 540, effect: null },
+    ],
+  };
+  // As an older server sends it: without the fields added after version 1.
+  const older: Call = Object.fromEntries(
+    Object.entries(old).filter(
+      ([key]) => !['undoMinutes', 'wordsLimit', 'applying'].includes(key),
+    ),
+  ) as unknown as Call;
+  assert.equal('undoMinutes' in older, false);
+  const box = dialog(render(snapshot({ needsYou: [older] })));
+  const page = text(box);
+  // No undo window known: the line says only what no answer does.
+  assert.match(page, /If you don't answer, nothing happens\./);
+  assert.doesNotMatch(page, /undo it for|Undo within/);
+  // No limit known: the box sets none, and the server checks the length.
+  assert.doesNotMatch(box, /maxLength/);
+  // No secret count known: no warning.
+  assert.doesNotMatch(page, /pod secret/);
+});
+
+await test("the call words: costs, each effect, and the article, the same as the desk's", () => {
   const home = lab();
   const asked = call();
+  assert.equal(costWords(11.97, 180), 'About $11.97 · 3 h');
+  assert.equal(costWords(0, 540), 'No cost · 9 h');
+  // A time of 0 or none says nothing, not "under a minute".
+  assert.equal(costWords(0, 0), 'No cost');
+  assert.equal(costWords(null, null), '');
+  assert.equal(
+    costLine({ label: 'x', usd: 2, minutes: 45, effect: null }),
+    'About $2 · 45 min',
+  );
   assert.deepEqual(
-    effectLines({ type: 'stop', direction: 'd-2' }, asked, home),
+    optionLines(
+      {
+        label: 'Stop it',
+        usd: null,
+        minutes: null,
+        effect: { type: 'stop', direction: 'd-2' },
+      },
+      asked,
+      home,
+    ),
     {
       does: 'Stops "The CoT matches what probes read inside". Its runs and pods end.',
       undo: 'Undo opens it again with its agent. Runs and pods that ended do not come back.',
     },
   );
   assert.equal(
-    effectLines(
-      { type: 'open', title: 'Gemma check', harness: 'codex', bar: '3 seeds' },
+    optionLines(
+      {
+        label: 'Open it',
+        usd: null,
+        minutes: null,
+        effect: {
+          type: 'open',
+          title: 'Gemma check',
+          harness: 'codex',
+          bar: '3 seeds',
+        },
+      },
       asked,
       home,
-    ).does,
+    )?.does,
     'Opens "Gemma check" with a new Codex agent.',
   );
-  assert.equal(
-    effectLines({ type: 'hours', hours: 1 }, asked, home).does,
-    'Gives the lab 1 more hour.',
-  );
+  // "an H100", "a B200".
+  const pod = (gpu: string): string | undefined =>
+    optionLines(
+      {
+        label: 'Rent',
+        usd: 1,
+        minutes: 60,
+        effect: { type: 'pod', gpu, hours: 1, secrets: 0, missing: 0 },
+      },
+      asked,
+      home,
+    )?.does;
+  assert.match(pod('NVIDIA A40') ?? '', /^Starts an NVIDIA A40 pod for 1 hour/);
+  assert.match(pod('B200') ?? '', /^Starts a B200 pod/);
   // Domains: Codex cannot limit the network, so the line says so for its shell.
-  const domains = effectLines(
-    { type: 'domains', domains: ['pypi.org', 'huggingface.co'] },
+  const domains = optionLines(
+    {
+      label: 'Let them',
+      usd: null,
+      minutes: null,
+      effect: { type: 'domains', domains: ['pypi.org', 'huggingface.co'] },
+    },
     asked,
     home,
   );
   assert.equal(
-    domains.does,
-    "Lets claude-2's shell reach pypi.org, huggingface.co. Codex cannot limit the network to pypi.org, huggingface.co, so codex-2's shell can reach any website.",
+    domains?.does,
+    "Lets claude-2's shell reach pypi.org, huggingface.co. Codex: any website. Codex cannot limit the network to pypi.org, huggingface.co, so codex-2's shell can reach any website.",
   );
   assert.equal(
-    domains.undo,
+    domains?.undo,
     'Undo takes these domains back. Either way, claude-2 and codex-2 continue their conversations in new processes.',
   );
-  assert.equal(
-    costLine({ label: 'x', usd: null, minutes: null, effect: null }),
-    '',
-  );
-  assert.equal(
-    costLine({ label: 'x', usd: 2, minutes: 45, effect: null }),
-    '$2 · about 45 min',
+});
+
+await test('closing leaves the call without a new history entry, and an old thread is said, not jumped to', () => {
+  // Opened from the lab home: back. From a link or a reload: replace.
+  assert.equal(closeHow(fromLab), 'back');
+  assert.equal(closeHow(null), 'replace');
+  assert.equal(closeHow({ from: 'elsewhere' }), 'replace');
+  assert.equal(closeHow('lab'), 'replace');
+  // "See the thread" closes only when the thread is on the board page.
+  const shown = lab({
+    board: {
+      posts: [
+        {
+          id: 'p-12',
+          at: ago(12),
+          author: 'verifold',
+          handle: null,
+          harness: null,
+          kind: 'status',
+          direction: 'd-2',
+          text: 'claude-2 asks the person (c-4).',
+          replyTo: null,
+          mentions: [],
+          proof: [],
+        },
+      ],
+      more: false,
+    },
+  });
+  assert.equal(onBoard(shown, 'p-12'), true);
+  assert.equal(onBoard(lab(), 'p-12'), false);
+  // Its post is a focus target on the board.
+  assert.match(
+    render(
+      {
+        ...snapshot(),
+        lab: { ...shown, needsYou: [] },
+      },
+      '#/',
+    ),
+    /<article id="post-p-12" tabindex="-1" class="post">/,
   );
 });
 

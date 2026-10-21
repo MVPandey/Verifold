@@ -6205,7 +6205,7 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   assert.equal(call?.options[0]?.usd, 3.2);
   assert.match(
     await labNeeds(lab),
-    /Starts a NVIDIA A40 pod for 2 hours for d-1\. Undo ends the pod\. The minutes billed so far stay billed\./,
+    /Starts an NVIDIA A40 pod for 2 hours for d-1\. Undo ends the pod\. The minutes billed so far stay billed\./,
   );
   // A paused lab starts no pod, also from a call.
   await lab.lab.pause();

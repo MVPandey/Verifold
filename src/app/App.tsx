@@ -5,6 +5,7 @@ import {
   type ReactNode,
 } from 'react';
 import { labActions } from './actions.ts';
+import { needsTick } from './call.ts';
 import { parseRoute, type Route } from './route.ts';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
@@ -21,13 +22,17 @@ function useRoute(): Route {
   return route;
 }
 
-/** The time, again every 30 seconds, for "waiting 12 min" and live durations. */
-function useNow(): number {
+/**
+ * The time, again every 30 seconds for "waiting 12 min" and live durations,
+ * and every second while an answer is applied or can be undone, so its line
+ * changes, and its Undo goes, at once.
+ */
+function useNow(fast: boolean): number {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    const timer = setInterval(() => setNow(Date.now()), fast ? 1_000 : 30_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [fast]);
   return now;
 }
 
@@ -125,7 +130,11 @@ export function App({
 }): ReactNode {
   const state = useSyncExternalStore(store.subscribe, store.get);
   const route = useRoute();
-  const now = useNow();
+  const [fast, setFast] = useState(false);
+  const now = useNow(fast);
+  useEffect(() => {
+    setFast(needsTick(state.snapshot?.lab, Date.now()));
+  }, [state, now]);
   const [actions] = useState(() => labActions(token));
   return <Screen state={state} route={route} now={now} actions={actions} />;
 }
