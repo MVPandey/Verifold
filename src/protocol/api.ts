@@ -550,6 +550,92 @@ export interface Work {
 export interface Away {
   readonly since: string;
   readonly spentThen: { readonly plansUsd: number; readonly gpuUsd: number };
+  /** What changed since then, as the desk's Home says it. Added after version 1. */
+  readonly news?: AwayNews;
+}
+
+/** A direction with news since the person left. */
+export interface AwayLine {
+  readonly direction: string;
+  readonly title: string;
+  /** The mark of its row: its verdict, an open dispute, or `new` for a direction opened meanwhile that is still open. */
+  readonly mark: Verdict | 'disputed' | 'new';
+  /** What changed, in words, such as "Holds up (acc 0.7). 2 new posts." */
+  readonly said: string;
+}
+
+/** What changed while the person was away. */
+export interface AwayNews {
+  /** The directions with news, the most important first: a dispute first, then the most settled. */
+  readonly lines: readonly AwayLine[];
+  /** Directions with news that `lines` leaves out. */
+  readonly moreLines: number;
+  /** What came, such as "4 posts, 3 runs ended (1 failed: r-7), 1 call for you", or "" when nothing came. */
+  readonly counts: string;
+  /** What the lab spent since then, such as "Spent since then: ≈$1.20 (Claude Code ≈$0.70, GPU $0.50).", or "" under a cent. */
+  readonly cost: string;
+}
+
+/** A part of a search hit's text: plain, or a match of the search's words. */
+export interface SnippetPart {
+  readonly text: string;
+  readonly mark: boolean;
+}
+
+/** A post, run, or call that a search found. */
+export type SearchHit =
+  | {
+      readonly type: 'post';
+      readonly id: string;
+      readonly at: string;
+      readonly kind: PostKind;
+      /** The kind in words, such as "Claim", or "Message" for the person's question. */
+      readonly label: string;
+      /** "You", "Verifold", or an agent's handle. */
+      readonly author: string;
+      readonly direction: string | null;
+      /** The text on one line around its first match. */
+      readonly snippet: readonly SnippetPart[];
+      /** The whole text of a long post that the board's newest page leaves out, within the search's byte budget. */
+      readonly whole: string | null;
+      /** A long post past the byte budget: its whole text is in .verifold/board/<id>.json. */
+      readonly cut: boolean;
+    }
+  | {
+      readonly type: 'run';
+      readonly id: string;
+      readonly at: string;
+      readonly author: string;
+      readonly direction: string;
+      /** Where the run stands, such as "exit 0 in 6 min" or "running". */
+      readonly summary: string;
+      readonly snippet: readonly SnippetPart[];
+    }
+  | {
+      readonly type: 'call';
+      readonly id: string;
+      readonly at: string;
+      /** The kind in words, such as "Cost call". */
+      readonly label: string;
+      readonly author: string;
+      /** Where it stands, such as "waits for you" or what the person chose. */
+      readonly state: string;
+      readonly open: boolean;
+      readonly snippet: readonly SnippetPart[];
+    };
+
+/**
+ * `GET /api/v1/search?q=`: the lab's search, as the desk's panel runs it.
+ * Each word must match, in any case. Added after version 1.
+ */
+export interface SearchResult {
+  readonly q: string;
+  /** What to type, that nothing matched, or how many hits. */
+  readonly note: string;
+  /** The hits in all. `hits` holds at most the newest 50. */
+  readonly total: number;
+  /** The newest first. */
+  readonly hits: readonly SearchHit[];
 }
 
 /**
@@ -685,6 +771,12 @@ export interface ActionBodies {
   };
   'lab-dismiss': Record<string, never>;
   'lab-away-dismiss': Record<string, never>;
+  /**
+   * The person looks at the lab now. A look after 30 minutes or more away
+   * starts a time away, which the snapshot's `away` shows until the person
+   * dismisses it. Added after version 1.
+   */
+  'lab-look': Record<string, never>;
 }
 
 export type ActionName = keyof ActionBodies;

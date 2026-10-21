@@ -52,8 +52,8 @@ function goHome(): void {
   dispatchEvent(new HashChangeEvent('hashchange'));
 }
 
-/** Bring a post of the board into view and give it focus, after the dialog has gone. */
-function showPost(post: string): void {
+/** Bring a post of the board into view and give it focus, after a dialog has gone. */
+export function showPost(post: string): void {
   const element = document.getElementById(`post-${post}`);
   if (!element) return;
   element.scrollIntoView({ block: 'center' });
