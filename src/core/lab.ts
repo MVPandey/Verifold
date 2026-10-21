@@ -24,7 +24,7 @@ import {
   type PostKind,
   type ReadState,
 } from './board.ts';
-import { type HarnessName } from './harness.ts';
+import type { HarnessName } from './harness.ts';
 import {
   agentPostKinds,
   askPersonToolSpec,
@@ -105,6 +105,7 @@ import {
   type BringFile,
   type BringList,
   type Bringing,
+  type Brought,
   type BuildsOn,
   type Call,
   type CallApplied,
@@ -119,9 +120,11 @@ import {
   type LabCompute,
   type LabEvent,
   type LabOptions,
+  type LabSessions,
   type LabState,
   type LabView,
   type LeftOut,
+  type Verdict,
   callEffect,
   callOptions,
   chosenEffect,
@@ -132,7 +135,6 @@ import {
   keptCalls,
   labLimits,
   labTiming,
-  mentionedDirection,
   parseAgent,
   parseState,
   planFacts,
@@ -148,12 +150,14 @@ import {
   askers,
   barSummary,
   barText,
+  bringGroups,
   bringOut,
   budgetEnded,
   codeSetting,
   evidenceText,
   fileText,
   gpuApproved,
+  labEnded,
   linkedText,
   localDay,
   movingText,
@@ -171,33 +175,33 @@ import {
   verdictWords,
   withBrought,
 } from './lab/words.ts';
-export { defaultLabHours, labLimits, stands } from './lab/schema.ts';
-export type {
-  AgentRecord,
-  BringList,
-  Brought,
-  Call,
-  CallEffect,
-  CallOption,
-  Check,
-  Direction,
-  DirectionView,
-  LabCompute,
-  LabSessions,
-  LabState,
-  LabView,
-  Verdict,
-} from './lab/schema.ts';
 export {
   addSpend,
   askers,
   barSummary,
   bringGroups,
   budgetEnded,
+  defaultLabHours,
   labEnded,
+  labLimits,
   nameList,
+  stands,
   verdictWords,
-} from './lab/words.ts';
+  type AgentRecord,
+  type BringList,
+  type Brought,
+  type Call,
+  type CallEffect,
+  type CallOption,
+  type Check,
+  type Direction,
+  type DirectionView,
+  type LabCompute,
+  type LabSessions,
+  type LabState,
+  type LabView,
+  type Verdict,
+};
 
 /**
  * The lab: several harness agents work on one question at the same time. Each
@@ -351,6 +355,12 @@ const verifoldNames = [
 function expressible(path: string): boolean {
   return !/[*?[\]{}()!\\]/.test(path) && !/\p{Cc}/u.test(path);
 }
+
+/** `@d-2` in the person's post: the direction's ID, from its own pattern. */
+const mentionedDirection = new RegExp(
+  `(?:^|\\s)@(${directionId.source.slice(1, -1)})\\b`,
+  'g',
+);
 
 function runtime(): AgentRuntime {
   return {

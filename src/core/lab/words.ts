@@ -1,6 +1,6 @@
 /**
  * Pure helpers of the lab: text for agents and the person, and decisions that
- * read records only, such as whether a call stands or a file may come in.
+ * read records only, such as a call's askers or whether a file may come in.
  * Nothing here holds state.
  */
 import { createHash } from 'node:crypto';

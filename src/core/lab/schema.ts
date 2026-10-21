@@ -3,7 +3,7 @@
  * parsers and validators of records and of agents' tool arguments. Nothing
  * here holds state. The Lab class in ../lab.ts is the only writer of records.
  */
-import { type QueuedEvent } from '../agent-loop.ts';
+import type { QueuedEvent } from '../agent-loop.ts';
 import {
   type Post,
   agentId,
@@ -26,7 +26,7 @@ import {
   planLimits,
   verdicts,
 } from '../lab-tools.ts';
-import { type LabPod } from '../compute.ts';
+import type { LabPod } from '../compute.ts';
 import { type Cause, type Lease, secretNames } from '../leases.ts';
 import {
   type PodRuns,
@@ -41,7 +41,7 @@ import {
   validSessionId,
 } from '../session.ts';
 import { type AgentTools, validDomain } from '../session-hosts.ts';
-import { type RunTeam } from '../team.ts';
+import type { RunTeam } from '../team.ts';
 import {
   type ChangedFile,
   type Workspace,
@@ -789,12 +789,6 @@ function spendOf(value: unknown): { readonly spend?: Spend } {
 }
 
 const callPattern = /^c-[1-9]\d{0,5}$/;
-
-/** `@d-2` in the person's post: the direction's ID, from its own pattern. */
-export const mentionedDirection = new RegExp(
-  `(?:^|\\s)@(${directionId.source.slice(1, -1)})\\b`,
-  'g',
-);
 
 /** The effect of the option that the person chose, or null. */
 export function chosenEffect(call: Call): CallEffect | null {

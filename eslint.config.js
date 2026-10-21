@@ -54,7 +54,8 @@ export default tseslint.config(
       ],
     },
   },
-  // A core folder one level down, such as src/core/lab/, reaches the rest of core with ../.
+  // A core folder one level down, such as src/core/lab/, reaches the rest of
+  // core with ../. A ../../ path leaves core, or comes back into it the long way.
   {
     files: ['src/core/*/*.ts'],
     rules: {
@@ -63,8 +64,61 @@ export default tseslint.config(
         {
           patterns: [
             {
-              regex: '^\\.\\./\\.\\./(?!core/)',
-              message: 'core imports only core.',
+              regex: '^\\.\\./\\.\\./',
+              message:
+                'core imports only core, with ../ from a folder in core.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // src/core/lab/ splits lab.ts, so nothing in it imports lab.ts back.
+  // Each block repeats the patterns before it: a later block replaces them.
+  {
+    files: ['src/core/lab/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./\\.\\./',
+              message:
+                'core imports only core, with ../ from a folder in core.',
+            },
+            {
+              regex: '^\\.\\./lab(\\.[jt]s)?$',
+              message:
+                'src/core/lab/ splits lab.ts, so it does not import lab.ts.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The records come first: schema.ts imports only core modules outside src/core/lab/.
+  {
+    files: ['src/core/lab/schema.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./\\.\\./',
+              message:
+                'core imports only core, with ../ from a folder in core.',
+            },
+            {
+              regex: '^\\.\\./lab(\\.[jt]s)?$',
+              message:
+                'src/core/lab/ splits lab.ts, so it does not import lab.ts.',
+            },
+            {
+              regex: '^(?!\\.\\./)',
+              message:
+                'schema.ts imports only core modules outside src/core/lab/.',
             },
           ],
         },
