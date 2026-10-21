@@ -1092,6 +1092,7 @@ await test('a task whose start failed runs on the other harness of the team', as
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const owner = new AbortController();
   const desk = await startDesk(
     root,
@@ -1275,6 +1276,7 @@ await test('use this instead: before the work starts, another direction gets its
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const desk = await startDesk(
     root,
     owner.signal,
@@ -1421,6 +1423,7 @@ await test('the message box writes to the coordinator, a task agent, or research
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const sessions = new SessionPool(root, {
     clientVersion: 'test',
     ownerId: 'owner-1',
@@ -1870,6 +1873,7 @@ await test('Start over archives the run through the desk, and Restore brings it 
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const desk = await startDesk(
     root,
     owner.signal,

@@ -424,7 +424,12 @@ await test('terminal commands and desk actions call the same research operations
     out: () => {},
     progress: (value: string) => messages.push(value),
   };
-  const controls = { host: 'claude', open: () => {}, research: runner };
+  const controls = {
+    host: 'claude',
+    open: () => {},
+    openApp: () => {},
+    research: runner,
+  };
   // This project asks before the source search, so the desk shows each research decision.
   await changeWorkspace(root, (current) => {
     assert.ok(current);
@@ -468,6 +473,7 @@ await test('terminal commands and desk actions call the same research operations
   for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const owner = new AbortController();
   const deskResearch = setup(root).runner;
   const desk = await startDesk(
