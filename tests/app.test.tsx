@@ -689,7 +689,7 @@ await test('posts group into threads by the post they answer', () => {
   );
 });
 
-await test('routes: the pages that later steps build, and pages that do not exist', () => {
+await test('routes: the first run, and pages that do not exist', () => {
   assert.deepEqual(parseRoute(''), { page: 'lab' });
   assert.deepEqual(parseRoute('#/'), { page: 'lab' });
   assert.deepEqual(parseRoute('#/d/d-2'), {
@@ -700,8 +700,13 @@ await test('routes: the pages that later steps build, and pages that do not exis
   assert.deepEqual(parseRoute('#/post/p-12'), { page: 'post', id: 'p-12' });
   assert.deepEqual(parseRoute('#/board/p-12'), { page: 'lab', post: 'p-12' });
   assert.deepEqual(parseRoute('#/answer'), { page: 'answer' });
-  assert.deepEqual(parseRoute('#/first-run'), { page: 'first-run' });
+  assert.deepEqual(parseRoute('#/setup'), { page: 'setup', step: null });
+  for (const step of ['agents', 'about', 'money', 'done'])
+    assert.deepEqual(parseRoute(`#/setup/${step}`), { page: 'setup', step });
   for (const hash of [
+    '#/first-run',
+    '#/setup/skills',
+    '#/setup/',
     '#/d/../x',
     '#/search',
     '#/projects',
@@ -718,13 +723,12 @@ await test('routes: the pages that later steps build, and pages that do not exis
     text(render(story(), 'live', '#/d/d-2')),
     /The CoT matches what probes read inside/,
   );
-  assert.match(
-    text(render(story(), 'live', '#/first-run')),
-    /Setting up comes in a later step/,
-  );
+  // The first run opens over a lab too, to change the profile, with a way back.
+  const setup = text(render(story(), 'live', '#/setup/agents'));
+  assert.match(setup, /Reading your profile/);
+  assert.match(setup, /Back to the lab/);
   const missing = text(render(story(), 'live', '#/search'));
   assert.match(missing, /This page does not exist/);
-  assert.doesNotMatch(missing, /later step/);
 });
 
 await test('the lab home shows the call, the directions with live lines, and the board threads', () => {
@@ -843,6 +847,14 @@ await test('the app explains a missing token, the first connection, and a projec
     text(render({ ...story(), lab: null })),
     /CoT faithfulness has no lab yet/,
   );
+  // Without a project, the app is the first run, at any page of the lab.
+  for (const hash of ['#/', '#/d/d-2', '#/answer']) {
+    const first = text(
+      render({ ...story(), project: '', lab: null }, 'live', hash),
+    );
+    assert.match(first, /Set up once\. Every project starts from it\./, hash);
+    assert.doesNotMatch(first, /Back to the lab/, hash);
+  }
 });
 
 await test('the desk serves the app build under /app/: its page with no-store, hashed files kept for a year, and token.js', async (t) => {

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { ensureGlobalProfile } from '../src/cli/profile.ts';
-import { saveAgencyFile } from '../src/cli/agency.ts';
+import { saveAgencyFile } from '../src/core/agency.ts';
 import type { runHarness } from '../src/core/harness.ts';
 
 function parseObject(value: string): Record<string, unknown> {

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { contextFiles } from '../src/cli/context-files.ts';
 import { investigateProject } from '../src/cli/project-context.ts';
-import { personalize, loadMemory } from '../src/cli/agency.ts';
+import { personalize } from '../src/cli/agency.ts';
+import { loadMemory } from '../src/core/agency.ts';
 import type { CliIO } from '../src/cli/commands.ts';
 const signal = (): AbortSignal => new AbortController().signal;
 function ui(answers: string[]): CliIO {

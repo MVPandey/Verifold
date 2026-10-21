@@ -101,6 +101,26 @@ await test("Claude Code keeps the person's own Opus default, and gets opus other
     null,
   );
   assert.equal(await labModel('codex', null), null);
+
+  // The person's profile picks a model for each harness. A project model still wins.
+  const profile = {
+    host: 'claude' as const,
+    model: 'fable',
+    helper: 'codex' as const,
+    helperModel: 'gpt-6.1-sol',
+  };
+  assert.equal(await labModel('claude', null, profile), 'fable');
+  assert.equal(await labModel('codex', null, profile), 'gpt-6.1-sol');
+  assert.equal(
+    await labModel('claude', { host: 'claude', model: 'sonnet' }, profile),
+    'sonnet',
+  );
+  // A harness that the profile leaves without a model keeps the defaults.
+  assert.equal(
+    await labModel('claude', null, { host: 'codex', model: 'gpt-6-astra' }),
+    'opus[1m]',
+  );
+  assert.equal(await labModel('codex', null, { host: 'claude' }), null);
 });
 
 await test('a model ID may end in a short suffix in brackets', () => {

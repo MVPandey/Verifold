@@ -1,14 +1,14 @@
 import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
+import { setupProfile } from './agency.ts';
 import {
   loadAgency,
   agencyDirectory,
   loadMemory,
   loadProfileState,
   saveAgencyPreferences,
-  setupProfile,
   type Agency,
-} from './agency.ts';
+} from '../core/agency.ts';
 import { choose } from './choices.ts';
 import { runHarness, validateModel } from '../core/harness.ts';
 import type { CliIO } from './commands.ts';

@@ -18,7 +18,7 @@ export function Avatar({
   labelled = false,
 }: {
   readonly who: Who;
-  readonly size: 'xs' | 'sm' | 'md' | 'lg';
+  readonly size: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
   readonly labelled?: boolean;
 }): ReactNode {
   const [kind, text, label] =

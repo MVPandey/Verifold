@@ -92,6 +92,7 @@ import {
   type Work,
 } from '../protocol/api.ts';
 import { readJsonBody, record } from './http.ts';
+import type { FirstRun } from './setup.ts';
 
 /**
  * The desk API, version 1, under /api/v1/: a snapshot of what the screens
@@ -1720,6 +1721,21 @@ const actionNames = new Set<string>([
   'lab-look',
 ] satisfies ActionName[]);
 
+/** The first run's actions. The first run runs them, with or without a project. */
+const setupNames = new Set<string>([
+  'setup-agents',
+  'setup-check',
+  'setup-say',
+  'setup-retry',
+  'setup-fill',
+  'setup-restart',
+  'setup-about',
+  'setup-key',
+  'setup-prices',
+  'setup-money',
+  'setup-skip',
+] satisfies ActionName[]);
+
 function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
@@ -1729,7 +1745,8 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 /**
  * Answer one request under /api/v1/. The desk checked its host and origin.
  * `authorized`: it has the desk's token. `act` runs a desk action and
- * returns 200, 202 when it goes on in the background, or 400.
+ * returns 200, 202 when it goes on in the background, or 400. `setup` is
+ * the first run, when the desk has one.
  */
 export async function answerApi(
   request: IncomingMessage,
@@ -1739,6 +1756,7 @@ export async function answerApi(
   feed: ApiFeed,
   reader: ApiReader,
   act: (body: Record<string, unknown>) => Promise<number>,
+  setup?: Pick<FirstRun, 'view' | 'act'>,
 ): Promise<void> {
   if (!authorized) {
     response.writeHead(401).end();
@@ -1757,7 +1775,9 @@ export async function answerApi(
       response.writeHead(415).end();
       return;
     }
-    if (url.search || !second || !actionNames.has(second)) {
+    const setupAction =
+      second !== undefined && setupNames.has(second) ? setup : undefined;
+    if (url.search || !second || !(setupAction || actionNames.has(second))) {
       json(response, 404, { error: 'Verifold knows no such action.' });
       return;
     }
@@ -1768,7 +1788,9 @@ export async function answerApi(
     }
     let status: number;
     try {
-      status = await act({ ...body, action: second });
+      status = await (setupAction
+        ? setupAction.act({ ...body, action: second })
+        : act({ ...body, action: second }));
     } catch (error) {
       if (!(error instanceof SessionActionError)) throw error;
       json(response, 409, { error: error.message });
@@ -1794,6 +1816,15 @@ export async function answerApi(
   const onlyBefore = keys.length <= 1 && keys.every((key) => key === 'before');
   if (first === 'snapshot' && parts.length === 1 && !keys.length) {
     json(response, 200, (await feed.current()).text);
+    return;
+  }
+  if (first === 'setup' && parts.length === 1 && !keys.length && setup) {
+    try {
+      json(response, 200, await setup.view());
+    } catch (error) {
+      if (!(error instanceof SessionActionError)) throw error;
+      json(response, 409, { error: error.message });
+    }
     return;
   }
   if (first === 'events' && parts.length === 1 && !keys.length) {

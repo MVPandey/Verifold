@@ -1,6 +1,6 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
-import { readMemory } from './agency.ts';
+import { readMemory } from '../core/agency.ts';
 
 export function projectContextFile(name: string): boolean {
   return /^(README(?:\.[\w-]+)?|AGENTS\.md|CLAUDE\.md|package\.json|pyproject\.toml|Cargo\.toml|go\.mod|Makefile)$/i.test(

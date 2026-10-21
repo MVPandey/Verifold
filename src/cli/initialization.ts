@@ -1,16 +1,16 @@
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
+import { setupProfile, memorySummary } from './agency.ts';
 import {
-  loadAgency,
   agencyDirectory,
   loadMemory,
   loadProfileState,
+  loadSettings,
   readMemory,
   saveAgencyPreferences,
-  setupProfile,
-  memorySummary,
   type Agency,
-} from './agency.ts';
+} from '../core/agency.ts';
+import { computeDefaults } from '../core/compute.ts';
 import {
   validateModel,
   runHarness,
@@ -213,7 +213,8 @@ export async function initializeProject(
     await checkProjectDirectory(root);
   // Legacy JSON imports remain project-scoped and do not change agency settings.
   const directory = agencyDirectory(cwd, options.agencyDir);
-  const saved = options.profile ? undefined : await loadAgency(directory);
+  const settings = options.profile ? null : await loadSettings(directory);
+  const saved = settings?.agency ?? undefined;
   let host = (
     options.host ??
     saved?.host ??
@@ -335,6 +336,10 @@ export async function initializeProject(
       host,
       ...(model ? { model } : {}),
       ...(helper ? { helper } : {}),
+      // The first run's model for the helper stays while the helper does.
+      ...(helper && helper === saved?.helper && saved.helperModel
+        ? { helperModel: saved.helperModel }
+        : {}),
     };
     context = await loadMemory(directory);
     // Setup without research offers the reusable profile. Research setup starts with the question instead.
@@ -470,6 +475,8 @@ export async function initializeProject(
     context,
     signal,
     options.lab === true && research !== null,
+    // A new project starts with the GPU limits of the profile.
+    settings?.money ? { ...computeDefaults, ...settings.money } : undefined,
   );
   return { root, workspace, research };
 }

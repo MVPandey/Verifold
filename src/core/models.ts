@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { Agency } from './agency.ts';
 import type { Workspace } from './contracts.ts';
 import { validateModel, type HarnessName } from './harness.ts';
 
@@ -52,14 +53,13 @@ export function pickCodexModel(models: readonly unknown[]): string | undefined {
 }
 
 /**
- * The Claude Code model for lab agents: the person's own default model when
- * it is an Opus model, exactly as written (so `opus[1m]` keeps its 1M
- * context), else `opus`. Verifold reads only the `model` key of Claude Code's
- * user settings.
+ * The person's own Claude Code model when it is an Opus model, exactly as
+ * written (so `opus[1m]` keeps its 1M context), else null. Verifold reads
+ * only the `model` key of Claude Code's user settings.
  */
-export async function claudeModel(
+export async function claudeOpus(
   folder = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
-): Promise<string> {
+): Promise<string | null> {
   const path = join(folder, 'settings.json');
   try {
     // A settings file is small. Anything else, such as a pipe, is not read.
@@ -72,18 +72,42 @@ export async function claudeModel(
   } catch {
     /* A missing or broken file leaves the default. */
   }
-  return 'opus';
+  return null;
+}
+
+/** The Claude Code model for lab agents: the person's own Opus model, else `opus`. */
+export async function claudeModel(folder?: string): Promise<string> {
+  return (await claudeOpus(folder)) ?? 'opus';
+}
+
+/** The model that the person's profile picked for a harness, if any. */
+export function profileModel(
+  host: HarnessName,
+  agency: Pick<Agency, 'host' | 'model' | 'helper' | 'helperModel'> | null,
+): string | undefined {
+  return agency?.host === host
+    ? agency.model
+    : agency?.helper === host
+      ? agency.helperModel
+      : undefined;
 }
 
 /**
  * The model of a lab agent, planner, or checker. A project model for the
- * project's main harness wins. Otherwise Claude Code gets `claudeModel`, and
+ * project's main harness wins, then the model that the person's profile
+ * picked for the harness. Otherwise Claude Code gets `claudeModel`, and
  * Codex gets null: it picks its most capable model on its own app-server.
  */
 export async function labModel(
   host: HarnessName,
   workspace: Pick<Workspace, 'host' | 'model'> | null,
+  agency: Pick<
+    Agency,
+    'host' | 'model' | 'helper' | 'helperModel'
+  > | null = null,
 ): Promise<string | null> {
   if (workspace?.host === host && workspace.model) return workspace.model;
+  const picked = profileModel(host, agency);
+  if (picked) return picked;
   return host === 'claude' ? claudeModel() : null;
 }

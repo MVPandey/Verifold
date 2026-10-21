@@ -271,6 +271,82 @@ export function parseSettings(
   };
 }
 
+/** Replace a project's compute settings in one step. */
+export async function writeComputeSettings(
+  root: string,
+  settings: ComputeSettings,
+): Promise<void> {
+  const folder = join(root, '.verifold', 'compute');
+  await mkdir(folder, { recursive: true, mode: 0o700 });
+  if (!(await lstat(folder)).isDirectory())
+    fail('.verifold/compute must be a folder, not a link.');
+  const temporary = join(folder, `.${randomUUID()}.tmp`);
+  try {
+    const handle = await open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(settings, null, 2)}\n`);
+    } finally {
+      await handle.close();
+    }
+    await rename(temporary, join(folder, 'settings.json'));
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+/**
+ * The GPU limits in the person's profile. Each new project copies them into
+ * its own compute settings. `limitUsd` null: pods are off.
+ */
+export type ProfileMoney = Pick<
+  ComputeSettings,
+  | 'limitUsd'
+  | 'maxUsdPerHour'
+  | 'maxHoursPerLease'
+  | 'idleMinutes'
+  | 'maxRunningPods'
+  | 'gpuTypes'
+>;
+
+/**
+ * The first run's limits until the person changes them. No GPU type is
+ * allowed until the person sees RunPod's prices.
+ */
+export const profileMoneyDefaults: ProfileMoney = {
+  limitUsd: 25,
+  maxUsdPerHour: 4,
+  maxHoursPerLease: 4,
+  idleMinutes: 15,
+  maxRunningPods: 1,
+  gpuTypes: [],
+};
+
+/** Check the limits of a profile with the same checks as a project's limits. */
+export function parseProfileMoney(
+  input: Record<string, unknown>,
+): ProfileMoney {
+  const settings = parseSettings(
+    {
+      ...computeDefaults,
+      limitUsd: input.limitUsd,
+      maxUsdPerHour: input.maxUsdPerHour,
+      maxHoursPerLease: input.maxHoursPerLease,
+      idleMinutes: input.idleMinutes,
+      maxRunningPods: input.maxRunningPods,
+      gpuTypes: input.gpuTypes ?? [],
+    },
+    computeDefaults,
+  );
+  return {
+    limitUsd: settings.limitUsd,
+    maxUsdPerHour: settings.maxUsdPerHour,
+    maxHoursPerLease: settings.maxHoursPerLease,
+    idleMinutes: settings.idleMinutes,
+    maxRunningPods: settings.maxRunningPods,
+    gpuTypes: settings.gpuTypes,
+  };
+}
+
 /**
  * The compute settings of a project and the RunPod key of this computer.
  * Settings live in `.verifold/compute/settings.json`. The key lives in the
@@ -1022,22 +1098,7 @@ export class Compute {
   saveSettings(input: Record<string, unknown>): Promise<void> {
     return this.serial(async () => {
       const settings = parseSettings(input, this.state.settings);
-      const folder = join(this.root, '.verifold', 'compute');
-      await mkdir(folder, { recursive: true, mode: 0o700 });
-      if (!(await lstat(folder)).isDirectory())
-        fail('.verifold/compute must be a folder, not a link.');
-      const temporary = join(folder, `.${randomUUID()}.tmp`);
-      try {
-        const handle = await open(temporary, 'wx', 0o600);
-        try {
-          await handle.writeFile(`${JSON.stringify(settings, null, 2)}\n`);
-        } finally {
-          await handle.close();
-        }
-        await rename(temporary, this.file);
-      } finally {
-        await rm(temporary, { force: true });
-      }
+      await writeComputeSettings(this.root, settings);
       this.state = { ...this.state, settings };
     });
   }

@@ -911,7 +911,7 @@ export function codexCommand(item: Record<string, unknown>): string {
  * crashed. The watchdog and Codex share one process group, so a later owner
  * can stop both. A missing Codex exits with code 127.
  */
-const watchdog = `const { spawn } = require('node:child_process');
+export const watchdog = `const { spawn } = require('node:child_process');
 const [command, ...args] = process.argv.slice(1);
 const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
 const stop = () => { try { child.kill('SIGTERM'); } catch {} setTimeout(() => process.exit(0), 2000).unref(); };

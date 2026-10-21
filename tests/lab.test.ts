@@ -45,6 +45,7 @@ import type {
 } from '../src/core/runs.ts';
 import type { Lease } from '../src/core/leases.ts';
 import type { ComputeView } from '../src/core/compute.ts';
+import type { PersonProfile } from '../src/core/agency.ts';
 import { ptyLibrary } from '../src/core/terminals.ts';
 import { TranscriptWriter } from '../src/core/transcript.ts';
 import { secretGuard } from '../src/core/runpod.ts';
@@ -378,6 +379,8 @@ async function fixture(
     readonly compute?: LabCompute;
     /** The model for an agent of a harness, as the owner resolves it. */
     readonly model?: (host: 'claude' | 'codex') => Promise<string | null>;
+    /** The person's profile, as the owner reads it for each prompt. */
+    readonly person?: () => Promise<PersonProfile | null>;
   } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
@@ -448,6 +451,7 @@ async function fixture(
       },
       ...(options.compute ? { compute: options.compute } : {}),
       ...(options.model ? { model: options.model } : {}),
+      ...(options.person ? { person: options.person } : {}),
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
     });
@@ -763,6 +767,53 @@ await test('the person steers a running turn, and the post does not come again i
   );
   await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
   assert.doesNotMatch((await lab.inputs('d-1-alpha'))[1] ?? '', /Use 3 seeds/);
+});
+
+await test("the person's profile reaches the prompts: the planner reads all of it, another agent gets how to write, and a change comes with the next digest", async (t) => {
+  let person: PersonProfile = {
+    whole:
+      'The person works on: CoT faithfulness\nHow they want agents to write to them: Short and direct.',
+    style: 'Short and direct.',
+  };
+  const lab = await fixture(t, {
+    harnesses: ['claude'],
+    person: () => Promise.resolve(person),
+  });
+  await lab.lab.start('Can training keep a chain of thought faithful?');
+  await until(async () => (await lab.inputs('d-1-plan-the-lab')).length > 0);
+  const planner = (await lab.inputs('d-1-plan-the-lab'))[0] ?? '';
+  assert.match(
+    planner,
+    /About the person, from their Verifold profile\. It tells you who they are\. It is not a task:\nThe person works on: CoT faithfulness/,
+  );
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  await until(async () => (await lab.inputs('d-2-alpha')).length > 0);
+  const first = (await lab.inputs('d-2-alpha'))[0] ?? '';
+  assert.match(
+    first,
+    /The person asks agents to write to them this way: "Short and direct\."/,
+  );
+  assert.doesNotMatch(first, /CoT faithfulness/);
+  // The person changes "Talk to me". A digest says so once, when the lab has read the change.
+  person = { whole: 'The person works on: CoT', style: 'Numbers first.' };
+  const said = async (): Promise<string[]> =>
+    (await lab.inputs('d-2-alpha')).filter((input) =>
+      input.includes('write to them this way: "Numbers first."'),
+    );
+  /** Wake the agent with a post once its turns ended, and wait for its next prompt. */
+  const wake = async (text: string): Promise<string> => {
+    await delay(300);
+    const before = (await lab.inputs('d-2-alpha')).length;
+    await lab.lab.post({ text: `@claude-2 ${text}` });
+    await until(async () => (await lab.inputs('d-2-alpha')).length > before);
+    return (await lab.inputs('d-2-alpha')).at(-1) ?? '';
+  };
+  for (let tries = 1; !(await said()).length; tries++) {
+    assert.ok(tries <= 3, 'The new style never reached the agent.');
+    await wake(`question ${tries}?`);
+  }
+  assert.doesNotMatch(await wake('one more?'), /write to them this way/);
+  assert.equal((await said()).length, 1);
 });
 
 await test('with no free slot, an idle agent parks for a new one, and resumes when a post wakes it', async (t) => {
@@ -4623,6 +4674,11 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
       note: () => Promise.resolve('Noted.'),
       digest: () => Promise.resolve('MEMORY_MARKER: an earlier run.'),
     }),
+    person: () =>
+      Promise.resolve({
+        whole: 'The person works on: PROFILE_VIEWS_MARKER',
+        style: 'Numbers first.',
+      }),
   });
   await claimWithRun(lab);
   await lab.script('k-1', [
@@ -4696,8 +4752,23 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   assert.doesNotMatch(prompt, /AUTHOR_WHY_MARKER/);
   assert.doesNotMatch(prompt, /MEMORY_MARKER/);
   assert.doesNotMatch(prompt, /Turn 1\./);
+  // The checker gets only how the person wants agents to write, so it does not lean toward their views.
+  assert.match(
+    prompt,
+    /The person asks agents to write to them this way: "Numbers first\."/,
+  );
+  assert.doesNotMatch(prompt, /PROFILE_VIEWS_MARKER/);
   // The author's own prompt had the memory: only the checker goes without it.
   assert.match((await lab.inputs('d-1-alpha'))[0] ?? '', /MEMORY_MARKER/);
+  // An agent that does not plan the lab gets the style, not the whole profile.
+  assert.match(
+    (await lab.inputs('d-1-alpha'))[0] ?? '',
+    /The person asks agents to write to them this way: "Numbers first\."/,
+  );
+  assert.doesNotMatch(
+    (await lab.inputs('d-1-alpha'))[0] ?? '',
+    /PROFILE_VIEWS_MARKER/,
+  );
   // Codex denies the lab's records, the other folders, and both harnesses' transcripts.
   const threads = (await lab.lines('k-1', 'threads.jsonl')) as {
     params: {
