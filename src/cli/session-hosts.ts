@@ -6,6 +6,7 @@ import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { childEnvironment, type HarnessName } from './harness.ts';
+import { pickCodexModel } from './models.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
@@ -229,6 +230,11 @@ export interface HostOptions {
   readonly cwd: string;
   readonly mode: SessionMode;
   readonly model?: string;
+  /**
+   * Codex only, without `model`: Verifold picks the most capable model that
+   * the app-server's `model/list` offers before the thread starts.
+   */
+  readonly bestModel?: boolean;
   /** The first request. A resumed session has none and waits for a follow-up. */
   readonly prompt?: string;
   /** Claude Code only: the session ID for a new conversation, chosen before launch. */
@@ -1309,13 +1315,40 @@ function codex(options: HostOptions): HostSession {
           stop(child);
           return;
         }
-        startThread(config);
+        if (options.bestModel && !options.model) chooseModel(config);
+        else startThread(config, options.model);
       });
     },
   );
 
+  /**
+   * Read every page of `model/list`, then start the thread with the most
+   * capable model. A refused list starts it with the person's own model.
+   */
+  function chooseModel(config: Record<string, unknown>): void {
+    const models: unknown[] = [];
+    const page = (cursor: string | undefined, pages: number): void =>
+      call(
+        'model/list',
+        { limit: 100, ...(cursor ? { cursor } : {}) },
+        (result) => {
+          if (Array.isArray(result.data))
+            models.push(...(result.data as unknown[]));
+          const next = str(result.nextCursor);
+          // A list that never ends still starts the thread.
+          if (next && pages < 10) page(next, pages + 1);
+          else startThread(config, pickCodexModel(models));
+        },
+        () => startThread(config, undefined),
+      );
+    page(undefined, 1);
+  }
+
   /** Start or resume the thread with the configuration that turns off the user's MCP servers. */
-  function startThread(config: Record<string, unknown>): void {
+  function startThread(
+    config: Record<string, unknown>,
+    model: string | undefined,
+  ): void {
     const unsupervised =
       options.mode === 'strict' || options.mode === 'coordinator'
         ? options.mode
@@ -1331,7 +1364,7 @@ function codex(options: HostOptions): HostSession {
         ...(unsupervised ? {} : { sandbox: 'workspace-write' }),
         // Without this, a user's global reviewer setting can answer requests meant for the person.
         approvalsReviewer: options.mode === 'auto' ? 'auto_review' : 'user',
-        ...(options.model ? { model: options.model } : {}),
+        ...(model ? { model } : {}),
         // Dynamic tools stay with the thread, and `thread/resume` does not take them. Probed on Codex 0.160.0.
         ...(options.tools && !options.resume
           ? {

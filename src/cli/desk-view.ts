@@ -693,7 +693,7 @@ function workerPanel(
     : record.status === 'failed'
       ? ['Stopped with an error', 'failed']
       : ['Ended', 'muted'];
-  const body = `<p class="session-meta"><span>${e(hostName(record.host))}</span><span>Mode: ${e(modeLabel(record))}</span><span>Model request: ${e(record.model ?? 'harness default')}</span>${record.costUsd === null ? '' : `<span>Cost estimate from Claude Code: $${e(record.costUsd.toFixed(2))}</span>`}</p>
+  const body = `<p class="session-meta"><span>${e(hostName(record.host))}</span><span>Mode: ${e(modeLabel(record))}</span><span>${record.reportedModel ? `Model: ${e(record.reportedModel)}` : `Model request: ${e(record.model ?? (record.agent && record.host === 'codex' ? 'most capable' : 'harness default'))}`}</span>${record.costUsd === null ? '' : `<span>Cost estimate from Claude Code: $${e(record.costUsd.toFixed(2))}</span>`}</p>
   ${view.saveFailed ? '<p class="notice">Verifold could not save the latest session record. The next change tries again.</p>' : ''}
   ${record.requests.length > 10 ? `<p class="notice">${record.requests.length} requests are open. The first 10 are shown.</p>` : ''}
   ${record.requests
