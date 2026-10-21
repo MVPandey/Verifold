@@ -512,6 +512,9 @@ export async function startLabOn(
   return planned;
 }
 
+/** How many lists of changed files a lab keeps, by their commits. */
+const changeListLimit = 20;
+
 export class Lab {
   private readonly root: string;
   private readonly options: LabOptions;
@@ -567,6 +570,12 @@ export class Lab {
    * the direction's newest commit then. A restart forgets them.
    */
   private readonly bringAt = new Map<string, BringLook>();
+  /**
+   * The changed files between two commits of a direction's folder, the
+   * newest few, by folder and commits. Commits never change, so a list
+   * stays right, and each diff of a file reads Git once more, not twice.
+   */
+  private readonly changeLists = new Map<string, readonly ChangedFile[]>();
   /** The person's profile as the last prompt read it. */
   private person: PersonProfile | null = null;
 
@@ -2069,7 +2078,7 @@ export class Lab {
     }));
     if (crashed)
       this.options.progress?.(
-        `${this.agent(id).handle} stopped by itself ${restarts.length} times in an hour. Start it again in the desk.`,
+        `${this.agent(id).handle} stopped by itself ${restarts.length} times in an hour. Start it again on its direction's page.`,
       );
     return crashed;
   }
@@ -4148,10 +4157,48 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     });
   }
 
-  /** The end of a run's log for the desk, or null when the run has none. */
-  async runLog(id: unknown): Promise<RunLogPart | null> {
+  /** The changed files between two commits of a folder, kept for the next read of the same commits. */
+  private async changedFiles(
+    workspace: Workspace,
+    from: string,
+    to: string,
+  ): Promise<readonly ChangedFile[]> {
+    const key = `${workspace.path}\0${from}\0${to}`;
+    const known = this.changeLists.get(key);
+    if (known) return known;
+    const files = await changes(this.root, workspace, from, to);
+    this.changeLists.set(key, files);
+    for (const old of [...this.changeLists.keys()].slice(0, -changeListLimit))
+      this.changeLists.delete(old);
+    return files;
+  }
+
+  /**
+   * A run's record and the handle of the agent that started it, without the
+   * whole lab view. Null for a run that the lab does not have.
+   */
+  runRecord(
+    id: unknown,
+  ): { readonly record: RunRecord; readonly handle: string | null } | null {
+    const record = this.ledger.get(id);
+    if (!record) return null;
+    const handle =
+      this.agents.get(record.agent)?.handle ??
+      this.state?.checks.find((check) => check.agent === record.agent)
+        ?.handle ??
+      null;
+    return { record, handle };
+  }
+
+  /** The end of a run's log, at most `bytes`, or null when the run has none. */
+  async runLog(
+    id: unknown,
+    bytes: number = runLimits.deskLog,
+  ): Promise<RunLogPart | null> {
     const run = this.ledger.get(id);
-    return run ? this.ledger.log(run.id, 'tail', runLimits.deskLog) : null;
+    return run
+      ? this.ledger.log(run.id, 'tail', Math.min(bytes, runLimits.deskLog))
+      : null;
   }
 
   /**
@@ -4196,7 +4243,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       ({ from, to } = cited);
       paths = cited.paths;
     }
-    const files = (await changes(this.root, workspace, from, to)).filter(
+    const files = (await this.changedFiles(workspace, from, to)).filter(
       (file) => !paths || paths.includes(file.path),
     );
     if (path === undefined) return { from, to, files, diff: null };

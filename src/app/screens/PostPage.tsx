@@ -1,12 +1,15 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Lab, Post, PostThread, Snapshot } from '../../protocol/api.ts';
 import type { Loaded } from '../api.ts';
 import { threads } from '../board.ts';
-import { clock } from '../format.ts';
+import { ControlsContext } from '../controls.ts';
+import { authorOf, clock } from '../format.ts';
+import { mentionNames } from '../mentions.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { BoardThread, showPost } from '../components/BoardThread.tsx';
+import { Composer } from '../components/Composer.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
 import type { LabActions } from './LabHome.tsx';
@@ -42,14 +45,17 @@ export function PostPage({
     signal?: AbortSignal,
   ) => Promise<Loaded<PostThread>>;
 }): ReactNode {
+  const controls = useContext(ControlsContext);
   const [loaded, setLoaded] = useState<Loaded<PostThread> | null>(null);
+  // A reply that went through reads the thread again, so it shows.
+  const [replies, setReplies] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     void read(id, controller.signal).then((value) => {
       if (!controller.signal.aborted) setLoaded(value);
     });
     return () => controller.abort();
-  }, [id, read]);
+  }, [id, read, replies]);
   const thread = loaded && 'value' in loaded ? loaded.value : null;
   useEffect(() => {
     if (thread) showPost(id);
@@ -93,6 +99,16 @@ export function PostPage({
                 </span>
               )}
             </section>
+          )}
+          {post && controls && lab.agentsHere && (
+            <Composer
+              label={`Reply to ${authorOf(post)}`}
+              placeholder="Write a reply, or @mention an agent"
+              maxLength={lab.postLimit}
+              names={mentionNames(lab)}
+              onSend={(text, key) => controls.reply(post.id, text, key)}
+              onSent={() => setReplies((count) => count + 1)}
+            />
           )}
         </div>
       </main>

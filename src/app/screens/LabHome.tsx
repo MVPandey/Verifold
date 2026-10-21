@@ -1,8 +1,23 @@
-import { useContext, useEffect, type ReactNode } from 'react';
-import type { Lab, QuestionAnswer, Snapshot } from '../../protocol/api.ts';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import type {
+  Lab,
+  Post,
+  QuestionAnswer,
+  Snapshot,
+} from '../../protocol/api.ts';
 import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
-import { boardLink, threads } from '../board.ts';
+import {
+  boardLink,
+  byNumber,
+  filledPosts,
+  joinPosts,
+  threads,
+  type OlderPosts,
+} from '../board.ts';
+import { ControlsContext } from '../controls.ts';
+import { authorOf, cut } from '../format.ts';
+import { mentionNames } from '../mentions.ts';
 import { href, replaceRoute } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -14,11 +29,20 @@ import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { AwayDigest } from '../components/AwayDigest.tsx';
+import {
+  Disputes,
+  MoreTime,
+  OpenDirection,
+  WorksLine,
+} from '../components/LabControls.tsx';
 import { NotifyLine } from '../components/NotifyLine.tsx';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
 import type { AgentActions } from './DirectionPage.tsx';
 import { PlannerComposer, Scoping, planQuestions } from './Scoping.tsx';
+
+/** Pages of older posts that a gap fill reads at most, before it gives the older posts up. */
+const gapPages = 10;
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -86,10 +110,16 @@ export function LabHome({
   const asked = new Set(questions.map((call) => call.id));
   const announced = new Set(questions.map((call) => call.post));
   const [first, ...rest] = lab.needsYou.filter((call) => !asked.has(call.id));
-  const posts = scoping
-    ? lab.board.posts.filter((post) => !announced.has(post.id))
-    : lab.board.posts;
   const tools = useContext(ToolsContext);
+  const controls = useContext(ControlsContext);
+  const [replyTo, setReplyTo] = useState<Post | null>(null);
+  const older = useOlderPosts(lab);
+  // Older pages hold question posts too, so the filter applies after the join.
+  const shownPosts = scoping
+    ? older.posts.filter((post) => !announced.has(post.id))
+    : older.posts;
+  const replies = controls && lab.agentsHere ? controls : null;
+  const box = useRef<HTMLDivElement>(null);
   // After the board rendered: then the post is on the page.
   useEffect(() => {
     if (!show) return;
@@ -132,6 +162,8 @@ export function LabHome({
             // Before the plan, the planner's own line says what happens.
             !scoping && <StatusBar tone="ok">Nothing needs you.</StatusBar>
           )}
+          {lab.paused?.reason === 'deadline' && lab.agentsHere && <MoreTime />}
+          <WorksLine lab={lab} />
           {lab.answered.map((call) => (
             <AnswerLine
               key={call.id}
@@ -183,18 +215,45 @@ export function LabHome({
               ready.
             </StatusBar>
           )}
-          {posts.length > 0 && (
+          {!scoping && lab.agentsHere && <OpenDirection />}
+          {shownPosts.length > 0 && (
             <section className="section section--board" aria-labelledby="board">
               <h2 id="board" className="section__title">
                 Board
               </h2>
-              {lab.board.more && (
-                <span className="more">
-                  Older posts are not shown here yet.
+              <Disputes lab={lab} />
+              {older.more && (
+                <button
+                  type="button"
+                  className="link-button"
+                  disabled={older.busy}
+                  onClick={() => void older.show()}
+                >
+                  Show older posts
+                </button>
+              )}
+              {older.gap && (
+                <p className="turns__none">Reading the posts in between…</p>
+              )}
+              {older.problem && (
+                <span role="alert" className="composer__error">
+                  {older.problem}
                 </span>
               )}
-              {threads(posts).map((thread) => (
-                <BoardThread key={thread.root.id} thread={thread} lab={lab} />
+              {threads(shownPosts).map((thread) => (
+                <BoardThread
+                  key={thread.root.id}
+                  thread={thread}
+                  lab={lab}
+                  {...(replies
+                    ? {
+                        onReply: (post: Post) => {
+                          setReplyTo(post);
+                          box.current?.querySelector('input')?.focus();
+                        },
+                      }
+                    : {})}
+                />
               ))}
             </section>
           )}
@@ -206,16 +265,125 @@ export function LabHome({
           {scoping ? (
             <PlannerComposer lab={lab} {...scoping} />
           ) : (
-            <Composer
-              label="Write to the lab"
-              placeholder="Reply, or @mention an agent"
-              maxLength={lab.postLimit}
-              onSend={actions.post}
-            />
+            <div ref={box}>
+              <Composer
+                label="Write to the lab"
+                placeholder="Reply, or @mention an agent"
+                maxLength={lab.postLimit}
+                names={mentionNames(lab)}
+                onSend={
+                  replyTo && replies
+                    ? (text, key) => replies.reply(replyTo.id, text, key)
+                    : actions.post
+                }
+                replying={
+                  replyTo
+                    ? {
+                        post: replyTo.id,
+                        to: authorOf(replyTo),
+                        text: cut(replyTo.text, 80),
+                        onStop: () => setReplyTo(null),
+                      }
+                    : undefined
+                }
+                onSent={() => setReplyTo(null)}
+              />
+            </div>
           )}
           <NotifyLine />
         </div>
       </main>
     </div>
   );
+}
+
+/**
+ * The board: older pages read on request, then the snapshot's newest page.
+ * When new posts push the older pages' anchor out of the newest page, the
+ * posts between are read before anything older shows again, so no post is
+ * ever missing from the list, as with an agent's turns.
+ */
+function useOlderPosts(lab: Lab): {
+  /** Every post to show, oldest first. */
+  readonly posts: readonly Post[];
+  readonly more: boolean;
+  /** The posts between the older pages and the newest page are being read. */
+  readonly gap: boolean;
+  readonly busy: boolean;
+  readonly problem: string | null;
+  readonly show: () => Promise<void>;
+} {
+  const controls = useContext(ControlsContext);
+  const [older, setOlder] = useState<OlderPosts | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  // A ref, so two clicks in one frame read once.
+  const loading = useRef(false);
+  // A gap fill makes reads that started before it stale.
+  const epoch = useRef(0);
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => pending.current?.abort(), []);
+  const { posts, gap } = joinPosts(older, lab.board.posts);
+  const anchor = older?.anchor ?? null;
+  useEffect(() => {
+    if (!controls || !gap || !older) return;
+    const controller = new AbortController();
+    const mine = ++epoch.current;
+    void (async () => {
+      const pages: (readonly Post[])[] = [];
+      let before = gap;
+      for (let page = 0; page < gapPages; page++) {
+        const loaded = await controls.board(before, controller.signal);
+        if (controller.signal.aborted || mine !== epoch.current) return;
+        if ('error' in loaded) {
+          // The list stays whole: the newest page alone, and "Show older posts" again.
+          setOlder(null);
+          setProblem(loaded.error);
+          return;
+        }
+        pages.push(loaded.value.posts);
+        const first = loaded.value.posts[0];
+        if (
+          !first ||
+          !loaded.value.more ||
+          loaded.value.posts.some((post) => post.id === older.anchor)
+        )
+          break;
+        before = first.id;
+      }
+      setOlder(filledPosts(older, pages, gap));
+    })();
+    return () => controller.abort();
+    // The fill depends on the gap and the anchor, not on each new `older`.
+  }, [gap, anchor, controls]);
+  return {
+    posts,
+    more: controls !== null && !gap && (older ? older.more : lab.board.more),
+    gap: gap !== null,
+    busy,
+    problem,
+    show: async () => {
+      const first = posts[0];
+      if (!controls || !first || loading.current) return;
+      loading.current = true;
+      setBusy(true);
+      const controller = new AbortController();
+      pending.current = controller;
+      const mine = epoch.current;
+      const loaded = await controls.board(first.id, controller.signal);
+      loading.current = false;
+      setBusy(false);
+      if (controller.signal.aborted || mine !== epoch.current) return;
+      if ('error' in loaded) {
+        setProblem(loaded.error);
+        return;
+      }
+      setProblem(null);
+      setOlder((current) => ({
+        posts: byNumber([loaded.value.posts, current?.posts ?? []]),
+        more: loaded.value.more,
+        anchor: current?.anchor ?? first.id,
+      }));
+    },
+  };
 }

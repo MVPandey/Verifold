@@ -338,7 +338,7 @@ await test('the first run waits for the first snapshot before it leads anywhere,
   assert.equal(pageRoute('money', ''), href.setup('money'));
 });
 
-await test('a project without a lab shows its question, why its lab did not start, and Start the lab', () => {
+await test('a project without a lab shows why its lab did not start, and a box with its question and hours to start it', () => {
   const empty: Snapshot = {
     protocolVersion: 1,
     epoch: 'e1',
@@ -351,28 +351,33 @@ await test('a project without a lab shows its question, why its lab did not star
     startProblem: 'Verifold found no agent tool that is signed in.',
   };
   const start = () => Promise.resolve({ ok: true as const });
+  const html = renderToStaticMarkup(<NoLab snapshot={empty} onStart={start} />);
   const page = text(<NoLab snapshot={empty} onStart={start} />);
   assert.match(
     page,
-    /cot has no lab yet Its question: Do probes see faithfulness\? The lab did not start: Verifold found no agent tool that is signed in\. Start the lab/,
+    /cot has no lab yet The lab did not start: Verifold found no agent tool that is signed in\. Your question Do probes see faithfulness\? Time budget, in hours Start the lab/,
   );
+  // The box holds the question, and the hours start at the lab's default.
+  assert.match(html, />Do probes see faithfulness\?<\/textarea>/);
+  assert.match(html, /value="8"/);
   assert.doesNotMatch(page, /later step/);
-  assert.match(
-    text(<NoLab snapshot={{ ...empty, startProblem: null }} onStart={start} />),
-    /Its question: Do probes see faithfulness\? Start the lab/,
-  );
-  // Without a question, the desk adds one.
-  const none = text(
+  // Without a question, the box is empty, and no page sends the person to the old desk.
+  const none = renderToStaticMarkup(
     <NoLab
       snapshot={{ ...empty, question: null, startProblem: null }}
       onStart={start}
     />,
   );
   assert.match(
-    none,
-    /This project has no question yet\. Add one in the desk: open the desk/,
+    text(
+      <NoLab
+        snapshot={{ ...empty, question: null, startProblem: null }}
+        onStart={start}
+      />,
+    ),
+    /Your question Time budget, in hours Start the lab/,
   );
-  assert.doesNotMatch(none, /Start the lab/);
+  assert.doesNotMatch(none, /open the desk|href="\/"/);
 });
 
 await test('without a project, #/ask is the Ask page; with one, it leads to the lab', () => {

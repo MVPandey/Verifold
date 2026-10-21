@@ -778,6 +778,62 @@ export interface FileDiff {
 }
 
 /**
+ * `GET /api/v1/runs/:id`: a run in full, with the files that Verifold kept
+ * from it and the end of its log. Added after version 1.
+ */
+export interface RunDetail {
+  readonly run: Run;
+  /** The handle of the agent that started it, such as claude-2. */
+  readonly handle: string | null;
+  readonly harness: Harness;
+  /** The most minutes that it may run. */
+  readonly minutes: number;
+  /** The files that Verifold kept from the run, in `.verifold/lab/runs/<id>/outputs/`. */
+  readonly outputs: readonly {
+    readonly path: string;
+    readonly bytes: number;
+  }[];
+  /** Kept files that `outputs` leaves out. */
+  readonly moreOutputs: number;
+  /** The end of its log, or null before the run wrote one. */
+  readonly log: {
+    readonly text: string;
+    /** The size of the whole log. */
+    readonly bytes: number;
+    /** `text` is only the end of the log. */
+    readonly partial: boolean;
+  } | null;
+  /** The person can cancel it here: it waits or runs, and this Verifold runs the lab's agents. */
+  readonly cancelable: boolean;
+}
+
+/**
+ * `GET /api/v1/directions/:direction/diff`: what a direction's folder
+ * changed since it started, file by file, at its newest commit. With
+ * `proof=p-12.0`, the diff that a post cites instead: its commits and its
+ * files. With `file=<path>`, also that file's diff, which must be one of the
+ * files. Added after version 1.
+ */
+export interface DirectionDiff {
+  readonly from: string;
+  readonly to: string;
+  readonly files: readonly {
+    readonly path: string;
+    readonly change: 'added' | 'modified' | 'deleted';
+    /** A regular file. A symbolic link or a submodule has no diff text. */
+    readonly regular: boolean;
+  }[];
+  /** Files that `files` leaves out. */
+  readonly moreFiles: number;
+  /** The diff of the file asked for. */
+  readonly diff: {
+    readonly path: string;
+    readonly text: string;
+    readonly trimmed: boolean;
+  } | null;
+}
+
+/**
  * `GET /api/v1/posts/:id`: a post and the replies below it at any depth,
  * oldest first, as the lab's agents read a thread. A search hit for a post
  * that the snapshot's board leaves out opens it. Added after version 1.
@@ -1048,7 +1104,18 @@ export interface ActionBodies {
     readonly files: readonly string[];
     readonly key?: string;
   };
-  'lab-dismiss': Record<string, never>;
+  /**
+   * Clear background actions that failed. `works` names the failures that
+   * the page showed, by action and start time: only they go. Without it,
+   * every failure goes. `works` was added after version 1.
+   */
+  'lab-dismiss': {
+    readonly works?: readonly {
+      readonly action: string;
+      readonly at: string;
+    }[];
+    readonly key?: string;
+  };
   'lab-away-dismiss': Record<string, never>;
   /**
    * The person looks at the lab now. A look after 30 minutes or more away

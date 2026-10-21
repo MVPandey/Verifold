@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Run } from '../../protocol/api.ts';
+import { href } from '../route.ts';
 
 /** A run as a chip: "Run r-3", or with how it ended when that is not a clean exit. */
 export function runLabel(run: Run): string {
@@ -11,10 +12,10 @@ export function runLabel(run: Run): string {
 }
 
 /**
- * A run that a post or a turn names. A run that the snapshot leaves out
- * shows by its ID. `target`: on a page that a link to a run opens, the run
- * that the link named, or null. The chip then carries the ID that the link
- * scrolls to, and the named run is marked.
+ * A run that a post or a turn names, as a link to its own page. A run that
+ * the snapshot leaves out shows by its ID. `target`: on a page that a link
+ * to a run opens, the run that the link named, or null. The chip then
+ * carries the ID that the link scrolls to, and the named run is marked.
  */
 export function RunChip({
   id,
@@ -27,11 +28,12 @@ export function RunChip({
 }): ReactNode {
   const run = runs.get(id);
   return (
-    <span
-      {...(target === undefined ? {} : { id: `run-${id}`, tabIndex: -1 })}
+    <a
+      href={href.runPage(id)}
+      {...(target === undefined ? {} : { id: `run-${id}` })}
       className={id === target ? 'proof proof--target' : 'proof'}
     >
       {run ? runLabel(run) : `Run ${id}`}
-    </span>
+    </a>
   );
 }
