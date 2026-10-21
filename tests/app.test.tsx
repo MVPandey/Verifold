@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type {
   Agent,
@@ -12,36 +13,24 @@ import type {
   Lab,
   Post,
   Snapshot,
-  StepCounts,
 } from '../src/protocol/api.ts';
-import { parseEvents } from '../src/app/api.ts';
+import { act, parseEvents, takeToken } from '../src/app/api.ts';
 import { threads } from '../src/app/board.ts';
-import { asked, due, span, usd, worked } from '../src/app/format.ts';
+import { asked, due, span, usd } from '../src/app/format.ts';
+import { afterSend, intentFor, unansweredAfter } from '../src/app/intent.ts';
 import { parseRoute } from '../src/app/route.ts';
-import { LabStore, newer } from '../src/app/store.ts';
+import { LabStore, newer, type LabState } from '../src/app/store.ts';
 import { Screen } from '../src/app/App.tsx';
-import { ActivityFold } from '../src/app/components/ActivityFold.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import { runCli, terminalInput } from '../src/cli/commands.ts';
 import { startDesk } from '../src/server/desk.ts';
 import type { SessionPool } from '../src/core/workers.ts';
+import { exchangeLaunch, readFragment, storedToken } from '../src/ui/token.ts';
 
 /** A fixed "now": Tuesday 2026-10-20, 22:00 UTC. */
 const now = Date.UTC(2026, 9, 20, 22, 0);
 const ago = (minutes: number): string =>
   new Date(now - minutes * 60_000).toISOString();
-
-const zero: StepCounts = {
-  search: 0,
-  page: 0,
-  read: 0,
-  command: 0,
-  edit: 0,
-  run: 0,
-  post: 0,
-  helper: 0,
-  other: 0,
-};
 
 function agent(
   id: string,
@@ -220,6 +209,7 @@ function story(fields: Partial<Lab> = {}): Snapshot {
           'claim',
           'After the filter, the gap between "the probe knows" and "the CoT says it" is 34% smaller on seed 1.',
           {
+            direction: 'd-2',
             proof: [
               { type: 'run', run: 'r-3' },
               {
@@ -285,18 +275,19 @@ function story(fields: Partial<Lab> = {}): Snapshot {
 }
 
 const actions: LabActions = {
-  post: () => Promise.resolve(null),
-  pause: () => Promise.resolve(null),
+  post: () => Promise.resolve({ ok: true }),
+  pause: () => Promise.resolve({ ok: true }),
 };
 
 function render(
   snapshot: Snapshot | null,
-  connection: 'connecting' | 'live' | 'reconnecting' | 'signed-out' = 'live',
+  connection: LabState['connection'] = 'live',
   hash = '#/',
+  retrying = false,
 ): string {
   return renderToStaticMarkup(
     <Screen
-      state={{ snapshot, connection }}
+      state={{ snapshot, connection, retrying }}
       route={parseRoute(hash)}
       now={now}
       actions={actions}
@@ -314,21 +305,73 @@ function text(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-await test('format helpers write money, spans, deadlines, askers, and folded turns plainly', () => {
+/** Wait until `done()` holds, for at most two seconds. */
+async function until(done: () => boolean): Promise<void> {
+  for (let tries = 0; tries < 200 && !done(); tries++) await delay(10);
+  assert.ok(done(), 'the condition never held');
+}
+
+/** A stream response with one snapshot event. It closes when `close`, else when `signal` aborts. */
+function stream(
+  snapshot: object,
+  signal: AbortSignal | null | undefined,
+  close = false,
+): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        new TextEncoder().encode(
+          `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+        ),
+      );
+      if (close) controller.close();
+      else
+        signal?.addEventListener('abort', () =>
+          controller.error(new DOMException('aborted', 'AbortError')),
+        );
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
+
+/** The globals that each test replaced, as they were before its first change. */
+const originals = new WeakMap<
+  test.TestContext,
+  Map<string, PropertyDescriptor | undefined>
+>();
+
+/** Replace a global for one test. A second replacement keeps the first original, which comes back after the test. */
+function stub(t: test.TestContext, name: string, value: unknown): void {
+  let saved = originals.get(t);
+  if (!saved) {
+    saved = new Map();
+    originals.set(t, saved);
+  }
+  if (!saved.has(name)) {
+    const had = Object.getOwnPropertyDescriptor(globalThis, name);
+    saved.set(name, had);
+    t.after(() => {
+      if (had) Object.defineProperty(globalThis, name, had);
+      else Reflect.deleteProperty(globalThis, name);
+    });
+  }
+  Object.defineProperty(globalThis, name, {
+    configurable: true,
+    writable: true,
+    value,
+  });
+}
+
+await test('format helpers write money, spans, deadlines and askers plainly', () => {
   assert.equal(usd(25), '$25');
   assert.equal(usd(4.2), '$4.20');
   assert.equal(span(40_000), '40 s');
   assert.equal(span(6 * 60_000), '6 min');
   assert.equal(span(80 * 60_000), '1 h 20 min');
   assert.equal(span(50 * 3_600_000), '2 days');
-  assert.match(
-    due(new Date(Date.UTC(2026, 9, 24, 1, 0)).toISOString(), now),
-    /^[A-Z][a-z]{2} \d\d:\d\d$/,
-  );
-  assert.match(
-    due(new Date(Date.UTC(2026, 10, 30, 1, 0)).toISOString(), now),
-    /^[A-Z][a-z]{2} \d{1,2} \d\d:\d\d$/,
-  );
   assert.equal(asked([]), 'Verifold asks');
   assert.equal(asked(call.askers), 'claude-2 and codex-2 asked');
   assert.equal(
@@ -338,14 +381,23 @@ await test('format helpers write money, spans, deadlines, askers, and folded tur
     ]),
     'claude-2, codex-2 and codex-1 asked',
   );
-  assert.equal(
-    worked({ ...zero, search: 4, page: 3, edit: 1 }, ago(30), ago(24), now),
-    'Worked 6 min · 4 searches · 3 pages · 1 edit',
-  );
-  assert.equal(
-    worked({ ...zero, command: 2 }, ago(2), null, now),
-    'Working for 2 min · 2 commands',
-  );
+});
+
+await test('a deadline names its weekday within six days, and its date further out, in the past, or a week ahead', () => {
+  // Local times, so the test holds in any time zone. Tuesday 20 Oct 2026, 22:00.
+  const tuesday = new Date(2026, 9, 20, 22, 0).getTime();
+  const local = (month: number, day: number, hour: number): string =>
+    new Date(2026, month, day, hour, 0).toISOString();
+  assert.equal(due(local(9, 23, 18), tuesday), 'Fri 18:00');
+  assert.equal(due(local(9, 26, 7), tuesday), 'Mon 07:00');
+  // Six days or more: the date as well.
+  assert.equal(due(local(9, 27, 7), tuesday), 'Tue 27 Oct, 07:00');
+  assert.equal(due(local(10, 2, 7), tuesday), 'Mon 2 Nov, 07:00');
+  // Today's weekday next week, even under six days from late tonight.
+  const lateTuesday = new Date(2026, 9, 20, 23, 30).getTime();
+  assert.equal(due(local(9, 27, 0), lateTuesday), 'Tue 27 Oct, 00:00');
+  // A deadline that passed.
+  assert.equal(due(local(9, 19, 9), tuesday), 'Mon 19 Oct, 09:00');
 });
 
 await test('the event parser keeps whole events, skips heartbeats, and leaves the unfinished rest', () => {
@@ -353,12 +405,12 @@ await test('the event parser keeps whole events, skips heartbeats, and leaves th
     'id: e1.1\nevent: snapshot\ndata: {"a":1}\n\n: ping\n\nevent: snapshot\ndata: {"b":\ndata: 2}\n\nid: e1.3\nevent: snap',
   );
   assert.deepEqual(events, [
-    { event: 'snapshot', data: '{"a":1}', id: 'e1.1' },
-    { event: 'snapshot', data: '{"b":\n2}', id: null },
+    { event: 'snapshot', data: '{"a":1}' },
+    { event: 'snapshot', data: '{"b":\n2}' },
   ]);
   assert.equal(rest, 'id: e1.3\nevent: snap');
   assert.deepEqual(parseEvents('event: snapshot\r\ndata: x\r\n\r\n').events, [
-    { event: 'snapshot', data: 'x', id: null },
+    { event: 'snapshot', data: 'x' },
   ]);
 });
 
@@ -380,10 +432,206 @@ await test('a snapshot replaces the shown one only when it is newer, and a new e
   assert.equal(changes, 1);
 });
 
+await test('before the first snapshot, a refusal or another protocol stops the stream, and only network failures retry', async (t) => {
+  const token = 'f'.repeat(64);
+  for (const status of [403, 503]) {
+    let calls = 0;
+    stub(t, 'fetch', () => {
+      calls++;
+      return Promise.resolve(new Response('', { status }));
+    });
+    const store = new LabStore(5);
+    await store.follow(token, new AbortController().signal);
+    assert.deepEqual(
+      [store.get().connection, store.get().retrying],
+      ['unreachable', false],
+      String(status),
+    );
+    await delay(30);
+    assert.equal(calls, 1, `${status} is not retried`);
+    assert.match(
+      text(render(null, 'unreachable', '#/', false)),
+      /Can't reach Verifold\. Is it running\? Verifold refused the connection\. Reload this page to try again\./,
+    );
+  }
+
+  let outdatedCalls = 0;
+  stub(t, 'fetch', (_url: string, init?: RequestInit) => {
+    outdatedCalls++;
+    return Promise.resolve(
+      stream({ ...story(), protocolVersion: 2 }, init?.signal),
+    );
+  });
+  const outdated = new LabStore(5);
+  await outdated.follow(token, new AbortController().signal);
+  assert.equal(outdated.get().connection, 'outdated');
+  assert.equal(outdatedCalls, 1);
+  assert.match(
+    text(render(null, 'outdated')),
+    /This page is older than Verifold\. Reload it\./,
+  );
+
+  stub(t, 'fetch', () => Promise.resolve(new Response('', { status: 401 })));
+  const refused = new LabStore(5);
+  await refused.follow(token, new AbortController().signal);
+  assert.equal(refused.get().connection, 'signed-out');
+
+  // Network failures: the notice shows after the first one, and the page keeps trying.
+  let calls = 0;
+  stub(t, 'fetch', (_url: string, init?: RequestInit) => {
+    calls++;
+    return calls < 3
+      ? Promise.reject(new TypeError('fetch failed'))
+      : Promise.resolve(stream(story(), init?.signal));
+  });
+  const store = new LabStore(5);
+  const owner = new AbortController();
+  t.after(() => owner.abort());
+  void store.follow(token, owner.signal);
+  await until(() => store.get().connection === 'unreachable');
+  assert.equal(store.get().retrying, true);
+  assert.match(
+    text(render(null, 'unreachable', '#/', true)),
+    /Can't reach Verifold\. Is it running\? This page keeps trying/,
+  );
+  await until(() => store.get().connection === 'live');
+  assert.equal(calls, 3);
+  assert.equal(store.get().snapshot?.rev, 7);
+});
+
+await test('after a snapshot, a dropped stream reconnects with the last one shown, and a refusal stops with it shown', async (t) => {
+  const token = 'f'.repeat(64);
+  let calls = 0;
+  stub(t, 'fetch', (_url: string, init?: RequestInit) => {
+    calls++;
+    if (calls === 1)
+      return Promise.resolve(stream(story(), init?.signal, true));
+    if (calls === 2) return Promise.reject(new TypeError('fetch failed'));
+    return Promise.resolve(new Response('', { status: 503 }));
+  });
+  const store = new LabStore(5);
+  const seen: string[] = [];
+  store.subscribe(() => seen.push(store.get().connection));
+  await store.follow(token, new AbortController().signal);
+  assert.deepEqual(seen.slice(0, 3), ['live', 'reconnecting', 'reconnecting']);
+  assert.equal(store.get().connection, 'unreachable');
+  assert.equal(store.get().snapshot?.rev, 7);
+  assert.match(
+    text(render(story(), 'reconnecting')),
+    /Reconnecting to Verifold\. This shows the lab as of \d\d:\d\d\./,
+  );
+  assert.match(
+    text(render(story(), 'unreachable')),
+    /Can't reach Verifold\. Is it running\? This shows the lab as of \d\d:\d\d\. Reload the page to try again\./,
+  );
+});
+
 await test('the store marks a tab without a token as signed out', async () => {
   const store = new LabStore();
   await store.follow(null, new AbortController().signal);
   assert.equal(store.get().connection, 'signed-out');
+});
+
+await test('a send keeps text typed while it was in flight, and a retry after a lost answer keeps its key', async (t) => {
+  // The box empties only if it still holds what was sent.
+  assert.equal(afterSend('Try Gemma', 'Try Gemma'), '');
+  assert.equal(
+    afterSend('Try Gemma, then Llama', 'Try Gemma'),
+    'Try Gemma, then Llama',
+  );
+  let made = 0;
+  const make = (): string => `key-${++made}`;
+  const first = intentFor<string>(null, 'Try Gemma', make);
+  assert.deepEqual(first, { value: 'Try Gemma', key: 'key-1' });
+  // The answer was lost: the same text keeps the key, other text gets a new one.
+  const kept = unansweredAfter(first, { lost: 'no answer' });
+  assert.equal(intentFor(kept, 'Try Gemma', make).key, 'key-1');
+  assert.equal(intentFor(kept, 'Try Llama', make).key, 'key-2');
+  // Verifold answered, even with a refusal: the next attempt is a new intent.
+  assert.equal(unansweredAfter(first, { refused: 'paused' }), null);
+  assert.equal(unansweredAfter(first, { ok: true }), null);
+
+  // act sends the caller's key, and tells a lost answer from a refusal.
+  const bodies: unknown[] = [];
+  let answer: () => Promise<Response> = () =>
+    Promise.reject(new TypeError('fetch failed'));
+  stub(t, 'fetch', (_url: string, init?: RequestInit) => {
+    bodies.push(
+      JSON.parse(typeof init?.body === 'string' ? init.body : 'null'),
+    );
+    return answer();
+  });
+  assert.deepEqual(await act('t', 'lab-post', { text: 'Hi' }, 'k1'), {
+    lost: 'Verifold did not answer. Send again to retry.',
+  });
+  answer = () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ error: 'The lab is paused.' }), {
+        status: 409,
+      }),
+    );
+  assert.deepEqual(await act('t', 'lab-post', { text: 'Hi' }, 'k1'), {
+    refused: 'The lab is paused.',
+  });
+  answer = () =>
+    Promise.resolve(
+      new Response('{"ok":true,"pending":true}', { status: 202 }),
+    );
+  assert.deepEqual(await act('t', 'lab-post', { text: 'Hi' }, 'k1'), {
+    ok: true,
+  });
+  assert.deepEqual(bodies, [
+    { text: 'Hi', key: 'k1' },
+    { text: 'Hi', key: 'k1' },
+    { text: 'Hi', key: 'k1' },
+  ]);
+});
+
+await test('the shared token module keeps a token, exchanges a launch code, and a cut-off answer signs the tab out', async (t) => {
+  const kept = new Map<string, string>();
+  const replaced: string[] = [];
+  stub(t, 'sessionStorage', {
+    getItem: (name: string) => kept.get(name) ?? null,
+    setItem: (name: string, value: string) => kept.set(name, value),
+  });
+  stub(t, 'history', {
+    replaceState: (_state: unknown, _title: string, url: string) =>
+      replaced.push(url),
+  });
+  const at = (hash: string): void =>
+    stub(t, 'location', { hash, pathname: '/app/' });
+  at(`#${'a'.repeat(64)}`);
+  assert.deepEqual(readFragment('#/'), { token: 'a'.repeat(64), launch: '' });
+  assert.deepEqual(replaced, ['/app/#/']);
+  at('#/');
+  assert.deepEqual(readFragment('#/'), { token: 'a'.repeat(64), launch: '' });
+  assert.equal(replaced.length, 1);
+  at('#launch-c0de');
+  assert.deepEqual(readFragment(''), { token: 'a'.repeat(64), launch: 'c0de' });
+  assert.equal(replaced.at(-1), '/app/');
+
+  // A cut-off answer to the launch exchange: no token, and the app shows the signed-out notice.
+  kept.clear();
+  stub(t, 'fetch', () =>
+    Promise.resolve(new Response('{"tok', { status: 200 })),
+  );
+  assert.equal(await exchangeLaunch('c0de'), null);
+  at('#launch-c0de');
+  assert.equal(await takeToken(), null);
+  const store = new LabStore();
+  await store.follow(null, new AbortController().signal);
+  assert.match(
+    text(render(null, store.get().connection)),
+    /Open Verifold from your terminal/,
+  );
+
+  stub(t, 'fetch', () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ token: 'b'.repeat(64) }), { status: 200 }),
+    ),
+  );
+  assert.equal(await exchangeLaunch('c0de'), 'b'.repeat(64));
+  assert.equal(storedToken(), 'b'.repeat(64));
 });
 
 await test('posts group into threads by the post they answer', () => {
@@ -407,26 +655,47 @@ await test('posts group into threads by the post they answer', () => {
   );
 });
 
-await test('routes come from the fragment, and unknown ones are named', () => {
+await test('routes: the pages that later steps build, and pages that do not exist', () => {
   assert.deepEqual(parseRoute(''), { page: 'lab' });
   assert.deepEqual(parseRoute('#/'), { page: 'lab' });
-  assert.deepEqual(parseRoute('#/d/d-2'), { page: 'direction', id: 'd-2' });
-  assert.deepEqual(parseRoute('#/call/c-4'), { page: 'call', id: 'c-4' });
+  assert.deepEqual(parseRoute('#/d/d-2'), { page: 'direction' });
+  assert.deepEqual(parseRoute('#/call/c-4'), { page: 'call' });
   assert.deepEqual(parseRoute('#/answer'), { page: 'answer' });
-  assert.deepEqual(parseRoute('#/d/../x'), { page: 'unknown' });
+  assert.deepEqual(parseRoute('#/first-run'), { page: 'first-run' });
+  for (const hash of [
+    '#/d/../x',
+    '#/search',
+    '#/projects',
+    '#/run/r-3',
+    '#/nope',
+  ])
+    assert.deepEqual(parseRoute(hash), { page: 'unknown' }, hash);
+  assert.match(
+    text(render(story(), 'live', '#/d/d-2')),
+    /A direction comes in a later step/,
+  );
+  assert.match(
+    text(render(story(), 'live', '#/first-run')),
+    /Setting up comes in a later step/,
+  );
+  const missing = text(render(story(), 'live', '#/search'));
+  assert.match(missing, /This page does not exist/);
+  assert.doesNotMatch(missing, /later step/);
 });
 
 await test('the lab home shows the call, the directions with live lines, and the board threads', () => {
   const html = render(story());
   const page = text(html);
-  // The header: project, money line, search, pause.
-  assert.match(page, /CoT faithfulness/);
+  // The header: the project as plain text, the money line, and pause. No search or switcher yet.
+  assert.match(html, /<span class="header__project">CoT faithfulness<\/span>/);
   assert.match(
     page,
     /Due [A-Z][a-z]{2} \d\d:\d\d · ≈\$3\.10 plans · \$4\.20 of \$25 GPU/,
   );
-  assert.match(page, /Search ⌘K/);
   assert.match(html, /<button type="button" class="button">Pause<\/button>/);
+  assert.doesNotMatch(html, />Search</);
+  assert.doesNotMatch(page, /⌘K/);
+  assert.doesNotMatch(html, /<kbd|switch project/i);
   // The needs-you line: question with the pick's price, askers, waiting time, Decide.
   assert.match(page, /Needs you Rent an H100 for the probe reruns\? \$11\.97/);
   assert.match(page, /claude-2 and codex-2 asked · waiting 12 min/);
@@ -447,10 +716,10 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.match(page, /Searching the web · 1 min/);
   assert.match(html, /class="row row--disputed" href="#\/d\/d-2"/);
   assert.match(html, /role="img" aria-label="Codex, codex-1"/);
-  // The board: a claim with its proof, an objection and a reply on its rail, the person's post.
+  // The board: proof chips open their direction's page.
   assert.match(page, /claude-2 Claim After the filter/);
-  assert.match(html, /href="#\/run\/r-3">Run r-3</);
-  assert.match(html, />Figure</);
+  assert.match(html, /<a class="proof" href="#\/d\/d-2">Run r-3<\/a>/);
+  assert.match(html, /<a class="proof" href="#\/d\/d-2">Figure<\/a>/);
   assert.match(page, /codex-2 Objection One seed can be luck/);
   assert.match(page, /You If budget is left, try Gemma/);
   assert.doesNotMatch(page, /You Question/);
@@ -464,6 +733,25 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.match(html, /placeholder="Reply, or @mention an agent"/);
   // No inline styles, so the desk's CSP holds.
   assert.doesNotMatch(html, /style="/);
+});
+
+await test('a proof chip without a direction to open is not a link', () => {
+  const lab = story().lab;
+  assert.ok(lab);
+  const html = render(
+    story({
+      board: {
+        posts: [
+          post('p-30', 'a-1', 'evidence', 'A rerun.', {
+            proof: [{ type: 'run', run: 'r-9' }],
+          }),
+        ],
+        more: false,
+      },
+    }),
+  );
+  assert.match(html, /<span class="proof">Run r-9<\/span>/);
+  assert.doesNotMatch(html, /href="#\/run/);
 });
 
 await test('the lab home says when nothing needs the person, when it is paused, and when items are left out', () => {
@@ -501,11 +789,7 @@ await test('the lab home says when nothing needs the person, when it is paused, 
   );
 });
 
-await test('the app explains a dropped connection, a missing token, a project with no lab, and later pages', () => {
-  assert.match(
-    text(render(story(), 'reconnecting')),
-    /Reconnecting to Verifold\. This shows the lab as of \d\d:\d\d\./,
-  );
+await test('the app explains a missing token, the first connection, and a project with no lab', () => {
   assert.match(
     text(render(null, 'signed-out')),
     /Open Verifold from your terminal/,
@@ -515,32 +799,9 @@ await test('the app explains a dropped connection, a missing token, a project wi
     text(render({ ...story(), lab: null })),
     /CoT faithfulness has no lab yet/,
   );
-  const later = render(story(), 'live', '#/d/d-2');
-  assert.match(text(later), /A direction comes in a later step/);
-  assert.match(later, /href="#\/"/);
 });
 
-await test('a folded turn is one line, closed by default', () => {
-  const html = renderToStaticMarkup(
-    <ActivityFold
-      turn={{
-        id: 't-3',
-        startedAt: ago(30),
-        endedAt: ago(6),
-        counts: { ...zero, command: 9, run: 1 },
-        message: null,
-      }}
-      now={now}
-    >
-      <p>steps</p>
-    </ActivityFold>,
-  );
-  assert.match(html, /aria-expanded="false"/);
-  assert.match(text(html), /Worked 24 min · 9 commands · 1 run/);
-  assert.doesNotMatch(html, /steps/);
-});
-
-await test('the desk serves the app build under /app/ with its headers, and opens it with a launch code', async (t) => {
+await test('the desk serves the app build under /app/: its page with no-store, hashed files kept for a year, and token.js', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-app-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const assets = join(root, 'assets');
@@ -568,17 +829,22 @@ await test('the desk serves the app build under /app/ with its headers, and open
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
-  const app = join(root, 'app');
-  await mkdir(join(app, 'assets'), { recursive: true });
-  await writeFile(
-    join(app, 'index.html'),
-    '<!doctype html><div id="root"></div>',
-  );
-  await writeFile(join(app, 'assets', 'index-abc.js'), 'export {};');
-  await writeFile(join(app, 'assets', 'index-abc.css'), 'body{}');
-  await writeFile(join(app, 'assets', 'notes.txt'), 'not served');
-
-  const start = async (appRoot: URL | undefined) => {
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
+  const build = async (
+    name: string,
+    files: readonly string[],
+  ): Promise<URL> => {
+    const folder = join(root, name);
+    await mkdir(join(folder, 'assets'), { recursive: true });
+    await writeFile(
+      join(folder, 'index.html'),
+      '<!doctype html><div id="root"></div>',
+    );
+    for (const file of files)
+      await writeFile(join(folder, 'assets', file), 'x');
+    return pathToFileURL(`${folder}/`);
+  };
+  const start = async (appRoot: URL) => {
     const owner = new AbortController();
     const desk = await startDesk(
       null,
@@ -591,7 +857,7 @@ await test('the desk serves the app build under /app/ with its headers, and open
       undefined,
       undefined,
       undefined,
-      appRoot ? { appRoot } : { appRoot: pathToFileURL(`${root}/missing/`) },
+      { appRoot },
     );
     t.after(async () => {
       owner.abort();
@@ -599,23 +865,42 @@ await test('the desk serves the app build under /app/ with its headers, and open
     });
     return desk;
   };
-  const desk = await start(pathToFileURL(`${app}/`));
+  const desk = await start(
+    await build('app', [
+      'index-abc.js',
+      'index-abc.css',
+      'manrope-variable-abc.ttf',
+    ]),
+  );
   const origin = new URL(desk.url).origin;
   for (const path of ['/app/', '/app']) {
     const page = await fetch(origin + path);
     assert.equal(page.status, 200, path);
     assert.match(page.headers.get('content-type') ?? '', /text\/html/);
+    assert.equal(page.headers.get('cache-control'), 'no-store');
     assert.match(
       page.headers.get('content-security-policy') ?? '',
       /script-src 'self'; style-src 'self'/,
     );
     assert.equal(page.headers.get('x-frame-options'), 'DENY');
   }
-  const script = await fetch(`${origin}/app/assets/index-abc.js`);
-  assert.equal(script.status, 200);
-  assert.match(script.headers.get('content-type') ?? '', /text\/javascript/);
-  assert.equal((await fetch(`${origin}/app/assets/index-abc.css`)).status, 200);
-  assert.equal((await fetch(`${origin}/app/assets/notes.txt`)).status, 404);
+  for (const [file, type] of [
+    ['index-abc.js', /text\/javascript/],
+    ['index-abc.css', /text\/css/],
+    ['manrope-variable-abc.ttf', /font\/ttf/],
+  ] as const) {
+    const asset = await fetch(`${origin}/app/assets/${file}`);
+    assert.equal(asset.status, 200, file);
+    assert.match(asset.headers.get('content-type') ?? '', type);
+    assert.equal(
+      asset.headers.get('cache-control'),
+      'public, max-age=31536000, immutable',
+    );
+  }
+  assert.equal((await fetch(`${origin}/app/assets/missing.js`)).status, 404);
+  const shared = await fetch(`${origin}/ui/token.js`);
+  assert.equal(shared.status, 200);
+  assert.match(shared.headers.get('content-type') ?? '', /text\/javascript/);
   assert.equal(
     desk.appUrl,
     `${origin}/app/#${new URL(desk.url).hash.slice(1)}`,
@@ -623,8 +908,14 @@ await test('the desk serves the app build under /app/ with its headers, and open
   assert.match(desk.launchUrl('/app/'), /\/app\/#launch-[0-9a-f]{48}$/);
   assert.match(desk.launchUrl(), /:\d+\/#launch-[0-9a-f]{48}$/);
 
+  // A file of a type that the desk does not know stops the desk, loudly.
+  await assert.rejects(
+    start(await build('odd', ['index-abc.js', 'notes.txt'])),
+    /no content type for notes\.txt/,
+  );
+
   // A package without the app build serves no app, and its launch falls back to the desk.
-  const bare = await start(undefined);
+  const bare = await start(pathToFileURL(`${root}/missing/`));
   const bareOrigin = new URL(bare.url).origin;
   assert.equal((await fetch(`${bareOrigin}/app/`)).status, 404);
   assert.equal(bare.appUrl, null);
@@ -641,17 +932,16 @@ await test('/app in the terminal opens the app, and --app is refused where it do
   };
   const sessions = { views: () => [] } as unknown as SessionPool;
   let opened = 0;
-  terminalInput(sessions, '/app', io, {
+  const controls = {
     host: 'claude',
     open: () => {},
     openApp: () => {
       opened++;
     },
-  });
+  };
+  terminalInput(sessions, '/app', io, controls);
   assert.equal(opened, 1);
-  terminalInput(sessions, '/app', io, { host: 'claude', open: () => {} });
-  assert.match(messages.at(-1) ?? '', /not available here/);
-  terminalInput(sessions, '/help', io, { host: 'claude', open: () => {} });
+  terminalInput(sessions, '/help', io, controls);
   assert.match(messages.at(-1) ?? '', /`\/app`: open the new app/);
   const root = await mkdtemp(join(tmpdir(), 'verifold-app-flag-'));
   t.after(() => rm(root, { recursive: true, force: true }));

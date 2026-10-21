@@ -155,6 +155,7 @@ for (const background of [false, true])
     for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
       await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
     let interview = 0;
     // The research requests that reach the harness. A lab starts none.
     const asked: string[] = [];

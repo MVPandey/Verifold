@@ -19,7 +19,8 @@ export interface Control {
 /** From the owner: a status line, the desk URL (with its access token), or the end. */
 export type FromOwner =
   | { readonly progress: string }
-  | { readonly url: string }
+  /** The desk's URL with its token, and the new app's URL when the package has its build. */
+  | { readonly url: string; readonly app?: string }
   | { readonly stopped: true };
 
 /** From a terminal, after the key: a line that the person typed, or stop. */
@@ -211,7 +212,11 @@ export async function connectControl(
     const message = (value ?? {}) as Record<string, unknown>;
     if (typeof message.progress === 'string')
       onMessage({ progress: message.progress });
-    else if (typeof message.url === 'string') onMessage({ url: message.url });
+    else if (typeof message.url === 'string')
+      onMessage({
+        url: message.url,
+        ...(typeof message.app === 'string' ? { app: message.app } : {}),
+      });
     else if (message.stopped === true) onMessage({ stopped: true });
   });
   socket.write(`${JSON.stringify({ token: control.token })}\n`);

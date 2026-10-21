@@ -48,39 +48,6 @@ export function Logo(): ReactNode {
   );
 }
 
-export function ChevronDown(): ReactNode {
-  return (
-    <Icon size={16} width={2}>
-      <path d="M6 9l6 6 6-6" />
-    </Icon>
-  );
-}
-
-export function ChevronRight(): ReactNode {
-  return (
-    <Icon size={14} width={2.4}>
-      <path d="M9 6l6 6-6 6" />
-    </Icon>
-  );
-}
-
-export function ChevronOpen(): ReactNode {
-  return (
-    <Icon size={14} width={2.4}>
-      <path d="M6 9l6 6 6-6" />
-    </Icon>
-  );
-}
-
-export function Search(): ReactNode {
-  return (
-    <Icon size={16} width={2}>
-      <circle cx="11" cy="11" r="7" />
-      <path d="M20 20l-4-4" />
-    </Icon>
-  );
-}
-
 export function Check({ size = 15 }: { readonly size?: number }): ReactNode {
   return (
     <Icon size={size} width={2.8}>

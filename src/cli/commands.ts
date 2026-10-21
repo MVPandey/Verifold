@@ -271,7 +271,7 @@ export interface TerminalControls {
   /** Open the desk in a browser with a new one-time code. */
   readonly open: () => void;
   /** Open the new app, a preview, in a browser with a new one-time code. */
-  readonly openApp?: () => void;
+  readonly openApp: () => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
   /** The terminal is attached to a background owner. */
@@ -334,12 +334,7 @@ export function terminalInput(
               : 'No request is open. Type /help for the terminal commands.',
         );
     } else if (value === '/open') controls.open();
-    else if (value === '/app')
-      if (controls.openApp) controls.openApp();
-      else
-        io.progress?.(
-          'The new app is not available here. Type /open for the desk.',
-        );
+    else if (value === '/app') controls.openApp();
     else if (value === '/help')
       io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
@@ -503,7 +498,10 @@ async function serveDesk(
     io.out(
       JSON.stringify({
         url: server.url,
-        ...(run.app && server.appUrl ? { app: server.appUrl } : {}),
+        // A background owner always passes the app's URL on: a terminal that attached with --app prints it.
+        ...((run.app || run.owner) && server.appUrl
+          ? { app: server.appUrl }
+          : {}),
         visibility: 'private',
         readOnly: false,
       }),
@@ -512,7 +510,9 @@ async function serveDesk(
     if (run.owner) return;
     if (run.noOpen)
       io.progress?.(
-        'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
+        run.app && server.appUrl
+          ? 'Open the printed app URL to use the new app. Keep this terminal open. Type /help for commands.'
+          : 'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
       );
     else if (await open()) io.progress?.(ready);
     else
@@ -873,7 +873,7 @@ async function serveDesk(
               openApp: () => {
                 if (!desk?.appUrl) {
                   io.progress?.(
-                    'This Verifold has no app build. Type /open for the desk.',
+                    'The new app is not available here. Type /open for the desk.',
                   );
                   return;
                 }
@@ -1075,13 +1075,15 @@ async function runOwner(
   // Lines from before the first terminal attached wait for it.
   let early: string[] | null = [];
   let url: string | undefined;
+  /** The app's URL, when the package has the app's build. */
+  let appUrl: string | undefined;
   let onLine: ((line: string) => void) | undefined;
   const waiting: string[] = [];
   const server = await serveControl(control, {
     attached: (send) => {
       for (const line of early ?? []) send({ progress: line });
       early = null;
-      if (url) send({ url });
+      if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
     },
     message: (message) => {
       if ('stop' in message) quit.abort();
@@ -1113,7 +1115,11 @@ async function runOwner(
               typeof shown.url === 'string'
             ) {
               url = shown.url;
-              server.send({ url });
+              appUrl =
+                'app' in shown && typeof shown.app === 'string'
+                  ? shown.app
+                  : undefined;
+              server.send({ url, ...(appUrl ? { app: appUrl } : {}) });
             }
           } catch {
             /* Only the desk URL is output. */
@@ -1231,9 +1237,11 @@ async function attachTeam(
       if ('progress' in message) io.progress?.(message.progress);
       else if ('url' in message && !shown) {
         shown = true;
+        const app = start.app ? message.app : undefined;
         io.out(
           JSON.stringify({
             url: message.url,
+            ...(app ? { app } : {}),
             visibility: 'private',
             readOnly: false,
           }),
@@ -1242,7 +1250,11 @@ async function attachTeam(
         if (start.desk && new URL(message.url).port === String(start.desk.port))
           io.progress?.('The desk in your browser now shows the project.');
         else if (start.noOpen)
-          io.progress?.('Open the printed URL to use the desk.');
+          io.progress?.(
+            app
+              ? 'Open the printed app URL to use the new app.'
+              : 'Open the printed URL to use the desk.',
+          );
         else client?.send({ line: start.app ? '/app' : '/open' });
       }
     },

@@ -46,12 +46,13 @@ try {
       (file) =>
         /^dist-cli\/[a-z]+\/[a-z-]+\.js$/.test(file.path) ||
         /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
-        // The new app: its page and the files that Vite names with a hash.
-        /^dist-cli\/app\/assets\/index-[\w-]+\.(js|css)$/.test(file.path) ||
+        // The new app: its page, and the files that Vite names with a hash.
+        /^dist-cli\/app\/assets\/[\w.-]+\.(js|css|ttf)$/.test(file.path) ||
         [
           'dist-cli/cli.js',
           'dist-cli/app/index.html',
           'dist-cli/app/react.LICENSE.txt',
+          'dist-cli/app/OFL-Manrope.txt',
           'dist-cli/ui/dom.js',
           'dist-cli/desk/desk.css',
           'dist-cli/desk/manrope.ttf',
@@ -548,6 +549,7 @@ onLine((line) => {
       '/vendor/xterm.css',
       '/vendor/addon-fit.js',
       '/ui/dom.js',
+      '/ui/token.js',
       '/desk.css',
       '/manrope.ttf',
       '/symbol.webp',

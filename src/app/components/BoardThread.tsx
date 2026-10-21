@@ -32,10 +32,31 @@ function proofLabel(proof: Proof): string {
   return proof.path.split('/').at(-1) ?? proof.path;
 }
 
-function proofHref(post: Post, proof: Proof, index: number): string {
-  return proof.type === 'run'
-    ? href.run(proof.run)
-    : href.proof(`${post.id}.${index}`);
+/**
+ * A post's proof, as chips. A chip opens the page of the direction that
+ * holds the proof, when the post names one: the direction's page shows its
+ * runs and files.
+ */
+function ProofLinks({ post }: { readonly post: Post }): ReactNode {
+  return (
+    <>
+      {post.proof.map((proof, index) => {
+        const direction =
+          proof.type === 'run'
+            ? post.direction
+            : (proof.direction ?? post.direction);
+        return direction ? (
+          <a key={index} className="proof" href={href.direction(direction)}>
+            {proofLabel(proof)}
+          </a>
+        ) : (
+          <span key={index} className="proof">
+            {proofLabel(proof)}
+          </span>
+        );
+      })}
+    </>
+  );
 }
 
 /** A post's name line and text, with its kind and its proof as chips. */
@@ -50,11 +71,7 @@ function PostLines({ post }: { readonly post: Post }): ReactNode {
       </div>
       <div className="post__text">
         <span>{post.text}</span>
-        {post.proof.map((proof, index) => (
-          <a key={index} className="proof" href={proofHref(post, proof, index)}>
-            {proofLabel(proof)}
-          </a>
-        ))}
+        <ProofLinks post={post} />
       </div>
     </>
   );
@@ -84,15 +101,7 @@ export function BoardThread({
               <Avatar who={who(reply)} size="xs" />
               <span>
                 <span className="ack__name">{name(reply)}</span> {reply.text}
-                {reply.proof.map((proof, index) => (
-                  <a
-                    key={index}
-                    className="proof ack__proof"
-                    href={proofHref(reply, proof, index)}
-                  >
-                    {proofLabel(proof)}
-                  </a>
-                ))}
+                <ProofLinks post={reply} />
               </span>
             </div>
           ))}

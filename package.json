@@ -69,7 +69,7 @@
     "dist-cli/legacy/",
     "dist-cli/protocol/",
     "dist-cli/server/",
-    "dist-cli/ui/dom.js",
+    "dist-cli/ui/",
     "LICENSING.md",
     "SECURITY.md"
   ],
