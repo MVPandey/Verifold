@@ -1,5 +1,5 @@
 import { useContext, useEffect, type ReactNode } from 'react';
-import type { Lab, Snapshot } from '../../protocol/api.ts';
+import type { Lab, QuestionAnswer, Snapshot } from '../../protocol/api.ts';
 import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
 import { boardLink, threads } from '../board.ts';
@@ -17,6 +17,8 @@ import { AwayDigest } from '../components/AwayDigest.tsx';
 import { NotifyLine } from '../components/NotifyLine.tsx';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
+import type { AgentActions } from './DirectionPage.tsx';
+import { PlannerComposer, Scoping, planQuestions } from './Scoping.tsx';
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -35,13 +37,22 @@ export interface LabActions {
     key: string,
   ) => Promise<ActOutcome>;
   readonly undo: (call: string, key: string) => Promise<ActOutcome>;
+  /** Answer each of the planner's questions before the plan with its pick. */
+  readonly skip: (key: string) => Promise<ActOutcome>;
+  /** Answer the planner's questions before the plan together. */
+  readonly questions: (
+    answers: readonly QuestionAnswer[],
+    key: string,
+  ) => Promise<ActOutcome>;
 }
 
 /**
  * The lab's home: what needs the person, the directions with their live
  * lines, the board, and a box to write to the lab. One column, as on the v9
  * canvas ("8. The lab at work"). Depth opens on its own page. `show`: a post
- * on the board that a link to it (`#/board/<id>`) brings into view.
+ * on the board that a link to it (`#/board/<id>`) brings into view. Before
+ * the plan, the planner's work and its questions take the place of the
+ * directions ("6 Scoping").
  */
 export function LabHome({
   snapshot,
@@ -49,6 +60,7 @@ export function LabHome({
   connection,
   now,
   actions,
+  agentActions,
   show = null,
 }: {
   readonly snapshot: Snapshot;
@@ -56,10 +68,27 @@ export function LabHome({
   readonly connection: Connection;
   readonly now: number;
   readonly actions: LabActions;
+  /** Without them, the lab before its plan shows as it does after it. */
+  readonly agentActions?: AgentActions;
   readonly show?: string | null;
 }): ReactNode {
   const agents = new Map(lab.agents.map((agent) => [agent.id, agent]));
-  const [first, ...rest] = lab.needsYou;
+  const planner = lab.planner ? agents.get(lab.planner) : undefined;
+  const plannerDirection = lab.directions.find(
+    (entry) => entry.id === planner?.direction,
+  );
+  const scoping =
+    !lab.plan && planner && plannerDirection && agentActions
+      ? { planner, direction: plannerDirection, agentActions }
+      : null;
+  // The planner's questions show as cards, so the Needs-you line leaves them out.
+  const questions = scoping ? planQuestions(lab) : [];
+  const asked = new Set(questions.map((call) => call.id));
+  const announced = new Set(questions.map((call) => call.post));
+  const [first, ...rest] = lab.needsYou.filter((call) => !asked.has(call.id));
+  const posts = scoping
+    ? lab.board.posts.filter((post) => !announced.has(post.id))
+    : lab.board.posts;
   const tools = useContext(ToolsContext);
   // After the board rendered: then the post is on the page.
   useEffect(() => {
@@ -100,7 +129,8 @@ export function LabHome({
                 : 'Paused. Agents start no new turns until you resume.'}
             </StatusBar>
           ) : (
-            <StatusBar tone="ok">Nothing needs you.</StatusBar>
+            // Before the plan, the planner's own line says what happens.
+            !scoping && <StatusBar tone="ok">Nothing needs you.</StatusBar>
           )}
           {lab.answered.map((call) => (
             <AnswerLine
@@ -112,7 +142,16 @@ export function LabHome({
               onUndo={actions.undo}
             />
           ))}
-          {lab.directions.length > 0 ? (
+          {scoping ? (
+            <Scoping
+              lab={lab}
+              planner={scoping.planner}
+              direction={scoping.direction}
+              now={now}
+              actions={actions}
+              agentActions={scoping.agentActions}
+            />
+          ) : lab.directions.length > 0 ? (
             <section className="section" aria-labelledby="directions">
               <div className="section__head">
                 <h2 id="directions" className="section__title">
@@ -144,7 +183,7 @@ export function LabHome({
               ready.
             </StatusBar>
           )}
-          {lab.board.posts.length > 0 && (
+          {posts.length > 0 && (
             <section className="section section--board" aria-labelledby="board">
               <h2 id="board" className="section__title">
                 Board
@@ -154,8 +193,8 @@ export function LabHome({
                   Older posts are not shown here yet.
                 </span>
               )}
-              {threads(lab.board.posts).map((thread) => (
-                <BoardThread key={thread.root.id} thread={thread} />
+              {threads(posts).map((thread) => (
+                <BoardThread key={thread.root.id} thread={thread} lab={lab} />
               ))}
             </section>
           )}
@@ -164,12 +203,16 @@ export function LabHome({
               This lab is large, so this page leaves out some older items.
             </span>
           )}
-          <Composer
-            label="Write to the lab"
-            placeholder="Reply, or @mention an agent"
-            maxLength={lab.postLimit}
-            onSend={actions.post}
-          />
+          {scoping ? (
+            <PlannerComposer lab={lab} {...scoping} />
+          ) : (
+            <Composer
+              label="Write to the lab"
+              placeholder="Reply, or @mention an agent"
+              maxLength={lab.postLimit}
+              onSend={actions.post}
+            />
+          )}
           <NotifyLine />
         </div>
       </main>

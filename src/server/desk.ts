@@ -69,7 +69,7 @@ import {
 } from '../core/storage.ts';
 import { validAgents } from '../core/contracts.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
-import { ApiFeed, ApiReader, answerApi } from './api.ts';
+import { ApiFeed, ApiReader, answerApi, type ProjectStart } from './api.ts';
 import { labScreen, type LabScreen } from './screen.ts';
 import type { Snapshot } from '../protocol/api.ts';
 import type { FirstRun } from './setup.ts';
@@ -659,6 +659,12 @@ async function labAction(
     case 'lab-call-words':
       await lab.answerCallInWords(body.call, body.text);
       return 200;
+    case 'lab-skip-questions':
+      await lab.skipQuestions();
+      return 200;
+    case 'lab-questions-answer':
+      await lab.answerQuestions(body.answers);
+      return 200;
     case 'lab-terminal-open':
       if (!validLease(body.lease))
         fail('The desk sent an invalid input lease.');
@@ -1205,6 +1211,10 @@ export async function startDesk(
     readonly appRoot?: URL;
     /** The first run, which the app shows with or without a project. */
     readonly firstRun?: FirstRun;
+    /** Without a project: the Ask page's read and the start of a project. */
+    readonly start?: ProjectStart;
+    /** Why the project's lab did not start, when its start failed. */
+    readonly startProblem?: () => string | null;
   } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
@@ -1234,6 +1244,7 @@ export async function startDesk(
         ? (await lookOf(project, labDesk, view.state.startedAt)).away
         : null;
     },
+    startProblem: options.startProblem,
     // The same reads as the desk's bring-in panel and its diffs.
     bring: {
       list: async (direction) => {
@@ -1423,6 +1434,8 @@ export async function startDesk(
             labDesk,
           ),
         options.firstRun,
+        // A project starts only once, from a desk that has none.
+        project ? undefined : options.start,
       );
       return;
     }

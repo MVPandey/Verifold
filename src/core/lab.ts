@@ -136,6 +136,7 @@ import {
   keptCalls,
   labLimits,
   labTiming,
+  moreHeld,
   parseAgent,
   parseState,
   planFacts,
@@ -637,6 +638,8 @@ export class Lab {
       }
     // A close that an earlier owner did not finish: the folder's last work is committed now.
     for (const agent of this.agents.values()) this.finishClosed(agent.id);
+    // Answers that the planner did not hear before a restart reach it now, when none of its questions waits.
+    await this.tellHeld().catch(() => {});
     await this.recoverBring().catch((error: unknown) =>
       this.options.progress?.(
         `Verifold could not finish a bring-in: ${error instanceof Error ? error.message : 'unknown error'}`,
@@ -2183,6 +2186,95 @@ export class Lab {
     return agent ? this.saveAgent(change(agent)) : Promise.resolve();
   }
 
+  /**
+   * The open scope calls that the planner asked before the plan of record,
+   * oldest first. The person answers them together, or skips them.
+   */
+  private planQuestions(state: LabState): Call[] {
+    const opener = state.opener;
+    return state.plan || !opener
+      ? []
+      : state.calls.filter(
+          (call) =>
+            call.state === 'open' &&
+            call.kind === 'scope' &&
+            askers(call).includes(opener),
+        );
+  }
+
+  /** A question of the planner before the plan: a scope call that the agent that opened the lab asked. */
+  private planQuestion(state: LabState, call: Call): boolean {
+    return (
+      !state.plan &&
+      state.opener !== null &&
+      call.kind === 'scope' &&
+      askers(call).includes(state.opener)
+    );
+  }
+
+  /**
+   * The planner hears the answers to its questions together: each answer's
+   * line waits on its call, and the lines reach the planner as one wakeup
+   * once no question of it is open or undoing. A question that the person
+   * answers last, in any way, therefore wakes it. In the lab's queue.
+   */
+  private async tellHeld(): Promise<void> {
+    const state = this.current();
+    const held = state.calls.filter((call) => call.held);
+    if (
+      !held.length ||
+      state.calls.some(
+        (call) =>
+          this.planQuestion(state, call) &&
+          (call.state === 'open' || call.state === 'undoing'),
+      )
+    )
+      return;
+    const opener = state.opener ? this.agents.get(state.opener) : undefined;
+    // The lines wait for an agent that can hear them.
+    if (!opener || !this.active(opener)) return;
+    await this.saveState({
+      ...state,
+      calls: state.calls.map((call): Call => {
+        if (!call.held) return call;
+        const told: { -readonly [Key in keyof Call]: Call[Key] } = { ...call };
+        delete told.held;
+        return told;
+      }),
+    });
+    // One event, shown whole: the planner reads every answer in full, in one digest.
+    this.loop(opener.id).add(
+      [
+        {
+          kind: 'call',
+          text: held.map((call) => call.held).join(' '),
+          whole: true,
+        },
+      ],
+      0,
+    );
+  }
+
+  /**
+   * The board's line about an answer to a question of the planner is read
+   * for the planner: it hears the answer with the others, from `tellHeld`,
+   * and never earlier from its digest.
+   */
+  private unheard(call: Call, post: Post | null): void {
+    const state = this.state;
+    if (post && state?.opener && this.planQuestion(state, call))
+      this.markRead(state.opener, post.id);
+  }
+
+  /** Keep an answer's line on a question of the planner until it hears them all. In the lab's queue. */
+  private async hold(call: Call, line: string): Promise<void> {
+    await this.changeCall(call.id, (entry) => ({
+      ...entry,
+      held: moreHeld(entry.held, line),
+    }));
+    await this.tellHeld();
+  }
+
   private loop(id: string): WakeLoop<LabEvent, AgentRecord> {
     let loop = this.loops.get(id);
     if (loop) return loop;
@@ -2268,7 +2360,7 @@ export class Lab {
       .filter((event) => event.kind !== 'post' && event.kind !== 'person')
       .map(
         (event) =>
-          `- [${event.kind}${event.again ? ', again' : ''}] ${event.text.length > labLimits.digestNote ? `${event.text.slice(0, labLimits.digestNote)}…` : event.text}`,
+          `- [${event.kind}${event.again ? ', again' : ''}] ${!event.whole && event.text.length > labLimits.digestNote ? `${event.text.slice(0, labLimits.digestNote)}…` : event.text}`,
       );
     const lines = [...notes, ...posts];
     const news = lines.length ? lines.join('\n') : '- No new posts.';
@@ -2391,7 +2483,7 @@ ${restrictions(agent.host, null, "direction's folder")
   .map((line) => `- ${line}`)
   .join('\n')}
 
-${planning ? 'Start now: read the question and the project, then post the plan of record with verifold_plan in this turn.' : 'Start now: plan the next step of your direction, do it, and post what you find.'}`;
+${planning ? 'Start now: read the question and the project, and check the facts. Then post the plan of record with verifold_plan in this turn, or ask the person your questions first.' : 'Start now: plan the next step of your direction, do it, and post what you find.'}`;
   }
 
   /** The tools of one launch of an agent's session. A call from an older launch changes nothing. */
@@ -2731,6 +2823,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           ? callLimits.defaultUndo
           : whole(args.undoMinutes, 0, callLimits.undoMinutes, 'undoMinutes'),
     };
+    const facts =
+      args.facts === undefined
+        ? []
+        : planFacts(args.facts, new Date().toISOString());
     const team = options.some((option) => option.effect?.type === 'open')
       ? await this.team()
       : [];
@@ -2781,6 +2877,16 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             'This lab has no time budget, so more hours change nothing. Give the options without hours.',
           );
       }
+      // Before the plan of record, the planner's questions change the plan, and the plan opens the directions.
+      if (
+        kind === 'scope' &&
+        !state.plan &&
+        state.opener === agent.id &&
+        priced.some((option) => option.effect)
+      )
+        fail(
+          'Before the plan, a scope call asks about what changes the plan. Give the options without effects: your plan opens the directions.',
+        );
       // A call that asks what an open call asks already joins it, so the person answers once.
       const same = this.sameOpenCall({ kind, need, options: priced });
       if (same) {
@@ -2799,6 +2905,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         options: priced,
         deadline: null,
         ...draft,
+        ...(facts.length ? { facts } : {}),
       });
       return { call, joined: false };
     });
@@ -2957,6 +3064,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       | 'why'
       | 'undoMinutes'
       | 'deadline'
+      | 'facts'
     >,
   ): Promise<Call> {
     const state = this.current();
@@ -3065,17 +3173,30 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
     });
   }
 
-  /** A line on the board about a call, which also wakes every agent that asked it. In the lab's queue. */
+  /**
+   * A line on the board about a call, which also wakes every agent that
+   * asked it. A question of the planner keeps its line until the planner
+   * hears all its answers together. In the lab's queue.
+   */
   private async tell(call: Call, line: string): Promise<void> {
-    await this.add({
+    const post = await this.add({
       author: 'verifold',
       kind: 'status',
       ...(call.direction ? { direction: call.direction } : {}),
       text: clip(line, boardLimits.text),
       mentions: [],
       artifacts: [],
-    }).catch(() => {});
-    this.wakeAskers(call, line);
+    }).catch(() => null);
+    this.unheard(call, post);
+    // While the lab moves, as in a reload's recovery, the askers hear it at once.
+    if (
+      this.state &&
+      !this.suspended &&
+      !this.moving &&
+      this.planQuestion(this.state, call)
+    )
+      await this.hold(call, line);
+    else this.wakeAskers(call, line);
   }
 
   /** Each agent that asked a call and still works gets the line. */
@@ -3202,32 +3323,169 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         words: body,
       }));
       // The record of the answer on the board. A full board refuses it; the call keeps the words.
-      if (call.post)
-        await this.add({
-          author: 'person',
-          kind: 'question',
-          replyTo: call.post,
-          text: body,
-          mentions: [],
-          artifacts: [],
-        }).catch(() => {});
-      else
-        await this.add({
-          author: 'verifold',
-          kind: 'status',
-          ...(call.direction ? { direction: call.direction } : {}),
-          text: clip(
-            `The person answered ${call.id} in their own words: ${JSON.stringify(body)}`,
-            boardLimits.text,
-          ),
-          mentions: [],
-          artifacts: [],
-        }).catch(() => {});
-      this.wakeAskers(
-        call,
-        `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(body)}. This is their decision: follow it, or ask again with new options when it is unclear.`,
+      const post = call.post
+        ? await this.add({
+            author: 'person',
+            kind: 'question',
+            replyTo: call.post,
+            text: body,
+            mentions: [],
+            artifacts: [],
+          }).catch(() => null)
+        : await this.add({
+            author: 'verifold',
+            kind: 'status',
+            ...(call.direction ? { direction: call.direction } : {}),
+            text: clip(
+              `The person answered ${call.id} in their own words: ${JSON.stringify(body)}`,
+              boardLimits.text,
+            ),
+            mentions: [],
+            artifacts: [],
+          }).catch(() => null);
+      this.unheard(call, post);
+      const line = `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(body)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
+      if (this.planQuestion(this.current(), call)) await this.hold(call, line);
+      else this.wakeAskers(call, line);
+    });
+  }
+
+  /**
+   * The person answers the planner's questions before the plan, together:
+   * each with an option or in their own words. A question that the list
+   * leaves out stays open. See `settleQuestions`.
+   */
+  async answerQuestions(answers: unknown): Promise<void> {
+    await this.serial(async () => {
+      const open = this.planQuestions(this.current());
+      const list =
+        Array.isArray(answers) &&
+        answers.length >= 1 &&
+        answers.length <= callLimits.open
+          ? answers
+          : fail(`Answer 1 to ${callLimits.open} of the planner's questions.`);
+      const settled = list.map((value) => {
+        const entry = object(value) ?? fail('Give each answer as an object.');
+        const call =
+          open.find((item) => item.id === entry.call) ??
+          fail(
+            `${typeof entry.call === 'string' ? entry.call : 'That call'} is not a question of the planner that waits for you.`,
+          );
+        if (
+          entry.words !== undefined &&
+          entry.words !== null &&
+          entry.words !== ''
+        )
+          return {
+            call,
+            words: text(entry.words, callLimits.words, 'your answer'),
+            option: null,
+          };
+        return {
+          call,
+          words: null,
+          option: whole(entry.option, 0, call.options.length - 1, 'option'),
+        };
+      });
+      if (new Set(settled.map(({ call }) => call.id)).size !== settled.length)
+        fail('Answer each question once.');
+      await this.settleQuestions(settled, false);
+    });
+  }
+
+  /** The person skips the planner's questions before the plan: each one takes the planner's pick. See `settleQuestions`. */
+  async skipQuestions(): Promise<void> {
+    await this.serial(async () => {
+      const open = this.planQuestions(this.current());
+      if (!open.length) fail('The planner has no questions that wait for you.');
+      await this.settleQuestions(
+        open.map((call) => ({ call, words: null, option: call.pick ?? 0 })),
+        true,
       );
     });
+  }
+
+  /**
+   * Save answers to the planner's questions in one step, with each answer's
+   * line held on its call, write each on the board, and let the planner hear
+   * them (see `tellHeld`). Before the plan, a question has no effect, so
+   * nothing else applies. An option can be undone in its window, as any
+   * answer. In the lab's queue.
+   */
+  private async settleQuestions(
+    answers: readonly {
+      readonly call: Call;
+      readonly words: string | null;
+      readonly option: number | null;
+    }[],
+    skipped: boolean,
+  ): Promise<void> {
+    const at = new Date().toISOString();
+    const lineOf = (answer: (typeof answers)[number]): string => {
+      const { call, words, option } = answer;
+      if (words !== null)
+        return `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(words)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
+      const label = JSON.stringify(call.options[option ?? 0]?.label ?? '');
+      return skipped
+        ? `The person skipped ${call.id}, so your pick ${label} stands.`
+        : `The person chose ${label} on ${call.id}.`;
+    };
+    const state = this.current();
+    await this.saveState({
+      ...state,
+      calls: state.calls.map((entry): Call => {
+        const answer = answers.find(({ call }) => call.id === entry.id);
+        if (!answer) return entry;
+        const line = lineOf(answer);
+        const held = moreHeld(entry.held, line);
+        if (answer.words !== null)
+          return { ...entry, state: 'answered', words: answer.words, held };
+        return {
+          ...entry,
+          state: 'answered',
+          answer: { option: answer.option ?? 0, at },
+          undoUntil:
+            entry.undoMinutes > 0
+              ? new Date(
+                  Date.parse(at) + entry.undoMinutes * 60_000,
+                ).toISOString()
+              : null,
+          held,
+        };
+      }),
+    });
+    for (const answer of answers) {
+      const { call, words } = answer;
+      // The record on the board: the person's words in the call's thread,
+      // else a status line, as for any answer. A full board refuses it; the
+      // call keeps the answer.
+      const post = await this.add(
+        words !== null && call.post
+          ? {
+              author: 'person',
+              kind: 'question',
+              replyTo: call.post,
+              text: words,
+              mentions: [],
+              artifacts: [],
+            }
+          : {
+              author: 'verifold',
+              kind: 'status',
+              ...(call.direction ? { direction: call.direction } : {}),
+              text: clip(
+                words !== null
+                  ? `The person answered ${call.id} in their own words: ${JSON.stringify(words)}`
+                  : lineOf(answer),
+                boardLimits.text,
+              ),
+              mentions: [],
+              artifacts: [],
+            },
+      ).catch(() => null);
+      this.unheard(call, post);
+    }
+    await this.tellHeld();
   }
 
   /** Apply a saved answer and record what it did. The answer is in `applying` meanwhile. */
@@ -6275,6 +6533,15 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         args.facts === undefined
           ? null
           : planFacts(args.facts, new Date().toISOString());
+      // The first plan changes nothing, so it has no line on what changed.
+      const changed =
+        first || args.changed === undefined || args.changed === ''
+          ? null
+          : text(
+              args.changed,
+              planLimits.changed,
+              'what changed from the plan before, and why',
+            );
       // From here on, no other plan starts.
       this.planning = true;
       return {
@@ -6282,6 +6549,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         reading,
         cost,
         facts,
+        changed,
         previous: state.plan?.post ?? null,
         host: agent.host,
         own: own.id,
@@ -6397,12 +6665,18 @@ Start now: find the claim's premise, start a run early, and post your rerun once
             cost: draft.cost,
             directions: order,
             facts: draft.facts ?? state.plan?.facts ?? [],
+            // A plan from before versions counts as the first.
+            version: state.plan ? (state.plan.version ?? 1) + 1 : 1,
+            ...(previous ? { previous } : {}),
+            ...(draft.changed ? { changed: draft.changed } : {}),
           },
         };
         // The plan post is on the board and the plan in memory: a failed write comes again with the next save.
         await this.stateFile.save().catch(() => {});
         this.rt(id).posted = true;
         this.rt(id).spoke = true;
+        // Answers that waited for another question reach the planner now: with a plan, no question waits.
+        await this.tellHeld().catch(() => {});
         this.options.onChange?.();
         const opened = [...made.values()];
         return [

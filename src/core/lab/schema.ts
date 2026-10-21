@@ -181,6 +181,12 @@ export interface PlanOfRecord {
   /** The directions of the plan, in its order. */
   readonly directions: readonly string[];
   readonly facts: readonly PlanFact[];
+  /** 1 for the first plan. A plan from before versions has none. */
+  readonly version?: number;
+  /** The plan post before this one. */
+  readonly previous?: string;
+  /** What the planner says changed from the plan before, and why. */
+  readonly changed?: string;
 }
 
 export interface LabState {
@@ -387,6 +393,8 @@ export type CallEffect =
 
 export interface CallOption {
   readonly label: string;
+  /** One line on what the option means. An option from before details has none. */
+  readonly detail?: string;
   readonly usd: number | null;
   readonly minutes: number | null;
   readonly effect: CallEffect | null;
@@ -452,6 +460,10 @@ export interface Call {
   readonly applied: CallApplied | null;
   /** Why it was withdrawn, or what Verifold did. */
   readonly note: string | null;
+  /** The facts behind the call that change over time, as the asker checked them. A call from before facts has none. */
+  readonly facts?: readonly PlanFact[];
+  /** A question of the planner before the plan: its answer's line, until the planner hears all its answers together. */
+  readonly held?: string;
 }
 
 export interface LabEvent {
@@ -467,6 +479,8 @@ export interface LabEvent {
   readonly text: string;
   /** The post that the event is about. */
   readonly post?: string;
+  /** The digest shows the text whole: the answers to the planner's questions, which `heldChars` bounds. */
+  readonly whole?: true;
 }
 
 export interface LabAction {
@@ -975,7 +989,7 @@ export function callOptions(
 ): CallOption[] {
   const { min, max } = callLimits.options;
   if (!Array.isArray(value) || value.length < min || value.length > max)
-    fail(`Give ${min} or ${max} options.`);
+    fail(`Give ${min} to ${max} options.`);
   return value.map((item) => {
     const option = object(item) ?? fail('Give each option as an object.');
     const amount = (
@@ -991,8 +1005,14 @@ export function callOptions(
             field <= top
           ? field
           : fail(`Give ${what} from 0 to ${top}.`);
+    const detail = optionalText(
+      option.detail,
+      callLimits.detail,
+      'the detail of each option',
+    );
     return {
       label: text(option.label, callLimits.label, 'a label for each option'),
+      ...(detail ? { detail } : {}),
       usd: amount(option.usd, callLimits.usd, 'the dollars'),
       minutes:
         option.minutes === undefined || option.minutes === null
@@ -1073,6 +1093,7 @@ function parseCall(value: unknown): Call | null {
   const answer = object(entry.answer);
   const option = answer?.option;
   const at = recordTime(answer?.at);
+  const facts = storedFacts(entry.facts);
   return {
     id: entry.id,
     at: entry.at,
@@ -1141,7 +1162,20 @@ function parseCall(value: unknown): Call | null {
     undoUntil: recordTime(entry.undoUntil),
     applied: parseApplied(entry.applied),
     note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : null,
+    ...(facts.length ? { facts } : {}),
+    ...(typeof entry.held === 'string' && entry.held
+      ? { held: entry.held.slice(0, heldChars) }
+      : {}),
   };
+}
+
+/** The most characters of the lines that a question of the planner holds: an answer in words, and the line around it, a few times. */
+const heldChars = 12_000;
+
+/** A question's held lines and one more. Past `heldChars`, the oldest go, so the newest answer stays. */
+export function moreHeld(held: string | undefined, line: string): string {
+  const all = held ? `${held} ${line}` : line;
+  return all.length > heldChars ? `…${all.slice(1 - heldChars)}` : all;
 }
 
 /** The fields of a `verifold_run` call that every run has: the command, why, its minutes up to `most`, and its outputs. */
@@ -1391,14 +1425,17 @@ export function parseState(
                   typeof id === 'string' && directionId.test(id),
               )
               .slice(0, labLimits.directions),
-            facts: Array.isArray(plan.facts)
-              ? plan.facts
-                  .flatMap((entry: unknown) => {
-                    const fact = storedFact(entry);
-                    return fact ? [fact] : [];
-                  })
-                  .slice(0, planLimits.facts)
-              : [],
+            facts: storedFacts(plan.facts),
+            ...(Number.isSafeInteger(plan.version) &&
+            (plan.version as number) >= 1
+              ? { version: plan.version as number }
+              : {}),
+            ...(typeof plan.previous === 'string' && postId.test(plan.previous)
+              ? { previous: plan.previous }
+              : {}),
+            ...(typeof plan.changed === 'string' && plan.changed.trim()
+              ? { changed: plan.changed.slice(0, planLimits.changed) }
+              : {}),
           }
         : null,
     budget:
@@ -1519,7 +1556,7 @@ function optionalText(
     : text(value, limit, what);
 }
 
-/** The facts of an agent's plan, checked. `at`: when the plan is posted. */
+/** The facts of an agent's plan or call, checked. `at`: when the plan or the call is posted. */
 export function planFacts(value: unknown, at: string): PlanFact[] {
   if (!Array.isArray(value) || value.length > planLimits.facts)
     fail(`Give facts as a list of at most ${planLimits.facts}.`);
@@ -1542,7 +1579,7 @@ export function planFacts(value: unknown, at: string): PlanFact[] {
   });
 }
 
-/** A fact of a plan from `lab.json`, or null for one that is not valid. */
+/** A fact of a plan or a call from `lab.json`, or null for one that is not valid. */
 function storedFact(value: unknown): PlanFact | null {
   try {
     const entry = object(value);
@@ -1553,6 +1590,18 @@ function storedFact(value: unknown): PlanFact | null {
   } catch {
     return null;
   }
+}
+
+/** The valid facts of a stored list, within the limit. */
+function storedFacts(value: unknown): PlanFact[] {
+  return Array.isArray(value)
+    ? value
+        .flatMap((entry: unknown) => {
+          const fact = storedFact(entry);
+          return fact ? [fact] : [];
+        })
+        .slice(0, planLimits.facts)
+    : [];
 }
 
 /** The repeat runs that a bar needs, from an agent's tool call. */

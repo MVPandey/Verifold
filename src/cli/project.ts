@@ -1,6 +1,8 @@
 import { lstat, mkdir, open, rm, rmdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { Workspace } from '../core/contracts.ts';
+import type { Profile } from '../core/profile.ts';
 import { changeWorkspace, loadWorkspace } from '../core/storage.ts';
 import { writeComputeSettings, type ComputeSettings } from '../core/compute.ts';
 
@@ -14,6 +16,30 @@ const folders = {
   agents:
     'Project-specific agent briefs and review notes; host settings stay with the host.',
 } as const;
+
+/** The research profile of a project that no `--profile` import gives. */
+export const defaultProfile: Profile = {
+  name: 'Researcher',
+  interests: ['Computational research'],
+  scholar: '',
+  github: '',
+  session: '',
+};
+
+/** A path as the person wrote it: `~/` starts in the home folder, and a relative path in `cwd`. */
+export function expandHome(path: string, cwd: string): string {
+  return path.startsWith('~/')
+    ? resolve(homedir(), path.slice(2))
+    : resolve(cwd, path);
+}
+
+/** A folder as the person reads it, with the home folder as `~`. */
+export function homeShown(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`)
+    ? `~${path.slice(home.length)}`
+    : path;
+}
 
 function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';

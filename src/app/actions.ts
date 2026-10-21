@@ -36,6 +36,8 @@ export function labActions(token: string | null): LabActions {
       answer: signedOut,
       words: signedOut,
       undo: signedOut,
+      skip: signedOut,
+      questions: signedOut,
     };
   return {
     post: (text, key) => act(token, 'lab-post', { text }, key),
@@ -46,6 +48,9 @@ export function labActions(token: string | null): LabActions {
     words: (call, text, key) =>
       act(token, 'lab-call-words', { call, text }, key),
     undo: (call, key) => act(token, 'lab-call-undo', { call }, key),
+    skip: (key) => act(token, 'lab-skip-questions', {}, key),
+    questions: (answers, key) =>
+      act(token, 'lab-questions-answer', { answers }, key),
   };
 }
 
@@ -105,14 +110,22 @@ export interface AppActions {
   readonly dismissAway: (key: string) => Promise<ActOutcome>;
   /** The person looks at the lab now. It needs no intent: a look again is harmless. */
   readonly look: () => Promise<ActOutcome>;
+  /** Start the project's lab on its question, as the desk's Start the lab does. */
+  readonly startLab: (question: string, key: string) => Promise<ActOutcome>;
 }
 
 export function appActions(token: string | null): AppActions {
   if (!token)
-    return { search: unread, dismissAway: signedOut, look: signedOut };
+    return {
+      search: unread,
+      dismissAway: signedOut,
+      look: signedOut,
+      startLab: signedOut,
+    };
   return {
     search: (q, signal) => load(token, searchPath(q), isSearchResult, signal),
     dismissAway: (key) => act(token, 'lab-away-dismiss', {}, key),
     look: () => act(token, 'lab-look', {}, newKey()),
+    startLab: (question, key) => act(token, 'lab-start', { question }, key),
   };
 }

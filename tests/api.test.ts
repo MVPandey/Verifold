@@ -852,6 +852,122 @@ await test('the snapshot holds what the screens show, and no internal field, key
     assert.equal(json.includes(hidden), false, `the snapshot shows ${hidden}`);
 });
 
+await test('the snapshot names the planner, the facts and option details of a call, and the version of the plan and what changed', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const seeded = seededView();
+  const plan = seeded.state.plan;
+  assert.ok(plan);
+  const view: LabView = {
+    ...seeded,
+    state: {
+      ...seeded.state,
+      plan: {
+        ...plan,
+        version: 2,
+        previous: 'p-0',
+        changed: 'Qwen3-4B → Qwen3.5-9B, as the person chose.',
+      },
+      calls: [
+        call({
+          kind: 'scope',
+          joined: [],
+          question: 'Which models should the experiments use?',
+          options: [
+            {
+              label: 'Qwen3.5-9B',
+              detail: 'Newest small Qwen, with official SAEs.',
+              usd: null,
+              minutes: null,
+              effect: null,
+            },
+            { label: 'Both', usd: null, minutes: null, effect: null },
+          ],
+          facts: [
+            {
+              claim: 'Qwen3.5-9B has official SAEs',
+              source: 'https://huggingface.co/Qwen',
+              sourceDate: '2026-04-27',
+              checkedAt: at(40),
+            },
+          ],
+        }),
+      ],
+    },
+  };
+  const lab = parse(
+    await new ApiReader(sources(root, () => view)).snapshot(),
+  ).lab;
+  assert.ok(lab);
+  assert.equal(lab.planner, 'a-1');
+  const [question] = lab.needsYou;
+  assert.deepEqual(
+    question?.options.map((option) => [option.label, option.detail ?? null]),
+    [
+      ['Qwen3.5-9B', 'Newest small Qwen, with official SAEs.'],
+      ['Both', null],
+    ],
+  );
+  assert.deepEqual(question?.facts, [
+    {
+      claim: 'Qwen3.5-9B has official SAEs',
+      source: 'https://huggingface.co/Qwen',
+      sourceDate: '2026-04-27',
+      listedAt: at(40),
+    },
+  ]);
+  assert.equal(lab.plan?.version, 2);
+  assert.equal(lab.plan?.previous, 'p-0');
+  assert.equal(
+    lab.plan?.changed,
+    'Qwen3-4B → Qwen3.5-9B, as the person chose.',
+  );
+  // A call without facts and a plan from before versions say nothing of them.
+  const older = parse(
+    await new ApiReader(sources(root, seededView)).snapshot(),
+  ).lab;
+  assert.equal(older?.needsYou[0]?.facts, undefined);
+  assert.equal(older?.plan?.version, undefined);
+  assert.equal(older?.plan?.previous, null);
+  assert.equal(older?.plan?.changed, null);
+});
+
+await test('a project without a lab: the snapshot holds its question and why its lab did not start, and a new reason sends a new snapshot', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let problem: string | null =
+    'Verifold found no agent tool that is signed in.';
+  const reader = new ApiReader(
+    sources(root, () => null, { startProblem: () => problem }),
+  );
+  // A project without a question has none to start a lab on.
+  assert.equal(parse(await reader.snapshot()).question, null);
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Do probes see faithfulness?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+  }));
+  const data = parse(await reader.snapshot());
+  assert.equal(data.lab, null);
+  assert.equal(data.question, 'Do probes see faithfulness?');
+  assert.equal(
+    data.startProblem,
+    'Verifold found no agent tool that is signed in.',
+  );
+  const before = await reader.signal();
+  problem = null;
+  assert.notDeepEqual(await reader.signal(), before);
+  assert.equal(parse(await reader.snapshot()).startProblem, null);
+  // Without a project, there is neither.
+  const none = parse(await new ApiReader(sources('', () => null)).snapshot());
+  assert.equal(none.project, '');
+  assert.equal('question' in none, false);
+  assert.equal('startProblem' in none, false);
+});
+
 await test('a pod option says how many of its secrets this computer lacks, and storing one updates it', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1704,6 +1820,14 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
       words.push([id, text]);
       return Promise.resolve();
     },
+    answerQuestions: (answers: unknown) => {
+      words.push(['questions', answers]);
+      return Promise.resolve();
+    },
+    skipQuestions: () => {
+      words.push(['skip']);
+      return Promise.resolve();
+    },
     pause: () =>
       Promise.reject(new SessionActionError('The lab is paused already.')),
   } as unknown as Lab;
@@ -1862,6 +1986,20 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
   assert.equal(answered.status, 200);
   assert.deepEqual(await answered.json(), { ok: true });
   assert.deepEqual(words, [['c-1', 'Use the A100 for one seed first.']]);
+  // The planner's questions: answers together, and a skip.
+  const answers = [
+    { call: 'c-1', option: 1 },
+    { call: 'c-3', words: 'Both.' },
+  ];
+  assert.equal((await action('lab-questions-answer', { answers })).status, 200);
+  assert.equal((await action('lab-skip-questions', {})).status, 200);
+  assert.deepEqual(words.slice(1), [['questions', answers], ['skip']]);
+  // A desk with a project takes no project start.
+  assert.equal(
+    (await action('project-start', { question: 'Another?' })).status,
+    404,
+  );
+  assert.equal((await fetch(`${api}/start`, { headers })).status, 404);
   const refused = await action('lab-pause', {});
   assert.equal(refused.status, 409);
   assert.deepEqual(await refused.json(), {

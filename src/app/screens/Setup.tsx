@@ -82,16 +82,34 @@ export function DoneStep({
           own GPU limits. <a href={href.lab}>Back to the lab</a>
         </p>
       ) : (
-        <p className="step__lead">
-          Next comes your question. The app’s Ask page comes in a later step.
-          Until then, press Ctrl+C in the terminal, then run{' '}
-          <code>verifold</code> in this folder without <code>--app</code>. The
-          desk asks for your question, and the new project starts from this
-          profile.
-        </p>
+        <div className="setup__actions">
+          <a className="button button--primary button--big" href={href.ask}>
+            Ask your question
+          </a>
+        </div>
       )}
     </>
   );
+}
+
+/** A page of the first run. Without a project, the end of the first run is the Ask page. */
+export function pageRoute(page: Page, project: string | null): string {
+  return page === 'done' && project === '' ? href.ask : href.setup(page);
+}
+
+/**
+ * Where `#/setup` leads: the first step without a record, once the first
+ * run and the first snapshot are read. Before the snapshot, nobody knows
+ * whether a project exists, so it waits. Null: stay.
+ */
+export function openingRoute(
+  view: SetupView | null,
+  step: Page | null,
+  project: string | null,
+): string | null {
+  return view && step === null && project !== null
+    ? pageRoute(firstPage(view), project)
+    : null;
 }
 
 /**
@@ -105,15 +123,16 @@ export function SetupPage({
 }: {
   readonly step: Page | null;
   readonly actions: SetupActions;
-  /** The project's folder name. Empty: Verifold runs without a project. */
-  readonly project: string;
+  /** The project's folder name. Empty: Verifold runs without a project. Null: before the first snapshot. */
+  readonly project: string | null;
 }): ReactNode {
   const { view, error, refresh } = useSetup(actions.read);
   useEffect(() => {
-    if (view && step === null) replaceRoute(href.setup(firstPage(view)));
-  }, [view, step]);
+    const to = openingRoute(view, step, project);
+    if (to) replaceRoute(to);
+  }, [view, step, project]);
   const open = (page: Page): void => {
-    location.hash = href.setup(page);
+    location.hash = pageRoute(page, project);
     refresh();
   };
   let body: ReactNode;
@@ -164,10 +183,10 @@ export function SetupPage({
         onSaved={() => open(pageAfter('money'))}
       />
     );
-  else body = <DoneStep view={view} project={project} />;
+  else body = <DoneStep view={view} project={project ?? ''} />;
   return (
     <div className="page">
-      <SetupHeader project={project} />
+      <SetupHeader project={project ?? ''} />
       <main className="setup">
         <div className="setup__column">{body}</div>
       </main>

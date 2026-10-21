@@ -51,6 +51,13 @@ export interface Snapshot {
   readonly project: string;
   /** Null: the project has no lab. */
   readonly lab: Lab | null;
+  /**
+   * A project without a lab: its question, so the page can start the lab
+   * on it, or null when it has none. Added after version 1.
+   */
+  readonly question?: string | null;
+  /** A project without a lab: why its lab's last start failed, or null. Added after version 1. */
+  readonly startProblem?: string | null;
   /** The snapshot left items out: lists past their bounds, or less of a large lab to stay under the size bound. */
   readonly trimmed: boolean;
 }
@@ -98,6 +105,12 @@ export interface Lab {
   readonly directionCounts?: DirectionCounts;
   /** The agents of the directions, then the checkers. */
   readonly agents: readonly Agent[];
+  /**
+   * The agent that opened the lab: it plans it, and changes the plan later.
+   * Null when no agent plans the lab. Before the plan, its open scope calls
+   * are its questions to the person. Added after version 1.
+   */
+  readonly planner?: string | null;
   readonly plan: Plan | null;
   /** The newest posts, oldest first. `GET /api/v1/board?before=` pages back. */
   readonly board: BoardPage;
@@ -181,6 +194,8 @@ export type Effect =
 
 export interface CallOption {
   readonly label: string;
+  /** One line on what the option means. Added after version 1. */
+  readonly detail?: string;
   readonly usd: number | null;
   readonly minutes: number | null;
   readonly effect: Effect | null;
@@ -219,6 +234,8 @@ export interface Call {
   readonly note: string | null;
   /** The board post of the call. Replies to it go in its thread. */
   readonly post: string | null;
+  /** The facts behind the call, as the agent that asked checked them. Added after version 1. */
+  readonly facts?: readonly Fact[];
 }
 
 export type Verdict = 'open' | 'leading' | 'holds-up' | 'ruled-out';
@@ -472,12 +489,12 @@ export interface Dispute {
   readonly check: string | null;
 }
 
-/** A fact that changes over time and that the plan rests on. No source: it is unverified. */
+/** A fact that changes over time and that a plan or a call rests on. No source: it is unverified. */
 export interface Fact {
   readonly claim: string;
   readonly source: string | null;
   readonly sourceDate: string | null;
-  /** When the plan that listed it was posted. */
+  /** When the plan or the call that listed it was posted. */
   readonly listedAt: string;
 }
 
@@ -490,6 +507,12 @@ export interface Plan {
   /** The plan's directions, in its order. */
   readonly directions: readonly string[];
   readonly facts: readonly Fact[];
+  /** 1 for the first plan. Absent for a plan from before versions. Added after version 1. */
+  readonly version?: number;
+  /** The plan post before this one, or null. Added after version 1. */
+  readonly previous?: string | null;
+  /** What the planner says changed from the plan before, and why, or null. Added after version 1. */
+  readonly changed?: string | null;
 }
 
 export interface Run {
@@ -1064,6 +1087,82 @@ export interface ActionBodies {
   'setup-skill-remove': { readonly id: string; readonly key?: string };
   /** Finish the Skills step. */
   'setup-skills-done': { readonly key?: string };
+  /**
+   * Without a project: create one for the person's question, and start its
+   * lab. The settings apply to this project only. Each one that is left out
+   * comes from the profile. Added after version 1.
+   */
+  'project-start': {
+    readonly question: string;
+    /** Another folder: an absolute path, or one that starts with `~/`. Without it, the folder where Verifold started. */
+    readonly folder?: string;
+    readonly agents?: ProjectAgents;
+    /** The project's GPU limit in USD. Null: no GPUs. */
+    readonly gpuUsd?: number | null;
+    /** The lab's time budget, in whole hours. */
+    readonly hours?: number;
+    readonly key?: string;
+  };
+  /**
+   * Answer each of the planner's open questions before the plan with its
+   * pick. The planner wakes once. Added after version 1.
+   */
+  'lab-skip-questions': { readonly key?: string };
+  /**
+   * Answer the planner's questions before the plan together, each with an
+   * option or in the person's own words. The planner wakes once, with every
+   * answer. Added after version 1.
+   */
+  'lab-questions-answer': {
+    readonly answers: readonly QuestionAnswer[];
+    readonly key?: string;
+  };
+}
+
+/** An answer to one of the planner's questions: an option, or the person's own words. */
+export interface QuestionAnswer {
+  readonly call: string;
+  readonly option?: number;
+  readonly words?: string;
+}
+
+/** A project's harnesses, the lead first, with their models. A model left out comes from the profile. */
+export interface ProjectAgents {
+  readonly host: Harness;
+  readonly model?: string;
+  readonly helper?: Harness;
+  readonly helperModel?: string;
+}
+
+/**
+ * `GET /api/v1/start`, while Verifold runs without a project: what the Ask
+ * page needs besides the profile, which `GET /api/v1/setup` gives. Added
+ * after version 1.
+ */
+export interface StartView {
+  /** The folder where Verifold started, with the home folder as `~`. */
+  readonly folder: string;
+  /** The folder holds files already, so the agents may read them. */
+  readonly files: boolean;
+  /** The lab's time budget unless the person changes it, in hours. */
+  readonly hours: number;
+  /** The most hours of a time budget. */
+  readonly maxHours: number;
+  /** The most characters of a question. */
+  readonly questionLimit: number;
+  /**
+   * The project's agents unless the person changes them: the profile's lead
+   * and helper with the models that it saved, else the signed-in harnesses
+   * on this computer. Null: none is signed in. Start sends what the page
+   * shows.
+   */
+  readonly agents: ProjectAgents | null;
+  /** The project's GPU limit unless the person changes it, in USD. Null: no GPUs. */
+  readonly gpuUsd: number | null;
+  /** The profile has GPU limits, so a project can have its own limit within them. */
+  readonly gpuLimits: boolean;
+  /** A start went through: the project starts, and this page's Verifold hands it on. */
+  readonly started: boolean;
 }
 
 export type ActionName = keyof ActionBodies;

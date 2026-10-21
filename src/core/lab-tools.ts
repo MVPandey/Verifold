@@ -14,7 +14,8 @@ import type { AgentTool } from './session-hosts.ts';
  * new thread. `verifold_direction` now accepts holds-up, which starts a
  * check; its schema did not change, so no version either. `facts` of
  * `verifold_plan` is optional, so the plans of an older thread stay valid: no
- * version.
+ * version. The same holds for `changed` of `verifold_plan`, for `facts` of
+ * `verifold_ask_person`, and for its fourth option.
  */
 export const labToolsVersion = 2;
 
@@ -35,6 +36,8 @@ export const planLimits = {
   claim: 160,
   source: 300,
   sourceDate: 40,
+  /** What a later plan changed, and why. */
+  changed: 200,
 };
 
 /** The kinds of post that an agent can write. A rerun comes from a checker that Verifold starts. */
@@ -502,10 +505,12 @@ export const callLimits = {
   open: 3,
   question: 160,
   label: 80,
+  /** One line under an option's label. */
+  detail: 160,
   why: 280,
   /** The person's answer in their own words. */
   words: 2000,
-  options: { min: 2, max: 3 },
+  options: { min: 2, max: 4 },
   usd: 10_000,
   minutes: 100_000,
   domains: 20,
@@ -519,11 +524,42 @@ export const callLimits = {
   deadlineHours: 4,
 };
 
+/** Facts that change over time, each with where and when the agent checked it. A plan and a call give them. */
+const factsSchema = {
+  type: 'array',
+  maxItems: planLimits.facts,
+  items: {
+    type: 'object',
+    properties: {
+      claim: {
+        type: 'string',
+        maxLength: planLimits.claim,
+        description:
+          'The fact, such as "Model: Qwen3.8-8B" or "H100: $3.99 an hour".',
+      },
+      source: {
+        type: 'string',
+        maxLength: planLimits.source,
+        description:
+          'Where you checked it: a URL. Leave it out for a fact that you could not check: it is unverified.',
+      },
+      sourceDate: {
+        type: 'string',
+        maxLength: planLimits.sourceDate,
+        description:
+          "The source's date, such as 2026-08-14, or when you read a price.",
+      },
+    },
+    required: ['claim'],
+    additionalProperties: false,
+  },
+} as const;
+
 /** A call for the person: cost, scope, access, or go, with options, a pick, and an undo window. */
 export const askPersonToolSpec: AgentTool = {
   name: 'verifold_ask_person',
   description:
-    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction), access (network for your shell, or a key in Compute), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 or 3 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, hours with cost or go, direction with scope, and domains with access. pick is the option that you advise, and why says why. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
+    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or a key in Compute), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, hours with cost or go, direction with scope, and domains with access. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -543,6 +579,12 @@ export const askPersonToolSpec: AgentTool = {
           type: 'object',
           properties: {
             label: { type: 'string', maxLength: callLimits.label },
+            detail: {
+              type: 'string',
+              maxLength: callLimits.detail,
+              description:
+                'One line on what the option means, such as what it gives or what it costs in time.',
+            },
             usd: { type: 'number', minimum: 0, maximum: callLimits.usd },
             minutes: {
               type: 'integer',
@@ -624,8 +666,17 @@ export const askPersonToolSpec: AgentTool = {
           additionalProperties: false,
         },
       },
-      pick: { type: 'integer', minimum: 0, maximum: 2 },
+      pick: {
+        type: 'integer',
+        minimum: 0,
+        maximum: callLimits.options.max - 1,
+      },
       why: { type: 'string', maxLength: callLimits.why },
+      facts: {
+        ...factsSchema,
+        description:
+          'The facts behind the call that change over time, such as a model or a price.',
+      },
       undoMinutes: {
         type: 'integer',
         minimum: 0,
@@ -641,7 +692,7 @@ export const askPersonToolSpec: AgentTool = {
 export const planToolSpec: AgentTool = {
   name: 'verifold_plan',
   description:
-    "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id. A plan without facts keeps the facts of the plan before it.",
+    "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id, and say in changed what changed and why. A plan without facts keeps the facts of the plan before it.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -722,35 +773,15 @@ export const planToolSpec: AgentTool = {
         description: 'What in the plan costs money, or that nothing does yet.',
       },
       facts: {
-        type: 'array',
-        maxItems: planLimits.facts,
-        items: {
-          type: 'object',
-          properties: {
-            claim: {
-              type: 'string',
-              maxLength: planLimits.claim,
-              description:
-                'The fact, such as "Model: Qwen3.8-8B" or "H100: $3.99 an hour".',
-            },
-            source: {
-              type: 'string',
-              maxLength: planLimits.source,
-              description:
-                'Where you checked it: a URL. Leave it out for a fact that you could not check: it is unverified.',
-            },
-            sourceDate: {
-              type: 'string',
-              maxLength: planLimits.sourceDate,
-              description:
-                "The source's date, such as 2026-08-14, or when you read a price.",
-            },
-          },
-          required: ['claim'],
-          additionalProperties: false,
-        },
+        ...factsSchema,
         description:
           'The facts that change over time and that the plan rests on.',
+      },
+      changed: {
+        type: 'string',
+        maxLength: planLimits.changed,
+        description:
+          'Every plan after the first: one line on what changed from the plan before, and why.',
       },
     },
     required: ['reading', 'directions', 'cost'],
