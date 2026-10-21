@@ -710,9 +710,9 @@ await test('a run link opens its direction with the run marked, says when the pa
   const marked = render(story(), href.run('d-2', 'r-3'));
   assert.match(
     marked,
-    /<span id="run-r-3" tabindex="-1" class="proof proof--target">Run r-3<\/span>/,
+    /<a href="#\/run\/r-3" id="run-r-3" class="proof proof--target">Run r-3<\/a>/,
   );
-  assert.match(marked, /<span id="run-r-7" tabindex="-1" class="proof">/);
+  assert.match(marked, /<a href="#\/run\/r-7" id="run-r-7" class="proof">/);
   assert.doesNotMatch(text(marked), /is not in/);
   // A run in a turn that the page has not read yet: the page says where to look.
   assert.match(

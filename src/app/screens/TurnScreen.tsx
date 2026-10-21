@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type {
-  Direction,
-  Lab,
-  Snapshot,
-  Step,
-  TurnDetail,
-} from '../../protocol/api.ts';
+import type { Lab, Snapshot, Step, TurnDetail } from '../../protocol/api.ts';
 import { refreshKey, turnSummary } from '../activity.ts';
 import { clock } from '../format.ts';
-import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { byIndex, meet } from '../turns.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -21,9 +14,10 @@ import { leftOut, type AgentActions } from './DirectionPage.tsx';
 import type { LabActions } from './LabHome.tsx';
 
 /**
- * One turn of a direction's agent, opened: every step, newest page first,
- * with "Show earlier steps" for the rest. A command shows the end of its
- * output. As on the v9 canvas ("11. One turn, opened").
+ * One turn of an agent, opened: every step, newest page first, with "Show
+ * earlier steps" for the rest. A command shows the end of its output. As on
+ * the v9 canvas ("11. One turn, opened"). `back` leads to the direction's
+ * page, or to the agent's own page for a checker.
  *
  * The newest page is read again whenever the turn's revision in the snapshot
  * moves. A failed read keeps the steps shown, with a note. Earlier pages
@@ -32,7 +26,8 @@ import type { LabActions } from './LabHome.tsx';
 export function TurnScreen({
   snapshot,
   lab,
-  direction,
+  agentId,
+  back,
   turnId,
   connection,
   now,
@@ -41,7 +36,8 @@ export function TurnScreen({
 }: {
   readonly snapshot: Snapshot;
   readonly lab: Lab;
-  readonly direction: Direction;
+  readonly agentId: string;
+  readonly back: { readonly href: string; readonly label: string };
   readonly turnId: string;
   readonly connection: Connection;
   readonly now: number;
@@ -49,8 +45,7 @@ export function TurnScreen({
   readonly agentActions: AgentActions;
 }): ReactNode {
   // The snapshot of a large lab can leave the agent out. Its turn still loads from the API.
-  const agent = lab.agents.find((entry) => entry.id === direction.agent);
-  const agentId = direction.agent;
+  const agent = lab.agents.find((entry) => entry.id === agentId);
   const name = agent?.handle ?? agentId;
   const folded = agent?.turns.turns.find((turn) => turn.id === turnId);
   const [newest, setNewest] = useState<TurnDetail | null>(null);
@@ -124,9 +119,9 @@ export function TurnScreen({
       <main className="main">
         <div className="column column--detail">
           <ConnectionBar connection={connection} at={snapshot.at} />
-          <a className="back" href={href.direction(direction.id)}>
+          <a className="back" href={back.href}>
             <Chevron to="left" />
-            {name}'s direction
+            {back.label}
           </a>
           <div className="turn-head">
             <h1 className="turn-head__title">

@@ -16,19 +16,23 @@ import {
 } from './actions.ts';
 import type { ActOutcome } from './api.ts';
 import { startActions, type StartActions } from './ask.ts';
+import { ControlsContext, labControls } from './controls.ts';
 import { needsTick, typing } from './call.ts';
 import { href, parseRoute, replaceRoute, type Route } from './route.ts';
 import { isSearchKey, onMac } from './search.ts';
+import { AgentPage } from './screens/AgentPage.tsx';
 import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
 import { AskPage } from './screens/AskPage.tsx';
 import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
+import { DiffPage } from './screens/DiffPage.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { SetupPage } from './screens/Setup.tsx';
 import { setupActions, type SetupActions } from './setup.ts';
 import { PostPage } from './screens/PostPage.tsx';
+import { RunPage } from './screens/RunPage.tsx';
 import { SearchDialog } from './screens/SearchDialog.tsx';
 import { TurnScreen } from './screens/TurnScreen.tsx';
 import type { LabStore, LabState } from './store.ts';
@@ -259,6 +263,50 @@ export function Screen({
         read={agentActions.thread}
       />
     );
+  if (route.page === 'run')
+    return (
+      <RunPage
+        key={route.id}
+        snapshot={snapshot}
+        lab={lab}
+        id={route.id}
+        connection={connection}
+        now={now}
+        actions={actions}
+      />
+    );
+  if (route.page === 'agent')
+    return (
+      <AgentPage
+        key={route.id}
+        snapshot={snapshot}
+        lab={lab}
+        id={route.id}
+        connection={connection}
+        now={now}
+        actions={actions}
+        agentActions={agentActions}
+      />
+    );
+  if (route.page === 'agent-turn') {
+    const handle =
+      lab.agents.find((entry) => entry.id === route.agent)?.handle ??
+      route.agent;
+    return (
+      <TurnScreen
+        key={`${route.agent}/${route.turn}`}
+        snapshot={snapshot}
+        lab={lab}
+        agentId={route.agent}
+        back={{ href: href.agent(route.agent), label: handle }}
+        turnId={route.turn}
+        connection={connection}
+        now={now}
+        actions={actions}
+        agentActions={agentActions}
+      />
+    );
+  }
   const direction = lab.directions.find(
     (entry) => entry.id === route.direction,
   );
@@ -290,6 +338,19 @@ export function Screen({
     return (
       <DirectionPage key={direction.id} {...page} run={route.run ?? null} />
     );
+  if (route.page === 'diff')
+    return (
+      <DiffPage
+        key={`${direction.id}/${route.proof ?? ''}`}
+        snapshot={snapshot}
+        lab={lab}
+        direction={direction}
+        proof={route.proof ?? null}
+        connection={connection}
+        now={now}
+        actions={actions}
+      />
+    );
   if (route.page === 'bring')
     return (
       <BringPage
@@ -303,11 +364,24 @@ export function Screen({
         answerActions={answers}
       />
     );
+  const handle =
+    lab.agents.find((entry) => entry.id === direction.agent)?.handle ??
+    direction.agent;
   return (
     <TurnScreen
       key={`${direction.id}/${route.turn}`}
-      {...page}
+      snapshot={snapshot}
+      lab={lab}
+      agentId={direction.agent}
+      back={{
+        href: href.direction(direction.id),
+        label: `${handle}'s direction`,
+      }}
       turnId={route.turn}
+      connection={connection}
+      now={now}
+      actions={actions}
+      agentActions={agentActions}
     />
   );
 }
@@ -332,6 +406,7 @@ export function App({
   const [setup] = useState(() => setupActions(token));
   const [start] = useState(() => startActions(token));
   const [app] = useState(() => appActions(token));
+  const [controls] = useState(() => (token ? labControls(token) : null));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
   const lab =
     state.connection === 'signed-out' || state.connection === 'outdated'
@@ -357,24 +432,26 @@ export function App({
   );
   return (
     <ToolsContext.Provider value={tools}>
-      <Screen
-        state={state}
-        route={route}
-        now={now}
-        actions={actions}
-        agentActions={agent}
-        answers={answers}
-        setup={setup}
-        start={start}
-        startLab={app.startLab}
-      />
-      {searching && lab && (
-        <SearchDialog
-          lab={lab}
-          run={app.search}
-          onClose={() => setSearching(false)}
+      <ControlsContext.Provider value={controls}>
+        <Screen
+          state={state}
+          route={route}
+          now={now}
+          actions={actions}
+          agentActions={agent}
+          answers={answers}
+          setup={setup}
+          start={start}
+          startLab={app.startLab}
         />
-      )}
+        {searching && lab && (
+          <SearchDialog
+            lab={lab}
+            run={app.search}
+            onClose={() => setSearching(false)}
+          />
+        )}
+      </ControlsContext.Provider>
     </ToolsContext.Provider>
   );
 }

@@ -52,3 +52,16 @@ export function modelName(id: string): string {
     return `GPT-${gpt[1]} ${gpt[2].charAt(0).toUpperCase()}${gpt[2].slice(1)}${context}`;
   return id;
 }
+
+/** A text cut to `max` characters, with "…" at the cut. */
+export function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/** Who wrote a post, as a name: "You", an agent's handle, or "Verifold". */
+export function authorOf(post: {
+  readonly author: string;
+  readonly handle: string | null;
+}): string {
+  return post.author === 'person' ? 'You' : (post.handle ?? 'Verifold');
+}

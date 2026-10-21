@@ -1,0 +1,513 @@
+/* The lab's controls and its pages in depth: the direction's menu, the run, diff and agent pages, and the lab home's forms. Values follow the v9 tokens and the "10. A direction" artboard. */
+
+/* A page's title where no row sits beside it */
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+/* "More actions" beside a title. On a narrow page it wraps to the right, so its list opens inside the page. */
+.more-menu {
+  position: relative;
+  margin-left: auto;
+}
+
+.more-menu__button {
+  list-style: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.more-menu__button::-webkit-details-marker {
+  display: none;
+}
+
+.more-menu__list {
+  position: absolute;
+  right: 0;
+  top: 50px;
+  z-index: 2;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px -12px rgba(16, 16, 20, 0.35);
+}
+
+.more-menu__item {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.more-menu__item:hover {
+  color: var(--ink);
+  background: var(--accent-wash);
+}
+
+/* A run */
+.run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.run-state--live {
+  color: var(--accent-ink);
+}
+
+.facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 130px) minmax(0, 1fr);
+  gap: 8px 16px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--need-bg);
+  color: var(--need-ink);
+  font-weight: 600;
+}
+
+.run-fine {
+  margin: 0;
+  font-size: 13px;
+}
+
+.table-box {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.metrics {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.metrics th,
+.metrics td {
+  padding: 7px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.metrics thead th {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.metrics tr:last-child th,
+.metrics tr:last-child td {
+  border-bottom: 0;
+}
+
+.outputs {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.run-log {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.run-outputs {
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.run-outputs__summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.run-outputs[open] .outputs {
+  margin: 8px 0;
+}
+
+/* A diff */
+.diff-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.diff-file {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.diff-file:last-child {
+  border-bottom: 0;
+}
+
+.diff-file__button {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-file__button:disabled {
+  cursor: default;
+}
+
+.diff-file__change {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.diff-file__change--added {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.diff-file__change--modified {
+  background: var(--rerun-bg);
+  color: var(--rerun-ink);
+}
+
+.diff-file__change--deleted {
+  background: var(--objection);
+  color: var(--need-ink);
+}
+
+.diff-file__path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.diff-text {
+  margin: 0;
+  max-height: 480px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 10px;
+  font: 500 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-line--add {
+  color: var(--code-add);
+}
+
+.diff-line--del {
+  color: var(--code-del);
+}
+
+.diff-line--hunk {
+  color: var(--code-hunk);
+}
+
+/* An agent's own page */
+.agent-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.agent-head__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Posts: how a check tested them, and Reply */
+.post__check {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.post__reply {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.post__reply:hover {
+  color: var(--accent-deep);
+}
+
+/* The message box: replying, and the names after an @ */
+.composer__replying {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.composer__stop {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mentions {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px -12px rgba(16, 16, 20, 0.35);
+}
+
+.mentions[hidden] {
+  display: none;
+}
+
+.mentions__item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.mentions__item.is-active {
+  background: var(--accent-wash);
+}
+
+/* Forms on the lab home and the no-lab page */
+.field {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.field__input {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 15px var(--font);
+}
+
+textarea.field__input {
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.field__input--short {
+  max-width: 120px;
+}
+
+.open-direction {
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.open-direction__summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  color: var(--accent-ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.open-direction__form,
+.lab-start {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.open-direction__actions {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.more-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Background actions */
+.works {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.works__item {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.works__item--failed {
+  border-color: transparent;
+  background: var(--need-bg);
+  color: var(--need-ink);
+}
+
+/* Open disputes, pinned above the board */
+.pinned {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pinned__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--objection);
+  border-radius: 12px;
+  background: var(--need-row);
+}
+
+.pinned__mark {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--need-ink);
+  font-weight: 800;
+}
+
+.pinned__text {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pinned__text p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px 0;
+  }
+
+  .facts dd + dt {
+    margin-top: 8px;
+  }
+}

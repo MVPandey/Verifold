@@ -3,9 +3,12 @@ import {
   type ActionBodies,
   type ActionName,
   type ActionResult,
+  type BoardPage,
   type BringRead,
+  type DirectionDiff,
   type FileDiff,
   type PostThread,
+  type RunDetail,
   type Snapshot,
   type TurnDetail,
   type TurnPage,
@@ -109,6 +112,22 @@ export const paths = {
     `/api/v1/directions/${encodeURIComponent(direction)}/bring/diff?${new URLSearchParams({ file, commit }).toString()}`,
   /** A post and the replies below it. */
   thread: (post: string): string => `/api/v1/posts/${encodeURIComponent(post)}`,
+  /** A run in full, with its kept files and the end of its log. */
+  run: (id: string): string => `/api/v1/runs/${encodeURIComponent(id)}`,
+  /** A direction's diff since its start, or the diff that a post cites, with one file's diff. */
+  diff: (
+    direction: string,
+    query: { readonly file?: string; readonly proof?: string } = {},
+  ): string => {
+    const search = new URLSearchParams();
+    if (query.proof !== undefined) search.set('proof', query.proof);
+    if (query.file !== undefined) search.set('file', query.file);
+    const rest = search.toString();
+    return `/api/v1/directions/${encodeURIComponent(direction)}/diff${rest ? `?${rest}` : ''}`;
+  },
+  /** The page of the board before a post. */
+  board: (before: string): string =>
+    `/api/v1/board?before=${encodeURIComponent(before)}`,
 } as const;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -150,6 +169,35 @@ export function isBringRead(value: unknown): value is BringRead {
         Array.isArray(value.list.files))) &&
     (value.error === null || typeof value.error === 'string') &&
     Array.isArray(value.history)
+  );
+}
+
+export function isRunDetail(value: unknown): value is RunDetail {
+  return (
+    object(value) &&
+    object(value.run) &&
+    typeof value.run.id === 'string' &&
+    Array.isArray(value.outputs) &&
+    (value.log === null || object(value.log)) &&
+    typeof value.cancelable === 'boolean'
+  );
+}
+
+export function isDirectionDiff(value: unknown): value is DirectionDiff {
+  return (
+    object(value) &&
+    typeof value.from === 'string' &&
+    typeof value.to === 'string' &&
+    Array.isArray(value.files) &&
+    (value.diff === null || object(value.diff))
+  );
+}
+
+export function isBoardPage(value: unknown): value is BoardPage {
+  return (
+    object(value) &&
+    Array.isArray(value.posts) &&
+    typeof value.more === 'boolean'
   );
 }
 

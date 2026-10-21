@@ -159,7 +159,8 @@ export function BringFiles({
       {list.omitted > 0 && (
         <span className="more">
           {list.omitted} more {list.omitted === 1 ? 'file is' : 'files are'} not
-          listed here. The desk lists them all.
+          listed here, so {list.omitted === 1 ? 'it does' : 'they do'} not come
+          in.
         </span>
       )}
       {list.newer && lab.agentsHere && (

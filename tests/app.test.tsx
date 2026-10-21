@@ -712,7 +712,6 @@ await test('routes: the first run, and pages that do not exist', () => {
     '#/d/../x',
     '#/search',
     '#/projects',
-    '#/run/r-3',
     '#/post/p-0',
     '#/post/c-1',
     '#/board/p-0',
@@ -766,9 +765,9 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.match(page, /Searching the web · 1 min/);
   assert.match(html, /class="row row--disputed" href="#\/d\/d-2"/);
   assert.match(html, /role="img" aria-label="Codex, codex-1"/);
-  // The board: proof chips open their direction's page.
+  // The board: a run chip opens the run's page, and a figure its direction's page.
   assert.match(page, /claude-2 Claim After the filter/);
-  assert.match(html, /<a class="proof" href="#\/d\/d-2">Run r-3<\/a>/);
+  assert.match(html, /<a class="proof" href="#\/run\/r-3">Run r-3<\/a>/);
   assert.match(html, /<a class="proof" href="#\/d\/d-2">Figure<\/a>/);
   assert.match(page, /codex-2 Objection One seed can be luck/);
   assert.match(page, /You If budget is left, try Gemma/);
@@ -785,7 +784,7 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.doesNotMatch(html, /style="/);
 });
 
-await test('a proof chip without a direction to open is not a link', () => {
+await test('a run chip opens the run without a direction, and a file chip without one is not a link', () => {
   const lab = story().lab;
   assert.ok(lab);
   const html = render(
@@ -793,15 +792,25 @@ await test('a proof chip without a direction to open is not a link', () => {
       board: {
         posts: [
           post('p-30', 'a-1', 'evidence', 'A rerun.', {
-            proof: [{ type: 'run', run: 'r-9' }],
+            direction: null,
+            proof: [
+              { type: 'run', run: 'r-9' },
+              {
+                type: 'file',
+                direction: null,
+                path: 'results/gap.csv',
+                commit: 'a3f9c2e',
+                bytes: 120,
+              },
+            ],
           }),
         ],
         more: false,
       },
     }),
   );
-  assert.match(html, /<span class="proof">Run r-9<\/span>/);
-  assert.doesNotMatch(html, /href="#\/run/);
+  assert.match(html, /<a class="proof" href="#\/run\/r-9">Run r-9<\/a>/);
+  assert.match(html, /<span class="proof">gap\.csv<\/span>/);
 });
 
 await test('the lab home says when nothing needs the person, when it is paused, and when items are left out', () => {

@@ -2069,7 +2069,7 @@ export class Lab {
     }));
     if (crashed)
       this.options.progress?.(
-        `${this.agent(id).handle} stopped by itself ${restarts.length} times in an hour. Start it again in the desk.`,
+        `${this.agent(id).handle} stopped by itself ${restarts.length} times in an hour. Start it again on its direction's page.`,
       );
     return crashed;
   }
@@ -4148,10 +4148,15 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     });
   }
 
-  /** The end of a run's log for the desk, or null when the run has none. */
-  async runLog(id: unknown): Promise<RunLogPart | null> {
+  /** The end of a run's log, at most `bytes`, or null when the run has none. */
+  async runLog(
+    id: unknown,
+    bytes: number = runLimits.deskLog,
+  ): Promise<RunLogPart | null> {
     const run = this.ledger.get(id);
-    return run ? this.ledger.log(run.id, 'tail', runLimits.deskLog) : null;
+    return run
+      ? this.ledger.log(run.id, 'tail', Math.min(bytes, runLimits.deskLog))
+      : null;
   }
 
   /**
