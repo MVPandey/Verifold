@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -275,6 +275,14 @@ export function parseSettings(
   };
 }
 
+/** A short fingerprint of a project's settings, which changes when any limit changes. */
+export function settingsVersion(settings: ComputeSettings): string {
+  return createHash('sha256')
+    .update(JSON.stringify(settings))
+    .digest('hex')
+    .slice(0, 16);
+}
+
 /** Replace a project's compute settings in one step. */
 export async function writeComputeSettings(
   root: string,
@@ -511,7 +519,7 @@ export class Compute {
     }
     if (missing.length)
       fail(
-        `Add the secret ${missing.join(' and ')} in Compute first. The pod of ${lease.id} needs it.`,
+        `Store ${missing.length === 1 ? 'the secret' : 'the secrets'} ${missing.join(' and ')} first, with ${missing.map((name) => `\`verifold runpod secret set ${name}\``).join(' and ')}. The pod of ${lease.id} needs ${missing.length === 1 ? 'it' : 'them'}.`,
       );
     this.hidden.set(lease.id, values);
     return values;
@@ -621,7 +629,7 @@ export class Compute {
     const what = `${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour`;
     const missing = this.missingSecrets(lease);
     if (missing.length)
-      return `Asked the person to add the secret ${missing.join(' and ')} in Compute for ${lease.id}: ${what}. ${this.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
+      return `Asked the person to store the secret ${missing.join(' and ')} for ${lease.id}: ${what}. ${this.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
     if (!this.view().settings.askBeforePod) {
       const started = await this.leases
         .approve(lease.id, 'verifold')
@@ -783,7 +791,7 @@ export class Compute {
           )
             ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
             : stopped
-              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in Compute.`
+              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`
               : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },
@@ -1143,11 +1151,35 @@ export class Compute {
     });
   }
 
+  /**
+   * Change the limits that `changes` names, and keep the others. `base`: the
+   * version of the settings that the person edited. When the settings changed
+   * since then, nothing is saved, so a newer change is never overwritten
+   * unseen.
+   */
+  changeSettings(
+    changes: Record<string, unknown>,
+    base: unknown,
+  ): Promise<void> {
+    return this.serial(async () => {
+      if (base !== undefined && base !== settingsVersion(this.state.settings))
+        fail(
+          'These settings changed while you edited them. Here is the new version.',
+        );
+      const settings = parseSettings(
+        { ...this.state.settings, ...changes },
+        this.state.settings,
+      );
+      await writeComputeSettings(this.root, settings);
+      this.state = { ...this.state, settings };
+    });
+  }
+
   private async key(): Promise<string> {
     return (
       (await this.store.read()) ??
       fail(
-        'Store a RunPod key first, in Compute or with `verifold runpod key set`.',
+        'Store a RunPod key first, under GPU money in your profile or with `verifold runpod key set`.',
       )
     );
   }

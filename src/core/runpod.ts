@@ -21,6 +21,21 @@ export interface GpuOffer {
   readonly stock: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | null;
 }
 
+/**
+ * Common GPUs for research, by RunPod's type IDs (docs.runpod.io GPU types,
+ * read on 2026-10-21). Pages show those that RunPod lists first, at the
+ * price that RunPod gives.
+ */
+export const commonGpus: readonly string[] = [
+  'NVIDIA H200',
+  'NVIDIA H100 80GB HBM3',
+  'NVIDIA H100 PCIe',
+  'NVIDIA A100-SXM4-80GB',
+  'NVIDIA A100 80GB PCIe',
+  'NVIDIA L40S',
+  'NVIDIA GeForce RTX 4090',
+];
+
 const stocks = ['NONE', 'LOW', 'MEDIUM', 'HIGH'] as const;
 
 const statuses = [

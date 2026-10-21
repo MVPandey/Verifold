@@ -95,6 +95,8 @@ export interface Lease {
   readonly activeAt: string | null;
   /** Something that the person should know. Needs you lists it until the person dismisses it. */
   readonly notice: string | null;
+  /** When Verifold set the notice. Records from before this field have none. */
+  readonly noticeAt?: string | null;
   readonly history: readonly {
     readonly at: string;
     readonly by: Cause | 'verifold';
@@ -567,7 +569,13 @@ export class Leases {
     });
   }
 
-  private async save(lease: Lease): Promise<Lease> {
+  private async save(next: Lease): Promise<Lease> {
+    // A new notice keeps the time that it came, also when later events change the lease.
+    const before = this.leases.find((entry) => entry.id === next.id);
+    const lease =
+      next.notice === (before?.notice ?? null)
+        ? next
+        : { ...next, noticeAt: next.notice ? this.stamp() : null };
     await mkdir(this.folder, { recursive: true, mode: 0o700 });
     if (!(await lstat(this.folder)).isDirectory())
       fail('.verifold/compute/leases must be a folder, not a link.');
@@ -643,12 +651,14 @@ export class Leases {
   }> {
     const settings = this.hooks.settings();
     if (settings.limitUsd === null)
-      fail('Pods are off: the person has not set a spend limit in Compute.');
+      fail(
+        "Pods are off: the person has not set a spend limit in the project's settings.",
+      );
     if (typeof input.gpu !== 'string' || !settings.gpuTypes.includes(input.gpu))
       fail(
         settings.gpuTypes.length
           ? `Ask for an allowed GPU type: ${settings.gpuTypes.join(', ')}.`
-          : 'The person has allowed no GPU type in Compute yet.',
+          : "The person has allowed no GPU type in the project's settings yet.",
       );
     const hours = input.hours;
     if (
@@ -793,7 +803,7 @@ export class Leases {
         fail(`${lease.id} does not wait for approval.`);
       const settings = this.hooks.settings();
       if (settings.limitUsd === null)
-        fail('Set a spend limit in Compute first.');
+        fail("Set a spend limit in the project's settings first.");
       if (
         !settings.gpuTypes.includes(lease.gpu) ||
         !settings.images.includes(lease.image)

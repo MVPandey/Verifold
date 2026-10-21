@@ -658,9 +658,9 @@ export class Lab {
     // An answer or an undo that an earlier owner did not finish: the board
     // says so, and the agent that asked wakes with it.
     const applying =
-      'Verifold stopped while it applied this answer, so it has no undo. Check Compute and the directions.';
+      "Verifold stopped while it applied this answer, so it has no undo. Check the project's pods and the directions.";
     const undoing =
-      'Verifold stopped while it undid this answer, so the undo may not be complete. Check Compute and the directions.';
+      "Verifold stopped while it undid this answer, so the undo may not be complete. Check the project's pods and the directions.";
     const left = this.state.calls.filter(
       (call) =>
         call.state === 'undoing' ||
@@ -2690,7 +2690,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         const why = text(args.why, 1000, 'why your direction needs the pod');
         // Without a key or a spend limit, the person adds them first.
         if (!this.podsOn()) return this.podCall(id, generation, why, null);
-        // The lab's first GPU pod always asks the person, also when the Compute limits would start it.
+        // The lab's first GPU pod always asks the person, also when the project's limits would start it.
         if (await this.serial(() => !gpuApproved(this.current()))) {
           const effect = callEffect(
             {
@@ -2788,14 +2788,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     if (compute.podsOn())
       return 'GPU pods: on. A RunPod key is saved, and the person set a spend limit.';
     return compute.keySaved()
-      ? 'GPU pods: off. A RunPod key is saved, but the person set no spend limit in Compute yet.'
+      ? "GPU pods: off. A RunPod key is saved, but the person set no spend limit in the project's settings yet."
       : 'GPU pods: off. No RunPod key is saved yet.';
   }
 
   /** Why pods are off, for an agent: only what is missing, so it never asks for a key that is saved. */
   private podsOffText(): string {
     return this.options.compute?.keySaved()
-      ? 'Pods are off: a RunPod key is saved, but the person set no spend limit in Compute.'
+      ? "Pods are off: a RunPod key is saved, but the person set no spend limit in the project's settings."
       : 'Pods are off: no RunPod key is saved, and no spend limit is set.';
   }
 
@@ -2967,7 +2967,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   /**
    * A pod request that the person decides: the lab's first GPU pod, with the
    * most that it can cost, or, while pods are off, an access call to add a
-   * RunPod key and a spend limit in Compute.
+   * RunPod key and a spend limit in the project's settings.
    */
   private async podCall(
     id: string,
@@ -2983,8 +2983,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const question = pod
       ? `The lab's first GPU pod: ${pod.effect.gpuType} for ${pod.effect.hours} ${pod.effect.hours === 1 ? 'hour' : 'hours'}?`
       : keySaved
-        ? 'Set a spend limit in Compute, so agents can rent GPUs?'
-        : 'Add a RunPod key and a spend limit in Compute?';
+        ? "Set a spend limit in the project's settings, so agents can rent GPUs?"
+        : 'Add a RunPod key and a spend limit, so agents can rent GPUs?';
     const ask = {
       kind: pod ? 'cost' : 'access',
       // While pods are off, one call turns them on for the whole lab.
@@ -7446,7 +7446,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   private async tick(): Promise<void> {
     const state = this.state;
     if (!state || this.closing || this.suspended || this.moving) return;
-    // Pods that the person turned on or off, from Compute or a call, reach each live process.
+    // Pods that the person turned on or off, from the project's settings or a call, reach each live process.
     for (const agent of this.agents.values())
       if (this.active(agent)) this.checkProcess(agent.id);
     // At the deadline the person gets a go call, also in a lab that they paused.

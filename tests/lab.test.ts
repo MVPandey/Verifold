@@ -6906,7 +6906,7 @@ await test('an agent that started with pods off gets the pod tools once pods are
       (await lab.lines('d-2-beta', 'threads.jsonl')) as { method: string }[]
     ).map((entry) => entry.method);
   assert.deepEqual(await threads(), ['start']);
-  // The person adds a key and a spend limit in Compute, then answers.
+  // The person adds a key and a spend limit, then answers.
   on = true;
   const calls = lab.lab.view()?.state.calls ?? [];
   for (const call of calls) await lab.lab.answerCall(call.id, 0);
@@ -7061,7 +7061,7 @@ await test('pod requests while pods are off ask the person once for the whole la
   assert.equal(calls[0]?.need, 'pods');
   assert.equal(
     calls[0]?.question,
-    'Set a spend limit in Compute, so agents can rent GPUs?',
+    "Set a spend limit in the project's settings, so agents can rent GPUs?",
   );
   assert.deepEqual(calls[0] ? askers(calls[0]).sort() : [], ['a-1', 'a-2']);
   const all = [...(await results('d-1-alpha')), ...(await results('d-2-beta'))];
@@ -7069,7 +7069,7 @@ await test('pod requests while pods are off ask the person once for the whole la
     all.filter((result) => pattern.test(result)).length;
   assert.equal(
     count(
-      /^Pods are off: a RunPod key is saved, but the person set no spend limit in Compute\. Verifold asked the person in c-1\./,
+      /^Pods are off: a RunPod key is saved, but the person set no spend limit in the project's settings\. Verifold asked the person in c-1\./,
     ),
     1,
   );
@@ -9879,7 +9879,7 @@ await test("every prompt and wake-up states today's date and the rules for curre
   assert.match(first, /such as "runpod\.io\/pricing, read 21:56"/);
   assert.match(
     first,
-    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in Compute yet\./,
+    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in the project's settings yet\./,
   );
   // A lab runs for days, so each wake-up states the date and the GPU pods again.
   await lab.lab.post({ text: 'Use 3 seeds.' });
@@ -9888,7 +9888,7 @@ await test("every prompt and wake-up states today's date and the rules for curre
   assert.match(digest, todayPattern);
   assert.match(
     digest,
-    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in Compute yet\./,
+    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in the project's settings yet\./,
   );
   // With a key saved, an agent asks only for the spend limit.
   assert.equal(
@@ -9907,7 +9907,7 @@ await test("every prompt and wake-up states today's date and the rules for curre
         why: 'Seeds.',
       })
     ).text,
-    'Pods are off: a RunPod key is saved, but the person set no spend limit in Compute. Ask the person with an access call first.',
+    "Pods are off: a RunPod key is saved, but the person set no spend limit in the project's settings. Ask the person with an access call first.",
   );
   assert.equal(
     (
@@ -9917,11 +9917,11 @@ await test("every prompt and wake-up states today's date and the rules for curre
         why: 'Seeds.',
       })
     ).text,
-    'Pods are off: a RunPod key is saved, but the person set no spend limit in Compute. Verifold asked the person in c-1. Verifold wakes you with the answer.',
+    "Pods are off: a RunPod key is saved, but the person set no spend limit in the project's settings. Verifold asked the person in c-1. Verifold wakes you with the answer.",
   );
   assert.equal(
     lab.lab.view()?.state.calls[0]?.question,
-    'Set a spend limit in Compute, so agents can rent GPUs?',
+    "Set a spend limit in the project's settings, so agents can rent GPUs?",
   );
   assert.equal(
     lab.lab.view()?.state.calls[0]?.options[0]?.label,
@@ -9947,7 +9947,7 @@ await test("every prompt and wake-up states today's date and the rules for curre
   );
   assert.equal(
     bare.lab.view()?.state.calls[0]?.question,
-    'Add a RunPod key and a spend limit in Compute?',
+    'Add a RunPod key and a spend limit, so agents can rent GPUs?',
   );
   assert.equal(
     bare.lab.view()?.state.calls[0]?.options[0]?.label,

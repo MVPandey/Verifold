@@ -17,6 +17,7 @@ import type { AnswerActions } from './screens/AnswerPage.tsx';
 import type { AgentActions } from './screens/DirectionPage.tsx';
 import type { LabActions } from './screens/LabHome.tsx';
 import type { LabStart } from './screens/Notice.tsx';
+import type { ComputeActions } from './screens/SettingsPage.tsx';
 
 /** The refusal of an action from a tab without a token. */
 export const signedOut = (): Promise<{ readonly refused: string }> =>
@@ -130,5 +131,37 @@ export function appActions(token: string | null): AppActions {
     look: () => act(token, 'lab-look', {}, newKey()),
     startLab: ({ question, hours }, key) =>
       act(token, 'lab-start', { question, hours }, key),
+  };
+}
+
+/**
+ * The project's compute operations, as the desk's Compute panel runs them:
+ * the pod settings that the person changed, RunPod's prices, "Agents at
+ * once", the person's actions on a pod, and Dismiss of the pod actions that
+ * failed in the background. Without a token, each one is refused at once.
+ */
+export function computeActions(token: string | null): ComputeActions {
+  if (!token)
+    return {
+      save: signedOut,
+      prices: signedOut,
+      agents: signedOut,
+      pod: signedOut,
+      dismiss: signedOut,
+    };
+  return {
+    save: (changes, base, key) =>
+      act(token, 'compute-settings', { ...changes, base }, key),
+    prices: (key) => act(token, 'compute-gpus', {}, key),
+    agents: (agents, key) => act(token, 'compute-agents', { agents }, key),
+    pod: (action, lease, key) =>
+      act(token, `compute-lease-${action}`, { lease }, key),
+    dismiss: (works, key) =>
+      act(
+        token,
+        'compute-dismiss',
+        { works: works.map(({ action, at }) => ({ action, at })) },
+        key,
+      ),
   };
 }

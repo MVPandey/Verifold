@@ -34,7 +34,7 @@ import {
   type ChatHarness,
   type ChatLine,
 } from '../core/profile-chat.ts';
-import type { GpuOffer } from '../core/runpod.ts';
+import { commonGpus, type GpuOffer } from '../core/runpod.ts';
 import { SessionActionError, hostName } from '../core/session.ts';
 import type { GitHubHosts } from '../core/skills.ts';
 import type { AgentTool, GpuPrice, SetupView } from '../protocol/api.ts';
@@ -44,21 +44,6 @@ import { SkillsStep } from './setup-skills.ts';
 function fail(message: string): never {
   throw new SessionActionError(message);
 }
-
-/**
- * Common GPUs for research, by RunPod's type IDs (docs.runpod.io GPU types,
- * read on 2026-10-21). "Prices now" shows those that RunPod lists, at the
- * price that RunPod gives.
- */
-const commonGpus = [
-  'NVIDIA H200',
-  'NVIDIA H100 80GB HBM3',
-  'NVIDIA H100 PCIe',
-  'NVIDIA A100-SXM4-80GB',
-  'NVIDIA A100 80GB PCIe',
-  'NVIDIA L40S',
-  'NVIDIA GeForce RTX 4090',
-];
 
 /**
  * The GPUs of "Prices now", the dearest first. Without one of the common
