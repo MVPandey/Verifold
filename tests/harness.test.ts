@@ -69,13 +69,30 @@ for (const host of ['claude', 'codex'] as const) {
   });
 }
 
-await test('a text-only call gives Claude Code no tools or MCP servers, and Codex no web search', async () => {
+/** A fake harness whose `mcp list --json` prints `servers`, and whose run prints its arguments. */
+function textOnlyHost(servers: string): string {
+  return `const { writeFileSync } = require('node:fs');
+     const args = process.argv.slice(2);
+     if (args.includes('mcp')) {
+       writeFileSync('mcp-args.json', JSON.stringify(args));
+       ${servers}
+     } else {
+       writeFileSync('ran', '');
+       process.stdin.resume(); process.stdin.on('end', () => {
+         const text = JSON.stringify(args);
+         console.log(JSON.stringify(args[0] === '-p'
+           ? { result: text, is_error: false }
+           : { type: 'item.completed', item: { type: 'agent_message', text } }));
+       });
+     }`;
+}
+
+await test('a text-only call gives Claude Code no tools or MCP servers, and Codex no web search and none of the MCP servers, plugins or apps of the person', async () => {
   for (const host of ['claude', 'codex'] as const)
     await fixture(
-      `process.stdin.resume(); process.stdin.on('end', () => {
-         const text = JSON.stringify(process.argv.slice(2));
-         console.log(JSON.stringify(${host === 'claude' ? '{ result: text, is_error: false }' : "{ type: 'item.completed', item: { type: 'agent_message', text } }"}));
-       });`,
+      textOnlyHost(
+        `console.log(JSON.stringify([{ name: 'github', enabled: true }, { name: 'node_repl', enabled: false }, { name: 'computer-use', enabled: false }]));`,
+      ),
       async (executable, cwd) => {
         const result = await runHarness(
           {
@@ -87,6 +104,12 @@ await test('a text-only call gives Claude Code no tools or MCP servers, and Code
           },
           { executable },
         );
+        const off = [
+          '-c',
+          'features.plugins=false',
+          '-c',
+          'features.apps=false',
+        ];
         assert.deepEqual(
           JSON.parse(result.text),
           host === 'claude'
@@ -100,6 +123,13 @@ await test('a text-only call gives Claude Code no tools or MCP servers, and Code
                 '--strict-mcp-config',
               ]
             : [
+                ...off,
+                '-c',
+                'mcp_servers.github.enabled=false',
+                '-c',
+                'mcp_servers.node_repl.enabled=false',
+                '-c',
+                'mcp_servers.computer-use.enabled=false',
                 'exec',
                 '--skip-git-repo-check',
                 '--color',
@@ -108,8 +138,78 @@ await test('a text-only call gives Claude Code no tools or MCP servers, and Code
                 '-',
               ],
         );
+        // Codex lists its MCP servers with plugins and apps off, so the list holds the servers of the configuration.
+        if (host === 'codex')
+          assert.deepEqual(
+            JSON.parse(await readFile(join(cwd, 'mcp-args.json'), 'utf8')),
+            [...off, 'mcp', 'list', '--json'],
+          );
+        else
+          await assert.rejects(readFile(join(cwd, 'mcp-args.json')), {
+            code: 'ENOENT',
+          });
       },
     );
+});
+
+for (const [what, servers, expected] of [
+  [
+    'its MCP servers cannot be listed',
+    `process.exit(1);`,
+    /could not read Codex's MCP servers/,
+  ],
+  [
+    'the list is not JSON',
+    `console.log('github  enabled');`,
+    /could not read Codex's MCP servers/,
+  ],
+  [
+    'a server name cannot be turned off with -c',
+    `console.log(JSON.stringify([{ name: 'my.server', enabled: true }]));`,
+    /MCP server named "my\.server", which Verifold cannot turn off/,
+  ],
+] as const)
+  await test(`a text-only Codex call does not run when ${what}`, async () => {
+    await fixture(textOnlyHost(servers), async (executable, cwd) => {
+      await assert.rejects(
+        runHarness(
+          {
+            host: 'codex',
+            cwd,
+            prompt: 'Pick skills.',
+            signal: new AbortController().signal,
+            textOnly: true,
+          },
+          { executable },
+        ),
+        expected,
+      );
+      await assert.rejects(readFile(join(cwd, 'ran')), { code: 'ENOENT' });
+    });
+  });
+
+await test('a text-only Codex call cancelled while it lists the MCP servers stops as cancelled', async () => {
+  await fixture(
+    textOnlyHost(`setTimeout(() => {}, 10_000);`),
+    async (executable, cwd) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 50);
+      await assert.rejects(
+        runHarness(
+          {
+            host: 'codex',
+            cwd,
+            prompt: 'Pick skills.',
+            signal: controller.signal,
+            textOnly: true,
+          },
+          { executable },
+        ),
+        { name: 'AbortError' },
+      );
+      await assert.rejects(readFile(join(cwd, 'ran')), { code: 'ENOENT' });
+    },
+  );
 });
 
 const failures: readonly [HarnessName, string, RegExp][] = [

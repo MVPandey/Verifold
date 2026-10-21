@@ -2,7 +2,7 @@ import { createInterface, type Interface } from 'node:readline';
 import type { LabScreen } from '../server/screen.ts';
 import { enterLine, plainLines, prompt, viewLines } from './lab-view.ts';
 import { muted, terminalMessage, tint } from './terminal.ts';
-import { fitText, visibleWidth } from './terminal-layout.ts';
+import { fitText, terminalColumns, visibleWidth } from './terminal-layout.ts';
 
 /** The terminal's streams. Tests pass their own. */
 export interface ViewStreams {
@@ -145,7 +145,7 @@ export class LabTerminal {
       this.print(text);
       return;
     }
-    const row = (this.output.columns ?? 80) - 3;
+    const row = terminalColumns(this.output.columns) - 3;
     if (keep || text.includes('\n') || visibleWidth(text) > row)
       this.draw(text);
     else {
@@ -159,7 +159,7 @@ export class LabTerminal {
     return (
       this.draws &&
       Boolean(this.screen) &&
-      (this.output.columns ?? 80) >= viewColumns &&
+      terminalColumns(this.output.columns) >= viewColumns &&
       (this.output.rows ?? 24) >= viewRows
     );
   }
@@ -206,7 +206,8 @@ export class LabTerminal {
       this.sent = Math.max(
         1,
         Math.ceil(
-          visibleWidth(prompt.text + text) / (this.output.columns ?? 80),
+          visibleWidth(prompt.text + text) /
+            terminalColumns(this.output.columns),
         ),
       );
       this.take(text);
@@ -287,7 +288,7 @@ export class LabTerminal {
     const line = this.line;
     const screen = this.screen;
     if (!line || !screen) return;
-    const columns = this.output.columns ?? 80;
+    const columns = terminalColumns(this.output.columns);
     // A message that wraps stays as readline drew it, until it fits on one row or goes.
     this.held =
       !above &&
@@ -344,7 +345,7 @@ export class LabTerminal {
   private readonly typed = (): void => {
     const line = this.line;
     if (!line) return;
-    const columns = this.output.columns ?? 80;
+    const columns = terminalColumns(this.output.columns);
     if (this.empty && line.line !== '') {
       this.empty = false;
       this.output.write('\u001b[0K');
