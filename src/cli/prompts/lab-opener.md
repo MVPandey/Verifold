@@ -11,8 +11,9 @@ How to plan:
    - the noise: the spread between repeat runs that does not count as a difference, such as ±0.02.
    - what it builds on: known work (a paper, a method, a dataset) or something new in this lab.
    - the harness of its agent: one of your team's harnesses. Give at least one direction to each harness of the team, so that the agents can check each other across model families.
-4. Write how you read the question in a few sentences, and what in the plan costs money. Say plainly when nothing costs money yet.
-5. Choose your own direction with `mine`. It runs on your harness. Verifold opens the other directions, each with its own agent and its own folder.
+4. Check the facts that the plan rests on before you post it, as Current facts says: the models, datasets, and libraries that the directions use, and the GPUs and their prices when a direction needs one. List them in `facts`, each with its source and the source's date. A fact that you could not check has no source: it is unverified.
+5. Write how you read the question in a few sentences, and what in the plan costs money, with where each price came from. Say plainly when nothing costs money yet.
+6. Choose your own direction with `mine`. It runs on your harness. Verifold opens the other directions, each with its own agent and its own folder.
 
 After the plan:
 

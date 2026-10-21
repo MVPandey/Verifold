@@ -191,6 +191,10 @@ const terminals =
     ? 'no PTY library on this platform'
     : false;
 
+/** Today's line in a prompt, with the date in its first group. */
+const todayPattern =
+  /Today is (\d{4}-\d{2}-\d{2}) \(\w+\), \d{2}:\d{2} in the time zone \S+\./;
+
 const codexSocket = fileURLToPath(
   new URL('./fixtures/codex-socket.cjs', import.meta.url),
 );
@@ -457,9 +461,11 @@ async function fixture(
     quota,
     script: (folder, turns) =>
       writeFile(join(base, 'scripts', `${folder}.json`), JSON.stringify(turns)),
+    // A fake appends each line while the test reads: only a line with its newline is whole.
     lines: async (folder, file) =>
       (await readFile(join(base, 'logs', folder, file), 'utf8').catch(() => ''))
         .split('\n')
+        .slice(0, -1)
         .filter(Boolean)
         .map((line) => JSON.parse(line) as unknown),
     inputs: async (folder) =>
@@ -1001,6 +1007,15 @@ await test('lab agents run with the strict limits and without RunPod or pod secr
     'deny',
   );
   assert.equal(thread?.cwd, join(lab.root, '.verifold/workspaces/d-2-beta'));
+  // Codex searches the live web, not only the index that OpenAI keeps.
+  const codexArgs = JSON.parse(
+    await readFile(join(lab.base, 'logs', 'd-2-beta', 'args.json'), 'utf8'),
+  ) as string[];
+  assert.deepEqual(codexArgs.slice(0, 3), [
+    '-c',
+    'web_search="live"',
+    'app-server',
+  ]);
   assert.deepEqual(
     thread?.dynamicTools.map((tool) => tool.name),
     [
@@ -1152,6 +1167,7 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
     podCost: () => Promise.resolve(1),
     startPod: () => Promise.reject(new Error('No pod.')),
     podsOn: () => true,
+    keySaved: () => true,
     leases: {
       list: () => [...leases.values()],
       get: (id) => {
@@ -1275,6 +1291,7 @@ await test('a paused lab starts no pod', async (t) => {
     podCost: () => Promise.resolve(1),
     startPod: () => Promise.reject(new Error('No pod.')),
     podsOn: () => true,
+    keySaved: () => true,
     leases: {
       list: () => [],
       get: () => {
@@ -4372,6 +4389,7 @@ await test("a pod that a direction's agent asks for while its direction stops en
     podCost: () => Promise.resolve(1),
     startPod: () => Promise.reject(new Error('No pod.')),
     podsOn: () => true,
+    keySaved: () => true,
     leases: {
       list: () => [...leases.values()],
       get: (id) => leases.get(String(id)) as Lease,
@@ -4591,6 +4609,8 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   // Its prompt has the claim, the command, and the objection, and nothing of the author's reasoning.
   const prompt = (await lab.inputs('k-1'))[0] ?? '';
   assert.match(prompt, /Accuracy is 0\.7\./);
+  // A checker's training data ends before today too.
+  assert.match(prompt, todayPattern);
   assert.match(prompt, /"sh train\.sh"/);
   assert.match(prompt, /acc=0\.7/);
   assert.match(prompt, /Is the test set clean\?/);
@@ -5848,6 +5868,7 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
       return Promise.resolve(lease);
     },
     podsOn: () => true,
+    keySaved: () => true,
     leases: {
       list: () => [...leases.values()],
       get: (id) => {
@@ -6000,6 +6021,7 @@ await test('an agent that started with pods off gets the pod tools once pods are
     podCost: () => Promise.resolve(2),
     startPod: () => Promise.reject(new Error('Not now.')),
     podsOn: () => on,
+    keySaved: () => true,
     leases: {
       list: () => [],
       get: () => {
@@ -8595,4 +8617,211 @@ await test('the desk brings files in and signs off only with its token, and esca
   assert.match(answer, /1 file brought in, last at/);
   // Home's header opens the answer.
   assert.match(await html('/api/view'), /data-panel="answer">Answer</);
+});
+
+/** A compute for the facts tests: a RunPod key or none, and pods off. */
+function keyCompute(key: boolean): LabCompute {
+  return {
+    describe: () => Promise.resolve('{}'),
+    requestPod: () => Promise.reject(new Error('Not now.')),
+    podCost: () => Promise.resolve(2),
+    startPod: () => Promise.reject(new Error('Not now.')),
+    podsOn: () => false,
+    keySaved: () => key,
+    leases: {
+      list: () => [],
+      get: () => {
+        throw new Error('No lease.');
+      },
+      end: () => Promise.reject(new Error('No lease.')),
+    },
+    podRuns: () => ({}) as PodRuns,
+  };
+}
+
+await test("every prompt and wake-up states today's date and the rules for current facts, and agents learn whether a RunPod key is saved", async (t) => {
+  const lab = await fixture(t, { compute: keyCompute(true) });
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  const first = (await lab.inputs('d-1-alpha'))[0] ?? '';
+  const date = first.match(todayPattern)?.[1] ?? '';
+  assert.ok(
+    Math.abs(Date.parse(date) - Date.now()) < 2 * 86_400_000,
+    `today in the prompt: ${date}`,
+  );
+  assert.match(first, /Current facts:/);
+  assert.match(first, /Look these up with web search before you use them/);
+  assert.match(first, /never base a spend on it/);
+  assert.match(first, /such as "runpod\.io\/pricing, read 21:56"/);
+  assert.match(
+    first,
+    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in Compute yet\./,
+  );
+  // A lab runs for days, so each wake-up states the date and the GPU pods again.
+  await lab.lab.post({ text: 'Use 3 seeds.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  const digest = (await lab.inputs('d-1-alpha'))[1] ?? '';
+  assert.match(digest, todayPattern);
+  assert.match(
+    digest,
+    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in Compute yet\./,
+  );
+  // With a key saved, an agent asks only for the spend limit.
+  assert.equal(
+    (
+      await agentCall(lab.lab, 'a-1', 'verifold_ask_person', {
+        kind: 'cost',
+        question: 'A pod for the seeds?',
+        options: [
+          {
+            label: 'Rent it',
+            effect: { pod: { gpuType: 'NVIDIA A40', hours: 2 } },
+          },
+          { label: 'No pod' },
+        ],
+        pick: 0,
+        why: 'Seeds.',
+      })
+    ).text,
+    'Pods are off: a RunPod key is saved, but the person set no spend limit in Compute. Ask the person with an access call first.',
+  );
+  assert.equal(
+    (
+      await agentCall(lab.lab, 'a-1', 'verifold_request_pod', {
+        gpuType: 'NVIDIA A40',
+        hours: 2,
+        why: 'Seeds.',
+      })
+    ).text,
+    'Pods are off: a RunPod key is saved, but the person set no spend limit in Compute. Verifold asked the person in c-1. Verifold wakes you with the answer.',
+  );
+  assert.equal(
+    lab.lab.view()?.state.calls[0]?.question,
+    'Set a spend limit in Compute, so agents can rent GPUs?',
+  );
+  assert.equal(
+    lab.lab.view()?.state.calls[0]?.options[0]?.label,
+    'I set a limit',
+  );
+  // Without a key, the agent learns that both are missing.
+  const bare = await fixture(t, { compute: keyCompute(false) });
+  await open(bare, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await bare.inputs('d-1-alpha')).length === 1);
+  assert.match(
+    (await bare.inputs('d-1-alpha'))[0] ?? '',
+    /GPU pods: off\. No RunPod key is saved yet\./,
+  );
+  assert.match(
+    (
+      await agentCall(bare.lab, 'a-1', 'verifold_request_pod', {
+        gpuType: 'NVIDIA A40',
+        hours: 2,
+        why: 'Seeds.',
+      })
+    ).text,
+    /^Pods are off: no RunPod key is saved, and no spend limit is set\. Verifold asked the person in c-1\./,
+  );
+  assert.equal(
+    bare.lab.view()?.state.calls[0]?.question,
+    'Add a RunPod key and a spend limit in Compute?',
+  );
+  assert.equal(
+    bare.lab.view()?.state.calls[0]?.options[0]?.label,
+    'I added them',
+  );
+});
+
+await test('the plan of record keeps the facts that it rests on, with sources and dates, for the agents and the person', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  const facts = [
+    {
+      claim: 'Model: Qwen3.8-8B',
+      source: 'https://huggingface.co/Qwen/Qwen3.8-8B',
+      sourceDate: '2026-08-14',
+    },
+    {
+      claim: 'A100 80GB: $1.79 an hour',
+      source: 'https://www.runpod.io/pricing',
+      sourceDate: 'read 2026-10-20 21:56',
+    },
+    { claim: 'Probe kit 3.2', source: 'javascript:alert(1)' },
+    { claim: 'Three seeds fit in a day' },
+  ];
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      calls: [{ name: 'verifold_plan', arguments: { ...firstPlan, facts } }],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(() => Boolean(lab.lab.view()?.state.plan), 20_000);
+  // The planner was told to check these facts and list them.
+  assert.match(
+    (await lab.inputs('d-1-plan-the-lab'))[0] ?? '',
+    /List them in `facts`, each with its source and the source's date\./,
+  );
+  assert.deepEqual(
+    lab.lab
+      .view()
+      ?.state.plan?.facts.map((fact) => [
+        fact.claim,
+        fact.source,
+        fact.sourceDate,
+      ]),
+    [
+      [
+        'Model: Qwen3.8-8B',
+        'https://huggingface.co/Qwen/Qwen3.8-8B',
+        '2026-08-14',
+      ],
+      [
+        'A100 80GB: $1.79 an hour',
+        'https://www.runpod.io/pricing',
+        'read 2026-10-20 21:56',
+      ],
+      ['Probe kit 3.2', 'javascript:alert(1)', null],
+      ['Three seeds fit in a day', null, null],
+    ],
+  );
+  // The other agents get the facts with their sources, and an unchecked one as unverified.
+  await until(async () => (await lab.inputs('d-2-helix')).length > 0);
+  const helix = (await lab.inputs('d-2-helix'))[0] ?? '';
+  assert.match(
+    helix,
+    /Facts that the plan rests on\. Check their dates before you use them:\n- "Model: Qwen3\.8-8B": source "https:\/\/huggingface\.co\/Qwen\/Qwen3\.8-8B" of "2026-08-14", listed \d{4}-\d{2}-\d{2}\./,
+  );
+  assert.match(
+    helix,
+    /- "Three seeds fit in a day": unverified \(no source\)\.\n/,
+  );
+  // The listed date is this computer's date, the same as the Today line.
+  assert.equal(
+    helix.match(/listed (\d{4}-\d{2}-\d{2})\./)?.[1],
+    helix.match(todayPattern)?.[1],
+  );
+  // The person sees a source as a link only when it is a web address.
+  const html = renderLab(lab.lab.view()!, (value) => value);
+  assert.match(
+    html,
+    /<ul class="plan-facts"><li>Model: Qwen3\.8-8B <span class="fine">· <a href="https:\/\/huggingface\.co\/Qwen\/Qwen3\.8-8B" target="_blank" rel="noopener noreferrer">huggingface\.co\/Qwen\/Qwen3\.8-8B<\/a>, 2026-08-14<\/span><\/li>/,
+  );
+  assert.match(
+    html,
+    /<li>Probe kit 3\.2 <span class="fine">· <span>javascript:alert\(1\)<\/span><\/span><\/li>/,
+  );
+  assert.doesNotMatch(html, /href="javascript:/);
+  assert.match(
+    html,
+    /<li>Three seeds fit in a day <span class="fine">· unverified \(no source\)<\/span><\/li>/,
+  );
+  // A later plan without facts keeps them, also after a restart.
+  await until(() => !(lab.lab as unknown as { planning: boolean }).planning);
+  const again = await agentCall(lab.lab, 'a-1', 'verifold_plan', {
+    reading: firstPlan.reading,
+    cost: 'Nothing costs money yet.',
+    directions: [{ id: 'd-1' }, { id: 'd-2' }, { id: 'd-3' }],
+  });
+  assert.match(again.text, /^Posted the plan p-\d+\./);
+  await lab.restart();
+  assert.equal(lab.lab.view()?.state.plan?.facts.length, 4);
 });

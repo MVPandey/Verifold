@@ -46,6 +46,7 @@ import {
   diffPanel,
   stateOf,
   labCallNeeds,
+  link,
   minutesText,
   renderLab,
   renderLabStart,
@@ -2990,19 +2991,6 @@ function findingsBody(report: ResearchReport, attempt: string): string {
     `<li><a id="source-${e(attempt)}-${index}" href="${e(item.url)}" target="_blank" rel="noopener noreferrer">${e(item.title)}</a><span>${e(new URL(item.url).hostname)}</span></li>`;
   const rest = report.sources.slice(5);
   return `<div class="prose">${moreMd(`findings-${attempt}`, report.summary, 400)}</div><ol class="sources">${report.sources.slice(0, 5).map(source).join('')}</ol>${rest.length ? `<details id="sources-${e(attempt)}"><summary>All ${report.sources.length} sources</summary><ol class="sources" start="6">${rest.map((item, index) => source(item, index + 5)).join('')}</ol></details>` : ''}<details id="delegation"><summary>How research split the work</summary><div class="prose md">${markdownHtml(report.delegation)}</div></details><p class="fine">Each link shows where a claim came from. Read the source before you rely on the claim.</p>`;
-}
-
-/** A web address as a link with its host and path. Text that is not an http(s) address stays text. */
-function link(address: string): string {
-  try {
-    const url = new URL(address);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:')
-      throw new Error();
-    const shown = `${url.hostname}${url.pathname === '/' ? '' : url.pathname}`;
-    return `<a href="${e(url.href)}" target="_blank" rel="noopener noreferrer">${e(shown.length > 80 ? `${shown.slice(0, 80)}…` : shown)}</a>`;
-  } catch {
-    return `<span>${e(address)}</span>`;
-  }
 }
 
 /** The searches and pages of the current research step, newest first. They come from its transcript and stay in the desk. */
