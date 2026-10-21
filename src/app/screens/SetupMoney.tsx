@@ -355,6 +355,11 @@ export function MoneyStep({
             Hard stops. Each project can change its own.
           </span>
         </div>
+        {money.unreadable && (
+          <p role="alert" className="setup__error limits__unread">
+            {money.unreadable}
+          </p>
+        )}
         <LimitField
           label="A project spends at most"
           before="$"

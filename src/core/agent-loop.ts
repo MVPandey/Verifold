@@ -49,6 +49,8 @@ export interface WakeOwner<E extends WakeEvent, R extends WakeRecord<E>> {
   ready(record: R): boolean;
   /** The usage window of the session's harness is used up until this time, so a turn would fail. */
   parked?(record: R): string | null;
+  /** Read what the digest needs, just before it is sent. */
+  prepare?(): Promise<void>;
   /** Send one digest as a turn. Throw when nothing was sent: the events then wait for the next wakeup. */
   send(events: readonly QueuedEvent<E>[], left: number): void;
   /** A digest was sent. */
@@ -210,6 +212,7 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
       return;
     }
     this.limited = null;
+    await this.owner.prepare?.();
     const sent = waiting.slice(0, this.limits.digest);
     // The cursor is saved first, so a restart never repeats a digest.
     await this.owner.save({

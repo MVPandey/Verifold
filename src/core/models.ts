@@ -15,6 +15,45 @@ export const codexModels: readonly string[] = [
   'gpt-6-sol',
 ];
 
+/** The most pages of Codex's `model/list` that Verifold reads, so a list that never ends still ends. */
+export const codexModelPages = 10;
+
+/** One JSON-RPC call on a connection to a Codex app-server. */
+export type CodexCall = (
+  method: string,
+  params: Record<string, unknown>,
+  onResult: (result: Record<string, unknown>) => void,
+  onError?: () => void,
+) => void;
+
+/**
+ * Read every page of Codex's `model/list`, at most `codexModelPages`, and
+ * give the entries to `done`. A page that Codex refuses gives null.
+ */
+export function listCodexModels(
+  call: CodexCall,
+  done: (models: unknown[] | null) => void,
+): void {
+  const models: unknown[] = [];
+  const page = (cursor: string | undefined, pages: number): void =>
+    call(
+      'model/list',
+      { limit: 100, ...(cursor ? { cursor } : {}) },
+      (result) => {
+        if (Array.isArray(result.data))
+          models.push(...(result.data as unknown[]));
+        const next =
+          typeof result.nextCursor === 'string' && result.nextCursor
+            ? result.nextCursor
+            : undefined;
+        if (next && pages < codexModelPages) page(next, pages + 1);
+        else done(models);
+      },
+      () => done(null),
+    );
+  page(undefined, 1);
+}
+
 /** Claude Code's Opus models: the alias or a full ID, with or without the 1M context. */
 const opus = /^(?:opus|claude-opus-[0-9a-z][0-9a-z.-]*)(?:\[1m\])?$/;
 

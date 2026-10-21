@@ -11,6 +11,9 @@ Read the input below. Then reply with one JSON object and nothing else.
 To ask one more question, reply with:
 {"question": "...", "suggestions": ["...", "...", "..."]}
 
+When the question asks how the agents should write to the person, add "asks": "talk":
+{"question": "...", "suggestions": ["...", "...", "..."], "asks": "talk"}
+
 To finish, reply with:
 {"card": {"workOn": "...", "explore": "...", "talk": "..."}}
 
