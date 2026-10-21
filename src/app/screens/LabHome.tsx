@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
+import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
 import { threads } from '../board.ts';
 import type { Connection } from '../store.ts';
@@ -12,6 +13,7 @@ import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { failureOf } from '../call.ts';
+import { href } from '../route.ts';
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -91,9 +93,14 @@ export function LabHome({
           ))}
           {lab.directions.length > 0 ? (
             <section className="section" aria-labelledby="directions">
-              <h2 id="directions" className="section__title">
-                Directions
-              </h2>
+              <div className="section__head">
+                <h2 id="directions" className="section__title">
+                  Directions
+                </h2>
+                <a className="section__link" href={href.answer}>
+                  {signedOff(lab) ? 'The answer' : 'The answer so far'}
+                </a>
+              </div>
               <div className="rows">
                 {lab.directions.map((direction) => (
                   <DirectionRow

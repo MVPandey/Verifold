@@ -17,14 +17,16 @@ export function newKey(): string {
 /**
  * The intent for a submit. When the last attempt got no answer, as when the
  * network dropped, the same value keeps its key, so a lost response and a
- * retry run once. Any other value is a new intent with a new key.
+ * retry run once. Any other value is a new intent with a new key. `same`
+ * says when two values are the same, such as two lists with the same items.
  */
 export function intentFor<T>(
   unanswered: Intent<T> | null,
   value: T,
   makeKey: () => string = newKey,
+  same: (a: T, b: T) => boolean = Object.is,
 ): Intent<T> {
-  return unanswered && unanswered.value === value
+  return unanswered && same(unanswered.value, value)
     ? unanswered
     : { value, key: makeKey() };
 }

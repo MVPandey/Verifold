@@ -1720,6 +1720,42 @@ function withBrought(
   ];
 }
 
+/** One bring-in of a direction: when, at which commit, and the files that keep it as their base. */
+export interface BringGroup {
+  readonly at: string;
+  readonly commit: string;
+  readonly paths: readonly string[];
+}
+
+/**
+ * A direction's bring-ins, oldest first: the files that keep each one as
+ * their base, by its time and commit. A file that came in again counts only
+ * with its newest bring-in.
+ */
+export function bringGroups(
+  brought: readonly Brought[],
+  direction: string,
+): BringGroup[] {
+  const groups = new Map<
+    string,
+    { readonly at: string; readonly commit: string; readonly paths: string[] }
+  >();
+  for (const entry of brought) {
+    if (entry.direction !== direction) continue;
+    const key = `${entry.at}|${entry.commit}`;
+    const group = groups.get(key) ?? {
+      at: entry.at,
+      commit: entry.commit,
+      paths: [],
+    };
+    group.paths.push(entry.path);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.at < b.at ? -1 : a.at > b.at ? 1 : 0,
+  );
+}
+
 function parseBrought(value: unknown): Brought | null {
   const entry = object(value);
   const at = recordTime(entry?.at);
@@ -6056,6 +6092,12 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       fail(`Tick at most ${labLimits.bringFiles} files at once.`);
     const out = chosen.find((file) => file.out);
     if (out) fail(`${out.path} cannot come in. ${out.out}`);
+    // A second bring-in of the same content would only move its time and add a bring-in to the history.
+    const again = chosen.filter((file) => file.since !== null);
+    if (again.length)
+      fail(
+        `Nothing came in. ${nameList(again.map((file) => file.path))} already came in with this content.`,
+      );
     const blind = chosen.filter((file) =>
       file.why?.startsWith("Verifold can't read the version"),
     );
