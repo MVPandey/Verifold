@@ -24,6 +24,7 @@ import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
 import { SessionPool } from '../src/cli/workers.ts';
 import {
   addSpend,
+  askers,
   Lab,
   labEnded,
   labLimits,
@@ -553,6 +554,10 @@ async function open(
             deadline: null,
             state: 'answered',
             answer: { option: 0, at },
+            words: null,
+            post: null,
+            joined: [],
+            need: null,
             undoUntil: null,
             applied: { type: 'pod', lease: 'lease-0' },
             note: 'Verifold started lease-0.',
@@ -1660,7 +1665,8 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   assert.match(needs, /More &lt;i&gt;time&lt;\/i&gt;\?/);
   const calls =
     needs.match(/<button[^>]*data-action="lab-call-[^"]*"[^>]*>/g) ?? [];
-  assert.equal(calls.length, 2);
+  // Two options, and the send of a typed answer.
+  assert.equal(calls.length, 3);
   for (const control of calls)
     assert.doesNotMatch(
       control,
@@ -1691,6 +1697,12 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
     409,
     { error: 'c-1 has no answer to undo.' },
   ]);
+  // A typed answer goes through the desk too, only with its token.
+  const typed = { action: 'lab-call-words', call: 'c-1', text: 'Stop now.' };
+  assert.equal((await post(typed, false))[0], 401);
+  assert.equal(lab.lab.view()?.state.calls[0]?.state, 'open');
+  assert.equal((await post(typed))[0], 200);
+  assert.equal(lab.lab.view()?.state.calls[0]?.words, 'Stop now.');
   assert.equal(
     (await post({ action: 'lab-direction-stop', direction: 'd-1' }))[0],
     200,
@@ -3220,6 +3232,65 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
     html,
     /<th scope="row">Circles <span class="fine">\(stopped\)<\/span><\/th>/,
   );
+});
+
+await test("words on Verifold's go call go to the whole lab and keep the call open until an option, and words on an agent's go call close it", async (t) => {
+  const lab = await fixture(t, { hourMs: 4000 });
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_ask_person',
+          arguments: {
+            kind: 'go',
+            question: 'Two more hours?',
+            options: [
+              { label: 'Two more', effect: { hours: 2 } },
+              { label: 'No' },
+            ],
+            pick: 0,
+            why: 'Seeds.',
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 1 });
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  // An agent's go call closes with words, as every agent's call does.
+  await until(() => lab.lab.view()?.state.calls.length === 1);
+  await lab.lab.answerCallInWords('c-1', 'Not yet.');
+  assert.equal(lab.lab.view()?.state.calls[0]?.state, 'answered');
+  // The time budget ends, and Verifold asks with its own go call.
+  await until(() => lab.lab.view()?.state.pausedFor === 'deadline', 10_000);
+  await until(() => lab.lab.view()?.state.calls.length === 2);
+  const words = 'Write up what you have.';
+  await lab.lab.answerCallInWords('c-2', words);
+  let state = lab.lab.view()?.state;
+  // Only an option gives the lab more time or ends it, so the call stays open and the lab stays paused.
+  assert.equal(state?.calls[1]?.state, 'open');
+  assert.equal(state?.calls[1]?.words, words);
+  assert.equal(state?.pausedFor, 'deadline');
+  assert.equal(state?.budget?.hours, 1);
+  // The words are a post from the person to the whole lab, in no thread.
+  const post = lab.lab.view()?.posts.find((entry) => entry.text === words);
+  assert.equal(post?.author, 'person');
+  assert.equal(post?.direction, undefined);
+  assert.equal(post?.replyTo, undefined);
+  // The card says what happened and what is left to do.
+  assert.match(
+    await labNeeds(lab),
+    /Your words went to the lab\. Pick an option to give it more time or end it\./,
+  );
+  // No tick asks a second time meanwhile.
+  await delay(300);
+  assert.equal(lab.lab.view()?.state.calls.length, 2);
+  // An option works as before.
+  await lab.lab.answerCall('c-2', 0);
+  state = lab.lab.view()?.state;
+  assert.equal(state?.calls[1]?.state, 'answered');
+  assert.equal(state?.pausedAt, null);
+  assert.equal(state?.budget?.hours, 5);
 });
 
 await test('when the time budget ends the lab pauses, a go call asks for more time, its answer resumes the lab, and its undo takes the hours back', async (t) => {
@@ -5731,7 +5802,10 @@ await test("an access answer gives the agent's shell its domains while it stands
       ],
     },
   ]);
-  await lab.script('d-2-beta', [{ calls: [access('C?', ['pypi.org'])] }]);
+  // Other domains than A's, so C does not join A.
+  await lab.script('d-2-beta', [
+    { calls: [access('C?', ['pypi.org', 'files.pythonhosted.org'])] },
+  ]);
   await open(lab, [
     { title: 'Alpha', harness: 'claude' },
     { title: 'Beta', harness: 'codex' },
@@ -5747,7 +5821,7 @@ await test("an access answer gives the agent's shell its domains while it stands
     .map((call) => call.id);
   assert.match(
     await labNeeds(lab),
-    /Codex: any website\. Codex cannot limit the network to pypi\.org, so codex-1&#39;s shell can reach any website\./,
+    /Codex: any website\. Codex cannot limit the network to pypi\.org, files\.pythonhosted\.org, so codex-1&#39;s shell can reach any website\./,
   );
   const domains = async (): Promise<string[]> => {
     const args = JSON.parse(
@@ -5839,6 +5913,216 @@ await test("an access answer gives the agent's shell its domains while it stands
   assert.deepEqual(networks, [['pypi.org'], []]);
   await until(async () => (await domains()).length === 0);
   pool.resumeAgent = resume;
+});
+
+await test('a call that asks what an open call asks joins it, its answer reaches every agent that asked, and the person can answer in their own words', async (t) => {
+  const lab = await fixture(t);
+  const pods = (question: string): Call => ({
+    name: 'verifold_ask_person',
+    arguments: {
+      kind: 'access',
+      need: 'pods',
+      question,
+      options: [{ label: 'Add a key and a $40 limit' }, { label: 'No GPU' }],
+      pick: 0,
+      why: 'Training needs a GPU.',
+    },
+  });
+  const access = (question: string, domains: string[]): Call => ({
+    name: 'verifold_ask_person',
+    arguments: {
+      kind: 'access',
+      question,
+      options: [
+        { label: 'Open them', effect: { domains } },
+        { label: 'No network' },
+      ],
+      pick: 0,
+      why: 'Needs packages.',
+    },
+  });
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        pods('Add a RunPod key?'),
+        pods('A RunPod key, please?'),
+        access('PyPI?', ['pypi.org', 'files.pythonhosted.org']),
+        {
+          name: 'verifold_ask_person',
+          arguments: {
+            kind: 'scope',
+            need: 'pods',
+            question: 'Pods?',
+            options: [{ label: 'Yes' }, { label: 'No' }],
+            pick: 0,
+            why: 'A GPU.',
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.script('d-2-beta', [
+    {
+      calls: [
+        pods('Turn pods on, $30?'),
+        access('Wheels?', ['FILES.pythonhosted.org', 'pypi.org']),
+        // The same need with other effects: its domains must not be lost in a plain pods call.
+        {
+          name: 'verifold_ask_person',
+          arguments: {
+            kind: 'access',
+            need: 'pods',
+            question: 'Pods, or PyPI for a CPU run?',
+            options: [
+              { label: 'Pods' },
+              { label: 'PyPI only', effect: { domains: ['pypi.org'] } },
+            ],
+            pick: 0,
+            why: 'Either works.',
+          },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  await until(
+    async () =>
+      (await lab.lines('d-1-alpha', 'results.jsonl')).length === 4 &&
+      (await lab.lines('d-2-beta', 'results.jsonl')).length === 3,
+  );
+  // Three calls wait: plain pods, the same domains, and pods with other effects.
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.equal(calls.length, 3);
+  const asked = (call: LabCall | undefined): string[] =>
+    call ? askers(call).sort() : [];
+  const pod = calls.find(
+    (call) =>
+      call.need === 'pods' && call.options.every((option) => !option.effect),
+  );
+  const pypi = calls.find((call) => !call.need);
+  const either = calls.find(
+    (call) =>
+      call.need === 'pods' && call.options.some((option) => option.effect),
+  );
+  assert.deepEqual(asked(pod), ['a-1', 'a-2']);
+  assert.deepEqual(asked(pypi), ['a-1', 'a-2']);
+  assert.deepEqual(asked(either), ['a-2']);
+  const alpha = await claudeResults(lab, 'd-1-alpha');
+  const beta = await claudeResults(lab, 'd-2-beta');
+  // An agent's second ask for the same thing is refused, whichever agent asked first.
+  assert.match(
+    alpha[1] ?? '',
+    /^Your call c-\d asks this already\. Verifold wakes you with the answer\.$/,
+  );
+  assert.equal(alpha[3], 'need pods goes with an access call.');
+  // The agent that joined learns the call that it joined.
+  assert.equal(
+    [...alpha, ...beta].filter((result) =>
+      /^claude-\d asked the person the same in c-\d, so your call joined it\. Its answer reaches you too/.test(
+        result,
+      ),
+    ).length,
+    2,
+  );
+  // Each join is a line in the call's thread.
+  const posts = lab.lab.view()?.posts ?? [];
+  for (const call of [pod, pypi])
+    assert.ok(
+      posts.some(
+        (post) =>
+          post.author === 'verifold' &&
+          post.replyTo === call?.post &&
+          /^claude-\d asks the same \(c-\d\)\.$/.test(post.text),
+      ),
+    );
+  // Needs you names every agent that asked, says what an answer gives each shell, and takes a typed answer.
+  const html = await labNeeds(lab);
+  assert.match(html, /claude-\d asks the same\./);
+  assert.match(
+    html,
+    /Lets the shells of claude-\d and claude-\d reach (pypi\.org, files\.pythonhosted\.org|files\.pythonhosted\.org, pypi\.org)\./,
+  );
+  assert.match(html, /continue their conversations in new processes\./);
+  assert.match(
+    html,
+    /<label class="field" for="lab-call-words-c-\d">Or tell them what to do instead<\/label><textarea id="lab-call-words-c-\d" rows="2" maxlength="2000"><\/textarea>/,
+  );
+  assert.match(
+    html,
+    /<button type="button" data-action="lab-call-words" data-call="c-\d">Send answer<\/button>/,
+  );
+
+  // A typed answer closes the call with no effect, and every agent that asked wakes with the words.
+  const words = 'None of these. Use the Mac and a 0.5B model <b>first</b>.';
+  await assert.rejects(
+    lab.lab.answerCallInWords(pod?.id, '   '),
+    /Write your answer, up to 2000 characters\./,
+  );
+  await lab.lab.answerCallInWords(pod?.id, words);
+  const answered = lab.lab
+    .view()
+    ?.state.calls.find((call) => call.id === pod?.id);
+  assert.equal(answered?.state, 'answered');
+  assert.equal(answered?.words, words);
+  assert.equal(answered?.answer, null);
+  assert.equal(answered?.undoUntil, null);
+  const line = `[call] The person answered ${pod?.id ?? ''} in their own words, so no option applies: ${JSON.stringify(words)}. This is their decision`;
+  for (const folder of ['d-1-alpha', 'd-2-beta'])
+    await until(async () =>
+      (await lab.inputs(folder)).some((input) => input.includes(line)),
+    );
+  // The board keeps the words in the call's thread, from the person.
+  assert.ok(
+    lab.lab
+      .view()
+      ?.posts.some(
+        (post) =>
+          post.author === 'person' &&
+          post.replyTo === pod?.post &&
+          post.text === words,
+      ),
+  );
+  await assert.rejects(
+    lab.lab.answerCallInWords(pod?.id, 'Again.'),
+    /waits for no answer now\./,
+  );
+  await assert.rejects(lab.lab.undoCall(pod?.id), /has no answer to undo\./);
+  assert.doesNotMatch(await labNeeds(lab), /Add a key and a \$40 limit/);
+
+  // The end of one asker's direction leaves the call open for the other, without the closed asker.
+  await lab.lab.stopDirection('d-1');
+  const left = lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id);
+  assert.equal(left?.state, 'open');
+  assert.deepEqual(asked(left), ['a-2']);
+  // An option's effect for a shell applies to every agent that asked.
+  const domains = async (folder: string): Promise<string[]> => {
+    const args = JSON.parse(
+      await readFile(join(lab.base, 'logs', folder, 'args.json'), 'utf8'),
+    ) as string[];
+    const settings = JSON.parse(
+      args[args.indexOf('--settings') + 1] ?? '{}',
+    ) as { sandbox?: { network?: { allowedDomains?: string[] } } };
+    return settings.sandbox?.network?.allowedDomains ?? [];
+  };
+  await lab.lab.answerCall(pypi?.id, 0);
+  await until(
+    async () =>
+      JSON.stringify(await domains('d-2-beta')) ===
+      JSON.stringify(['files.pythonhosted.org', 'pypi.org']),
+  );
+  assert.equal(
+    lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id)?.note,
+    "claude-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
+  );
+  // When no asker's direction is open, the call is withdrawn.
+  await lab.lab.stopDirection('d-2');
+  assert.equal(
+    lab.lab.view()?.state.calls.find((call) => call.id === either?.id)?.state,
+    'withdrawn',
+  );
 });
 
 await test("the lab's first GPU pod asks the person: the answer starts the lease, its undo ends it and asks again, and later pods follow the limits", async (t) => {
@@ -6096,6 +6380,158 @@ await test('an agent that started with pods off gets the pod tools once pods are
   assert.deepEqual(await threads(), ['start', 'start']);
 });
 
+await test("when the first asker's direction ends, the next asker takes its place on the call", async (t) => {
+  const lab = await fixture(t);
+  const pypi = (why: string): Call => ({
+    name: 'verifold_ask_person',
+    arguments: {
+      kind: 'access',
+      question: 'PyPI?',
+      options: [
+        { label: 'Open it', effect: { domains: ['pypi.org'] } },
+        { label: 'No network' },
+      ],
+      pick: 0,
+      why,
+    },
+  });
+  await lab.script('d-1-alpha', [{ calls: [pypi('Needs numpy.')] }]);
+  await lab.script('d-2-beta', [
+    { calls: [] },
+    { when: 'Ask for PyPI now', calls: [pypi('Needs scipy.')] },
+  ]);
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  const call = (): LabCall | undefined => lab.lab.view()?.state.calls[0];
+  // claude-1 asks first. claude-2 asks once its first turn ended, and joins.
+  await until(
+    () =>
+      call() !== undefined &&
+      lab.lab.view()?.directions.find((entry) => entry.direction.id === 'd-2')
+        ?.status === 'idle',
+  );
+  await lab.lab.post({ text: 'Ask for PyPI now.', direction: 'd-2' });
+  await until(() => call()?.joined.length === 1);
+  assert.equal(call()?.by, 'a-1');
+  const first = call()?.post;
+  await lab.lab.stopDirection('d-1');
+  // claude-2 takes the first place, with its direction and its why.
+  assert.equal(call()?.state, 'open');
+  assert.equal(call()?.by, 'a-2');
+  assert.equal(call()?.direction, 'd-2');
+  assert.equal(call()?.why, 'Needs scipy.');
+  assert.deepEqual(call()?.joined, []);
+  // The call's thread starts again in claude-2's direction.
+  assert.notEqual(call()?.post, first);
+  const thread = lab.lab.view()?.posts.find((post) => post.id === call()?.post);
+  assert.equal(thread?.direction, 'd-2');
+  assert.equal(thread?.text, 'claude-2 asks the person (c-1): PyPI?');
+  // The card names claude-2 only.
+  const html = await labNeeds(lab);
+  assert.match(html, /claude-2 asks, for Beta \(c-1\)\./);
+  assert.match(html, /Why claude-2 picks it: Needs scipy\./);
+  assert.match(html, /Lets claude-2&#39;s shell reach pypi\.org\./);
+  assert.doesNotMatch(html, /claude-1 asks|claude-1&#39;s shell/);
+  // A domains answer applies to claude-2 only, and the board says so in its direction.
+  await lab.lab.answerCall('c-1', 0);
+  assert.equal(
+    call()?.note,
+    "claude-2's shell can reach pypi.org from its next turn.",
+  );
+  assert.equal(
+    lab.lab
+      .view()
+      ?.posts.find((post) =>
+        post.text.startsWith('The person chose "Open it" on c-1.'),
+      )?.direction,
+    'd-2',
+  );
+});
+
+await test('pod requests while pods are off ask the person once for the whole lab', async (t) => {
+  let on = true;
+  const compute: LabCompute = {
+    describe: () => Promise.resolve('{}'),
+    requestPod: () => Promise.reject(new Error('Not now.')),
+    podCost: () => Promise.resolve(2),
+    startPod: () => Promise.reject(new Error('Not now.')),
+    podsOn: () => on,
+    // A key is saved, so the call asks only for the spend limit.
+    keySaved: () => true,
+    leases: {
+      list: () => [],
+      get: () => {
+        throw new Error('No lease.');
+      },
+      end: () => Promise.reject(new Error('No lease.')),
+    },
+    podRuns: () => ({}) as PodRuns,
+  };
+  const lab = await fixture(t, { compute });
+  const request: Call = {
+    name: 'verifold_request_pod',
+    arguments: { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' },
+  };
+  // Codex threads keep their pod tools after pods go off.
+  for (const folder of ['d-1-alpha', 'd-2-beta'])
+    await lab.script(folder, [
+      { calls: [] },
+      { when: 'Ask for a pod now', calls: [request, request] },
+    ]);
+  await open(lab, [
+    { title: 'Alpha', harness: 'codex' },
+    { title: 'Beta', harness: 'codex' },
+  ]);
+  // Both first turns end, so the post starts new turns instead of steering a running one.
+  await until(
+    async () =>
+      (await lab.inputs('d-1-alpha')).length > 0 &&
+      (await lab.inputs('d-2-beta')).length > 0 &&
+      (lab.lab.view()?.directions ?? []).every(
+        (entry) => entry.status === 'idle',
+      ),
+  );
+  on = false;
+  await lab.lab.post({ text: 'Ask for a pod now.' });
+  const results = async (folder: string): Promise<string[]> =>
+    (
+      (await lab.lines(folder, 'results.jsonl')) as {
+        result: { contentItems?: { text: string }[] };
+      }[]
+    ).map((entry) => entry.result.contentItems?.[0]?.text ?? '');
+  await until(
+    async () =>
+      (await results('d-1-alpha')).length === 2 &&
+      (await results('d-2-beta')).length === 2,
+  );
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.need, 'pods');
+  assert.equal(
+    calls[0]?.question,
+    'Set a spend limit in Compute, so agents can rent GPUs?',
+  );
+  assert.deepEqual(calls[0] ? askers(calls[0]).sort() : [], ['a-1', 'a-2']);
+  const all = [...(await results('d-1-alpha')), ...(await results('d-2-beta'))];
+  const count = (pattern: RegExp): number =>
+    all.filter((result) => pattern.test(result)).length;
+  assert.equal(
+    count(
+      /^Pods are off: a RunPod key is saved, but the person set no spend limit in Compute\. Verifold asked the person in c-1\./,
+    ),
+    1,
+  );
+  assert.equal(
+    count(
+      /^Pods are off: .* codex-\d asked the person already in c-1, and your request joined it\./,
+    ),
+    1,
+  );
+  assert.equal(count(/^Your call c-1 waits for the person already\./), 2);
+});
+
 await test('a scope call opens or stops a direction, and its undo reverses it', async (t) => {
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [
@@ -6168,17 +6604,20 @@ await test('a scope call opens or stops a direction, and its undo reverses it', 
 
 await test('calls and their undo windows survive a restart, and an undo after its window is refused', async (t) => {
   const lab = await fixture(t);
-  const more = (question: string): Call => ({
+  const more = (question: string, hours: number): Call => ({
     name: 'verifold_ask_person',
     arguments: {
       kind: 'go',
       question,
-      options: [{ label: 'Yes', effect: { hours: 2 } }, { label: 'No' }],
+      options: [{ label: 'Yes', effect: { hours } }, { label: 'No' }],
       pick: 0,
       why: 'Seeds.',
     },
   });
-  await lab.script('d-1-alpha', [{ calls: [more('First?'), more('Second?')] }]);
+  // Different hours: a call with the same effects as an open call of the agent is refused.
+  await lab.script('d-1-alpha', [
+    { calls: [more('First?', 2), more('Second?', 3)] },
+  ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }], { hours: 1 });
   await until(() => lab.lab.view()?.state.calls.length === 2);
   await lab.lab.answerCall('c-1', 0);
@@ -6202,14 +6641,14 @@ await test('calls and their undo windows survive a restart, and an undo after it
       ['c-2', 'answered', 'hours'],
     ],
   );
-  assert.equal(lab.lab.view()?.state.budget?.hours, 5);
+  assert.equal(lab.lab.view()?.state.budget?.hours, 6);
   await assert.rejects(
     lab.lab.undoCall('c-2'),
     /The time to undo c-2 ended at/,
   );
   // c-2 changed the budget after c-1, so the undo takes c-1's hours off.
   await lab.lab.undoCall('c-1');
-  assert.equal(lab.lab.view()?.state.budget?.hours, 3);
+  assert.equal(lab.lab.view()?.state.budget?.hours, 4);
   // An answer that Verifold stopped while it applied it has no undo, and the board says so.
   await lab.restart(async () => {
     const file = join(lab.root, '.verifold', 'lab.json');
@@ -6499,6 +6938,10 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
     deadline: null,
     state: 'open',
     answer: null,
+    words: null,
+    post: null,
+    joined: [],
+    need: null,
     undoUntil: null,
     applied: null,
     note: null,
@@ -7282,6 +7725,10 @@ function screenCall(at: string, more: Partial<LabCall> = {}): LabCall {
     deadline: null,
     state: 'open',
     answer: null,
+    words: null,
+    post: null,
+    joined: [],
+    need: null,
     undoUntil: null,
     applied: null,
     note: null,
@@ -8334,6 +8781,10 @@ await test('the lab ends when every direction ended, or when the person stops at
         deadline,
         state: 'answered',
         answer: { option: 1, at },
+        words: null,
+        post: null,
+        joined: [],
+        need: null,
         undoUntil: null,
         applied: null,
         note: null,
@@ -8456,6 +8907,10 @@ await test("the answer lists only the person's answers that stand", async (t) =>
     deadline: null,
     state: 'answered',
     answer: { option: 0, at },
+    words: null,
+    post: null,
+    joined: [],
+    need: null,
     undoUntil: null,
     applied: applied
       ? { type: 'hours', hours: 1, budget: null, deadline: null }
@@ -8467,11 +8922,21 @@ await test("the answer lists only the person's answers that stand", async (t) =>
     calls: [
       call('c-1', 'Kept answer', true),
       call('c-2', 'Half answer', false),
+      // An answer in the person's own words applies nothing, so it stands.
+      {
+        ...call('c-3', 'Not chosen', false),
+        answer: null,
+        words: 'Use the <b>Mac</b>.',
+        note: null,
+      },
     ],
   };
   const body = answerPanel(lab.lab.view() as LabView, (value) => value).body;
-  assert.match(body, /<strong>Your calls:<\/strong> Kept answer\./);
-  assert.doesNotMatch(body, /Half answer/);
+  assert.match(
+    body,
+    /<strong>Your calls:<\/strong> Kept answer · &quot;Use the &lt;b&gt;Mac&lt;\/b&gt;\.&quot;\./,
+  );
+  assert.doesNotMatch(body, /Half answer|Not chosen/);
 });
 
 await test('the desk brings files in and signs off only with its token, and escapes every file name', async (t) => {
