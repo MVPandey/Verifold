@@ -733,6 +733,7 @@ await test('a terminal without a background owner gets the same live view of its
   const lines: string[] = [];
   const screens: (LabScreen | null)[] = [];
   const typed: ((line: string) => void)[] = [];
+  let unfollow: (() => void) | undefined;
   const stop = new AbortController();
   const done = runCli(
     ['ui', '--no-open'],
@@ -743,7 +744,12 @@ await test('a terminal without a background owner gets the same live view of its
       out: () => {},
       progress: (line) => lines.push(line),
       listen: (onLine) => typed.push(onLine),
-      screens: { show: (screen) => screens.push(screen) },
+      // The terminal of an in-process desk owns its watch of the lab.
+      screens: {
+        serve: (follow) => {
+          unfollow = follow((screen) => screens.push(screen));
+        },
+      },
       deskAssets: assets,
     },
     stop.signal,
@@ -764,6 +770,107 @@ await test('a terminal without a background owner gets the same live view of its
   );
   typed[0]?.('A note for the lab');
   await until(() => lines.includes('Your message is on the board.'));
+  unfollow?.();
   stop.abort();
   await done;
+});
+
+await test('a terminal that attaches gets a fresh screen, not the one from before it was away', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await mkdir(join(root, '.verifold', 'lab', 'agents'), { recursive: true });
+  await writeFile(
+    join(root, '.verifold', 'lab.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      question: 'Do months lie on a circle?',
+      startedAt: new Date().toISOString(),
+      pausedAt: null,
+      handles: { claude: 0, codex: 0 },
+      directions: [],
+    }),
+  );
+  const owner = new AbortController();
+  let ownerDone: Promise<void> | undefined;
+  t.after(async () => {
+    owner.abort();
+    await ownerDone?.catch(() => {});
+  });
+  const background = {
+    keys,
+    start: (folder: string, line: string): Promise<void> => {
+      ownerDone = runCli(
+        ['owner', '--workspace', folder],
+        folder,
+        {
+          interactive: false,
+          ask: () => Promise.reject(new Error('No prompts')),
+          out: () => assert.fail('The owner prints nothing.'),
+          browse: () => Promise.resolve(true),
+          deskAssets: assets,
+          background: {
+            keys,
+            start: () =>
+              Promise.reject(new Error('The owner starts no owner.')),
+            input: () => Promise.resolve(line),
+          },
+        },
+        owner.signal,
+      );
+      return Promise.resolve();
+    },
+    input: () => Promise.reject(new Error('A terminal has no owner input.')),
+  };
+  const attach = (
+    screens: (LabScreen | null)[],
+    urls: string[],
+    signal: AbortSignal,
+  ): Promise<void> =>
+    runCli(
+      ['ui', '--no-open'],
+      root,
+      {
+        interactive: true,
+        ask: () => Promise.reject(new Error('No prompts')),
+        out: (value) => urls.push(value),
+        progress: () => {},
+        listen: () => {},
+        screens: { show: (screen) => screens.push(screen) },
+        background,
+      },
+      signal,
+    );
+  const first: (LabScreen | null)[] = [];
+  const urls: string[] = [];
+  const away = new AbortController();
+  const attached = attach(first, urls, away.signal);
+  await until(() => first.some((screen) => screen !== null) && urls.length > 0);
+  assert.equal(first.find((screen) => screen !== null)?.paused, null);
+  away.abort();
+  await attached;
+  // While no terminal looks, the person pauses the lab in the app.
+  const url = new URL((JSON.parse(urls[0] ?? '{}') as { url: string }).url);
+  const headers = {
+    Authorization: `Bearer ${url.hash.slice(1)}`,
+    'Content-Type': 'application/json',
+  };
+  const paused = await fetch(`${url.origin}/api/v1/actions/lab-pause`, {
+    method: 'POST',
+    headers,
+    body: '{}',
+  });
+  assert.ok(paused.status === 200 || paused.status === 202);
+  await until(async () => {
+    const snapshot = (await (
+      await fetch(`${url.origin}/api/v1/snapshot`, { headers })
+    ).json()) as { lab: { paused: unknown } | null };
+    return snapshot.lab?.paused !== null;
+  });
+  // The next terminal's first screen is the lab as it is now.
+  const second: (LabScreen | null)[] = [];
+  const back = new AbortController();
+  const again = attach(second, [], back.signal);
+  await until(() => second.length > 0);
+  assert.equal(second[0]?.paused, 'person');
+  back.abort();
+  await again;
 });

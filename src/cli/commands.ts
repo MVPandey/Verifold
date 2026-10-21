@@ -41,6 +41,7 @@ import { Quota } from '../core/quota.ts';
 import { Coordinator } from '../legacy/coordinator.ts';
 import { Lab, labOnDisk, startLabOn } from '../core/lab.ts';
 import type { LabScreen } from '../server/screen.ts';
+import type { FollowScreens } from './terminal-view.ts';
 import { labModel } from '../core/models.ts';
 import { labWorks, RunTeam } from '../core/team.ts';
 import { withTranscript } from '../core/transcript.ts';
@@ -105,6 +106,8 @@ export interface CliIO {
   readonly out: (value: string) => void;
   /** `agent`: text from the harness. `tool`: a harness event that Verifold observed. */
   readonly progress?: (value: string, source?: 'agent' | 'tool') => void;
+  /** A line of the person's own session, which a terminal keeps in its scrollback. Without it, the line goes to `progress`. */
+  readonly feed?: (line: string) => void;
   /** Review a draft brief with direct editing. Only the desk provides it. */
   readonly review?: (brief: string, final: boolean) => Promise<BriefDecision>;
   /** Mark the current setup step for a view that shows it. */
@@ -139,13 +142,22 @@ export interface CliIO {
   /** Background owners. Only the executable provides it. Without it, the desk runs in this process. */
   readonly background?: Background;
   /**
-   * The lab for the terminal's live view. `show` gets the lab's screen, and
-   * again after each change of it: null when the project has no lab. While
-   * `wanted` is false, Verifold builds no screen. Only a terminal provides it.
+   * The lab for a terminal's live view. Only a terminal, or a background
+   * owner for its terminals, provides it.
    */
   readonly screens?: {
-    readonly show: (screen: LabScreen | null) => void;
-    readonly wanted?: () => boolean;
+    /**
+     * A screen of the lab from a background owner, again after each change
+     * of it: null when the project has no lab. `detaches`: Ctrl+C only
+     * detaches this terminal, and the lab works on.
+     */
+    readonly show?: (screen: LabScreen | null, detaches: boolean) => void;
+    /**
+     * The desk of this process serves the project. `follow` starts a watch
+     * of the lab's screens and returns its stop. The view owns the watch,
+     * and stops it when it closes.
+     */
+    readonly serve?: (follow: FollowScreens) => void;
   };
 }
 
@@ -672,7 +684,7 @@ async function serveDesk(
             io.interactive && !view?.record.task && !view?.record.agent
               ? feedLine(event, view ? hostName(view.record.host) : undefined)
               : null;
-          if (line) io.progress?.(line);
+          if (line) (io.feed ?? io.progress)?.(line);
           // The session that `verifold session` started decides when this command ends.
           if (!owned.session || view?.record.id !== owned.session) return;
           const { status } = view.record;
@@ -873,8 +885,18 @@ async function serveDesk(
               : 'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
           );
         }
-        // A terminal's live view follows the lab.
-        if (io.screens) desk.screens(io.screens.show, io.screens.wanted);
+        // A view follows the lab. Without a lab, it builds nothing, after one last screen that says so.
+        const server = desk;
+        io.screens?.serve?.((show) => {
+          let shown = false;
+          return server.screens(
+            (screen) => {
+              shown = screen !== null;
+              show(screen);
+            },
+            () => lab.exists || shown,
+          );
+        });
         const paused = sessions.paused().length;
         if (paused && !session)
           io.progress?.(
@@ -1108,20 +1130,41 @@ async function runOwner(
   const { research, desk, lab } = ownerStart(input);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
-  let early: string[] | null = [];
+  let early: { readonly progress: string; readonly feed?: true }[] | null = [];
   let url: string | undefined;
   /** The app's URL, when the package has the app's build. */
   let appUrl: string | undefined;
-  /** The newest screen of the lab, for a terminal that attaches. */
+  /**
+   * The lab's screens, built only while a terminal is attached: the desk's
+   * watch, its stop while it runs, and its newest screen.
+   */
+  let follow: FollowScreens | undefined;
+  let unfollow: (() => void) | undefined;
   let screen: LabScreen | null | undefined;
+  /** A new watch sends a fresh screen to every terminal at once. */
+  const watch = (): void => {
+    if (unfollow || !follow || !server.terminals()) return;
+    unfollow = follow((next) => {
+      screen = next;
+      server.send({ screen: next });
+    });
+  };
   let onLine: ((line: string) => void) | undefined;
   const waiting: string[] = [];
   const server = await serveControl(control, {
     attached: (send) => {
-      for (const line of early ?? []) send({ progress: line });
+      for (const message of early ?? []) send(message);
       early = null;
       if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
-      if (screen !== undefined) send({ screen });
+      // A screen is fresh only while the watch runs for another terminal.
+      if (unfollow && screen !== undefined) send({ screen });
+      else watch();
+    },
+    detached: () => {
+      if (server.terminals()) return;
+      unfollow?.();
+      unfollow = undefined;
+      screen = undefined;
     },
     message: (message) => {
       if ('stop' in message) quit.abort();
@@ -1130,10 +1173,13 @@ async function runOwner(
     },
   });
   const log = ownerLog(root);
-  const progress = (value: string): void => {
+  const progress = (value: string, feed = false): void => {
     log(value);
-    if (early && early.length < 50) early.push(value);
-    server.send({ progress: value });
+    const message = feed
+      ? { progress: value, feed: true as const }
+      : { progress: value };
+    if (early && early.length < 50) early.push(message);
+    server.send(message);
   };
   try {
     await serveDesk(
@@ -1167,6 +1213,7 @@ async function runOwner(
         progress: (value, source) => {
           if (source !== 'tool') progress(value);
         },
+        feed: (line) => progress(line, true),
         listen: (handler, until) => {
           onLine = handler;
           for (const line of waiting.splice(0)) handler(line);
@@ -1178,13 +1225,12 @@ async function runOwner(
             { once: true },
           );
         },
-        // Screens are built only while a terminal is attached to show them.
+        // The desk's watch of the lab runs only while a terminal is attached to show it.
         screens: {
-          show: (next) => {
-            screen = next;
-            server.send({ screen: next });
+          serve: (start) => {
+            follow = start;
+            watch();
           },
-          wanted: () => server.terminals() > 0,
         },
       },
       AbortSignal.any([signal, quit.signal]),
@@ -1280,8 +1326,11 @@ async function attachTeam(
   client = await reach(
     control,
     (message) => {
-      if ('progress' in message) io.progress?.(message.progress);
-      else if ('screen' in message) io.screens?.show(message.screen);
+      if ('progress' in message)
+        (message.feed ? (io.feed ?? io.progress) : io.progress)?.(
+          message.progress,
+        );
+      else if ('screen' in message) io.screens?.show?.(message.screen, true);
       else if ('url' in message && !shown) {
         shown = true;
         const app = start.app ? message.app : undefined;

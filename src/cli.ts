@@ -165,10 +165,15 @@ try {
       },
       ...(lab
         ? {
+            // The lines of the person's own session stay in the scrollback.
+            feed: (line: string) => lab.progress(line, true),
             // Menus are finished before this starts. Plain mode reads lines as the shell gives them.
             listen: (onLine: (line: string) => void, signal: AbortSignal) =>
               lab.listen(onLine, signal),
-            screens: { show: lab.show.bind(lab) },
+            screens: {
+              show: lab.show.bind(lab),
+              serve: lab.serve.bind(lab),
+            },
           }
         : {}),
       out: (value) => {

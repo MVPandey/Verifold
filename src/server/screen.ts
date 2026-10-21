@@ -1,5 +1,7 @@
+import { clip } from '../core/board.ts';
 import type { Live, Snapshot } from '../protocol/api.ts';
 import { shownVerdict, type ShownVerdict } from '../ui/lab-lines.ts';
+import { record } from './http.ts';
 
 /**
  * The lab as the terminal's live view shows it: a small part of the API's
@@ -60,12 +62,6 @@ export const screenLimits = {
   question: 240,
 };
 
-/** At most `max` characters, cut at whole code points. */
-function cut(value: string, max: number): string {
-  const points = Array.from(value);
-  return points.length <= max ? value : `${points.slice(0, max - 1).join('')}…`;
-}
-
 const ranks: Readonly<Record<ShownVerdict, number>> = {
   disputed: 2,
   open: 3,
@@ -115,18 +111,18 @@ export function labScreen(
     const agent = agents.get(direction.agent);
     return {
       id: direction.id,
-      title: cut(direction.title, screenLimits.text),
+      title: clip(direction.title, screenLimits.text),
       shown: shownVerdict(direction),
       agent: agent?.handle ?? null,
       live: agent
         ? {
             state: agent.live.state,
-            text: cut(agent.live.text, screenLimits.text),
+            text: clip(agent.live.text, screenLimits.text),
             since: agent.live.since,
           }
         : null,
       evidence: direction.evidence
-        ? cut(direction.evidence.text, screenLimits.text)
+        ? clip(direction.evidence.text, screenLimits.text)
         : null,
     };
   });
@@ -138,7 +134,7 @@ export function labScreen(
   const pick =
     first && first.pick !== null ? first.options[first.pick] : undefined;
   return {
-    project: cut(snapshot.project, screenLimits.question),
+    project: clip(snapshot.project, screenLimits.question),
     origin: desk.origin,
     app: desk.app,
     money: {
@@ -153,18 +149,12 @@ export function labScreen(
     call: first
       ? {
           id: first.id,
-          question: cut(first.question, screenLimits.question),
+          question: clip(first.question, screenLimits.question),
           usd: pick?.usd ?? null,
         }
       : null,
     calls: lab.needsYou.length + (lab.omitted.needsYou ?? 0),
   };
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 const text = (value: unknown, max: number): value is string =>
@@ -193,38 +183,47 @@ const callId = /^c-[1-9][0-9]{0,5}$/;
 
 function live(value: unknown): Live | null | undefined {
   if (value === null) return null;
-  const data = record(value);
-  return data &&
-    states.includes(data.state as Live['state']) &&
-    text(data.text, screenLimits.text * 2) &&
-    time(data.since)
+  return record(value) &&
+    states.includes(value.state as Live['state']) &&
+    text(value.text, screenLimits.text * 2) &&
+    time(value.since)
     ? {
-        state: data.state as Live['state'],
-        text: data.text,
-        since: data.since,
+        state: value.state as Live['state'],
+        text: value.text,
+        since: value.since,
       }
     : undefined;
 }
 
 function direction(value: unknown): ScreenDirection | null {
-  const data = record(value);
-  if (!data) return null;
-  const shown = live(data.live);
-  return text(data.id, 100) &&
-    text(data.title, screenLimits.text * 2) &&
-    verdicts.includes(data.shown as ShownVerdict) &&
-    (data.agent === null || text(data.agent, 100)) &&
+  if (!record(value)) return null;
+  const shown = live(value.live);
+  return text(value.id, 100) &&
+    text(value.title, screenLimits.text * 2) &&
+    verdicts.includes(value.shown as ShownVerdict) &&
+    (value.agent === null || text(value.agent, 100)) &&
     shown !== undefined &&
-    (data.evidence === null || text(data.evidence, screenLimits.text * 2))
+    (value.evidence === null || text(value.evidence, screenLimits.text * 2))
     ? {
-        id: data.id,
-        title: data.title,
-        shown: data.shown as ShownVerdict,
-        agent: data.agent,
+        id: value.id,
+        title: value.title,
+        shown: value.shown as ShownVerdict,
+        agent: value.agent,
         live: shown,
-        evidence: data.evidence,
+        evidence: value.evidence,
       }
     : null;
+}
+
+function call(value: unknown): ScreenCall | null | undefined {
+  if (value === null) return null;
+  return record(value) &&
+    text(value.id, 20) &&
+    callId.test(value.id) &&
+    text(value.question, screenLimits.question * 2) &&
+    (value.usd === null || amount(value.usd))
+    ? { id: value.id, question: value.question, usd: value.usd }
+    : undefined;
 }
 
 /**
@@ -232,62 +231,46 @@ function direction(value: unknown): ScreenDirection | null {
  * anything else: a terminal shows only what it could read.
  */
 export function parseLabScreen(value: unknown): LabScreen | null {
-  const data = record(value);
-  const money = record(data?.money);
-  const call = data?.call === null ? null : record(data?.call);
   if (
-    !data ||
-    !money ||
-    !text(data.project, screenLimits.question * 2) ||
-    !text(data.origin, 100) ||
-    !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(data.origin) ||
-    typeof data.app !== 'boolean' ||
-    !amount(money.plansUsd) ||
-    !amount(money.gpuUsd) ||
-    !(money.gpuLimitUsd === null || amount(money.gpuLimitUsd)) ||
-    !time(data.deadline) ||
+    !record(value) ||
+    !record(value.money) ||
+    !text(value.project, screenLimits.question * 2) ||
+    !text(value.origin, 100) ||
+    !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(value.origin) ||
+    typeof value.app !== 'boolean' ||
+    !amount(value.money.plansUsd) ||
+    !amount(value.money.gpuUsd) ||
+    !(value.money.gpuLimitUsd === null || amount(value.money.gpuLimitUsd)) ||
+    !time(value.deadline) ||
     !(
-      data.paused === null ||
-      data.paused === 'person' ||
-      data.paused === 'deadline'
+      value.paused === null ||
+      value.paused === 'person' ||
+      value.paused === 'deadline'
     ) ||
-    !Array.isArray(data.directions) ||
-    data.directions.length > screenLimits.directions ||
-    !count(data.more) ||
-    !count(data.calls) ||
-    (data.call !== null &&
-      !(
-        call &&
-        text(call.id, 20) &&
-        callId.test(call.id) &&
-        text(call.question, screenLimits.question * 2) &&
-        (call.usd === null || amount(call.usd))
-      ))
+    !Array.isArray(value.directions) ||
+    value.directions.length > screenLimits.directions ||
+    !count(value.more) ||
+    !count(value.calls)
   )
     return null;
-  const directions = data.directions.map(direction);
-  if (directions.some((entry) => entry === null)) return null;
+  const directions = value.directions.map(direction);
+  const first = call(value.call);
+  if (first === undefined || directions.some((entry) => entry === null))
+    return null;
   return {
-    project: data.project,
-    origin: data.origin,
-    app: data.app,
+    project: value.project,
+    origin: value.origin,
+    app: value.app,
     money: {
-      plansUsd: money.plansUsd,
-      gpuUsd: money.gpuUsd,
-      gpuLimitUsd: money.gpuLimitUsd,
+      plansUsd: value.money.plansUsd,
+      gpuUsd: value.money.gpuUsd,
+      gpuLimitUsd: value.money.gpuLimitUsd,
     },
-    deadline: data.deadline,
-    paused: data.paused,
+    deadline: value.deadline,
+    paused: value.paused,
     directions: directions as ScreenDirection[],
-    more: data.more,
-    call:
-      call && typeof call.id === 'string' && typeof call.question === 'string'
-        ? {
-            id: call.id,
-            question: call.question,
-            usd: call.usd as number | null,
-          }
-        : null,
-    calls: data.calls,
+    more: value.more,
+    call: first,
+    calls: value.calls,
   };
 }
