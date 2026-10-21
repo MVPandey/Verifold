@@ -243,10 +243,13 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
     ),
   );
   const given = await args(work, 'codex-args.json');
-  assert.ok(given.includes('--disable'));
   assert.equal(
-    given[given.indexOf('--disable') + 1],
-    'skill_mcp_dependency_install',
+    given[given.indexOf('features.skill_mcp_dependency_install=false') - 1],
+    '-c',
+  );
+  assert.ok(
+    given.indexOf('features.skill_mcp_dependency_install=false') <
+      given.indexOf('app-server'),
   );
   const methods = (await readFile(join(work, 'rpc.jsonl'), 'utf8'))
     .trim()
@@ -292,7 +295,11 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
       'thread/start',
     ),
   );
-  assert.ok(!(await args(work, 'codex-args.json')).includes('--disable'));
+  assert.ok(
+    !(await args(work, 'codex-args.json')).some((arg) =>
+      arg.includes('skill_mcp_dependency_install'),
+    ),
+  );
   assert.ok(
     !(await readFile(join(work, 'rpc.jsonl'), 'utf8')).includes('skills/'),
   );
