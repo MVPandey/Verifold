@@ -17,10 +17,17 @@ export interface Text {
   readonly trimmed: boolean;
 }
 
-/** What the screens show, at one moment. `GET /api/v1/snapshot` and each `snapshot` event send one. */
+/**
+ * What the screens show, at one moment. `GET /api/v1/snapshot` and each
+ * `snapshot` event send one. Compare snapshots by `epoch` and `rev`: a new
+ * epoch means that Verifold started again, so take the snapshot as new,
+ * whatever its rev.
+ */
 export interface Snapshot {
   readonly protocolVersion: typeof protocolVersion;
-  /** Grows by one with each change. Two snapshots with the same rev hold the same data. */
+  /** A new one each time Verifold starts. */
+  readonly epoch: string;
+  /** Grows by one with each change within an epoch. Two snapshots with the same epoch and rev hold the same data. */
   readonly rev: number;
   /** When the server built it. */
   readonly at: string;
@@ -28,9 +35,24 @@ export interface Snapshot {
   readonly project: string;
   /** Null: the project has no lab. */
   readonly lab: Lab | null;
-  /** The snapshot reached its size bound, so it holds fewer turns, posts, or characters than usual. */
+  /** The snapshot left items out: lists past their bounds, or less of a large lab to stay under the size bound. */
   readonly trimmed: boolean;
 }
+
+/** The lists of a lab that a snapshot can cut. Posts and turns have their own `more` flags. */
+export type LabList =
+  | 'needsYou'
+  | 'answered'
+  | 'directions'
+  | 'buildsOn'
+  | 'agents'
+  | 'disputes'
+  | 'facts'
+  | 'runs'
+  | 'checks'
+  | 'works'
+  | 'plan'
+  | 'signoff';
 
 export interface Lab {
   readonly question: string;
@@ -65,6 +87,8 @@ export interface Lab {
   readonly works: readonly Work[];
   /** The person was away: when they left, and the two costs then. */
   readonly away: Away | null;
+  /** How many items each cut list left out. A list that the snapshot did not cut is not named. */
+  readonly omitted: Readonly<Partial<Record<LabList, number>>>;
 }
 
 export interface Money {
@@ -255,6 +279,8 @@ export type StepType = 'request' | 'text' | 'thinking' | 'tool' | 'note';
 export type StepKind = keyof StepCounts;
 
 export interface Step {
+  /** Its place in the turn, from 0. */
+  readonly index: number;
   readonly id: string;
   /** The tool call that started a helper agent, for the helper's steps. */
   readonly parent: string | null;
@@ -276,12 +302,16 @@ export interface Step {
   readonly text: Text | null;
 }
 
-/** `GET /api/v1/agents/:agent/turns/:turn` */
+/**
+ * `GET /api/v1/agents/:agent/turns/:turn`: the turn's newest steps, or with
+ * `?before=<index>` the steps before that one. A page holds at most 200
+ * steps and about 256 KB.
+ */
 export interface TurnDetail {
   readonly turn: Turn;
   /** Oldest first. */
   readonly steps: readonly Step[];
-  /** The turn has more steps than the server sends. */
+  /** Older steps exist. Ask again with `before` set to the first step's index. */
   readonly more: boolean;
 }
 
@@ -487,7 +517,11 @@ export interface ActionBodies {
 
 export type ActionName = keyof ActionBodies;
 
-/** The answer to an action. `pending`: a slow action goes on, and a later snapshot shows how it ends. */
+/**
+ * The answer to an action. Status 200: it ran. Status 202 with `pending`: a
+ * slow action goes on in the background, and a later snapshot shows how it
+ * ends. Status 409 has the reason that Verifold refused it.
+ */
 export type ActionResult =
   | { readonly ok: true; readonly pending?: true }
   | { readonly error: string };

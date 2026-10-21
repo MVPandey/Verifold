@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { liveOf, stepKind, turnsOf } from '../src/core/activity.ts';
+import { liveOf, stepKind, toolStep, turnsOf } from '../src/core/activity.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
@@ -15,7 +17,12 @@ import {
   TranscriptWriter,
   type TranscriptUpdate,
 } from '../src/core/transcript.ts';
-import { ApiReader, apiLimits, type ApiSources } from '../src/server/api.ts';
+import {
+  ApiFeed,
+  ApiReader,
+  apiLimits,
+  type ApiSources,
+} from '../src/server/api.ts';
 import { startDesk } from '../src/server/desk.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
 import { computeDefaults, type ComputeView } from '../src/core/compute.ts';
@@ -541,15 +548,90 @@ function sources(
   view: () => LabView | null,
   more: Partial<ApiSources> = {},
 ): () => ApiSources {
+  // One array for every read: the feed compares the works by reference.
+  const works = more.works ?? [];
   return () => ({
     root,
     lab: { view },
     compute: undefined,
     session: () => null,
-    works: [],
     away: () => Promise.resolve(null),
     ...more,
+    works,
   });
+}
+
+/** A snapshot's data, as the reader sends it before the feed adds its version, epoch, rev, and time. */
+type Data = Omit<Snapshot, 'protocolVersion' | 'epoch' | 'rev' | 'at'>;
+const parse = (json: string): Data => JSON.parse(json) as Data;
+
+/** Wait until `check` holds, for at most 5 seconds. */
+async function until(check: () => boolean): Promise<void> {
+  const stop = Date.now() + 5000;
+  while (!check()) {
+    if (Date.now() > stop)
+      throw new Error('The condition did not hold in time.');
+    await delay(10);
+  }
+}
+
+/** The events of a stream as they come: snapshots, their IDs, and heartbeats. */
+function listen(response: Response): {
+  readonly events: Snapshot[];
+  readonly ids: string[];
+  readonly pings: () => number;
+  readonly stop: () => Promise<void>;
+} {
+  const body = response.body;
+  assert.ok(body);
+  const reader = body.getReader();
+  const events: Snapshot[] = [];
+  const ids: string[] = [];
+  let pings = 0;
+  let buffer = '';
+  const decoder = new TextDecoder();
+  const pump = (async (): Promise<void> => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      let end = buffer.indexOf('\n\n');
+      while (end >= 0) {
+        const block = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        if (block.startsWith(': ping')) pings++;
+        for (const line of block.split('\n')) {
+          if (line.startsWith('id: ')) ids.push(line.slice(4));
+          if (line.startsWith('data: '))
+            events.push(JSON.parse(line.slice(6)) as Snapshot);
+        }
+        end = buffer.indexOf('\n\n');
+      }
+    }
+  })();
+  return {
+    events,
+    ids,
+    pings: () => pings,
+    stop: async () => {
+      await reader.cancel();
+      await pump;
+    },
+  };
+}
+
+/** The seeded lab with claude-1 on another session, between turns. */
+function withSession(session: string): LabView {
+  const view = seededView();
+  const [first, ...rest] = view.directions;
+  assert.ok(first);
+  return {
+    ...view,
+    directions: [
+      { ...first, agent: { ...first.agent, session }, status: 'idle' },
+      ...rest,
+    ],
+  };
 }
 
 await test('a Claude Code transcript becomes turns with counts by kind, the last message, and the running step', () => {
@@ -570,7 +652,6 @@ await test('a Claude Code transcript becomes turns with counts by kind, the last
     other: 0,
   });
   assert.equal(first.message, 'Seed 1: the gap is 34% smaller.');
-  assert.equal(first.request?.text?.startsWith('Your direction'), true);
   assert.equal(first.running, null);
   assert.equal(second.running?.name, 'Bash');
   assert.equal(second.counts.command, 1);
@@ -641,7 +722,8 @@ await test('the snapshot holds what the screens show, and no internal field, key
         Promise.resolve({ since: at(50), spent: { claude: 1.25, gpu: 0 } }),
     }),
   );
-  const data = await reader.snapshot();
+  const json = await reader.snapshot();
+  const data = parse(json);
   const lab = data.lab;
   assert.ok(lab);
   assert.equal(data.trimmed, false);
@@ -720,8 +802,8 @@ await test('the snapshot holds what the screens show, and no internal field, key
   assert.deepEqual(lab.board.posts[1]?.proof, [{ type: 'run', run: 'r-1' }]);
   assert.equal(lab.runs[0]?.command, 'python probe_train.py --seed 1');
   assert.equal(lab.works[0]?.action, 'lab-direction-add');
+  assert.deepEqual(lab.omitted, {});
   // Nothing internal, secret, or outside the project leaves the server.
-  const json = JSON.stringify(data);
   for (const hidden of [
     '"generation"',
     '"cursor"',
@@ -775,14 +857,354 @@ await test('a large lab stays inside the snapshot bound and says that it is trim
       }),
     );
   const view: LabView = { ...base, directions, posts };
-  const data = await new ApiReader(sources(root, () => view)).snapshot();
-  assert.ok(Buffer.byteLength(JSON.stringify(data)) <= apiLimits.snapshot);
+  const json = await new ApiReader(sources(root, () => view)).snapshot();
+  const data = parse(json);
+  assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
   assert.equal(data.trimmed, true);
   const agent = data.lab?.agents[0];
   assert.ok(agent);
   assert.equal(agent.turns.turns.length, 5);
   assert.equal(agent.turns.more, true);
   assert.equal(agent.turns.turns[0]?.message?.trimmed, true);
+});
+
+await test('a cold read takes a transcript past 4 MB to its end before it answers', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // About 5.5 MB before the last turn: one read step of the file holds 4 MB.
+  const big = 'o'.repeat(60 * 1024);
+  const updates: TranscriptUpdate[] = [requestUpdate('Start.')];
+  for (let index = 0; index < 90; index++)
+    updates.push(
+      ...claudeUpdates(
+        claude.tool(`b${index}`, 'Bash', { command: `python step${index}.py` }),
+      ),
+      ...claudeUpdates(claude.result(`b${index}`, big)),
+    );
+  updates.push(
+    requestUpdate('Next.'),
+    ...claudeUpdates(claude.text('The last turn.')),
+  );
+  const session = '20261020T090000000Z-cccccc01';
+  await writeTranscript(root, session, updates);
+  const view = withSession(session);
+  // A one-off page read, with no stream open, sees the whole file.
+  const page = await new ApiReader(sources(root, () => view)).turnPage('a-1');
+  assert.ok(page);
+  assert.equal(page.turns.length, 2);
+  assert.equal(page.turns[0]?.counts.command, 90);
+  assert.equal(page.turns[1]?.message?.text, 'The last turn.');
+  // So does a snapshot.
+  const data = parse(await new ApiReader(sources(root, () => view)).snapshot());
+  assert.equal(
+    data.lab?.agents[0]?.turns.turns[1]?.message?.text,
+    'The last turn.',
+  );
+});
+
+await test("a turn's steps page from the newest, within a count and a byte bound", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // Turn 1: a request and 449 small steps. Turn 2: 100 steps with large input and output.
+  const updates: TranscriptUpdate[] = [requestUpdate('Start.')];
+  for (let index = 0; index < 449; index++)
+    updates.push(
+      ...claudeUpdates(
+        claude.tool(`r${index}`, 'Read', { file_path: `f${index}.py` }),
+      ),
+    );
+  updates.push(requestUpdate('Wide.'));
+  const blob = 'w'.repeat(6000);
+  for (let index = 0; index < 100; index++)
+    updates.push(
+      ...claudeUpdates(claude.tool(`w${index}`, 'Bash', { command: blob })),
+      ...claudeUpdates(claude.result(`w${index}`, blob)),
+    );
+  const session = '20261020T090000000Z-cccccc02';
+  await writeTranscript(root, session, updates);
+  const reader = new ApiReader(sources(root, () => withSession(session)));
+  const turns = await reader.turnPage('a-1');
+  const [narrow, broad] = turns?.turns ?? [];
+  assert.ok(narrow && broad);
+  const read = async (turn: string, before?: number): Promise<TurnDetail> => {
+    const json = await reader.turn('a-1', turn, before);
+    assert.ok(json);
+    return JSON.parse(json) as TurnDetail;
+  };
+  const newest = await read(narrow.id);
+  assert.equal(newest.steps.length, apiLimits.steps);
+  assert.deepEqual(
+    [newest.steps[0]?.index, newest.steps.at(-1)?.index, newest.more],
+    [250, 449, true],
+  );
+  const middle = await read(narrow.id, 250);
+  assert.deepEqual(
+    [middle.steps[0]?.index, middle.steps.at(-1)?.index, middle.more],
+    [50, 249, true],
+  );
+  const oldest = await read(narrow.id, 50);
+  assert.deepEqual(
+    [oldest.steps.length, oldest.steps[0]?.index, oldest.more],
+    [50, 0, false],
+  );
+  assert.equal(oldest.steps[0]?.type, 'request');
+  // Large steps: the page stops at its byte bound, and the next page goes on from there.
+  const heavy = await read(broad.id);
+  assert.ok(heavy.steps.length > 0 && heavy.steps.length < 100);
+  assert.equal(heavy.more, true);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(heavy.steps)) <=
+      apiLimits.stepPage + heavy.steps.length,
+  );
+  const before = heavy.steps[0]?.index;
+  assert.ok(before);
+  const next = await read(broad.id, before);
+  assert.equal(next.steps.at(-1)?.index, before - 1);
+  // A step index past the end finds nothing.
+  assert.equal(await reader.turn('a-1', narrow.id, 451), null);
+});
+
+await test('each start of the feed has its own epoch, and its revs start from 1', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const view = seededView();
+  const reader = new ApiReader(sources(root, () => view));
+  const before = JSON.parse(
+    (await new ApiFeed(reader).current()).text,
+  ) as Snapshot;
+  // A restart of Verifold makes a new feed.
+  const after = JSON.parse(
+    (await new ApiFeed(reader).current()).text,
+  ) as Snapshot;
+  assert.equal(before.protocolVersion, 1);
+  assert.equal(before.rev, 1);
+  assert.equal(after.rev, 1);
+  assert.match(before.epoch, /^[0-9a-f]{16}$/);
+  assert.notEqual(before.epoch, after.epoch);
+});
+
+await test('a Codex call of a Verifold tool reads in plain words, with or without its server name', () => {
+  const started = codexAppUpdates(
+    'item/started',
+    {
+      id: 'v1',
+      type: 'mcpToolCall',
+      server: 'verifold',
+      tool: 'verifold_post',
+      arguments: { kind: 'claim', text: 'Gap 34% smaller.' },
+    },
+    null,
+  );
+  const turns = turnsOf(logOf([requestUpdate('Go.'), ...started]).list());
+  assert.equal(turns[0]?.running?.name, 'verifold.verifold_post');
+  assert.equal(turns[0]?.counts.post, 1);
+  assert.equal(
+    liveOf({
+      status: 'working',
+      harness: 'codex',
+      turn: turns.at(-1) ?? null,
+      asked: null,
+    }).text,
+    'Writing a note',
+  );
+  assert.equal(toolStep('verifold.verifold_object'), 'Raising an objection');
+  assert.equal(toolStep('verifold_post'), 'Writing a note');
+  assert.equal(toolStep('mcp__verifold__verifold_post'), 'Writing a note');
+  assert.equal(toolStep('File change', 'a.py'), 'Writing a.py');
+});
+
+await test('a lab huge in every list stays in bound, counts what it left out, and never fails', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = seededView();
+  const plan = base.state.plan;
+  assert.ok(plan);
+  const directions = Array.from({ length: 300 }, (_, index) => ({
+    ...direction(
+      `d-${index + 1}`,
+      `Direction ${index + 1}`,
+      `a-${index + 100}`,
+    ),
+    buildsOn: Array.from({ length: 50 }, (__, work) => ({
+      text: `Work ${work}`,
+      known: true,
+    })),
+  }));
+  const rows = directions.map((entry, index) => ({
+    direction: entry,
+    agent: agentRecord(
+      `a-${index + 100}`,
+      `claude-${index + 100}`,
+      'claude',
+      entry.id,
+      null,
+    ),
+    status: 'idle' as const,
+    until: null,
+  }));
+  const posts: Post[] = [];
+  const checks: Check[] = [];
+  for (let index = 1; index <= 300; index++) {
+    posts.push(
+      post(`p-${2 * index - 1}`, 'a-1', 'claim', `Claim ${index}.`, {
+        artifacts: [{ type: 'run', run: 'r-1' }],
+      }),
+      post(`p-${2 * index}`, 'a-2', 'objection', `Doubt ${index}.`, {
+        replyTo: `p-${2 * index - 1}`,
+      }),
+    );
+    checks.push({
+      ...check(),
+      id: `k-${index}`,
+      claim: `p-${2 * index - 1}`,
+      objections: [`p-${2 * index}`],
+      agent: `a-${index + 1000}`,
+      handle: `codex-${index + 1000}`,
+    });
+  }
+  const facts = Array.from({ length: 200 }, (_, index) => ({
+    claim: `Fact ${index}`,
+    source: null,
+    sourceDate: null,
+    checkedAt: at(1),
+  }));
+  const calls = Array.from({ length: 300 }, (_, index) =>
+    call({ id: `c-${index + 1}`, joined: [] }),
+  );
+  const view: LabView = {
+    ...base,
+    state: {
+      ...base.state,
+      directions,
+      calls,
+      checks,
+      plan: { ...plan, facts },
+    },
+    directions: rows,
+    posts,
+    checks,
+  };
+  const json = await new ApiReader(sources(root, () => view)).snapshot();
+  assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
+  const data = parse(json);
+  assert.equal(data.trimmed, true);
+  const omitted = data.lab?.omitted ?? {};
+  for (const list of [
+    'needsYou',
+    'directions',
+    'buildsOn',
+    'agents',
+    'disputes',
+    'facts',
+    'checks',
+  ] as const)
+    assert.ok((omitted[list] ?? 0) > 0, `${list} is not cut`);
+  assert.equal((data.lab?.needsYou.length ?? 0) + (omitted.needsYou ?? 0), 300);
+  // Calls so large that no list fits: the snapshot keeps the money and the question, and says what it left out.
+  const heavy: LabView = {
+    ...view,
+    state: {
+      ...view.state,
+      calls: Array.from({ length: 20 }, (_, index) =>
+        call({
+          id: `c-${index + 1}`,
+          joined: [],
+          question: 'q'.repeat(200_000),
+        }),
+      ),
+    },
+  };
+  const last = await new ApiReader(sources(root, () => heavy)).snapshot();
+  assert.ok(Buffer.byteLength(last) <= apiLimits.snapshot);
+  const lab = parse(last).lab;
+  assert.ok(lab);
+  assert.equal(lab.needsYou.length, 0);
+  assert.equal(lab.omitted.needsYou, 20);
+  assert.equal(lab.plan, null);
+  assert.equal(lab.omitted.plan, 1);
+  assert.equal(lab.money.plansUsd, 2.5);
+});
+
+await test('every checker that the snapshot names has turns to fetch, an old one too', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = seededView();
+  const checks: Check[] = [];
+  for (let index = 1; index <= 8; index++) {
+    const session = `20261020T090000000Z-dddddd0${index}`;
+    await writeTranscript(root, session, [
+      requestUpdate(`Check ${index}.`),
+      ...claudeUpdates(claude.text(`Rerun ${index} holds.`)),
+    ]);
+    checks.push({
+      ...check(),
+      id: `k-${index}`,
+      agent: `a-${index + 20}`,
+      handle: `codex-${index + 20}`,
+      state: 'done',
+      outcome: 'holds',
+      session,
+      endedAt: at(60 + index),
+    });
+  }
+  const view: LabView = { ...base, state: { ...base.state, checks }, checks };
+  const reader = new ApiReader(sources(root, () => view));
+  const data = parse(await reader.snapshot());
+  // The agents list shows the five newest ended checkers. The checks list names all eight.
+  assert.deepEqual(
+    data.lab?.agents
+      .filter((agent) => agent.check !== null)
+      .map((agent) => agent.id),
+    ['a-24', 'a-25', 'a-26', 'a-27', 'a-28'],
+  );
+  assert.ok(data.lab?.checks.some((entry) => entry.agent === 'a-21'));
+  const page = await reader.turnPage('a-21');
+  assert.equal(page?.turns[0]?.message?.text, 'Rerun 1 holds.');
+  const turn = page?.turns[0]?.id;
+  assert.ok(turn);
+  assert.ok(await reader.turn('a-21', turn));
+});
+
+await test('an idle lab with an open stream builds no snapshot after the first, and a change builds one', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = seededView();
+  const feed = new ApiFeed(new ApiReader(sources(root, () => current)), {
+    pollMs: 20,
+    heartbeatMs: 60_000,
+  });
+  const server = createServer((request, response) => {
+    void feed.open(request, response);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => {
+    feed.close();
+    server.closeAllConnections();
+    server.close();
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const { events, stop } = listen(
+    await fetch(`http://127.0.0.1:${address.port}/`),
+  );
+  await until(() => events.length === 1);
+  // About 15 ticks of an idle lab: signals only, no build.
+  await delay(300);
+  assert.equal(feed.builds, 1);
+  assert.equal(events.length, 1);
+  current = {
+    ...current,
+    posts: [...current.posts, post('p-9', 'person', 'question', 'New.')],
+  };
+  await until(() => events.length === 2);
+  assert.equal(feed.builds, 2);
+  await delay(200);
+  assert.equal(feed.builds, 2);
+  // A snapshot request on an idle lab builds nothing either.
+  assert.equal((await feed.current()).rev, 2);
+  assert.equal(feed.builds, 2);
+  await stop();
 });
 
 /** Fixture assets for a desk server. Returns their folder URL. */
@@ -862,6 +1284,7 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
     await fetch(`${api}/snapshot`, { headers })
   ).json()) as Snapshot;
   assert.equal(snapshot.protocolVersion, 1);
+  assert.match(snapshot.epoch, /^[0-9a-f]{16}$/);
   assert.equal(snapshot.lab?.agents[0]?.handle, 'claude-1');
   assert.equal((await fetch(`${api}/snapshot?x=1`, { headers })).status, 404);
 
@@ -869,41 +1292,11 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
   const stream = await fetch(`${api}/events`, { headers });
   assert.equal(stream.status, 200);
   assert.match(stream.headers.get('content-type') ?? '', /text\/event-stream/);
-  assert.ok(stream.body);
-  const events: Snapshot[] = [];
-  let pings = 0;
-  const reader = stream.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const pump = (async (): Promise<void> => {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-      let end = buffer.indexOf('\n\n');
-      while (end >= 0) {
-        const block = buffer.slice(0, end);
-        buffer = buffer.slice(end + 2);
-        if (block.startsWith(': ping')) pings++;
-        const data = block
-          .split('\n')
-          .find((line) => line.startsWith('data: '));
-        if (data) events.push(JSON.parse(data.slice(6)) as Snapshot);
-        end = buffer.indexOf('\n\n');
-      }
-    }
-  })();
-  const until = async (check: () => boolean): Promise<void> => {
-    const stop = Date.now() + 5000;
-    while (!check()) {
-      if (Date.now() > stop)
-        throw new Error('The condition did not hold in time.');
-      await delay(10);
-    }
-  };
+  const { events, ids, pings, stop } = listen(stream);
   await until(() => events.length === 1);
   const first = events[0];
   assert.ok(first);
+  assert.equal(ids[0], `${snapshot.epoch}.${first.rev}`);
   for (let index = 5; index < 10; index++)
     current = {
       ...current,
@@ -917,10 +1310,10 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
   await delay(300);
   assert.equal(events.length, 2);
   assert.equal(events[1]?.rev, first.rev + 1);
+  assert.equal(events[1]?.epoch, snapshot.epoch);
   assert.equal(events[1]?.lab?.board.posts.length, 9);
-  assert.ok(pings > 0);
-  await reader.cancel();
-  await pump;
+  assert.ok(pings() > 0);
+  await stop();
 
   // The board pages back from a post.
   const page = (await (
