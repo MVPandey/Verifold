@@ -285,6 +285,17 @@ await test('menus fit short viewports and keep the current choice in place', () 
     }
   const output = terminalMenu('Choose your agent harness', choices, 1, false);
   assert.match(output, /○ Claude Code\n {2}◆ Codex/);
+  // A terminal that reports no size, as a pseudo-terminal without one reports 0, gets the full menu at 80 by 24.
+  assert.equal(
+    terminalMenu('Choose your agent harness', choices, 1, false, 0, 0),
+    output,
+  );
+  assert.equal(paragraph('A short line.', 0), paragraph('A short line.'));
+  assert.equal(
+    terminalMessage('A **short** line.', false, 0),
+    terminalMessage('A **short** line.', false),
+  );
+  assert.equal(terminalBanner(true, true, 0), terminalBanner(true, true));
   assert.ok(
     terminalBanner(true, true).split('\n').length + output.split('\n').length <=
       24,
