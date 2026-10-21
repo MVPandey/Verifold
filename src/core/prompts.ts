@@ -32,6 +32,7 @@ export const promptIds = [
   'lab-pods',
   'lab-check',
   'profile-card',
+  'skills-pick',
 ] as const;
 
 export type PromptId = (typeof promptIds)[number];

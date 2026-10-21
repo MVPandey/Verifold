@@ -13,7 +13,8 @@ import { SessionActionError } from './session.ts';
  * - `settings.json`: the agents, the GPU limits for new projects, and which
  *   first-run steps the person finished or skipped;
  * - `USER.md`: the profile that the person approved;
- * - `profile-state.json`: how the last profile setup in the terminal ended.
+ * - `profile-state.json`: how the last profile setup in the terminal ended;
+ * - `skills.json` and `skills/`: the skills that the person added (see skills.ts).
  */
 export interface Agency {
   readonly host: HarnessName;
@@ -30,7 +31,7 @@ export interface ProfileState {
 }
 
 /** The first run's steps. A step without a record was never offered. */
-export type SetupStep = 'agents' | 'about' | 'money';
+export type SetupStep = 'agents' | 'about' | 'skills' | 'money';
 export type SetupSteps = Readonly<
   Partial<Record<SetupStep, 'done' | 'skipped'>>
 >;
@@ -200,7 +201,7 @@ export async function loadSettings(directory: string): Promise<AgencySettings> {
     }
   const steps: Partial<Record<SetupStep, 'done' | 'skipped'>> = {};
   const saved = record(data.steps) ? data.steps : {};
-  for (const step of ['agents', 'about', 'money'] as const)
+  for (const step of ['agents', 'about', 'skills', 'money'] as const)
     if (saved[step] === 'done' || saved[step] === 'skipped')
       steps[step] = saved[step];
   return { agency, money, unreadMoney, steps };
@@ -253,7 +254,7 @@ export async function loadProfileState(
 /** Replace one owned file atomically. Existing symlink targets are never written. */
 export async function saveAgencyFile(
   directory: string,
-  name: 'settings.json' | 'USER.md' | 'profile-state.json',
+  name: 'settings.json' | 'USER.md' | 'profile-state.json' | 'skills.json',
   content: string,
 ): Promise<void> {
   await prepareAgency(directory);

@@ -69,6 +69,49 @@ for (const host of ['claude', 'codex'] as const) {
   });
 }
 
+await test('a text-only call gives Claude Code no tools or MCP servers, and Codex no web search', async () => {
+  for (const host of ['claude', 'codex'] as const)
+    await fixture(
+      `process.stdin.resume(); process.stdin.on('end', () => {
+         const text = JSON.stringify(process.argv.slice(2));
+         console.log(JSON.stringify(${host === 'claude' ? '{ result: text, is_error: false }' : "{ type: 'item.completed', item: { type: 'agent_message', text } }"}));
+       });`,
+      async (executable, cwd) => {
+        const result = await runHarness(
+          {
+            host,
+            cwd,
+            prompt: 'Pick skills.',
+            signal: new AbortController().signal,
+            textOnly: true,
+          },
+          { executable },
+        );
+        assert.deepEqual(
+          JSON.parse(result.text),
+          host === 'claude'
+            ? [
+                '-p',
+                '--output-format',
+                'stream-json',
+                '--verbose',
+                '--tools',
+                '',
+                '--strict-mcp-config',
+              ]
+            : [
+                'exec',
+                '--skip-git-repo-check',
+                '--color',
+                'never',
+                '--json',
+                '-',
+              ],
+        );
+      },
+    );
+});
+
 const failures: readonly [HarnessName, string, RegExp][] = [
   ['claude', '{"is_error":true,"result":"private detail"}', /failed request/],
   ['claude', '{"result":""}', /no result text/],

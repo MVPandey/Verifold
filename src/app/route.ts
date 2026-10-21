@@ -76,7 +76,7 @@ export function parseRoute(hash: string): Route {
   }
   if (path === '/answer') return { page: 'answer' };
   if (path === '/setup') return { page: 'setup', step: null };
-  const setup = /^\/setup\/(agents|about|money|done)$/.exec(path)?.[1];
+  const setup = /^\/setup\/(agents|about|skills|money|done)$/.exec(path)?.[1];
   if (setup) return { page: 'setup', step: setup as SetupPage };
   return { page: 'unknown' };
 }
