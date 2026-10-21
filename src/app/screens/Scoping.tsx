@@ -1,7 +1,13 @@
 import { useState, type ReactNode } from 'react';
-import type { Agent, Call, Direction, Lab } from '../../protocol/api.ts';
+import type {
+  Agent,
+  Call,
+  Direction,
+  Lab,
+  QuestionAnswer,
+} from '../../protocol/api.ts';
 import { harnessName, modelName } from '../format.ts';
-import { newKey } from '../intent.ts';
+import { useAction } from '../useAction.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { FactsList, uniqueFacts } from '../components/FactsList.tsx';
@@ -34,6 +40,14 @@ export function answerOf(choice: Choice): {
   return { words: words || null, option: choice.option };
 }
 
+/** Two sends of the same answers are one intent, so a retry after a lost answer keeps its key. */
+export function sameAnswers(
+  a: readonly QuestionAnswer[],
+  b: readonly QuestionAnswer[],
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * The lab before its plan, as on the v9 canvas ("6 Scoping"): the question,
  * the planner's work folded, its message, the facts that it checked, and
@@ -58,47 +72,44 @@ export function Scoping({
 }): ReactNode {
   const questions = planQuestions(lab);
   const [choices, setChoices] = useState<Readonly<Record<string, Choice>>>({});
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  // One intent each: a retry after a lost answer keeps its key, so it runs once.
+  const answer = useAction(
+    (answers: readonly QuestionAnswer[], key: string) =>
+      actions.questions(answers, key),
+    sameAnswers,
+  );
+  const skipping = useAction((_: 'skip', key: string) => actions.skip(key));
+  const [last, setLast] = useState<'answer' | 'skip' | null>(null);
+  const busy = answer.busy || skipping.busy;
+  // Only the problem of the last action shows, and none while an action runs.
+  const problem = busy
+    ? null
+    : last === 'answer'
+      ? answer.error
+      : last === 'skip'
+        ? skipping.error
+        : null;
   const choiceOf = (call: Call): Choice =>
     choices[call.id] ?? { option: call.pick ?? 0, words: '' };
   const facts = uniqueFacts(questions.flatMap((call) => call.facts ?? []));
   const working = planner.live.state === 'working';
+  // One action for every answer, so the planner hears them together.
   const send = async (): Promise<void> => {
     if (busy) return;
-    setBusy(true);
-    setProblem(null);
-    // One action for every answer, so the planner wakes once, with all of them.
-    const outcome = await actions.questions(
+    setLast('answer');
+    await answer.submit(
       questions.map((call) => {
-        const answer = answerOf(choiceOf(call));
-        return answer.words
-          ? { call: call.id, words: answer.words }
-          : { call: call.id, option: answer.option };
+        const chosen = answerOf(choiceOf(call));
+        return chosen.words
+          ? { call: call.id, words: chosen.words }
+          : { call: call.id, option: chosen.option };
       }),
-      newKey(),
-    );
-    setBusy(false);
-    setProblem(
-      'refused' in outcome
-        ? outcome.refused
-        : 'lost' in outcome
-          ? outcome.lost
-          : null,
     );
   };
   const skip = async (): Promise<void> => {
     if (busy) return;
-    setBusy(true);
-    const outcome = await actions.skip(newKey());
-    setBusy(false);
-    setProblem(
-      'refused' in outcome
-        ? outcome.refused
-        : 'lost' in outcome
-          ? outcome.lost
-          : null,
-    );
+    setLast('skip');
+    await skipping.submit('skip');
   };
   const turns = planner.turns.turns;
   return (

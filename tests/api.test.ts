@@ -932,6 +932,42 @@ await test('the snapshot names the planner, the facts and option details of a ca
   assert.equal(older?.plan?.changed, null);
 });
 
+await test('a project without a lab: the snapshot holds its question and why its lab did not start, and a new reason sends a new snapshot', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let problem: string | null =
+    'Verifold found no agent tool that is signed in.';
+  const reader = new ApiReader(
+    sources(root, () => null, { startProblem: () => problem }),
+  );
+  // A project without a question has none to start a lab on.
+  assert.equal(parse(await reader.snapshot()).question, null);
+  await changeWorkspace(root, (state) => ({
+    ...state!,
+    research: {
+      topic: 'Do probes see faithfulness?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+  }));
+  const data = parse(await reader.snapshot());
+  assert.equal(data.lab, null);
+  assert.equal(data.question, 'Do probes see faithfulness?');
+  assert.equal(
+    data.startProblem,
+    'Verifold found no agent tool that is signed in.',
+  );
+  const before = await reader.signal();
+  problem = null;
+  assert.notDeepEqual(await reader.signal(), before);
+  assert.equal(parse(await reader.snapshot()).startProblem, null);
+  // Without a project, there is neither.
+  const none = parse(await new ApiReader(sources('', () => null)).snapshot());
+  assert.equal(none.project, '');
+  assert.equal('question' in none, false);
+  assert.equal('startProblem' in none, false);
+});
+
 await test('a pod option says how many of its secrets this computer lacks, and storing one updates it', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -1213,6 +1213,8 @@ export async function startDesk(
     readonly firstRun?: FirstRun;
     /** Without a project: the Ask page's read and the start of a project. */
     readonly start?: ProjectStart;
+    /** Why the project's lab did not start, when its start failed. */
+    readonly startProblem?: () => string | null;
   } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
@@ -1242,6 +1244,7 @@ export async function startDesk(
         ? (await lookOf(project, labDesk, view.state.startedAt)).away
         : null;
     },
+    startProblem: options.startProblem,
     // The same reads as the desk's bring-in panel and its diffs.
     bring: {
       list: async (direction) => {

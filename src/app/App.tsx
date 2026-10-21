@@ -12,6 +12,7 @@ import {
   answerActions,
   appActions,
   labActions,
+  type AppActions,
 } from './actions.ts';
 import type { ActOutcome } from './api.ts';
 import { startActions, type StartActions } from './ask.ts';
@@ -24,7 +25,7 @@ import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
-import { NotFound, Notice } from './screens/Notice.tsx';
+import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { SetupPage } from './screens/Setup.tsx';
 import { setupActions, type SetupActions } from './setup.ts';
 import { PostPage } from './screens/PostPage.tsx';
@@ -62,6 +63,7 @@ function useNow(fast: boolean): number {
 const signedOutAnswers = answerActions(null);
 const signedOutSetup = setupActions(null);
 const signedOutStart = startActions(null);
+const signedOutApp = appActions(null);
 
 /** How often a visible page tells Verifold that the person looks, as the desk's page does. */
 export const lookMs = 60_000;
@@ -138,6 +140,7 @@ export function Screen({
   answers = signedOutAnswers,
   setup = signedOutSetup,
   start = signedOutStart,
+  startLab = signedOutApp.startLab,
 }: {
   readonly state: LabState;
   readonly route: Route;
@@ -147,6 +150,7 @@ export function Screen({
   readonly answers?: AnswerActions;
   readonly setup?: SetupActions;
   readonly start?: StartActions;
+  readonly startLab?: AppActions['startLab'];
 }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
@@ -179,13 +183,14 @@ export function Screen({
       <SetupPage
         step={route.step}
         actions={setup}
-        project={snapshot?.project ?? ''}
+        // Null until the first snapshot says whether a project exists.
+        project={snapshot ? snapshot.project : null}
       />
     );
   // Without a project, the app asks the question of a new one, after the first run.
   if (snapshot && !snapshot.project)
     return route.page === 'ask' ? (
-      <AskPage setup={setup} start={start} now={now} />
+      <AskPage setup={setup} start={start} now={now} connection={connection} />
     ) : (
       <SetupPage step={null} actions={setup} project="" />
     );
@@ -206,16 +211,7 @@ export function Screen({
   // The Ask page is for a folder without a project. With one, the lab opens.
   if (route.page === 'ask') return <Redirect to={href.lab} />;
   const lab = snapshot.lab;
-  if (!lab)
-    return (
-      <Notice title={`${snapshot.project} has no lab yet`}>
-        <p>
-          Start one from the desk for now: <a href="/">open the desk</a>. The
-          new app's Ask page comes in a later step. You can{' '}
-          <a href={href.setup('agents')}>change your profile</a> here.
-        </p>
-      </Notice>
-    );
+  if (!lab) return <NoLab snapshot={snapshot} onStart={startLab} />;
   if (route.page === 'lab' || route.page === 'call')
     return (
       <>
@@ -370,6 +366,7 @@ export function App({
         answers={answers}
         setup={setup}
         start={start}
+        startLab={app.startLab}
       />
       {searching && lab && (
         <SearchDialog

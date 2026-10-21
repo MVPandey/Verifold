@@ -18,13 +18,16 @@ import {
   dueLabel,
   gpuLabel,
   isStartView,
-  profileAgents,
-  profileGpu,
+  startedAfterLost,
+  teamOrder,
   validFolder,
+  validHours,
+  withUse,
   type StartActions,
 } from '../src/app/ask.ts';
 import { threads } from '../src/app/board.ts';
-import { parseRoute } from '../src/app/route.ts';
+import { intentFor, unansweredAfter } from '../src/app/intent.ts';
+import { href, parseRoute } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
 import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import {
@@ -36,7 +39,13 @@ import { QuestionCard } from '../src/app/components/QuestionCard.tsx';
 import { AskForm } from '../src/app/screens/AskPage.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from '../src/app/screens/LabHome.tsx';
-import { answerOf, planQuestions } from '../src/app/screens/Scoping.tsx';
+import { NoLab } from '../src/app/screens/Notice.tsx';
+import {
+  answerOf,
+  planQuestions,
+  sameAnswers,
+} from '../src/app/screens/Scoping.tsx';
+import { openingRoute, pageRoute } from '../src/app/screens/Setup.tsx';
 import type { SetupActions } from '../src/app/setup.ts';
 
 /** A fixed "now": Tuesday 2026-10-20, 22:00 UTC. */
@@ -136,6 +145,15 @@ const where: StartView = {
   hours: 8,
   maxHours: 168,
   questionLimit: 4000,
+  agents: {
+    host: 'claude',
+    model: 'opus[1m]',
+    helper: 'codex',
+    helperModel: 'gpt-6-astra',
+  },
+  gpuUsd: 25,
+  gpuLimits: true,
+  started: false,
 };
 
 const start: StartActions = {
@@ -143,33 +161,22 @@ const start: StartActions = {
   start: () => Promise.resolve({ ok: true, pending: true }),
 };
 
-await test('the Ask chips name the profile: its agents with their models, the GPU limit, and when the answer is due', () => {
-  const agents = profileAgents([claude, codex]);
-  assert.deepEqual(agents, {
-    host: 'claude',
-    model: 'opus[1m]',
-    helper: 'codex',
-    helperModel: 'gpt-6-astra',
-  });
-  assert.equal(agentsLabel(agents), 'Claude Opus (1M) and Codex GPT-6 Astra');
+await test("the Ask chips show the project's defaults as Verifold sends them: its agents with their models, the GPU limit, and when the answer is due", () => {
   assert.equal(
-    agentsLabel({ host: 'codex' }),
-    'Codex',
-    'a harness without a model shows its name only',
+    agentsLabel({
+      host: 'claude',
+      model: 'opus[1m]',
+      helper: 'codex',
+      helperModel: 'gpt-6-astra',
+    }),
+    'Claude Opus (1M) and Codex GPT-6 Astra',
   );
-  assert.equal(agentsLabel(null), 'Claude Code');
+  // A harness without a saved model runs its own default, so the chip names no model.
   assert.equal(
-    profileAgents([{ ...claude, use: false }, codex])?.host,
-    'codex',
+    agentsLabel({ host: 'claude', helper: 'codex' }),
+    'Claude Code and Codex',
   );
-  // Limits that the person never set start a project without GPUs.
-  assert.equal(profileGpu(setupView()), 25);
-  assert.equal(
-    profileGpu(
-      setupView({ steps: { agents: 'done', about: 'done', money: 'skipped' } }),
-    ),
-    null,
-  );
+  assert.equal(agentsLabel({ host: 'codex' }), 'Codex');
   assert.equal(gpuLabel(25), 'GPUs up to $25');
   assert.equal(gpuLabel(null), 'No GPUs');
   // The weekday and hour follow this computer's time zone.
@@ -178,14 +185,85 @@ await test('the Ask chips name the profile: its agents with their models, the GP
   assert.equal(validFolder('~/research/new'), true);
   assert.equal(validFolder('research/new'), false);
   assert.equal(isStartView(where), true);
-  assert.equal(isStartView({ folder: 'x' }), false);
+  assert.equal(isStartView({ ...where, agents: null, gpuUsd: null }), true);
+  // A view without the defaults cannot show what Start sends.
+  assert.equal(
+    isStartView({
+      folder: 'x',
+      files: false,
+      hours: 8,
+      maxHours: 168,
+      questionLimit: 4000,
+    }),
+    false,
+  );
   assert.deepEqual(parseRoute('#/ask'), { page: 'ask' });
 });
 
-await test('the Ask page: the question, the chips from the profile, the folder that the agents may read, and what Start does', () => {
-  const page = text(
-    <AskForm view={setupView()} where={where} start={start} now={now} />,
+await test('a change to the agents keeps the lead first: a harness that joins helps, and a model that the person leaves alone stays the harness default', () => {
+  const codexLeads = { host: 'codex', helper: 'claude' } as const;
+  // The editor lists the team in its order, the lead first.
+  assert.deepEqual(
+    teamOrder([claude, codex], codexLeads).map((tool) => tool.harness),
+    ['codex', 'claude'],
   );
+  assert.deepEqual(
+    teamOrder([claude, codex], { host: 'claude' }).map((tool) => tool.harness),
+    ['claude', 'codex'],
+  );
+  // A model for the helper leaves the lead as it was.
+  assert.deepEqual(withUse(codexLeads, 'claude', true, 'sonnet'), {
+    host: 'codex',
+    helper: 'claude',
+    helperModel: 'sonnet',
+  });
+  // A harness that joins helps the lead, with no model of its own.
+  assert.deepEqual(withUse({ host: 'codex' }, 'claude', true), {
+    host: 'codex',
+    helper: 'claude',
+  });
+  assert.deepEqual(withUse(null, 'codex', true), { host: 'codex' });
+  // "Its own default model" sends no model.
+  assert.deepEqual(
+    withUse({ host: 'claude', model: 'opus[1m]' }, 'claude', true, ''),
+    { host: 'claude' },
+  );
+  // When the lead leaves, its helper leads.
+  assert.deepEqual(withUse(codexLeads, 'codex', false), { host: 'claude' });
+  assert.equal(withUse({ host: 'claude' }, 'claude', false), null);
+});
+
+await test('the hours box takes whole hours in range from what the person typed, and a lost Start asks Verifold whether the project started', () => {
+  assert.equal(validHours('12', 168), 12);
+  assert.equal(validHours(' 24 ', 168), 24);
+  for (const typed of ['', ' ', '0', '169', '1.5', '-2', '1e2', 'eight'])
+    assert.equal(validHours(typed, 168), null, typed);
+  assert.equal(startedAfterLost({ value: { ...where, started: true } }), true);
+  assert.equal(startedAfterLost({ value: where }), false);
+  // A Verifold that no longer answers handed the project on.
+  assert.equal(startedAfterLost({ error: 'Verifold does not answer.' }), true);
+});
+
+/** The Ask page with Verifold's defaults, and the profile's read or why it failed. */
+function ask(
+  fields: Partial<StartView> = {},
+  profileError: string | null = null,
+): ReactElement {
+  return (
+    <AskForm
+      where={{ ...where, ...fields }}
+      tools={profileError ? null : [claude, codex]}
+      profileError={profileError}
+      onRetry={() => {}}
+      start={start}
+      now={now}
+      connection="live"
+    />
+  );
+}
+
+await test("the Ask page shows Verifold's defaults: the lead that it chose, the GPU limit, the folder that the agents may read, and what Start does", () => {
+  const page = text(ask());
   assert.match(page, /What do you want to find out\?/);
   assert.match(
     page,
@@ -205,9 +283,8 @@ await test('the Ask page: the question, the chips from the profile, the folder t
   );
   // The canvas's "or say it in the question" is left out: no question changes a limit.
   assert.doesNotMatch(page, /say it in the question/);
-  const html = renderToStaticMarkup(
-    <AskForm view={setupView()} where={where} start={start} now={now} />,
-  );
+  assert.doesNotMatch(page, /could not read your profile/);
+  const html = renderToStaticMarkup(ask());
   // Start waits for a question.
   assert.match(
     html,
@@ -215,17 +292,87 @@ await test('the Ask page: the question, the chips from the profile, the folder t
   );
   assert.match(html, /aria-expanded="false"/);
   // An empty folder says nothing of files.
-  assert.doesNotMatch(
-    text(
-      <AskForm
-        view={setupView()}
-        where={{ ...where, files: false }}
-        start={start}
-        now={now}
-      />,
-    ),
-    /may read the files/,
+  assert.doesNotMatch(text(ask({ files: false })), /may read the files/);
+  // Only Codex is signed in, so Verifold makes it the lead, and the chip shows it.
+  assert.match(
+    text(ask({ agents: { host: 'codex' }, gpuUsd: null, gpuLimits: false })),
+    /Codex No GPUs Answer by/,
   );
+  // The limit that Verifold sends shows, also when the first run skipped the GPU step.
+  assert.match(text(ask({ gpuUsd: 40 })), /GPUs up to \$40/);
+  assert.match(text(ask({ agents: null })), /Choose an agent/);
+});
+
+await test("an unreadable profile does not stop the Ask page: the person asks with Verifold's defaults, sees why, and can read the profile again", () => {
+  const page = text(ask({}, 'settings.json is not valid JSON.'));
+  assert.match(
+    page,
+    /Verifold could not read your profile: settings\.json is not valid JSON\. This project starts with the settings above\. Try again/,
+  );
+  assert.match(
+    page,
+    /Claude Opus \(1M\) and Codex GPT-6 Astra GPUs up to \$25/,
+  );
+  assert.match(page, /What do you want to find out\?/);
+});
+
+await test('the first run waits for the first snapshot before it leads anywhere, and without a project it ends on the Ask page', () => {
+  const done = setupView();
+  // Before the first snapshot, nobody knows whether a project exists.
+  assert.equal(openingRoute(done, null, null), null);
+  assert.equal(openingRoute(null, null, ''), null);
+  assert.equal(openingRoute(done, null, ''), href.ask);
+  assert.equal(openingRoute(done, null, 'cot'), href.setup('done'));
+  // A step that the person opened stays open.
+  assert.equal(openingRoute(done, 'agents', ''), null);
+  assert.equal(
+    openingRoute(
+      setupView({ steps: { agents: 'done', about: null, money: null } }),
+      null,
+      '',
+    ),
+    href.setup('about'),
+  );
+  assert.equal(pageRoute('done', ''), href.ask);
+  assert.equal(pageRoute('done', 'cot'), href.setup('done'));
+  assert.equal(pageRoute('money', ''), href.setup('money'));
+});
+
+await test('a project without a lab shows its question, why its lab did not start, and Start the lab', () => {
+  const empty: Snapshot = {
+    protocolVersion: 1,
+    epoch: 'e1',
+    rev: 1,
+    at: ago(0),
+    project: 'cot',
+    lab: null,
+    trimmed: false,
+    question: 'Do probes see faithfulness?',
+    startProblem: 'Verifold found no agent tool that is signed in.',
+  };
+  const start = () => Promise.resolve({ ok: true as const });
+  const page = text(<NoLab snapshot={empty} onStart={start} />);
+  assert.match(
+    page,
+    /cot has no lab yet Its question: Do probes see faithfulness\? The lab did not start: Verifold found no agent tool that is signed in\. Start the lab/,
+  );
+  assert.doesNotMatch(page, /later step/);
+  assert.match(
+    text(<NoLab snapshot={{ ...empty, startProblem: null }} onStart={start} />),
+    /Its question: Do probes see faithfulness\? Start the lab/,
+  );
+  // Without a question, the desk adds one.
+  const none = text(
+    <NoLab
+      snapshot={{ ...empty, question: null, startProblem: null }}
+      onStart={start}
+    />,
+  );
+  assert.match(
+    none,
+    /This project has no question yet\. Add one in the desk: open the desk/,
+  );
+  assert.doesNotMatch(none, /Start the lab/);
 });
 
 await test('without a project, #/ask is the Ask page; with one, it leads to the lab', () => {
@@ -609,6 +756,39 @@ await test("an answer in the person's own words replaces the options, and a call
     words: 'Both',
     option: 1,
   });
+  // Send answers again after a lost answer: the same answers keep their key, so the lab takes them once.
+  let made = 0;
+  const make = (): string => `key-${++made}`;
+  const sent = [
+    { call: 'c-1', option: 0 },
+    { call: 'c-2', words: 'Both' },
+  ];
+  const first = intentFor(null, sent, make, sameAnswers);
+  const kept = unansweredAfter(first, { lost: 'Verifold did not answer.' });
+  assert.equal(
+    intentFor(
+      kept,
+      [
+        { call: 'c-1', option: 0 },
+        { call: 'c-2', words: 'Both' },
+      ],
+      make,
+      sameAnswers,
+    ).key,
+    first.key,
+  );
+  assert.notEqual(
+    intentFor(
+      kept,
+      [
+        { call: 'c-1', option: 1 },
+        { call: 'c-2', words: 'Both' },
+      ],
+      make,
+      sameAnswers,
+    ).key,
+    first.key,
+  );
   const access = question('c-3', {
     kind: 'access',
     question: 'Let me install packages?',

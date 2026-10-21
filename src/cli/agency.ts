@@ -1,6 +1,6 @@
 import { loadPrompt } from './prompts.ts';
 import { open, rm, mkdtemp, lstat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
 import type { CliIO } from './commands.ts';
@@ -19,6 +19,7 @@ import {
 } from '../core/agency.ts';
 import { researchInterview } from './onboarding.ts';
 import { contextFiles } from './context-files.ts';
+import { expandHome } from './project.ts';
 
 export function memorySummary(markdown: string): string {
   const paragraph =
@@ -164,11 +165,7 @@ export async function personalize(
     ).trim();
     if (selected === '/skip' || (!selected && choice === 'import'))
       return undefined;
-    const source = selected
-      ? selected.startsWith('~/')
-        ? resolve(homedir(), selected.slice(2))
-        : resolve(cwd, selected)
-      : defaultSource;
+    const source = selected ? expandHome(selected, cwd) : defaultSource;
     if (choice === 'harness-history') {
       io.progress?.(
         `## Let your harness build your profile\n\nSource: ${source}\nHarness: ${agency.host} (${agency.model ?? 'host default model'})\n\n- Your harness chooses and reads relevant local chats using its own tools and permissions.\n- It chooses how much context to read within this source and reports its coverage. The scope is a prompt instruction, not a filesystem sandbox.\n- This does not grant access to cloud chats or guarantee that earlier conversations are available.\n- Your model provider may process the text, and your harness may retain session records.\n- You review the full draft before Verifold saves reusable context in ${directory}/USER.md.`,

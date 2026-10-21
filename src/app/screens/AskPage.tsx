@@ -1,29 +1,39 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import type {
   AgentTool,
+  Harness,
   ProjectAgents,
-  SetupView,
   StartView,
 } from '../../protocol/api.ts';
 import {
   agentsLabel,
   dueLabel,
   gpuLabel,
-  profileAgents,
-  profileGpu,
+  startedAfterLost,
+  teamOrder,
   validFolder,
+  validHours,
+  withUse,
   type StartActions,
 } from '../ask.ts';
 import { newKey } from '../intent.ts';
 import { href } from '../route.ts';
 import type { SetupActions } from '../setup.ts';
+import type { Connection } from '../store.ts';
 import { useSetup } from '../useSetup.ts';
 import { Logo } from '../components/Icons.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 
 type Editing = 'agents' | 'gpu' | 'hours' | 'folder' | null;
 
-/** The project's agents: a Use box and a model menu for each harness on this computer. */
+const toolName = (harness: Harness): string =>
+  harness === 'claude' ? 'Claude Code' : 'Codex';
+
+/**
+ * The project's agents: a Use box and a model menu for each harness on this
+ * computer, in the order of the team, the lead first. A model that the
+ * person does not pick stays the harness's own default.
+ */
 function AgentsEditor({
   tools,
   agents,
@@ -33,61 +43,10 @@ function AgentsEditor({
   readonly agents: ProjectAgents | null;
   readonly onChange: (agents: ProjectAgents | null) => void;
 }): ReactNode {
-  const installed = tools.filter((tool) => tool.installed);
-  const chosen = (harness: AgentTool['harness']): string | undefined =>
-    agents?.host === harness
-      ? agents.model
-      : agents?.helper === harness
-        ? agents.helperModel
-        : undefined;
-  const used = (harness: AgentTool['harness']): boolean =>
-    agents?.host === harness || agents?.helper === harness;
-  // The lead is the first harness in use, Claude Code before Codex, as in the profile.
-  const set = (
-    next: readonly { harness: AgentTool['harness']; model?: string }[],
-  ): void => {
-    const [lead, second] = next;
-    onChange(
-      lead
-        ? {
-            host: lead.harness,
-            ...(lead.model ? { model: lead.model } : {}),
-            ...(second
-              ? {
-                  helper: second.harness,
-                  ...(second.model ? { helperModel: second.model } : {}),
-                }
-              : {}),
-          }
-        : null,
-    );
-  };
-  const rows = installed.map((tool) => ({
-    harness: tool.harness,
-    use: used(tool.harness),
-    model: chosen(tool.harness),
-  }));
-  const change = (
-    harness: AgentTool['harness'],
-    patch: { use?: boolean; model?: string },
-  ): void =>
-    set(
-      rows
-        .map((row) =>
-          row.harness === harness
-            ? {
-                ...row,
-                ...(patch.use === undefined ? {} : { use: patch.use }),
-                ...(patch.model === undefined ? {} : { model: patch.model }),
-              }
-            : row,
-        )
-        .filter((row) => row.use)
-        .map((row) => ({
-          harness: row.harness,
-          ...(row.model ? { model: row.model } : {}),
-        })),
-    );
+  const installed = teamOrder(
+    tools.filter((tool) => tool.installed),
+    agents,
+  );
   if (!installed.length)
     return (
       <p className="setup__note">
@@ -95,42 +54,53 @@ function AgentsEditor({
         <a href={href.setup('agents')}>Check your agents</a>.
       </p>
     );
+  const modelOf = (harness: Harness): string =>
+    (agents?.host === harness
+      ? agents.model
+      : agents?.helper === harness
+        ? agents.helperModel
+        : undefined) ?? '';
   return (
     <div className="ask__agents">
-      {installed.map((tool) => (
-        <div key={tool.harness} className="ask__agent">
-          <label className="agent__use">
-            <input
-              type="checkbox"
-              checked={used(tool.harness)}
-              onChange={(event) =>
-                change(tool.harness, { use: event.target.checked })
-              }
-            />
-            {tool.harness === 'claude' ? 'Claude Code' : 'Codex'}
-          </label>
-          {tool.models.length > 0 && (
+      {installed.map((tool) => {
+        const used =
+          agents?.host === tool.harness || agents?.helper === tool.harness;
+        return (
+          <div key={tool.harness} className="ask__agent">
+            <label className="agent__use">
+              <input
+                type="checkbox"
+                checked={used}
+                onChange={(event) =>
+                  onChange(withUse(agents, tool.harness, event.target.checked))
+                }
+              />
+              {toolName(tool.harness)}
+              {agents?.host === tool.harness && agents.helper && (
+                <span className="muted"> · plans the lab</span>
+              )}
+            </label>
             <select
               className="select"
-              aria-label={`Model for ${tool.harness === 'claude' ? 'Claude Code' : 'Codex'}`}
-              disabled={!used(tool.harness)}
-              value={chosen(tool.harness) ?? tool.model ?? ''}
+              aria-label={`Model for ${toolName(tool.harness)}`}
+              disabled={!used}
+              value={modelOf(tool.harness)}
               onChange={(event) =>
-                change(tool.harness, { model: event.target.value })
+                onChange(
+                  withUse(agents, tool.harness, true, event.target.value),
+                )
               }
             >
-              {tool.model === null && (
-                <option value="">The harness's own default</option>
-              )}
+              <option value="">Its own default model</option>
               {tool.models.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
                 </option>
               ))}
             </select>
-          )}
-        </div>
-      ))}
+          </div>
+        );
+      })}
       {!agents && (
         <span role="alert" className="setup__error">
           Use at least one agent.
@@ -141,47 +111,67 @@ function AgentsEditor({
 }
 
 /**
- * The Ask page: the question of a new project, the project's settings from
- * the profile as chips, and the folder. Start creates the project and starts
- * its lab, and the page then waits for the lab. As on the v9 canvas ("5
- * Ask").
+ * The Ask page: the question of a new project, the project's settings as
+ * chips, and the folder. Verifold sends the settings that a new project
+ * starts with, and the page shows exactly those; Start sends what the page
+ * shows. As on the v9 canvas ("5 Ask").
  */
 export function AskPage({
   setup,
   start,
   now,
+  connection,
 }: {
   readonly setup: SetupActions;
   readonly start: StartActions;
   readonly now: number;
+  readonly connection: Connection;
 }): ReactNode {
-  const { view } = useSetup(setup.read);
+  const profile = useSetup(setup.read);
   const [where, setWhere] = useState<StartView | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [reads, setReads] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     void start.read(controller.signal).then((loaded) => {
       if (controller.signal.aborted) return;
-      if ('value' in loaded) setWhere(loaded.value);
-      else setProblem(loaded.error);
+      if ('value' in loaded) {
+        setWhere(loaded.value);
+        setProblem(null);
+      } else setProblem(loaded.error);
     });
     return () => controller.abort();
-  }, [start]);
-  if (problem)
+  }, [start, reads]);
+  if (!where)
     return (
       <AskFrame>
-        <p role="alert" className="setup__error">
-          {problem}
-        </p>
+        {problem ? (
+          <div className="setup__problem">
+            <span role="alert">{problem}</span>
+            <button
+              type="button"
+              className="button button--small"
+              onClick={() => setReads(reads + 1)}
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <StatusBar tone="plan">Reading your profile.</StatusBar>
+        )}
       </AskFrame>
     );
-  if (!view || !where)
-    return (
-      <AskFrame>
-        <StatusBar tone="plan">Reading your profile.</StatusBar>
-      </AskFrame>
-    );
-  return <AskForm view={view} where={where} start={start} now={now} />;
+  return (
+    <AskForm
+      where={where}
+      tools={profile.view?.agents.tools ?? null}
+      profileError={profile.error}
+      onRetry={profile.refresh}
+      start={start}
+      now={now}
+      connection={connection}
+    />
+  );
 }
 
 function AskFrame({ children }: { readonly children: ReactNode }): ReactNode {
@@ -202,36 +192,39 @@ function AskFrame({ children }: { readonly children: ReactNode }): ReactNode {
   );
 }
 
-/** The Ask page once the profile and the folder are read. Tests render it directly. */
+/** The Ask page once Verifold sent the project's defaults. Tests render it directly. */
 export function AskForm({
-  view,
   where,
+  tools,
+  profileError,
+  onRetry,
   start,
   now,
+  connection,
 }: {
-  readonly view: SetupView;
   readonly where: StartView;
+  /** The harnesses on this computer, from the profile's read. Null: not read yet, or not readable. */
+  readonly tools: readonly AgentTool[] | null;
+  readonly profileError: string | null;
+  readonly onRetry: () => void;
   readonly start: StartActions;
   readonly now: number;
+  readonly connection: Connection;
 }): ReactNode {
   const questionId = useId();
   const editorId = useId();
   const [question, setQuestion] = useState('');
-  // Undefined: the profile's choice, which the project then reads from the profile.
-  const [agents, setAgents] = useState<ProjectAgents | null | undefined>(
-    undefined,
-  );
-  const [gpu, setGpu] = useState<number | null | undefined>(undefined);
+  // The server's defaults, which the chips show and Start sends unless the person changes them.
+  const [agents, setAgents] = useState<ProjectAgents | null>(where.agents);
+  const [gpu, setGpu] = useState<number | null>(where.gpuUsd);
   const [hours, setHours] = useState(where.hours);
+  const [hoursText, setHoursText] = useState(String(where.hours));
   const [folder, setFolder] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
   const [editing, setEditing] = useState<Editing>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [started, setStarted] = useState(false);
-  const team = agents === undefined ? profileAgents(view.agents.tools) : agents;
-  const limit = gpu === undefined ? profileGpu(view) : gpu;
-  const moneySet = view.steps.money === 'done';
+  const [phase, setPhase] = useState<'ask' | 'starting' | 'lost'>('ask');
   const toggle = (what: Exclude<Editing, null>): void =>
     setEditing(editing === what ? null : what);
   const chip = (what: Exclude<Editing, null>, label: string): ReactNode => (
@@ -245,11 +238,25 @@ export function AskForm({
       {label}
     </button>
   );
+  /** The hours that the box holds, kept when they are whole hours in range. */
+  const checkHours = (): number | null => {
+    const value = validHours(hoursText, where.maxHours);
+    if (value === null) return null;
+    setHours(value);
+    setHoursText(String(value));
+    return value;
+  };
   const submit = async (): Promise<void> => {
     const text = question.trim();
-    if (!text || busy || started) return;
-    if (agents === null) {
+    if (!text || busy || phase === 'starting') return;
+    if (!agents) {
       setEditing('agents');
+      return;
+    }
+    const budget = checkHours();
+    if (budget === null) {
+      setEditing('hours');
+      setError(`Give the time in whole hours, from 1 to ${where.maxHours}.`);
       return;
     }
     setBusy(true);
@@ -258,26 +265,37 @@ export function AskForm({
       {
         question: text,
         ...(folder ? { folder } : {}),
-        ...(agents ? { agents } : {}),
-        ...(gpu === undefined ? {} : { gpuUsd: gpu }),
-        hours,
+        agents,
+        gpuUsd: gpu,
+        hours: budget,
       },
       newKey(),
     );
+    if ('refused' in outcome) {
+      setBusy(false);
+      setError(outcome.refused);
+      return;
+    }
+    if ('ok' in outcome) {
+      setBusy(false);
+      setPhase('starting');
+      return;
+    }
+    // A lost answer: ask this Verifold whether the project started.
+    const loaded = await start.read();
     setBusy(false);
-    // A lost answer most likely means that the project started and this desk closed for its owner.
-    if ('refused' in outcome) setError(outcome.refused);
-    else setStarted(true);
+    setPhase(startedAfterLost(loaded) ? 'starting' : 'lost');
   };
-  if (started)
+  if (phase === 'starting')
     return (
       <AskFrame>
         <StatusBar tone="plan">
           The project starts. Its lab opens here in a moment.
         </StatusBar>
         <p className="ask__note">
-          Verifold now hands the project to a process that keeps working when
-          you close the terminal. This page reconnects by itself.
+          {connection === 'unreachable'
+            ? 'Verifold does not answer. Check the terminal where it runs.'
+            : 'Verifold now hands the project to a process that keeps working when you close the terminal. This page reconnects by itself.'}
         </p>
       </AskFrame>
     );
@@ -311,35 +329,55 @@ export function AskForm({
           aria-label="This project's settings"
           className="ask__chips"
         >
-          {chip('agents', agentsLabel(team))}
-          {chip('gpu', gpuLabel(limit))}
+          {chip('agents', agents ? agentsLabel(agents) : 'Choose an agent')}
+          {chip('gpu', gpuLabel(gpu))}
           {chip('hours', dueLabel(hours, now))}
         </div>
         <span className="ask__hint">
           These come from your profile. Click one to change it for this project
           only.
         </span>
+        {profileError && (
+          <div className="setup__problem">
+            <span role="alert">
+              Verifold could not read your profile: {profileError} This project
+              starts with the settings above.
+            </span>
+            <button
+              type="button"
+              className="button button--small"
+              onClick={onRetry}
+            >
+              Try again
+            </button>
+          </div>
+        )}
         {editing && (
           <div id={editorId} className="ask__editor">
-            {editing === 'agents' && (
-              <AgentsEditor
-                tools={view.agents.tools}
-                agents={team}
-                onChange={setAgents}
-              />
-            )}
+            {editing === 'agents' &&
+              (tools ? (
+                <AgentsEditor
+                  tools={tools}
+                  agents={agents}
+                  onChange={setAgents}
+                />
+              ) : (
+                <p className="setup__note">
+                  {profileError
+                    ? 'Verifold could not read the agents on this computer, so the project uses the agents above.'
+                    : 'Reading the agents on this computer.'}
+                </p>
+              ))}
             {editing === 'gpu' &&
-              (moneySet ? (
+              (where.gpuLimits ? (
                 <div className="ask__gpu">
                   <label className="agent__use">
                     <input
                       type="checkbox"
-                      checked={limit === null}
+                      checked={gpu === null}
                       onChange={(event) =>
                         setGpu(
-                          event.target.checked
-                            ? null
-                            : (view.money.limits.limitUsd ?? 25),
+                          event.target.checked ? null : (where.gpuUsd ?? 25),
                         )
                       }
                     />
@@ -355,8 +393,8 @@ export function AskForm({
                         type="number"
                         min={1}
                         className="limit__input"
-                        disabled={limit === null}
-                        value={limit ?? ''}
+                        disabled={gpu === null}
+                        value={gpu ?? ''}
                         onChange={(event) =>
                           setGpu(
                             event.target.value === ''
@@ -384,15 +422,15 @@ export function AskForm({
                   min={1}
                   max={where.maxHours}
                   className="limit__input"
-                  value={hours}
-                  onChange={(event) =>
-                    setHours(
-                      Math.min(
-                        where.maxHours,
-                        Math.max(1, Math.round(Number(event.target.value))),
-                      ) || where.hours,
-                    )
-                  }
+                  value={hoursText}
+                  onChange={(event) => setHoursText(event.target.value)}
+                  onBlur={() => {
+                    if (checkHours() === null)
+                      setError(
+                        `Give the time in whole hours, from 1 to ${where.maxHours}.`,
+                      );
+                    else setError(null);
+                  }}
                 />
               </label>
             )}
@@ -458,9 +496,14 @@ export function AskForm({
             className="button button--primary button--big"
             disabled={busy || !question.trim()}
           >
-            Start
+            {phase === 'lost' ? 'Start again' : 'Start'}
           </button>
         </div>
+        {phase === 'lost' && (
+          <p role="alert" className="setup__error">
+            Verifold did not answer, and the project did not start. Start again.
+          </p>
+        )}
         {error && (
           <p role="alert" className="setup__error">
             {error}

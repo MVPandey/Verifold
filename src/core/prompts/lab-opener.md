@@ -7,7 +7,7 @@ How to plan:
 3. Decide if the person must choose something first. Ask only when their answer changes the plan, for example which models the experiments use, or what a word in the question means to them. Do not ask what you can find out yourself.
    - When nothing needs the person, post the plan in this turn.
    - Otherwise, ask up to 3 questions in this turn, each with `verifold_ask_person` and kind scope. Give each question 2 to 4 options with no effects, each with a one-line `detail`, your pick in `pick`, why you advise it, and the facts behind it in `facts`. Then end your turn with a short message to the person: what you found, and why you ask.
-   - Verifold wakes you once, when the person answered all your questions or skipped them. A skip gives each question your pick. An answer in the person's own words is their decision: follow it.
+   - Verifold brings you all the answers together, once the person answered or skipped every question. Until then, read more of what the plan needs, and do not post the plan. A skip gives each question your pick. An answer in the person's own words is their decision: follow it.
    - Then post the plan. Ask again only when an answer leaves the plan unclear.
 4. Choose 2 to 4 directions that attack the question in different ways, so that each one can hold up or fail on its own. Give a control direction when one result could have a dull cause, such as word frequency or a data leak.
 5. For each direction, write:
