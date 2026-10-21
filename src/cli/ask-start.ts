@@ -4,6 +4,7 @@ import { loadSettings } from '../core/agency.ts';
 import {
   computeDefaults,
   parseSettings,
+  projectSettings,
   type ProfileMoney,
 } from '../core/compute.ts';
 import type { Workspace } from '../core/contracts.ts';
@@ -204,7 +205,10 @@ export function askStart(options: {
           fail(
             'Verifold found no agent tool that is signed in. Sign in to Claude Code or Codex, then start again.',
           );
-        const base = { ...computeDefaults, ...(fallback.money ?? {}) };
+        // The profile's limits without its monthly one, which each check reads from the profile.
+        const base = fallback.money
+          ? projectSettings(fallback.money)
+          : computeDefaults;
         const compute = parseSettings(
           {
             ...base,

@@ -33,11 +33,13 @@ export function validDomain(value: string): boolean {
  * Verifold's credentials, the RunPod, GitHub, and AWS logins, Git and netrc
  * passwords, the logins of both harnesses, and the macOS login keychain. A
  * sandboxed command with network access can otherwise read keychain items
- * through the `security` tool. Probed on Codex 0.160.0.
+ * through the `security` tool. Probed on Codex 0.160.0. The person's Verifold
+ * profile is closed too: agents get what they need of it in their prompts.
  */
 export const credentialPaths = [
   '~/.ssh',
   '~/.verifold/credentials',
+  '~/.verifold/agency',
   '~/.runpod',
   '~/.aws/credentials',
   '~/.config/gh',

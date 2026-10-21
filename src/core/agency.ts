@@ -1,12 +1,12 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { validateModel, type HarnessName } from './harness.ts';
 import { object, text } from './research-contracts.ts';
 import { parseProfileMoney, type ProfileMoney } from './compute.ts';
 import { SessionActionError } from './session.ts';
+import { missing, writePrivateFile } from './storage.ts';
 
 /**
  * The person's global profile lives in `~/.verifold/agency/`:
@@ -141,10 +141,6 @@ export async function readMemory(path: string, limit = 12000): Promise<string> {
   }
 }
 
-function missing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
-}
-
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -258,19 +254,7 @@ export async function saveAgencyFile(
   content: string,
 ): Promise<void> {
   await prepareAgency(directory);
-  const temporary = join(directory, `${randomUUID()}.tmp`);
-  try {
-    const file = await open(temporary, 'wx', 0o600);
-    try {
-      await file.writeFile(content);
-      await file.sync();
-    } finally {
-      await file.close();
-    }
-    await rename(temporary, join(directory, name));
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await writePrivateFile(join(directory, name), content, { sync: true });
 }
 
 /**

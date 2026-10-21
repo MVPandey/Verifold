@@ -29,6 +29,7 @@ import {
   codexCommand,
   credentialPaths,
   strictClaudeSettings,
+  strictCodexOptions,
 } from '../src/core/session-hosts.ts';
 import { SessionPool } from '../src/core/workers.ts';
 import { readDeskSnapshot } from '../src/server/desk-records.ts';
@@ -1740,6 +1741,22 @@ await test('a task with domains opens only those to its shell commands', async (
     );
     await coordinator.close();
   });
+});
+
+await test("a strict session cannot read the person's Verifold profile, in Claude Code or in Codex", () => {
+  const settings = JSON.parse(strictClaudeSettings()) as {
+    sandbox: { filesystem: { denyRead: string[] } };
+    permissions: { deny: string[] };
+  };
+  assert.ok(
+    settings.sandbox.filesystem.denyRead.includes('~/.verifold/agency'),
+  );
+  assert.ok(settings.permissions.deny.includes('Read(~/.verifold/agency/**)'));
+  assert.ok(
+    strictCodexOptions(false).some((option) =>
+      option.includes('"~/.verifold/agency"="deny"'),
+    ),
+  );
 });
 
 await test("a strict session's extra read denials close the sandbox and the Read tool, absolute and home paths alike", () => {

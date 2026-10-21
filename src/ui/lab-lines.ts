@@ -128,15 +128,17 @@ export interface MoneyPiece {
 }
 
 /**
- * The money line, in parts: "Due Fri 18:00", "≈$3.10 plans" and "$4.20 of
- * $25 GPU". The screens join the parts with " · ". `deadline`: the end of the
- * lab's time budget, or null without one.
+ * The money line, in parts: "Due Fri 18:00", "≈$3.10 plans", "$4.20 of
+ * $25 GPU" and, with a monthly limit, "$37.20 of $100 this month". The
+ * screens join the parts with " · ". `deadline`: the end of the lab's time
+ * budget, or null without one.
  */
 export function moneyLine(
   money: {
     readonly plansUsd: number;
     readonly gpuUsd: number;
     readonly gpuLimitUsd: number | null;
+    readonly month?: { readonly spentUsd: number; readonly limitUsd: number };
   },
   deadline: string | null,
   now: number,
@@ -152,5 +154,13 @@ export function moneyLine(
         money.gpuLimitUsd === null ? 'GPU' : `of ${usd(money.gpuLimitUsd)} GPU`,
       ),
     ],
+    ...(money.month
+      ? [
+          [
+            strong(usd(money.month.spentUsd)),
+            muted(`of ${usd(money.month.limitUsd)} this month`),
+          ],
+        ]
+      : []),
   ];
 }

@@ -300,11 +300,19 @@ export function localSandbox(): Sandbox | null {
     : null;
 }
 
-/** The credential paths that exist, by their real paths, so a link to one is closed too. */
-export async function deniedPaths(home = homedir()): Promise<string[]> {
+/**
+ * The credential paths that exist, and `more`, by their real paths, so a
+ * link to one is closed too. A path is absolute or under `~/`.
+ */
+export async function deniedPaths(
+  home = homedir(),
+  more: readonly string[] = [],
+): Promise<string[]> {
   const found = new Set<string>();
-  for (const path of credentialPaths) {
-    const real = await realpath(join(home, path.slice(2))).catch(() => null);
+  for (const path of [...credentialPaths, ...more]) {
+    const real = await realpath(
+      path.startsWith('~/') ? join(home, path.slice(2)) : path,
+    ).catch(() => null);
     if (real) found.add(real);
   }
   return [...found];
@@ -685,6 +693,8 @@ export interface RunLedgerOptions {
   readonly minuteMs?: number;
   /** The home folder whose credential paths a run cannot read. */
   readonly home?: string;
+  /** More paths that a run cannot read: absolute, or under `~/`. */
+  readonly denyRead?: readonly string[];
 }
 
 export class RunLedger {
@@ -1087,7 +1097,10 @@ export class RunLedger {
         command: run.command,
         folder,
         cwd: join(folder, 'tree'),
-        denied: [...(await deniedPaths(this.options.home)), ...deny],
+        denied: [
+          ...(await deniedPaths(this.options.home, this.options.denyRead)),
+          ...deny,
+        ],
       });
       log = new RunLog(
         await open(join(this.record(run.id), 'log.txt'), 'w', 0o600),

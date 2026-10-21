@@ -953,3 +953,42 @@ await test('a move to column 0 is a carriage return alone', () => {
   assert.equal(toColumn(0), '\r');
   assert.equal(toColumn(4), '\r\u001b[4C');
 });
+
+await test("with a monthly limit, the money line adds all projects' month, and a screen carries it", () => {
+  const snapshot = story();
+  assert.ok(snapshot.lab);
+  const screen = screenOf({
+    ...snapshot,
+    lab: {
+      ...snapshot.lab,
+      money: {
+        ...snapshot.lab.money,
+        month: { spentUsd: 37.2, limitUsd: 100 },
+      },
+    },
+  });
+  assert.deepEqual(screen.money.month, { spentUsd: 37.2, limitUsd: 100 });
+  assert.equal(
+    viewLines(screen, {
+      columns: 120,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    })[2],
+    '  Due Fri 18:00 · ≈$3.10 plans · $4.20 of $25 GPU · $37.20 of $100 this month',
+  );
+  assert.deepEqual(parseLabScreen(JSON.parse(JSON.stringify(screen))), screen);
+  // A month that is not two amounts makes the screen unreadable.
+  for (const month of [
+    { spentUsd: -1, limitUsd: 100 },
+    { spentUsd: 1 },
+    'a lot',
+  ])
+    assert.equal(
+      parseLabScreen({ ...screen, money: { ...screen.money, month } }),
+      null,
+    );
+  // Without a monthly limit, the line stays as it was.
+  assert.equal(screenOf().money.month, undefined);
+});
