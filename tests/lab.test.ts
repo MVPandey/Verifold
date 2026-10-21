@@ -20,8 +20,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
-import { SessionPool } from '../src/cli/workers.ts';
+import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
+import { SessionPool } from '../src/core/workers.ts';
 import {
   addSpend,
   askers,
@@ -35,24 +35,24 @@ import {
   type LabSessions,
   type LabState,
   type LabView,
-} from '../src/cli/lab.ts';
-import { RunTeam } from '../src/cli/team.ts';
+} from '../src/core/lab.ts';
+import { RunTeam } from '../src/core/team.ts';
 import type {
   PodRuns,
   RunRecord,
   Sandbox,
   SandboxSpec,
-} from '../src/cli/runs.ts';
-import type { Lease } from '../src/cli/leases.ts';
-import type { ComputeView } from '../src/cli/compute.ts';
-import { ptyLibrary } from '../src/cli/terminals.ts';
-import { TranscriptWriter } from '../src/cli/transcript.ts';
-import { secretGuard } from '../src/cli/runpod.ts';
-import { ResearchRunner } from '../src/cli/research-runner.ts';
-import { boardLimits } from '../src/cli/board.ts';
-import { checkToolSpecs } from '../src/cli/lab-tools.ts';
-import { Coordinator } from '../src/cli/coordinator.ts';
-import { parseFrame, renderDesk } from '../src/cli/desk-view.ts';
+} from '../src/core/runs.ts';
+import type { Lease } from '../src/core/leases.ts';
+import type { ComputeView } from '../src/core/compute.ts';
+import { ptyLibrary } from '../src/core/terminals.ts';
+import { TranscriptWriter } from '../src/core/transcript.ts';
+import { secretGuard } from '../src/core/runpod.ts';
+import { ResearchRunner } from '../src/legacy/research-runner.ts';
+import { boardLimits } from '../src/core/board.ts';
+import { checkToolSpecs } from '../src/core/lab-tools.ts';
+import { Coordinator } from '../src/legacy/coordinator.ts';
+import { parseFrame, renderDesk } from '../src/desk/desk-view.ts';
 import {
   answerPanel,
   bringPanel,
@@ -61,19 +61,19 @@ import {
   renderLab,
   runPanel,
   searchPanel,
-} from '../src/cli/desk-lab.ts';
-import { readDeskSnapshot } from '../src/cli/desk-records.ts';
-import { Quota } from '../src/cli/quota.ts';
+} from '../src/desk/desk-lab.ts';
+import { readDeskSnapshot } from '../src/server/desk-records.ts';
+import { Quota } from '../src/core/quota.ts';
 import {
   readRecord,
   SessionManager,
   type SessionView,
-} from '../src/cli/session.ts';
-import { archiveRun, restoreRun } from '../src/cli/archive.ts';
+} from '../src/core/session.ts';
+import { archiveRun, restoreRun } from '../src/core/archive.ts';
 import { runCli, terminalInput, type CliIO } from '../src/cli/commands.ts';
-import { startDesk } from '../src/cli/desk.ts';
-import { TaskManager } from '../src/cli/tasks.ts';
-import { ProjectMemory } from '../src/cli/memory.ts';
+import { startDesk } from '../src/server/desk.ts';
+import { TaskManager } from '../src/legacy/tasks.ts';
+import { ProjectMemory } from '../src/core/memory.ts';
 
 /**
  * A fake Claude Code for lab agents. Its folder name (such as d-1-circles)

@@ -10,11 +10,11 @@ import {
   changeWorkspace,
   loadWorkspace,
   readJson,
-} from '../src/cli/storage.ts';
-import { runResearch } from '../src/cli/research.ts';
-import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
+} from '../src/core/storage.ts';
+import { runResearch } from '../src/legacy/research.ts';
+import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
 import { runCli } from '../src/cli/commands.ts';
-import { object, sourceUrl } from '../src/cli/research-contracts.ts';
+import { object, sourceUrl } from '../src/core/research-contracts.ts';
 
 const plan = {
   scope: 'Study proof search under fixed compute.',
@@ -205,7 +205,7 @@ await test(
         '--input-type=module',
         '-e',
         `
-    import { runResearch } from ${JSON.stringify(new URL('../src/cli/research.ts', import.meta.url).href)};
+    import { runResearch } from ${JSON.stringify(new URL('../src/legacy/research.ts', import.meta.url).href)};
     await runResearch(${JSON.stringify(root)}, { topic: 'Math', autonomy: 'guided' },
       { interactive: false, ask: async () => '', out: () => {} },
       new AbortController().signal, async () => {

@@ -3,10 +3,10 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { ProjectMemory, type LabProgress } from '../src/cli/memory.ts';
-import { ResultsStore, type Results } from '../src/cli/results.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
-import type { TaskRecord } from '../src/cli/tasks.ts';
+import { ProjectMemory, type LabProgress } from '../src/core/memory.ts';
+import { ResultsStore, type Results } from '../src/legacy/results.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
+import type { TaskRecord } from '../src/legacy/tasks.ts';
 
 const at = '2026-10-12T14:00:00.000Z';
 

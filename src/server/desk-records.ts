@@ -1,10 +1,15 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { readMemory } from './agency.ts';
-import { parseWorkspace, type Workspace } from './contracts.ts';
-import { validateModel } from './harness.ts';
-import { object, text, type ResearchState } from './research-contracts.ts';
-import { parseReport, type ResearchReport } from './research.ts';
+// eslint-disable-next-line no-restricted-imports -- old global profile, replaced in A2 (#282)
+import { readMemory } from '../cli/agency.ts';
+import { parseWorkspace, type Workspace } from '../core/contracts.ts';
+import { validateModel } from '../core/harness.ts';
+import {
+  object,
+  text,
+  type ResearchState,
+} from '../core/research-contracts.ts';
+import { parseReport, type ResearchReport } from '../legacy/research.ts';
 
 export interface AttemptRecord {
   readonly schemaVersion: 1;

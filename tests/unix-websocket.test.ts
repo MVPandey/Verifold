@@ -6,7 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { connectUnixWebSocket } from '../src/cli/unix-websocket.ts';
+import { connectUnixWebSocket } from '../src/core/unix-websocket.ts';
 
 /** A server frame: never masked. `fin` false starts or continues a fragmented message. */
 function frame(opcode: number, payload: Buffer, fin = true): Buffer {

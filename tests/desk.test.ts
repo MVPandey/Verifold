@@ -13,16 +13,19 @@ import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { request } from 'node:http';
-import { startDesk, openDeskBrowser } from '../src/cli/desk.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
-import { readDeskSnapshot, readDeskReport } from '../src/cli/desk-records.ts';
+import { startDesk, openDeskBrowser } from '../src/server/desk.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
+import {
+  readDeskSnapshot,
+  readDeskReport,
+} from '../src/server/desk-records.ts';
 import {
   parseFrame,
   renderDesk,
   type DeskPanel,
   type DeskView,
-} from '../src/cli/desk-view.ts';
-import { computeDefaults } from '../src/cli/compute.ts';
+} from '../src/desk/desk-view.ts';
+import { computeDefaults } from '../src/core/compute.ts';
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'verifold-desk-'));
@@ -3725,7 +3728,7 @@ await test('Plan shows the first sources, and the rest fold (D92)', async (t) =>
 await test('the desk text has none of the phrases that read as robotic (docs/words.md)', async () => {
   for (const file of ['desk-view.ts', 'desk-client.ts']) {
     const source = await readFile(
-      new URL(`../src/cli/${file}`, import.meta.url),
+      new URL(`../src/desk/${file}`, import.meta.url),
       'utf8',
     );
     for (const phrase of [

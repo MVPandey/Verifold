@@ -5,8 +5,8 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { claimOwner, OwnerConflict } from '../src/cli/owner.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { claimOwner, OwnerConflict } from '../src/core/owner.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
 import { runCli } from '../src/cli/commands.ts';
 
 async function folder(): Promise<string> {

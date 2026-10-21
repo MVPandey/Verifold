@@ -6,7 +6,7 @@ import {
   type QueuedEvent,
   type WakeEvent,
   type WakeRecord,
-} from '../src/cli/agent-loop.ts';
+} from '../src/core/agent-loop.ts';
 
 type Record = WakeRecord<WakeEvent> & { readonly stopped: boolean };
 

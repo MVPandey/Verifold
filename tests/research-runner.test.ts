@@ -4,16 +4,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
-import { ResearchRunner } from '../src/cli/research-runner.ts';
+import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
+import { ResearchRunner } from '../src/legacy/research-runner.ts';
 import {
   HarnessTimeoutError,
   type HarnessRequest,
   type HarnessResult,
-} from '../src/cli/harness.ts';
-import { SessionPool } from '../src/cli/workers.ts';
+} from '../src/core/harness.ts';
+import { SessionPool } from '../src/core/workers.ts';
 import { terminalInput } from '../src/cli/commands.ts';
-import { startDesk } from '../src/cli/desk.ts';
+import { startDesk } from '../src/server/desk.ts';
 
 const plan = {
   scope: 'Study proof search under fixed compute.',

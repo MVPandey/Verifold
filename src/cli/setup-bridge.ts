@@ -1,7 +1,7 @@
 import type { Choice } from './choices.ts';
 import type { AskHint, BriefDecision, CliIO, SetupStep } from './commands.ts';
-import { SessionActionError } from './session.ts';
-import { TranscriptLog } from './transcript.ts';
+import { SessionActionError } from '../core/session.ts';
+import { TranscriptLog } from '../core/transcript.ts';
 
 export type SetupPrompt =
   | {

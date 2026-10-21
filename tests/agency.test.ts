@@ -25,7 +25,7 @@ import {
   setupProfile,
 } from '../src/cli/agency.ts';
 import type { CliIO } from '../src/cli/commands.ts';
-import type { runHarness } from '../src/cli/harness.ts';
+import type { runHarness } from '../src/core/harness.ts';
 
 async function temporary(
   run: (root: string, directory: string) => Promise<void>,
