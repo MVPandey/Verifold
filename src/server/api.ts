@@ -1340,8 +1340,6 @@ const actionNames = new Set<string>([
   'lab-away-dismiss',
 ] satisfies ActionName[]);
 
-/** A turn ID: an entry ID of a transcript, such as `1a2b3c4d.#3` or `1a2b3c4d.toolu_01`. */
-
 function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
