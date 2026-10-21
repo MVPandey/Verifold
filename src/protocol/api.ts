@@ -70,6 +70,8 @@ export interface Lab {
   readonly question: string;
   /** The most characters that a post by the person may have. Added after version 1. */
   readonly postLimit?: number;
+  /** The most characters that the line of a sign-off may have. Added after version 1. */
+  readonly signoffLimit?: number;
   readonly startedAt: string;
   /** False: this process only shows the lab, and the project's owner runs its agents. */
   readonly agentsHere: boolean;
@@ -220,6 +222,12 @@ export interface Direction {
   readonly stoppedAt: string | null;
   /** The newest commit of its folder. */
   readonly head: string;
+  /**
+   * The files that the person brought into the project folder from it: how
+   * many, and when the newest came in. Null when none came in. Added after
+   * version 1.
+   */
+  readonly brought?: { readonly files: number; readonly lastAt: string } | null;
 }
 
 /** What a turn's tool calls did, by kind. */
@@ -524,6 +532,83 @@ export interface Away {
 }
 
 /**
+ * A file that a direction changed, as a bring-in shows it. Its path is in
+ * the direction's folder, and the same path in the project folder is where
+ * it comes in.
+ */
+export interface BringFile {
+  readonly path: string;
+  readonly change: 'added' | 'modified' | 'deleted';
+  readonly bytes: number;
+  /** Ticked first: it can come in, nothing ticks it off, and it did not come in already. */
+  readonly ticked: boolean;
+  /** Why it cannot come in, such as Verifold's own records, or null. */
+  readonly out: string | null;
+  /** Why it is not ticked first, such as project memory or a file that runs code, or null. */
+  readonly why: string | null;
+  /** When it came in from this direction with this content, or null. */
+  readonly since: string | null;
+  /** It can run code through the person's tools, such as a Git hook or an editor task. */
+  readonly code: boolean;
+}
+
+/**
+ * What a bring-in of a direction can copy: its files at the commit that the
+ * person looked at (`lab-bring-look`). A bring-in copies that commit, also
+ * when the agent works on.
+ */
+export interface BringList {
+  readonly direction: string;
+  /** The direction's branch, or its folder when it has none. */
+  readonly branch: string;
+  /** The commit that the person looked at. `lab-bring` names it. */
+  readonly commit: string;
+  /** The agent worked when the person looked: the files are those of its last turn. */
+  readonly working: boolean;
+  /** The direction has newer work than this commit. */
+  readonly newer: boolean;
+  /** Files of the folder that the commit leaves out, and why. */
+  readonly left: readonly { readonly path: string; readonly why: string }[];
+  /** By path. */
+  readonly files: readonly BringFile[];
+  /** Files that the list leaves out past its bound. */
+  readonly omitted: number;
+}
+
+/** One bring-in of a direction: when, at which commit, and the files that keep it as their base. */
+export interface BringGroup {
+  readonly at: string;
+  readonly commit: string;
+  readonly paths: readonly string[];
+  /** Paths that the group leaves out past its bound. */
+  readonly more: number;
+}
+
+/**
+ * `GET /api/v1/directions/:direction/bring`. `list` is null until the person
+ * asks Verifold to take the direction's newest work (`lab-bring-look`).
+ * `error`: Verifold could not read the files. Added after version 1.
+ */
+export interface BringRead {
+  readonly list: BringList | null;
+  readonly error: string | null;
+  /** The direction's bring-ins so far, oldest first. */
+  readonly history: readonly BringGroup[];
+}
+
+/**
+ * `GET /api/v1/directions/:direction/bring/diff?file=<path>&commit=<commit>`:
+ * one file's changes since the direction started, at the commit of a
+ * bring-in. Added after version 1.
+ */
+export interface FileDiff {
+  readonly text: string;
+  /** Verifold cut the diff. */
+  readonly trimmed: boolean;
+  readonly commit: string;
+}
+
+/**
  * `POST /api/v1/actions/:name`: the body of each action. The server runs the
  * operation that the desk runs for the same action, with the same checks.
  * `key`: a random 32-character hex string; the same key within a minute
@@ -566,6 +651,15 @@ export interface ActionBodies {
   'lab-agent-restart': { readonly agent: string; readonly key?: string };
   'lab-run-cancel': { readonly run: string; readonly key?: string };
   'lab-signoff': { readonly note?: string; readonly key?: string };
+  /** Take a direction's newest work, so a bring-in shows exactly the files that come in. Added after version 1. */
+  'lab-bring-look': { readonly direction: string; readonly key?: string };
+  /** Copy ticked files of a direction, at the commit that the person looked at, into the project folder. Added after version 1. */
+  'lab-bring': {
+    readonly direction: string;
+    readonly commit: string;
+    readonly files: readonly string[];
+    readonly key?: string;
+  };
   'lab-dismiss': Record<string, never>;
   'lab-away-dismiss': Record<string, never>;
 }

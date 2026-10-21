@@ -72,6 +72,7 @@ import {
 import { archiveRun, restoreRun } from '../src/core/archive.ts';
 import { runCli, terminalInput, type CliIO } from '../src/cli/commands.ts';
 import { startDesk } from '../src/server/desk.ts';
+import type { BringRead, FileDiff, Snapshot } from '../src/protocol/api.ts';
 import { TaskManager } from '../src/legacy/tasks.ts';
 import { ProjectMemory } from '../src/core/memory.ts';
 
@@ -9088,6 +9089,203 @@ await test('the desk brings files in and signs off only with its token, and esca
   assert.match(answer, /1 file brought in, last at/);
   // Home's header opens the answer.
   assert.match(await html('/api/view'), /data-panel="answer">Answer</);
+});
+
+await test("the app's API brings files in and signs off with the desk's checks, and refuses what the desk refuses", async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a.md'), 'a\n');
+  // A Git hook runs code, so it starts unticked.
+  await mkdir(join(folder, '.githooks'));
+  await writeFile(join(folder, '.githooks', 'pre-commit'), '#!/bin/sh\n');
+  // A commit of the direction's branch holds a file under Verifold's own folder, by another case.
+  await mkdir(join(folder, '.Verifold'));
+  await writeFile(join(folder, '.Verifold', 'lab.json'), '{}\n');
+  git(folder, 'add', '--force', '.Verifold/lab.json');
+  git(folder, 'commit', '--quiet', '-m', 'records');
+  // A link in the project folder leads a path into a Git folder.
+  await mkdir(join(lab.root, 'vendor', '.git'), { recursive: true });
+  await symlink(join('vendor', '.git'), join(lab.root, 'hooks'));
+  await mkdir(join(folder, 'hooks'));
+  await writeFile(join(folder, 'hooks', 'post-checkout'), 'x\n');
+  const stop = new AbortController();
+  const desk = await startDesk(
+    lab.root,
+    stop.signal,
+    pathToFileURL(`${await deskAssets(lab.base)}/cli/`),
+    lab.sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab.lab },
+  );
+  t.after(async () => {
+    stop.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const token = url.hash.slice(1);
+  const api = `${url.origin}/api/v1`;
+  const get = (path: string, authorized = true): Promise<Response> =>
+    fetch(
+      `${api}${path}`,
+      authorized ? { headers: { Authorization: `Bearer ${token}` } } : {},
+    );
+  const act = (
+    name: string,
+    body: Record<string, unknown>,
+    authorized = true,
+  ): Promise<Response> =>
+    fetch(`${api}/actions/${name}`, {
+      method: 'POST',
+      headers: {
+        ...(authorized ? { Authorization: `Bearer ${token}` } : {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  const json = async <T>(response: Promise<Response>): Promise<T> =>
+    (await (await response).json()) as T;
+
+  // Only with the token.
+  assert.equal((await get('/directions/d-1/bring', false)).status, 401);
+  assert.equal(
+    (
+      await get(
+        `/directions/d-1/bring/diff?file=a.md&commit=${'a'.repeat(40)}`,
+        false,
+      )
+    ).status,
+    401,
+  );
+  for (const [name, body] of [
+    ['lab-bring-look', { direction: 'd-1' }],
+    [
+      'lab-bring',
+      { direction: 'd-1', commit: 'a'.repeat(40), files: ['a.md'] },
+    ],
+    ['lab-signoff', { note: 'No.' }],
+  ] as const)
+    assert.equal((await act(name, body, false)).status, 401, name);
+
+  // Before Verifold took the commit, there is no list, only the history.
+  assert.deepEqual(await json<BringRead>(get('/directions/d-1/bring')), {
+    list: null,
+    error: null,
+    history: [],
+  });
+  assert.equal((await get('/directions/d-9/bring')).status, 404);
+  assert.equal((await get('/directions/x/bring')).status, 404);
+  assert.equal((await get('/directions/d-1/bring?x=1')).status, 404);
+
+  assert.equal((await act('lab-bring-look', { direction: 'd-1' })).status, 200);
+  const read = await json<BringRead>(get('/directions/d-1/bring'));
+  const commit = read.list?.commit ?? '';
+  assert.equal(commit, lab.lab.bringCommit('d-1'));
+  assert.match(read.list?.branch ?? '', /d-1/);
+  const file = (path: string) =>
+    read.list?.files.find((entry) => entry.path === path);
+  assert.deepEqual([file('a.md')?.ticked, file('a.md')?.code], [true, false]);
+  assert.deepEqual(
+    [file('.githooks/pre-commit')?.ticked, file('.githooks/pre-commit')?.code],
+    [false, true],
+  );
+  assert.match(file('.githooks/pre-commit')?.why ?? '', /can run code/);
+  assert.equal(
+    file('.Verifold/lab.json')?.out,
+    "Verifold's own records stay out.",
+  );
+
+  // A file's diff comes at that commit only.
+  const diff = await json<FileDiff>(
+    get(`/directions/d-1/bring/diff?file=a.md&commit=${commit}`),
+  );
+  assert.match(diff.text, /\+a/);
+  assert.equal(diff.commit, commit);
+  assert.equal(
+    (await get(`/directions/d-1/bring/diff?file=a.md&commit=${'f'.repeat(40)}`))
+      .status,
+    404,
+  );
+  const missing = await get(
+    `/directions/d-1/bring/diff?file=README.md&commit=${commit}`,
+  );
+  assert.equal(missing.status, 404);
+  assert.match(
+    ((await missing.json()) as { error: string }).error,
+    /not in this diff/,
+  );
+  for (const query of [
+    '?file=a.md&commit=x',
+    '?file=a.md',
+    `?file=a.md&commit=${commit}&commit=${commit}`,
+    `?file=a.md&commit=${commit}&extra=1`,
+    `?file=${'x'.repeat(301)}&commit=${commit}`,
+  ])
+    assert.equal(
+      (await get(`/directions/d-1/bring/diff${query}`)).status,
+      400,
+      query,
+    );
+
+  // The desk's refusals hold through the API, and nothing comes in.
+  const refused = async (
+    body: Record<string, unknown>,
+    pattern: RegExp,
+  ): Promise<void> => {
+    const response = await act('lab-bring', body);
+    assert.equal(response.status, 409, JSON.stringify(body));
+    assert.match(((await response.json()) as { error: string }).error, pattern);
+  };
+  await refused(
+    { direction: 'd-1', commit, files: ['.Verifold/lab.json'] },
+    /cannot come in\. Verifold's own records stay out\./,
+  );
+  await refused(
+    { direction: 'd-1', commit: 'f'.repeat(40), files: ['a.md'] },
+    /changed since you looked/,
+  );
+  await refused(
+    { direction: 'd-1', commit, files: ['hooks/post-checkout'] },
+    /leads into Verifold's own folder or a Git folder/,
+  );
+  await refused({ direction: 'd-1', commit, files: [] }, /Tick the files/);
+  assert.equal(
+    existsSync(join(lab.root, 'vendor', '.git', 'post-checkout')),
+    false,
+  );
+  assert.equal(existsSync(join(lab.root, 'a.md')), false);
+
+  // A ticked file comes in, and the list, its history, and the snapshot say so.
+  assert.equal(
+    (await act('lab-bring', { direction: 'd-1', commit, files: ['a.md'] }))
+      .status,
+    200,
+  );
+  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'a\n');
+  const after = await json<BringRead>(get('/directions/d-1/bring'));
+  assert.notEqual(
+    after.list?.files.find((entry) => entry.path === 'a.md')?.since ?? null,
+    null,
+  );
+  assert.deepEqual(
+    after.history.map((group) => [group.commit, group.paths]),
+    [[commit, ['a.md']]],
+  );
+  const shown = await json<Snapshot>(get('/snapshot'));
+  assert.equal(
+    shown.lab?.directions.find((entry) => entry.id === 'd-1')?.brought?.files,
+    1,
+  );
+
+  // The sign-off, through the API.
+  assert.equal((await act('lab-signoff', { note: 'Partly yes.' })).status, 200);
+  const signed = await json<Snapshot>(get('/snapshot'));
+  assert.equal(signed.lab?.signoff?.note, 'Partly yes.');
+  assert.equal(signed.lab?.signoffLimit, labLimits.signoff);
 });
 
 /** A compute for the facts tests: a RunPod key or none, and pods off. */

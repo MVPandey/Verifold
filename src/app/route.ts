@@ -2,12 +2,13 @@ import { turnIdPattern } from '../protocol/api.ts';
 
 /**
  * The app's pages, from the URL fragment. The lab home is `#/`, a direction
- * is `#/d/<id>`, one turn of its agent is `#/d/<id>/turn/<turn>`, and a
- * call opens over the lab at `#/call/<id>`. The pages that later slices of
- * #282 build (the answer, the first run) show a short "comes in a later
- * step" page until then. Any other fragment is a page that does not exist.
+ * is `#/d/<id>`, one turn of its agent is `#/d/<id>/turn/<turn>`, a call
+ * opens over the lab at `#/call/<id>`, the answer is `#/answer`, and a
+ * direction's bring-in is `#/d/<id>/bring`. The page that a later slice of
+ * #282 builds (the first run) shows a short "comes in a later step" page
+ * until then. Any other fragment is a page that does not exist.
  */
-export type LaterPage = 'answer' | 'first-run';
+export type LaterPage = 'first-run';
 
 export type Route =
   | { readonly page: 'lab' }
@@ -18,8 +19,8 @@ export type Route =
       readonly turn: string;
     }
   | { readonly page: 'call'; readonly id: string }
-  // One member per later page, so that a check of `page` narrows the route.
   | { readonly page: 'answer' }
+  | { readonly page: 'bring'; readonly direction: string }
   | { readonly page: 'first-run' }
   | { readonly page: 'unknown' };
 
@@ -41,6 +42,8 @@ export function parseRoute(hash: string): Route {
   if (call?.[1]) return { page: 'call', id: call[1] };
   const direction = new RegExp(`^/d/(${id})$`).exec(path);
   if (direction?.[1]) return { page: 'direction', direction: direction[1] };
+  const bring = new RegExp(`^/d/(${id})/bring$`).exec(path);
+  if (bring?.[1]) return { page: 'bring', direction: bring[1] };
   const turn = new RegExp(`^/d/(${id})/turn/([^/]{1,400})$`).exec(path);
   if (turn?.[1] && turn[2]) {
     const decoded = decode(turn[2]);
@@ -59,4 +62,6 @@ export const href = {
   turn: (direction: string, turn: string): string =>
     `#/d/${direction}/turn/${encodeURIComponent(turn)}`,
   call: (id: string): string => `#/call/${id}`,
+  answer: '#/answer',
+  bring: (direction: string): string => `#/d/${direction}/bring`,
 } as const;

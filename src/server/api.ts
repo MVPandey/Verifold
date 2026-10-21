@@ -12,6 +12,8 @@ import {
   agentId,
   boardLimits,
   clip,
+  commitId,
+  directionId,
   number,
   postId,
   type Artifact,
@@ -23,6 +25,9 @@ import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
 import {
   askers,
+  labLimits,
+  type BringList as LabBringList,
+  type Brought,
   type Call as LabCall,
   type CallEffect,
   type Check as LabCheck,
@@ -43,11 +48,15 @@ import {
   type Agent,
   type AgentStatus,
   type BoardPage,
+  type BringGroup,
+  type BringList,
+  type BringRead,
   type Call,
   type CallOption,
   type CheckItem,
   type Direction,
   type Effect,
+  type FileDiff,
   type Lab,
   type LabList,
   type Post,
@@ -109,6 +118,12 @@ export const apiLimits = {
   backlog: 8 * 1024 * 1024,
   /** Bytes of an action's body. */
   body: 512_000,
+  /** Files in a bring-in list. */
+  bringFiles: 2000,
+  /** A direction's bring-ins in a bring-in read, the newest kept. */
+  bringGroups: 20,
+  /** Paths of one bring-in in a bring-in read. */
+  bringPaths: 50,
 };
 
 /** How many items of each list a snapshot keeps, and how much of each message. */
@@ -218,6 +233,31 @@ export interface ApiSources {
   readonly away: () => Promise<{
     readonly since: string;
     readonly spent: { readonly claude: number; readonly gpu: number };
+  } | null>;
+  /** The desk's bring-in reads, when it runs a lab. */
+  readonly bring?: BringSource | undefined;
+}
+
+/** The desk's own bring-in reads, which its bring-in panel uses too. */
+export interface BringSource {
+  /**
+   * The files that a bring-in of a direction can copy, at the commit that
+   * the person looked at. Null before a look. A string when Verifold could
+   * not read the files.
+   */
+  readonly list: (direction: string) => Promise<LabBringList | string | null>;
+  /**
+   * One file's diff at the commit of a bring-in, or null. It throws a
+   * SessionActionError when the file is not in the bring-in.
+   */
+  readonly diff: (
+    direction: string,
+    file: string,
+    commit: string,
+  ) => Promise<{
+    readonly text: string;
+    readonly cut: boolean;
+    readonly to: string;
   } | null>;
 }
 
@@ -571,10 +611,27 @@ function call(
   };
 }
 
+/** Each direction's bring-ins: how many files came in, and when the newest did. */
+function broughtByDirection(
+  brought: readonly Brought[],
+): Map<string, { readonly files: number; readonly lastAt: string }> {
+  const counts = new Map<string, { files: number; lastAt: string }>();
+  for (const entry of brought) {
+    const known = counts.get(entry.direction);
+    if (!known) counts.set(entry.direction, { files: 1, lastAt: entry.at });
+    else {
+      known.files++;
+      if (entry.at > known.lastAt) known.lastAt = entry.at;
+    }
+  }
+  return counts;
+}
+
 function direction(
   entry: LabDirection,
   disputed: (entry: LabDirection) => boolean,
   buildsOn: readonly LabDirection['buildsOn'][number][],
+  brought: { readonly files: number; readonly lastAt: string } | undefined,
 ): Direction {
   return {
     id: entry.id,
@@ -598,6 +655,7 @@ function direction(
     openedAt: entry.openedAt,
     stoppedAt: entry.stoppedAt,
     head: entry.head,
+    brought: brought ?? null,
   };
 }
 
@@ -768,11 +826,13 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
   if (state.signoff && !level.whole) omitted.signoff = 1;
+  const brought = broughtByDirection(state.brought);
   return {
     question: level.whole
       ? state.question
       : clip(state.question, apiLimits.question),
     postLimit: boardLimits.personText,
+    signoffLimit: labLimits.signoff,
     startedAt: state.startedAt,
     agentsHere: view.runs,
     paused: state.pausedAt
@@ -804,6 +864,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
           entry,
           disputed,
           keep(entry.buildsOn, level.buildsOn, 'buildsOn'),
+          brought.get(entry.id),
         ),
     ),
     agents,
@@ -898,6 +959,63 @@ function step(entry: TranscriptEntry, index: number): Step {
 /** Two signals are equal when every part is the same value or the same object. */
 function same(a: readonly unknown[], b: readonly unknown[]): boolean {
   return a.length === b.length && a.every((part, index) => part === b[index]);
+}
+
+/** A bring-in list as the API sends it, within its bound. */
+function bringList(list: LabBringList, branch: string): BringList {
+  const files = list.files.slice(0, apiLimits.bringFiles);
+  return {
+    direction: list.direction,
+    branch,
+    commit: list.commit,
+    working: list.working,
+    newer: list.newer,
+    left: list.left
+      .slice(0, apiLimits.bringFiles)
+      .map((file) => ({ path: file.path, why: file.why })),
+    files: files.map((file) => ({
+      path: file.path,
+      change: file.change,
+      bytes: file.bytes,
+      ticked: file.ticked,
+      out: file.out,
+      why: file.why,
+      since: file.since,
+      code: file.code,
+    })),
+    omitted: list.files.length - files.length,
+  };
+}
+
+/** A direction's bring-ins, oldest first: the files that keep each one as their base, by its time and commit. */
+function bringHistory(
+  brought: readonly Brought[],
+  direction: string,
+): BringGroup[] {
+  const groups = new Map<
+    string,
+    { readonly at: string; readonly commit: string; readonly paths: string[] }
+  >();
+  for (const entry of brought) {
+    if (entry.direction !== direction) continue;
+    const key = `${entry.at}|${entry.commit}`;
+    const group = groups.get(key) ?? {
+      at: entry.at,
+      commit: entry.commit,
+      paths: [],
+    };
+    group.paths.push(entry.path);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    .slice(-apiLimits.bringGroups)
+    .map((group) => ({
+      at: group.at,
+      commit: group.commit,
+      paths: group.paths.slice(0, apiLimits.bringPaths),
+      more: Math.max(0, group.paths.length - apiLimits.bringPaths),
+    }));
 }
 
 /**
@@ -1173,6 +1291,42 @@ export class ApiReader {
     );
     return `{"turn":${JSON.stringify(shown)},"steps":[${steps.join(',')}],"more":${more}}`;
   }
+
+  /**
+   * What a bring-in of a direction can copy, and its bring-ins so far. Null
+   * without a lab, or for a direction that the lab does not have.
+   */
+  async bring(id: string): Promise<BringRead | null> {
+    const sources = this.sources();
+    const view = sources.lab?.view();
+    const entry = view?.state.directions.find((item) => item.id === id);
+    if (!view || !entry) return null;
+    const read = sources.bring ? await sources.bring.list(id) : null;
+    return {
+      list:
+        read && typeof read === 'object'
+          ? bringList(read, entry.workspace.branch ?? entry.workspace.path)
+          : null,
+      error: typeof read === 'string' ? read : null,
+      history: bringHistory(view.state.brought, id),
+    };
+  }
+
+  /**
+   * One file's diff at the commit of a bring-in, or null when there is none.
+   * A SessionActionError says why the file is not in the bring-in.
+   */
+  async bringDiff(
+    id: string,
+    file: string,
+    commit: string,
+  ): Promise<FileDiff | null> {
+    const source = this.sources().bring;
+    const shown = source ? await source.diff(id, file, commit) : null;
+    return shown
+      ? { text: shown.text, trimmed: shown.cut, commit: shown.to }
+      : null;
+  }
 }
 
 /**
@@ -1336,6 +1490,8 @@ const actionNames = new Set<string>([
   'lab-agent-restart',
   'lab-run-cancel',
   'lab-signoff',
+  'lab-bring-look',
+  'lab-bring',
   'lab-dismiss',
   'lab-away-dismiss',
 ] satisfies ActionName[]);
@@ -1429,6 +1585,43 @@ export async function answerApi(
     if (page) json(response, 200, page);
     else response.writeHead(404).end();
     return;
+  }
+  if (
+    first === 'directions' &&
+    second &&
+    directionId.test(second) &&
+    third === 'bring'
+  ) {
+    if (parts.length === 3 && !keys.length) {
+      const read = await reader.bring(second);
+      if (read) json(response, 200, read);
+      else response.writeHead(404).end();
+      return;
+    }
+    if (parts.length === 4 && fourth === 'diff') {
+      const file = url.searchParams.get('file') ?? '';
+      const commit = url.searchParams.get('commit') ?? '';
+      if (
+        !file ||
+        file.length > 300 ||
+        !commitId.test(commit) ||
+        keys.length !== 2 ||
+        !keys.includes('file') ||
+        !keys.includes('commit')
+      ) {
+        response.writeHead(400).end();
+        return;
+      }
+      try {
+        const shown = await reader.bringDiff(second, file, commit);
+        if (shown) json(response, 200, shown);
+        else response.writeHead(404).end();
+      } catch (error) {
+        if (!(error instanceof SessionActionError)) throw error;
+        json(response, 404, { error: error.message });
+      }
+      return;
+    }
   }
   // A turn's steps also take `limit` (1 to 200) and `tools=1`.
   const stepQuery =

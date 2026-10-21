@@ -1,0 +1,370 @@
+/* The answer and bring-in pages. Values follow the v9 canvas artboard "13. The answer". */
+.section__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+/* A link at the end of a section's head, such as the lab home's link to the answer. */
+.section__link {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.answer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.answer-head__status {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--accent-ink);
+}
+
+.answer-head__title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.answer-head__question {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.answer-legend {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.finding {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.finding:last-child {
+  border-bottom: 0;
+}
+
+.finding__body {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.finding__text {
+  margin: 0;
+}
+
+.finding__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.finding__title a {
+  color: var(--ink);
+}
+
+.finding__meta {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.finding__links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.finding__bring {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.tag {
+  flex: none;
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tag--data {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.tag--literature {
+  background: var(--rerun-bg);
+  color: var(--rerun-ink);
+}
+
+.tag--reasoning {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.answer-empty {
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink-2);
+}
+
+.still-open {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.answer-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Sign off */
+.signoff {
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  gap: 10px;
+}
+
+.signoff__text {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.signoff__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.signoff__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.signoff__input {
+  flex: 1 1 280px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1.5px solid var(--control);
+  border-radius: 10px;
+  background: var(--surface);
+  font: 500 15px var(--font);
+  color: var(--ink);
+}
+
+/* Bring in */
+.bring-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bring-head__kind {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--accent-ink);
+}
+
+.bring-head__title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.bring-head__sub {
+  font-size: 14px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.bring-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.bring-note--need {
+  background: var(--need-bg);
+  border: 1px solid var(--you);
+  color: var(--need-ink);
+}
+
+.bring-note--ok {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.bring-text {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.bring-text--fine {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.link-button--inline {
+  align-self: auto;
+  min-height: 0;
+}
+
+.bring-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.bring-file {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+
+.bring-file:last-child {
+  border-bottom: 0;
+}
+
+.bring-file__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.bring-file__line input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.bring-file__line code,
+.bring-out code {
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.bring-file__change {
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--line-soft);
+  color: var(--ink-2);
+}
+
+.bring-file__change--added {
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.bring-file__change--deleted {
+  background: var(--objection);
+  color: var(--need-ink);
+}
+
+.bring-file__why {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.bring-file__code {
+  font-size: 13px;
+  color: var(--need-ink);
+}
+
+.bring-file__code--ticked {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--need-bg);
+  font-weight: 700;
+}
+
+.bring-diff {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 10px;
+  font: 500 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bring-out,
+.bring-history {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.bring-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
