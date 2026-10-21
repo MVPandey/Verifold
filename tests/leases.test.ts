@@ -9,6 +9,7 @@ import {
   readFile,
   readdir,
   rm,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,7 +24,12 @@ import {
   reserved,
   spent,
   type Lease,
+  type MonthHooks,
 } from '../src/core/leases.ts';
+import { GpuMonth, monthFolder } from '../src/core/gpu-month.ts';
+import { prepareAgency, saveAgencyFile } from '../src/core/agency.ts';
+import { profileMoneyDefaults } from '../src/core/compute.ts';
+import { runCli } from '../src/cli/commands.ts';
 
 const key = 'rpa_TESTKEY0123456789abcdefWXYZ';
 
@@ -261,10 +267,18 @@ async function fakeRunPod(t: test.TestContext): Promise<{
   };
 }
 
-/** A project with a stored key, limits, and a clock that the test moves. */
+/**
+ * A project with a stored key, limits, and a clock that the test moves.
+ * `options.clock` lets projects share one clock, and `options.month` gives
+ * the project the monthly limit across projects.
+ */
 async function setup(
   t: test.TestContext,
   limits: Record<string, unknown> = {},
+  options: {
+    readonly clock?: { now: number };
+    readonly month?: (root: string) => MonthHooks;
+  } = {},
 ): Promise<{
   root: string;
   compute: Compute;
@@ -297,7 +311,7 @@ async function setup(
     platform: 'linux',
     secretTool: join(dir, 'none'),
   });
-  const clock = { now: Date.parse('2026-10-05T12:00:00Z') };
+  const clock = options.clock ?? { now: Date.parse('2026-10-05T12:00:00Z') };
   const lines: string[] = [];
   const make = async (): Promise<Compute> => {
     const compute = new Compute(root, {
@@ -306,6 +320,7 @@ async function setup(
       programs: { keyscan, ssh },
       now: () => clock.now,
       onChange: (_lease, line) => lines.push(line),
+      ...(options.month ? { month: options.month(root) } : {}),
     });
     await compute.load();
     return compute;
@@ -780,4 +795,334 @@ await test('when the person approves each pod, a new secret leaves the request f
   assert.equal(compute.leases.get(lease.id).state, 'requested');
   assert.ok(!api.calls.includes('POST /v2/pods'));
   assert.deepEqual(compute.missingSecrets(compute.leases.get(lease.id)), []);
+});
+
+await test('the monthly limit refuses a pod that does not fit, counts every project, follows the profile, and starts at zero in a new month', async (t) => {
+  const agency = await mkdtemp(join(tmpdir(), 'verifold-agency-'));
+  t.after(() => rm(agency, { recursive: true, force: true }));
+  const limit: { usd: number | null } = { usd: 2 };
+  // Local time: the month is a calendar month on this computer.
+  const clock = { now: new Date(2026, 9, 30, 12, 0).getTime() };
+  const month = (root: string): MonthHooks =>
+    new GpuMonth({ agency, root, limit: () => Promise.resolve(limit.usd) });
+  const first = await setup(t, {}, { clock, month });
+  const second = await setup(t, {}, { clock, month });
+  const hourly = 0.27 + diskRate(50);
+  // The first project holds a pod for 4 hours: $1.11 of the $2.
+  const held = await first.compute.leases.request({ ...ask, hours: 4 });
+  await first.compute.leases.approve(held.id);
+  assert.ok(
+    Math.abs((first.compute.view().month?.heldUsd ?? 0) - hourly * 4) < 1e-6,
+  );
+  // The other project counts it: a pod for 4 hours does not fit, one for 2 hours does.
+  await assert.rejects(
+    second.compute.leases.request({ ...ask, hours: 4 }),
+    /The pod can cost up to \$1\.11, but only \$0\.89 is left of your monthly GPU limit of \$2\.00 across projects: \$0\.00 spent this month and \$1\.11 held by open pods\. Raise the limit in your profile, under GPU money\.$/,
+  );
+  const waiting = await second.compute.leases.request({ ...ask, hours: 2 });
+  // The limit comes from the profile at each check: a lower one refuses the approval.
+  limit.usd = 1.5;
+  await assert.rejects(
+    second.compute.leases.approve(waiting.id),
+    /only \$0\.39 is left of your monthly GPU limit of \$1\.50/,
+  );
+  // Without a monthly limit, only the project's own limit applies.
+  limit.usd = null;
+  assert.equal(
+    (await second.compute.leases.approve(waiting.id)).state,
+    'starting',
+  );
+  assert.equal(second.compute.view().month, null);
+  // Each project keeps its own record in the profile.
+  assert.equal(
+    (await readdir(monthFolder(agency))).filter((name) =>
+      /^[0-9a-f]{16}\.json$/.test(name),
+    ).length,
+    2,
+  );
+  // Three hours later both pods end: October spent $1.67 (the other project's record rounds up to the cent), so a pod for 4 hours no longer fits.
+  limit.usd = 2;
+  clock.now += 3 * 3_600_000;
+  await first.compute.leases.end(held.id, 'person', 'done.');
+  await second.compute.leases.end(waiting.id, 'person', 'done.');
+  await assert.rejects(
+    first.compute.leases.request({ ...ask, hours: 4 }),
+    /\$1\.67 spent this month and \$0\.00 held/,
+  );
+  // In November, October's pods count no more.
+  clock.now = new Date(2026, 10, 1, 0, 30).getTime();
+  assert.equal(
+    (await first.compute.leases.request({ ...ask, hours: 4 })).state,
+    'requested',
+  );
+  assert.equal(first.compute.view().month?.spentUsd, 0);
+});
+
+await test('when all projects together reach the monthly limit, the running pods end with a notice', async (t) => {
+  const agency = await mkdtemp(join(tmpdir(), 'verifold-agency-'));
+  t.after(() => rm(agency, { recursive: true, force: true }));
+  const clock = { now: new Date(2026, 9, 12, 12, 0).getTime() };
+  const { compute, api } = await setup(
+    t,
+    { limitUsd: '100' },
+    {
+      clock,
+      month: (root) =>
+        new GpuMonth({ agency, root, limit: () => Promise.resolve(5) }),
+    },
+  );
+  // Another project spent $4 this month, and its pods ended.
+  await prepareAgency(agency);
+  await mkdir(monthFolder(agency), { mode: 0o700 });
+  await writeFile(
+    join(monthFolder(agency), '0123456789abcdef.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      project: '/elsewhere',
+      month: '2026-10',
+      writtenAt: new Date(clock.now).toISOString(),
+      endedUsd: 4,
+      open: [],
+    }),
+  );
+  const id = (await compute.leases.request(ask)).id;
+  await compute.leases.approve(id);
+  await compute.leases.poll();
+  await compute.leases.poll();
+  assert.equal(compute.leases.get(id).state, 'ready');
+  // RunPod bills $0.99 for this pod: with the other project's $4, the month reaches the limit.
+  api.mode.billed = 0.99;
+  clock.now += 16 * 60_000;
+  await compute.leases.active(id);
+  await compute.leases.poll();
+  await compute.leases.poll();
+  const lease = compute.leases.get(id);
+  assert.equal(lease.state, 'ended');
+  assert.equal(lease.end?.by, 'limit');
+  assert.equal(
+    lease.notice,
+    `Verifold ended ${id}: your projects reached the monthly GPU limit of $5.00, with $4.99 spent this month. Raise the limit in your profile, under GPU money.`,
+  );
+  // The record of this project now says what it spent, for the other projects.
+  const records = (await readdir(monthFolder(agency))).filter(
+    (name) => name !== '0123456789abcdef.json' && name.endsWith('.json'),
+  );
+  assert.equal(records.length, 1);
+  const own = JSON.parse(
+    await readFile(join(monthFolder(agency), records[0] ?? ''), 'utf8'),
+  ) as { month: string; endedUsd: number; open: unknown[] };
+  assert.equal(own.month, '2026-10');
+  assert.equal(own.endedUsd, 0.99);
+  assert.deepEqual(own.open, []);
+  // Spend past the limit leaves nothing to rent: the agents never see a negative figure.
+  await writeFile(
+    join(monthFolder(agency), '0123456789abcdef.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      project: '/elsewhere',
+      month: '2026-10',
+      writtenAt: new Date(clock.now).toISOString(),
+      endedUsd: 10,
+      open: [],
+    }),
+  );
+  await compute.leases.refreshMonth();
+  const state = JSON.parse(await compute.describe()) as {
+    monthAllProjects: { leftUsd: number };
+  };
+  assert.equal(state.monthAllProjects.leftUsd, 0);
+});
+
+await test("a record that cannot be saved, and another project's record that cannot be read, show in Compute", async (t) => {
+  const agency = await mkdtemp(join(tmpdir(), 'verifold-agency-'));
+  t.after(() => rm(agency, { recursive: true, force: true }));
+  // A folder that holds other files is not a Verifold profile, so the record is refused.
+  await writeFile(join(agency, 'notes.txt'), 'not Verifold');
+  const { compute, clock } = await setup(
+    t,
+    {},
+    {
+      month: (root) =>
+        new GpuMonth({ agency, root, limit: () => Promise.resolve(50) }),
+    },
+  );
+  // A pod that runs holds money, so its project records it.
+  const id = (await compute.leases.request(ask)).id;
+  await compute.leases.approve(id);
+  assert.match(
+    compute.view().problem?.text ?? '',
+    /could not save this project's GPU spend for the monthly limit, so your other projects do not count it: Choose an empty agency directory/,
+  );
+  // Without the stray file, the next change saves the record of the pod's ten minutes, and the problem goes.
+  await rm(join(agency, 'notes.txt'));
+  clock.now += 10 * 60_000;
+  await compute.leases.end(id, 'person', 'done.');
+  assert.equal(compute.view().problem, null);
+  // A record of another project that cannot be read, with no earlier read: Verifold cannot tell that spend, so no new pod starts.
+  const broken = join(monthFolder(agency), 'abcdefabcdefabcd.json');
+  await writeFile(broken, '{');
+  const line = `Verifold can't read ${broken}, the GPU record of another project, so it can't tell what that project spent, and no new pod starts. If that project no longer exists, remove the file. If it does, open Verifold in that project, so it writes the file again.`;
+  await assert.rejects(compute.leases.request(ask), (error: Error) => {
+    assert.equal(error.message, line);
+    return true;
+  });
+  assert.equal(compute.view().problem?.text, line);
+  assert.equal(compute.view().month, null);
+});
+
+await test('a pod that runs past the end of a month counts in the new month, for its own project and for the others', async (t) => {
+  const agency = await mkdtemp(join(tmpdir(), 'verifold-agency-'));
+  t.after(() => rm(agency, { recursive: true, force: true }));
+  const clock = { now: new Date(2026, 9, 31, 23, 0).getTime() };
+  const month = (root: string): MonthHooks =>
+    new GpuMonth({ agency, root, limit: () => Promise.resolve(2) });
+  const first = await setup(t, {}, { clock, month });
+  const second = await setup(t, {}, { clock, month });
+  const hourly = 0.27 + diskRate(50);
+  const id = (await first.compute.leases.request({ ...ask, hours: 4 })).id;
+  await first.compute.leases.approve(id);
+  await first.compute.leases.poll();
+  await first.compute.leases.poll();
+  assert.equal(first.compute.leases.get(id).state, 'ready');
+  // Half past midnight on November 1: the pod still runs a job, so it counts in November.
+  clock.now = new Date(2026, 10, 1, 0, 30).getTime();
+  await first.compute.leases.active(id);
+  await first.compute.leases.poll();
+  assert.equal(first.compute.leases.get(id).state, 'ready');
+  const own = first.compute.view().month;
+  assert.ok(Math.abs((own?.spentUsd ?? 0) - hourly * 1.5) < 1e-6);
+  assert.ok(Math.abs((own?.heldUsd ?? 0) - hourly * 2.5) < 1e-6);
+  // Its owner wrote the record at this time, which the test's clock sets.
+  for (const name of await readdir(monthFolder(agency)))
+    await utimes(
+      join(monthFolder(agency), name),
+      new Date(clock.now),
+      new Date(clock.now),
+    );
+  // The other project counts it too: $0.42 spent and $0.70 held leave $0.88 of the $2.
+  await assert.rejects(
+    second.compute.leases.request({ ...ask, hours: 4 }),
+    /only \$0\.88 is left of your monthly GPU limit of \$2\.00 across projects: \$0\.42 spent this month and \$0\.70 held by open pods/,
+  );
+});
+
+await test('a profile that Verifold cannot read, or GPU limits in it that are not valid, stop new pods and show why', async (t) => {
+  const agency = await mkdtemp(join(tmpdir(), 'verifold-agency-'));
+  t.after(() => rm(agency, { recursive: true, force: true }));
+  // The limit comes from the profile, as the owner reads it.
+  const { compute } = await setup(
+    t,
+    {},
+    { month: (root) => new GpuMonth({ agency, root }) },
+  );
+  // GPU limits that cannot be read: no new pod, although the first run shows the defaults.
+  await saveAgencyFile(
+    agency,
+    'settings.json',
+    JSON.stringify({
+      host: 'claude',
+      money: { ...profileMoneyDefaults, monthUsd: 'a lot' },
+    }),
+  );
+  const limits =
+    "Your GPU limits in the profile can't be read. Set them again under GPU money.";
+  await assert.rejects(compute.leases.request(ask), (error: Error) => {
+    assert.equal(error.message, limits);
+    return true;
+  });
+  assert.equal(compute.view().problem?.text, limits);
+  // A profile that cannot be read at all stops new pods too, with no limit read before.
+  await saveAgencyFile(agency, 'settings.json', '{ not json');
+  await assert.rejects(
+    compute.leases.request(ask),
+    /Verifold can't read your profile, so no new pod starts until it can check your monthly GPU limit: /,
+  );
+  assert.match(
+    compute.view().problem?.text ?? '',
+    /^Verifold can't read your profile/,
+  );
+  // Limits that read again: the pod fits, and the problem goes.
+  await saveAgencyFile(
+    agency,
+    'settings.json',
+    JSON.stringify({
+      host: 'claude',
+      money: { ...profileMoneyDefaults, monthUsd: 50 },
+    }),
+  );
+  assert.equal((await compute.leases.request(ask)).state, 'requested');
+  assert.equal(compute.view().problem, null);
+});
+
+await test('each poll reads the month once, with or without pods, in the queue', async (t) => {
+  const agency = await mkdtemp(join(tmpdir(), 'verifold-agency-'));
+  t.after(() => rm(agency, { recursive: true, force: true }));
+  let reads = 0;
+  const { compute } = await setup(
+    t,
+    {},
+    {
+      month: (root) => {
+        const inner = new GpuMonth({
+          agency,
+          root,
+          limit: () => Promise.resolve(50),
+        });
+        return {
+          others: (now) => {
+            reads++;
+            return inner.others(now);
+          },
+          record: (leases, now) => inner.record(leases, now),
+        };
+      },
+    },
+  );
+  reads = 0;
+  await compute.leases.poll();
+  assert.equal(reads, 1);
+  const id = (await compute.leases.request(ask)).id;
+  await compute.leases.approve(id);
+  reads = 0;
+  await compute.leases.poll();
+  assert.equal(reads, 1);
+});
+
+await test("verifold pods keeps the project's record for the monthly limit, like the owner does", async (t) => {
+  const { root, compute, clock } = await setup(t);
+  // Started by a Compute without the monthly limit, so nothing wrote a record yet.
+  const id = (await compute.leases.request(ask)).id;
+  await compute.leases.approve(id);
+  clock.now += 30 * 60_000;
+  const home = await mkdtemp(join(tmpdir(), 'verifold-home-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const saved = process.env.HOME;
+  t.after(() => {
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  });
+  process.env.HOME = home;
+  const out: string[] = [];
+  await runCli(['pods'], root, {
+    interactive: false,
+    ask: () => Promise.reject(new Error('Unexpected prompt')),
+    out: (text) => {
+      out.push(text);
+    },
+  });
+  assert.equal(
+    (JSON.parse(out[0] ?? '[]') as { lease: string }[])[0]?.lease,
+    id,
+  );
+  const gpu = join(home, '.verifold', 'agency', 'gpu');
+  const [name] = (await readdir(gpu)).filter((entry) =>
+    entry.endsWith('.json'),
+  );
+  const record = JSON.parse(await readFile(join(gpu, name ?? ''), 'utf8')) as {
+    open: { id: string }[];
+  };
+  assert.deepEqual(
+    record.open.map((entry) => entry.id),
+    [id],
+  );
 });

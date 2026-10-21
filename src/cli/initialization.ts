@@ -9,7 +9,7 @@ import {
   saveAgencyPreferences,
   type Agency,
 } from '../core/agency.ts';
-import { computeDefaults } from '../core/compute.ts';
+import { projectSettings } from '../core/compute.ts';
 import {
   validateModel,
   runHarness,
@@ -466,7 +466,7 @@ export async function initializeProject(
     signal,
     options.lab === true && research !== null,
     // A new project starts with the GPU limits of the profile.
-    settings?.money ? { ...computeDefaults, ...settings.money } : undefined,
+    settings?.money ? projectSettings(settings.money) : undefined,
   );
   return { root, workspace, research };
 }

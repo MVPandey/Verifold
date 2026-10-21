@@ -18,6 +18,8 @@ import {
   usd,
   type Budget,
   type Lease,
+  type MonthHooks,
+  type MonthView,
 } from './leases.ts';
 import { PodShell, podLimits, type PodTarget } from './pod-shell.ts';
 import { PodGoneError, type PodRuns } from './runs.ts';
@@ -90,6 +92,8 @@ export interface ComputeView {
   /** Every lease, oldest first. */
   readonly leases: readonly Lease[];
   readonly budget: Budget;
+  /** All projects' GPU spend this month against the person's monthly limit. Null or absent: no monthly limit, or not read yet. */
+  readonly month?: MonthView | null;
   /** The last problem that a check of the pods met. */
   readonly problem: { readonly at: string; readonly text: string } | null;
 }
@@ -306,7 +310,13 @@ export type ProfileMoney = Pick<
   | 'idleMinutes'
   | 'maxRunningPods'
   | 'gpuTypes'
->;
+> & {
+  /**
+   * What all projects together may spend on pods in one calendar month.
+   * Null: no monthly limit. Projects do not copy it: each check reads it here.
+   */
+  readonly monthUsd: number | null;
+};
 
 /**
  * The first run's limits until the person changes them. No GPU type is
@@ -319,6 +329,7 @@ export const profileMoneyDefaults: ProfileMoney = {
   idleMinutes: 15,
   maxRunningPods: 1,
   gpuTypes: [],
+  monthUsd: 100,
 };
 
 /** Check the limits of a profile with the same checks as a project's limits. */
@@ -344,7 +355,21 @@ export function parseProfileMoney(
     idleMinutes: settings.idleMinutes,
     maxRunningPods: settings.maxRunningPods,
     gpuTypes: settings.gpuTypes,
+    // Limits saved before the monthly limit existed have none.
+    monthUsd:
+      input.monthUsd === undefined ||
+      input.monthUsd === null ||
+      (typeof input.monthUsd === 'string' && !input.monthUsd.trim())
+        ? null
+        : number(input.monthUsd, 'the monthly limit in USD', 1, 100_000),
   };
+}
+
+/** The compute settings that a new project starts with: the profile's limits, without the monthly one. */
+export function projectSettings(money: ProfileMoney): ComputeSettings {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the rest is every limit but the monthly one, which each check reads from the profile.
+  const { monthUsd: _, ...limits } = money;
+  return { ...computeDefaults, ...limits };
 }
 
 /**
@@ -394,6 +419,8 @@ export class Compute {
       readonly taskFolder?: (task: string) => Promise<TaskPlace | null>;
       /** Before the pod of a lab lease stops: its runs end and copy back their outputs. */
       readonly runsStop?: (lease: string) => Promise<void>;
+      /** The person's monthly GPU limit across projects. */
+      readonly month?: MonthHooks;
       /** The `ssh`, `ssh-keyscan`, and `ssh-keygen` programs. Tests use fakes. */
       readonly programs?: {
         readonly ssh?: string;
@@ -420,6 +447,7 @@ export class Compute {
         (await this.catalog()).find((entry) => entry.id === gpu) ?? null,
       ...(options.onChange ? { onChange: options.onChange } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.month ? { month: options.month } : {}),
       sshKey: (lease) => this.shell.newKey(lease.id),
       secrets: (lease) => this.secretValues(lease),
       prepare: async (lease, pod) => {
@@ -548,6 +576,16 @@ export class Compute {
         heldUsd: Number(budget.reserved.toFixed(2)),
         leftUsd: budget.left === null ? null : Number(budget.left.toFixed(2)),
       },
+      ...(view.month
+        ? {
+            monthAllProjects: {
+              limitUsd: view.month.limitUsd,
+              spentUsd: Number(view.month.spentUsd.toFixed(2)),
+              heldUsd: Number(view.month.heldUsd.toFixed(2)),
+              leftUsd: Number(view.month.leftUsd.toFixed(2)),
+            },
+          }
+        : {}),
       allowedGpus: offers,
       leases: view.leases.slice(-20).map((lease) => ({
         id: lease.id,
@@ -943,6 +981,7 @@ export class Compute {
       ...this.state,
       leases: this.leases.list(),
       budget: this.leases.budget(),
+      month: this.leases.month(),
       problem: this.leases.lastProblem(),
     };
   }
@@ -950,6 +989,7 @@ export class Compute {
   /** Check the pods every 30 seconds, until close(). A secret stored in the terminal shows up here too. */
   watch(): void {
     this.timer ??= setInterval(() => {
+      // A poll also reads the month across projects, once per tick.
       this.leases.poll().catch(() => {
         /* poll() keeps its problem for the view. */
       });

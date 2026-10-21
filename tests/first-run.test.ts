@@ -21,12 +21,15 @@ import {
   loadSettings,
   parseCard,
   personProfile,
+  prepareAgency,
   profileReader,
   saveAgencyFile,
   saveAgencyPreferences,
   withProfileLock,
   writeSettings,
 } from '../src/core/agency.ts';
+import { monthFolder } from '../src/core/gpu-month.ts';
+import { monthKey } from '../src/core/leases.ts';
 import {
   Compute,
   computeDefaults,
@@ -167,6 +170,18 @@ await test('the profile settings read older ones, keep each part on a change, an
   const fixed = await loadSettings(agency);
   assert.deepEqual(fixed.money, profileMoneyDefaults);
   assert.equal(fixed.unreadMoney, null);
+  // Limits saved before the monthly limit existed have none: Verifold does not invent one.
+  const older: Record<string, unknown> = { ...profileMoneyDefaults };
+  delete older.monthUsd;
+  await saveAgencyFile(
+    agency,
+    'settings.json',
+    JSON.stringify({ host: 'claude', money: older }),
+  );
+  assert.deepEqual((await loadSettings(agency)).money, {
+    ...profileMoneyDefaults,
+    monthUsd: null,
+  });
 });
 
 await test('the card round-trips through USER.md, and a profile in free form goes to the planner only', async (t) => {
@@ -842,6 +857,8 @@ await test('the first run through the API: agents, a conversation that ends in a
     ],
   );
   assert.deepEqual(money.money.limits, profileMoneyDefaults);
+  // No project spent on pods this month yet.
+  assert.deepEqual(money.money.month, { spentUsd: 0, problem: null });
   const limits = {
     limitUsd: 25,
     maxUsdPerHour: 4,
@@ -849,12 +866,24 @@ await test('the first run through the API: agents, a conversation that ends in a
     idleMinutes: 15,
     maxRunningPods: 1,
     gpuTypes: ['NVIDIA GeForce RTX 4090'],
+    monthUsd: 60,
   };
   const tooLong = await act('setup-money', { ...limits, maxHoursPerLease: 30 });
   assert.equal(tooLong.status, 409);
   assert.match(tooLong.text, /hours of a lease/);
+  const noMonth = await act('setup-money', { ...limits, monthUsd: 0 });
+  assert.equal(noMonth.status, 409);
+  assert.match(noMonth.text, /the monthly limit in USD as a number from 1/);
   assert.equal((await act('setup-money', limits)).status, 200);
   assert.equal((await read()).steps.money, 'done');
+  assert.equal((await read()).money.limits.monthUsd, 60);
+  // An empty field means no monthly limit.
+  assert.equal(
+    (await act('setup-money', { ...limits, monthUsd: '' })).status,
+    200,
+  );
+  assert.equal((await read()).money.limits.monthUsd, null);
+  assert.equal((await act('setup-money', limits)).status, 200);
   // No answer, and no file of the profile, holds the key.
   for (const text of said) assert.doesNotMatch(text, /TESTKEY/);
   assert.doesNotMatch(await everything(agency), /TESTKEY/);
@@ -882,6 +911,8 @@ await test('the first run through the API: agents, a conversation that ends in a
   assert.equal(copied.limitUsd, 25);
   assert.equal(copied.maxUsdPerHour, 4);
   assert.deepEqual(copied.gpuTypes, ['NVIDIA GeForce RTX 4090']);
+  // The monthly limit stays in the profile: each check reads it there.
+  assert.equal('monthUsd' in copied, false);
   const pods = new Compute(project, { store: store(), url });
   await pods.load();
   const pod = {
@@ -1289,5 +1320,51 @@ await test('the price list shows the common GPUs that RunPod lists, else the che
       { ...offer('Gone', 0.2, 48), stock: 'NONE' as const },
     ]).map((gpu) => gpu.id),
     ['Mid'],
+  );
+});
+
+await test("the money step shows this month's spend from a read a few seconds old, and says when Verifold cannot tell it", async (t) => {
+  const agency = join(await folder(t, 'month'), 'agency');
+  await prepareAgency(agency);
+  const gpu = monthFolder(agency);
+  await mkdir(gpu);
+  await writeFile(
+    join(gpu, 'aaaaaaaaaaaaaaaa.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      project: '/elsewhere',
+      month: monthKey(Date.now()),
+      writtenAt: new Date().toISOString(),
+      endedUsd: 12.5,
+      open: [],
+    }),
+  );
+  const compute = {
+    view: () => ({ key: null, keyring: null, gpus: null, gpusAt: null }),
+  } as unknown as Compute;
+  const make = (): FirstRun =>
+    new FirstRun({
+      directory: agency,
+      compute,
+      signal,
+      detect: () => Promise.resolve([]),
+      installed: () => Promise.resolve([]),
+    });
+  const setup = make();
+  assert.deepEqual((await setup.view()).money.month, {
+    spentUsd: 12.5,
+    problem: null,
+  });
+  // The page polls, so a read a few seconds old serves again.
+  const broken = join(gpu, 'bbbbbbbbbbbbbbbb.json');
+  await writeFile(broken, '{');
+  assert.deepEqual((await setup.view()).money.month, {
+    spentUsd: 12.5,
+    problem: null,
+  });
+  // A new read cannot tell the spend of a record that it cannot read, and the step says so.
+  assert.equal(
+    (await make().view()).money.month?.problem,
+    `Verifold can't read ${broken}, the GPU record of another project, so it can't tell what that project spent, and no new pod starts. If that project no longer exists, remove the file. If it does, open Verifold in that project, so it writes the file again.`,
   );
 });

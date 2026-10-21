@@ -382,6 +382,8 @@ async function fixture(
     readonly model?: (host: 'claude' | 'codex') => Promise<string | null>;
     /** The person's profile, as the owner reads it for each prompt. */
     readonly person?: () => Promise<PersonProfile | null>;
+    /** More paths that the lab's sessions and runs cannot read. */
+    readonly denyRead?: readonly string[];
   } = {},
 ): Promise<Fixture> {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-lab-')));
@@ -453,6 +455,7 @@ async function fixture(
       ...(options.compute ? { compute: options.compute } : {}),
       ...(options.model ? { model: options.model } : {}),
       ...(options.person ? { person: options.person } : {}),
+      ...(options.denyRead ? { denyRead: options.denyRead } : {}),
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
       ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
     });
@@ -1036,7 +1039,8 @@ await test('lab agents run with the strict limits and without RunPod or pod secr
   process.env.HOME = home;
   process.env.HF_TOKEN = 'hf-secret-value';
   process.env.RUNPOD_API_KEY = 'runpod-secret-value';
-  const lab = await fixture(t);
+  // A profile folder outside the default one, as --agency-dir names it.
+  const lab = await fixture(t, { denyRead: ['/custom/profile'] });
   await open(lab, [
     { title: 'Alpha', harness: 'claude' },
     { title: 'Beta', harness: 'codex' },
@@ -1062,6 +1066,11 @@ await test('lab agents run with the strict limits and without RunPod or pod secr
     sandbox: { filesystem: { denyRead: string[] } };
   };
   assert.ok(settings.sandbox.filesystem.denyRead.includes('~/.ssh'));
+  // The person's profile is closed to the agents: the default folder, and one that --agency-dir names.
+  assert.ok(
+    settings.sandbox.filesystem.denyRead.includes('~/.verifold/agency'),
+  );
+  assert.ok(settings.sandbox.filesystem.denyRead.includes('/custom/profile'));
   const thread = (
     (await lab.lines('d-2-beta', 'threads.jsonl')) as {
       params: {
@@ -1081,6 +1090,12 @@ await test('lab agents run with the strict limits and without RunPod or pod secr
     thread?.config.permissions['verifold-strict']?.filesystem['~/.ssh'],
     'deny',
   );
+  for (const path of ['~/.verifold/agency', '/custom/profile'])
+    assert.equal(
+      thread?.config.permissions['verifold-strict']?.filesystem[path],
+      'deny',
+      path,
+    );
   assert.equal(thread?.cwd, join(lab.root, '.verifold/workspaces/d-2-beta'));
   // Codex searches the live web, not only the index that OpenAI keeps.
   const codexArgs = JSON.parse(

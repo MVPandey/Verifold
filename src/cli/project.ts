@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Workspace } from '../core/contracts.ts';
 import type { Profile } from '../core/profile.ts';
-import { changeWorkspace, loadWorkspace } from '../core/storage.ts';
+import { changeWorkspace, loadWorkspace, missing } from '../core/storage.ts';
 import { writeComputeSettings, type ComputeSettings } from '../core/compute.ts';
 
 const folders = {
@@ -39,10 +39,6 @@ export function homeShown(path: string): string {
   return path === home || path.startsWith(`${home}/`)
     ? `~${path.slice(home.length)}`
     : path;
-}
-
-function missing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 /** Reject redirected project roots and conflicting artifacts before initialization. */

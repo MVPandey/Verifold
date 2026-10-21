@@ -577,6 +577,7 @@ export class Lab {
     this.board = new Board(root);
     this.ledger = new RunLedger(root, {
       sandbox: options.sandbox === undefined ? localSandbox() : options.sandbox,
+      ...(options.denyRead ? { denyRead: options.denyRead } : {}),
       ...(options.compute ? { pods: options.compute.podRuns() } : {}),
       serial: (work) => this.serial(work),
       ended: (run) => this.runEnded(run),
@@ -5602,7 +5603,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         cwd: join(this.root, workspace.path),
         agent: check.agent,
         tools: this.checkTools(id, generation),
-        denyRead: denied.harness,
+        denyRead: [...(this.options.denyRead ?? []), ...denied.harness],
       });
       await this.changeCheck(id, (entry) =>
         entry.generation === generation && entry.session === null
@@ -7617,6 +7618,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           agent: id,
           tools,
           ...(network.length ? { network } : {}),
+          ...(this.options.denyRead?.length
+            ? { denyRead: this.options.denyRead }
+            : {}),
         });
         // The new thread has the current tools. Only a start that worked says
         // so. A new conversation drops the notes about the earlier one, such

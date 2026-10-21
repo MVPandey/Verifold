@@ -287,6 +287,8 @@ await test("a start makes the project from the profile, and the Ask page's own c
   ) as { limitUsd: number | null; gpuTypes: string[] };
   assert.equal(limits.limitUsd, 30);
   assert.deepEqual(limits.gpuTypes, ['NVIDIA L40S']);
+  // The monthly limit stays in the profile: each check reads it there.
+  assert.equal('monthUsd' in limits, false);
   // One start only, and the page's next read says that it went through.
   await assert.rejects(
     first.start.act({ question: 'Again?' }),

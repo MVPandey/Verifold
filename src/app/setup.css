@@ -580,6 +580,12 @@
   color: var(--ink);
 }
 
+.limit__note {
+  flex: 1 1 100%;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .limits__unread {
   margin: 0;
 }

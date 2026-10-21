@@ -400,6 +400,38 @@ await test('step 4 asks for a key without one, and with one shows the prices wit
   assert.match(priced, /aria-label="Allow L40S" checked=""/);
   assert.match(priced, /value="25"/);
   assert.match(priced, /value="15"/);
+  // The monthly limit across projects: empty for none, with this month's spend under it.
+  assert.match(
+    shown,
+    /All projects together, each month \$ Nothing spent this month\. Leave it empty for no monthly limit\. Two projects that rent at the same moment can go over it by one pod’s cost\. Verifold then stops their pods\./,
+  );
+  const monthly = step({
+    limits: { ...view().money.limits, monthUsd: 100 },
+    month: { spentUsd: 37.2 },
+  });
+  assert.match(monthly, /value="100"/);
+  assert.match(monthly, /aria-describedby="[^"]+"/);
+  assert.match(
+    monthly.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '),
+    /Spent so far this month: \$37\.20\. Leave it empty/,
+  );
+  // When Verifold cannot tell the month's spend, the step says why instead of a figure.
+  const unknown = step({
+    limits: { ...view().money.limits, monthUsd: 100 },
+    month: {
+      spentUsd: 0,
+      problem:
+        "Verifold can't read /p/gpu/a.json, the GPU record of another project.",
+    },
+  })
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#x27;/g, "'")
+    .replace(/\s+/g, ' ');
+  assert.match(
+    unknown,
+    /Verifold can't read \/p\/gpu\/a\.json, the GPU record of another project\. Leave it empty/,
+  );
+  assert.doesNotMatch(unknown, /Nothing spent this month/);
   assert.match(
     shown,
     /Claude and Codex usage comes out of your plans\. Each project shows what Claude Code estimates its work cost\. When a plan’s usage limit runs out, the agents on it wait until it resets\./,
