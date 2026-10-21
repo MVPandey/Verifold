@@ -1,4 +1,8 @@
 import { randomBytes } from 'node:crypto';
+import {
+  parseCoordinator,
+  type CoordinatorAction,
+} from '../core/team-records.ts';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Workspace } from '../core/contracts.ts';
@@ -40,6 +44,8 @@ import { scratch } from '../core/workspaces.ts';
  * digest. A pause between events costs nothing.
  */
 
+export type { CoordinatorAction };
+
 export const coordinatorLimits = {
   /** Tasks that one coordinator can create. */
   tasks: 12,
@@ -54,18 +60,6 @@ export const coordinatorLimits = {
 };
 
 export type CoordinatorEvent = QueuedEvent<TaskEvent>;
-
-/** One tool call of the coordinator, with its reason and Verifold's answer. */
-export interface CoordinatorAction {
-  /** The harness's call ID. A repeated call gets the same answer and changes nothing. */
-  readonly key: string;
-  readonly at: string;
-  readonly tool: string;
-  readonly input: string;
-  readonly reason?: string;
-  readonly ok: boolean;
-  readonly result: string;
-}
 
 export interface CoordinatorState {
   readonly schemaVersion: 1;
@@ -246,19 +240,10 @@ export class Coordinator {
     try {
       const stats = await lstat(this.file);
       if (!stats.isFile() || stats.size > 4_000_000) return;
-      const value = object(JSON.parse(await readFile(this.file, 'utf8')));
-      if (
-        value.schemaVersion === 1 &&
-        typeof value.objective === 'string' &&
-        (value.host === 'claude' || value.host === 'codex') &&
-        Array.isArray(value.events) &&
-        Array.isArray(value.actions) &&
-        Array.isArray(value.wakeups) &&
-        typeof value.cursor === 'number' &&
-        typeof value.created === 'number' &&
-        typeof value.planApproved === 'boolean'
-      )
-        this.state = value as unknown as CoordinatorState;
+      const value = parseCoordinator(
+        JSON.parse(await readFile(this.file, 'utf8')),
+      );
+      if (value) this.state = value as unknown as CoordinatorState;
     } catch {
       /* No coordinator yet, or an unreadable record. */
     }
