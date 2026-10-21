@@ -25,7 +25,14 @@ import {
 import { isTurnDetail, isTurnPage, load, paths } from '../src/app/api.ts';
 import { clock, modelName } from '../src/app/format.ts';
 import { href, parseRoute } from '../src/app/route.ts';
-import { byIndex, byStart, filled, joinTurns, meet } from '../src/app/turns.ts';
+import {
+  byIndex,
+  byStart,
+  filled,
+  joinTurns,
+  meet,
+  runPlace,
+} from '../src/app/turns.ts';
 import { agentActions } from '../src/app/actions.ts';
 import { Screen } from '../src/app/App.tsx';
 import { runLabel } from '../src/app/components/RunChip.tsx';
@@ -309,6 +316,7 @@ const agentStub: AgentActions = {
   message: () => Promise.resolve({ ok: true }),
   turns: () => Promise.resolve({ error: 'not in this test' }),
   turn: () => Promise.resolve({ error: 'not in this test' }),
+  thread: () => Promise.resolve({ error: 'not in this test' }),
 };
 
 function render(
@@ -378,12 +386,21 @@ await test('routes: a direction, one of its turns, and turn IDs that need encodi
     direction: 'd-2',
     turn: id,
   });
+  // A run opens on its direction's page.
+  assert.equal(href.run('d-2', 'r-3'), '#/d/d-2/run/r-3');
+  assert.deepEqual(parseRoute('#/d/d-2/run/r-3'), {
+    page: 'direction',
+    direction: 'd-2',
+    run: 'r-3',
+  });
   for (const hash of [
     '#/d/d-2/turn/not-a-turn',
     '#/d/d-2/turn/%E0%A4%A',
     '#/d/d-2/turn/',
     '#/d/../turn/0a1b2c3d.t1',
     '#/d/d-2/turns/0a1b2c3d.t1',
+    '#/d/d-2/run/p-3',
+    '#/d/d-2/run/r-0',
   ])
     assert.deepEqual(parseRoute(hash), { page: 'unknown' }, hash);
 });
@@ -684,6 +701,38 @@ await test('the direction page of a working agent, of one without turns, of a pa
     text(render(story(), '#/d/d-9')),
     /This direction is not in the lab/,
   );
+});
+
+await test('a run link opens its direction with the run marked, says when the page does not show the run, and says when a large lab leaves the direction out', () => {
+  // claude-2's second turn started r-3 and r-7.
+  const marked = render(story(), href.run('d-2', 'r-3'));
+  assert.match(
+    marked,
+    /<span id="run-r-3" tabindex="-1" class="proof proof--target">Run r-3<\/span>/,
+  );
+  assert.match(marked, /<span id="run-r-7" tabindex="-1" class="proof">/);
+  assert.doesNotMatch(text(marked), /is not in/);
+  // A run in a turn that the page has not read yet: the page says where to look.
+  assert.match(
+    text(render(story(), href.run('d-2', 'r-12'))),
+    /Run r-12 is not in the turns on this page\. It may be in an older turn\. Show older turns/,
+  );
+  // An agent with no older turns: the run is not in them.
+  assert.match(
+    text(render(story(), href.run('d-3', 'r-12'))),
+    /Run r-12 is not in codex-1's turns\./,
+  );
+  assert.equal(runPlace('r-3', turns, false), 'shown');
+  assert.equal(runPlace('r-12', turns, true), 'older');
+  assert.equal(runPlace('r-12', turns, false), 'absent');
+  // A direction that this view of a large lab leaves out says so, with the way back.
+  const out = render(
+    story({ omitted: { directions: 40 } }),
+    href.run('d-40', 'r-3'),
+  );
+  assert.match(text(out), /This view of a large lab leaves out this direction/);
+  assert.match(out, /<a href="#\/">Back to the lab<\/a>/);
+  assert.doesNotMatch(text(out), /not in the lab/);
 });
 
 await test('the turn page shows the turn from the snapshot while its steps load, with a way back', () => {

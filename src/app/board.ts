@@ -1,9 +1,26 @@
-import type { Post } from '../protocol/api.ts';
+import type { Lab, Post } from '../protocol/api.ts';
+import { onBoard } from './call.ts';
+import { href } from './route.ts';
 
 export interface Thread {
   readonly root: Post;
   /** Every reply below the root, at any depth, oldest first. */
   readonly replies: readonly Post[];
+}
+
+/**
+ * Where a link to a post on the lab home's board (`#/board/<id>`) leads:
+ * the post, brought into view, and then the lab home's own address, so a
+ * later change does not bring it back. A post that the board leaves out,
+ * as after a smaller snapshot, opens on its own page instead.
+ */
+export function boardLink(
+  lab: Lab,
+  post: string,
+): { readonly show: string | null; readonly route: string } {
+  return onBoard(lab, post)
+    ? { show: post, route: href.lab }
+    : { show: null, route: href.post(post) };
 }
 
 /**

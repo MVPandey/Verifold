@@ -19,8 +19,15 @@ import {
   type Artifact,
   type Post as BoardPost,
 } from '../core/board.ts';
+import {
+  awayCounts,
+  awayLines,
+  awayNews,
+  type Away as LabAway,
+} from '../core/away.ts';
 import { labGpu, type ComputeView } from '../core/compute.ts';
 import { openDisputes } from '../core/disputes.ts';
+import { authorName, callWords, kindLabel } from '../core/lab-words.ts';
 import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
 import {
@@ -35,7 +42,16 @@ import {
   type Direction as LabDirection,
   type LabView,
 } from '../core/lab.ts';
-import type { RunRecord } from '../core/runs.ts';
+import { runSummary, type RunRecord } from '../core/runs.ts';
+import {
+  callSearchText,
+  callState,
+  searchLab,
+  searchLimit,
+  searchNote,
+  searchWords,
+  snippetParts,
+} from '../core/search.ts';
 import {
   SessionActionError,
   sessionTranscript,
@@ -45,6 +61,7 @@ import { TranscriptFile, type TranscriptEntry } from '../core/transcript.ts';
 import { workspaceName } from '../core/workspaces.ts';
 import {
   protocolVersion,
+  searchQueryLimit,
   turnIdPattern,
   type ActionName,
   type Agent,
@@ -63,8 +80,11 @@ import {
   type Lab,
   type LabList,
   type Post,
+  type PostThread,
   type Proof,
   type Run,
+  type SearchHit,
+  type SearchResult,
   type Step,
   type Text,
   type Turn,
@@ -76,15 +96,15 @@ import { readJsonBody, record } from './http.ts';
 /**
  * The desk API, version 1, under /api/v1/: a snapshot of what the screens
  * show, a stream that sends it again when it changes, pages of the board, of
- * an agent's turns, and of a turn's steps, and actions. The desk's host,
- * origin, and token checks run before any of it. See src/protocol/api.ts for
- * the shapes.
+ * an agent's turns, and of a turn's steps, a post's thread, the search, and
+ * actions. The desk's host, origin, and token checks run before any of it.
+ * See src/protocol/api.ts for the shapes.
  */
 
 export const apiLimits = {
   /** Bytes of one snapshot. A bigger lab gets fewer items and characters. */
   snapshot: 512 * 1024,
-  /** Posts in a snapshot and in one page of the board. */
+  /** Posts in a snapshot, in one page of the board, and in one post's thread. */
   posts: 50,
   /** An agent's turns in a snapshot and in one page of turns. */
   turns: 20,
@@ -127,6 +147,8 @@ export const apiLimits = {
   bringGroups: 20,
   /** Paths of one bring-in in a bring-in read. */
   bringPaths: 50,
+  /** IDs in each list of the snapshot's `notify`, which no level cuts. */
+  notify: 300,
 };
 
 /** How many items of each list a snapshot keeps, and how much of each message. */
@@ -234,10 +256,7 @@ export interface ApiSources {
   readonly session: (id: string) => SessionView | null;
   readonly works: readonly Work[];
   /** When the person left the lab, and the two costs then. */
-  readonly away: () => Promise<{
-    readonly since: string;
-    readonly spent: { readonly claude: number; readonly gpu: number };
-  } | null>;
+  readonly away: () => Promise<LabAway | null>;
   /** The desk's bring-in reads, when it runs a lab. */
   readonly bring?: BringSource | undefined;
 }
@@ -284,6 +303,9 @@ interface Loaded {
   readonly view: LabView;
   readonly agents: readonly AgentRef[];
   readonly compute: ComputeView | null;
+  /** The lab's GPU spend and limit. Null without pods to read. */
+  readonly gpu: ReturnType<typeof labGpu> | null;
+  readonly disputes: ReturnType<typeof openDisputes>;
   readonly works: readonly Work[];
   readonly away: Lab['away'];
   readonly turns: ReadonlyMap<string, readonly ActivityTurn[]>;
@@ -631,16 +653,22 @@ function broughtByDirection(
   return counts;
 }
 
+/** The lab's directions that hold up and that are ruled out, from one scan that the counts and the notify lists share. */
+interface Settled {
+  readonly holdsUp: readonly LabDirection[];
+  readonly ruledOut: readonly LabDirection[];
+}
+
 /** The lab's directions counted over all of them. Still open: open, with no verdict or a disputed one. */
 function directionCounts(
   directions: readonly LabDirection[],
+  settled: Settled,
   disputed: (entry: LabDirection) => boolean,
 ): DirectionCounts {
   return {
     total: directions.length,
-    holdsUp: directions.filter((entry) => entry.verdict === 'holds-up').length,
-    ruledOut: directions.filter((entry) => entry.verdict === 'ruled-out')
-      .length,
+    holdsUp: settled.holdsUp.length,
+    ruledOut: settled.ruledOut.length,
     open: directions.filter(
       (entry) =>
         entry.state === 'open' && (entry.verdict === 'open' || disputed(entry)),
@@ -721,6 +749,38 @@ function post(entry: BoardPost, handle: (agent: string) => string): Post {
   };
 }
 
+/**
+ * The time away, with the news since then in the words of the desk's Home
+ * (core/away.ts): the first directions with news, how many more, what came,
+ * and what the lab spent. `gpu`: the GPU spend, or null without pods to read.
+ */
+function awayOf(
+  view: LabView,
+  away: LabAway,
+  gpu: number | null,
+  disputes: Loaded['disputes'],
+): NonNullable<Lab['away']> {
+  const news = awayNews(
+    view,
+    away,
+    gpu,
+    new Set(disputes.map((dispute) => dispute.target.id)),
+  );
+  return {
+    since: away.since,
+    spentThen: {
+      plansUsd: cents(away.spent.claude),
+      gpuUsd: cents(away.spent.gpu),
+    },
+    news: {
+      lines: news.lines.slice(0, awayLines),
+      moreLines: Math.max(0, news.lines.length - awayLines),
+      counts: awayCounts(news, (id) => id),
+      cost: news.cost,
+    },
+  };
+}
+
 /** The page of posts before post number `before`, or the newest page. Oldest first. */
 function boardPage(
   posts: readonly BoardPost[],
@@ -785,7 +845,7 @@ function check(entry: LabCheck): CheckItem {
 
 /** The lab as the screens show it, within one level. */
 function shapeLab(loaded: Loaded, level: Level): Lab {
-  const { view } = loaded;
+  const { view, disputes } = loaded;
   const { state } = view;
   const proof = proofIndex(view);
   const omitted: Partial<Record<LabList, number>> = {};
@@ -802,20 +862,23 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     return newest ? list.slice(-max) : list.slice(0, max);
   };
   const handle = (agent: string): string => view.handles[agent] ?? agent;
-  const disputes = openDisputes(view);
   const disputed = (entry: LabDirection): boolean =>
     disputes.some(
       ({ target }) =>
         target.direction === entry.id || target.id === entry.evidence?.post,
     );
-  const gpu = loaded.compute
-    ? labGpu(loaded.compute, state.startedAt)
-    : { spent: 0, limit: null };
+  const gpu = loaded.gpu ?? { spent: 0, limit: null };
   const stored = loaded.compute
     ? new Set(loaded.compute.secrets.map((secret) => secret.name))
     : null;
   const waiting = (entry: LabCall): boolean =>
     entry.state === 'open' || entry.state === 'undoing';
+  const settled: Settled = {
+    holdsUp: state.directions.filter((entry) => entry.verdict === 'holds-up'),
+    ruledOut: state.directions.filter((entry) => entry.verdict === 'ruled-out'),
+  };
+  const newest = (list: readonly { readonly id: string }[]): string[] =>
+    list.slice(-apiLimits.notify).map((entry) => entry.id);
   const agents: Agent[] = keep(loaded.agents, level.agents, 'agents').map(
     (ref) => {
       const turns = loaded.turns.get(ref.id) ?? [];
@@ -888,7 +951,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         brought.get(entry.id),
       ),
     ),
-    directionCounts: directionCounts(state.directions, disputed),
+    directionCounts: directionCounts(state.directions, settled, disputed),
     agents,
     plan:
       plan && level.whole
@@ -940,6 +1003,11 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     })),
     away: loaded.away,
     omitted,
+    notify: {
+      calls: newest(state.calls.filter(waiting)),
+      holdsUp: newest(settled.holdsUp),
+      ruledOut: newest(settled.ruledOut),
+    },
   };
 }
 
@@ -1153,20 +1221,17 @@ export class ApiReader {
       if (reported) models.set(agent.id, reported);
     }
     const away = view.runs ? await sources.away() : null;
+    const compute = sources.compute?.view() ?? null;
+    const gpu = compute ? labGpu(compute, view.state.startedAt) : null;
+    const disputes = openDisputes(view);
     return {
       view,
       agents,
-      compute: sources.compute?.view() ?? null,
+      compute,
+      gpu,
+      disputes,
       works: sources.works,
-      away: away
-        ? {
-            since: away.since,
-            spentThen: {
-              plansUsd: cents(away.spent.claude),
-              gpuUsd: cents(away.spent.gpu),
-            },
-          }
-        : null,
+      away: away ? awayOf(view, away, gpu?.spent ?? null, disputes) : null,
       turns,
       models,
     };
@@ -1207,6 +1272,104 @@ export class ApiReader {
       (agent) => view.handles[agent] ?? agent,
       before,
     );
+  }
+
+  /**
+   * A post and the replies below it at any depth, oldest first, as the lab's
+   * agents read a thread: at most `apiLimits.posts` posts. Null without a
+   * lab, or when the lab has no such post.
+   */
+  thread(id: string): PostThread | null {
+    const view = this.sources().lab?.view();
+    const root = view?.posts.find((entry) => entry.id === id);
+    if (!view || !root) return null;
+    // A reply always comes after the post that it answers, so one pass finds every depth.
+    const below = new Set([root.id]);
+    const replies: BoardPost[] = [];
+    for (const entry of view.posts)
+      if (entry.replyTo && below.has(entry.replyTo)) {
+        below.add(entry.id);
+        replies.push(entry);
+      }
+    const room = apiLimits.posts - 1;
+    const handle = (agent: string): string => view.handles[agent] ?? agent;
+    return {
+      posts: [root, ...replies.slice(0, room)].map((entry) =>
+        post(entry, handle),
+      ),
+      more: replies.length > room,
+    };
+  }
+
+  /**
+   * The lab's search (core/search.ts), as the desk's panel runs it: the
+   * newest hits with their marked snippets. A call hit carries its question
+   * and answer, so a page that does not hold the call can still show it.
+   * Null without a lab.
+   */
+  search(q: string): SearchResult | null {
+    const view = this.sources().lab?.view();
+    if (!view) return null;
+    const words = searchWords(q);
+    const found = words ? searchLab(view, words) : [];
+    const hits = !words
+      ? []
+      : found.slice(0, searchLimit).map((entry): SearchHit => {
+          if ('post' in entry) {
+            const { post } = entry;
+            return {
+              type: 'post',
+              id: post.id,
+              at: post.at,
+              kind: post.kind,
+              label: kindLabel(post),
+              author: authorName(view, post.author),
+              direction: post.direction ?? null,
+              snippet: snippetParts(post.text, words.any),
+            };
+          }
+          if ('run' in entry) {
+            const { run, at } = entry;
+            return {
+              type: 'run',
+              id: run.id,
+              at,
+              author: authorName(view, run.agent),
+              direction: run.direction,
+              summary: runSummary(run),
+              snippet: snippetParts(run.command, words.any),
+            };
+          }
+          const { call } = entry;
+          const chosen = call.answer
+            ? call.options[call.answer.option]?.label
+            : undefined;
+          return {
+            type: 'call',
+            id: call.id,
+            at: call.at,
+            label: callWords[call.kind],
+            author: authorName(view, call.by),
+            state: call.state,
+            summary: callState(call),
+            question: call.question,
+            // Words on Verifold's own open call go to the lab, and only an option answers it.
+            answer:
+              call.answer && chosen !== undefined
+                ? { option: chosen, at: call.answer.at }
+                : call.words !== null && call.state !== 'open'
+                  ? { words: call.words }
+                  : null,
+            note: call.note,
+            snippet: snippetParts(callSearchText(call), words.any),
+          };
+        });
+    return {
+      q,
+      note: searchNote(words, found.length),
+      total: found.length,
+      hits,
+    };
   }
 
   /** Any agent of the lab, with its turns and the lab's view. Null when the lab has no such agent. */
@@ -1503,6 +1666,7 @@ const actionNames = new Set<string>([
   'lab-bring',
   'lab-dismiss',
   'lab-away-dismiss',
+  'lab-look',
 ] satisfies ActionName[]);
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -1583,6 +1747,32 @@ export async function answerApi(
   }
   if (first === 'events' && parts.length === 1 && !keys.length) {
     if (!(await feed.open(request, response))) response.writeHead(503).end();
+    return;
+  }
+  if (
+    first === 'search' &&
+    parts.length === 1 &&
+    keys.length <= 1 &&
+    keys.every((key) => key === 'q')
+  ) {
+    const q = url.searchParams.get('q') ?? '';
+    if (q.length > searchQueryLimit) {
+      response.writeHead(400).end();
+      return;
+    }
+    const result = reader.search(q);
+    if (result) json(response, 200, result);
+    else response.writeHead(404).end();
+    return;
+  }
+  if (first === 'posts' && parts.length === 2 && !keys.length) {
+    if (!second || !postId.test(second)) {
+      response.writeHead(400).end();
+      return;
+    }
+    const thread = reader.thread(second);
+    if (thread) json(response, 200, thread);
+    else response.writeHead(404).end();
     return;
   }
   if (first === 'board' && parts.length === 1 && onlyBefore) {

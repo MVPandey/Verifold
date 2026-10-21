@@ -112,3 +112,22 @@ export function Up(): ReactNode {
     </Icon>
   );
 }
+
+/** A direction that opened while the person was away. */
+export function Plus(): ReactNode {
+  return (
+    <Icon size={15} width={2.6}>
+      <path d="M12 5v14M5 12h14" />
+    </Icon>
+  );
+}
+
+/** The search button's magnifier, from the v9 header. */
+export function Magnifier(): ReactNode {
+  return (
+    <Icon size={16} width={2}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-4-4" />
+    </Icon>
+  );
+}

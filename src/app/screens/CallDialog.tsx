@@ -27,9 +27,10 @@ import {
 } from '../call.ts';
 import { andList } from '../../ui/call-words.ts';
 import { asked, since, usd } from '../format.ts';
-import { href } from '../route.ts';
+import { href, replaceRoute } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { AnswerLine } from '../components/AnswerLine.tsx';
+import { showPost } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { Cross } from '../components/Icons.tsx';
 import type { LabActions } from './LabHome.tsx';
@@ -44,20 +45,7 @@ function goHome(): void {
     history.back();
     return;
   }
-  history.replaceState(
-    null,
-    '',
-    `${location.pathname}${location.search}${href.lab}`,
-  );
-  dispatchEvent(new HashChangeEvent('hashchange'));
-}
-
-/** Bring a post of the board into view and give it focus, after the dialog has gone. */
-function showPost(post: string): void {
-  const element = document.getElementById(`post-${post}`);
-  if (!element) return;
-  element.scrollIntoView({ block: 'center' });
-  element.focus({ preventScroll: true });
+  replaceRoute(href.lab);
 }
 
 /** What the call rests on: the money spent so far, and the facts that the plan checked. */

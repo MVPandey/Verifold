@@ -295,6 +295,7 @@ const agentActions: AgentActions = {
   message: () => Promise.resolve({ ok: true }),
   turns: () => Promise.resolve({ error: 'not in this test' }),
   turn: () => Promise.resolve({ error: 'not in this test' }),
+  thread: () => Promise.resolve({ error: 'not in this test' }),
 };
 
 function render(
@@ -689,6 +690,8 @@ await test('routes: the pages that later steps build, and pages that do not exis
     direction: 'd-2',
   });
   assert.deepEqual(parseRoute('#/call/c-4'), { page: 'call', id: 'c-4' });
+  assert.deepEqual(parseRoute('#/post/p-12'), { page: 'post', id: 'p-12' });
+  assert.deepEqual(parseRoute('#/board/p-12'), { page: 'lab', post: 'p-12' });
   assert.deepEqual(parseRoute('#/answer'), { page: 'answer' });
   assert.deepEqual(parseRoute('#/first-run'), { page: 'first-run' });
   for (const hash of [
@@ -696,6 +699,10 @@ await test('routes: the pages that later steps build, and pages that do not exis
     '#/search',
     '#/projects',
     '#/run/r-3',
+    '#/post/p-0',
+    '#/post/c-1',
+    '#/board/p-0',
+    '#/board/',
     '#/nope',
   ])
     assert.deepEqual(parseRoute(hash), { page: 'unknown' }, hash);

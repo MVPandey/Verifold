@@ -5,6 +5,8 @@ import './app.css';
 import './call.css';
 import './direction.css';
 import './answer.css';
+import './away.css';
+import './search.css';
 import { takeToken } from './api.ts';
 import { App } from './App.tsx';
 import { LabStore } from './store.ts';

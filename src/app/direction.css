@@ -193,6 +193,13 @@
   gap: 8px;
 }
 
+/* A run that a link named, such as a search hit. */
+.proof--target {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
 /* The agent now */
 .live {
   display: flex;
