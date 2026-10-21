@@ -182,7 +182,7 @@ function TurnProof({
  * ends, its output grows, or text arrives. A failed read keeps what the fold
  * shows, with a note.
  */
-function TurnItem({
+export function TurnItem({
   turn,
   agent,
   direction,

@@ -2183,6 +2183,46 @@ export class Lab {
     return agent ? this.saveAgent(change(agent)) : Promise.resolve();
   }
 
+  /**
+   * The open scope calls that the planner asked before the plan of record,
+   * oldest first. The person answers them together, or skips them.
+   */
+  private planQuestions(state: LabState): Call[] {
+    const opener = state.opener;
+    return state.plan || !opener
+      ? []
+      : state.calls.filter(
+          (call) =>
+            call.state === 'open' &&
+            call.kind === 'scope' &&
+            askers(call).includes(opener),
+        );
+  }
+
+  /**
+   * Before the plan of record, the planner waits for all its questions: an
+   * answer to one of them does not wake it while another one waits, or while
+   * Verifold still applies an answer, whose line has not reached it yet. A
+   * post of the person for it wakes it all the same.
+   */
+  private waitsForAnswers(agent: AgentRecord): boolean {
+    const state = this.state;
+    if (!state || state.plan || state.opener !== agent.id) return false;
+    return (
+      state.calls.some(
+        (call) =>
+          call.kind === 'scope' &&
+          askers(call).includes(agent.id) &&
+          (call.state === 'open' ||
+            call.state === 'undoing' ||
+            this.applying.has(call.id)),
+      ) &&
+      !agent.events.some(
+        (event) => event.seq > agent.cursor && event.kind === 'person',
+      )
+    );
+  }
+
   private loop(id: string): WakeLoop<LabEvent, AgentRecord> {
     let loop = this.loops.get(id);
     if (loop) return loop;
@@ -2200,6 +2240,7 @@ export class Lab {
           agent.session !== null &&
           !this.runtimes.get(agent.id)?.parking &&
           !this.holdsTerminal(agent.id) &&
+          !this.waitsForAnswers(agent) &&
           this.options.sessions.idle(agent.session),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         // The profile as it is now, so a changed "Talk to me" comes with this digest.
@@ -2391,7 +2432,7 @@ ${restrictions(agent.host, null, "direction's folder")
   .map((line) => `- ${line}`)
   .join('\n')}
 
-${planning ? 'Start now: read the question and the project, then post the plan of record with verifold_plan in this turn.' : 'Start now: plan the next step of your direction, do it, and post what you find.'}`;
+${planning ? 'Start now: read the question and the project, and check the facts. Then post the plan of record with verifold_plan in this turn, or ask the person your questions first.' : 'Start now: plan the next step of your direction, do it, and post what you find.'}`;
   }
 
   /** The tools of one launch of an agent's session. A call from an older launch changes nothing. */
@@ -2731,6 +2772,10 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           ? callLimits.defaultUndo
           : whole(args.undoMinutes, 0, callLimits.undoMinutes, 'undoMinutes'),
     };
+    const facts =
+      args.facts === undefined
+        ? []
+        : planFacts(args.facts, new Date().toISOString());
     const team = options.some((option) => option.effect?.type === 'open')
       ? await this.team()
       : [];
@@ -2781,6 +2826,16 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
             'This lab has no time budget, so more hours change nothing. Give the options without hours.',
           );
       }
+      // Before the plan of record, the planner's questions change the plan, and the plan opens the directions.
+      if (
+        kind === 'scope' &&
+        !state.plan &&
+        state.opener === agent.id &&
+        priced.some((option) => option.effect)
+      )
+        fail(
+          'Before the plan, a scope call asks about what changes the plan. Give the options without effects: your plan opens the directions.',
+        );
       // A call that asks what an open call asks already joins it, so the person answers once.
       const same = this.sameOpenCall({ kind, need, options: priced });
       if (same) {
@@ -2799,6 +2854,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         options: priced,
         deadline: null,
         ...draft,
+        ...(facts.length ? { facts } : {}),
       });
       return { call, joined: false };
     });
@@ -2957,6 +3013,7 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
       | 'why'
       | 'undoMinutes'
       | 'deadline'
+      | 'facts'
     >,
   ): Promise<Call> {
     const state = this.current();
@@ -3150,13 +3207,18 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         fail(
           'The lab is paused, so no pod starts now. Resume the lab or give it more time, then answer.',
         );
-      await this.changeCall(call.id, (entry) => ({
-        ...entry,
-        state: 'answered',
-        answer: { option: picked, at: new Date().toISOString() },
-      }));
-      // Known in the same step as the answer, so no tick finds it unapplied meanwhile.
+      // Known before the answer is in memory, so no tick and no wakeup finds it unapplied meanwhile.
       this.applying.add(call.id);
+      try {
+        await this.changeCall(call.id, (entry) => ({
+          ...entry,
+          state: 'answered',
+          answer: { option: picked, at: new Date().toISOString() },
+        }));
+      } catch (error) {
+        this.applying.delete(call.id);
+        throw error;
+      }
       return { call, picked };
     });
     try {
@@ -3196,11 +3258,18 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
         await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
         return;
       }
-      await this.changeCall(call.id, (entry) => ({
-        ...entry,
-        state: 'answered',
-        words: body,
-      }));
+      // Until the askers hear the words, the answer counts as one that Verifold applies: a planner that waits for it stays asleep.
+      this.applying.add(call.id);
+      try {
+        await this.changeCall(call.id, (entry) => ({
+          ...entry,
+          state: 'answered',
+          words: body,
+        }));
+      } catch (error) {
+        this.applying.delete(call.id);
+        throw error;
+      }
       // The record of the answer on the board. A full board refuses it; the call keeps the words.
       if (call.post)
         await this.add({
@@ -3223,11 +3292,146 @@ ${planning ? 'Start now: read the question and the project, then post the plan o
           mentions: [],
           artifacts: [],
         }).catch(() => {});
+      this.applying.delete(call.id);
       this.wakeAskers(
         call,
         `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(body)}. This is their decision: follow it, or ask again with new options when it is unclear.`,
       );
     });
+  }
+
+  /**
+   * The person answers the planner's questions before the plan, together:
+   * each with an option or in their own words. A question that the list
+   * leaves out stays open. See `settleQuestions`.
+   */
+  async answerQuestions(answers: unknown): Promise<void> {
+    await this.serial(async () => {
+      const open = this.planQuestions(this.current());
+      const list =
+        Array.isArray(answers) &&
+        answers.length >= 1 &&
+        answers.length <= callLimits.open
+          ? answers
+          : fail(`Answer 1 to ${callLimits.open} of the planner's questions.`);
+      const settled = list.map((value) => {
+        const entry = object(value) ?? fail('Give each answer as an object.');
+        const call =
+          open.find((item) => item.id === entry.call) ??
+          fail(
+            `${typeof entry.call === 'string' ? entry.call : 'That call'} is not a question of the planner that waits for you.`,
+          );
+        if (
+          entry.words !== undefined &&
+          entry.words !== null &&
+          entry.words !== ''
+        )
+          return {
+            call,
+            words: text(entry.words, callLimits.words, 'your answer'),
+            option: null,
+          };
+        return {
+          call,
+          words: null,
+          option: whole(entry.option, 0, call.options.length - 1, 'option'),
+        };
+      });
+      if (new Set(settled.map(({ call }) => call.id)).size !== settled.length)
+        fail('Answer each question once.');
+      await this.settleQuestions(settled, false);
+    });
+  }
+
+  /** The person skips the planner's questions before the plan: each one takes the planner's pick. See `settleQuestions`. */
+  async skipQuestions(): Promise<void> {
+    await this.serial(async () => {
+      const open = this.planQuestions(this.current());
+      if (!open.length) fail('The planner has no questions that wait for you.');
+      await this.settleQuestions(
+        open.map((call) => ({ call, words: null, option: call.pick ?? 0 })),
+        true,
+      );
+    });
+  }
+
+  /**
+   * Save answers to the planner's questions in one step, write each on the
+   * board, and wake the planner once, with all of them. Before the plan, a
+   * question has no effect, so nothing else applies. An option can be
+   * undone in its window, as any answer. In the lab's queue.
+   */
+  private async settleQuestions(
+    answers: readonly {
+      readonly call: Call;
+      readonly words: string | null;
+      readonly option: number | null;
+    }[],
+    skipped: boolean,
+  ): Promise<void> {
+    const at = new Date().toISOString();
+    const state = this.current();
+    await this.saveState({
+      ...state,
+      calls: state.calls.map((entry): Call => {
+        const answer = answers.find(({ call }) => call.id === entry.id);
+        if (!answer) return entry;
+        if (answer.words !== null)
+          return { ...entry, state: 'answered', words: answer.words };
+        return {
+          ...entry,
+          state: 'answered',
+          answer: { option: answer.option ?? 0, at },
+          undoUntil:
+            entry.undoMinutes > 0
+              ? new Date(
+                  Date.parse(at) + entry.undoMinutes * 60_000,
+                ).toISOString()
+              : null,
+        };
+      }),
+    });
+    const lines: string[] = [];
+    for (const { call, words, option } of answers) {
+      if (words !== null) {
+        // The person's words are the record of the answer, in the call's thread. A full board refuses them; the call keeps them.
+        await this.add({
+          author: 'person',
+          kind: 'question',
+          ...(call.post
+            ? { replyTo: call.post }
+            : call.direction
+              ? { direction: call.direction }
+              : {}),
+          text: words,
+          mentions: [],
+          artifacts: [],
+        }).catch(() => {});
+        lines.push(
+          `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(words)}. This is their decision: follow it, or ask again with new options when it is unclear.`,
+        );
+        continue;
+      }
+      const label = JSON.stringify(call.options[option ?? 0]?.label ?? '');
+      const line = skipped
+        ? `The person skipped ${call.id}, so your pick ${label} stands.`
+        : `The person chose ${label} on ${call.id}.`;
+      await this.add({
+        author: 'verifold',
+        kind: 'status',
+        ...(call.direction ? { direction: call.direction } : {}),
+        text: clip(line, boardLimits.text),
+        mentions: [],
+        artifacts: [],
+      }).catch(() => {});
+      lines.push(line);
+    }
+    const opener = state.opener ? this.agents.get(state.opener) : undefined;
+    if (opener && this.active(opener))
+      this.loop(opener.id).add(
+        lines.map((text) => ({ kind: 'call' as const, text })),
+        0,
+      );
   }
 
   /** Apply a saved answer and record what it did. The answer is in `applying` meanwhile. */
@@ -6275,6 +6479,15 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         args.facts === undefined
           ? null
           : planFacts(args.facts, new Date().toISOString());
+      // The first plan changes nothing, so it has no line on what changed.
+      const changed =
+        first || args.changed === undefined || args.changed === ''
+          ? null
+          : text(
+              args.changed,
+              planLimits.changed,
+              'what changed from the plan before, and why',
+            );
       // From here on, no other plan starts.
       this.planning = true;
       return {
@@ -6282,6 +6495,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         reading,
         cost,
         facts,
+        changed,
         previous: state.plan?.post ?? null,
         host: agent.host,
         own: own.id,
@@ -6397,6 +6611,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
             cost: draft.cost,
             directions: order,
             facts: draft.facts ?? state.plan?.facts ?? [],
+            // A plan from before versions counts as the first.
+            version: state.plan ? (state.plan.version ?? 1) + 1 : 1,
+            ...(previous ? { previous } : {}),
+            ...(draft.changed ? { changed: draft.changed } : {}),
           },
         };
         // The plan post is on the board and the plan in memory: a failed write comes again with the next save.

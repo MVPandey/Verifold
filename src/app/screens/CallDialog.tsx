@@ -30,6 +30,7 @@ import { asked, since, usd } from '../format.ts';
 import { href, replaceRoute } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { AnswerLine } from '../components/AnswerLine.tsx';
+import { FactSource, uniqueFacts } from '../components/FactsList.tsx';
 import { showPost } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { Cross } from '../components/Icons.tsx';
@@ -48,9 +49,16 @@ function goHome(): void {
   replaceRoute(href.lab);
 }
 
-/** What the call rests on: the money spent so far, and the facts that the plan checked. */
-function Facts({ lab }: { readonly lab: Lab }): ReactNode {
+/** What the call rests on: the money spent so far, the facts that the asker checked, and those of the plan. */
+function Facts({
+  lab,
+  call,
+}: {
+  readonly lab: Lab;
+  readonly call: Call;
+}): ReactNode {
   const { money, plan } = lab;
+  const facts = uniqueFacts([...(call.facts ?? []), ...(plan?.facts ?? [])]);
   return (
     <details className="call__facts">
       <summary>Facts behind this</summary>
@@ -61,15 +69,9 @@ function Facts({ lab }: { readonly lab: Lab }): ReactNode {
             ` of the project's ${usd(money.gpuLimitUsd)} GPU limit`}
           . Plans so far: about {usd(money.plansUsd)}.
         </li>
-        {plan?.facts.map((fact, index) => (
+        {facts.map((fact, index) => (
           <li key={index}>
-            {fact.claim}{' '}
-            <span className="call__fact-source">
-              ·{' '}
-              {fact.source
-                ? `${fact.source}${fact.sourceDate ? `, ${fact.sourceDate}` : ''}`
-                : 'unverified (no source)'}
-            </span>
+            {fact.claim} <FactSource fact={fact} />
           </li>
         ))}
       </ul>
@@ -200,6 +202,9 @@ function OpenCall({
               >
                 <span className="call__option-body">
                   <b>{option.label}</b>
+                  {option.detail && (
+                    <span className="call__detail">{option.detail}</span>
+                  )}
                   {cost && <span className="call__cost">{cost}</span>}
                 </span>
                 {advised && (
@@ -221,7 +226,7 @@ function OpenCall({
           {error}
         </p>
       )}
-      <Facts lab={lab} />
+      <Facts lab={lab} call={call} />
       {call.byVerifold && call.words && (
         <p role="status" className="call__sent">
           Your words went to the lab. Pick an option to give it more time or end

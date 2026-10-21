@@ -33,6 +33,8 @@ export interface Workspace {
   readonly model?: string;
   /** The second harness of the team. The coordinator can give it tasks. The lead (`host`) runs research and the coordinator. */
   readonly helper?: 'claude' | 'codex';
+  /** The helper's model for this project. Without one, the profile's model for the helper applies. */
+  readonly helperModel?: string;
   /** How many agents may run at the same time, 1 to 8. Absent means the default, 3. */
   readonly agents?: number;
   readonly context?: string;
@@ -101,6 +103,7 @@ export function parseWorkspace(value: unknown): Workspace {
   )
     throw new Error('Selected idea is missing.');
   validateModel(data.model);
+  validateModel(data.helperModel);
   const host = string(data.host, 'host');
   const helper = (['claude', 'codex'] as const).find(
     (name) => name === data.helper && name !== host,
@@ -114,6 +117,7 @@ export function parseWorkspace(value: unknown): Workspace {
     host,
     ...(data.model ? { model: data.model } : {}),
     ...(helper ? { helper } : {}),
+    ...(helper && data.helperModel ? { helperModel: data.helperModel } : {}),
     ...(data.agents === undefined ? {} : { agents: data.agents }),
     ...(data.context === undefined
       ? {}

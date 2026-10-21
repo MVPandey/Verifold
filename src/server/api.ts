@@ -42,6 +42,7 @@ import {
   type Direction as LabDirection,
   type LabView,
 } from '../core/lab.ts';
+import type { PlanFact } from '../core/lab/schema.ts';
 import { runSummary, type RunRecord } from '../core/runs.ts';
 import {
   callSearchText,
@@ -76,6 +77,7 @@ import {
   type Direction,
   type DirectionCounts,
   type Effect,
+  type Fact,
   type FileDiff,
   type Lab,
   type LabList,
@@ -85,6 +87,7 @@ import {
   type Run,
   type SearchHit,
   type SearchResult,
+  type StartView,
   type Step,
   type Text,
   type Turn,
@@ -594,6 +597,7 @@ function call(
 ): Call {
   const options: CallOption[] = entry.options.map((option) => ({
     label: option.label,
+    ...(option.detail ? { detail: option.detail } : {}),
     usd: option.usd,
     minutes: option.minutes,
     effect: option.effect ? effect(option.effect, stored) : null,
@@ -635,6 +639,17 @@ function call(
     undoUntil: entry.undoUntil,
     note: entry.note,
     post: entry.post,
+    ...(entry.facts?.length ? { facts: entry.facts.map(fact) } : {}),
+  };
+}
+
+/** A fact of a plan or a call, as the API sends it. */
+function fact(entry: PlanFact): Fact {
+  return {
+    claim: entry.claim,
+    source: entry.source,
+    sourceDate: entry.sourceDate,
+    listedAt: entry.checkedAt,
   };
 }
 
@@ -954,6 +969,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     ),
     directionCounts: directionCounts(state.directions, settled, disputed),
     agents,
+    planner: state.opener,
     plan:
       plan && level.whole
         ? {
@@ -962,12 +978,10 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
             reading: plan.reading,
             cost: plan.cost,
             directions: [...plan.directions],
-            facts: keep(plan.facts, level.facts, 'facts').map((fact) => ({
-              claim: fact.claim,
-              source: fact.source,
-              sourceDate: fact.sourceDate,
-              listedAt: fact.checkedAt,
-            })),
+            facts: keep(plan.facts, level.facts, 'facts').map(fact),
+            ...(plan.version === undefined ? {} : { version: plan.version }),
+            previous: plan.previous ?? null,
+            changed: plan.changed ?? null,
           }
         : null,
     board: boardPage(view.posts, level.posts, handle),
@@ -1719,6 +1733,8 @@ const actionNames = new Set<string>([
   'lab-dismiss',
   'lab-away-dismiss',
   'lab-look',
+  'lab-skip-questions',
+  'lab-questions-answer',
 ] satisfies ActionName[]);
 
 /** The first run's actions. The first run runs them, with or without a project. */
@@ -1740,6 +1756,16 @@ const setupNames = new Set<string>([
   'setup-skills-done',
 ] satisfies ActionName[]);
 
+/**
+ * Verifold without a project: the Ask page's read, and the start of a
+ * project with the person's question.
+ */
+export interface ProjectStart {
+  readonly view: () => Promise<StartView>;
+  /** Run `project-start`. Returns 202: the project starts in the background. */
+  readonly act: (body: Record<string, unknown>) => Promise<number>;
+}
+
 function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
@@ -1750,7 +1776,8 @@ function json(response: ServerResponse, status: number, body: unknown): void {
  * Answer one request under /api/v1/. The desk checked its host and origin.
  * `authorized`: it has the desk's token. `act` runs a desk action and
  * returns 200, 202 when it goes on in the background, or 400. `setup` is
- * the first run, when the desk has one.
+ * the first run, when the desk has one. `start` starts a project, when the
+ * desk runs without one.
  */
 export async function answerApi(
   request: IncomingMessage,
@@ -1761,6 +1788,7 @@ export async function answerApi(
   reader: ApiReader,
   act: (body: Record<string, unknown>) => Promise<number>,
   setup?: Pick<FirstRun, 'view' | 'act'>,
+  start?: ProjectStart,
 ): Promise<void> {
   if (!authorized) {
     response.writeHead(401).end();
@@ -1781,7 +1809,12 @@ export async function answerApi(
     }
     const setupAction =
       second !== undefined && setupNames.has(second) ? setup : undefined;
-    if (url.search || !second || !(setupAction || actionNames.has(second))) {
+    const startAction = second === 'project-start' ? start : undefined;
+    if (
+      url.search ||
+      !second ||
+      !(setupAction || startAction || actionNames.has(second))
+    ) {
       json(response, 404, { error: 'Verifold knows no such action.' });
       return;
     }
@@ -1792,9 +1825,10 @@ export async function answerApi(
     }
     let status: number;
     try {
-      status = await (setupAction
-        ? setupAction.act({ ...body, action: second })
-        : act({ ...body, action: second }));
+      status = await (setupAction ?? startAction ?? { act }).act({
+        ...body,
+        action: second,
+      });
     } catch (error) {
       if (!(error instanceof SessionActionError)) throw error;
       json(response, 409, { error: error.message });
@@ -1820,6 +1854,10 @@ export async function answerApi(
   const onlyBefore = keys.length <= 1 && keys.every((key) => key === 'before');
   if (first === 'snapshot' && parts.length === 1 && !keys.length) {
     json(response, 200, (await feed.current()).text);
+    return;
+  }
+  if (first === 'start' && parts.length === 1 && !keys.length && start) {
+    json(response, 200, await start.view());
     return;
   }
   if (first === 'setup' && parts.length === 1 && !keys.length && setup) {

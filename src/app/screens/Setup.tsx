@@ -82,13 +82,11 @@ export function DoneStep({
           own GPU limits. <a href={href.lab}>Back to the lab</a>
         </p>
       ) : (
-        <p className="step__lead">
-          Next comes your question. The app’s Ask page comes in a later step.
-          Until then, press Ctrl+C in the terminal, then run{' '}
-          <code>verifold</code> in this folder without <code>--app</code>. The
-          desk asks for your question, and the new project starts from this
-          profile.
-        </p>
+        <div className="setup__actions">
+          <a className="button button--primary button--big" href={href.ask}>
+            Ask your question
+          </a>
+        </div>
       )}
     </>
   );
@@ -109,11 +107,14 @@ export function SetupPage({
   readonly project: string;
 }): ReactNode {
   const { view, error, refresh } = useSetup(actions.read);
+  // Without a project, the end of the first run is the Ask page.
+  const pageHref = (page: Page): string =>
+    page === 'done' && !project ? href.ask : href.setup(page);
   useEffect(() => {
-    if (view && step === null) replaceRoute(href.setup(firstPage(view)));
+    if (view && step === null) replaceRoute(pageHref(firstPage(view)));
   }, [view, step]);
   const open = (page: Page): void => {
-    location.hash = href.setup(page);
+    location.hash = pageHref(page);
     refresh();
   };
   let body: ReactNode;

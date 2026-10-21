@@ -3309,6 +3309,307 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
   );
 });
 
+/** The planner's questions before its plan: models with details, and what a phrase means. */
+const plannerQuestions = [
+  {
+    name: 'verifold_ask_person',
+    arguments: {
+      kind: 'scope',
+      question: 'Which models should the experiments use?',
+      options: [
+        {
+          label: 'Qwen3.5-9B',
+          detail: 'Newest small Qwen, with official SAEs.',
+        },
+        { label: 'Qwen3.8-27B', detail: 'Each run needs an H100.' },
+        { label: 'Both', detail: '9B first, then 27B to confirm.' },
+        { label: 'Gemma 4', detail: 'Another model family.' },
+      ],
+      pick: 0,
+      why: 'It has official SAEs, and a LoRA fits on one A100.',
+      facts: [
+        {
+          claim: 'Qwen3.5-9B has official SAEs',
+          source: 'https://huggingface.co/Qwen',
+          sourceDate: '2026-04-27',
+        },
+      ],
+    },
+  },
+  {
+    name: 'verifold_ask_person',
+    arguments: {
+      kind: 'scope',
+      question: 'What does "frontier-lab scale" mean to you?',
+      options: [{ label: 'Under 1% of training' }, { label: 'Works with RL' }],
+      pick: 1,
+      why: 'RL is where a CoT stops being faithful.',
+      facts: [
+        {
+          claim: 'Qwen3.5-9B has official SAEs',
+          source: 'https://huggingface.co/Qwen',
+          sourceDate: '2026-04-27',
+        },
+        { claim: 'An H100 costs $3.99 an hour' },
+      ],
+    },
+  },
+];
+
+await test('before the plan, the planner asks the person scope questions with facts and details, and wakes once, after the last answer', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'You also open the lab',
+      calls: [
+        // A question before the plan changes the plan: the plan opens the directions.
+        {
+          name: 'verifold_ask_person',
+          arguments: {
+            kind: 'scope',
+            question: 'Open a direction for spirals?',
+            options: [
+              {
+                label: 'Open it',
+                effect: {
+                  direction: { open: 'Spirals', harness: 'claude', bar: 'x' },
+                },
+              },
+              { label: 'Not now' },
+            ],
+            pick: 1,
+            why: 'A gap.',
+          },
+        },
+        ...plannerQuestions,
+      ],
+    },
+    {
+      when: 'The person chose',
+      calls: [{ name: 'verifold_plan', arguments: firstPlan }],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 8 });
+  await until(
+    async () => (await claudeResults(lab, 'd-1-plan-the-lab')).length >= 3,
+  );
+  const results = await claudeResults(lab, 'd-1-plan-the-lab');
+  assert.match(
+    results[0] ?? '',
+    /^Before the plan, a scope call asks about what changes the plan\. Give the options without effects/,
+  );
+  assert.match(results[1] ?? '', /^Asked the person in c-1\./);
+  assert.match(results[2] ?? '', /^Asked the person in c-2\./);
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.deepEqual(
+    calls[0]?.options.map((option) => [option.label, option.detail]),
+    [
+      ['Qwen3.5-9B', 'Newest small Qwen, with official SAEs.'],
+      ['Qwen3.8-27B', 'Each run needs an H100.'],
+      ['Both', '9B first, then 27B to confirm.'],
+      ['Gemma 4', 'Another model family.'],
+    ],
+  );
+  assert.deepEqual(
+    calls[0]?.facts?.map((fact) => [fact.claim, fact.source, fact.sourceDate]),
+    [
+      [
+        'Qwen3.5-9B has official SAEs',
+        'https://huggingface.co/Qwen',
+        '2026-04-27',
+      ],
+    ],
+  );
+  assert.equal(calls[1]?.facts?.length, 2);
+  assert.equal(calls[1]?.facts?.[1]?.source, null);
+
+  // The first turn ended. The planner waits for its questions: no turn comes meanwhile.
+  await delay(400);
+  assert.equal((await lab.inputs('d-1-plan-the-lab')).length, 1);
+  await lab.lab.answerCall('c-1', 2);
+  await delay(400);
+  assert.equal((await lab.inputs('d-1-plan-the-lab')).length, 1);
+  // The last answer wakes it once, with both answers.
+  await lab.lab.answerCallInWords('c-2', 'Both, and RL matters most.');
+  await until(async () => (await lab.inputs('d-1-plan-the-lab')).length >= 2);
+  const digest = (await lab.inputs('d-1-plan-the-lab'))[1] ?? '';
+  assert.match(digest, /The person chose "Both" on c-1/);
+  assert.match(
+    digest,
+    /The person answered c-2 in their own words, so no option applies: "Both, and RL matters most\."/,
+  );
+  // Then it posts the first plan: version 1, with no plan before it.
+  await until(() => lab.lab.view()?.state.plan !== null, 20_000);
+  const plan = lab.lab.view()?.state.plan;
+  assert.equal(plan?.version, 1);
+  assert.equal(plan?.previous, undefined);
+  assert.equal(plan?.changed, undefined);
+});
+
+await test("the person's post wakes the planner while it waits for answers, and a skip gives each question the planner's pick", async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    { when: 'You also open the lab', calls: plannerQuestions },
+    { when: 'Use the 9B model first', calls: [] },
+    {
+      when: 'The person skipped',
+      calls: [{ name: 'verifold_plan', arguments: firstPlan }],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 8 });
+  await until(() => (lab.lab.view()?.state.calls.length ?? 0) === 2);
+  await until(
+    async () => (await claudeResults(lab, 'd-1-plan-the-lab')).length >= 2,
+  );
+  await delay(300);
+  assert.equal((await lab.inputs('d-1-plan-the-lab')).length, 1);
+  // A post of the person for the planner wakes it all the same.
+  await lab.lab.post({ text: 'Use the 9B model first.', direction: 'd-1' });
+  await until(async () => (await lab.inputs('d-1-plan-the-lab')).length >= 2);
+  await delay(400);
+  assert.equal((await lab.inputs('d-1-plan-the-lab')).length, 2);
+  // A skip answers each question with the planner's pick, and wakes it once.
+  await lab.lab.skipQuestions();
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.deepEqual(
+    calls.map((call) => [call.id, call.state, call.answer?.option]),
+    [
+      ['c-1', 'answered', 0],
+      ['c-2', 'answered', 1],
+    ],
+  );
+  await until(async () => (await lab.inputs('d-1-plan-the-lab')).length >= 3);
+  const digest = (await lab.inputs('d-1-plan-the-lab'))[2] ?? '';
+  assert.match(
+    digest,
+    /The person skipped c-1, so your pick "Qwen3\.5-9B" stands\./,
+  );
+  assert.match(
+    digest,
+    /The person skipped c-2, so your pick "Works with RL" stands\./,
+  );
+  await assert.rejects(
+    lab.lab.skipQuestions(),
+    /The planner has no questions that wait for you\./,
+  );
+  await until(() => lab.lab.view()?.state.plan !== null, 20_000);
+});
+
+await test("the person answers the planner's questions together, each with an option or words, and the planner wakes once", async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    { when: 'You also open the lab', calls: plannerQuestions },
+    {
+      when: 'The person chose',
+      calls: [{ name: 'verifold_plan', arguments: firstPlan }],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 8 });
+  await until(() => (lab.lab.view()?.state.calls.length ?? 0) === 2);
+  await until(
+    async () => (await claudeResults(lab, 'd-1-plan-the-lab')).length >= 2,
+  );
+  // Refused answers change nothing.
+  await assert.rejects(lab.lab.answerQuestions([]), /Answer 1 to 3/);
+  await assert.rejects(
+    lab.lab.answerQuestions([{ call: 'c-9', option: 0 }]),
+    /c-9 is not a question of the planner that waits for you/,
+  );
+  await assert.rejects(
+    lab.lab.answerQuestions([{ call: 'c-1', option: 7 }]),
+    /option/,
+  );
+  await assert.rejects(
+    lab.lab.answerQuestions([
+      { call: 'c-1', option: 0 },
+      { call: 'c-1', option: 1 },
+    ]),
+    /each question once/,
+  );
+  assert.deepEqual(
+    lab.lab.view()?.state.calls.map((call) => call.state),
+    ['open', 'open'],
+  );
+  await lab.lab.answerQuestions([
+    { call: 'c-1', option: 2 },
+    { call: 'c-2', words: 'Both, and RL matters most.' },
+  ]);
+  const calls = lab.lab.view()?.state.calls ?? [];
+  assert.deepEqual(
+    calls.map((call) => [call.state, call.answer?.option ?? null, call.words]),
+    [
+      ['answered', 2, null],
+      ['answered', null, 'Both, and RL matters most.'],
+    ],
+  );
+  // An option can be undone in its window, as any answer.
+  assert.ok(calls[0]?.undoUntil);
+  await until(async () => (await lab.inputs('d-1-plan-the-lab')).length >= 2);
+  const digest = (await lab.inputs('d-1-plan-the-lab'))[1] ?? '';
+  assert.match(digest, /The person chose "Both" on c-1\./);
+  assert.match(
+    digest,
+    /The person answered c-2 in their own words, so no option applies: "Both, and RL matters most\."/,
+  );
+  // The words are the person's reply in the call's thread.
+  assert.ok(
+    lab.lab
+      .view()
+      ?.posts.some(
+        (post) =>
+          post.author === 'person' &&
+          post.text === 'Both, and RL matters most.' &&
+          post.replyTo === calls[1]?.post,
+      ),
+  );
+  await until(() => lab.lab.view()?.state.plan !== null, 20_000);
+});
+
+await test('a later plan records its version, the plan before it, and what changed', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  const changed = 'Helix needs 4 runs, as the person asked.';
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      // The first plan changes nothing: a line on what changed is left out.
+      calls: [
+        {
+          name: 'verifold_plan',
+          arguments: { ...firstPlan, changed: 'Nothing yet.' },
+        },
+      ],
+    },
+    {
+      when: 'Give Helix 4 runs',
+      calls: [
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...firstPlan,
+            directions: [{ id: 'd-1' }, { id: 'd-2', runs: 4 }, { id: 'd-3' }],
+            changed,
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(() => lab.lab.view()?.state.plan !== null, 20_000);
+  const first = lab.lab.view()?.state.plan;
+  assert.equal(first?.post, 'p-1');
+  assert.equal(first?.version, 1);
+  assert.equal(first?.changed, undefined);
+  await lab.lab.post({ text: 'Give Helix 4 runs.', replyTo: 'p-1' });
+  await until(() => lab.lab.view()?.state.plan?.version === 2, 20_000);
+  const second = lab.lab.view()?.state.plan;
+  assert.equal(second?.previous, 'p-1');
+  assert.equal(second?.changed, changed);
+  assert.equal(
+    lab.lab.view()?.state.directions.find((entry) => entry.id === 'd-2')?.runs,
+    4,
+  );
+});
+
 await test("words on Verifold's go call go to the whole lab and keep the call open until an option, and words on an agent's go call close it", async (t) => {
   const lab = await fixture(t, { hourMs: 4000 });
   await lab.script('d-1-alpha', [
@@ -9527,7 +9828,7 @@ await test('the plan of record keeps the facts that it rests on, with sources an
   // The planner was told to check these facts and list them.
   assert.match(
     (await lab.inputs('d-1-plan-the-lab'))[0] ?? '',
-    /List them in `facts`, each with its source and the source's date\./,
+    /List the facts that the plan rests on in `facts`, each with its source and the source's date\./,
   );
   assert.deepEqual(
     lab.lab

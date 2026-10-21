@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import type { Post, PostKind, Proof } from '../../protocol/api.ts';
+import type { Lab, Post, PostKind, Proof } from '../../protocol/api.ts';
 import type { Thread } from '../board.ts';
 import { href } from '../route.ts';
 import { Avatar, type Who } from './Avatar.tsx';
+import { PlanCard } from './PlanCard.tsx';
 
 const chips: Partial<Record<PostKind, string>> = {
   plan: 'Plan of record',
@@ -67,10 +68,26 @@ function ProofLinks({ post }: { readonly post: Post }): ReactNode {
   );
 }
 
-/** A post's name line and text, with its kind and its proof as chips. */
-function PostLines({ post }: { readonly post: Post }): ReactNode {
+/**
+ * A post's name line and text, with its kind and its proof as chips. The
+ * plan of record shows as its card. A plan before it is an earlier plan.
+ */
+function PostLines({
+  post,
+  lab,
+}: {
+  readonly post: Post;
+  readonly lab?: Lab | undefined;
+}): ReactNode {
+  if (post.kind === 'plan' && lab?.plan?.post === post.id)
+    return <PlanCard plan={lab.plan} lab={lab} />;
   // The person's posts and Verifold's status lines carry no kind chip.
-  const chip = post.author === 'person' ? undefined : chips[post.kind];
+  const chip =
+    post.author === 'person'
+      ? undefined
+      : post.kind === 'plan' && lab?.plan
+        ? 'Earlier plan'
+        : chips[post.kind];
   return (
     <>
       <div className="post__head">
@@ -92,17 +109,26 @@ function PostLines({ post }: { readonly post: Post }): ReactNode {
  */
 export function BoardThread({
   thread,
+  lab,
 }: {
   readonly thread: Thread;
+  /** The lab, so the plan of record shows as its card, first in its thread. */
+  readonly lab?: Lab;
 }): ReactNode {
-  const { root, replies } = thread;
+  // A changed plan replies to the plan before it. The plan of record leads its thread.
+  const current = lab?.plan?.post;
+  const promoted = thread.replies.find((reply) => reply.id === current);
+  const root = promoted ?? thread.root;
+  const replies = promoted
+    ? [thread.root, ...thread.replies.filter((reply) => reply !== promoted)]
+    : thread.replies;
   if (root.author === 'person')
     return (
       <article id={`post-${root.id}`} tabIndex={-1} className="post">
         <Avatar who="person" size="lg" />
         <div className="post__body post__body--person">
           <div>
-            <PostLines post={root} />
+            <PostLines post={root} lab={lab} />
           </div>
           {replies.map((reply) => (
             <div
@@ -126,7 +152,7 @@ export function BoardThread({
       <Avatar who={who(root)} size="lg" />
       <div className="post__body">
         <div>
-          <PostLines post={root} />
+          <PostLines post={root} lab={lab} />
         </div>
         {replies.length > 0 && (
           <div className="thread">
@@ -141,7 +167,7 @@ export function BoardThread({
                 >
                   <Avatar who={who(reply)} size="sm" />
                   <div>
-                    <PostLines post={reply} />
+                    <PostLines post={reply} lab={lab} />
                   </div>
                 </div>
               ))}

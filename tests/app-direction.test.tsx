@@ -310,6 +310,8 @@ const actions: LabActions = {
   answer: ok,
   words: ok,
   undo: ok,
+  skip: ok,
+  questions: ok,
 };
 
 const agentStub: AgentActions = {
