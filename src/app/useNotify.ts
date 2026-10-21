@@ -80,6 +80,7 @@ export function useNotify(snapshot: Snapshot | null): {
       snapshot.project,
       background(),
       state === 'on',
+      snapshot.compute,
     );
     memory.current = next.memory;
     for (const note of next.notes) show(note);

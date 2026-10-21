@@ -734,7 +734,7 @@ await test('a pod gets the secrets that its request names, and a missing secret 
   // Without the secret, the pod does not start, and the request waits.
   await assert.rejects(
     compute.leases.approve(lease.id, 'verifold'),
-    /Add the secret HF_TOKEN in Compute first\. The pod of lease-1 needs it\./,
+    /Store the secret HF_TOKEN first, with `verifold runpod secret set NAME`\. The pod of lease-1 needs it\./,
   );
   assert.equal(compute.leases.get(lease.id).state, 'requested');
   assert.ok(!api.calls.includes('POST /v2/pods'));

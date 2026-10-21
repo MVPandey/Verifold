@@ -11,6 +11,7 @@ import {
   agentActions,
   answerActions,
   appActions,
+  computeActions,
   labActions,
   type AppActions,
 } from './actions.ts';
@@ -30,6 +31,7 @@ import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { SetupPage } from './screens/Setup.tsx';
+import { SettingsPage, type ComputeActions } from './screens/SettingsPage.tsx';
 import { setupActions, type SetupActions } from './setup.ts';
 import { PostPage } from './screens/PostPage.tsx';
 import { RunPage } from './screens/RunPage.tsx';
@@ -68,6 +70,7 @@ const signedOutAnswers = answerActions(null);
 const signedOutSetup = setupActions(null);
 const signedOutStart = startActions(null);
 const signedOutApp = appActions(null);
+const signedOutCompute = computeActions(null);
 
 /** How often a visible page tells Verifold that the person looks, as the desk's page does. */
 export const lookMs = 60_000;
@@ -145,6 +148,7 @@ export function Screen({
   setup = signedOutSetup,
   start = signedOutStart,
   startLab = signedOutApp.startLab,
+  compute = signedOutCompute,
 }: {
   readonly state: LabState;
   readonly route: Route;
@@ -155,6 +159,7 @@ export function Screen({
   readonly setup?: SetupActions;
   readonly start?: StartActions;
   readonly startLab?: AppActions['startLab'];
+  readonly compute?: ComputeActions;
 }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
@@ -214,6 +219,17 @@ export function Screen({
     );
   // The Ask page is for a folder without a project. With one, the lab opens.
   if (route.page === 'ask') return <Redirect to={href.lab} />;
+  // A project's settings and pods open with or without a lab.
+  if (route.page === 'settings')
+    return (
+      <SettingsPage
+        snapshot={snapshot}
+        connection={connection}
+        now={now}
+        actions={compute}
+        onPause={actions.pause}
+      />
+    );
   const lab = snapshot.lab;
   if (!lab) return <NoLab snapshot={snapshot} onStart={startLab} />;
   if (route.page === 'lab' || route.page === 'call')
@@ -226,6 +242,7 @@ export function Screen({
           now={now}
           actions={actions}
           agentActions={agentActions}
+          onPod={compute.pod}
           show={route.page === 'lab' ? (route.post ?? null) : null}
         />
         {route.page === 'call' && (
@@ -407,6 +424,7 @@ export function App({
   const [start] = useState(() => startActions(token));
   const [app] = useState(() => appActions(token));
   const [controls] = useState(() => (token ? labControls(token) : null));
+  const [compute] = useState(() => computeActions(token));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
   const lab =
     state.connection === 'signed-out' || state.connection === 'outdated'
@@ -443,6 +461,7 @@ export function App({
           setup={setup}
           start={start}
           startLab={app.startLab}
+          compute={compute}
         />
         {searching && lab && (
           <SearchDialog

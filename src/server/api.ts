@@ -28,6 +28,15 @@ import {
   type Away as LabAway,
 } from '../core/away.ts';
 import { labGpu, type ComputeView } from '../core/compute.ts';
+import {
+  isOpen,
+  leaseLimits,
+  maxCost,
+  diskRate,
+  spent,
+  type Lease,
+} from '../core/leases.ts';
+import { commonGpus } from '../core/runpod.ts';
 import { openDisputes } from '../core/disputes.ts';
 import { authorName, callWords, kindLabel } from '../core/lab-words.ts';
 import { callLimits } from '../core/lab-tools.ts';
@@ -83,10 +92,13 @@ import {
   type Effect,
   type Fact,
   type FileDiff,
+  type GpuType,
   type Lab,
   type LabList,
+  type PodLease,
   type Post,
   type PostThread,
+  type ProjectCompute,
   type Proof,
   type Run,
   type RunDetail,
@@ -164,6 +176,12 @@ export const apiLimits = {
   runOutputs: 200,
   /** Files in a direction's diff read. */
   diffFiles: 2000,
+  /** Pods in the snapshot that are open, wait for the person, or carry a notice. */
+  pods: 50,
+  /** Earlier pods in the snapshot, the newest kept. */
+  earlierPods: 20,
+  /** GPU types in the snapshot. */
+  gpuTypes: 60,
 };
 
 /** How many items of each list a snapshot keeps, and how much of each message. */
@@ -276,6 +294,8 @@ export interface ApiSources {
   readonly bring?: BringSource | undefined;
   /** Why the project's lab did not start, when its start failed. */
   readonly startProblem?: (() => string | null) | undefined;
+  /** "Agents at once" of the project, when this process runs its worker slots. */
+  readonly agentsAtOnce?: (() => number | null) | undefined;
   /** The lab's reads that the snapshot keeps folded: a run's log, and a direction's diff. */
   readonly reads?: LabReadSource | undefined;
 }
@@ -906,6 +926,139 @@ function check(entry: LabCheck): CheckItem {
   };
 }
 
+/** A pod as the screens show it: no pod name, ID, or address, and secret names only. */
+function podLease(
+  lease: Lease,
+  stored: ReadonlySet<string>,
+  now: number,
+): PodLease {
+  const secrets = lease.secrets ?? [];
+  const noticeAt = lease.notice ? (lease.history.at(-1)?.at ?? null) : null;
+  return {
+    id: lease.id,
+    state: lease.state,
+    gpu: lease.gpu,
+    asker: lease.requestedBy,
+    directions: lease.directions ?? [],
+    reason: text(lease.reason, leaseLimits.reason),
+    rateUsd: cents(lease.rate + diskRate(lease.diskGb)),
+    hours: lease.hours,
+    maxUsd: cents(maxCost(lease.rate, lease.diskGb, lease.hours)),
+    spentUsd: cents(spent(lease, now)),
+    requestedAt: lease.requestedAt,
+    endsAt: lease.deadline,
+    idleMinutes:
+      lease.state === 'ready' && lease.activeAt
+        ? Math.max(0, Math.floor((now - Date.parse(lease.activeAt)) / 60_000))
+        : null,
+    ended: lease.end ? { at: lease.end.at, reason: lease.end.reason } : null,
+    notice: lease.notice,
+    noticeAt,
+    secrets,
+    missingSecrets: secrets.filter((name) => !stored.has(name)),
+  };
+}
+
+const stockOf = {
+  NONE: 'none',
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+} as const;
+
+/**
+ * RunPod's GPUs for the settings page: each type that RunPod offers, the
+ * dearest first, then each allowed type that it does not offer now, so a
+ * save keeps it. A cut list keeps every allowed type.
+ */
+function gpuTypes(view: ComputeView): ProjectCompute['gpus'] {
+  if (!view.gpus || !view.gpusAt) return null;
+  const offered = new Set(view.gpus.map((gpu) => gpu.id));
+  const allowed = new Set(view.settings.gpuTypes);
+  const types: GpuType[] = [
+    ...[...view.gpus]
+      .sort((a, b) => b.price - a.price)
+      .map((gpu) => ({
+        id: gpu.id,
+        name: gpu.name,
+        memoryGb: gpu.memoryGb,
+        usdPerHour: gpu.price,
+        stock: gpu.stock ? stockOf[gpu.stock] : null,
+        common: commonGpus.includes(gpu.id),
+      })),
+    ...[...allowed]
+      .filter((id) => !offered.has(id))
+      .map((id) => ({
+        id,
+        name: id,
+        memoryGb: 0,
+        usdPerHour: null,
+        stock: null,
+        common: false,
+      })),
+  ];
+  let room =
+    apiLimits.gpuTypes - types.filter((gpu) => allowed.has(gpu.id)).length;
+  return {
+    at: view.gpusAt,
+    types: types.filter((gpu) => allowed.has(gpu.id) || room-- > 0),
+  };
+}
+
+/** The project's pods and their settings, as the settings page and Needs you show them. No key, no secret value. */
+function shapeCompute(
+  view: ComputeView,
+  agentsAtOnce: number | null,
+  now: number,
+): ProjectCompute {
+  const stored = new Set(view.secrets.map((secret) => secret.name));
+  const newest = [...view.leases].reverse();
+  const current = newest.filter(
+    (lease) => isOpen(lease) || lease.state === 'requested' || lease.notice,
+  );
+  const earlier = newest.filter((lease) => !current.includes(lease));
+  const { settings, budget, month } = view;
+  return {
+    keyStored: view.key
+      ? { last4: view.key.last4, problem: view.key.problem ?? null }
+      : null,
+    settings: {
+      limitUsd: settings.limitUsd,
+      maxUsdPerHour: settings.maxUsdPerHour,
+      maxHoursPerLease: settings.maxHoursPerLease,
+      idleMinutes: settings.idleMinutes,
+      maxRunningPods: settings.maxRunningPods,
+      gpuTypes: settings.gpuTypes,
+      images: settings.images,
+      diskGb: settings.diskGb,
+      askBeforePod: settings.askBeforePod,
+    },
+    agentsAtOnce,
+    budget: {
+      spentUsd: cents(budget.spent),
+      heldUsd: cents(budget.reserved),
+      leftUsd: budget.left === null ? null : cents(Math.max(0, budget.left)),
+      rateUsd: cents(budget.rate),
+    },
+    month: month
+      ? {
+          spentUsd: cents(month.spentUsd),
+          limitUsd: month.limitUsd,
+          leftUsd: cents(month.leftUsd),
+        }
+      : null,
+    pods: current
+      .slice(0, apiLimits.pods)
+      .map((lease) => podLease(lease, stored, now)),
+    earlier: earlier
+      .slice(0, apiLimits.earlierPods)
+      .map((lease) => podLease(lease, stored, now)),
+    earlierCount: earlier.length,
+    gpus: gpuTypes(view),
+    problem: view.problem,
+  };
+}
+
 /** The lab as the screens show it, within one level. */
 function shapeLab(loaded: Loaded, level: Level): Lab {
   const { view, disputes } = loaded;
@@ -1240,22 +1393,27 @@ export class ApiReader {
     const root = sources.root;
     // A project without a lab shows its question and why its lab did not start.
     if (!view && root) parts.push(sources.startProblem?.());
+    // The pods and their settings show with or without a lab. A stored pod secret changes what a pod lacks.
+    const compute = root ? sources.compute?.view() : undefined;
+    if (compute)
+      parts.push(
+        compute.settings,
+        compute.leases,
+        compute.key,
+        compute.gpusAt,
+        compute.problem,
+        compute.secrets.map((secret) => secret.name).join('\n'),
+        cents(compute.budget.spent),
+        cents(compute.budget.reserved),
+        compute.month ? cents(compute.month.spentUsd) : null,
+        compute.month?.limitUsd,
+        sources.agentsAtOnce?.(),
+      );
     if (!view || !root) return parts;
     parts.push(view.posts.length, view.posts.at(-1), ...view.ledger);
     for (const entry of view.directions)
       parts.push(entry.agent, entry.status, entry.until);
-    const compute = sources.compute?.view();
-    if (compute) {
-      const gpu = labGpu(compute, view.state.startedAt);
-      // A stored pod secret changes what a pod option is missing.
-      parts.push(
-        cents(gpu.spent),
-        gpu.limit,
-        compute.secrets.map((secret) => secret.name).join('\n'),
-        compute.month ? cents(compute.month.spentUsd) : null,
-        compute.month?.limitUsd,
-      );
-    }
+    if (compute) parts.push(cents(labGpu(compute, view.state.startedAt).spent));
     const agents = shownAgents(view);
     const followed = await Promise.all(
       agents.map((agent) => this.follow(root, agent.session)),
@@ -1320,6 +1478,17 @@ export class ApiReader {
     const sources = this.sources();
     const root = sources.root;
     const project = root ? basename(root) : '';
+    // The project's pods, the same at every level: their own lists have bounds.
+    const view = root ? sources.compute?.view() : undefined;
+    const compute = view
+      ? {
+          compute: shapeCompute(
+            view,
+            sources.agentsAtOnce?.() ?? null,
+            Date.now(),
+          ),
+        }
+      : {};
     const loaded = await this.load();
     if (!loaded) {
       // A project without a lab: its question, so the page can start the lab, and why the last start failed.
@@ -1337,6 +1506,7 @@ export class ApiReader {
               startProblem: sources.startProblem?.() ?? null,
             }
           : {}),
+        ...compute,
       });
     }
     // The feed adds the version, the epoch, the rev, and the time.
@@ -1347,6 +1517,7 @@ export class ApiReader {
       json = JSON.stringify({
         project,
         lab,
+        ...compute,
         trimmed: index > 0 || Object.keys(lab.omitted).length > 0,
       });
       if (Buffer.byteLength(json) <= room) break;
@@ -1861,6 +2032,15 @@ const actionNames = new Set<string>([
   'lab-look',
   'lab-skip-questions',
   'lab-questions-answer',
+  'compute-settings',
+  'compute-gpus',
+  'compute-agents',
+  'compute-lease-approve',
+  'compute-lease-deny',
+  'compute-lease-stop',
+  'compute-lease-start',
+  'compute-lease-end',
+  'compute-lease-dismiss',
 ] satisfies ActionName[]);
 
 /** The first run's actions. The first run runs them, with or without a project. */

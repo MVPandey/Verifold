@@ -324,7 +324,7 @@ export class SessionPool {
   private free(session?: unknown): SessionManager {
     if (this.full)
       throw new PoolFullError(
-        `${this.limit} ${this.limit === 1 ? 'agent runs' : 'agents run'}, the most that "Agents at once" allows. Wait for one to end, or raise the setting in Compute.`,
+        `${this.limit} ${this.limit === 1 ? 'agent runs' : 'agents run'}, the most that "Agents at once" allows. Wait for one to end, or raise it in the project's settings.`,
       );
     const open = (slot: SessionManager): boolean =>
       !slot.active && !this.taken.has(slot);

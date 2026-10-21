@@ -103,7 +103,7 @@ export function footLine(call: Call, lab: Lab): string {
 export function missingLine(option: CallOption): string | null {
   const effect = option.effect;
   if (effect?.type !== 'pod' || !effect.missing) return null;
-  return `Needs ${effect.missing} pod ${effect.missing === 1 ? 'secret' : 'secrets'} stored in Compute first.`;
+  return `Needs ${effect.missing} pod ${effect.missing === 1 ? 'secret' : 'secrets'} that this computer does not store yet.`;
 }
 
 /**

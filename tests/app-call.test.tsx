@@ -450,7 +450,7 @@ await test('a pod option says when a pod secret must be stored first', () => {
   const page = text(dialog(render(snapshot({ needsYou: [needs] }))));
   assert.match(
     page,
-    /Needs 1 pod secret stored in Compute first\. Open the desk to store it\./,
+    /Needs 1 pod secret that this computer does not store yet\. Store each one in a terminal with verifold runpod secret set NAME ?\./,
   );
 });
 

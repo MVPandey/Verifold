@@ -14,8 +14,9 @@ import type { SetupPage } from './setup.ts';
  * one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's page,
  * such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`, and
  * `#/d/<id>/diff` what a direction changed, or with a proof such as
- * `#/d/<id>/diff/p-12.0` the diff that a post cites. Any other fragment is a
- * page that does not exist.
+ * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/settings` is the
+ * project's settings, with its pods. Any other fragment is a page that does
+ * not exist.
  */
 export type Route =
   | {
@@ -57,6 +58,7 @@ export type Route =
       /** The proof that a post cites, such as p-12.0. Without one, the direction's changes since its start. */
       readonly proof?: string;
     }
+  | { readonly page: 'settings' }
   | { readonly page: 'unknown' };
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
@@ -115,6 +117,7 @@ export function parseRoute(hash: string): Route {
       : { page: 'diff', direction: diff[1] };
   if (path === '/answer') return { page: 'answer' };
   if (path === '/ask') return { page: 'ask' };
+  if (path === '/settings') return { page: 'settings' };
   if (path === '/setup') return { page: 'setup', step: null };
   const setup = /^\/setup\/(agents|about|skills|money|done)$/.exec(path)?.[1];
   if (setup) return { page: 'setup', step: setup as SetupPage };
@@ -143,6 +146,7 @@ export const href = {
     `#/d/${direction}/diff${proof ? `/${proof}` : ''}`,
   setup: (step?: SetupPage): string => (step ? `#/setup/${step}` : '#/setup'),
   ask: '#/ask',
+  settings: '#/settings',
 } as const;
 
 /**
