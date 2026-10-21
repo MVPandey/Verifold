@@ -420,6 +420,8 @@ await test('the About-you agent asks at most two follow-ups with three suggestio
   });
   const asked = fake.requests[0];
   assert.equal(asked?.host, 'claude');
+  // The chat answers from the prompt alone.
+  assert.equal(asked?.textOnly, true);
   assert.equal(asked?.model, 'opus[1m]');
   assert.match(asked?.prompt ?? '', /"questionsLeft":2/);
   assert.match(asked?.prompt ?? '', /I want to explore probes/);

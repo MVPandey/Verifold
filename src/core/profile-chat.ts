@@ -110,8 +110,8 @@ function parseStep(text: string, left: number): ChatStep {
 
 /**
  * The next step: a question or the card. With a card and a note, the
- * harness changes the card. The harness works in an empty private folder
- * that Verifold removes afterwards, with no tools that the task needs.
+ * harness changes the card. The harness answers as text only, in an empty
+ * private folder that Verifold removes afterwards.
  */
 export async function nextStep(input: {
   readonly lines: readonly ChatLine[];
@@ -139,6 +139,7 @@ export async function nextStep(input: {
       signal,
       timeoutMs: 180_000,
       idleMs: 120_000,
+      textOnly: true,
       prompt: `${await loadPrompt('profile-card')}
 
 The input, as JSON:

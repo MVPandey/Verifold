@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -60,11 +60,18 @@ export interface HarnessRequest {
    */
   readonly onTranscript?: (update: TranscriptUpdate) => void;
   /**
-   * The harness answers from the prompt alone, for a prompt that holds text
-   * from outside: Claude Code gets no built-in tools and no MCP servers, and
-   * Codex gets no web search.
+   * The harness answers from the prompt alone. Claude Code gets no built-in
+   * tools and no MCP servers. Codex gets no web search, a read-only sandbox
+   * with no approvals, and none of the person's plugins, apps, or MCP
+   * servers, when Verifold can list them.
    */
   readonly textOnly?: boolean;
+  /**
+   * The prompt holds text from outside, such as the descriptions of a skill
+   * catalog. A text-only Codex call then runs only when Verifold can turn off
+   * every MCP server of the person.
+   */
+  readonly outsideText?: boolean;
 }
 
 /** A harness call ran into a time limit: it sent nothing for too long, or it ran for too long. */
@@ -335,6 +342,177 @@ export function validateModel(
 }
 
 /**
+ * A name that Codex's `-c` option reads as one key. Codex reads no quoted
+ * key: `mcp_servers."x".enabled` names a new server `"x"`, and Codex then
+ * refuses its configuration. Probed on Codex 0.160.0.
+ */
+const codexKey = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * `-c` options that turn off the person's plugins, apps, and the MCP servers
+ * `servers` for one Codex process. An empty `mcp_servers` table does not
+ * replace the person's servers, so each one is turned off by name. Null: a
+ * name cannot be written as a `-c` key, so the servers cannot all be turned
+ * off this way. Probed on Codex 0.160.0.
+ */
+export function codexOffOptions(servers: readonly string[]): string[] | null {
+  if (!servers.every((name) => codexKey.test(name))) return null;
+  return [
+    '-c',
+    'features.plugins=false',
+    '-c',
+    'features.apps=false',
+    ...servers.flatMap((name) => ['-c', `mcp_servers.${name}.enabled=false`]),
+  ];
+}
+
+/** Codex's MCP server names for one folder and program, read in the last minute. */
+const codexServerNames = new Map<
+  string,
+  { readonly at: number; readonly names: readonly string[] }
+>();
+
+/** How long a list of Codex's MCP servers stays in use. */
+const codexServerListMs = 60_000;
+
+/** Send a signal to a child and its process group. Returns the error, unless the process ended already. */
+function signalGroup(child: ChildProcess, signal: NodeJS.Signals): unknown {
+  if (child.pid === undefined) return undefined;
+  try {
+    if (process.platform === 'win32') child.kill(signal);
+    else process.kill(-child.pid, signal);
+    return undefined;
+  } catch (error) {
+    return record(error) && error.code === 'ESRCH' ? undefined : error;
+  }
+}
+
+/** The error of a request that the person or Verifold cancelled, before or during its process. */
+function cancelled(signal: AbortSignal): Error {
+  return new Error('Harness request was cancelled.', { cause: signal.reason });
+}
+
+/**
+ * The names of the MCP servers of the person's Codex configuration, from
+ * `codex mcp list --json` with plugins and apps off, which list the servers
+ * that plugins and apps bring. A list is used again for a minute. Null: the
+ * list could not be read within `limitMs`. The listing process reports
+ * itself through `onSpawn`, as the call does.
+ */
+async function codexServers(
+  executable: string,
+  cwd: string,
+  signal: AbortSignal,
+  limitMs: number,
+  onSpawn: ((pid: number) => void) | undefined,
+): Promise<readonly string[] | null> {
+  const key = `${executable}\0${cwd}`;
+  const known = codexServerNames.get(key);
+  if (known && Date.now() - known.at < codexServerListMs) return known.names;
+  const names = await new Promise<readonly string[] | null>(
+    (resolve, reject) => {
+      const child = spawn(
+        executable,
+        [
+          '-c',
+          'features.plugins=false',
+          '-c',
+          'features.apps=false',
+          'mcp',
+          'list',
+          '--json',
+        ],
+        {
+          cwd,
+          env: childEnvironment(),
+          shell: false,
+          detached: process.platform !== 'win32',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        },
+      );
+      if (child.pid !== undefined) onSpawn?.(child.pid);
+      let output = '';
+      let settled = false;
+      const settle = (value: readonly string[] | null, error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal.removeEventListener('abort', cancel);
+        if (value === null) signalGroup(child, 'SIGKILL');
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const timer = setTimeout(() => settle(null), limitMs);
+      const cancel = (): void => settle(null, cancelled(signal));
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) cancel();
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        output += chunk;
+        if (output.length > 1024 * 1024) settle(null);
+      });
+      child.on('error', () => settle(null));
+      child.on('close', (code) => {
+        if (code !== 0) return settle(null);
+        try {
+          const listed: unknown = JSON.parse(output);
+          settle(
+            Array.isArray(listed) &&
+              listed.every(
+                (entry) => record(entry) && typeof entry.name === 'string',
+              )
+              ? listed.map((entry) => String((entry as { name: string }).name))
+              : null,
+          );
+        } catch {
+          settle(null);
+        }
+      });
+    },
+  );
+  if (names) codexServerNames.set(key, { at: Date.now(), names });
+  return names;
+}
+
+/**
+ * The options of a text-only Codex call: no web search, a read-only sandbox
+ * with no approvals, and none of the person's plugins, apps, or MCP servers.
+ * Without a list of the MCP servers, or with a name that `-c` cannot hold,
+ * the call runs with them on, unless the prompt holds text from outside: that
+ * call does not run.
+ */
+async function codexTextOnly(
+  request: HarnessRequest,
+  executable: string,
+  limitMs: number,
+): Promise<{ readonly global: string[]; readonly exec: string[] }> {
+  const names = await codexServers(
+    executable,
+    request.cwd,
+    request.signal,
+    limitMs,
+    request.onSpawn,
+  );
+  const off = names ? codexOffOptions(names) : null;
+  if (!off && request.outsideText)
+    throw new Error(
+      names
+        ? 'Codex has an MCP server whose name Verifold cannot turn off for one request, so it did not run this request.'
+        : "Verifold could not read Codex's MCP servers, so it did not run this request.",
+    );
+  return {
+    global: [
+      ...(off ?? ['-c', 'features.plugins=false', '-c', 'features.apps=false']),
+      '-c',
+      'web_search="disabled"',
+      '-c',
+      'approval_policy="never"',
+    ],
+    exec: ['--sandbox', 'read-only'],
+  };
+}
+
+/**
  * Run one host request with the user's host configuration and permissions.
  * Prompts use stdin and are limited to 2 MiB. Output is read line by line, and
  * one line is limited to 8 MiB. Error output is limited to 2 MiB. A call stops
@@ -361,6 +539,13 @@ export async function runHarness(
   if (Buffer.byteLength(request.prompt) > maxBytes) {
     throw new Error('Harness prompt exceeds the 2 MiB limit.');
   }
+  const startedAt = Date.now();
+  const executable = options.executable ?? request.host;
+  // The listing of Codex's MCP servers counts in the call's time.
+  const textOnly =
+    request.host === 'codex' && request.textOnly
+      ? await codexTextOnly(request, executable, Math.min(10_000, timeoutMs))
+      : null;
   const args =
     request.host === 'claude'
       ? [
@@ -373,8 +558,9 @@ export async function runHarness(
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
       : [
-          ...(request.textOnly ? [] : ['--search']),
+          ...(textOnly ? textOnly.global : ['--search']),
           'exec',
+          ...(textOnly ? textOnly.exec : []),
           '--skip-git-repo-check',
           '--color',
           'never',
@@ -383,9 +569,10 @@ export async function runHarness(
           ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? [request.sessionId, '-'] : ['-']),
         ];
+  const left = Math.max(1, timeoutMs - (Date.now() - startedAt));
   const stream = reader(request.host);
   return new Promise<HarnessResult>((resolve, reject) => {
-    const child = spawn(options.executable ?? request.host, args, {
+    const child = spawn(executable, args, {
       cwd: request.cwd,
       env: childEnvironment(),
       shell: false,
@@ -400,17 +587,11 @@ export async function runHarness(
     let pending = '';
 
     function kill(signal: NodeJS.Signals): void {
-      if (child.pid === undefined) return;
-      try {
-        if (process.platform === 'win32') child.kill(signal);
-        else process.kill(-child.pid, signal);
-      } catch (error) {
-        if (!record(error) || error.code !== 'ESRCH') {
-          failure ??= new Error('Could not stop the harness process.', {
-            cause: error,
-          });
-        }
-      }
+      const error = signalGroup(child, signal);
+      if (error)
+        failure ??= new Error('Could not stop the harness process.', {
+          cause: error,
+        });
     }
 
     function stop(error: Error): void {
@@ -421,11 +602,7 @@ export async function runHarness(
     }
 
     function abort(): void {
-      stop(
-        new Error('Harness request was cancelled.', {
-          cause: request.signal.reason,
-        }),
-      );
+      stop(cancelled(request.signal));
     }
 
     /** Read one line. Invalid output stops the host, because its result cannot be trusted. */
@@ -468,7 +645,7 @@ export async function runHarness(
             `The agent ran for ${duration(timeoutMs)}, the longest that one call can run, so Verifold stopped it.`,
           ),
         ),
-      timeoutMs,
+      left,
     );
     // Each line of output starts the quiet period again.
     const quiet = setTimeout(

@@ -1107,6 +1107,12 @@ export class SessionManager {
     else {
       const socket =
         host.socket ?? fail('This Codex session has no socket for a terminal.');
+      const overrides =
+        host.overrides === null
+          ? fail(
+              'An MCP server in your Codex settings has a name that Verifold cannot turn off in a terminal, so the terminal stays closed. The session goes on without that server.',
+            )
+          : (host.overrides ?? []);
       args = [
         // A turn that starts in the terminal must keep the task's limits.
         ...(strict
@@ -1117,7 +1123,7 @@ export class SessionManager {
             ]
           : []),
         // The terminal keeps the worker's MCP isolation.
-        ...(host.overrides ?? []),
+        ...overrides,
         '--remote',
         `unix://${socket}`,
         'resume',

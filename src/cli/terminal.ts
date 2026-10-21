@@ -1,6 +1,12 @@
 import type { Choice } from './choices.ts';
 import { stripVTControlCharacters } from 'node:util';
-import { plainText, visibleWidth, wrapText } from './terminal-layout.ts';
+import {
+  plainText,
+  terminalColumns,
+  terminalRows,
+  visibleWidth,
+  wrapText,
+} from './terminal-layout.ts';
 
 // Colors from brand/exports/brand-tokens.css. Body text inherits the terminal theme.
 export const palette = {
@@ -28,11 +34,16 @@ export function muted(value: string, color: boolean): string {
 }
 
 /** Leave a safe right gutter and keep prose readable in wide terminals. */
-export function contentWidth(columns = 80): number {
-  return Math.max(1, Math.min(72, columns - 5));
+export function contentWidth(reported?: number): number {
+  return Math.max(1, Math.min(72, terminalColumns(reported) - 5));
 }
 
-export function paragraph(value: string, columns = 80, indent = '  '): string {
+export function paragraph(
+  value: string,
+  reported?: number,
+  indent = '  ',
+): string {
+  const columns = terminalColumns(reported);
   return wrapText(value, Math.max(1, Math.min(72, columns - indent.length - 1)))
     .map((line) => indent + line)
     .join('\n');
@@ -128,8 +139,9 @@ function styledLines(line: string, width: number): string[] {
 export function terminalMessage(
   value: string,
   color: boolean,
-  columns = 80,
+  reported?: number,
 ): string {
+  const columns = terminalColumns(reported);
   let fence: string | undefined;
   let headers: string[] | undefined;
   let separator = -1;
@@ -235,9 +247,10 @@ export function terminalMessage(
 export function terminalBanner(
   interactive: boolean,
   noColor: boolean,
-  columns = 80,
+  reported?: number,
   frame = 2,
 ): string {
+  const columns = terminalColumns(reported);
   if (!interactive) return '';
   const color = !noColor;
   const left = ['██▄   ', ' ▀██▄ ', '  ▀██▄', '   ▀██', '    ▀█'];
@@ -271,9 +284,11 @@ export function terminalMenu(
   choices: readonly Choice[],
   index: number,
   color: boolean,
-  columns = 80,
-  rows = 24,
+  reportedColumns?: number,
+  reportedRows?: number,
 ): string {
+  const columns = terminalColumns(reportedColumns);
+  const rows = terminalRows(reportedRows);
   const width = contentWidth(columns);
   const lines = [tint(paragraph(question, columns), color), ''];
   choices.forEach((choice, position) => {
