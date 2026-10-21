@@ -19,8 +19,15 @@ import {
   type Artifact,
   type Post as BoardPost,
 } from '../core/board.ts';
+import {
+  awayCounts,
+  awayLines,
+  awayNews,
+  type Away as LabAway,
+} from '../core/away.ts';
 import { labGpu, type ComputeView } from '../core/compute.ts';
 import { openDisputes } from '../core/disputes.ts';
+import { authorName, callWords, kindLabel } from '../core/lab-words.ts';
 import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
 import {
@@ -35,7 +42,18 @@ import {
   type Direction as LabDirection,
   type LabView,
 } from '../core/lab.ts';
-import type { RunRecord } from '../core/runs.ts';
+import { runSummary, type RunRecord } from '../core/runs.ts';
+import {
+  callSearchText,
+  callState,
+  searchLab,
+  searchLimit,
+  searchNote,
+  searchTextBytes,
+  searchWords,
+  snippetParts,
+  snippetWidth,
+} from '../core/search.ts';
 import {
   SessionActionError,
   sessionTranscript,
@@ -65,6 +83,8 @@ import {
   type Post,
   type Proof,
   type Run,
+  type SearchHit,
+  type SearchResult,
   type Step,
   type Text,
   type Turn,
@@ -127,6 +147,8 @@ export const apiLimits = {
   bringGroups: 20,
   /** Paths of one bring-in in a bring-in read. */
   bringPaths: 50,
+  /** Characters of a search, as in the desk's search box. */
+  searchQuery: 100,
 };
 
 /** How many items of each list a snapshot keeps, and how much of each message. */
@@ -234,10 +256,7 @@ export interface ApiSources {
   readonly session: (id: string) => SessionView | null;
   readonly works: readonly Work[];
   /** When the person left the lab, and the two costs then. */
-  readonly away: () => Promise<{
-    readonly since: string;
-    readonly spent: { readonly claude: number; readonly gpu: number };
-  } | null>;
+  readonly away: () => Promise<LabAway | null>;
   /** The desk's bring-in reads, when it runs a lab. */
   readonly bring?: BringSource | undefined;
 }
@@ -721,6 +740,40 @@ function post(entry: BoardPost, handle: (agent: string) => string): Post {
   };
 }
 
+/**
+ * The time away, with the news since then in the words of the desk's Home
+ * (core/away.ts): the first directions with news, how many more, what came,
+ * and what the lab spent.
+ */
+function awayOf(
+  view: LabView,
+  away: LabAway,
+  compute: ComputeView | null,
+): NonNullable<Lab['away']> {
+  const disputed = new Set(
+    openDisputes(view).map((dispute) => dispute.target.id),
+  );
+  const news = awayNews(
+    view,
+    away,
+    compute ? labGpu(compute, view.state.startedAt).spent : null,
+    disputed,
+  );
+  return {
+    since: away.since,
+    spentThen: {
+      plansUsd: cents(away.spent.claude),
+      gpuUsd: cents(away.spent.gpu),
+    },
+    news: {
+      lines: news.lines.slice(0, awayLines),
+      moreLines: Math.max(0, news.lines.length - awayLines),
+      counts: awayCounts(news, (id) => id),
+      cost: news.cost,
+    },
+  };
+}
+
 /** The page of posts before post number `before`, or the newest page. Oldest first. */
 function boardPage(
   posts: readonly BoardPost[],
@@ -1158,15 +1211,7 @@ export class ApiReader {
       agents,
       compute: sources.compute?.view() ?? null,
       works: sources.works,
-      away: away
-        ? {
-            since: away.since,
-            spentThen: {
-              plansUsd: cents(away.spent.claude),
-              gpuUsd: cents(away.spent.gpu),
-            },
-          }
-        : null,
+      away: away ? awayOf(view, away, sources.compute?.view() ?? null) : null,
       turns,
       models,
     };
@@ -1207,6 +1252,80 @@ export class ApiReader {
       (agent) => view.handles[agent] ?? agent,
       before,
     );
+  }
+
+  /**
+   * The lab's search (core/search.ts), as the desk's panel runs it: the
+   * newest hits with their marked snippets. A long post that the board's
+   * newest page leaves out comes with its whole text, within the search's
+   * byte budget. Null without a lab.
+   */
+  search(q: string): SearchResult | null {
+    const view = this.sources().lab?.view();
+    if (!view) return null;
+    const words = searchWords(q);
+    const found = words ? searchLab(view, words) : [];
+    const board = new Set(
+      view.posts.slice(-apiLimits.posts).map((entry) => entry.id),
+    );
+    let budget = searchTextBytes;
+    const hits = !words
+      ? []
+      : found.slice(0, searchLimit).map((entry): SearchHit => {
+          if ('post' in entry) {
+            const { post } = entry;
+            let whole: string | null = null;
+            let cut = false;
+            if (!board.has(post.id) && post.text.length > snippetWidth) {
+              const bytes = Buffer.byteLength(post.text);
+              if (bytes <= budget) {
+                budget -= bytes;
+                whole = post.text;
+              } else cut = true;
+            }
+            return {
+              type: 'post',
+              id: post.id,
+              at: post.at,
+              kind: post.kind,
+              label: kindLabel(post),
+              author: authorName(view, post.author),
+              direction: post.direction ?? null,
+              snippet: snippetParts(post.text, words.any),
+              whole,
+              cut,
+            };
+          }
+          if ('run' in entry) {
+            const { run, at } = entry;
+            return {
+              type: 'run',
+              id: run.id,
+              at,
+              author: authorName(view, run.agent),
+              direction: run.direction,
+              summary: runSummary(run),
+              snippet: snippetParts(run.command, words.any),
+            };
+          }
+          const { call } = entry;
+          return {
+            type: 'call',
+            id: call.id,
+            at: call.at,
+            label: callWords[call.kind],
+            author: authorName(view, call.by),
+            state: callState(call),
+            open: call.state === 'open',
+            snippet: snippetParts(callSearchText(call), words.any),
+          };
+        });
+    return {
+      q,
+      note: searchNote(words, found.length),
+      total: found.length,
+      hits,
+    };
   }
 
   /** Any agent of the lab, with its turns and the lab's view. Null when the lab has no such agent. */
@@ -1503,6 +1622,7 @@ const actionNames = new Set<string>([
   'lab-bring',
   'lab-dismiss',
   'lab-away-dismiss',
+  'lab-look',
 ] satisfies ActionName[]);
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -1583,6 +1703,22 @@ export async function answerApi(
   }
   if (first === 'events' && parts.length === 1 && !keys.length) {
     if (!(await feed.open(request, response))) response.writeHead(503).end();
+    return;
+  }
+  if (
+    first === 'search' &&
+    parts.length === 1 &&
+    keys.length <= 1 &&
+    keys.every((key) => key === 'q')
+  ) {
+    const q = url.searchParams.get('q') ?? '';
+    if (q.length > apiLimits.searchQuery) {
+      response.writeHead(400).end();
+      return;
+    }
+    const result = reader.search(q);
+    if (result) json(response, 200, result);
+    else response.writeHead(404).end();
     return;
   }
   if (first === 'board' && parts.length === 1 && onlyBefore) {

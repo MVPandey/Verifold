@@ -58,11 +58,11 @@ import {
   renderLabWork,
   runPanel,
   searchPanel,
-  type Away,
   type LabDiff,
   type LabWork,
   type Panel,
 } from './desk-lab.ts';
+import type { Away } from '../core/away.ts';
 import { scratch } from '../core/workspaces.ts';
 import {
   decisionLabel,

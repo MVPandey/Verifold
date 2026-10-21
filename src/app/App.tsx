@@ -1,20 +1,32 @@
 import {
+  useCallback,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { agentActions, answerActions, labActions } from './actions.ts';
+import {
+  agentActions,
+  answerActions,
+  appActions,
+  labActions,
+} from './actions.ts';
 import { needsTick } from './call.ts';
 import { href, parseRoute, type Route } from './route.ts';
+import { isSearchKey } from './search.ts';
 import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
 import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { ComingSoon, NotFound, Notice } from './screens/Notice.tsx';
+import { SearchDialog } from './screens/SearchDialog.tsx';
 import { TurnScreen } from './screens/TurnScreen.tsx';
 import type { LabStore, LabState } from './store.ts';
+import { ToolsContext, type AppTools } from './tools.ts';
+import { useNotify } from './useNotify.ts';
 
 function useRoute(): Route {
   const [route, setRoute] = useState(() => parseRoute(location.hash));
@@ -42,6 +54,42 @@ function useNow(fast: boolean): number {
 
 /** Answer and bring-in actions for a page without a token: each one is refused. */
 const signedOutAnswers = answerActions(null);
+
+/** How often a visible page tells Verifold that the person looks, as the desk's page does. */
+const lookMs = 60_000;
+
+/**
+ * Tell Verifold that the person looks at the lab: at once, each minute while
+ * the page shows, and when it shows again. A look after 30 minutes or more
+ * away starts the "While you were away" digest.
+ */
+function useLook(look: () => Promise<unknown>): void {
+  useEffect(() => {
+    const tell = (): void => {
+      if (document.visibilityState === 'visible') void look();
+    };
+    tell();
+    const timer = setInterval(tell, lookMs);
+    document.addEventListener('visibilitychange', tell);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tell);
+    };
+  }, [look]);
+}
+
+/** ⌘K, or Ctrl+K off a Mac, opens the search from any page. */
+function useSearchKey(open: () => void): void {
+  useEffect(() => {
+    const key = (event: KeyboardEvent): void => {
+      if (!isSearchKey(event)) return;
+      event.preventDefault();
+      open();
+    };
+    addEventListener('keydown', key);
+    return () => removeEventListener('keydown', key);
+  }, [open]);
+}
 
 /** The page for a state and a route. Separate from the hooks, so tests render it directly. */
 export function Screen({
@@ -207,14 +255,43 @@ export function App({
   const [actions] = useState(() => labActions(token));
   const [agent] = useState(() => agentActions(token));
   const [answers] = useState(() => answerActions(token));
+  const [app] = useState(() => appActions(token));
+  const lab = state.snapshot?.lab ?? null;
+  // The search opens only over a lab: before one, there is nothing to find.
+  const hasLab = useRef(false);
+  hasLab.current = lab !== null;
+  const [searching, setSearching] = useState(false);
+  const openSearch = useCallback(() => {
+    if (hasLab.current) setSearching(true);
+  }, []);
+  useSearchKey(openSearch);
+  useLook(app.look);
+  const notify = useNotify(state.snapshot);
+  const tools = useMemo<AppTools>(
+    () => ({ openSearch, dismissAway: app.dismissAway, notify }),
+    [openSearch, app, notify],
+  );
+  const board = useMemo(
+    () => new Set(lab?.board.posts.map((post) => post.id)),
+    [lab],
+  );
   return (
-    <Screen
-      state={state}
-      route={route}
-      now={now}
-      actions={actions}
-      agentActions={agent}
-      answers={answers}
-    />
+    <ToolsContext.Provider value={tools}>
+      <Screen
+        state={state}
+        route={route}
+        now={now}
+        actions={actions}
+        agentActions={agent}
+        answers={answers}
+      />
+      {searching && lab && (
+        <SearchDialog
+          board={board}
+          run={app.search}
+          onClose={() => setSearching(false)}
+        />
+      )}
+    </ToolsContext.Provider>
   );
 }

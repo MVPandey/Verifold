@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
 import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
@@ -12,8 +12,11 @@ import { DirectionRow } from '../components/DirectionRow.tsx';
 import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
+import { AwayDigest } from '../components/AwayDigest.tsx';
+import { NotifyLine } from '../components/NotifyLine.tsx';
 import { failureOf } from '../call.ts';
 import { href } from '../route.ts';
+import { ToolsContext } from '../tools.ts';
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -54,6 +57,7 @@ export function LabHome({
 }): ReactNode {
   const agents = new Map(lab.agents.map((agent) => [agent.id, agent]));
   const [first, ...rest] = lab.needsYou;
+  const tools = useContext(ToolsContext);
   return (
     <div className="page">
       <AppHeader
@@ -65,6 +69,13 @@ export function LabHome({
       <main className="main">
         <div className="column">
           <ConnectionBar connection={connection} at={snapshot.at} />
+          {lab.away && (
+            <AwayDigest
+              away={lab.away}
+              now={now}
+              onDismiss={tools?.dismissAway ?? null}
+            />
+          )}
           {first ? (
             <NeedsYouLine
               call={first}
@@ -149,6 +160,7 @@ export function LabHome({
             maxLength={lab.postLimit}
             onSend={actions.post}
           />
+          <NotifyLine />
         </div>
       </main>
     </div>
