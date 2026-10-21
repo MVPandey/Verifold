@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Call } from '../../protocol/api.ts';
+import { decideId } from '../call.ts';
 import { asked, since, usd } from '../format.ts';
 import { href } from '../route.ts';
 
@@ -32,7 +33,11 @@ export function NeedsYouLine({
             ` · ${more} more ${more === 1 ? 'call' : 'calls'} after this`}
         </span>
       </span>
-      <a className="button button--dark" href={href.call(call.id)}>
+      <a
+        id={decideId}
+        className="button button--dark"
+        href={href.call(call.id)}
+      >
         Decide
       </a>
     </div>

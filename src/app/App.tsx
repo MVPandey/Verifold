@@ -4,8 +4,9 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { act } from './api.ts';
+import { labActions } from './actions.ts';
 import { parseRoute, type Route } from './route.ts';
+import { CallDialog } from './screens/CallDialog.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { ComingSoon, NotFound, Notice } from './screens/Notice.tsx';
 import type { LabStore, LabState } from './store.ts';
@@ -68,7 +69,8 @@ export function Screen({
       </Notice>
     );
   if (route.page === 'unknown') return <NotFound />;
-  if (route.page !== 'lab') return <ComingSoon page={route.page} />;
+  if (route.page !== 'lab' && route.page !== 'call')
+    return <ComingSoon page={route.page} />;
   if (!snapshot)
     return connection === 'unreachable' ? (
       <Notice title="Can't reach Verifold. Is it running?">
@@ -93,13 +95,24 @@ export function Screen({
       </Notice>
     );
   return (
-    <LabHome
-      snapshot={snapshot}
-      lab={snapshot.lab}
-      connection={connection}
-      now={now}
-      actions={actions}
-    />
+    <>
+      <LabHome
+        snapshot={snapshot}
+        lab={snapshot.lab}
+        connection={connection}
+        now={now}
+        actions={actions}
+      />
+      {route.page === 'call' && (
+        <CallDialog
+          key={route.id}
+          lab={snapshot.lab}
+          id={route.id}
+          now={now}
+          actions={actions}
+        />
+      )}
+    </>
   );
 }
 
@@ -113,14 +126,6 @@ export function App({
   const state = useSyncExternalStore(store.subscribe, store.get);
   const route = useRoute();
   const now = useNow();
-  const signedOut = Promise.resolve({ refused: 'This tab has no access key.' });
-  const actions: LabActions = {
-    post: (text, key) =>
-      token ? act(token, 'lab-post', { text }, key) : signedOut,
-    pause: (pause, key) =>
-      token
-        ? act(token, pause ? 'lab-pause' : 'lab-resume', {}, key)
-        : signedOut,
-  };
+  const [actions] = useState(() => labActions(token));
   return <Screen state={state} route={route} now={now} actions={actions} />;
 }

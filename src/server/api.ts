@@ -373,7 +373,8 @@ function pageOfTurns(
   };
 }
 
-function effect(value: CallEffect): Effect {
+/** `stored`: the pod secrets that this computer stores, or null when Compute is not known. */
+function effect(value: CallEffect, stored: ReadonlySet<string> | null): Effect {
   switch (value.type) {
     case 'pod':
       return {
@@ -381,6 +382,9 @@ function effect(value: CallEffect): Effect {
         gpu: value.gpuType,
         hours: value.hours,
         secrets: value.secrets.length,
+        missing: stored
+          ? value.secrets.filter((name) => !stored.has(name)).length
+          : null,
       };
     case 'hours':
       return { type: 'hours', hours: value.hours };
@@ -398,12 +402,16 @@ function effect(value: CallEffect): Effect {
   }
 }
 
-function call(entry: LabCall, handle: (agent: string) => string): Call {
+function call(
+  entry: LabCall,
+  handle: (agent: string) => string,
+  stored: ReadonlySet<string> | null,
+): Call {
   const options: CallOption[] = entry.options.map((option) => ({
     label: option.label,
     usd: option.usd,
     minutes: option.minutes,
-    effect: option.effect ? effect(option.effect) : null,
+    effect: option.effect ? effect(option.effect, stored) : null,
   }));
   return {
     id: entry.id,
@@ -424,6 +432,7 @@ function call(entry: LabCall, handle: (agent: string) => string): Call {
     byVerifold: entry.by === 'verifold',
     options,
     pick: entry.pick,
+    undoMinutes: entry.undoMinutes,
     state: entry.state,
     answer: entry.answer
       ? { option: entry.answer.option, at: entry.answer.at }
@@ -595,6 +604,9 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   const gpu = loaded.compute
     ? labGpu(loaded.compute, state.startedAt)
     : { spent: 0, limit: null };
+  const stored = loaded.compute
+    ? new Set(loaded.compute.secrets.map((secret) => secret.name))
+    : null;
   const waiting = (entry: LabCall): boolean =>
     entry.state === 'open' || entry.state === 'undoing';
   const agents: Agent[] = keep(loaded.agents, level.agents, 'agents').map(
@@ -647,7 +659,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     },
     // The calls that waited longest come first.
     needsYou: keep(state.calls.filter(waiting), level.needsYou, 'needsYou').map(
-      (entry) => call(entry, handle),
+      (entry) => call(entry, handle, stored),
     ),
     answered: keep(
       state.calls.filter((entry) => !waiting(entry)),
@@ -656,7 +668,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       true,
     )
       .reverse()
-      .map((entry) => call(entry, handle)),
+      .map((entry) => call(entry, handle, stored)),
     directions: keep(state.directions, level.directions, 'directions').map(
       (entry) =>
         direction(
@@ -837,7 +849,12 @@ export class ApiReader {
     const compute = sources.compute?.view();
     if (compute) {
       const gpu = labGpu(compute, view.state.startedAt);
-      parts.push(cents(gpu.spent), gpu.limit);
+      // A stored pod secret changes what a pod option is missing.
+      parts.push(
+        cents(gpu.spent),
+        gpu.limit,
+        compute.secrets.map((secret) => secret.name).join('\n'),
+      );
     }
     const agents = shownAgents(view);
     const followed = await Promise.all(

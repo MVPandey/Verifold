@@ -1,0 +1,294 @@
+/* The call dialog and the undo line. Values follow the v9 canvas artboard "9. A call". */
+.call {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  margin: 40px auto auto;
+  padding: 26px 30px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 30px 80px -30px rgba(16, 16, 20, 0.6);
+}
+
+.call::backdrop {
+  background: rgba(16, 16, 20, 0.42);
+}
+
+.call__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.call__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.call__label {
+  flex-grow: 1;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--need-ink);
+}
+
+.call__label--done {
+  color: var(--ok-ink);
+}
+
+.call__close {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.call__title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.call__context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 16px;
+}
+
+.call__context p {
+  margin: 0;
+}
+
+.call__options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.call__choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.call__option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border: 1.5px solid var(--control);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 700 15px var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.call__option--pick {
+  border: 2px solid var(--accent);
+  background: var(--accent-wash);
+}
+
+.call__option:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.call__option-body {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.call__option-body b {
+  font-size: 17px;
+}
+
+.call__cost {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.call__pick {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.call__fine {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.call__fine--need {
+  color: var(--need-ink);
+}
+
+.call__error {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--need-ink);
+}
+
+.call__facts {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.call__facts summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--ink-2);
+}
+
+.call__facts ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.call__fact-source {
+  color: var(--muted);
+}
+
+.call__sent {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ok-ink);
+}
+
+.call__words {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.call__words-label {
+  font-weight: 800;
+}
+
+.call__words-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.call__words-row textarea {
+  flex: 1 1 360px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--control);
+  border-radius: 12px;
+  font: 500 15px/1.4 var(--font);
+  color: var(--ink);
+  resize: vertical;
+}
+
+.call__send {
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: 12px;
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 800;
+}
+
+.call__send:hover {
+  color: var(--accent-deep);
+}
+
+.call__foot {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.call__quote {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--bg);
+  white-space: pre-wrap;
+}
+
+.call__done {
+  display: flex;
+  padding-top: 4px;
+}
+
+/* An answer the person can still undo, in the dialog and on the lab home. */
+.undo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: var(--ok-bg);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.undo__button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.undo__button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.undo__fine {
+  color: var(--ink-2);
+}
+
+.undo__error {
+  color: var(--need-ink);
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .call {
+    margin-top: 16px;
+    padding: 20px 18px;
+  }
+
+  .call__title {
+    font-size: 22px;
+  }
+}

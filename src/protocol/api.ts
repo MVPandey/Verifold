@@ -107,13 +107,19 @@ export interface Asker {
   readonly why: string;
 }
 
-/** What an option does when the person picks it. A pod lists how many pod secrets it gets, never their names. */
+/**
+ * What an option does when the person picks it. A pod lists how many pod
+ * secrets it gets, never their names, and how many of those this computer
+ * does not store yet (null when Verifold cannot tell). A pod cannot start
+ * until each one is stored in Compute.
+ */
 export type Effect =
   | {
       readonly type: 'pod';
       readonly gpu: string;
       readonly hours: number;
       readonly secrets: number;
+      readonly missing: number | null;
     }
   | { readonly type: 'hours'; readonly hours: number }
   | {
@@ -146,6 +152,8 @@ export interface Call {
   readonly options: readonly CallOption[];
   /** The option that the agents advise, or null. */
   readonly pick: number | null;
+  /** How long the person can undo an answer, in minutes. 0: an answer has no undo. */
+  readonly undoMinutes: number;
   readonly state: 'open' | 'answered' | 'undoing' | 'withdrawn';
   readonly answer: { readonly option: number; readonly at: string } | null;
   /** The person's answer in their own words. */

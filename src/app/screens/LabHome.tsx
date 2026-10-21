@@ -10,11 +10,25 @@ import { Composer } from '../components/Composer.tsx';
 import { DirectionRow } from '../components/DirectionRow.tsx';
 import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
+import { UndoLine } from '../components/UndoLine.tsx';
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
   readonly post: (text: string, key: string) => Promise<ActOutcome>;
   readonly pause: (pause: boolean, key: string) => Promise<ActOutcome>;
+  /** Answer a call with one of its options, by its index in the call. */
+  readonly answer: (
+    call: string,
+    option: number,
+    key: string,
+  ) => Promise<ActOutcome>;
+  /** Answer a call in the person's own words. */
+  readonly words: (
+    call: string,
+    text: string,
+    key: string,
+  ) => Promise<ActOutcome>;
+  readonly undo: (call: string, key: string) => Promise<ActOutcome>;
 }
 
 /**
@@ -70,6 +84,16 @@ export function LabHome({
           ) : (
             <StatusBar tone="ok">Nothing needs you.</StatusBar>
           )}
+          {lab.answered.map((call) => (
+            <UndoLine
+              key={call.id}
+              call={call}
+              lab={lab}
+              now={now}
+              question
+              onUndo={actions.undo}
+            />
+          ))}
           {lab.directions.length > 0 ? (
             <section className="section" aria-labelledby="directions">
               <h2 id="directions" className="section__title">
