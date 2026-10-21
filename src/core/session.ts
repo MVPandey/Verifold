@@ -222,6 +222,8 @@ export interface SessionSkills {
   folder(host: HarnessName): Promise<string | null>;
   /** The harness could not load them, and why. Later launches of that harness go without them. */
   problem(host: HarnessName, text: string): void;
+  /** A turn of a session that loaded the folder starts, so the folder is in use. */
+  used(folder: string): void;
 }
 
 /** An action that the current session state does not allow. The message is safe to show. */
@@ -977,6 +979,8 @@ export class SessionManager {
   private readonly options: SessionManagerOptions;
   private current: SessionRecord | null = null;
   private host: HostSession | null = null;
+  /** The plugin folder of added skills that the live process loaded. */
+  private skillsFolder: string | null = null;
   /** Request IDs continue across sessions, so an old desk button cannot answer a new request. */
   private readonly requests: { next: number };
   /** A launch is saving its record. No second start can begin. */
@@ -1445,6 +1449,7 @@ export class SessionManager {
     if (!this.host || this.current?.status !== 'idle')
       fail('Wait for the current turn to end, or cancel it.');
     this.host.send(text);
+    if (this.skillsFolder) this.options.skills?.used(this.skillsFolder);
     this.transcript?.apply(requestUpdate(text));
     this.patch((record) => ({ ...record, status: 'running' }));
     this.event('you', text);
@@ -1646,9 +1651,10 @@ export class SessionManager {
       }
       // Lab agents and checkers load the skills that the person added.
       const skills =
-        record.agent && record.mode === 'strict'
+        (record.agent && record.mode === 'strict'
           ? await this.options.skills?.folder(record.host)
-          : null;
+          : null) ?? null;
+      this.skillsFolder = skills;
       const writer = await TranscriptWriter.open(
         transcriptFile(this.root, record.id),
       );
@@ -2005,6 +2011,13 @@ export class SessionManager {
       case 'skills':
         this.event('notice', event.text);
         this.options.skills?.problem(record.host, event.text);
+        break;
+      case 'process':
+        // A later owner checks the start time before it stops a process with this PID.
+        this.identify(launch, { pid: event.pid });
+        void processStart(event.pid).then((start) =>
+          this.identify(launch, { processStart: start }),
+        );
         break;
       case 'limit': {
         const signal: LimitSignal = {

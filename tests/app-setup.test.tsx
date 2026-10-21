@@ -593,4 +593,35 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
     runsLine({ scripts: [], executables: 0, installs: [], hosts: [] }),
     'Has no scripts. No hooks.',
   );
+  // A date that GitHub's limit kept out, and an update check without a profile.
+  const updates = text(
+    <SkillsStep
+      view={view({
+        skills: skills({
+          needsProfile: true,
+          added: [
+            {
+              id: card.id,
+              name: card.name,
+              repo: card.repo,
+              commit: 'b'.repeat(40),
+              path: card.path,
+              addedAt: '2026-10-01T10:00:00Z',
+            },
+          ],
+          cards: [{ ...card, updated: null, state: 'update' }],
+        }),
+      })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  assert.match(updates, /@ aaaaaaa · updated: not read/);
+  assert.match(
+    updates,
+    /Verifold read 1 skill catalog at \d\d:\d\d today to check your added skills for updates\./,
+  );
+  assert.match(updates, /this step needs About you first/);
+  assert.match(updates, /Update/);
 });

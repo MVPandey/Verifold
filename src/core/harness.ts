@@ -59,6 +59,12 @@ export interface HarnessRequest {
    * results, with subagent work under its tool call. It is private session data.
    */
   readonly onTranscript?: (update: TranscriptUpdate) => void;
+  /**
+   * The harness answers from the prompt alone, for a prompt that holds text
+   * from outside: Claude Code gets no built-in tools and no MCP servers, and
+   * Codex gets no web search.
+   */
+  readonly textOnly?: boolean;
 }
 
 /** A harness call ran into a time limit: it sent nothing for too long, or it ran for too long. */
@@ -362,11 +368,12 @@ export async function runHarness(
           '--output-format',
           'stream-json',
           '--verbose',
+          ...(request.textOnly ? ['--tools', '', '--strict-mcp-config'] : []),
           ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
       : [
-          '--search',
+          ...(request.textOnly ? [] : ['--search']),
           'exec',
           '--skip-git-repo-check',
           '--color',
