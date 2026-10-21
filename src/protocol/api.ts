@@ -158,6 +158,12 @@ export interface Money {
   readonly gpuUsd: number;
   /** The project's GPU spend limit, or null when none is set. */
   readonly gpuLimitUsd: number | null;
+  /**
+   * What all of the person's projects spent on GPU pods this calendar month,
+   * and their monthly limit. Absent: no monthly limit, or Verifold has not
+   * read it yet. Added after version 1.
+   */
+  readonly month?: { readonly spentUsd: number; readonly limitUsd: number };
 }
 
 export interface Asker {
@@ -944,6 +950,8 @@ export interface MoneyLimits {
   readonly maxRunningPods: 1 | 2;
   /** RunPod GPU type IDs that agents may rent. */
   readonly gpuTypes: readonly string[];
+  /** What all projects together may spend in one calendar month. Null: no monthly limit. Added after version 1. */
+  readonly monthUsd?: number | null;
 }
 
 /** A GPU type with RunPod's Secure Cloud list price. */
@@ -977,6 +985,15 @@ export interface SetupMoney {
   readonly limits: MoneyLimits;
   /** Why the saved limits are not valid. The defaults show until a save replaces them. */
   readonly unreadable?: string | null;
+  /**
+   * What all projects spent on GPU pods this calendar month. `problem`: why
+   * Verifold cannot tell it, or counts a last known value. Added after
+   * version 1.
+   */
+  readonly month?: {
+    readonly spentUsd: number;
+    readonly problem?: string | null;
+  };
 }
 
 /**

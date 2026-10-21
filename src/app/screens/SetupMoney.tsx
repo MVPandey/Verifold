@@ -14,6 +14,8 @@ interface LimitText {
   readonly maxHoursPerLease: string;
   readonly idleMinutes: string;
   readonly maxRunningPods: '1' | '2';
+  /** Empty: no monthly limit. */
+  readonly monthUsd: string;
 }
 
 function textOf(limits: MoneyLimits): LimitText {
@@ -24,6 +26,7 @@ function textOf(limits: MoneyLimits): LimitText {
     maxHoursPerLease: String(limits.maxHoursPerLease),
     idleMinutes: String(limits.idleMinutes),
     maxRunningPods: limits.maxRunningPods === 2 ? '2' : '1',
+    monthUsd: String(limits.monthUsd ?? ''),
   };
 }
 
@@ -41,7 +44,7 @@ export function readAt(at: string): string {
     : `on ${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} at ${clock(at)}`;
 }
 
-/** One number field with its unit, as in the artboard's "Limits". */
+/** One number field with its unit, as in the artboard's "Limits". `note`: a line under it. */
 function LimitField({
   label,
   before,
@@ -50,6 +53,7 @@ function LimitField({
   onChange,
   min,
   step,
+  note,
 }: {
   readonly label: string;
   readonly before?: string;
@@ -58,8 +62,10 @@ function LimitField({
   readonly onChange: (value: string) => void;
   readonly min: number;
   readonly step: number;
+  readonly note?: ReactNode;
 }): ReactNode {
   const id = useId();
+  const noteId = useId();
   return (
     <div className="limit">
       <label htmlFor={id} className="limit__label">
@@ -76,9 +82,15 @@ function LimitField({
           step={step}
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          {...(note ? { 'aria-describedby': noteId } : {})}
         />
         {after}
       </span>
+      {note && (
+        <span id={noteId} className="limit__note">
+          {note}
+        </span>
+      )}
     </div>
   );
 }
@@ -134,7 +146,12 @@ export function MoneyStep({
       idleMinutes: numberOf(limits.idleMinutes),
     };
     const missing = Object.entries(values).find(([, value]) => value === null);
-    if (missing && (pods || missing[0] !== 'limitUsd')) {
+    // An empty monthly field means no monthly limit.
+    const month = numberOf(limits.monthUsd);
+    if (
+      (missing && (pods || missing[0] !== 'limitUsd')) ||
+      (month === null && limits.monthUsd.trim())
+    ) {
       setProblem('Give each limit as a number.');
       return;
     }
@@ -147,6 +164,7 @@ export function MoneyStep({
         idleMinutes: values.idleMinutes ?? 0,
         maxRunningPods: limits.maxRunningPods === '2' ? 2 : 1,
         gpuTypes: allowed,
+        monthUsd: month,
       })
       .then((ok) => ok && onSaved());
   };
@@ -367,6 +385,26 @@ export function MoneyStep({
           onChange={set('limitUsd')}
           min={1}
           step={1}
+        />
+        <LimitField
+          label="All projects together, each month"
+          before="$"
+          value={limits.monthUsd}
+          onChange={set('monthUsd')}
+          min={1}
+          step={1}
+          note={
+            <>
+              {money.month?.problem
+                ? `${money.month.problem} `
+                : money.month && money.month.spentUsd > 0
+                  ? `Spent so far this month: ${usd(money.month.spentUsd)}. `
+                  : 'Nothing spent this month. '}
+              Leave it empty for no monthly limit. Two projects that rent at the
+              same moment can go over it by one pod’s cost. Verifold then stops
+              their pods.
+            </>
+          }
         />
         <LimitField
           label="Stop a pod that sits idle for"

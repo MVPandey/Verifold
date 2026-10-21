@@ -949,6 +949,14 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       plansUsd: cents(view.claudeUsd),
       gpuUsd: cents(gpu.spent),
       gpuLimitUsd: gpu.limit,
+      ...(loaded.compute?.month
+        ? {
+            month: {
+              spentUsd: cents(loaded.compute.month.spentUsd),
+              limitUsd: loaded.compute.month.limitUsd,
+            },
+          }
+        : {}),
     },
     // The calls that waited longest come first.
     needsYou: keep(state.calls.filter(waiting), level.needsYou, 'needsYou').map(
@@ -1200,6 +1208,8 @@ export class ApiReader {
         cents(gpu.spent),
         gpu.limit,
         compute.secrets.map((secret) => secret.name).join('\n'),
+        compute.month ? cents(compute.month.spentUsd) : null,
+        compute.month?.limitUsd,
       );
     }
     const agents = shownAgents(view);

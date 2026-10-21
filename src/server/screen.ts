@@ -20,6 +20,8 @@ export interface LabScreen {
     readonly plansUsd: number;
     readonly gpuUsd: number;
     readonly gpuLimitUsd: number | null;
+    /** All projects' GPU spend this month, with the monthly limit. Absent: no monthly limit. */
+    readonly month?: { readonly spentUsd: number; readonly limitUsd: number };
   };
   /** The end of the lab's time budget, or null without one. */
   readonly deadline: string | null;
@@ -141,6 +143,14 @@ export function labScreen(
       plansUsd: lab.money.plansUsd,
       gpuUsd: lab.money.gpuUsd,
       gpuLimitUsd: lab.money.gpuLimitUsd,
+      ...(lab.money.month
+        ? {
+            month: {
+              spentUsd: lab.money.month.spentUsd,
+              limitUsd: lab.money.month.limitUsd,
+            },
+          }
+        : {}),
     },
     deadline: lab.budget?.deadline ?? null,
     paused: lab.paused?.reason ?? null,
@@ -226,6 +236,16 @@ function call(value: unknown): ScreenCall | null | undefined {
     : undefined;
 }
 
+/** A screen's month across projects: absent, or both amounts. Null: not readable. */
+function monthOf(
+  value: unknown,
+): { readonly spentUsd: number; readonly limitUsd: number } | undefined | null {
+  if (value === undefined) return undefined;
+  return record(value) && amount(value.spentUsd) && amount(value.limitUsd)
+    ? { spentUsd: value.spentUsd, limitUsd: value.limitUsd }
+    : null;
+}
+
 /**
  * A screen from the control channel, checked field by field. Null for
  * anything else: a terminal shows only what it could read.
@@ -255,7 +275,12 @@ export function parseLabScreen(value: unknown): LabScreen | null {
     return null;
   const directions = value.directions.map(direction);
   const first = call(value.call);
-  if (first === undefined || directions.some((entry) => entry === null))
+  const month = monthOf(value.money.month);
+  if (
+    first === undefined ||
+    month === null ||
+    directions.some((entry) => entry === null)
+  )
     return null;
   return {
     project: value.project,
@@ -265,6 +290,7 @@ export function parseLabScreen(value: unknown): LabScreen | null {
       plansUsd: value.money.plansUsd,
       gpuUsd: value.money.gpuUsd,
       gpuLimitUsd: value.money.gpuLimitUsd,
+      ...(month ? { month } : {}),
     },
     deadline: value.deadline,
     paused: value.paused,

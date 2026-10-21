@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
+  deniedPaths,
   localSandbox,
   RunLedger,
   runLimits,
@@ -612,3 +613,19 @@ await test(
     assert.match(log, /workspaces: Operation not permitted/);
   },
 );
+
+await test("a run cannot read the person's Verifold profile, in its default folder or one that --agency-dir names", async (t) => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-deny-')));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const home = join(base, 'home');
+  await mkdir(join(home, '.verifold', 'agency'), { recursive: true });
+  await mkdir(join(home, '.ssh'));
+  const custom = join(base, 'profile');
+  await mkdir(custom);
+  const denied = await deniedPaths(home, [custom, '~/not-there']);
+  assert.ok(denied.includes(join(home, '.verifold', 'agency')));
+  assert.ok(denied.includes(join(home, '.ssh')));
+  assert.ok(denied.includes(custom));
+  // A path that does not exist has nothing to close.
+  assert.ok(!denied.some((path) => path.endsWith('not-there')));
+});

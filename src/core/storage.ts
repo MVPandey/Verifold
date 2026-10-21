@@ -5,6 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { parseWorkspace } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
 
+/** A file or folder that does not exist. */
+export function missing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
 export async function readJson(path: string): Promise<unknown> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
@@ -108,17 +113,20 @@ export async function changeWorkspace(
 /**
  * Write a private file whole: a temporary file in the same folder, then a
  * rename, readable by the owner only. A reader sees the old or the new file,
- * never a part.
+ * never a part. `sync`: the data reaches the disk before the rename, so a
+ * crash cannot leave an empty file in place of the old one.
  */
 export async function writePrivateFile(
   path: string,
   body: string,
+  options: { readonly sync?: boolean } = {},
 ): Promise<void> {
   const temporary = join(dirname(path), `.${randomUUID()}.tmp`);
   try {
     const file = await open(temporary, 'wx', 0o600);
     try {
       await file.writeFile(body);
+      if (options.sync) await file.sync();
     } finally {
       await file.close();
     }

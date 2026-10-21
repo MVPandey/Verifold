@@ -18,6 +18,7 @@ import {
   type Compute,
 } from '../core/compute.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
+import { monthFolder, readMonth, type MonthRead } from '../core/gpu-month.ts';
 import {
   installedHarnesses,
   runHarness,
@@ -107,6 +108,9 @@ export interface FirstRunOptions {
  * Each write of the profile holds its lock, so a profile setup in a
  * terminal cannot write at the same time.
  */
+/** How long a read of the month across projects serves the setup view. */
+const monthReadMs = 5_000;
+
 export class FirstRun {
   private readonly options: FirstRunOptions;
   private detected: readonly HarnessStatus[] | null = null;
@@ -130,6 +134,9 @@ export class FirstRun {
   private readAgain = false;
   private saving: Promise<void> | null = null;
   private problem: string | null = null;
+  /** The last read of the month across projects. The page polls, so a read a few seconds old serves again. */
+  private monthRead: { readonly at: number; readonly read: MonthRead } | null =
+    null;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly requests = new Map<
     string,
@@ -183,6 +190,7 @@ export class FirstRun {
     const saved = markdown ? parseCard(markdown) : null;
     const compute = this.options.compute.view();
     const chat = chatChoice(this.detected ?? [], settings.agency);
+    const month = await this.month();
     return {
       steps: {
         agents: settings.steps.agents ?? null,
@@ -226,8 +234,23 @@ export class FirstRun {
         unreadable: settings.unreadMoney
           ? `The saved GPU limits are not valid: ${settings.unreadMoney.reason} They show the defaults until you save new ones.`
           : null,
+        month: {
+          spentUsd: Math.round(month.spentUsd * 100) / 100,
+          problem: month.unknown ?? month.problem,
+        },
       },
     };
+  }
+
+  /** The month across projects, from each project's record, at most a few seconds old. */
+  private async month(): Promise<MonthRead> {
+    const now = Date.now();
+    if (!this.monthRead || now - this.monthRead.at > monthReadMs)
+      this.monthRead = {
+        at: now,
+        read: await readMonth(monthFolder(this.options.directory), now),
+      };
+    return this.monthRead.read;
   }
 
   /** The settings, or a reason that the person can act on. */

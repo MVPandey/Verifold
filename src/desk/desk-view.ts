@@ -2741,6 +2741,7 @@ function renderPods(
     '<thead><tr><th scope="col">For</th><th scope="col">GPU</th><th scope="col">Status</th><th scope="col">Cost so far</th><th scope="col">Ends</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>';
   return `<section class="card" aria-labelledby="pods-title"><div class="section-title"><h2 id="pods-title">Pods</h2>${budget.rate ? `<span class="count">${usd(budget.rate)} per hour now</span>` : ''}</div>
   ${settings.limitUsd === null ? '' : `<p>Spent ${usd(budget.spent)}. Held for running pods ${usd(budget.reserved)}. Left ${usd(Math.max(0, budget.left ?? 0))} of ${usd(settings.limitUsd)}.</p>`}
+  ${compute.month ? `<p>This month, all projects: ${usd(compute.month.spentUsd)} of ${usd(compute.month.limitUsd)}.</p>` : ''}
   ${compute.problem ? `<p class="notice">${e(compute.problem.text)} (${e(since(compute.problem.at))})</p>` : ''}
   ${current.length ? `<div class="table"><table class="leases">${head}<tbody>${[...current].reverse().map(row).join('')}</tbody></table></div>` : `<p class="fine">No pod runs. The coordinator asks for a pod when a task needs a GPU. ${compute.settings.askBeforePod ? 'You approve each pod in Needs you.' : 'A pod that fits your limits starts at once. Other requests wait for you in Needs you.'}</p>`}
   ${earlier.length ? `<details id="earlier-leases"><summary>Earlier pods (${earlier.length})</summary><div class="table"><table class="leases">${head}<tbody>${[...earlier].reverse().slice(0, 30).map(row).join('')}</tbody></table></div></details>` : ''}

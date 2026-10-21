@@ -657,6 +657,11 @@ export interface LabOptions {
    */
   readonly person?: () => Promise<PersonProfile | null>;
   /**
+   * Paths that no agent, checker, or run of the lab may read, more than the
+   * credential paths: a profile folder outside the default one.
+   */
+  readonly denyRead?: readonly string[];
+  /**
    * The harnesses of the project's team, the main one first. A lab's first
    * agent runs on the main one and posts the plan of record, and a plan's
    * directions use these harnesses only. Without it, a lab starts with no

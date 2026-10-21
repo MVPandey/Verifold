@@ -77,6 +77,7 @@ import { Compute, type TaskPlace } from '../core/compute.ts';
 import { KeepAwake } from '../server/awake.ts';
 import { KeyStore, type KeyStoreOptions } from '../core/credentials.ts';
 import { spent, type Lease } from '../core/leases.ts';
+import { GpuMonth } from '../core/gpu-month.ts';
 /** How a view can show a question. The terminal shows only the question text. */
 export type AskHint =
   | { readonly kind: 'confirm'; readonly yes: string; readonly no: string }
@@ -674,7 +675,8 @@ async function serveDesk(
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);
       await quota.load();
-      // The person's profile: the lab reads it for each prompt, and its added skills load for each agent's session.
+      // The person's profile: the lab reads it for each prompt, its added skills load for each agent's session,
+      // and pods read its monthly limit across projects at each check.
       const agency = run.agency ?? agencyDirectory(root);
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
@@ -741,6 +743,7 @@ async function serveDesk(
         },
         (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
         (lease) => owned.lab?.podStops(lease) ?? Promise.resolve(),
+        agency,
       );
       // The project memory follows every change of the records, and every agent reads its index.
       const memory = new ProjectMemory(
@@ -822,6 +825,8 @@ async function serveDesk(
             (await loadSettings(agency).catch(() => null))?.agency,
           ),
         person: profileReader(agency),
+        // A profile folder outside the default one is closed to the lab's sessions and runs too.
+        ...(agency === agencyDirectory(root) ? {} : { denyRead: [agency] }),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);
@@ -1069,7 +1074,14 @@ async function serveStart(
   },
 ): Promise<(Begun & { readonly desk: DeskPlace }) | undefined> {
   // The RunPod key belongs to this computer, so the first run stores it without a project.
-  const compute = computeFor(root, io);
+  const compute = computeFor(
+    root,
+    io,
+    undefined,
+    undefined,
+    undefined,
+    run.agency,
+  );
   await compute.load();
   // The desk closes after the person starts a project.
   const handed = new AbortController();
@@ -1646,12 +1658,18 @@ async function recover(
 }
 
 /** The compute settings, RunPod key, and pod leases of a project, with the test hooks of the I/O. */
+/**
+ * The Compute of a project. Each one can change leases, so each one keeps
+ * the project's record for the monthly limit across projects, in the profile
+ * at `agency` (default: ~/.verifold/agency).
+ */
 function computeFor(
   root: string,
   io: CliIO,
   onChange?: (lease: Lease, line: string) => void,
   taskFolder?: (task: string) => Promise<TaskPlace | null>,
   runsStop?: (lease: string) => Promise<void>,
+  agency: string = agencyDirectory(root),
 ): Compute {
   return new Compute(root, {
     store: new KeyStore(io.compute?.store),
@@ -1660,6 +1678,7 @@ function computeFor(
     ...(onChange ? { onChange } : {}),
     ...(taskFolder ? { taskFolder } : {}),
     ...(runsStop ? { runsStop } : {}),
+    month: new GpuMonth({ agency, root }),
   });
 }
 
