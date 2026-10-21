@@ -761,18 +761,90 @@ export interface PostThread {
 }
 
 /** A step of the first run. */
-export type SetupStep = 'agents' | 'about' | 'money';
+export type SetupStep = 'agents' | 'about' | 'skills' | 'money';
 
 /**
  * `GET /api/v1/setup`: the first run, which the app also opens later to
  * change the profile. Each step saves on its own. Added after version 1.
  */
 export interface SetupView {
-  /** Each step: `done`, `skipped`, or null when the person never saw it. */
-  readonly steps: Readonly<Record<SetupStep, 'done' | 'skipped' | null>>;
+  /** Each step: `done`, `skipped`, or null when the person never saw it. An older server has no `skills`. */
+  readonly steps: Readonly<
+    Record<Exclude<SetupStep, 'skills'>, 'done' | 'skipped' | null> &
+      Partial<Record<'skills', 'done' | 'skipped' | null>>
+  >;
   readonly agents: SetupAgents;
   readonly about: SetupAbout;
+  /** The Skills step. Added after version 1. */
+  readonly skills?: SetupSkills;
   readonly money: SetupMoney;
+}
+
+/** What a skill can run, from its files, not from its own text. */
+export interface SkillRuns {
+  /** Script languages, with how many files of each. */
+  readonly scripts: readonly {
+    readonly language: string;
+    readonly files: number;
+  }[];
+  /** Files with the executable mode. */
+  readonly executables: number;
+  /** Install and download commands that its files name, such as `pip install` or `curl`. */
+  readonly installs: readonly string[];
+  /** Up to 5 web hosts that its files name. */
+  readonly hosts: readonly string[];
+}
+
+/** A skill that the search offers. */
+export interface SkillCard {
+  /** The same for each version of the skill. */
+  readonly id: string;
+  readonly name: string;
+  /** One plain line on what it does. */
+  readonly what: string;
+  /** `owner/repo`. */
+  readonly repo: string;
+  readonly commit: string;
+  /** The skill's folder in the repository. */
+  readonly path: string;
+  /** When the folder last changed. */
+  readonly updated: string | null;
+  readonly license: string | null;
+  readonly runs: SkillRuns;
+  /** `added`: this version is added. `update`: an older version is added. */
+  readonly state: 'new' | 'added' | 'update';
+}
+
+/** A skill that the person added, pinned to its commit. */
+export interface AddedSkill {
+  readonly id: string;
+  readonly name: string;
+  readonly repo: string;
+  readonly commit: string;
+  readonly path: string;
+  readonly addedAt: string;
+}
+
+export interface SetupSkills {
+  /** Verifold reads the catalogs (`search`) or adds a skill (`add`) now. */
+  readonly busy: 'search' | 'add' | null;
+  /** The last search. Null before one. */
+  readonly search: {
+    readonly at: string;
+    readonly catalogs: readonly {
+      readonly repo: string;
+      readonly commit: string | null;
+      readonly problem: string | null;
+    }[];
+    /** The harness that picked the cards. Null: Verifold matched them to the profile. */
+    readonly picker: Harness | null;
+  } | null;
+  readonly cards: readonly SkillCard[];
+  readonly added: readonly AddedSkill[];
+  /** No profile yet: the search needs the "About you" step. */
+  readonly needsProfile: boolean;
+  /** Why the last search, add, or removal failed. */
+  readonly problem: string | null;
 }
 
 export interface SetupAgents {
@@ -984,6 +1056,14 @@ export interface ActionBodies {
   'setup-money': MoneyLimits & { readonly key?: string };
   /** Skip a step, or every step that the person did not finish. */
   'setup-skip': { readonly step: SetupStep | 'all'; readonly key?: string };
+  /** Read the skill catalogs and match them to the profile. Added after version 1. */
+  'setup-skills-search': { readonly key?: string };
+  /** Add a skill of the last search, pinned to its commit. */
+  'setup-skill-add': { readonly id: string; readonly key?: string };
+  /** Remove an added skill. */
+  'setup-skill-remove': { readonly id: string; readonly key?: string };
+  /** Finish the Skills step. */
+  'setup-skills-done': { readonly key?: string };
 }
 
 export type ActionName = keyof ActionBodies;

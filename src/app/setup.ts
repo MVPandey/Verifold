@@ -9,7 +9,7 @@ import type {
 import { act, load, type ActOutcome, type Loaded } from './api.ts';
 
 /** The first run's pages, in order. `done` comes after the last step. */
-export const setupSteps = ['agents', 'about', 'money'] as const;
+export const setupSteps = ['agents', 'about', 'skills', 'money'] as const;
 
 export type SetupPage = SetupStep | 'done';
 
@@ -72,6 +72,11 @@ export interface SetupActions {
   readonly prices: (key: string) => Promise<ActOutcome>;
   readonly money: (limits: MoneyLimits, key: string) => Promise<ActOutcome>;
   readonly skip: (step: SetupStep | 'all', key: string) => Promise<ActOutcome>;
+  /** Read the skill catalogs and match them to the profile. */
+  readonly skillsSearch: (key: string) => Promise<ActOutcome>;
+  readonly skillAdd: (id: string, key: string) => Promise<ActOutcome>;
+  readonly skillRemove: (id: string, key: string) => Promise<ActOutcome>;
+  readonly skillsDone: (key: string) => Promise<ActOutcome>;
 }
 
 const signedOut = (): Promise<{ readonly refused: string }> =>
@@ -92,6 +97,10 @@ export function setupActions(token: string | null): SetupActions {
       prices: signedOut,
       money: signedOut,
       skip: signedOut,
+      skillsSearch: signedOut,
+      skillAdd: signedOut,
+      skillRemove: signedOut,
+      skillsDone: signedOut,
     };
   const run = <Name extends ActionName>(
     name: Name,
@@ -114,6 +123,10 @@ export function setupActions(token: string | null): SetupActions {
     prices: (key) => run('setup-prices', {}, key),
     money: (limits, key) => run('setup-money', limits, key),
     skip: (step, key) => run('setup-skip', { step }, key),
+    skillsSearch: (key) => run('setup-skills-search', {}, key),
+    skillAdd: (id, key) => run('setup-skill-add', { id }, key),
+    skillRemove: (id, key) => run('setup-skill-remove', { id }, key),
+    skillsDone: (key) => run('setup-skills-done', {}, key),
   };
 }
 

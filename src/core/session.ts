@@ -212,6 +212,16 @@ export interface SessionManagerOptions {
   readonly onLimit?: (host: HarnessName, signal: LimitSignal) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
   readonly requests?: { next: number };
+  /** The skills that the person added, for lab agents and checkers. */
+  readonly skills?: SessionSkills;
+}
+
+/** The skills that the person added in Verifold, for the sessions of lab agents and checkers. */
+export interface SessionSkills {
+  /** The folder of Verifold's plugin with the added skills, or null without any. Read at each launch. */
+  folder(host: HarnessName): Promise<string | null>;
+  /** The harness could not load them, and why. Later launches of that harness go without them. */
+  problem(host: HarnessName, text: string): void;
 }
 
 /** An action that the current session state does not allow. The message is safe to show. */
@@ -1634,6 +1644,11 @@ export class SessionManager {
           'Verifold could not save the session record, so the harness did not start. Check .verifold/sessions/ and try again.',
         );
       }
+      // Lab agents and checkers load the skills that the person added.
+      const skills =
+        record.agent && record.mode === 'strict'
+          ? await this.options.skills?.folder(record.host)
+          : null;
       const writer = await TranscriptWriter.open(
         transcriptFile(this.root, record.id),
       );
@@ -1674,6 +1689,7 @@ export class SessionManager {
         ...(this.tools ? { tools: this.tools } : {}),
         ...(record.network?.length ? { network: record.network } : {}),
         ...(record.denyRead?.length ? { denyRead: record.denyRead } : {}),
+        ...(skills ? { skills } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
       const pid = this.host.pid;
@@ -1985,6 +2001,10 @@ export class SessionManager {
         break;
       case 'notice':
         this.event('notice', event.text);
+        break;
+      case 'skills':
+        this.event('notice', event.text);
+        this.options.skills?.problem(record.host, event.text);
         break;
       case 'limit': {
         const signal: LimitSignal = {

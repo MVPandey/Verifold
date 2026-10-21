@@ -34,7 +34,7 @@ function numberOf(text: string): number | null {
 }
 
 /** When Verifold read the prices: "at 19:41 today", or with the date. */
-function readAt(at: string): string {
+export function readAt(at: string): string {
   const date = new Date(at);
   return date.toDateString() === new Date().toDateString()
     ? `at ${clock(at)} today`
@@ -84,7 +84,7 @@ function LimitField({
 }
 
 /**
- * Step 3, as in the artboard "4 GPU money": the RunPod key, RunPod's prices
+ * Step 4, as in the artboard "4 GPU money": the RunPod key, RunPod's prices
  * now with the GPUs that agents may rent, and the limits that each new
  * project starts with.
  */
