@@ -100,6 +100,7 @@ const codexSocket = fileURLToPath(
 
 /** A fake Codex app-server that speaks JSON-RPC over stdio. */
 const codexHost = `const fs = require('node:fs');
+fs.writeFileSync('codex-args.json', JSON.stringify(process.argv.slice(2)));
 const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
 let reviewer = 'user';
 let scenario = '';
@@ -1709,6 +1710,12 @@ await test('a task with domains opens only those to its shell commands', async (
     assert.equal(profile?.filesystem['~/.ssh'], 'deny');
     assert.equal(profile?.filesystem['~/Library/Keychains'], 'deny');
     assert.deepEqual(profile?.network, { enabled: true });
+    // Only lab agents and checkers search the live web. A task worker keeps Codex's default.
+    assert.ok(
+      !(await file(join(folder('net-codex'), 'codex-args.json'))).includes(
+        'web_search',
+      ),
+    );
     await codex.close();
 
     // The coordinator reads with a read-only profile that also denies the credential files.
@@ -1725,6 +1732,9 @@ await test('a task with domains opens only those to its shell commands', async (
     assert.equal(readOnly?.extends, ':read-only');
     assert.equal(readOnly?.filesystem['~/.verifold/credentials'], 'deny');
     assert.equal(readOnly?.network, undefined);
+    assert.ok(
+      !(await file(join(root, 'codex-args.json'))).includes('web_search'),
+    );
     await coordinator.close();
   });
 });

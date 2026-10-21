@@ -548,7 +548,7 @@ function planTable(view: LabView, name: (author: string) => string): string {
     writer.status !== 'crashed';
   // Each fact shows its source and date, so the person sees what is current and what nobody checked.
   const facts = plan.facts.length
-    ? `<p class="fine">Facts that the plan rests on:</p><ul class="plan-facts">${plan.facts.map((fact) => `<li>${e(fact.claim)} <span class="fine">· ${fact.source ? `${link(fact.source)}${fact.sourceDate ? `, ${e(fact.sourceDate)}` : ''}` : 'unverified'}</span></li>`).join('')}</ul>`
+    ? `<p class="fine">Facts that the plan rests on:</p><ul class="plan-facts">${plan.facts.map((fact) => `<li>${e(fact.claim)} <span class="fine">· ${fact.source ? `${link(fact.source)}${fact.sourceDate ? `, ${e(fact.sourceDate)}` : ''}` : 'unverified (no source)'}</span></li>`).join('')}</ul>`
     : '';
   return `<div class="table plan-table"><table><thead><tr><th scope="col">Direction</th><th scope="col">Holds up if</th><th scope="col">Builds on</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>${facts}<p class="fine">What costs money, says ${e(author)}: ${e(plan.cost)} ${listening ? `Reply to change the plan. A reply wakes ${e(author)}.` : `${e(author)} no longer works, so the plan stays as it is.`}</p>`;
 }

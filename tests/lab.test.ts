@@ -8655,10 +8655,15 @@ await test("every prompt and wake-up states today's date and the rules for curre
     first,
     /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in Compute yet\./,
   );
-  // A lab runs for days, so each wake-up states the date again.
+  // A lab runs for days, so each wake-up states the date and the GPU pods again.
   await lab.lab.post({ text: 'Use 3 seeds.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
-  assert.match((await lab.inputs('d-1-alpha'))[1] ?? '', todayPattern);
+  const digest = (await lab.inputs('d-1-alpha'))[1] ?? '';
+  assert.match(digest, todayPattern);
+  assert.match(
+    digest,
+    /GPU pods: off\. A RunPod key is saved, but the person set no spend limit in Compute yet\./,
+  );
   // With a key saved, an agent asks only for the spend limit.
   assert.equal(
     (
@@ -8692,6 +8697,10 @@ await test("every prompt and wake-up states today's date and the rules for curre
     lab.lab.view()?.state.calls[0]?.question,
     'Set a spend limit in Compute, so agents can rent GPUs?',
   );
+  assert.equal(
+    lab.lab.view()?.state.calls[0]?.options[0]?.label,
+    'I set a limit',
+  );
   // Without a key, the agent learns that both are missing.
   const bare = await fixture(t, { compute: keyCompute(false) });
   await open(bare, [{ title: 'Alpha', harness: 'claude' }]);
@@ -8713,6 +8722,10 @@ await test("every prompt and wake-up states today's date and the rules for curre
   assert.equal(
     bare.lab.view()?.state.calls[0]?.question,
     'Add a RunPod key and a spend limit in Compute?',
+  );
+  assert.equal(
+    bare.lab.view()?.state.calls[0]?.options[0]?.label,
+    'I added them',
   );
 });
 
@@ -8773,9 +8786,17 @@ await test('the plan of record keeps the facts that it rests on, with sources an
   const helix = (await lab.inputs('d-2-helix'))[0] ?? '';
   assert.match(
     helix,
-    /Facts that the plan rests on\. Check their dates before you use them:\n- "Model: Qwen3\.8-8B": source "https:\/\/huggingface\.co\/Qwen\/Qwen3\.8-8B" of "2026-08-14", checked \d{4}-\d{2}-\d{2}\./,
+    /Facts that the plan rests on\. Check their dates before you use them:\n- "Model: Qwen3\.8-8B": source "https:\/\/huggingface\.co\/Qwen\/Qwen3\.8-8B" of "2026-08-14", listed \d{4}-\d{2}-\d{2}\./,
   );
-  assert.match(helix, /- "Three seeds fit in a day": unverified, checked /);
+  assert.match(
+    helix,
+    /- "Three seeds fit in a day": unverified \(no source\)\.\n/,
+  );
+  // The listed date is this computer's date, the same as the Today line.
+  assert.equal(
+    helix.match(/listed (\d{4}-\d{2}-\d{2})\./)?.[1],
+    helix.match(todayPattern)?.[1],
+  );
   // The person sees a source as a link only when it is a web address.
   const html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(
@@ -8789,7 +8810,7 @@ await test('the plan of record keeps the facts that it rests on, with sources an
   assert.doesNotMatch(html, /href="javascript:/);
   assert.match(
     html,
-    /<li>Three seeds fit in a day <span class="fine">· unverified<\/span><\/li>/,
+    /<li>Three seeds fit in a day <span class="fine">· unverified \(no source\)<\/span><\/li>/,
   );
   // A later plan without facts keeps them, also after a restart.
   await until(() => !(lab.lab as unknown as { planning: boolean }).planning);

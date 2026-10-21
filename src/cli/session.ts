@@ -1662,6 +1662,8 @@ export class SessionManager {
         ...(record.model ? { model: record.model } : {}),
         // Codex picks the most capable model for a lab agent or checker without one. The lab names Claude Code's model.
         ...(record.agent && !record.model ? { bestModel: true } : {}),
+        // Lab agents and checkers look up current facts on the live web.
+        ...(record.agent ? { liveSearch: true } : {}),
         ...(prompt === undefined ? {} : { prompt }),
         ...(native && (prompt === undefined || resume)
           ? { resume: native }
