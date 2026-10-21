@@ -2,11 +2,11 @@ import type { ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
 import type { ActOutcome } from '../api.ts';
 import { threads } from '../board.ts';
-import { clock } from '../format.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { BoardThread } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
+import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { DirectionRow } from '../components/DirectionRow.tsx';
 import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
@@ -62,18 +62,7 @@ export function LabHome({
       />
       <main className="main">
         <div className="column">
-          {connection === 'reconnecting' && (
-            <StatusBar tone="muted">
-              Reconnecting to Verifold. This shows the lab as of{' '}
-              {clock(snapshot.at)}.
-            </StatusBar>
-          )}
-          {connection === 'unreachable' && (
-            <StatusBar tone="muted">
-              Can't reach Verifold. Is it running? This shows the lab as of{' '}
-              {clock(snapshot.at)}. Reload the page to try again.
-            </StatusBar>
-          )}
+          <ConnectionBar connection={connection} at={snapshot.at} />
           {first ? (
             <NeedsYouLine
               call={first}
@@ -150,6 +139,7 @@ export function LabHome({
           <Composer
             label="Write to the lab"
             placeholder="Reply, or @mention an agent"
+            maxLength={lab.postLimit}
             onSend={actions.post}
           />
         </div>

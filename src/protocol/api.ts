@@ -1,7 +1,7 @@
 /**
  * The desk API, version 1: the data that the server sends to the app, and
- * the actions that the app sends back. These are plain types with one
- * constant and no imports, so the server and the app can share them.
+ * the actions that the app sends back. These are plain types with two
+ * constants and no imports, so the server and the app can share them.
  *
  * Times are ISO 8601 strings. Money is in USD. The server never puts
  * internal record fields, keys, or paths outside the project into these
@@ -13,6 +13,9 @@
  * field, raises `protocolVersion`.
  */
 export const protocolVersion = 1;
+
+/** A turn's ID: the ID of the turn's first transcript entry. The API and the app's links check it with this. */
+export const turnIdPattern = /^[0-9a-f]{8}\.[\w#:.-]{1,120}$/;
 
 export type Harness = 'claude' | 'codex';
 
@@ -61,6 +64,8 @@ export type LabList =
 
 export interface Lab {
   readonly question: string;
+  /** The most characters that a post by the person may have. Added after version 1. */
+  readonly postLimit?: number;
   readonly startedAt: string;
   /** False: this process only shows the lab, and the project's owner runs its agents. */
   readonly agentsHere: boolean;
@@ -232,9 +237,26 @@ export interface Turn {
   readonly startedAt: string;
   /** Null while the turn runs. */
   readonly endedAt: string | null;
+  /**
+   * Grows whenever anything in the turn changes: a step starts or ends, its
+   * output grows, or text arrives. Added after version 1, with the step
+   * reads' `limit` and `tools` (see `TurnDetail`).
+   */
+  readonly rev?: number;
   readonly counts: StepCounts;
   /** The agent's last message in the turn. */
   readonly message: Text | null;
+  /** The board posts that the turn's tool calls wrote, oldest first. Added after version 1. */
+  readonly posts?: readonly string[];
+  /** The runs that the turn's tool calls started, oldest first. Added after version 1. */
+  readonly runs?: readonly string[];
+  /**
+   * Some of `posts` and `runs` were matched by time, not by tool call: the
+   * agent's posts and runs from while the turn ran. This happens when the
+   * harness names its calls in a way that the records do not carry. Added
+   * after version 1.
+   */
+  readonly proofByTime?: boolean;
 }
 
 export interface TurnPage {
@@ -326,13 +348,16 @@ export interface Step {
 /**
  * `GET /api/v1/agents/:agent/turns/:turn`: the turn's newest steps, or with
  * `?before=<index>` the steps before that one. A page holds at most 200
- * steps and about 256 KB.
+ * steps and about 256 KB. `?limit=<n>` (1 to 200) asks for fewer steps, and
+ * `?tools=1` for tool calls only, as a fold's short list needs. Both were
+ * added after version 1: a server that takes them sends `Turn.rev`, and an
+ * older one answers 404 to them.
  */
 export interface TurnDetail {
   readonly turn: Turn;
   /** Oldest first. */
   readonly steps: readonly Step[];
-  /** Older steps exist. Ask again with `before` set to the first step's index. */
+  /** Older steps exist (with `tools=1`: older tool calls). Ask again with `before` set to the first step's index. */
   readonly more: boolean;
 }
 

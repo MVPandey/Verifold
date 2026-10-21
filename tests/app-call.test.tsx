@@ -8,7 +8,7 @@ import type {
   Lab,
   Snapshot,
 } from '../src/protocol/api.ts';
-import { labActions } from '../src/app/actions.ts';
+import { agentActions, labActions } from '../src/app/actions.ts';
 import {
   callView,
   closeHow,
@@ -221,6 +221,7 @@ function render(state: Snapshot, hash = '#/call/c-4'): string {
       route={parseRoute(hash)}
       now={now}
       actions={actions}
+      agentActions={agentActions(null)}
     />,
   );
 }
