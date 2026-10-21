@@ -156,6 +156,12 @@ export function computeActions(token: string | null): ComputeActions {
     agents: (agents, key) => act(token, 'compute-agents', { agents }, key),
     pod: (action, lease, key) =>
       act(token, `compute-lease-${action}`, { lease }, key),
-    dismiss: (key) => act(token, 'compute-dismiss', {}, key),
+    dismiss: (works, key) =>
+      act(
+        token,
+        'compute-dismiss',
+        { works: works.map(({ action, at }) => ({ action, at })) },
+        key,
+      ),
   };
 }

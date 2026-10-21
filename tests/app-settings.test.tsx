@@ -392,7 +392,7 @@ await test('a paused lab keeps its paused bar beside a waiting pod, and the requ
   assert.ok(!text(render(snapshot(compute()), '#/')).includes('is paused'));
 });
 
-await test('a project without a lab shows the header, its pod requests, and its pods line, and notifies its pod requests', () => {
+await test('a project without a lab shows the header, its pod requests, and its pods line beside the start of a lab, and notifies its pod requests', () => {
   const html = render(snapshot(compute(), false), '#/');
   assert.match(
     html,
@@ -401,6 +401,10 @@ await test('a project without a lab shows the header, its pod requests, and its 
   const page = text(html);
   for (const line of [
     'cot-faithfulness has no lab yet',
+    // The start of a lab: the question box and the hours.
+    'Your question',
+    'Time budget, in hours',
+    'Start the lab',
     'You asked for a pod with one RTX A5000, up to $0.55',
     'The agent of d-2 asks for a pod with one H100 SXM, up to $16.03',
     'lease-2: Verifold copied the results of r-4 before it stopped the pod.',
@@ -669,7 +673,18 @@ await test("the compute actions send the desk's action names with the intent key
     'dismiss',
   ] as const)
     await live.pod(action, 'lease-1', action);
-  await live.dismiss('d');
+  await live.dismiss(
+    [
+      {
+        action: 'compute-lease-end',
+        label: 'Ending the pod: lease-2',
+        at: ago(2),
+        error: 'RunPod did not answer.',
+        lease: 'lease-2',
+      },
+    ],
+    'd',
+  );
   assert.deepEqual(
     sent.map((entry) => entry.url),
     [
@@ -694,7 +709,11 @@ await test("the compute actions send the desk's action names with the intent key
   });
   assert.deepEqual(sent[2]?.body, { agents: 5, key: 'c' });
   assert.deepEqual(sent[3]?.body, { lease: 'lease-1', key: 'approve' });
-  assert.deepEqual(sent[9]?.body, { key: 'd' });
+  // Dismiss names the failures that the page showed, by action and start.
+  assert.deepEqual(sent[9]?.body, {
+    works: [{ action: 'compute-lease-end', at: ago(2) }],
+    key: 'd',
+  });
   assert.deepEqual(await computeActions(null).agents(2, 'k'), {
     refused: 'This tab has no access key.',
   });

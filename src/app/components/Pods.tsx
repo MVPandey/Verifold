@@ -1,5 +1,10 @@
 import { Fragment, type ReactNode } from 'react';
-import type { Lab, PodLease, ProjectCompute } from '../../protocol/api.ts';
+import type {
+  Lab,
+  PodLease,
+  ProjectCompute,
+  Work,
+} from '../../protocol/api.ts';
 import type { ActOutcome } from '../api.ts';
 import { since, usd } from '../format.ts';
 import {
@@ -28,10 +33,17 @@ export type OnPod = (
   key: string,
 ) => Promise<ActOutcome>;
 
-/** The pod actions that pages send: one action on a pod, and Dismiss of the actions that failed in the background. */
+/**
+ * The pod actions that pages send: one action on a pod, and Dismiss of the
+ * pod actions that failed in the background, which names the failures that
+ * the page showed.
+ */
 export interface PodActions {
   readonly pod: OnPod;
-  readonly dismiss: (key: string) => Promise<ActOutcome>;
+  readonly dismiss: (
+    works: readonly Work[],
+    key: string,
+  ) => Promise<ActOutcome>;
 }
 
 /** A pod action for one button: the same intent keeps its key on a retry. */
@@ -182,10 +194,19 @@ export function PodWorks({
   readonly compute: ProjectCompute;
   readonly onDismiss: PodActions['dismiss'];
 }): ReactNode {
-  const dismiss = useAction((_: null, key) => onDismiss(key));
+  const dismiss = useAction(
+    (failed: readonly Work[], key) => onDismiss(failed, key),
+    // The same failures are one intent.
+    (a, b) =>
+      a.length === b.length &&
+      a.every(
+        (work, index) =>
+          work.action === b[index]?.action && work.at === b[index]?.at,
+      ),
+  );
   const works = compute.works;
   if (!works.length) return null;
-  const failed = works.some((work) => work.error !== null);
+  const failed = works.filter((work) => work.error !== null);
   return (
     <div className="status status--muted pod-notice" role="status">
       <span className="pod-notice__text">
@@ -210,12 +231,12 @@ export function PodWorks({
           </span>
         )}
       </span>
-      {failed && (
+      {failed.length > 0 && (
         <button
           type="button"
           className="link-button"
           disabled={dismiss.busy}
-          onClick={() => void dismiss.submit(null)}
+          onClick={() => void dismiss.submit(failed)}
         >
           Dismiss
         </button>
