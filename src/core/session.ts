@@ -681,8 +681,14 @@ export async function readRecord(
   root: string,
   id: string,
 ): Promise<SessionRecord | null> {
+  return readSessionRecord(join(root, '.verifold', 'sessions', `${id}.json`));
+}
+
+/** A session record at `path`, such as one in an archived run, or null. */
+export async function readSessionRecord(
+  path: string,
+): Promise<SessionRecord | null> {
   try {
-    const path = join(root, '.verifold', 'sessions', `${id}.json`);
     const stats = await lstat(path);
     if (!stats.isFile() || stats.size > 16_000_000) return null;
     return parseRecord(JSON.parse(await readFile(path, 'utf8')));

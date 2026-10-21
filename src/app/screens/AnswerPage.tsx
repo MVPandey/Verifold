@@ -378,6 +378,12 @@ export function AnswerPage({
               to sign off or bring files in.
             </p>
           )}
+          {lab.agentsHere && (
+            <p className="answer-line muted">
+              Done with this question? <a href={href.startOver}>Start over</a>{' '}
+              moves this run into History and keeps the question.
+            </p>
+          )}
         </div>
       </main>
     </div>

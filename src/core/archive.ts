@@ -45,6 +45,10 @@ export interface ArchivedRun {
   readonly tasks: number;
   /** The direction that the run had, if it chose one. */
   readonly direction: string | null;
+  /** The question of the run. */
+  readonly question: string | null;
+  /** `lab`: a lab's run. `research`: a run of the research flow that came before the lab. */
+  readonly kind: 'lab' | 'research';
 }
 
 function folder(root: string): string {
@@ -119,34 +123,59 @@ export async function archiveRun(root: string): Promise<string | null> {
   return id;
 }
 
-/** The archives of this project, newest first. An unreadable one is skipped. */
-export async function listArchives(root: string): Promise<ArchivedRun[]> {
-  let names: string[];
+/** The IDs of this project's archives, newest first. */
+export async function archiveIds(root: string): Promise<string[]> {
   try {
-    names = await readdir(folder(root));
+    return (await readdir(folder(root)))
+      .filter(validArchiveId)
+      .sort()
+      .reverse();
   } catch {
     return [];
   }
+}
+
+/** An archive's folder. The caller checks the ID with `validArchiveId`. */
+export function archiveFolder(root: string, id: string): string {
+  return join(folder(root), id);
+}
+
+/** One archive of this project, or null when it cannot be read. The caller checks the ID. */
+export async function readArchive(
+  root: string,
+  id: string,
+): Promise<ArchivedRun | null> {
+  try {
+    const path = join(folder(root), id);
+    const tasks = await readdir(join(path, 'tasks')).catch(() => []);
+    const saved = parseWorkspace(
+      JSON.parse(await readFile(join(path, 'workspace.json'), 'utf8')),
+    );
+    return {
+      direction:
+        saved.candidates.find((idea) => idea.id === saved.selectedId)?.title ??
+        null,
+      question: saved.research?.topic ?? null,
+      kind: (await exists(join(path, 'lab.json'))) ? 'lab' : 'research',
+      id,
+      at: (await lstat(path)).mtime.toISOString(),
+      bytes: await size(path),
+      tasks: tasks.filter((name) => /^task-[1-9]\d{0,5}$/.test(name)).length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The newest `limit` archives of this project, newest first. An unreadable one is skipped. */
+export async function listArchives(
+  root: string,
+  limit = Infinity,
+): Promise<ArchivedRun[]> {
   const runs: ArchivedRun[] = [];
-  for (const id of names.filter(validArchiveId).sort().reverse()) {
-    try {
-      const path = join(folder(root), id);
-      const tasks = await readdir(join(path, 'tasks')).catch(() => []);
-      const saved = parseWorkspace(
-        JSON.parse(await readFile(join(path, 'workspace.json'), 'utf8')),
-      );
-      runs.push({
-        direction:
-          saved.candidates.find((idea) => idea.id === saved.selectedId)
-            ?.title ?? null,
-        id,
-        at: (await lstat(path)).mtime.toISOString(),
-        bytes: await size(path),
-        tasks: tasks.filter((name) => /^task-[1-9]\d{0,5}$/.test(name)).length,
-      });
-    } catch {
-      /* Skip an archive that cannot be read. */
-    }
+  for (const id of (await archiveIds(root)).slice(0, limit)) {
+    const run = await readArchive(root, id);
+    if (run) runs.push(run);
   }
   return runs;
 }

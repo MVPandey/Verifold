@@ -11,6 +11,7 @@ import './setup.css';
 import './ask.css';
 import './controls.css';
 import './settings.css';
+import './history.css';
 import { takeToken } from './api.ts';
 import { App } from './App.tsx';
 import { LabStore } from './store.ts';
