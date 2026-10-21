@@ -2078,10 +2078,10 @@ content.addEventListener('mousedown', (event) => {
   event.preventDefault();
   takeMention(item);
 });
-// 1, 2, or 3 chooses an option of the call that is open in Needs you, outside a text field.
+// 1 to 4 chooses an option of the call that is open in Needs you, outside a text field.
 document.addEventListener('keydown', (event) => {
   if (
-    !['1', '2', '3'].includes(event.key) ||
+    !['1', '2', '3', '4'].includes(event.key) ||
     event.ctrlKey ||
     event.metaKey ||
     event.altKey ||

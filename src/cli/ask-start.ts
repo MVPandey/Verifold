@@ -1,15 +1,25 @@
 import { mkdir, readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
-import { loadSettings, type Agency } from '../core/agency.ts';
-import { computeDefaults, parseSettings } from '../core/compute.ts';
+import { isAbsolute } from 'node:path';
+import { loadSettings } from '../core/agency.ts';
+import {
+  computeDefaults,
+  parseSettings,
+  type ProfileMoney,
+} from '../core/compute.ts';
 import type { Workspace } from '../core/contracts.ts';
+import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
 import { defaultLabHours, hours, labLimits, text } from '../core/lab/schema.ts';
 import { SessionActionError } from '../core/session.ts';
-import type { StartView } from '../protocol/api.ts';
+import type { ProjectAgents, StartView } from '../protocol/api.ts';
 import type { ProjectStart } from '../server/api.ts';
-import { checkProjectDirectory, createProject } from './project.ts';
+import {
+  checkProjectDirectory,
+  createProject,
+  defaultProfile,
+  expandHome,
+  homeShown,
+} from './project.ts';
 
 /** A project that the Ask page started: its folder, the question, and the lab's hours. */
 export interface Begun {
@@ -18,16 +28,16 @@ export interface Begun {
   readonly hours: number;
 }
 
-function fail(message: string): never {
-  throw new SessionActionError(message);
+/** What a new project starts with unless the Ask page changes it. */
+interface Defaults {
+  readonly agents: ProjectAgents | null;
+  readonly gpuUsd: number | null;
+  /** The profile's GPU limits, which a project copies. Null: the profile has none. */
+  readonly money: ProfileMoney | null;
 }
 
-/** A folder for the person, with their home folder as `~`. */
-function shown(path: string): string {
-  const home = homedir();
-  return path === home || path.startsWith(`${home}/`)
-    ? `~${path.slice(home.length)}`
-    : path;
+function fail(message: string): never {
+  throw new SessionActionError(message);
 }
 
 function harness(value: unknown, what: string): HarnessName {
@@ -47,18 +57,8 @@ function model(value: unknown): string | undefined {
   return value;
 }
 
-/** The project's harnesses: the person's choice on the Ask page, else the profile's harnesses without their models, which the lab reads from the profile. */
-function team(
-  value: unknown,
-  profile: Agency | null,
-): Pick<Workspace, 'host' | 'model' | 'helper' | 'helperModel'> {
-  if (value === undefined)
-    return {
-      host: profile?.host ?? 'claude',
-      ...(profile?.helper && profile.helper !== profile.host
-        ? { helper: profile.helper }
-        : {}),
-    };
+/** The agents that the Ask page sends: a lead and maybe a helper, each with a model or none. */
+function team(value: unknown): ProjectAgents {
   const data =
     typeof value === 'object' && value !== null
       ? (value as Record<string, unknown>)
@@ -80,9 +80,32 @@ function team(
 }
 
 /**
- * The Ask page's start, while Verifold runs without a project. It creates
- * the project with the person's question and settings, and `begun` settles
- * with it. Only one start runs, and nothing starts after it.
+ * The project's agents unless the person changes them: the profile's lead
+ * and helper with the models that it saved, else the harnesses on this
+ * computer that are installed and not signed out, Claude Code first. Null:
+ * none of them is.
+ */
+export function defaultTeam(
+  profile: ProjectAgents | null,
+  found: readonly HarnessStatus[],
+): ProjectAgents | null {
+  if (profile) return profile;
+  const [lead, second] = (['claude', 'codex'] as const).filter((name) =>
+    found.some(
+      (status) =>
+        status.harness === name &&
+        status.installed &&
+        status.signedIn !== false,
+    ),
+  );
+  return lead ? { host: lead, ...(second ? { helper: second } : {}) } : null;
+}
+
+/**
+ * The Ask page's start, while Verifold runs without a project. The view
+ * holds the project's defaults, and the page shows exactly those; Start
+ * then sends what the page shows. Only one start runs, and nothing starts
+ * after it. `begun` settles with the new project.
  */
 export function askStart(options: {
   /** The folder where Verifold started. */
@@ -90,6 +113,8 @@ export function askStart(options: {
   /** The folder of the person's profile. */
   readonly agency: string;
   readonly signal: AbortSignal;
+  /** Tests use fakes. */
+  readonly detect?: () => Promise<readonly HarnessStatus[]>;
 }): { readonly start: ProjectStart; readonly begun: Promise<Begun> } {
   let settle: (project: Begun) => void = () => {};
   const begun = new Promise<Begun>((resolve) => {
@@ -97,17 +122,59 @@ export function askStart(options: {
   });
   let busy = false;
   let done = false;
+  let detected: Promise<readonly HarnessStatus[]> | null = null;
+  /** The defaults, from the profile when it reads, else from this computer. */
+  const defaults = async (): Promise<Defaults> => {
+    const settings = await loadSettings(options.agency).catch(() => null);
+    const saved = settings?.agency;
+    const profile: ProjectAgents | null = saved
+      ? {
+          host: saved.host,
+          ...(saved.model ? { model: saved.model } : {}),
+          ...(saved.helper && saved.helper !== saved.host
+            ? {
+                helper: saved.helper,
+                ...(saved.helperModel
+                  ? { helperModel: saved.helperModel }
+                  : {}),
+              }
+            : {}),
+        }
+      : null;
+    // Without a profile team, the harnesses on this computer, found once. A failed look runs again.
+    const found = profile
+      ? []
+      : await (detected ??= (options.detect ?? detectHarnesses)().catch(
+          (): readonly HarnessStatus[] => {
+            detected = null;
+            return [];
+          },
+        ));
+    const money = settings?.money ?? null;
+    return {
+      agents: defaultTeam(profile, found),
+      gpuUsd: money?.limitUsd ?? null,
+      money,
+    };
+  };
   const start: ProjectStart = {
-    view: async (): Promise<StartView> => ({
-      folder: shown(options.root),
-      // The person's own files, not what macOS adds.
-      files: (await readdir(options.root).catch(() => [])).some(
-        (name) => name !== '.DS_Store',
-      ),
-      hours: defaultLabHours,
-      maxHours: labLimits.hours,
-      questionLimit: labLimits.question,
-    }),
+    view: async (): Promise<StartView> => {
+      const { agents, gpuUsd, money } = await defaults();
+      return {
+        folder: homeShown(options.root),
+        // The person's own files, not what macOS adds.
+        files: (await readdir(options.root).catch(() => [])).some(
+          (name) => name !== '.DS_Store',
+        ),
+        hours: defaultLabHours,
+        maxHours: labLimits.hours,
+        questionLimit: labLimits.question,
+        agents,
+        gpuUsd,
+        gpuLimits: money !== null,
+        started: done,
+      };
+    },
     act: async (body) => {
       if (done) fail('The project started already. Reload the page.');
       if (busy) fail('The project is starting. Wait a moment.');
@@ -121,24 +188,30 @@ export function askStart(options: {
         const folder =
           body.folder === undefined || body.folder === ''
             ? options.root
-            : typeof body.folder === 'string' && body.folder.length <= 4096
-              ? body.folder.startsWith('~/')
-                ? join(homedir(), body.folder.slice(2))
-                : isAbsolute(body.folder)
-                  ? resolve(body.folder)
-                  : fail(
-                      'Give the folder as a full path, or as one that starts with ~/.',
-                    )
-              : fail('Give the folder as a full path.');
+            : typeof body.folder === 'string' &&
+                body.folder.length <= 4096 &&
+                (body.folder.startsWith('~/') || isAbsolute(body.folder))
+              ? expandHome(body.folder, options.root)
+              : fail(
+                  'Give the folder as a full path, or as one that starts with ~/.',
+                );
         const budget =
           body.hours === undefined ? defaultLabHours : hours(body.hours);
-        const profile = await loadSettings(options.agency).catch(() => null);
-        const agents = team(body.agents, profile?.agency ?? null);
-        const base = { ...computeDefaults, ...(profile?.money ?? {}) };
-        const compute =
-          body.gpuUsd === undefined
-            ? base
-            : parseSettings({ ...base, limitUsd: body.gpuUsd }, base);
+        const fallback = await defaults();
+        const agents =
+          body.agents === undefined ? fallback.agents : team(body.agents);
+        if (!agents)
+          fail(
+            'Verifold found no agent tool that is signed in. Sign in to Claude Code or Codex, then start again.',
+          );
+        const base = { ...computeDefaults, ...(fallback.money ?? {}) };
+        const compute = parseSettings(
+          {
+            ...base,
+            limitUsd: body.gpuUsd === undefined ? fallback.gpuUsd : body.gpuUsd,
+          },
+          base,
+        );
         try {
           await checkProjectDirectory(folder);
           // A new folder from Change comes into being here.
@@ -148,13 +221,7 @@ export function askStart(options: {
             {
               schemaVersion: 1,
               visibility: 'private',
-              profile: {
-                name: 'Researcher',
-                interests: ['Computational research'],
-                scholar: '',
-                github: '',
-                session: '',
-              },
+              profile: defaultProfile,
               ...agents,
               // The lab keeps the question for the project, as setup does.
               research: {
@@ -164,7 +231,7 @@ export function askStart(options: {
               },
               candidates: [],
               selectedId: null,
-            },
+            } satisfies Workspace,
             question,
             undefined,
             options.signal,
@@ -174,7 +241,7 @@ export function askStart(options: {
         } catch (error) {
           if (error instanceof SessionActionError) throw error;
           fail(
-            `Verifold could not start the project in ${shown(folder)}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            `Verifold could not start the project in ${homeShown(folder)}: ${error instanceof Error ? error.message : 'unknown error'}`,
           );
         }
         done = true;

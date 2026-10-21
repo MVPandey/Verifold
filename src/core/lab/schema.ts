@@ -462,6 +462,8 @@ export interface Call {
   readonly note: string | null;
   /** The facts behind the call that change over time, as the asker checked them. A call from before facts has none. */
   readonly facts?: readonly PlanFact[];
+  /** A question of the planner before the plan: its answer's line, until the planner hears all its answers together. */
+  readonly held?: string;
 }
 
 export interface LabEvent {
@@ -477,6 +479,8 @@ export interface LabEvent {
   readonly text: string;
   /** The post that the event is about. */
   readonly post?: string;
+  /** The digest shows the text whole: the answers to the planner's questions, which `heldChars` bounds. */
+  readonly whole?: true;
 }
 
 export interface LabAction {
@@ -1159,7 +1163,19 @@ function parseCall(value: unknown): Call | null {
     applied: parseApplied(entry.applied),
     note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : null,
     ...(facts.length ? { facts } : {}),
+    ...(typeof entry.held === 'string' && entry.held
+      ? { held: entry.held.slice(0, heldChars) }
+      : {}),
   };
+}
+
+/** The most characters of the lines that a question of the planner holds: an answer in words, and the line around it, a few times. */
+const heldChars = 12_000;
+
+/** A question's held lines and one more. Past `heldChars`, the oldest go, so the newest answer stays. */
+export function moreHeld(held: string | undefined, line: string): string {
+  const all = held ? `${held} ${line}` : line;
+  return all.length > heldChars ? `…${all.slice(1 - heldChars)}` : all;
 }
 
 /** The fields of a `verifold_run` call that every run has: the command, why, its minutes up to `most`, and its outputs. */

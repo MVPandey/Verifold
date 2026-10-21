@@ -515,6 +515,16 @@ interface DeskRun {
   };
 }
 
+/** Where a desk serves, so a background owner opens its own desk there and the open tab keeps working. */
+function placeOf(desk: DeskServer): DeskPlace {
+  const place = new URL(desk.url);
+  return {
+    port: Number(place.port),
+    token: place.hash.slice(1),
+    pages: Number(new URL(desk.pages).port),
+  };
+}
+
 /** What setup leaves for the background owner. */
 interface Handoff {
   readonly root: string;
@@ -594,7 +604,10 @@ async function serveDesk(
         undefined,
         undefined,
         undefined,
-        { stop: () => quit.abort() },
+        {
+          stop: () => quit.abort(),
+          ...(io.appAssets ? { appRoot: io.appAssets } : {}),
+        },
       );
       await announce(
         desk,
@@ -615,18 +628,10 @@ async function serveDesk(
       io.progress?.(`Setup is complete. The project is in ${root}.`);
       if (run.handoff) {
         // The background owner opens the desk on the same port with the same token, so this tab keeps working.
-        const place = new URL(desk.url);
+        const place = placeOf(desk);
         stop.abort();
         await desk.closed;
-        return {
-          root,
-          research,
-          desk: {
-            port: Number(place.port),
-            token: place.hash.slice(1),
-            pages: Number(new URL(desk.pages).port),
-          },
-        };
+        return { root, research, desk: place };
       }
     }
     const host =
@@ -832,6 +837,8 @@ async function serveDesk(
         ...(io.progress ? { progress: io.progress } : {}),
       });
       owned.lab = lab;
+      /** Why the lab's start failed, for the app. */
+      let labProblem: string | null = null;
       // While an agent works, a lab run runs, or a pod runs, a Mac does not go to idle sleep. So the work and the idle stop of a pod go on.
       // Lease recovery that waits for the lab's pod runs. The owner's stop waits for it.
       let leasesRecovered: Promise<void> = Promise.resolve();
@@ -909,6 +916,8 @@ async function serveDesk(
               stop: () => quit.abort(),
               reuse: run.owner?.desk ?? run.reuse,
               lab,
+              // The app shows why the lab did not start, and offers to start it again.
+              startProblem: () => labProblem,
               // The app opens the first run here too, to change the profile.
               firstRun: new FirstRun({
                 directory: agency,
@@ -916,6 +925,7 @@ async function serveDesk(
                 signal: deskSignal,
                 harness,
               }),
+              ...(io.appAssets ? { appRoot: io.appAssets } : {}),
             },
           );
           await announce(
@@ -949,7 +959,7 @@ async function serveDesk(
           );
         // The question of setup starts a lab: the lab is the default. --lab still starts one in a project that exists.
         if (research || run.lab)
-          await startLab(root, lab, research ?? {}, io, run.hours);
+          labProblem = await startLab(root, lab, research ?? {}, io, run.hours);
         io.listen?.(
           (line) =>
             terminalInput(sessions, line, io, {
@@ -1130,19 +1140,12 @@ async function serveStart(
     desk.closed.then(() => undefined),
   ]);
   if (!begun) return undefined;
-  // ponytail: a short wait lets the answer to the start reach the page before the desk drops its connections. The page waits for the new desk either way.
+  // ponytail: a short wait lets the answer to the start reach the page before the desk drops its connections. The page checks for the new desk either way.
   await new Promise((resolve) => setTimeout(resolve, 200));
-  const place = new URL(desk.url);
+  const place = placeOf(desk);
   handed.abort();
   await desk.closed;
-  return {
-    ...begun,
-    desk: {
-      port: Number(place.port),
-      token: place.hash.slice(1),
-      pages: Number(new URL(desk.pages).port),
-    },
-  };
+  return { ...begun, desk: place };
 }
 
 /** Status lines of the background owner in `.verifold/owner.log`, with the time. Over about 1 MB, the log moves to owner.log.1. */
@@ -1178,12 +1181,12 @@ async function startLab(
   research: ResearchOptions,
   io: CliIO,
   hours?: number,
-): Promise<void> {
+): Promise<string | null> {
   if (lab.exists) {
     io.progress?.(
       'This project has a lab already, so Verifold started nothing new. Open it on Home in the desk.',
     );
-    return;
+    return null;
   }
   try {
     const asked = research.topic ?? (await loadWorkspace(root)).research?.topic;
@@ -1191,7 +1194,7 @@ async function startLab(
       io.progress?.(
         'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
       );
-      return;
+      return null;
     }
     // The same start as the desk's: the setup question stays with the project.
     const planned = await startLabOn(
@@ -1206,10 +1209,11 @@ async function startLab(
         ? 'The lab started. Its first agent reads the question and posts a plan on the board in the desk.'
         : 'The lab started without an agent that plans it. Open a direction in the desk: each one gets its own agent.',
     );
+    return null;
   } catch (error) {
-    io.progress?.(
-      `Verifold started no lab: ${error instanceof Error ? error.message : 'unknown error'}`,
-    );
+    const reason = error instanceof Error ? error.message : 'unknown error';
+    io.progress?.(`Verifold started no lab: ${reason}`);
+    return reason;
   }
 }
 
@@ -2081,7 +2085,7 @@ export async function runCli(
       const background = io.interactive ? io.background : undefined;
       if (background)
         await attachTeam(begun.root, io, signal, background, {
-          noOpen: false,
+          noOpen: values['no-open'] ?? false,
           research,
           desk: begun.desk,
           app: true,

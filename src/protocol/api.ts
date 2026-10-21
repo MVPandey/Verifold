@@ -51,6 +51,13 @@ export interface Snapshot {
   readonly project: string;
   /** Null: the project has no lab. */
   readonly lab: Lab | null;
+  /**
+   * A project without a lab: its question, so the page can start the lab
+   * on it, or null when it has none. Added after version 1.
+   */
+  readonly question?: string | null;
+  /** A project without a lab: why its lab's last start failed, or null. Added after version 1. */
+  readonly startProblem?: string | null;
   /** The snapshot left items out: lists past their bounds, or less of a large lab to stay under the size bound. */
   readonly trimmed: boolean;
 }
@@ -1143,6 +1150,19 @@ export interface StartView {
   readonly maxHours: number;
   /** The most characters of a question. */
   readonly questionLimit: number;
+  /**
+   * The project's agents unless the person changes them: the profile's lead
+   * and helper with the models that it saved, else the signed-in harnesses
+   * on this computer. Null: none is signed in. Start sends what the page
+   * shows.
+   */
+  readonly agents: ProjectAgents | null;
+  /** The project's GPU limit unless the person changes it, in USD. Null: no GPUs. */
+  readonly gpuUsd: number | null;
+  /** The profile has GPU limits, so a project can have its own limit within them. */
+  readonly gpuLimits: boolean;
+  /** A start went through: the project starts, and this page's Verifold hands it on. */
+  readonly started: boolean;
 }
 
 export type ActionName = keyof ActionBodies;

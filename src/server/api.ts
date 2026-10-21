@@ -44,6 +44,7 @@ import {
 } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
 import { runSummary, type RunRecord } from '../core/runs.ts';
+import { loadWorkspace } from '../core/storage.ts';
 import {
   callSearchText,
   callState,
@@ -263,6 +264,8 @@ export interface ApiSources {
   readonly away: () => Promise<LabAway | null>;
   /** The desk's bring-in reads, when it runs a lab. */
   readonly bring?: BringSource | undefined;
+  /** Why the project's lab did not start, when its start failed. */
+  readonly startProblem?: (() => string | null) | undefined;
 }
 
 /** The desk's own bring-in reads, which its bring-in panel uses too. */
@@ -1183,6 +1186,8 @@ export class ApiReader {
       sources.works,
     ];
     const root = sources.root;
+    // A project without a lab shows its question and why its lab did not start.
+    if (!view && root) parts.push(sources.startProblem?.());
     if (!view || !root) return parts;
     parts.push(view.posts.length, view.posts.at(-1), ...view.ledger);
     for (const entry of view.directions)
@@ -1258,10 +1263,28 @@ export class ApiReader {
    * sends, so the snapshot is serialized once.
    */
   async snapshot(): Promise<string> {
-    const root = this.sources().root;
+    const sources = this.sources();
+    const root = sources.root;
     const project = root ? basename(root) : '';
     const loaded = await this.load();
-    if (!loaded) return JSON.stringify({ project, lab: null, trimmed: false });
+    if (!loaded) {
+      // A project without a lab: its question, so the page can start the lab, and why the last start failed.
+      const question = root
+        ? ((await loadWorkspace(root).catch(() => null))?.research?.topic ??
+          null)
+        : null;
+      return JSON.stringify({
+        project,
+        lab: null,
+        trimmed: false,
+        ...(root
+          ? {
+              question: question && clip(question, apiLimits.question),
+              startProblem: sources.startProblem?.() ?? null,
+            }
+          : {}),
+      });
+    }
     // The feed adds the version, the epoch, the rev, and the time.
     const room = apiLimits.snapshot - 256;
     let json = '';
