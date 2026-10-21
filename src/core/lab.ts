@@ -1407,6 +1407,24 @@ export class Lab {
     });
   }
 
+  /**
+   * A line from Verifold on the board for the person and the agents, such
+   * as a harness that cannot load the added skills. A full board refuses it.
+   */
+  note(text: string): Promise<void> {
+    return this.serial(async () => {
+      if (!this.state || this.moving || this.suspended) return;
+      await this.add({
+        author: 'verifold',
+        kind: 'status',
+        text: clip(text, boardLimits.text),
+        mentions: [],
+        artifacts: [],
+      });
+      this.options.onChange?.();
+    }).catch(() => {});
+  }
+
   /** Start again an agent whose process stopped too often by itself. */
   restartAgent(id: unknown): Promise<void> {
     return this.serial(async () => {

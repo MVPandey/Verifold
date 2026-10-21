@@ -736,7 +736,12 @@ await test('the first run through the API: agents, a conversation that ends in a
   };
   assert.equal((await fetch(`${origin}/api/v1/setup`)).status, 401);
   const fresh = await read();
-  assert.deepEqual(fresh.steps, { agents: null, about: null, money: null });
+  assert.deepEqual(fresh.steps, {
+    agents: null,
+    about: null,
+    skills: null,
+    money: null,
+  });
   await until(async () => !(await read()).agents.checking);
 
   // Step 1: the agents.
@@ -914,6 +919,7 @@ await test('the first run through the API: agents, a conversation that ends in a
   assert.deepEqual((await read()).steps, {
     agents: 'done',
     about: 'done',
+    skills: 'skipped',
     money: 'done',
   });
 });

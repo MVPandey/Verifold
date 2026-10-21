@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -228,6 +228,10 @@ export type HostEvent =
       readonly costUsd?: number;
     }
   | { readonly type: 'notice'; readonly text: string }
+  /** The harness could not load the added skills, and why. Later sessions of it go without them. */
+  | { readonly type: 'skills'; readonly text: string }
+  /** The session continues in a new process, such as a second run without the added skills. */
+  | { readonly type: 'process'; readonly pid: number }
   /** The harness reported its plan's usage window: open, or used up until a reset. */
   | ({ readonly type: 'limit' } & LimitSignal)
   /** The harness took a message that `steer` added to the running turn, or refused it. */
@@ -291,6 +295,12 @@ export interface HostOptions {
    * besides the credential paths. A lab's checker gets the lab's records.
    */
   readonly denyRead?: readonly string[];
+  /**
+   * Lab agents and checkers: the folder of Verifold's read-only plugin with
+   * the skills that the person added. Claude Code loads it with
+   * `--plugin-dir`, and Codex its `skills/` folder as an extra skill root.
+   */
+  readonly skills?: string;
   readonly onEvent: (event: HostEvent) => void;
 }
 
@@ -495,6 +505,11 @@ function launch(
   command: string,
   args: readonly string[],
   options: HostOptions,
+  /**
+   * Called with the exit code when all output is read, before the `exit`
+   * event. True: the session goes on in another process, so no `exit` event.
+   */
+  closing?: (code: number | null) => boolean,
 ): ChildProcessWithoutNullStreams {
   const child = spawn(command, args, {
     cwd: options.cwd,
@@ -519,7 +534,10 @@ function launch(
       text: `Could not start ${options.host === 'claude' ? 'Claude Code' : 'Codex'}. Check that it is installed and signed in.`,
     }),
   );
-  child.on('close', (code) => options.onEvent({ type: 'exit', code }));
+  child.on('close', (code) => {
+    if (closing?.(code)) return;
+    options.onEvent({ type: 'exit', code });
+  });
   return child;
 }
 
@@ -580,69 +598,131 @@ function claudeDetail(tool: string, input: unknown): string | undefined {
   return undefined;
 }
 
+/** Claude Code's start event lists the plugins that it loaded and the ones that failed. */
+function pluginProblem(
+  event: Record<string, unknown>,
+  folder: string,
+): string | null {
+  const ours = (entry: unknown): boolean => {
+    const text = String(JSON.stringify(entry));
+    return text.includes('verifold-skills') || text.includes(folder);
+  };
+  const failed = Array.isArray(event.plugin_errors) ? event.plugin_errors : [];
+  // A start event without a plugin list says nothing either way.
+  if (
+    failed.some(ours) ||
+    (Array.isArray(event.plugins) && !event.plugins.some(ours))
+  )
+    return 'Claude Code could not load the added skills, so its agents run without them.';
+  return null;
+}
+
 /**
  * Claude Code through its stream-json control protocol. The CLI sends each
  * permission prompt to this process as a `can_use_tool` request.
  */
 function claude(options: HostOptions): HostSession {
-  const child = launch(
-    options.executable ?? 'claude',
-    [
-      '-p',
-      '--input-format',
-      'stream-json',
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      // Claude Code echoes each message when it takes it in, so Verifold knows when a steered message arrived.
-      '--replay-user-messages',
-      '--permission-prompt-tool',
-      'stdio',
-      // Workers load no MCP server from the user's configuration, plugins, or claude.ai connectors.
-      '--strict-mcp-config',
-      '--permission-mode',
-      options.mode === 'auto'
-        ? 'auto'
-        : options.mode === 'strict'
-          ? 'dontAsk'
-          : 'default',
-      ...(options.mode === 'strict'
-        ? [
-            '--settings',
-            strictClaudeSettings(options.network, options.denyRead),
-          ]
-        : []),
-      ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
-      ...(options.model ? ['--model', options.model] : []),
-      ...(options.tools
-        ? [
-            '--mcp-config',
-            JSON.stringify({
-              mcpServers: { verifold: { type: 'sdk', name: 'verifold' } },
-            }),
-            // Verifold's own tools need no permission request.
-            '--allowedTools',
-            options.tools.specs
-              .map((tool) => `mcp__verifold__${tool.name}`)
-              .join(','),
-          ]
-        : []),
-      ...(options.resume
-        ? ['--resume', options.resume]
-        : options.sessionId
-          ? ['--session-id', options.sessionId]
-          : []),
-    ],
-    options,
-  );
   const emit = options.onEvent;
+  /** Claude Code reported its start. */
+  let started = false;
+  /** Verifold stops the process, so its exit says nothing about the added skills. */
+  let closing = false;
+  /** The plugin of the added skills for this run. A second run goes without it. */
+  let plugin = options.skills;
+  /** The run with the plugin failed before its start, and this run goes without it. */
+  let probing = false;
+  /** The start of the error output of a run with the plugin, kept in memory only, to tell a refusal by policy. */
+  let errors = '';
+  /** What Verifold wrote before Claude Code started, for a second run. */
+  const early: unknown[] = [];
+  const args = (): string[] => [
+    '-p',
+    '--input-format',
+    'stream-json',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    // Claude Code echoes each message when it takes it in, so Verifold knows when a steered message arrived.
+    '--replay-user-messages',
+    '--permission-prompt-tool',
+    'stdio',
+    // Workers load no MCP server from the user's configuration, plugins, or claude.ai connectors.
+    '--strict-mcp-config',
+    '--permission-mode',
+    options.mode === 'auto'
+      ? 'auto'
+      : options.mode === 'strict'
+        ? 'dontAsk'
+        : 'default',
+    ...(options.mode === 'strict'
+      ? ['--settings', strictClaudeSettings(options.network, options.denyRead)]
+      : []),
+    ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
+    ...(options.model ? ['--model', options.model] : []),
+    ...(plugin ? ['--plugin-dir', plugin] : []),
+    ...(options.tools
+      ? [
+          '--mcp-config',
+          JSON.stringify({
+            mcpServers: { verifold: { type: 'sdk', name: 'verifold' } },
+          }),
+          // Verifold's own tools need no permission request.
+          '--allowedTools',
+          options.tools.specs
+            .map((tool) => `mcp__verifold__${tool.name}`)
+            .join(','),
+        ]
+      : []),
+    ...(options.resume
+      ? ['--resume', options.resume]
+      : options.sessionId
+        ? ['--session-id', options.sessionId]
+        : []),
+  ];
+  const begin = (): ChildProcessWithoutNullStreams => {
+    errors = '';
+    const next = launch(options.executable ?? 'claude', args(), options, again);
+    if (plugin)
+      next.stderr.on('data', (chunk: Buffer) => {
+        if (errors.length < 8192)
+          errors += chunk.toString('utf8').slice(0, 8192 - errors.length);
+      });
+    readLines(next.stdout, onLine, (text) => emit({ type: 'notice', text }));
+    return next;
+  };
+  /**
+   * A run with the plugin that fails before its start runs once more without
+   * it, in the same session. A managed setting that refuses the plugin flag
+   * blocks the added skills at once. Any other failure blocks them only when
+   * the run without the plugin starts. Verifold's own stop is no failure.
+   */
+  function again(code: number | null): boolean {
+    if (!plugin || started || closing || code === null || code === 0)
+      return false;
+    if (/\bdisableSideloadFlags\b/.test(errors))
+      emit({
+        type: 'skills',
+        text: "Your organization's Claude Code settings block added skills, so agents run without them.",
+      });
+    else probing = true;
+    plugin = undefined;
+    child = begin();
+    if (child.pid !== undefined) emit({ type: 'process', pid: child.pid });
+    for (const value of early) write(child, value);
+    return true;
+  }
+  /** Write to Claude Code. What comes before its start is kept for a second run. */
+  const send = (value: unknown): void => {
+    if (!started) early.push(value);
+    write(child, value);
+  };
   const tools = options.tools;
   const inputs = new Map<string, unknown>();
   let interrupting = false;
   /** Messages that `steer` wrote and Claude Code has not echoed yet. */
   const steers = new Set<string>();
   const user = (text: string, uuid?: string): void =>
-    write(child, {
+    send({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
@@ -650,7 +730,7 @@ function claude(options: HostOptions): HostSession {
       ...(uuid ? { uuid } : {}),
     });
   const stopTurn = (): void =>
-    write(child, {
+    send({
       type: 'control_request',
       request_id: `verifold-${randomUUID()}`,
       request: { subtype: 'interrupt' },
@@ -659,7 +739,7 @@ function claude(options: HostOptions): HostSession {
     if (!inputs.has(id)) return;
     const input = inputs.get(id);
     inputs.delete(id);
-    write(child, {
+    send({
       type: 'control_response',
       response: {
         subtype: 'success',
@@ -675,139 +755,144 @@ function claude(options: HostOptions): HostSession {
     });
   };
 
-  readLines(
-    child.stdout,
-    (event) => {
-      if (!record(event)) return;
-      // An echo repeats a message that Verifold sent. It marks the moment Claude Code took it in.
-      if (event.isReplay === true) {
-        const id = str(event.uuid);
-        if (!id || !steers.delete(id)) return;
-        emit({ type: 'steered', id, taken: true });
-        // A stop that came before this message also stops the turn that the message started.
-        if (interrupting) stopTurn();
-        return;
+  function onLine(event: unknown): void {
+    if (!record(event)) return;
+    // An echo repeats a message that Verifold sent. It marks the moment Claude Code took it in.
+    if (event.isReplay === true) {
+      const id = str(event.uuid);
+      if (!id || !steers.delete(id)) return;
+      emit({ type: 'steered', id, taken: true });
+      // A stop that came before this message also stops the turn that the message started.
+      if (interrupting) stopTurn();
+      return;
+    }
+    for (const update of claudeUpdates(event))
+      emit({ type: 'transcript', update });
+    if (event.type === 'rate_limit_event') {
+      const signal = claudeLimit(event.rate_limit_info);
+      if (signal) emit({ type: 'limit', ...signal });
+    } else if (event.type === 'system') {
+      if (event.subtype === 'init') {
+        started = true;
+        // The run without the plugin started, so the plugin stopped the first run.
+        const problem = probing
+          ? 'Claude Code did not start with the added skills, so its agents run without them.'
+          : plugin
+            ? pluginProblem(event, plugin)
+            : null;
+        if (problem) emit({ type: 'skills', text: problem });
+        const id = str(event.session_id);
+        const model = str(event.model);
+        const mode = str(event.permissionMode);
+        if (id)
+          emit({
+            type: 'session',
+            id,
+            ...(model ? { model } : {}),
+            ...(mode ? { mode } : {}),
+          });
+      } else if (event.subtype === 'status' && str(event.permissionMode))
+        emit({ type: 'mode', mode: String(event.permissionMode) });
+      else if (event.subtype === 'permission_denied') {
+        const toolId = str(event.tool_use_id);
+        if (toolId)
+          emit({
+            type: 'denied',
+            toolId,
+            reason: str(event.decision_reason_type) ?? 'unknown',
+          });
       }
-      for (const update of claudeUpdates(event))
-        emit({ type: 'transcript', update });
-      if (event.type === 'rate_limit_event') {
-        const signal = claudeLimit(event.rate_limit_info);
-        if (signal) emit({ type: 'limit', ...signal });
-      } else if (event.type === 'system') {
-        if (event.subtype === 'init') {
-          const id = str(event.session_id);
-          const model = str(event.model);
-          const mode = str(event.permissionMode);
+    } else if (
+      (event.type === 'assistant' || event.type === 'user') &&
+      record(event.message) &&
+      Array.isArray(event.message.content)
+    ) {
+      for (const block of event.message.content as unknown[]) {
+        if (!record(block)) continue;
+        if (event.type === 'assistant' && block.type === 'text') {
+          const text = str(block.text);
+          if (text) emit({ type: 'message', text });
+        } else if (event.type === 'assistant' && block.type === 'tool_use') {
+          const id = str(block.id);
+          const tool = str(block.name) ?? 'Tool';
           if (id)
             emit({
-              type: 'session',
+              type: 'tool',
               id,
-              ...(model ? { model } : {}),
-              ...(mode ? { mode } : {}),
+              tool,
+              action: claudeAction(tool, block.input),
             });
-        } else if (event.subtype === 'status' && str(event.permissionMode))
-          emit({ type: 'mode', mode: String(event.permissionMode) });
-        else if (event.subtype === 'permission_denied') {
-          const toolId = str(event.tool_use_id);
-          if (toolId)
+        } else if (event.type === 'user' && block.type === 'tool_result') {
+          const id = str(block.tool_use_id);
+          if (id)
             emit({
-              type: 'denied',
-              toolId,
-              reason: str(event.decision_reason_type) ?? 'unknown',
+              type: 'tool-end',
+              id,
+              outcome: block.is_error === true ? 'failed' : 'ok',
             });
         }
-      } else if (
-        (event.type === 'assistant' || event.type === 'user') &&
-        record(event.message) &&
-        Array.isArray(event.message.content)
-      ) {
-        for (const block of event.message.content as unknown[]) {
-          if (!record(block)) continue;
-          if (event.type === 'assistant' && block.type === 'text') {
-            const text = str(block.text);
-            if (text) emit({ type: 'message', text });
-          } else if (event.type === 'assistant' && block.type === 'tool_use') {
-            const id = str(block.id);
-            const tool = str(block.name) ?? 'Tool';
-            if (id)
-              emit({
-                type: 'tool',
-                id,
-                tool,
-                action: claudeAction(tool, block.input),
-              });
-          } else if (event.type === 'user' && block.type === 'tool_result') {
-            const id = str(block.tool_use_id);
-            if (id)
-              emit({
-                type: 'tool-end',
-                id,
-                outcome: block.is_error === true ? 'failed' : 'ok',
-              });
-          }
-        }
-      } else if (event.type === 'control_request' && record(event.request)) {
-        const id = str(event.request_id);
-        if (!id) return;
-        if (event.request.subtype === 'can_use_tool') {
-          const tool = str(event.request.tool_name) ?? 'Tool';
-          const toolId = str(event.request.tool_use_id);
-          const reason = str(event.request.description);
-          const detail = claudeDetail(tool, event.request.input);
-          inputs.set(id, event.request.input);
-          emit({
-            type: 'request',
-            id,
-            tool,
-            action: claudeAction(tool, event.request.input),
-            ...(toolId ? { toolId } : {}),
-            ...(detail ? { detail } : {}),
-            ...(reason ? { reason } : {}),
-          });
-        } else if (
-          event.request.subtype === 'mcp_message' &&
-          event.request.server_name === 'verifold' &&
-          tools
-        )
-          mcp(id, event.request.message);
-        else
-          write(child, {
-            type: 'control_response',
-            response: {
-              subtype: 'error',
-              request_id: id,
-              error: 'Verifold does not support this request.',
-            },
-          });
-      } else if (event.type === 'control_cancel_request') {
-        const id = str(event.request_id);
-        if (id && inputs.delete(id)) emit({ type: 'request-end', id });
-      } else if (event.type === 'result') {
-        // A steered message that came after the last tool call starts one more turn by itself. Probed on Claude Code 2.1.296.
-        if (steers.size) return;
-        const limit = claudeLimitResult(event);
-        if (limit) emit({ type: 'limit', ...limit });
-        const cost = event.total_cost_usd;
-        emit({
-          type: 'turn-end',
-          status: interrupting
-            ? 'interrupted'
-            : event.is_error === true || event.subtype !== 'success'
-              ? 'failed'
-              : 'completed',
-          ...(typeof cost === 'number' && Number.isFinite(cost)
-            ? { costUsd: cost }
-            : {}),
-        });
-        interrupting = false;
       }
-    },
-    (text) => emit({ type: 'notice', text }),
-  );
+    } else if (event.type === 'control_request' && record(event.request)) {
+      const id = str(event.request_id);
+      if (!id) return;
+      if (event.request.subtype === 'can_use_tool') {
+        const tool = str(event.request.tool_name) ?? 'Tool';
+        const toolId = str(event.request.tool_use_id);
+        const reason = str(event.request.description);
+        const detail = claudeDetail(tool, event.request.input);
+        inputs.set(id, event.request.input);
+        emit({
+          type: 'request',
+          id,
+          tool,
+          action: claudeAction(tool, event.request.input),
+          ...(toolId ? { toolId } : {}),
+          ...(detail ? { detail } : {}),
+          ...(reason ? { reason } : {}),
+        });
+      } else if (
+        event.request.subtype === 'mcp_message' &&
+        event.request.server_name === 'verifold' &&
+        tools
+      )
+        mcp(id, event.request.message);
+      else
+        send({
+          type: 'control_response',
+          response: {
+            subtype: 'error',
+            request_id: id,
+            error: 'Verifold does not support this request.',
+          },
+        });
+    } else if (event.type === 'control_cancel_request') {
+      const id = str(event.request_id);
+      if (id && inputs.delete(id)) emit({ type: 'request-end', id });
+    } else if (event.type === 'result') {
+      // A steered message that came after the last tool call starts one more turn by itself. Probed on Claude Code 2.1.296.
+      if (steers.size) return;
+      const limit = claudeLimitResult(event);
+      if (limit) emit({ type: 'limit', ...limit });
+      const cost = event.total_cost_usd;
+      emit({
+        type: 'turn-end',
+        status: interrupting
+          ? 'interrupted'
+          : event.is_error === true || event.subtype !== 'success'
+            ? 'failed'
+            : 'completed',
+        ...(typeof cost === 'number' && Number.isFinite(cost)
+          ? { costUsd: cost }
+          : {}),
+      });
+      interrupting = false;
+    }
+  }
+  let child = begin();
   /** Answer one message to Verifold's SDK MCP server. */
   const mcp = (id: string, message: unknown): void => {
     const reply = (response: Record<string, unknown>): void =>
-      write(child, {
+      send({
         type: 'control_response',
         response: {
           subtype: 'success',
@@ -856,7 +941,7 @@ function claude(options: HostOptions): HostSession {
       });
   };
 
-  write(child, {
+  send({
     type: 'control_request',
     request_id: `verifold-${randomUUID()}`,
     request: {
@@ -872,7 +957,9 @@ function claude(options: HostOptions): HostSession {
     queueMicrotask(() => emit({ type: 'session', id }));
   }
   return {
-    pid: child.pid,
+    get pid() {
+      return child.pid;
+    },
     send: user,
     steer(text, id) {
       steers.add(id);
@@ -886,6 +973,7 @@ function claude(options: HostOptions): HostSession {
     },
     answer: (id, allow) => answer(id, allow),
     close() {
+      closing = true;
       child.stdin.end();
       stop(child);
     },
@@ -939,6 +1027,11 @@ function codex(options: HostOptions): HostSession {
       options.executable ?? 'codex',
       // A top-level -c reaches the app-server. Search does not use the sandbox's network.
       ...(options.liveSearch ? ['-c', 'web_search="live"'] : []),
+      // A skill's MCP dependencies would go into the person's own Codex settings.
+      // The same as `--disable`, which an older app-server may refuse.
+      ...(options.skills
+        ? ['-c', 'features.skill_mcp_dependency_install=false']
+        : []),
       'app-server',
       '--listen',
       `unix://${socket}`,
@@ -969,7 +1062,7 @@ function codex(options: HostOptions): HostSession {
     {
       readonly method: string;
       readonly onResult?: (result: Record<string, unknown>) => void;
-      readonly onError?: () => void;
+      readonly onError?: (error: Record<string, unknown>) => void;
     }
   >();
   const requests = new Map<string, number | string>();
@@ -983,7 +1076,7 @@ function codex(options: HostOptions): HostSession {
     method: string,
     params: Record<string, unknown>,
     onResult?: (result: Record<string, unknown>) => void,
-    onError?: () => void,
+    onError?: (error: Record<string, unknown>) => void,
   ): void => {
     const id = nextId++;
     results.set(id, {
@@ -1197,7 +1290,7 @@ function codex(options: HostOptions): HostSession {
       results.delete(message.id);
       if (record(message.error)) {
         // A steer that comes after the turn ended is refused. The caller sends it another way.
-        if (pending?.onError) return pending.onError();
+        if (pending?.onError) return pending.onError(message.error);
         emit({
           type: 'notice',
           text: `Codex rejected ${pending?.method ?? 'a request'}: ${str(message.error.message) ?? 'unknown error'}.`,
@@ -1356,11 +1449,77 @@ function codex(options: HostOptions): HostSession {
           stop(child);
           return;
         }
-        if (options.bestModel && !options.model) chooseModel(config);
-        else startThread(config, options.model);
+        const begin = (): void => {
+          if (options.bestModel && !options.model) chooseModel(config);
+          else startThread(config, options.model);
+        };
+        if (options.skills) addSkills(options.skills, begin);
+        else begin();
       });
     },
   );
+
+  /**
+   * Add the skills folder of Verifold's plugin as a skill root of this
+   * app-server, which only this session uses, and check that Codex lists
+   * the skills. A Codex without the method, or one that cannot load them,
+   * starts the thread without them.
+   */
+  function addSkills(folder: string, then: () => void): void {
+    const root = join(folder, 'skills');
+    // Codex can report a path in its canonical form, so the plugin's own folder name identifies it.
+    const marker = `${basename(folder)}/skills/`;
+    const without = (text: string): void => {
+      emit({ type: 'skills', text });
+      then();
+    };
+    const failed =
+      'Codex could not load the added skills, so Codex agents run without them.';
+    // The root goes again, so the session runs without any of them, as the line says.
+    const clear = (): void =>
+      call(
+        'skills/extraRoots/set',
+        { extraRoots: [] },
+        () => without(failed),
+        () => without(failed),
+      );
+    call(
+      'skills/extraRoots/set',
+      { extraRoots: [root] },
+      () =>
+        call(
+          'skills/list',
+          { cwds: [options.cwd], forceReload: true },
+          (result) => {
+            const entries = Array.isArray(result.data)
+              ? result.data.filter(record)
+              : [];
+            const ours = (value: unknown): boolean =>
+              record(value) &&
+              typeof value.path === 'string' &&
+              value.path.includes(marker);
+            const listed = entries.some(
+              (entry) => Array.isArray(entry.skills) && entry.skills.some(ours),
+            );
+            const broken = entries.some(
+              (entry) => Array.isArray(entry.errors) && entry.errors.some(ours),
+            );
+            if (listed && !broken) return then();
+            clear();
+          },
+          clear,
+        ),
+      (error) =>
+        without(
+          error.code === -32601 ||
+            /method not found|unknown variant|unknown method/i.test(
+              str(error.message) ?? '',
+            )
+            ? 'This version of Codex cannot load added skills, so Codex agents run without them. Update Codex to use them.'
+            : failed,
+        ),
+    );
+  }
 
   /**
    * Read every page of `model/list`, then start the thread with the most

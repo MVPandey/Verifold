@@ -152,13 +152,16 @@ Profile setup and initialization share a lock on the global settings, so only on
 
 ### The first run in the app
 
-`verifold --app` in a folder without a project opens the first run of the new app, a preview. No project starts, and Ctrl+C in the terminal stops it. There are three steps, and you can skip each one:
+`verifold --app` in a folder without a project opens the first run of the new app, a preview. No project starts, and Ctrl+C in the terminal stops it. There are four steps, and you can skip each one:
 
 1. **Agents.** Claude Code and Codex, each with its version, its sign-in, and a model. Verifold reads only the sign-in state and the plan from `claude auth status` and `codex login status`, never the account's email. It offers Fable only on a plan that includes it.
 2. **About you.** Verifold asks what you work on. Your agent, with the model that you picked, asks up to two more questions in an empty private folder, then drafts a card: "You work on", "To explore", and "Talk to me". Edit the card, or add a note and the agent changes it. Verifold saves the card as `USER.md`. Without a signed-in agent, Verifold asks the questions and fills the card from your answers.
-3. **GPU money.** The RunPod key, RunPod's prices now, the GPUs that agents may rent, and the limits for new projects. The key goes to the keyring through the same check as `verifold runpod key set`. "No GPUs for now" keeps pods off.
+3. **Skills.** Verifold reads six public skill catalogs on GitHub and matches their skills to your card. Your agent picks up to three, with no tools and no web search, because the catalogs' text comes from outside. Each card shows the source pinned to a commit, the license, and what the skill can run, which Verifold finds in its files. Verifold never offers a skill with hooks, with shell commands that its Markdown runs when it loads, with MCP or LSP server settings, with binary files or links, or with more than 200 files or 5 MB. Nothing installs until you click Add.
+4. **GPU money.** The RunPod key, RunPod's prices now, the GPUs that agents may rent, and the limits for new projects. The key goes to the keyring through the same check as `verifold runpod key set`. "No GPUs for now" keeps pods off.
 
 `settings.json` keeps the agents in the fields that older versions read, and adds the GPU limits and the steps that you finished or skipped. A new project copies the harnesses and the GPU limits. The planner of each lab reads your whole profile. Every other agent, and each checker, gets only "Talk to me". An edit reaches a running lab with its next prompt. Open these pages again with Profile in the app's top bar.
+
+`skills.json` lists the skills that you added, each with its repository, commit, folder, and tree hash. Verifold keeps each one read-only in `skills/` in the same folder, without its `allowed-tools`. Only lab agents and checkers load them, from a read-only copy in `~/.verifold/plugins/`, outside the profile folder: Claude Code with `--plugin-dir`, and Codex as an extra skill root of the session's own app-server, with `skill_mcp_dependency_install` off. Your own Claude Code and Codex settings do not change. When a catalog changes a skill that you added, the step offers Update, and the new version installs only when you click it.
 
 ### Editable harness prompts
 

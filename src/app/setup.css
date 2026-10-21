@@ -1,4 +1,4 @@
-/* The first run. Values follow the v9 canvas artboards "1 Agents", "2 About you" and "4 GPU money". */
+/* The first run. Values follow the v9 canvas artboards "1 Agents", "2 About you", "3 Skills" and "4 GPU money". */
 .header__brand {
   margin-left: -6px;
   font-size: 17px;
@@ -39,7 +39,8 @@
 
 .step__bar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -643,4 +644,91 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
   }
+}
+
+/* Step 3, as in the artboard "3 Skills". */
+.skills {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.skill__body {
+  flex: 1 1 380px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill__name {
+  font-size: 17px;
+}
+
+.skill__source {
+  font: 500 13px var(--mono);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.skill__source a {
+  color: inherit;
+}
+
+.skill__runs {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.skill__add {
+  flex: none;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.skill__add[aria-pressed='true'] {
+  border: 2px solid var(--ok-ink);
+  background: var(--ok-bg);
+  color: var(--ok-ink);
+}
+
+.skill__add:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.added {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.added__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }

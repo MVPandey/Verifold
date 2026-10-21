@@ -35,6 +35,7 @@ import { nextResearchAction } from '../desk/desk-view.ts';
 import { startDesk, openDeskBrowser, type DeskServer } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { FirstRun } from '../server/setup.ts';
+import { pluginsHome, skillLoader } from '../core/skills.ts';
 import { TaskManager } from '../legacy/tasks.ts';
 import { ResultsStore } from '../legacy/results.ts';
 import { defaultAgents, SessionPool } from '../core/workers.ts';
@@ -663,9 +664,16 @@ async function serveDesk(
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);
       await quota.load();
+      // The person's profile: the lab reads it for each prompt, and its added skills load for each agent's session.
+      const agency = run.agency ?? agencyDirectory(root);
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
+        skills: skillLoader(
+          agency,
+          pluginsHome(),
+          (text) => void owned.lab?.note(text),
+        ),
         agents:
           (await loadWorkspace(root).catch(() => null))?.agents ??
           defaultAgents,
@@ -791,8 +799,6 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
-      // The person's profile, read for each prompt when it changed, so an edit reaches the agents.
-      const agency = run.agency ?? agencyDirectory(root);
       // The lab's agents share the worker slots with tasks and plain sessions.
       const lab = new Lab(root, {
         sessions,

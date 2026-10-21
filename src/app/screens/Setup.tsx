@@ -14,10 +14,12 @@ import { useSetup } from '../useSetup.ts';
 import { AboutStep } from './SetupAbout.tsx';
 import { AgentsStep } from './SetupAgents.tsx';
 import { MoneyStep } from './SetupMoney.tsx';
+import { SkillsStep } from './SetupSkills.tsx';
 
 const stepTitles = {
   agents: 'Your agents',
   about: 'About you',
+  skills: 'Skills',
   money: 'GPU money',
 } as const;
 
@@ -47,14 +49,16 @@ export function DoneStep({
   readonly view: SetupView;
   readonly project: string;
 }): ReactNode {
-  const skipped = setupSteps.filter((step) => view.steps[step] !== 'done');
+  // An older Verifold reports no Skills step, so the page leaves it out.
+  const steps = setupSteps.filter((step) => view.steps[step] !== undefined);
+  const skipped = steps.filter((step) => view.steps[step] !== 'done');
   return (
     <>
       <h1 className="step__title">
         {skipped.length ? 'Setup is saved' : 'You’re set'}
       </h1>
       <ul className="done">
-        {setupSteps.map((step) => (
+        {steps.map((step) => (
           <li key={step} className="done__item">
             <span className="done__name">{stepTitles[step]}</span>
             <span
@@ -140,6 +144,15 @@ export function SetupPage({
         actions={actions}
         refresh={refresh}
         onSaved={() => open(pageAfter('about'))}
+      />
+    );
+  else if (step === 'skills')
+    body = (
+      <SkillsStep
+        view={view}
+        actions={actions}
+        refresh={refresh}
+        onDone={() => open(pageAfter('skills'))}
       />
     );
   else if (step === 'money')
