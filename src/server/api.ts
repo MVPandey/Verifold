@@ -1525,6 +1525,8 @@ export class ApiFeed {
   private built = 0;
   /** Each open stream, with the rev that it got last. */
   private readonly streams = new Map<ServerResponse, number>();
+  /** Each watcher, such as a terminal's view, with the rev that it got last. */
+  private readonly watchers = new Map<Watcher, number>();
   private poll: NodeJS.Timeout | undefined;
   private beat: NodeJS.Timeout | undefined;
 
@@ -1595,12 +1597,55 @@ export class ApiFeed {
   }
 
   private async tick(): Promise<void> {
+    const watchers = [...this.watchers.keys()].filter((watcher) =>
+      watcher.wanted(),
+    );
+    // Without a stream or a watcher that wants it, the feed builds nothing.
+    if (!this.streams.size && !watchers.length) return;
     try {
       const latest = await this.current();
       for (const stream of this.streams.keys()) this.send(stream, latest);
+      for (const watcher of watchers) {
+        // A watcher that stopped meanwhile, or that has this rev, gets nothing.
+        if ((this.watchers.get(watcher) ?? latest.rev) >= latest.rev) continue;
+        this.watchers.set(watcher, latest.rev);
+        try {
+          watcher.show(latest);
+        } catch {
+          // The next change comes again.
+        }
+      }
     } catch {
       // A read that failed tries again at the next tick.
     }
+  }
+
+  /**
+   * Give `show` the snapshot at the next tick, then each change, as a
+   * stream gets them. `wanted`: while it is false, the feed builds no
+   * snapshot for this watcher. Returns the function that stops it.
+   */
+  watch(
+    show: (latest: { readonly rev: number; readonly text: string }) => void,
+    wanted: () => boolean = () => true,
+  ): () => void {
+    const watcher: Watcher = { show, wanted };
+    this.watchers.set(watcher, 0);
+    this.start();
+    void this.tick();
+    return () => {
+      this.watchers.delete(watcher);
+      if (!this.streams.size && !this.watchers.size) this.stop();
+    };
+  }
+
+  /** Tick while a stream or a watcher is open. */
+  private start(): void {
+    this.poll ??= setInterval(() => void this.tick(), this.pollMs).unref();
+    this.beat ??= setInterval(() => {
+      for (const stream of this.streams.keys())
+        this.write(stream, ': ping\n\n');
+    }, this.heartbeatMs).unref();
   }
 
   /** Open a stream: the current snapshot at once, then each change. False: too many streams are open. */
@@ -1618,13 +1663,9 @@ export class ApiFeed {
     this.streams.set(response, 0);
     response.on('close', () => {
       this.streams.delete(response);
-      if (!this.streams.size) this.stop();
+      if (!this.streams.size && !this.watchers.size) this.stop();
     });
-    this.poll ??= setInterval(() => void this.tick(), this.pollMs).unref();
-    this.beat ??= setInterval(() => {
-      for (const stream of this.streams.keys())
-        this.write(stream, ': ping\n\n');
-    }, this.heartbeatMs).unref();
+    this.start();
     try {
       this.send(response, await this.current());
     } catch {
@@ -1644,7 +1685,17 @@ export class ApiFeed {
     this.stop();
     for (const stream of this.streams.keys()) stream.end();
     this.streams.clear();
+    this.watchers.clear();
   }
+}
+
+/** A watcher of the feed. */
+interface Watcher {
+  readonly show: (latest: {
+    readonly rev: number;
+    readonly text: string;
+  }) => void;
+  readonly wanted: () => boolean;
 }
 
 /** The lab actions that the API runs. Each runs the desk's own operation for it. */
