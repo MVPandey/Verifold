@@ -10,6 +10,7 @@ import {
 } from '../core/activity.ts';
 import {
   agentId,
+  boardLimits,
   clip,
   number,
   postId,
@@ -37,6 +38,7 @@ import {
 import { TranscriptFile, type TranscriptEntry } from '../core/transcript.ts';
 import {
   protocolVersion,
+  turnIdPattern,
   type ActionName,
   type Agent,
   type AgentStatus,
@@ -339,18 +341,126 @@ function anyAgent(view: LabView, id: string): AgentRef | null {
 const working = (agent: AgentRef): boolean =>
   agent.status === 'working' || agent.status === 'running';
 
+/**
+ * The lab's posts and runs by the harness call that made them. A post's key
+ * is `agent:generation:call`, and a run's key is `generation:call`, so the
+ * call's ID is what follows the agent and the generation.
+ */
+interface ProofIndex {
+  readonly posts: ReadonlyMap<string, readonly BoardPost[]>;
+  readonly runs: ReadonlyMap<string, readonly RunRecord[]>;
+  readonly allPosts: readonly BoardPost[];
+  readonly ledger: readonly RunRecord[];
+}
+
+function group<T>(
+  items: readonly T[],
+  call: (item: T) => string | null,
+): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const id = call(item);
+    if (id) map.set(id, [...(map.get(id) ?? []), item]);
+  }
+  return map;
+}
+
+function proofIndex(view: LabView): ProofIndex {
+  return {
+    posts: group(
+      view.posts,
+      (post) => post.key?.split(':').slice(2).join(':') || null,
+    ),
+    runs: group(
+      view.ledger,
+      (run) => run.key.split(':').slice(1).join(':') || null,
+    ),
+    allPosts: view.posts,
+    ledger: view.ledger,
+  };
+}
+
+/** The most posts and runs that a folded turn names. */
+const turnProofs = 20;
+
+/**
+ * The posts and runs that a turn's tool calls made, by the calls' IDs. When
+ * a call that posts or starts a run matched no record, as when a harness
+ * names its calls in a way that the records do not carry, the agent's posts
+ * and runs from while the turn ran fill in, matched by time and marked so.
+ */
+function turnProof(
+  entry: ActivityTurn,
+  agent: string,
+  index: ProofIndex,
+): Pick<Turn, 'posts' | 'runs' | 'proofByTime'> {
+  const posts = new Set<string>();
+  const runs = new Set<string>();
+  let unmatched = false;
+  for (const call of entry.entries) {
+    if (call.kind !== 'tool') continue;
+    // A transcript ID is the run's prefix, a dot, then the harness's own call ID.
+    const id = call.id.slice(call.id.indexOf('.') + 1);
+    const made = (index.posts.get(id) ?? []).filter(
+      (post) => post.author === agent,
+    );
+    const started = (index.runs.get(id) ?? []).filter(
+      (run) => run.agent === agent,
+    );
+    for (const post of made) posts.add(post.id);
+    for (const run of started) runs.add(run.id);
+    const kind = stepKind(call.name ?? '');
+    if (
+      (kind === 'post' || kind === 'run') &&
+      call.status === 'done' &&
+      !made.length &&
+      !started.length
+    )
+      unmatched = true;
+  }
+  let byTime = false;
+  if (unmatched) {
+    // Fallback: matched by time, not by call. See `Turn.proofByTime`.
+    const from = Date.parse(entry.startedAt);
+    const to = Date.parse(entry.lastAt);
+    const during = (at: string): boolean => {
+      const time = Date.parse(at);
+      return time >= from && time <= to;
+    };
+    for (const post of index.allPosts)
+      if (post.author === agent && during(post.at) && !posts.has(post.id)) {
+        posts.add(post.id);
+        byTime = true;
+      }
+    for (const run of index.ledger)
+      if (run.agent === agent && during(run.queuedAt) && !runs.has(run.id)) {
+        runs.add(run.id);
+        byTime = true;
+      }
+  }
+  return {
+    posts: [...posts].slice(0, turnProofs),
+    runs: [...runs].slice(0, turnProofs),
+    proofByTime: byTime,
+  };
+}
+
 function foldTurn(
   entry: ActivityTurn,
+  agent: AgentRef,
   running: boolean,
   message: number,
+  index: ProofIndex,
 ): Turn {
   return {
     id: entry.id,
     startedAt: entry.startedAt,
     endedAt: running ? null : entry.lastAt,
+    rev: entry.entries.reduce((max, item) => Math.max(max, item.seq), 0),
     counts: entry.counts,
     message:
       message && entry.message !== null ? text(entry.message, message) : null,
+    ...turnProof(entry, agent.id, index),
   };
 }
 
@@ -360,6 +470,7 @@ function pageOfTurns(
   turns: readonly ActivityTurn[],
   size: number,
   message: number,
+  index: ProofIndex,
   end = turns.length,
 ): TurnPage {
   const start = Math.max(0, end - size);
@@ -368,7 +479,13 @@ function pageOfTurns(
     turns: turns
       .slice(start, end)
       .map((entry) =>
-        foldTurn(entry, working(agent) && entry === newest, message),
+        foldTurn(
+          entry,
+          agent,
+          working(agent) && entry === newest,
+          message,
+          index,
+        ),
       ),
     more: start > 0,
   };
@@ -591,6 +708,7 @@ function check(entry: LabCheck): CheckItem {
 function shapeLab(loaded: Loaded, level: Level): Lab {
   const { view } = loaded;
   const { state } = view;
+  const proof = proofIndex(view);
   const omitted: Partial<Record<LabList, number>> = {};
   /** The first `max` items, or with `newest` the last ones. The rest count as omitted. */
   const keep = <T>(
@@ -642,7 +760,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
           turn: turns.at(-1) ?? null,
           asked,
         }),
-        turns: pageOfTurns(ref, turns, level.turns, level.message),
+        turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
         spendUsd: ref.spend,
       };
     },
@@ -654,6 +772,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     question: level.whole
       ? state.question
       : clip(state.question, apiLimits.question),
+    postLimit: boardLimits.personText,
     startedAt: state.startedAt,
     agentsHere: view.runs,
     paused: state.pausedAt
@@ -963,10 +1082,11 @@ export class ApiReader {
     );
   }
 
-  /** Any agent of the lab, with its turns. Null when the lab has no such agent. */
+  /** Any agent of the lab, with its turns and the lab's view. Null when the lab has no such agent. */
   private async agent(id: string): Promise<{
     readonly agent: AgentRef;
     readonly turns: readonly ActivityTurn[];
+    readonly view: LabView;
   } | null> {
     const sources = this.sources();
     const view = sources.lab?.view();
@@ -983,7 +1103,7 @@ export class ApiReader {
       this.extra.push(path);
       this.extra.splice(0, this.extra.length - apiLimits.extraTranscripts);
     }
-    return { agent, turns: this.turnsOf(followed) };
+    return { agent, turns: this.turnsOf(followed), view };
   }
 
   /** A page of an agent's turns, before the turn `before` or the newest. Null: no such agent or turn. */
@@ -1000,32 +1120,42 @@ export class ApiReader {
       found.turns,
       apiLimits.turns,
       apiLimits.message,
+      proofIndex(found.view),
       end,
     );
   }
 
   /**
    * One turn with a page of its steps, as JSON: the newest steps, or those
-   * before index `before`. A page holds at most `apiLimits.steps` steps and
-   * about `apiLimits.stepPage` bytes, and always at least one step. Null: no
-   * such agent, turn, or step.
+   * before index `before`. A page holds at most `limit` steps (at most
+   * `apiLimits.steps`) and about `apiLimits.stepPage` bytes, and always at
+   * least one step when there is one. With `tools`, only tool calls count.
+   * Null: no such agent, turn, or step.
    */
   async turn(
     id: string,
     turnId: string,
     before?: number,
+    page: { readonly limit?: number; readonly tools?: boolean } = {},
   ): Promise<string | null> {
     const found = await this.agent(id);
     const entry = found?.turns.find((item) => item.id === turnId);
     if (!found || !entry) return null;
     const end = before ?? entry.entries.length;
     if (end > entry.entries.length) return null;
+    const limit = Math.min(page.limit ?? apiLimits.steps, apiLimits.steps);
+    const counted = (item: TranscriptEntry): boolean =>
+      !page.tools || item.kind === 'tool';
     const steps: string[] = [];
     let bytes = 0;
     let start = end;
-    while (start > 0 && steps.length < apiLimits.steps) {
+    while (start > 0 && steps.length < limit) {
       const item = entry.entries[start - 1];
       if (!item) break;
+      if (!counted(item)) {
+        start--;
+        continue;
+      }
       const json = JSON.stringify(step(item, start - 1));
       const size = Buffer.byteLength(json);
       if (steps.length && bytes + size > apiLimits.stepPage) break;
@@ -1033,12 +1163,15 @@ export class ApiReader {
       bytes += size;
       start--;
     }
+    const more = entry.entries.slice(0, start).some(counted);
     const shown = foldTurn(
       entry,
+      found.agent,
       working(found.agent) && entry === found.turns.at(-1),
       apiLimits.message,
+      proofIndex(found.view),
     );
-    return `{"turn":${JSON.stringify(shown)},"steps":[${steps.join(',')}],"more":${start > 0}}`;
+    return `{"turn":${JSON.stringify(shown)},"steps":[${steps.join(',')}],"more":${more}}`;
   }
 }
 
@@ -1207,9 +1340,6 @@ const actionNames = new Set<string>([
   'lab-away-dismiss',
 ] satisfies ActionName[]);
 
-/** A turn ID: an entry ID of a transcript, such as `1a2b3c4d.#3` or `1a2b3c4d.toolu_01`. */
-const turnId = /^[0-9a-f]{8}\.[\w#:.-]{1,120}$/;
-
 function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
@@ -1300,15 +1430,20 @@ export async function answerApi(
     else response.writeHead(404).end();
     return;
   }
+  // A turn's steps also take `limit` (1 to 200) and `tools=1`.
+  const stepQuery =
+    new Set(keys).size === keys.length &&
+    keys.every((key) => key === 'before' || key === 'limit' || key === 'tools');
+  const limit = url.searchParams.get('limit');
+  const tools = url.searchParams.get('tools');
   if (
     first === 'agents' &&
     second &&
     agentId.test(second) &&
-    third === 'turns' &&
-    onlyBefore
+    third === 'turns'
   ) {
-    if (parts.length === 3) {
-      if (before !== null && !turnId.test(before)) {
+    if (parts.length === 3 && onlyBefore) {
+      if (before !== null && !turnIdPattern.test(before)) {
         response.writeHead(400).end();
         return;
       }
@@ -1317,7 +1452,7 @@ export async function answerApi(
       else response.writeHead(404).end();
       return;
     }
-    if (parts.length === 4 && fourth) {
+    if (parts.length === 4 && fourth && stepQuery) {
       let id: string;
       try {
         id = decodeURIComponent(fourth);
@@ -1326,8 +1461,10 @@ export async function answerApi(
         return;
       }
       if (
-        !turnId.test(id) ||
-        (before !== null && !/^(0|[1-9]\d{0,6})$/.test(before))
+        !turnIdPattern.test(id) ||
+        (before !== null && !/^(0|[1-9]\d{0,6})$/.test(before)) ||
+        (limit !== null && !/^([1-9]\d?|1\d\d|200)$/.test(limit)) ||
+        (tools !== null && tools !== '1')
       ) {
         response.writeHead(400).end();
         return;
@@ -1336,6 +1473,10 @@ export async function answerApi(
         second,
         id,
         before === null ? undefined : Number(before),
+        {
+          ...(limit === null ? {} : { limit: Number(limit) }),
+          ...(tools === null ? {} : { tools: true }),
+        },
       );
       if (detail) json(response, 200, detail);
       else response.writeHead(404).end();

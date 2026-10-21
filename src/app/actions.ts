@@ -1,8 +1,12 @@
-import { act } from './api.ts';
+import { act, isTurnDetail, isTurnPage, load, paths } from './api.ts';
+import type { AgentActions } from './screens/DirectionPage.tsx';
 import type { LabActions } from './screens/LabHome.tsx';
 
 const signedOut = (): Promise<{ readonly refused: string }> =>
   Promise.resolve({ refused: 'This tab has no access key.' });
+
+const unread = (): Promise<{ readonly error: string }> =>
+  Promise.resolve({ error: 'This tab has no access key.' });
 
 /**
  * The lab actions that the app's pages send, each with the key of the
@@ -27,5 +31,22 @@ export function labActions(token: string | null): LabActions {
     words: (call, text, key) =>
       act(token, 'lab-call-words', { call, text }, key),
     undo: (call, key) => act(token, 'lab-call-undo', { call }, key),
+  };
+}
+
+/**
+ * The reads and writes of the direction and turn pages. A message to a
+ * direction is a plain post in it, which wakes its agent (Board.wakes).
+ * Without a token, each one is refused at once.
+ */
+export function agentActions(token: string | null): AgentActions {
+  if (!token) return { message: signedOut, turns: unread, turn: unread };
+  return {
+    message: (direction, text, key) =>
+      act(token, 'lab-post', { text, direction }, key),
+    turns: (agent, before, signal) =>
+      load(token, paths.turns(agent, before), isTurnPage, signal),
+    turn: (agent, turn, query, signal) =>
+      load(token, paths.turn(agent, turn, query), isTurnDetail, signal),
   };
 }

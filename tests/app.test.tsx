@@ -21,6 +21,7 @@ import { afterSend, intentFor, unansweredAfter } from '../src/app/intent.ts';
 import { parseRoute } from '../src/app/route.ts';
 import { LabStore, newer, type LabState } from '../src/app/store.ts';
 import { Screen } from '../src/app/App.tsx';
+import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import { runCli, terminalInput } from '../src/cli/commands.ts';
 import { startDesk } from '../src/server/desk.ts';
@@ -155,6 +156,7 @@ function story(fields: Partial<Lab> = {}): Snapshot {
   const lab: Lab = {
     question:
       "Can cheap training methods make a model's chain of thought match its internal reasoning?",
+    postLimit: 4000,
     startedAt: ago(600),
     agentsHere: true,
     paused: null,
@@ -289,6 +291,12 @@ const actions: LabActions = {
   undo: () => Promise.resolve({ ok: true }),
 };
 
+const agentActions: AgentActions = {
+  message: () => Promise.resolve({ ok: true }),
+  turns: () => Promise.resolve({ error: 'not in this test' }),
+  turn: () => Promise.resolve({ error: 'not in this test' }),
+};
+
 function render(
   snapshot: Snapshot | null,
   connection: LabState['connection'] = 'live',
@@ -301,6 +309,7 @@ function render(
       route={parseRoute(hash)}
       now={now}
       actions={actions}
+      agentActions={agentActions}
     />,
   );
 }
@@ -668,7 +677,10 @@ await test('posts group into threads by the post they answer', () => {
 await test('routes: the pages that later steps build, and pages that do not exist', () => {
   assert.deepEqual(parseRoute(''), { page: 'lab' });
   assert.deepEqual(parseRoute('#/'), { page: 'lab' });
-  assert.deepEqual(parseRoute('#/d/d-2'), { page: 'direction' });
+  assert.deepEqual(parseRoute('#/d/d-2'), {
+    page: 'direction',
+    direction: 'd-2',
+  });
   assert.deepEqual(parseRoute('#/call/c-4'), { page: 'call', id: 'c-4' });
   assert.deepEqual(parseRoute('#/answer'), { page: 'answer' });
   assert.deepEqual(parseRoute('#/first-run'), { page: 'first-run' });
@@ -680,9 +692,10 @@ await test('routes: the pages that later steps build, and pages that do not exis
     '#/nope',
   ])
     assert.deepEqual(parseRoute(hash), { page: 'unknown' }, hash);
+  // A direction has its own page now (#295).
   assert.match(
     text(render(story(), 'live', '#/d/d-2')),
-    /A direction comes in a later step/,
+    /The CoT matches what probes read inside/,
   );
   assert.match(
     text(render(story(), 'live', '#/first-run')),
