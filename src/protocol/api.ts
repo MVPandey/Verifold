@@ -6,6 +6,11 @@
  * Times are ISO 8601 strings. Money is in USD. The server never puts
  * internal record fields, keys, or paths outside the project into these
  * shapes. A text that the server cut says so in its `trimmed` field.
+ *
+ * Changes: a field added after version 1 shipped is optional, and a client
+ * handles its absence, so an older server and a newer page still work
+ * together. Only a change that breaks that, such as a removed or retyped
+ * field, raises `protocolVersion`.
  */
 export const protocolVersion = 1;
 
@@ -107,13 +112,20 @@ export interface Asker {
   readonly why: string;
 }
 
-/** What an option does when the person picks it. A pod lists how many pod secrets it gets, never their names. */
+/**
+ * What an option does when the person picks it. A pod lists how many pod
+ * secrets it gets, never their names, and how many of those this computer
+ * does not store yet (null when Verifold cannot tell). A pod cannot start
+ * until each one is stored in Compute.
+ */
 export type Effect =
   | {
       readonly type: 'pod';
       readonly gpu: string;
       readonly hours: number;
       readonly secrets: number;
+      /** Added after version 1: absent from an older server. */
+      readonly missing?: number | null;
     }
   | { readonly type: 'hours'; readonly hours: number }
   | {
@@ -146,6 +158,15 @@ export interface Call {
   readonly options: readonly CallOption[];
   /** The option that the agents advise, or null. */
   readonly pick: number | null;
+  /** How long the person can undo an answer, in minutes. 0: an answer has no undo. Added after version 1. */
+  readonly undoMinutes?: number;
+  /** The most characters that an answer in the person's own words may have. Added after version 1. */
+  readonly wordsLimit?: number;
+  /**
+   * The answer is saved and Verifold applies its option now, for example a
+   * pod starts. `undoUntil` is set once that is done. Added after version 1.
+   */
+  readonly applying?: boolean;
   readonly state: 'open' | 'answered' | 'undoing' | 'withdrawn';
   readonly answer: { readonly option: number; readonly at: string } | null;
   /** The person's answer in their own words. */
@@ -460,7 +481,12 @@ export interface Work {
   readonly action: string;
   readonly label: string;
   readonly at: string;
+  /** Why the action failed after Verifold accepted it, or null while it runs. */
   readonly error: string | null;
+  /** The call that an answer or undo was for. Added after version 1. */
+  readonly call?: string;
+  /** The option that an answer picked. Added after version 1. */
+  readonly option?: number;
 }
 
 export interface Away {
