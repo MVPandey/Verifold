@@ -3,10 +3,10 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { copyFile, readFile, realpath, stat } from 'node:fs/promises';
+import { copyFile, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -74,8 +74,13 @@ import { readJsonBody, record } from './http.ts';
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
   readonly url: string;
-  /** A URL with a one-time code for a browser launch. Each code works once, for two minutes. */
-  launchUrl(): string;
+  /** The new app's URL with the same token, or null when the package has no app build. */
+  readonly appUrl: string | null;
+  /**
+   * A URL with a one-time code for a browser launch. Each code works once, for
+   * two minutes. `/app/` opens the new app instead of the desk.
+   */
+  launchUrl(path?: '/' | '/app/'): string;
   /** Switch a setup desk to the project that setup created. */
   attach(
     root: string,
@@ -1146,6 +1151,8 @@ export async function startDesk(
       | undefined;
     /** How often the API's stream builds the snapshot, and sends a heartbeat. Tests set them short. */
     readonly api?: { readonly pollMs?: number; readonly heartbeatMs?: number };
+    /** The new app's build: index.html and assets/. Without one, /app/ is not served. */
+    readonly appRoot?: URL;
   } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
@@ -1222,6 +1229,10 @@ export async function startDesk(
   ] as const) {
     assets.set(path, { type, body: await readFile(new URL(file, assetsRoot)) });
   }
+  const app = await readAppBuild(
+    options.appRoot ?? new URL('../app/', import.meta.url),
+  );
+  for (const [path, asset] of app) assets.set(path, asset);
   let origin = '';
   // Agents' pages run on their own origin. The desk may frame only that one.
   let pages: PageServer | undefined;
@@ -1985,12 +1996,13 @@ export async function startDesk(
   if (signal.aborted) stop();
   return {
     url: `${origin}/#${token}`,
-    launchUrl: () => {
+    appUrl: app.size ? `${origin}/app/#${token}` : null,
+    launchUrl: (path = '/') => {
       for (const [code, expires] of launchCodes)
         if (expires <= Date.now()) launchCodes.delete(code);
       const code = randomBytes(24).toString('hex');
       launchCodes.set(code, Date.now() + 120_000);
-      return `${origin}/#launch-${code}`;
+      return `${origin}${path === '/app/' && app.size ? path : '/'}#launch-${code}`;
     },
     attach: async (
       next,
@@ -2016,6 +2028,41 @@ export async function startDesk(
     pages: pages.origin,
     closed,
   };
+}
+
+const appTypes: Readonly<Record<string, string>> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+};
+
+/**
+ * The new app's files, by URL path: its page at /app and /app/, and the
+ * hashed files that the build wrote to assets/. An empty map when the app
+ * was not built, as in tests that pass their own desk assets.
+ */
+async function readAppBuild(
+  root: URL,
+): Promise<Map<string, { type: string; body: Buffer }>> {
+  const files = new Map<string, { type: string; body: Buffer }>();
+  let page: Buffer;
+  let names: string[];
+  try {
+    page = await readFile(new URL('index.html', root));
+    names = await readdir(new URL('assets/', root));
+  } catch {
+    return files;
+  }
+  for (const path of ['/app', '/app/'])
+    files.set(path, { type: 'text/html; charset=utf-8', body: page });
+  for (const name of names) {
+    const type = appTypes[extname(name)];
+    if (type && /^[\w.-]+$/.test(name))
+      files.set(`/app/assets/${name}`, {
+        type,
+        body: await readFile(new URL(`assets/${name}`, root)),
+      });
+  }
+  return files;
 }
 
 /** Browser launch is optional. The printed URL remains usable if it fails. */

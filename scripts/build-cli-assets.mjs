@@ -36,5 +36,8 @@ for (const [source, target] of [
   await copyFile(source, `dist-cli/desk/${target}`);
 }
 
+// The new app's bundle holds React, React DOM and scheduler, which share one MIT license text. Vite built dist-cli/app/ before this script.
+await copyFile('node_modules/react/LICENSE', 'dist-cli/app/react.LICENSE.txt');
+
 // tsc writes the entry point without the executable bit. A checkout linked with `npm link` runs it directly.
 await chmod('dist-cli/cli.js', 0o755);

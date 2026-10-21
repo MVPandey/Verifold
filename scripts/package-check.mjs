@@ -46,8 +46,12 @@ try {
       (file) =>
         /^dist-cli\/[a-z]+\/[a-z-]+\.js$/.test(file.path) ||
         /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
+        // The new app: its page and the files that Vite names with a hash.
+        /^dist-cli\/app\/assets\/index-[\w-]+\.(js|css)$/.test(file.path) ||
         [
           'dist-cli/cli.js',
+          'dist-cli/app/index.html',
+          'dist-cli/app/react.LICENSE.txt',
           'dist-cli/ui/dom.js',
           'dist-cli/desk/desk.css',
           'dist-cli/desk/manrope.ttf',
@@ -550,6 +554,26 @@ onLine((line) => {
       '/vendor/purify.js',
       '/vendor/idiomorph.js',
     ]) {
+      const asset = await fetch(url.origin + path);
+      assert.equal(asset.status, 200, path);
+      assert.ok((await asset.arrayBuffer()).byteLength > 0, path);
+    }
+    // The new app: its page, and each file that the page loads.
+    const appPage = await fetch(`${url.origin}/app/`);
+    assert.equal(appPage.status, 200);
+    const appHtml = await appPage.text();
+    const appFiles = [
+      ...appHtml.matchAll(/(?:src|href)="(\/app\/assets\/[\w.-]+)"/g),
+    ].map((match) => match[1]);
+    assert.ok(
+      appFiles.some((path) => path.endsWith('.js')),
+      appHtml,
+    );
+    assert.ok(
+      appFiles.some((path) => path.endsWith('.css')),
+      appHtml,
+    );
+    for (const path of appFiles) {
       const asset = await fetch(url.origin + path);
       assert.equal(asset.status, 200, path);
       assert.ok((await asset.arrayBuffer()).byteLength > 0, path);

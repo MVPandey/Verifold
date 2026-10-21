@@ -1,0 +1,43 @@
+/* The v9 design tokens. Each value comes from the approved v9 canvas. Dark mode follows in a later slice. */
+@font-face {
+  font-family: 'Manrope';
+  /* The desk serves the bundled Manrope font. */
+  src: url('/manrope.ttf') format('truetype');
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+:root {
+  --bg: #f8f7fa;
+  --surface: #ffffff;
+  --ink: #101014;
+  --ink-2: #4a4453;
+  --muted: #5f5969;
+  --line: #e6e2ec;
+  --line-soft: #ece8f1;
+  --line-faint: #e2dde9;
+  --control: #8a8494;
+  --accent: #6d28d9;
+  --accent-ink: #5b21b6;
+  --accent-deep: #4c1d95;
+  --accent-tint: #f3edfe;
+  --accent-wash: #faf7ff;
+  --accent-soft: #f3effc;
+  --accent-line: #c9b3f5;
+  --codex: #3d3846;
+  --you: #c9973a;
+  --need-bg: #fff4de;
+  --need-ink: #7a4f00;
+  --need-row: #fffbf2;
+  --objection: #fff0cf;
+  --ok-bg: #e9f5ef;
+  --ok-ink: #1e6b47;
+  --rerun-bg: #e8eefc;
+  --rerun-ink: #1d3f8f;
+  --code-bg: #17151c;
+  --code-ink: #ece8f1;
+
+  --font: 'Manrope', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --column: 760px;
+}
