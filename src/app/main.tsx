@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './tokens.css';
 import './app.css';
 import './call.css';
+import './direction.css';
 import { takeToken } from './api.ts';
 import { App } from './App.tsx';
 import { LabStore } from './store.ts';

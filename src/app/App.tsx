@@ -4,12 +4,14 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { labActions } from './actions.ts';
+import { agentActions, labActions } from './actions.ts';
 import { needsTick } from './call.ts';
-import { parseRoute, type Route } from './route.ts';
+import { href, parseRoute, type Route } from './route.ts';
 import { CallDialog } from './screens/CallDialog.tsx';
+import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { ComingSoon, NotFound, Notice } from './screens/Notice.tsx';
+import { TurnScreen } from './screens/TurnScreen.tsx';
 import type { LabStore, LabState } from './store.ts';
 
 function useRoute(): Route {
@@ -42,11 +44,13 @@ export function Screen({
   route,
   now,
   actions,
+  agentActions,
 }: {
   readonly state: LabState;
   readonly route: Route;
   readonly now: number;
   readonly actions: LabActions;
+  readonly agentActions: AgentActions;
 }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
@@ -74,7 +78,7 @@ export function Screen({
       </Notice>
     );
   if (route.page === 'unknown') return <NotFound />;
-  if (route.page !== 'lab' && route.page !== 'call')
+  if (route.page === 'answer' || route.page === 'first-run')
     return <ComingSoon page={route.page} />;
   if (!snapshot)
     return connection === 'unreachable' ? (
@@ -90,7 +94,8 @@ export function Screen({
         <p>The lab shows here in a moment.</p>
       </Notice>
     );
-  if (!snapshot.lab)
+  const lab = snapshot.lab;
+  if (!lab)
     return (
       <Notice title={`${snapshot.project} has no lab yet`}>
         <p>
@@ -99,25 +104,59 @@ export function Screen({
         </p>
       </Notice>
     );
-  return (
-    <>
-      <LabHome
-        snapshot={snapshot}
-        lab={snapshot.lab}
-        connection={connection}
-        now={now}
-        actions={actions}
-      />
-      {route.page === 'call' && (
-        <CallDialog
-          key={route.id}
-          lab={snapshot.lab}
-          id={route.id}
+  if (route.page === 'lab' || route.page === 'call')
+    return (
+      <>
+        <LabHome
+          snapshot={snapshot}
+          lab={lab}
+          connection={connection}
           now={now}
           actions={actions}
         />
-      )}
-    </>
+        {route.page === 'call' && (
+          <CallDialog
+            key={route.id}
+            lab={lab}
+            id={route.id}
+            now={now}
+            actions={actions}
+          />
+        )}
+      </>
+    );
+  const direction = lab.directions.find(
+    (entry) => entry.id === route.direction,
+  );
+  if (!direction)
+    return (
+      <Notice title="This direction is not in the lab">
+        <p>
+          {lab.omitted.directions !== undefined
+            ? 'This view of a large lab leaves out some directions. '
+            : ''}
+          <a href={href.lab}>Back to the lab</a>
+        </p>
+      </Notice>
+    );
+  const page = {
+    snapshot,
+    lab,
+    direction,
+    connection,
+    now,
+    actions,
+    agentActions,
+  };
+  // Keyed by the route, so no state carries from one direction or turn to another.
+  return route.page === 'direction' ? (
+    <DirectionPage key={direction.id} {...page} />
+  ) : (
+    <TurnScreen
+      key={`${direction.id}/${route.turn}`}
+      {...page}
+      turnId={route.turn}
+    />
   );
 }
 
@@ -136,5 +175,14 @@ export function App({
     setFast(needsTick(state.snapshot?.lab, Date.now()));
   }, [state, now]);
   const [actions] = useState(() => labActions(token));
-  return <Screen state={state} route={route} now={now} actions={actions} />;
+  const [agent] = useState(() => agentActions(token));
+  return (
+    <Screen
+      state={state}
+      route={route}
+      now={now}
+      actions={actions}
+      agentActions={agent}
+    />
+  );
 }

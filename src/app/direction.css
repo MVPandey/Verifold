@@ -1,0 +1,389 @@
+/* The direction and turn pages. Values follow the v9 canvas artboards "10. A direction" and "11. One turn, opened". */
+.column--detail {
+  gap: 14px;
+}
+
+.back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.link-button {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent-deep);
+}
+
+.link-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+/* The direction's head */
+.direction-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.direction-head__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.direction-head__title {
+  margin: 0;
+  flex: 1 1 320px;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.direction-head__meta {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+/* Turns */
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 4px;
+}
+
+.turns__none {
+  margin: 0;
+  color: var(--muted);
+}
+
+.turn {
+  display: flex;
+  gap: 12px;
+}
+
+.turn__body {
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.turn__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.turn__time {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-faint);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: 700 13px var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fold:hover {
+  background: var(--accent-wash);
+}
+
+.steps {
+  margin: 0;
+  padding: 10px 14px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.steps--note {
+  color: var(--muted);
+}
+
+.steps__item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.steps__verb {
+  flex: none;
+}
+
+.steps__what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.steps__all {
+  font-weight: 700;
+}
+
+/* A read that failed after steps showed: they stay, with this note. */
+.steps__problem {
+  margin: 0;
+  font-size: 13px;
+  color: var(--need-ink);
+}
+
+.turn__message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.turn__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.turn__text--folded {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+
+.turn__proof {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The agent now */
+.live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+}
+
+.live__text {
+  flex: 1 1 260px;
+  font-weight: 700;
+}
+
+.live--need {
+  background: var(--need-bg);
+  border: 1px solid var(--you);
+}
+
+.live--need .dot {
+  background: var(--you);
+}
+
+.live--working {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
+
+.live--working .dot {
+  background: var(--accent);
+}
+
+.live--quiet {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
+.composer__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* The turn's page */
+.turn-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.turn-head__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.turn-head__meta {
+  color: var(--ink-2);
+}
+
+.step-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.step-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.step-row:last-child {
+  border-bottom: 0;
+}
+
+.step-row--log {
+  background: var(--bg);
+}
+
+.step-row__line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.step-row__verb {
+  flex: none;
+  width: 76px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.step-row__dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+}
+
+.step-row__what {
+  flex: 1 1 360px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.step-row__time {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.step-row__more {
+  margin-left: 86px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.step-row__block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.step-row__label {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.step-row__toggle {
+  align-self: flex-start;
+  margin-left: 86px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.step-row__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.log {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 10px;
+  font: 500 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tag {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tag--failed {
+  background: var(--objection);
+  color: var(--need-ink);
+}
+
+@media (max-width: 600px) {
+  .step-row__verb {
+    width: auto;
+  }
+
+  .step-row__more,
+  .step-row__toggle {
+    margin-left: 0;
+  }
+}

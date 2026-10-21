@@ -36,7 +36,7 @@ import type {
   LabState,
   LabView,
 } from '../src/core/lab.ts';
-import type { Post } from '../src/core/board.ts';
+import { boardLimits, type Post } from '../src/core/board.ts';
 import type { RunRecord } from '../src/core/runs.ts';
 import type { Lease } from '../src/core/leases.ts';
 import type { SessionPool } from '../src/core/workers.ts';
@@ -728,6 +728,8 @@ await test('the snapshot holds what the screens show, and no internal field, key
   assert.ok(lab);
   assert.equal(data.trimmed, false);
   assert.equal(lab.question, 'Can cheap training make a CoT faithful?');
+  // The person's post limit comes from the board, so the app's box matches it.
+  assert.equal(lab.postLimit, boardLimits.personText);
   assert.deepEqual(lab.money, { plansUsd: 2.5, gpuUsd: 4.2, gpuLimitUsd: 25 });
   assert.deepEqual(lab.away, {
     since: at(50),
@@ -1508,6 +1510,29 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
     (await fetch(`${api}/agents/a-1/turns/not%20an%20id`, { headers })).status,
     400,
   );
+  // A fold's short list: the newest tool calls only, as many as it asks for.
+  const turnUrl = `${api}/agents/a-1/turns/${encodeURIComponent(firstTurn.id)}`;
+  const short = (await (
+    await fetch(`${turnUrl}?limit=2&tools=1`, { headers })
+  ).json()) as TurnDetail;
+  assert.deepEqual(
+    short.steps.map((entry) => entry.type),
+    ['tool', 'tool'],
+  );
+  assert.equal(short.more, true);
+  assert.ok(detail.steps.filter((entry) => entry.type === 'tool').length > 2);
+  for (const query of ['limit=0', 'limit=201', 'limit=two', 'tools=yes'])
+    assert.equal(
+      (await fetch(`${turnUrl}?${query}`, { headers })).status,
+      400,
+      query,
+    );
+  for (const query of ['x=1', 'limit=2&limit=3'])
+    assert.equal(
+      (await fetch(`${turnUrl}?${query}`, { headers })).status,
+      404,
+      query,
+    );
 
   // Actions run the desk's own operations, with its checks.
   const action = (name: string, body: unknown, more: RequestInit = {}) =>
@@ -1559,4 +1584,100 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
     (await fetch(`${api}/actions/lab-pause`, { headers })).status,
     405,
   );
+});
+
+await test("a turn's revision grows when a running step ends, with no new tool call", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const running = '20261020T090000000Z-dddddd01';
+  const finished = '20261020T090000000Z-dddddd02';
+  await writeTranscript(root, running, claudeSession());
+  await writeTranscript(root, finished, [
+    ...claudeSession(),
+    ...claudeUpdates(claude.result('t6', 'gap 0.31\n')),
+  ]);
+  const newest = async (
+    session: string,
+  ): Promise<TurnPage['turns'][number]> => {
+    const reader = new ApiReader(sources(root, () => withSession(session)));
+    const last = (await reader.turnPage('a-1'))?.turns.at(-1);
+    assert.ok(last);
+    return last;
+  };
+  const before = await newest(running);
+  const after = await newest(finished);
+  // The command only ended: the same counts, a higher revision.
+  assert.deepEqual(after.counts, before.counts);
+  assert.ok(before.rev !== undefined && after.rev !== undefined);
+  assert.ok(after.rev > before.rev, `${after.rev} > ${before.rev}`);
+});
+
+await test('a turn names the posts and runs that its own tool calls made, and marks a match by time', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = '20261020T090000000Z-dddddd03';
+  await writeTranscript(root, session, [
+    requestUpdate('Go.'),
+    ...claudeUpdates(
+      claude.tool('tr', 'mcp__verifold__verifold_run', {
+        command: 'python probe.py',
+      }),
+    ),
+    ...claudeUpdates(claude.result('tr', 'Started r-1.')),
+    ...claudeUpdates(
+      claude.tool('tp', 'mcp__verifold__verifold_post', {
+        kind: 'claim',
+        text: 'The gap is 34% smaller.',
+      }),
+    ),
+    ...claudeUpdates(claude.result('tp', 'Posted p-2.')),
+    ...claudeUpdates(claude.text('Done.')),
+    ...claudeUpdates(claude.end),
+  ]);
+  // A post's key is agent:generation:call, and a run's key generation:call.
+  const keyed = (): LabView => {
+    const view = withSession(session);
+    return {
+      ...view,
+      posts: view.posts.map((entry) =>
+        entry.id === 'p-2' ? { ...entry, key: 'a-1:0a1b2c3d:tp' } : entry,
+      ),
+      ledger: view.ledger.map((run) => ({ ...run, key: '0a1b2c3d:tr' })),
+    };
+  };
+  const exact = (
+    await new ApiReader(sources(root, keyed)).turnPage('a-1')
+  )?.turns.at(-1);
+  assert.ok(exact);
+  assert.deepEqual(
+    [exact.runs, exact.posts, exact.proofByTime],
+    [['r-1'], ['p-2'], false],
+  );
+  // No record carries the calls' IDs: the agent's records from while the turn ran fill in, marked as matched by time.
+  const during = exact.startedAt;
+  const unkeyed = (): LabView => {
+    const view = withSession(session);
+    return {
+      ...view,
+      posts: [
+        ...view.posts,
+        post('p-5', 'a-1', 'claim', 'From the turn.', { at: during }),
+      ],
+      ledger: view.ledger.map((run) => ({
+        ...run,
+        key: '0a1b2c3d:another-call',
+        queuedAt: during,
+      })),
+    };
+  };
+  const timed = (
+    await new ApiReader(sources(root, unkeyed)).turnPage('a-1')
+  )?.turns.at(-1);
+  assert.ok(timed);
+  assert.deepEqual(
+    [timed.runs, timed.posts, timed.proofByTime],
+    [['r-1'], ['p-5'], true],
+  );
+  // The records' keys never show.
+  assert.doesNotMatch(JSON.stringify(timed), /another-call|0a1b2c3d:/);
 });

@@ -19,6 +19,8 @@ import { useAction } from '../useAction.ts';
  * answer in the person's own words. Enter makes a new line there, and ⌘ or
  * Ctrl with Enter sends. `maxLength`: the server's limit, when it gave one;
  * without one a multiline box sets none and the server checks the length.
+ * `hint`: one line under the box, such as when the message reaches its
+ * reader. A refusal shows in its place.
  */
 export function Composer({
   label,
@@ -26,12 +28,14 @@ export function Composer({
   onSend,
   multiline = false,
   maxLength,
+  hint,
 }: {
   readonly label: string;
   readonly placeholder: string;
   readonly onSend: (text: string, key: string) => Promise<ActOutcome>;
   readonly multiline?: boolean;
   readonly maxLength?: number | undefined;
+  readonly hint?: string | undefined;
 }): ReactNode {
   const id = useId();
   const [text, setText] = useState('');
@@ -44,10 +48,12 @@ export function Composer({
     if (await action.submit(value))
       setText((current) => afterSend(current, sent));
   };
-  const error = action.error && (
+  const below = action.error ? (
     <span role="alert" className="composer__error">
       {action.error}
     </span>
+  ) : (
+    hint && <span className="composer__hint">{hint}</span>
   );
   if (multiline)
     return (
@@ -80,7 +86,7 @@ export function Composer({
             Send
           </button>
         </div>
-        {error}
+        {below}
       </form>
     );
   return (
@@ -105,7 +111,7 @@ export function Composer({
           Send
         </button>
       </div>
-      {error}
+      {below}
     </form>
   );
 }

@@ -4,6 +4,8 @@ import {
   type ActionName,
   type ActionResult,
   type Snapshot,
+  type TurnDetail,
+  type TurnPage,
 } from '../protocol/api.ts';
 import { exchangeLaunch, readFragment } from '../ui/token.ts';
 
@@ -70,6 +72,86 @@ export async function act<Name extends ActionName>(
       ? result.error
       : 'Verifold could not run this. Try again.',
   };
+}
+
+/** What a read of folded detail gave: the data, or why there is none. */
+export type Loaded<T> = { readonly value: T } | { readonly error: string };
+
+/** Which steps of a turn to read: before a step's index, how many, and tool calls only. */
+export interface StepQuery {
+  readonly before?: number;
+  readonly limit?: number;
+  readonly tools?: boolean;
+}
+
+/** The API paths of an agent's turns and of one turn's steps. */
+export const paths = {
+  turns: (agent: string, before: string): string =>
+    `/api/v1/agents/${encodeURIComponent(agent)}/turns?before=${encodeURIComponent(before)}`,
+  turn: (agent: string, turn: string, query: StepQuery = {}): string => {
+    const search = new URLSearchParams();
+    if (query.before !== undefined) search.set('before', String(query.before));
+    if (query.limit !== undefined) search.set('limit', String(query.limit));
+    if (query.tools) search.set('tools', '1');
+    const rest = search.toString();
+    return `/api/v1/agents/${encodeURIComponent(agent)}/turns/${encodeURIComponent(turn)}${rest ? `?${rest}` : ''}`;
+  },
+} as const;
+
+function object(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+export function isTurnPage(value: unknown): value is TurnPage {
+  return (
+    object(value) &&
+    Array.isArray(value.turns) &&
+    typeof value.more === 'boolean'
+  );
+}
+
+export function isTurnDetail(value: unknown): value is TurnDetail {
+  return (
+    object(value) &&
+    object(value.turn) &&
+    Array.isArray(value.steps) &&
+    typeof value.more === 'boolean'
+  );
+}
+
+/**
+ * Read detail that a snapshot keeps folded, such as a turn's steps. The
+ * answer is the data, or a reason in plain words. A read that `signal`
+ * aborted answers with a reason too: the caller drops it.
+ */
+export async function load<T>(
+  token: string,
+  path: string,
+  is: (value: unknown) => value is T,
+  signal?: AbortSignal,
+): Promise<Loaded<T>> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      headers: { Authorization: `Bearer ${token}` },
+      ...(signal ? { signal } : {}),
+    });
+  } catch {
+    return { error: "Can't reach Verifold. Try again." };
+  }
+  if (response.status === 401)
+    return {
+      error:
+        'This tab has no access key. Open Verifold from your terminal again.',
+    };
+  if (response.status === 404)
+    return { error: 'Verifold no longer has this. The lab may have moved on.' };
+  if (!response.ok)
+    return { error: 'Verifold could not send this. Try again.' };
+  const value: unknown = await response.json().catch(() => null);
+  return is(value)
+    ? { value }
+    : { error: 'Verifold sent something this page cannot read. Reload it.' };
 }
 
 /**
