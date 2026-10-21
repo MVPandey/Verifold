@@ -59,6 +59,10 @@ export type Route =
       readonly proof?: string;
     }
   | { readonly page: 'settings' }
+  | { readonly page: 'history' }
+  /** One run of History: `current`, or an archive ID. */
+  | { readonly page: 'history-run'; readonly id: string }
+  | { readonly page: 'start-over' }
   | { readonly page: 'unknown' };
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
@@ -118,6 +122,12 @@ export function parseRoute(hash: string): Route {
   if (path === '/answer') return { page: 'answer' };
   if (path === '/ask') return { page: 'ask' };
   if (path === '/settings') return { page: 'settings' };
+  if (path === '/history') return { page: 'history' };
+  const historyRun = /^\/history\/(current|\d{8}T\d{9}Z-[a-f0-9]{6})$/.exec(
+    path,
+  );
+  if (historyRun?.[1]) return { page: 'history-run', id: historyRun[1] };
+  if (path === '/start-over') return { page: 'start-over' };
   if (path === '/setup') return { page: 'setup', step: null };
   const setup = /^\/setup\/(agents|about|skills|money|done)$/.exec(path)?.[1];
   if (setup) return { page: 'setup', step: setup as SetupPage };
@@ -147,6 +157,9 @@ export const href = {
   setup: (step?: SetupPage): string => (step ? `#/setup/${step}` : '#/setup'),
   ask: '#/ask',
   settings: '#/settings',
+  history: '#/history',
+  historyRun: (id: string): string => `#/history/${id}`,
+  startOver: '#/start-over',
 } as const;
 
 /**

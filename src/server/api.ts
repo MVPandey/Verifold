@@ -28,6 +28,20 @@ import {
   type Away as LabAway,
 } from '../core/away.ts';
 import { labGpu, settingsVersion, type ComputeView } from '../core/compute.ts';
+import { validArchiveId } from '../core/archive.ts';
+import {
+  historyIndex,
+  historyRun as readHistoryRun,
+  historyTask as readHistoryTask,
+  historyTaskDiff,
+  historyTranscript,
+  memoryFiles,
+  researchRunOnDisk,
+  type HistoryRunInfo,
+  type LabHistory,
+  type ResearchHistory,
+} from '../core/history.ts';
+import type { TaskRecord } from '../core/team-records.ts';
 import {
   isOpen,
   leaseLimits,
@@ -71,7 +85,11 @@ import {
   type SessionView,
 } from '../core/session.ts';
 import { TranscriptFile, type TranscriptEntry } from '../core/transcript.ts';
-import { workspaceName, type ChangedFile } from '../core/workspaces.ts';
+import {
+  WorkspaceError,
+  workspaceName,
+  type ChangedFile,
+} from '../core/workspaces.ts';
 import {
   protocolVersion,
   searchQueryLimit,
@@ -110,6 +128,13 @@ import {
   type Turn,
   type TurnPage,
   type Work,
+  type HistoryEntry,
+  type HistoryLabRun,
+  type HistoryList,
+  type HistoryResearchRun,
+  type HistoryRun,
+  type HistoryTask,
+  type HistoryTurns,
 } from '../protocol/api.ts';
 import { readJsonBody, record } from './http.ts';
 import type { FirstRun } from './setup.ts';
@@ -911,6 +936,294 @@ function run(entry: RunRecord): Run {
   };
 }
 
+/** History's bounds of texts and lists, under the core's own bounds. */
+const historyBounds = {
+  long: 4000,
+  short: 1000,
+  message: 1000,
+  answer: 500,
+  result: 300,
+  command: 200,
+  commands: 20,
+  actions: 100,
+  sources: 20,
+  attempts: 20,
+  versions: 20,
+  files: 200,
+  brief: 16_000,
+  memory: 64 * 1024,
+} as const;
+
+function historyEntry(info: HistoryRunInfo): HistoryEntry {
+  return {
+    id: info.id,
+    kind: info.kind,
+    at: info.at,
+    question: info.question && clip(info.question, apiLimits.question),
+    direction: info.direction,
+    bytes: info.bytes,
+    tasks: info.tasks,
+  };
+}
+
+/** A lab's archived run: its plan, directions, runs, and newest posts. */
+function historyLab(found: LabHistory): HistoryLabRun {
+  const handle = (agent: string): string =>
+    found.agents.get(agent)?.handle ?? agent;
+  const plan = found.state.plan;
+  return {
+    kind: 'lab',
+    entry: historyEntry(found.info),
+    question: found.state.question,
+    startedAt: found.state.startedAt,
+    plan: plan
+      ? {
+          reading: text(plan.reading, historyBounds.long),
+          cost: text(plan.cost, historyBounds.short),
+          facts: plan.facts.map(fact),
+        }
+      : null,
+    directions: found.state.directions.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      bar: entry.bar,
+      state: entry.state,
+      verdict: entry.verdict,
+      evidence: entry.evidence
+        ? clip(entry.evidence.text, historyBounds.short)
+        : null,
+      handle: found.agents.get(entry.agent)?.handle ?? null,
+    })),
+    runs: found.runs.map(run),
+    posts: found.posts.map((entry) => post(entry, handle)),
+    olderPosts: found.postCount - found.posts.length,
+  };
+}
+
+/**
+ * A research-flow run: its question and brief, research, directions, the
+ * coordinator, task summaries, messages, results, the person's sessions,
+ * and pods.
+ */
+function historyResearch(
+  found: ResearchHistory,
+  now: number,
+): HistoryResearchRun {
+  const workspace = found.workspace;
+  const research = workspace?.research;
+  const coordinator = found.coordinator;
+  const actions = coordinator?.actions.slice(-historyBounds.actions) ?? [];
+  return {
+    kind: 'research',
+    entry: historyEntry(found.info),
+    question: research?.topic ?? found.info.question,
+    brief: workspace?.context
+      ? text(workspace.context, historyBounds.brief)
+      : null,
+    plan: research?.plan
+      ? {
+          scope: clip(research.plan.scope, historyBounds.long),
+          personas: research.plan.personas.map((persona) => ({
+            name: persona.name,
+            task: clip(persona.task, historyBounds.short),
+          })),
+        }
+      : null,
+    attempts: found.attempts
+      .slice(0, historyBounds.attempts)
+      .map((attempt) => ({
+        id: attempt.id,
+        phase: attempt.record?.phase ?? null,
+        status: attempt.record?.status ?? null,
+        harness: attempt.record?.host ?? null,
+        model: attempt.record?.model ?? null,
+        startedAt: attempt.record?.startedAt ?? null,
+        finishedAt: attempt.record?.finishedAt ?? null,
+        summary: attempt.report
+          ? text(attempt.report.summary, historyBounds.long)
+          : null,
+        delegation: attempt.report
+          ? text(attempt.report.delegation, historyBounds.short)
+          : null,
+        sources: (attempt.report?.sources ?? [])
+          .slice(0, historyBounds.sources)
+          .map((source) => ({
+            title: clip(source.title, 300),
+            url: source.url,
+          })),
+        transcript: attempt.transcript,
+      })),
+    candidates: (workspace?.candidates ?? []).map((candidate) => ({
+      id: candidate.id,
+      title: candidate.title,
+      recommendation: text(candidate.recommendation, historyBounds.short),
+      checks: candidate.gates.map((check) => clip(check, historyBounds.short)),
+      sources: [...(candidate.sources ?? [])],
+      kind: candidate.kind ?? null,
+    })),
+    chosen: workspace?.selectedId ?? null,
+    coordinator: coordinator
+      ? {
+          objective: text(coordinator.objective, historyBounds.long),
+          harness: coordinator.host,
+          model: coordinator.model,
+          startedAt: coordinator.startedAt,
+          stoppedAt: coordinator.stoppedAt,
+          planApproved: coordinator.planApproved,
+          session: coordinator.session,
+          actions: actions.map((action) => ({
+            at: action.at,
+            tool: action.tool,
+            reason: action.reason
+              ? clip(action.reason, historyBounds.short)
+              : null,
+            ok: action.ok,
+            result: text(action.result, historyBounds.result),
+          })),
+          olderActions: coordinator.actions.length - actions.length,
+        }
+      : null,
+    tasks: found.tasks.map((task) => ({
+      id: task.id,
+      title: task.assignment.title,
+      state: task.state,
+      harness: task.assignment.host,
+      model: task.assignment.model,
+      attempts: task.attempts.length,
+      versions: task.attempts.reduce(
+        (sum, attempt) => sum + attempt.versions.length,
+        0,
+      ),
+      outcome: task.attempts.at(-1)?.outcome ?? null,
+    })),
+    messages: found.messages.map((message) => ({
+      id: message.id,
+      at: message.at,
+      from: message.from,
+      to: message.to,
+      kind: message.kind,
+      text: text(message.text, historyBounds.message),
+      status: message.status ?? null,
+      answer: message.answer
+        ? text(message.answer.text, historyBounds.answer)
+        : null,
+    })),
+    olderMessages: found.messageCount - found.messages.length,
+    results: found.results.map((results) => ({
+      direction: results.direction,
+      checks: results.checks.map((check) => ({
+        check: check.check,
+        result: check.result,
+        value: clip(check.value, historyBounds.short),
+        reason: text(check.reason, historyBounds.short),
+        ruling: check.ruling
+          ? {
+              result: check.ruling.result,
+              reason: clip(check.ruling.reason, historyBounds.short),
+            }
+          : null,
+      })),
+      answer: results.answer
+        ? {
+            statement: text(results.answer.statement, historyBounds.long),
+            claims: results.answer.claims.map((claim) => ({
+              text: clip(claim.text, historyBounds.short),
+              evidence: [...claim.evidence],
+            })),
+            decision: results.answer.decision
+              ? {
+                  kind: results.answer.decision.kind,
+                  note: results.answer.decision.note
+                    ? clip(results.answer.decision.note, historyBounds.short)
+                    : null,
+                }
+              : null,
+          }
+        : null,
+    })),
+    sessions: found.sessions.map(({ record, transcript }) => {
+      const commands = record.commands.slice(-historyBounds.commands);
+      return {
+        id: record.id,
+        harness: record.host,
+        model: record.model,
+        mode: record.mode,
+        status: record.status,
+        startedAt: record.startedAt,
+        endedAt: record.endedAt,
+        costUsd: record.costUsd,
+        commands: commands.map((command) => ({
+          at: command.at,
+          tool: command.tool,
+          action: text(command.action, historyBounds.command),
+          risk: [...command.risk],
+        })),
+        olderCommands: record.commands.length - commands.length,
+        transcript,
+      };
+    }),
+    pods: found.pods.map((lease) => ({
+      lease: lease.id,
+      gpu: lease.gpu,
+      state: lease.state,
+      tasks: [...lease.tasks],
+      requestedAt: lease.requestedAt,
+      costUsd: cents(spent(lease, now)),
+    })),
+  };
+}
+
+/** A task of a research-flow run in full: its newest attempts, with their versions and files. */
+function historyTaskOf(task: TaskRecord): HistoryTask {
+  const attempts = task.attempts.slice(-historyBounds.attempts);
+  return {
+    id: task.id,
+    title: task.assignment.title,
+    objective: text(task.assignment.objective, historyBounds.long),
+    state: task.state,
+    harness: task.assignment.host,
+    model: task.assignment.model,
+    revision: task.revision,
+    olderAttempts: task.attempts.length - attempts.length,
+    attempts: attempts.map((attempt) => ({
+      number: attempt.number,
+      startedAt: attempt.startedAt,
+      endedAt: attempt.endedAt,
+      outcome: attempt.outcome,
+      note: attempt.note ? clip(attempt.note, historyBounds.short) : null,
+      session: attempt.session,
+      versions: attempt.versions
+        .slice(-historyBounds.versions)
+        .map((version) => ({
+          number: version.number,
+          at: version.at,
+          turn: version.turn,
+          files: version.files.slice(0, historyBounds.files).map((file) => ({
+            path: file.path,
+            change: file.change,
+            inScope: file.inScope,
+          })),
+          moreFiles: Math.max(0, version.files.length - historyBounds.files),
+          reply: version.reply
+            ? text(version.reply, historyBounds.answer)
+            : null,
+          decision: version.decision
+            ? {
+                kind: version.decision.kind,
+                note: version.decision.note
+                  ? clip(version.decision.note, historyBounds.short)
+                  : null,
+                by:
+                  version.decision.by === 'coordinator'
+                    ? ('coordinator' as const)
+                    : ('person' as const),
+              }
+            : null,
+        })),
+    })),
+  };
+}
+
 function check(entry: LabCheck): CheckItem {
   return {
     id: entry.id,
@@ -1497,6 +1810,80 @@ export class ApiReader {
    * the size bound. The string is all that the feed measures, compares, and
    * sends, so the snapshot is serialized once.
    */
+  /** `GET /api/v1/history`: the project's runs and its memory files. Null without a project. */
+  async history(): Promise<HistoryList | null> {
+    const root = this.sources().root;
+    if (!root) return null;
+    const index = await historyIndex(root);
+    return {
+      current: index.current ? historyEntry(index.current) : null,
+      runs: index.runs.map(historyEntry),
+      more: index.more,
+      memory: (await memoryFiles(root)).map((file) => ({
+        name: file.name,
+        text: head(file.text, historyBounds.memory),
+      })),
+    };
+  }
+
+  /** `GET /api/v1/history/:id`: one run, or null when the project has no such run. */
+  async historyRun(id: string): Promise<HistoryRun | null> {
+    const root = this.sources().root;
+    const found = root ? await readHistoryRun(root, id) : null;
+    if (!found) return null;
+    return found.kind === 'lab'
+      ? historyLab(found)
+      : historyResearch(found, Date.now());
+  }
+
+  /** `GET /api/v1/history/:id/tasks/:task`: one task of a run in full, or null. */
+  async historyTask(id: string, task: string): Promise<HistoryTask | null> {
+    const root = this.sources().root;
+    const found = root ? await readHistoryTask(root, id, task) : null;
+    return found ? historyTaskOf(found) : null;
+  }
+
+  /** `GET /api/v1/history/:id/turns?source=`: the newest turns of a transcript in a run, folded. */
+  async historyTurns(id: string, source: string): Promise<HistoryTurns | null> {
+    const root = this.sources().root;
+    const path = root ? await historyTranscript(root, id, source) : null;
+    if (!path) return null;
+    const file = new TranscriptFile(path);
+    await file.refreshAll();
+    const turns = turnsOf(file.log.list());
+    const shown = turns.slice(-apiLimits.turns);
+    return {
+      turns: shown.map((entry) => ({
+        id: entry.id,
+        startedAt: entry.startedAt,
+        endedAt: entry.lastAt,
+        rev: entry.entries.reduce((max, item) => Math.max(max, item.seq), 0),
+        counts: entry.counts,
+        message:
+          entry.message === null
+            ? null
+            : text(entry.message, apiLimits.message),
+      })),
+      more: turns.length > shown.length,
+    };
+  }
+
+  /** `GET /api/v1/history/:id/tasks/:task/diff`: one file of a task version, or null. */
+  async historyDiff(
+    id: string,
+    task: string,
+    version: number,
+    file: string,
+  ): Promise<FileDiff | null> {
+    const root = this.sources().root;
+    const shown = root
+      ? await historyTaskDiff(root, id, task, version, file)
+      : null;
+    return shown
+      ? { text: shown.text, trimmed: shown.cut, commit: shown.commit }
+      : null;
+  }
+
   async snapshot(): Promise<string> {
     const sources = this.sources();
     const root = sources.root;
@@ -1528,6 +1915,7 @@ export class ApiReader {
           ? {
               question: question && clip(question, apiLimits.question),
               startProblem: sources.startProblem?.() ?? null,
+              researchRun: await researchRunOnDisk(root),
             }
           : {}),
         ...compute,
@@ -2066,6 +2454,7 @@ const actionNames = new Set<string>([
   'compute-lease-end',
   'compute-lease-dismiss',
   'compute-dismiss',
+  'start-over',
 ] satisfies ActionName[]);
 
 /** The first run's actions. The first run runs them, with or without a project. */
@@ -2101,6 +2490,83 @@ function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
     .end(typeof body === 'string' ? body : JSON.stringify(body));
+}
+
+/**
+ * History's reads: the list, one run, one task of a run, a transcript's
+ * turns, and a task version's diff. The run is `current` or an archive ID.
+ */
+async function answerHistory(
+  response: ServerResponse,
+  url: URL,
+  parts: readonly string[],
+  reader: ApiReader,
+): Promise<void> {
+  const keys = [...url.searchParams.keys()];
+  const [, run, third, fourth, fifth] = parts;
+  const send = (value: unknown): void => {
+    if (value) json(response, 200, value);
+    else response.writeHead(404).end();
+  };
+  if (parts.length === 1 && !keys.length) {
+    send(await reader.history());
+    return;
+  }
+  if (!run || (run !== 'current' && !validArchiveId(run))) {
+    json(response, 400, {
+      error:
+        'Name a run: current, or an archive ID such as 20261021T120000000Z-a1b2c3.',
+    });
+    return;
+  }
+  if (parts.length === 2 && !keys.length) {
+    send(await reader.historyRun(run));
+    return;
+  }
+  if (
+    parts.length === 3 &&
+    third === 'turns' &&
+    keys.length === 1 &&
+    keys[0] === 'source'
+  ) {
+    const source = url.searchParams.get('source') ?? '';
+    if (source.length > 120) {
+      json(response, 400, { error: 'Name a source such as session:<id>.' });
+      return;
+    }
+    send(await reader.historyTurns(run, source));
+    return;
+  }
+  if (third === 'tasks' && fourth && /^task-[1-9]\d{0,5}$/.test(fourth)) {
+    if (parts.length === 4 && !keys.length) {
+      send(await reader.historyTask(run, fourth));
+      return;
+    }
+    const version = Number(url.searchParams.get('version'));
+    const file = url.searchParams.get('file') ?? '';
+    if (
+      parts.length === 5 &&
+      fifth === 'diff' &&
+      keys.length === 2 &&
+      keys.includes('version') &&
+      keys.includes('file') &&
+      Number.isSafeInteger(version) &&
+      version >= 1 &&
+      file &&
+      file.length <= 300
+    ) {
+      try {
+        send(await reader.historyDiff(run, fourth, version, file));
+      } catch (error) {
+        if (!(error instanceof WorkspaceError)) throw error;
+        json(response, 404, {
+          error: `Verifold cannot show this diff: ${error.message}`,
+        });
+      }
+      return;
+    }
+  }
+  json(response, 400, { error: 'Verifold knows no such History read.' });
 }
 
 /**
@@ -2189,6 +2655,10 @@ export async function answerApi(
   }
   if (first === 'start' && parts.length === 1 && !keys.length && start) {
     json(response, 200, await start.view());
+    return;
+  }
+  if (first === 'history') {
+    await answerHistory(response, url, parts, reader);
     return;
   }
   if (first === 'setup' && parts.length === 1 && !keys.length && setup) {

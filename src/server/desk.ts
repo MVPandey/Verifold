@@ -290,6 +290,7 @@ async function changeRun(
   memory: ProjectMemory | undefined,
   labRun: Lab | undefined,
   restore?: unknown,
+  startResearch = true,
 ): Promise<void> {
   if (restore !== undefined && !validArchiveId(restore))
     throw new SessionActionError('Choose an archive from Records.');
@@ -309,6 +310,7 @@ async function changeRun(
       memory,
       labRun,
       restore,
+      startResearch,
     );
   } finally {
     changing.delete(root);
@@ -323,7 +325,8 @@ async function changeRunNow(
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
   labRun: Lab | undefined,
-  restore?: unknown,
+  restore: unknown,
+  startResearch: boolean,
 ): Promise<void> {
   // A step that checks its input, or chooses a direction for the coordinator, counts as running too.
   if (research?.busy)
@@ -375,6 +378,7 @@ async function changeRunNow(
   // After a lab, Home offers the lab again instead.
   if (
     restore === undefined &&
+    startResearch &&
     !lab &&
     research &&
     (await loadWorkspace(root)).research
@@ -956,23 +960,43 @@ async function act(
   }
   if (body.action === 'start-over' || body.action === 'restore') {
     if (!tasks) return 400;
-    // A save of the last look ends before the lab moves, so no look lands in the next run.
-    await labDesk.saving;
-    await changeRun(
-      root,
-      sessions,
-      research,
-      tasks,
-      coordinator,
-      memory,
-      labDesk.lab,
-      body.action === 'restore' ? body.archive : undefined,
-    );
-    // The lab actions of the earlier run, and their answers, do not belong to this one.
-    labDesk.works = [];
-    labDesk.requests.clear();
-    labDesk.look = undefined;
-    return 200;
+    // The app's Start over gives its intent's key: a retry after a lost answer gets the first answer.
+    const key =
+      typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
+        ? body.key
+        : null;
+    const known = key ? labDesk.requests.get(key) : undefined;
+    if (known) return known.status;
+    const status = (async (): Promise<number> => {
+      // A save of the last look ends before the lab moves, so no look lands in the next run.
+      await labDesk.saving;
+      await changeRun(
+        root,
+        sessions,
+        research,
+        tasks,
+        coordinator,
+        memory,
+        labDesk.lab,
+        body.action === 'restore' ? body.archive : undefined,
+        // The app starts a lab on the question itself. The desk's own Start over starts research.
+        body.lab !== true,
+      );
+      // The lab actions of the earlier run, and their answers, do not belong to this one.
+      labDesk.works = [];
+      labDesk.requests.clear();
+      labDesk.look = undefined;
+      return 200;
+    })();
+    if (key) {
+      labDesk.requests.set(key, { status, at: Date.now() });
+      // The answers of the earlier run go above, and this one stays for its retry.
+      status.then(
+        () => labDesk.requests.set(key, { status, at: Date.now() }),
+        () => labDesk.requests.delete(key),
+      );
+    }
+    return status;
   }
   // The app says that the person looks at the lab, as the desk's own page
   // does with `look=1`. A desk of one session only shows the lab, so it notes nothing.
