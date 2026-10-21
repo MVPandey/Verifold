@@ -18,6 +18,7 @@ import {
 } from '../core/board.ts';
 import { labGpu, type ComputeView } from '../core/compute.ts';
 import { openDisputes } from '../core/disputes.ts';
+import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
 import {
   askers,
@@ -433,6 +434,15 @@ function call(
     options,
     pick: entry.pick,
     undoMinutes: entry.undoMinutes,
+    wordsLimit: callLimits.words,
+    // Saved, and its option not applied yet: what the lab's recovery also
+    // finds unfinished after a stop, which then gets a note.
+    applying:
+      entry.state === 'answered' &&
+      entry.answer !== null &&
+      Boolean(entry.options[entry.answer.option]?.effect) &&
+      entry.applied === null &&
+      entry.note === null,
     state: entry.state,
     answer: entry.answer
       ? { option: entry.answer.option, at: entry.answer.at }
@@ -720,6 +730,8 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       label: work.label,
       at: work.at,
       error: work.error,
+      ...(work.call === undefined ? {} : { call: work.call }),
+      ...(work.option === undefined ? {} : { option: work.option }),
     })),
     away: loaded.away,
     omitted,

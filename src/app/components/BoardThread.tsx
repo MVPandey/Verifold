@@ -90,14 +90,19 @@ export function BoardThread({
   const { root, replies } = thread;
   if (root.author === 'person')
     return (
-      <article id={`post-${root.id}`} className="post">
+      <article id={`post-${root.id}`} tabIndex={-1} className="post">
         <Avatar who="person" size="lg" />
         <div className="post__body post__body--person">
           <div>
             <PostLines post={root} />
           </div>
           {replies.map((reply) => (
-            <div key={reply.id} id={`post-${reply.id}`} className="ack">
+            <div
+              key={reply.id}
+              id={`post-${reply.id}`}
+              tabIndex={-1}
+              className="ack"
+            >
               <Avatar who={who(reply)} size="xs" />
               <span>
                 <span className="ack__name">{name(reply)}</span> {reply.text}
@@ -109,7 +114,7 @@ export function BoardThread({
       </article>
     );
   return (
-    <article id={`post-${root.id}`} className="post">
+    <article id={`post-${root.id}`} tabIndex={-1} className="post">
       <Avatar who={who(root)} size="lg" />
       <div className="post__body">
         <div>
@@ -120,7 +125,12 @@ export function BoardThread({
             <div className="thread__rail" />
             <div className="thread__replies">
               {replies.map((reply) => (
-                <div key={reply.id} id={`post-${reply.id}`} className="reply">
+                <div
+                  key={reply.id}
+                  id={`post-${reply.id}`}
+                  tabIndex={-1}
+                  className="reply"
+                >
                   <Avatar who={who(reply)} size="sm" />
                   <div>
                     <PostLines post={reply} />

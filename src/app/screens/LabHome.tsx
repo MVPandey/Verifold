@@ -10,7 +10,8 @@ import { Composer } from '../components/Composer.tsx';
 import { DirectionRow } from '../components/DirectionRow.tsx';
 import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { UndoLine } from '../components/UndoLine.tsx';
+import { AnswerLine } from '../components/AnswerLine.tsx';
+import { failureOf } from '../call.ts';
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -74,7 +75,12 @@ export function LabHome({
             </StatusBar>
           )}
           {first ? (
-            <NeedsYouLine call={first} more={rest.length} now={now} />
+            <NeedsYouLine
+              call={first}
+              more={rest.length}
+              now={now}
+              failure={failureOf(lab, first)?.text ?? null}
+            />
           ) : lab.paused ? (
             <StatusBar tone="muted">
               {lab.paused.reason === 'deadline'
@@ -85,7 +91,7 @@ export function LabHome({
             <StatusBar tone="ok">Nothing needs you.</StatusBar>
           )}
           {lab.answered.map((call) => (
-            <UndoLine
+            <AnswerLine
               key={call.id}
               call={call}
               lab={lab}

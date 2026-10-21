@@ -829,6 +829,17 @@ async function labRequest(
     );
     if (opening && openingLabActions.has(action))
       fail(`${opening.label} still runs. Wait for it to end.`);
+    // An answer or an undo names its call, so a failure after the 202 shows on that call.
+    const call =
+      typeof body.call === 'string' && /^c-[1-9]\d{0,5}$/.test(body.call)
+        ? body.call
+        : undefined;
+    const option =
+      action === 'lab-call-answer' &&
+      typeof body.option === 'number' &&
+      Number.isInteger(body.option)
+        ? body.option
+        : undefined;
     const work: LabWork = {
       action,
       label:
@@ -839,11 +850,16 @@ async function labRequest(
           : slow,
       at: new Date(now).toISOString(),
       error: null,
+      ...(call === undefined ? {} : { call }),
+      ...(option === undefined ? {} : { option }),
     };
-    // A new try of an action replaces its earlier failure.
+    // A new try of an action replaces its earlier failure, for the same call when it has one.
     desk.works = [
       ...desk.works.filter(
-        (entry) => entry.action !== action || entry.error === null,
+        (entry) =>
+          entry.action !== action ||
+          entry.error === null ||
+          entry.call !== call,
       ),
       work,
     ];

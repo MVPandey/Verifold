@@ -3,43 +3,61 @@ import {
   useId,
   useRef,
   useState,
-  type FormEvent,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import type { Call, Lab } from '../../protocol/api.ts';
 import {
-  andList,
-  askedBy,
   callView,
+  closeHow,
   costLine,
-  effectLines,
+  failureOf,
+  footLine,
   missingLine,
+  onBoard,
   optionForKey,
+  optionLines,
   optionOrder,
   returnFocus,
+  settledLabel,
   typing,
   undoLeft,
-  undoSentence,
+  applyingText,
+  type CallView,
 } from '../call.ts';
-import { since, usd } from '../format.ts';
-import { afterSend } from '../intent.ts';
+import { andList } from '../../ui/call-words.ts';
+import { asked, since, usd } from '../format.ts';
 import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
+import { AnswerLine } from '../components/AnswerLine.tsx';
+import { Composer } from '../components/Composer.tsx';
 import { Cross } from '../components/Icons.tsx';
-import { UndoLine } from '../components/UndoLine.tsx';
 import type { LabActions } from './LabHome.tsx';
 
-/** Leave the dialog for the lab home. With `post`, bring that post of the board into view. */
-function close(post: string | null = null): void {
-  location.hash = href.lab;
-  requestAnimationFrame(() => {
-    returnFocus(document);
-    if (post)
-      document
-        .getElementById(`post-${post}`)
-        ?.scrollIntoView({ block: 'center' });
-  });
+/**
+ * Leave the call's address for the lab home without a new history entry:
+ * back when the lab home opened the call, else the call's entry becomes the
+ * lab's. Back after this cannot reopen the call.
+ */
+function goHome(): void {
+  if (closeHow(history.state) === 'back') {
+    history.back();
+    return;
+  }
+  history.replaceState(
+    null,
+    '',
+    `${location.pathname}${location.search}${href.lab}`,
+  );
+  dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+/** Bring a post of the board into view and give it focus, after the dialog has gone. */
+function showPost(post: string): void {
+  const element = document.getElementById(`post-${post}`);
+  if (!element) return;
+  element.scrollIntoView({ block: 'center' });
+  element.focus({ preventScroll: true });
 }
 
 /** What the call rests on: the money spent so far, and the facts that the plan checked. */
@@ -52,7 +70,7 @@ function Facts({ lab }: { readonly lab: Lab }): ReactNode {
         <li>
           GPU spent so far: {usd(money.gpuUsd)}
           {money.gpuLimitUsd !== null &&
-            ` of this lab's ${usd(money.gpuLimitUsd)}`}
+            ` of the project's ${usd(money.gpuLimitUsd)} GPU limit`}
           . Plans so far: about {usd(money.plansUsd)}.
         </li>
         {plan?.facts.map((fact, index) => (
@@ -71,71 +89,60 @@ function Facts({ lab }: { readonly lab: Lab }): ReactNode {
   );
 }
 
-/** The person's own answer: a box and Send. The words go to every agent that asked. */
-function Words({
-  call,
-  onWords,
+/** The top line: what the dialog is about, and Close. */
+function Top({
+  label,
+  tone,
+  onClose,
 }: {
-  readonly call: Call;
-  readonly onWords: LabActions['words'];
+  readonly label: string | null;
+  readonly tone: 'need' | 'done' | 'busy' | 'quiet';
+  readonly onClose: () => void;
 }): ReactNode {
-  const id = useId();
-  const [text, setText] = useState('');
-  const words = useAction<string>((value, key) => onWords(call.id, value, key));
-  const send = async (event: FormEvent): Promise<void> => {
-    event.preventDefault();
-    const sent = text;
-    const value = sent.trim();
-    if (!value || words.busy) return;
-    if (await words.submit(value))
-      setText((current) => afterSend(current, sent));
-  };
   return (
-    <form className="call__words" onSubmit={(event) => void send(event)}>
-      <label htmlFor={id} className="call__words-label">
-        Or tell them what to do instead
-      </label>
-      <div className="call__words-row">
-        <textarea
-          id={id}
-          rows={2}
-          maxLength={2000}
-          value={text}
-          placeholder="Say it in your own words"
-          onChange={(event) => setText(event.target.value)}
-        />
-        <button
-          type="submit"
-          className="button call__send"
-          disabled={words.busy}
-        >
-          Send
-        </button>
-      </div>
-      {words.error && (
-        <span role="alert" className="call__error">
-          {words.error}
-        </span>
-      )}
-    </form>
+    <div className="call__top">
+      <span className={`call__label call__label--${tone}`}>{label}</span>
+      <button
+        type="button"
+        className="call__close"
+        aria-label="Close"
+        onClick={onClose}
+      >
+        <Cross size={18} width={2} />
+      </button>
+    </div>
   );
 }
 
-/** An open call: the options to pick, the facts, and the box for the person's own words. */
+/** An open call: the reasons, the options to pick, the facts, and a box for the person's own words. */
 function OpenCall({
   call,
   lab,
   now,
   titleId,
-  actions,
+  order,
+  busy,
+  error,
+  older,
+  onPick,
+  onThread,
+  onClose,
+  onWords,
 }: {
   readonly call: Call;
   readonly lab: Lab;
   readonly now: number;
   readonly titleId: string;
-  readonly actions: LabActions;
+  readonly order: readonly number[];
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly older: boolean;
+  readonly onPick: (option: number) => void;
+  readonly onThread: (post: string) => void;
+  readonly onClose: () => void;
+  readonly onWords: LabActions['words'];
 }): ReactNode {
-  const order = optionOrder(call);
+  const failure = failureOf(lab, call);
   // The call's reason, then each later asker's own, when it says more.
   const reasons = [
     call.why,
@@ -144,34 +151,34 @@ function OpenCall({
       .filter((asker) => asker.why && asker.why !== call.why)
       .map((asker) => `${asker.handle}: ${asker.why}`),
   ];
-  const answer = useAction<number>((option, key) =>
-    actions.answer(call.id, option, key),
-  );
-  const pick = (option: number): void => {
-    if (!answer.busy) void answer.submit(option);
-  };
-  const keys = (event: KeyboardEvent): void => {
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    const option = optionForKey(event.key, order, typing(event.target));
-    if (option === null) return;
-    event.preventDefault();
-    pick(option);
-  };
+  const post = call.post;
   return (
-    <div className="call__body" onKeyDown={keys}>
-      <CallHead call={call} now={now} titleId={titleId} />
+    <div className="call__body">
+      <Top
+        label={`Needs you · ${asked(call.askers)} · ${since(call.at, now)} ago`}
+        tone="need"
+        onClose={onClose}
+      />
+      <h2 id={titleId} className="call__title">
+        {call.question}
+      </h2>
+      {failure && (
+        <p role="alert" className="call__failure">
+          {failure.text} The call is open again.
+        </p>
+      )}
       <div className="call__context">
         {reasons.map((reason, index) => (
           <p key={index}>
             {reason}
-            {index === reasons.length - 1 && call.post && (
+            {index === reasons.length - 1 && post && (
               <>
                 {' '}
                 <a
                   href={href.lab}
                   onClick={(event) => {
                     event.preventDefault();
-                    close(call.post);
+                    onThread(post);
                   }}
                 >
                   See the thread
@@ -180,30 +187,32 @@ function OpenCall({
             )}
           </p>
         ))}
+        {older && (
+          <p role="status" className="call__fine">
+            That thread is older than the board shows.
+          </p>
+        )}
       </div>
       <div className="call__options" role="group" aria-labelledby={titleId}>
         {order.map((index, position) => {
           const option = call.options[index];
           if (!option) return null;
-          const lines = option.effect
-            ? effectLines(option.effect, call, lab)
-            : null;
+          const lines = optionLines(option, call, lab);
           const missing = missingLine(option);
           const advised = call.pick === index;
+          const cost = costLine(option);
           return (
             <div key={index} className="call__choice">
               <button
                 type="button"
                 className={`call__option${advised ? ' call__option--pick' : ''}`}
                 aria-keyshortcuts={String(position + 1)}
-                disabled={answer.busy}
-                onClick={() => pick(index)}
+                disabled={busy}
+                onClick={() => onPick(index)}
               >
                 <span className="call__option-body">
                   <b>{option.label}</b>
-                  {costLine(option) && (
-                    <span className="call__cost">{costLine(option)}</span>
-                  )}
+                  {cost && <span className="call__cost">{cost}</span>}
                 </span>
                 {advised && (
                   <span className="call__pick">The agents' pick</span>
@@ -219,9 +228,9 @@ function OpenCall({
           );
         })}
       </div>
-      {answer.error && (
+      {error && (
         <p role="alert" className="call__error">
-          {answer.error}
+          {error}
         </p>
       )}
       <Facts lab={lab} />
@@ -231,76 +240,113 @@ function OpenCall({
           it.
         </p>
       )}
-      <Words call={call} onWords={actions.words} />
-      <p className="call__foot">{undoSentence(call)}</p>
+      <Composer
+        multiline
+        label="Or tell them what to do instead"
+        placeholder="Say it in your own words"
+        maxLength={call.wordsLimit}
+        onSend={(text, key) => onWords(call.id, text, key)}
+      />
+      <p className="call__foot">{footLine(call, lab)}</p>
     </div>
   );
 }
 
-/** The dialog's first lines: who asked and when, and the question as its title. */
-function CallHead({
-  call,
+/** A call that no longer waits: what became of it, under a label that says its state. */
+function Settled({
+  view,
+  lab,
   now,
   titleId,
+  actions,
+  onClose,
 }: {
-  readonly call: Call;
+  readonly view: Exclude<CallView, { readonly kind: 'open' }>;
+  readonly lab: Lab;
   readonly now: number;
   readonly titleId: string;
+  readonly actions: LabActions;
+  readonly onClose: () => void;
 }): ReactNode {
-  return (
-    <>
-      <div className="call__top">
-        <span className="call__label">
-          Needs you · {askedBy(call)} · {since(call.at, now)} ago
-        </span>
-        <button
-          type="button"
-          className="call__close"
-          aria-label="Close"
-          onClick={() => close()}
-        >
-          <Cross size={18} width={2} />
-        </button>
-      </div>
-      <h2 id={titleId} className="call__title">
-        {call.question}
-      </h2>
-    </>
-  );
-}
-
-/** A call that no longer waits: what the person chose, or what became of it. */
-function Settled({
-  title,
-  children,
-  titleId,
-}: {
-  readonly title: string;
-  readonly children: ReactNode;
-  readonly titleId: string;
-}): ReactNode {
+  const label = settledLabel(view);
+  const body = ((): ReactNode => {
+    switch (view.kind) {
+      case 'applying':
+        return (
+          <p className="call__fine" role="status">
+            {applyingText(view.option)}
+          </p>
+        );
+      case 'chosen':
+        return undoLeft(view.call, now) === null ? (
+          <>
+            <p className="call__fine">You chose “{view.option.label}”.</p>
+            <AnswerLine
+              call={view.call}
+              lab={lab}
+              now={now}
+              onUndo={actions.undo}
+            />
+          </>
+        ) : (
+          <AnswerLine
+            call={view.call}
+            lab={lab}
+            now={now}
+            onUndo={actions.undo}
+          />
+        );
+      case 'words':
+        return (
+          <>
+            <p className="call__fine">You answered in your own words:</p>
+            <blockquote className="call__quote">{view.words}</blockquote>
+            <p className="call__fine">
+              {view.call.askers.length
+                ? `${andList(view.call.askers.map((asker) => asker.handle))} ${view.call.askers.length === 1 ? 'gets' : 'get'} your words with the next turn. No option applied.`
+                : 'No option applied.'}
+            </p>
+          </>
+        );
+      case 'undoing':
+        return (
+          <p className="call__fine" role="status">
+            Undoing your answer…
+          </p>
+        );
+      case 'withdrawn':
+        return (
+          <p className="call__fine">
+            Verifold withdrew this call
+            {view.call.note ? `: ${view.call.note}` : '.'}
+          </p>
+        );
+      case 'missing':
+        return (
+          <p className="call__fine">
+            It may have ended a while ago, or the address is wrong.
+          </p>
+        );
+    }
+  })();
   return (
     <div className="call__body">
-      <div className="call__top">
-        <span className="call__label call__label--done">Answered</span>
-        <button
-          type="button"
-          className="call__close"
-          aria-label="Close"
-          onClick={() => close()}
-        >
-          <Cross size={18} width={2} />
-        </button>
-      </div>
+      <Top
+        label={label?.text ?? null}
+        tone={label?.tone ?? 'quiet'}
+        onClose={onClose}
+      />
       <h2 id={titleId} className="call__title">
-        {title}
+        {view.kind === 'missing'
+          ? 'This call is not in the lab'
+          : view.call.question}
       </h2>
-      {children}
+      {body}
       <div className="call__done">
         <button
           type="button"
           className="button button--primary"
-          onClick={() => close()}
+          onClick={onClose}
         >
           Back to the lab
         </button>
@@ -312,8 +358,12 @@ function Settled({
 /**
  * A call, over the lab home, as on the v9 canvas ("9. A call"). The person
  * picks an option, or answers in their own words. Escape and Close leave
- * without answering; nothing is bought then. A modal `<dialog>` keeps focus
- * inside, and the browser returns it to where it was when the call opened.
+ * without answering; nothing is bought then.
+ *
+ * A modal `<dialog>` keeps focus inside. Leaving closes it first, so the
+ * browser returns focus to where it was when the call opened, and then
+ * leaves the address. After the dialog is gone, focus goes to the Decide
+ * link if it went nowhere, and "See the thread" brings the post into view.
  */
 export function CallDialog({
   lab,
@@ -327,92 +377,88 @@ export function CallDialog({
   readonly actions: LabActions;
 }): ReactNode {
   const ref = useRef<HTMLDialogElement>(null);
+  // Set when the person leaves; what to bring into view after the dialog is gone.
+  const leaving = useRef<{ readonly post: string | null } | null>(null);
   const titleId = useId();
+  const [older, setOlder] = useState(false);
+  const view = callView(lab, id);
+  const open = view.kind === 'open' ? view.call : null;
+  const order = open ? optionOrder(open) : [];
+  const answer = useAction<number>((option, key) =>
+    actions.answer(id, option, key),
+  );
   useEffect(() => {
     const dialog = ref.current;
     if (dialog && !dialog.open) dialog.showModal();
     return () => {
+      const after = leaving.current;
       if (dialog?.open) dialog.close();
+      // After React removed the dialog: then neither the focus fallback nor
+      // the scroll can be undone by the browser's own focus return.
+      setTimeout(() => {
+        returnFocus(document);
+        if (after?.post) showPost(after.post);
+      }, 0);
     };
   }, []);
-  const view = callView(lab, id);
-  const body = ((): ReactNode => {
-    switch (view.kind) {
-      case 'open':
-        return (
-          <OpenCall
-            call={view.call}
-            lab={lab}
-            now={now}
-            titleId={titleId}
-            actions={actions}
-          />
-        );
-      case 'undoing':
-        return (
-          <Settled title={view.call.question} titleId={titleId}>
-            <p className="call__fine">Undoing your answer.</p>
-          </Settled>
-        );
-      case 'chosen':
-        return (
-          <Settled title={view.call.question} titleId={titleId}>
-            {undoLeft(view.call, now) === null ? (
-              <p className="call__fine">You chose “{view.option.label}”.</p>
-            ) : (
-              <UndoLine
-                call={view.call}
-                lab={lab}
-                now={now}
-                onUndo={actions.undo}
-              />
-            )}
-          </Settled>
-        );
-      case 'words':
-        return (
-          <Settled title={view.call.question} titleId={titleId}>
-            <p className="call__fine">You answered in your own words:</p>
-            <blockquote className="call__quote">{view.words}</blockquote>
-            <p className="call__fine">
-              {view.call.askers.length
-                ? `${andList(view.call.askers.map((asker) => asker.handle))} ${view.call.askers.length === 1 ? 'gets' : 'get'} your words with the next turn. No option applied.`
-                : 'No option applied.'}
-            </p>
-          </Settled>
-        );
-      case 'withdrawn':
-        return (
-          <Settled title={view.call.question} titleId={titleId}>
-            <p className="call__fine">
-              Verifold withdrew this call
-              {view.call.note ? `: ${view.call.note}` : '.'}
-            </p>
-          </Settled>
-        );
-      case 'missing':
-        return (
-          <Settled title="This call is not in the lab" titleId={titleId}>
-            <p className="call__fine">
-              It may have ended a while ago, or the address is wrong.
-            </p>
-          </Settled>
-        );
-    }
-  })();
+  const leave = (post: string | null = null): void => {
+    leaving.current = { post };
+    ref.current?.close();
+  };
+  const pick = (option: number): void => {
+    if (open && !answer.busy) void answer.submit(option);
+  };
+  const keys = (event: KeyboardEvent<HTMLDialogElement>): void => {
+    if (!open || event.metaKey || event.ctrlKey || event.altKey) return;
+    const option = optionForKey(event.key, order, typing(event.target));
+    if (option === null) return;
+    event.preventDefault();
+    pick(option);
+  };
   return (
     <dialog
       ref={ref}
       className="call"
       aria-labelledby={titleId}
       aria-modal="true"
+      onKeyDown={keys}
       onCancel={(event) => {
-        // Escape: leave the call without answering, and keep the address in step.
+        // Escape: leave as Close does, so the address stays in step.
         event.preventDefault();
-        close();
+        leave();
+      }}
+      onClose={() => {
+        if (leaving.current) goHome();
       }}
     >
-      {body}
+      {view.kind === 'open' ? (
+        <OpenCall
+          call={view.call}
+          lab={lab}
+          now={now}
+          titleId={titleId}
+          order={order}
+          busy={answer.busy}
+          error={answer.error}
+          older={older}
+          onPick={pick}
+          onThread={(post) => {
+            if (onBoard(lab, post)) leave(post);
+            else setOlder(true);
+          }}
+          onClose={() => leave()}
+          onWords={actions.words}
+        />
+      ) : (
+        <Settled
+          view={view}
+          lab={lab}
+          now={now}
+          titleId={titleId}
+          actions={actions}
+          onClose={() => leave()}
+        />
+      )}
     </dialog>
   );
 }

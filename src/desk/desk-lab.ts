@@ -38,6 +38,16 @@ import {
 import type { HarnessName } from '../core/harness.ts';
 import { hostName } from '../core/session.ts';
 import type { ChangedFile } from '../core/workspaces.ts';
+import {
+  andList,
+  costWords,
+  effectWords,
+  minutesText,
+  undoWords,
+  type EffectWords,
+} from '../ui/call-words.ts';
+
+export { minutesText };
 
 /**
  * The lab's screen in the desk. One header line, one Needs-you line, one row
@@ -53,6 +63,10 @@ export interface LabWork {
   readonly label: string;
   readonly at: string;
   readonly error: string | null;
+  /** The call that an answer or an undo is for. */
+  readonly call?: string;
+  /** The option that an answer picked. */
+  readonly option?: number;
 }
 
 /** One thing that waits for the person, in the order of the Needs-you line. `body` is HTML. */
@@ -321,13 +335,6 @@ function proofHtml(
     case 'figure':
       return `<span class="proof" title="${e(`${artifact.path} at ${artifact.commit.slice(0, 7)}${artifact.direction ? ` in ${artifact.direction}` : ''}`)}">${e(artifact.type)} · ${e(clip(artifact.path, 60))}</span>`;
   }
-}
-
-/** A span of minutes, such as "45 min" or "3 h 20 min". */
-export function minutesText(minutes: number): string {
-  if (minutes < 1) return 'under a minute';
-  if (minutes < 60) return `${minutes} min`;
-  return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
 }
 
 /** Runs that a direction's open row shows: those that run now, then the newest. */
@@ -809,72 +816,40 @@ function hostOf(view: LabView, agent: string): string | null {
   );
 }
 
-/** Names as a list: "a", "a and b", or "a, b and c". */
-function andList(names: readonly string[]): string {
-  return names.length > 1
-    ? `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`
-    : (names[0] ?? '');
-}
-
-/** "claude-1's shell", or "the shells of claude-1 and codex-1". */
-function shells(names: readonly string[]): string {
-  return names.length === 1
-    ? `${names[0] ?? ''}'s shell`
-    : `the shells of ${andList(names)}`;
+/** A call effect, as the shared call words take it. The desk names a direction by its ID. */
+function wordsOf(effect: CallEffect): EffectWords {
+  switch (effect.type) {
+    case 'pod':
+      return { type: 'pod', gpu: effect.gpuType, hours: effect.hours };
+    case 'hours':
+      return { type: 'hours', hours: effect.hours };
+    case 'open':
+      return { type: 'open', title: effect.title, harness: effect.harness };
+    case 'stop':
+      return { type: 'stop', direction: effect.direction };
+    case 'domains':
+      return { type: 'domains', domains: effect.domains };
+  }
 }
 
 /**
- * What an effect does and what an undo does, in Verifold's words. An
- * agent's label says what the agent means; this line says what happens.
+ * What an effect does and what an undo does, in the words that the desk and
+ * the app share (src/ui/call-words.ts). Each agent that asked is named, and
+ * a Codex agent's shell is said to reach any website.
  */
 function effectLines(
   effect: CallEffect,
   call: Call,
   view: LabView,
 ): { readonly does: string; readonly undo: string } {
-  switch (effect.type) {
-    case 'pod':
-      return {
-        does: `Starts a ${effect.gpuType} pod for ${effect.hours} ${effect.hours === 1 ? 'hour' : 'hours'} for ${call.direction ?? 'the direction'}.`,
-        undo: 'Undo ends the pod. The minutes billed so far stay billed.',
-      };
-    case 'hours':
-      return {
-        does: `Gives the lab ${effect.hours} more ${effect.hours === 1 ? 'hour' : 'hours'}.`,
-        undo: 'Undo takes the hours back.',
-      };
-    case 'open':
-      return {
-        does: `Opens "${effect.title}" with a new ${hostName(effect.harness)} agent.`,
-        undo: 'Undo stops it. Its folder and branch stay.',
-      };
-    case 'stop':
-      return {
-        does: `Stops ${effect.direction}. Its runs and pods end.`,
-        undo: 'Undo opens it again with its agent. Runs and pods that ended do not come back.',
-      };
-    case 'domains': {
-      // Each agent that asked gets the domains. Codex cannot limit them.
-      const name = (id: string): string => view.handles[id] ?? id;
-      const all = askers(call);
-      const codex = all.filter((id) => hostOf(view, id) === 'codex');
-      const others = all.filter((id) => !codex.includes(id));
-      const domains = effect.domains.join(', ');
-      return {
-        does: [
-          others.length
-            ? `Lets ${shells(others.map(name))} reach ${domains}.`
-            : '',
-          codex.length
-            ? `Codex: any website. Codex cannot limit the network to ${domains}, so ${shells(codex.map(name))} can reach any website.`
-            : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
-        undo: `Undo takes these domains back. Either way, ${all.length === 1 ? `${name(all[0] ?? '')} continues its conversation in a new process` : `${andList(all.map(name))} continue their conversations in new processes`}.`,
-      };
-    }
-  }
+  return effectWords(
+    wordsOf(effect),
+    call.direction,
+    askers(call).map((id) => ({
+      handle: view.handles[id] ?? id,
+      codex: hostOf(view, id) === 'codex',
+    })),
+  );
 }
 
 /** One option of a call: a large button with its dollars and minutes, and a line on what it does. */
@@ -891,16 +866,16 @@ function optionHtml(
     option.effect?.type === 'pod' && stored
       ? option.effect.secrets.filter((name) => !stored.includes(name))
       : [];
-  const facts = [
-    option.usd === null
-      ? ''
-      : option.usd === 0
-        ? 'No cost'
-        : `About ${usd(option.usd)}`,
-    option.minutes === null ? '' : minutesText(option.minutes),
-  ].filter(Boolean);
+  const facts = costWords(option.usd, option.minutes);
   const pick = call.pick === index;
-  return `<li><button type="button" class="call-option${pick ? ' picked' : ''}" data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}"><span class="option-label"><span class="key" aria-hidden="true">${index + 1}</span> ${e(option.label)}</span>${facts.length ? `<span class="option-facts">${e(facts.join(' · '))}</span>` : ''}${pick ? '<span class="pick">The agents\' pick</span>' : ''}</button>${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
+  return `<li><button type="button" class="call-option${pick ? ' picked' : ''}" data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}"><span class="option-label"><span class="key" aria-hidden="true">${index + 1}</span> ${e(option.label)}</span>${facts ? `<span class="option-facts">${e(facts)}</span>` : ''}${pick ? '<span class="pick">The agents\' pick</span>' : ''}</button>${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
+}
+
+/** The effect of the agents' pick, which the undo line describes before an answer. */
+function pickEffect(call: Call): EffectWords | null {
+  const effect =
+    call.pick === null ? null : (call.options[call.pick]?.effect ?? null);
+  return effect ? wordsOf(effect) : null;
 }
 
 /**
@@ -943,7 +918,7 @@ export function labCallNeeds(
         since: call.at,
         body: `<p class="call-why">${call.pick === null ? `${e(asker)} says: ` : `Why ${e(asker)} picks it: `}${e(call.why)}</p>
   <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view, stored)).join('')}</ul>
-  <p class="fine">${call.undoMinutes ? `Your answer applies at once. You can undo it for ${call.undoMinutes} ${call.undoMinutes === 1 ? 'minute' : 'minutes'}. If you do not answer, nothing happens.` : 'Your answer applies at once, and it has no undo. If you do not answer, nothing happens.'}</p>
+  <p class="fine">${e(undoWords(call.undoMinutes, pickEffect(call)))}</p>
   ${call.by === 'verifold' && call.words ? '<p class="fine" role="status">Your words went to the lab. Pick an option to give it more time or end it.</p>' : ''}<div class="call-words"><label class="field" for="${e(words)}">Or tell them what to do instead</label><textarea id="${e(words)}" rows="2" maxlength="${callLimits.words}"></textarea><div class="actions"><button type="button" data-action="lab-call-words" data-call="${e(call.id)}">Send answer</button></div></div>`,
       };
     });

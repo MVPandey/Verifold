@@ -1,14 +1,10 @@
 import type { Call, CallOption, Effect, Lab } from '../protocol/api.ts';
-import { harnessName, span, usd } from './format.ts';
-
-/** "a", "a and b", "a, b and c". */
-export function andList(names: readonly string[]): string {
-  if (names.length < 2) return names[0] ?? '';
-  return `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`;
-}
-
-const plural = (count: number, word: string): string =>
-  `${count} ${count === 1 ? word : `${word}s`}`;
+import {
+  costWords,
+  effectWords,
+  undoWords,
+  type EffectWords,
+} from '../ui/call-words.ts';
 
 /**
  * The options in the order that the dialog shows them: the agents' pick
@@ -46,131 +42,144 @@ export function typing(target: unknown): boolean {
   return tag === 'TEXTAREA' || tag === 'INPUT';
 }
 
-/** An option's cost and time: "$11.97 · about 3 h". */
+/** A direction by its title in quotes, as the app names directions, or its ID when the snapshot left it out. */
+function titled(lab: Lab, id: string): string {
+  const title = lab.directions.find((entry) => entry.id === id)?.title;
+  return title ? `"${title}"` : id;
+}
+
+/** An effect, as the shared call words take it. */
+function wordsOf(effect: Effect, lab: Lab): EffectWords {
+  switch (effect.type) {
+    case 'pod':
+      return { type: 'pod', gpu: effect.gpu, hours: effect.hours };
+    case 'hours':
+      return { type: 'hours', hours: effect.hours };
+    case 'open':
+      return { type: 'open', title: effect.title, harness: effect.harness };
+    case 'stop':
+      return { type: 'stop', direction: titled(lab, effect.direction) };
+    case 'domains':
+      return { type: 'domains', domains: effect.domains };
+  }
+}
+
+/** What an option does and what its undo does, in the words that the desk uses too. */
+export function optionLines(
+  option: CallOption,
+  call: Call,
+  lab: Lab,
+): { readonly does: string; readonly undo: string } | null {
+  if (!option.effect) return null;
+  const direction = call.askers[0]?.direction;
+  return effectWords(
+    wordsOf(option.effect, lab),
+    direction ? titled(lab, direction) : null,
+    call.askers.map((asker) => ({
+      handle: asker.handle,
+      codex:
+        lab.agents.find((agent) => agent.id === asker.agent)?.harness ===
+        'codex',
+    })),
+  );
+}
+
+/** An option's cost and time: "About $11.97 · 3 h", "No cost · 9 h". */
 export function costLine(option: CallOption): string {
-  return [
-    option.usd === null ? '' : usd(option.usd),
-    option.minutes === null ? '' : `about ${span(option.minutes * 60_000)}`,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-/** Who asked, for the dialog's first line: "asked by claude-2 and codex-2", or "Verifold asks". */
-export function askedBy(call: Call): string {
-  return call.askers.length
-    ? `asked by ${andList(call.askers.map((asker) => asker.handle))}`
-    : 'Verifold asks';
-}
-
-function shells(names: readonly string[]): string {
-  return names.length === 1
-    ? `${names[0] ?? ''}'s shell`
-    : `the shells of ${andList(names)}`;
+  return costWords(option.usd, option.minutes);
 }
 
 /**
- * What an option does and what an undo does, in Verifold's words, as the
- * desk says them. An agent's label says what the agent means; this line
- * says what happens.
+ * The dialog's last line: how an answer can be taken back, for the option
+ * that the person chose, or the agents' pick before an answer.
  */
-export function effectLines(
-  effect: Effect,
-  call: Call,
-  lab: Lab,
-): { readonly does: string; readonly undo: string } {
-  const title = (id: string): string =>
-    lab.directions.find((entry) => entry.id === id)?.title ?? id;
-  switch (effect.type) {
-    case 'pod':
-      return {
-        does: `Starts a pod with ${effect.gpu} for ${plural(effect.hours, 'hour')}.`,
-        undo: 'Undo ends the pod. The minutes billed so far stay billed.',
-      };
-    case 'hours':
-      return {
-        does: `Gives the lab ${plural(effect.hours, 'more hour')}.`,
-        undo: 'Undo takes the hours back.',
-      };
-    case 'open':
-      return {
-        does: `Opens "${effect.title}" with a new ${harnessName(effect.harness)} agent.`,
-        undo: 'Undo stops it. Its folder and branch stay.',
-      };
-    case 'stop':
-      return {
-        does: `Stops "${title(effect.direction)}". Its runs and pods end.`,
-        undo: 'Undo opens it again with its agent. Runs and pods that ended do not come back.',
-      };
-    case 'domains': {
-      // Each agent that asked gets the domains. Codex cannot limit them.
-      const harness = (agent: string): string | undefined =>
-        lab.agents.find((entry) => entry.id === agent)?.harness;
-      const codex = call.askers
-        .filter((asker) => harness(asker.agent) === 'codex')
-        .map((asker) => asker.handle);
-      const others = call.askers
-        .filter((asker) => harness(asker.agent) !== 'codex')
-        .map((asker) => asker.handle);
-      const all = call.askers.map((asker) => asker.handle);
-      const domains = effect.domains.join(', ');
-      return {
-        does: [
-          others.length ? `Lets ${shells(others)} reach ${domains}.` : '',
-          codex.length
-            ? `Codex cannot limit the network to ${domains}, so ${shells(codex)} can reach any website.`
-            : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
-        undo: `Undo takes these domains back. Either way, ${
-          all.length === 1
-            ? `${all[0] ?? ''} continues its conversation in a new process`
-            : `${andList(all)} continue their conversations in new processes`
-        }.`,
-      };
-    }
-  }
+export function footLine(call: Call, lab: Lab): string {
+  const index = call.answer?.option ?? call.pick;
+  const effect = index === null ? null : call.options[index]?.effect;
+  return undoWords(call.undoMinutes, effect ? wordsOf(effect, lab) : null);
 }
 
 /** A pod option that cannot start yet: the pod secrets that this computer does not store. */
 export function missingLine(option: CallOption): string | null {
   const effect = option.effect;
   if (effect?.type !== 'pod' || !effect.missing) return null;
-  return `Needs ${plural(effect.missing, 'pod secret')} stored in Compute first.`;
+  return `Needs ${effect.missing} pod ${effect.missing === 1 ? 'secret' : 'secrets'} stored in Compute first.`;
 }
 
 /**
- * The dialog's last line: how long an answer can be undone, and what an
- * undo of a pod costs, as the v9 canvas says it. An option's own line says
- * what it does; this line says how to take it back.
+ * The last seconds of an undo window count as closed: a click then could
+ * reach Verifold after the window, and the page never offers an undo that
+ * Verifold refuses.
  */
-export function undoSentence(call: Call): string {
-  if (!call.undoMinutes)
-    return "Your answer applies at once, and it has no undo. If you don't answer, nothing happens.";
-  const pods = call.options.some((option) => option.effect?.type === 'pod');
-  return pods
-    ? `Undo within ${plural(call.undoMinutes, 'minute')} stops the GPU, and you pay only the minutes used. If you don't answer, nothing is bought.`
-    : `Your answer applies at once. You can undo it for ${plural(call.undoMinutes, 'minute')}. If you don't answer, nothing happens.`;
-}
+const undoMargin = 2_000;
 
-/** Whole minutes left to undo an answer, or null when the answer has no undo now. */
+/** Milliseconds left to undo an answer, or null when it has no undo now. */
 export function undoLeft(call: Call, now: number): number | null {
   if (call.state !== 'answered' || !call.answer || !call.undoUntil) return null;
-  const left = Date.parse(call.undoUntil) - now;
-  return left > 0 ? Math.ceil(left / 60_000) : null;
+  const left = Date.parse(call.undoUntil) - now - undoMargin;
+  return left > 0 ? left : null;
+}
+
+/** An answer or an undo that failed after Verifold accepted it. */
+export interface CallFailure {
+  readonly kind: 'answer' | 'undo';
+  readonly text: string;
+}
+
+/**
+ * Why the person's last answer or undo of a call failed, from the lab's
+ * background work: an answer's failure while the call is open again, an
+ * undo's while the answer stands. A later try replaces the failure.
+ */
+export function failureOf(lab: Lab, call: Call): CallFailure | null {
+  const work = [...lab.works]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.call === call.id &&
+        entry.error !== null &&
+        (entry.action === 'lab-call-answer' ||
+          entry.action === 'lab-call-undo'),
+    );
+  if (!work?.error) return null;
+  if (work.action === 'lab-call-undo')
+    return call.state === 'answered'
+      ? { kind: 'undo', text: `The undo did not go through: ${work.error}` }
+      : null;
+  if (call.state !== 'open') return null;
+  const option =
+    work.option === undefined ? undefined : call.options[work.option];
+  return {
+    kind: 'answer',
+    text:
+      option?.effect?.type === 'pod'
+        ? `The pod did not start: ${work.error}`
+        : `Your answer did not go through: ${work.error}`,
+  };
+}
+
+/** While Verifold applies an answer: what it does, never a final "You chose". */
+export function applyingText(option: CallOption): string {
+  return option.effect?.type === 'pod'
+    ? `Starting the pod for “${option.label}”…`
+    : `Applying “${option.label}”…`;
 }
 
 /** What the dialog shows for a call: its question, or what became of it. */
 export type CallView =
   | { readonly kind: 'open'; readonly call: Call }
-  | { readonly kind: 'undoing'; readonly call: Call }
+  | {
+      readonly kind: 'applying';
+      readonly call: Call;
+      readonly option: CallOption;
+    }
   | {
       readonly kind: 'chosen';
       readonly call: Call;
       readonly option: CallOption;
     }
   | { readonly kind: 'words'; readonly call: Call; readonly words: string }
+  | { readonly kind: 'undoing'; readonly call: Call }
   | { readonly kind: 'withdrawn'; readonly call: Call }
   | { readonly kind: 'missing' };
 
@@ -183,9 +192,63 @@ export function callView(lab: Lab, id: string): CallView {
   if (call.state === 'undoing') return { kind: 'undoing', call };
   if (call.state === 'withdrawn') return { kind: 'withdrawn', call };
   const option = call.answer ? call.options[call.answer.option] : undefined;
-  if (option) return { kind: 'chosen', call, option };
+  if (option)
+    return call.applying
+      ? { kind: 'applying', call, option }
+      : { kind: 'chosen', call, option };
   if (call.words !== null) return { kind: 'words', call, words: call.words };
   return { kind: 'missing' };
+}
+
+/** The label over a call that no longer waits, by its state. An unknown call has none. */
+export function settledLabel(
+  view: CallView,
+): { readonly text: string; readonly tone: 'done' | 'busy' | 'quiet' } | null {
+  switch (view.kind) {
+    case 'applying':
+      return { text: 'Applying your answer', tone: 'busy' };
+    case 'chosen':
+    case 'words':
+      return { text: 'Answered', tone: 'done' };
+    case 'undoing':
+      return { text: 'Undoing your answer', tone: 'busy' };
+    case 'withdrawn':
+      return { text: 'Withdrawn', tone: 'quiet' };
+    case 'open':
+    case 'missing':
+      return null;
+  }
+}
+
+/** True while an answer is applied or can be undone, so the page counts the seconds. */
+export function needsTick(lab: Lab | null | undefined, now: number): boolean {
+  return Boolean(
+    lab?.answered.some(
+      (call) => call.applying === true || undoLeft(call, now) !== null,
+    ),
+  );
+}
+
+/** Whether a post is on the board page that the lab home shows. */
+export function onBoard(lab: Lab, post: string): boolean {
+  return lab.board.posts.some((entry) => entry.id === post);
+}
+
+/** The history state of a call opened from the lab home. */
+export const fromLab = { from: 'lab' } as const;
+
+/**
+ * How closing the dialog leaves its address without a new history entry:
+ * back, when the lab home opened the call, so Back cannot reopen it; else,
+ * as for a link from elsewhere, the call's entry becomes the lab's.
+ */
+export function closeHow(state: unknown): 'back' | 'replace' {
+  return typeof state === 'object' &&
+    state !== null &&
+    'from' in state &&
+    state.from === fromLab.from
+    ? 'back'
+    : 'replace';
 }
 
 /** Where focus goes after the dialog closes, when it went nowhere: the needs-you line's Decide link. */

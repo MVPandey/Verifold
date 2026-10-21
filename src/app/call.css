@@ -1,4 +1,4 @@
-/* The call dialog and the undo line. Values follow the v9 canvas artboard "9. A call". */
+/* The call dialog, the answer line, and the multiline composer. Values follow the v9 canvas artboard "9. A call". */
 .call {
   width: min(620px, calc(100vw - 32px));
   max-height: calc(100vh - 80px);
@@ -31,11 +31,22 @@
   flex-grow: 1;
   font-size: 13px;
   font-weight: 800;
+}
+
+.call__label--need {
   color: var(--need-ink);
 }
 
 .call__label--done {
   color: var(--ok-ink);
+}
+
+.call__label--busy {
+  color: var(--accent-ink);
+}
+
+.call__label--quiet {
+  color: var(--muted);
 }
 
 .call__close {
@@ -58,6 +69,16 @@
   font-weight: 800;
   line-height: 1.25;
   letter-spacing: -0.01em;
+}
+
+.call__failure {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--need-bg);
+  border: 1px solid var(--you);
+  color: var(--need-ink);
+  font-weight: 700;
 }
 
 .call__context {
@@ -182,49 +203,6 @@
   color: var(--ok-ink);
 }
 
-.call__words {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 4px;
-}
-
-.call__words-label {
-  font-weight: 800;
-}
-
-.call__words-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.call__words-row textarea {
-  flex: 1 1 360px;
-  min-width: 0;
-  min-height: 52px;
-  padding: 10px 12px;
-  border: 1.5px solid var(--control);
-  border-radius: 12px;
-  font: 500 15px/1.4 var(--font);
-  color: var(--ink);
-  resize: vertical;
-}
-
-.call__send {
-  min-height: 48px;
-  padding: 0 20px;
-  border-radius: 12px;
-  border-color: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 800;
-}
-
-.call__send:hover {
-  color: var(--accent-deep);
-}
-
 .call__foot {
   margin: 0;
   padding-top: 12px;
@@ -246,8 +224,15 @@
   padding-top: 4px;
 }
 
-/* An answer the person can still undo, in the dialog and on the lab home. */
-.undo {
+/* The person's last answer failed after Verifold took it: on the needs-you line. */
+.needs__failure {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--need-ink);
+}
+
+/* An answer that is applied now, can be undone, or whose undo failed: in the dialog and on the lab home. */
+.answer {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -258,7 +243,19 @@
   font-size: 14px;
 }
 
-.undo__button {
+.answer--busy {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-weight: 700;
+}
+
+.answer--failed {
+  background: var(--need-bg);
+  color: var(--need-ink);
+  font-weight: 700;
+}
+
+.answer__undo {
   padding: 0;
   border: 0;
   background: none;
@@ -268,18 +265,62 @@
   cursor: pointer;
 }
 
-.undo__button:disabled {
+.answer__undo:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.undo__fine {
+.answer__fine {
   color: var(--ink-2);
 }
 
-.undo__error {
+.answer__error {
   color: var(--need-ink);
   font-weight: 700;
+}
+
+/* The multiline composer: a labelled box of a few lines, such as the answer in the person's own words. */
+.composer--box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.composer__label {
+  font-weight: 800;
+}
+
+.composer__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.composer__area {
+  flex: 1 1 360px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--control);
+  border-radius: 12px;
+  font: 500 15px/1.4 var(--font);
+  color: var(--ink);
+  resize: vertical;
+}
+
+.composer__send {
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: 12px;
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 800;
+}
+
+.composer__send:hover {
+  color: var(--accent-deep);
 }
 
 @media (max-width: 600px) {
