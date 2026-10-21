@@ -99,6 +99,7 @@ async function project(t: test.TestContext): Promise<{
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   return {
     root,
     keys: join(base, 'home', '.verifold', 'credentials', 'owners'),
@@ -141,11 +142,17 @@ await test('the control channel refuses a wrong or late key, and carries message
   terminal.send({ stop: true });
   await until(() => received.length === 2);
   server.send({ url: 'http://127.0.0.1:1/#abc' });
-  await until(() => shown.length === 2);
+  // An owner with the app's build passes its URL on, for a terminal that attached with --app.
+  server.send({
+    url: 'http://127.0.0.1:1/#abc',
+    app: 'http://127.0.0.1:1/app/#abc',
+  });
+  await until(() => shown.length === 3);
   assert.deepEqual(received, [{ line: '/help' }, { stop: true }]);
   assert.deepEqual(shown, [
     { progress: 'Welcome.' },
     { url: 'http://127.0.0.1:1/#abc' },
+    { url: 'http://127.0.0.1:1/#abc', app: 'http://127.0.0.1:1/app/#abc' },
   ]);
   terminal.close();
   await terminal.closed;

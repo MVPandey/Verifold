@@ -1397,6 +1397,7 @@ async function deskAssets(base: string): Promise<string> {
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   return assets;
 }
 
@@ -2160,9 +2161,14 @@ await test('an agent cannot mention all, and the terminal and cancel leave lab a
   } as unknown as CliIO;
   terminalInput(lab.sessions, '/cancel', io, {
     open: () => {},
+    openApp: () => {},
     host: 'claude',
   });
-  terminalInput(lab.sessions, 'Hello?', io, { open: () => {}, host: 'claude' });
+  terminalInput(lab.sessions, 'Hello?', io, {
+    open: () => {},
+    openApp: () => {},
+    host: 'claude',
+  });
   assert.deepEqual(lines, [
     'Nothing is running.',
     'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',

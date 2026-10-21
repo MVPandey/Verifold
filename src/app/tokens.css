@@ -1,8 +1,8 @@
 /* The v9 design tokens. Each value comes from the approved v9 canvas. Dark mode follows in a later slice. */
 @font-face {
   font-family: 'Manrope';
-  /* The desk serves the bundled Manrope font. */
-  src: url('/manrope.ttf') format('truetype');
+  /* Vite copies the font into the app's build with a hashed name. */
+  src: url('../../public/fonts/manrope-variable.ttf') format('truetype');
   font-weight: 200 800;
   font-display: swap;
 }

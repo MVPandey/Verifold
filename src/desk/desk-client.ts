@@ -1,6 +1,7 @@
 import DOMPurify from './vendor/purify.js';
 import { Idiomorph } from './vendor/idiomorph.js';
 import { requiredElement } from '../ui/dom.ts';
+import { exchangeLaunch, readFragment } from '../ui/token.ts';
 import { mountTranscripts, refreshTranscripts } from './desk-transcript.ts';
 import { mountTerminals, placeTerminals } from './desk-terminals.ts';
 import { viewLease } from './desk-lease.ts';
@@ -88,13 +89,10 @@ let pane = 'summary';
 let records = 'all';
 /** Finished tasks on the map and in the rail: shown, or hidden after Clear finished. The choice lasts for this browser. */
 let finished = 'shown';
-let token = location.hash.slice(1);
-const launch = token.startsWith('launch-') ? token.slice(7) : '';
+const fragment = readFragment('');
+let token = fragment.token;
+const launch = fragment.launch;
 try {
-  if (/^[a-f0-9]{64}$/.test(token)) {
-    sessionStorage.setItem('verifold-desk-token', token);
-    history.replaceState(null, '', location.pathname);
-  } else token = sessionStorage.getItem('verifold-desk-token') ?? '';
   view = sessionStorage.getItem('verifold-desk-view') ?? 'home';
   since = sessionStorage.getItem('verifold-desk-since') ?? undefined;
   searchQuery = sessionStorage.getItem('verifold-desk-q') ?? undefined;
@@ -2174,30 +2172,7 @@ window.addEventListener('pageshow', () => {
 
 /** Exchange the one-time launch code for the access token, then load the desk. */
 async function connect(): Promise<void> {
-  if (launch) {
-    history.replaceState(null, '', location.pathname);
-    try {
-      const response = await fetch('/api/launch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: launch }),
-        cache: 'no-store',
-      });
-      const reply: unknown = await response.json();
-      if (
-        response.ok &&
-        reply &&
-        typeof reply === 'object' &&
-        'token' in reply &&
-        typeof reply.token === 'string'
-      ) {
-        token = reply.token;
-        sessionStorage.setItem('verifold-desk-token', token);
-      }
-    } catch {
-      /* The full URL printed in the terminal still connects. */
-    }
-  }
+  if (launch) token = (await exchangeLaunch(launch)) ?? token;
   await refresh();
 }
 void connect();

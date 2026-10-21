@@ -188,6 +188,7 @@ await test('desk restricts private reads, serves escaped records, and stops with
   ])
     await writeFile(join(assets, 'cli', name), 'fixture asset');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const owner = new AbortController();
   const server = await startDesk(
     root,

@@ -1,12 +1,14 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { Lab } from '../../protocol/api.ts';
+import type { ActOutcome } from '../api.ts';
 import { due, usd } from '../format.ts';
-import { href } from '../route.ts';
-import { ChevronDown, Logo, Search } from './Icons.tsx';
+import { useAction } from '../useAction.ts';
+import { Logo } from './Icons.tsx';
 
 /**
- * The top bar: the project, the money line, search, and pause. `onPause`
- * resolves to Verifold's reason when it refused.
+ * The top bar: the project, the money line, and pause. Search and the
+ * project switcher come with later slices of #282, so the bar shows neither
+ * until they work.
  */
 export function AppHeader({
   project,
@@ -17,49 +19,28 @@ export function AppHeader({
   readonly project: string;
   readonly lab: Lab | null;
   readonly now: number;
-  readonly onPause?: (pause: boolean) => Promise<string | null>;
+  readonly onPause: (pause: boolean, key: string) => Promise<ActOutcome>;
 }): ReactNode {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const toggle = async (): Promise<void> => {
-    if (!onPause || !lab) return;
-    setBusy(true);
-    setError(await onPause(!lab.paused));
-    setBusy(false);
-  };
+  const pause = useAction(onPause);
   return (
     <header className="header">
       <Logo />
-      <a
-        className="header__project"
-        href={href.projects}
-        aria-label={`${project}, switch project`}
-      >
-        {project}
-        <ChevronDown />
-      </a>
+      <span className="header__project">{project}</span>
       <div className="header__spacer" />
       {lab && <MoneyLine lab={lab} now={now} />}
-      {lab && (
-        <a className="button button--search" href={href.search}>
-          <Search />
-          Search
-          <kbd>⌘K</kbd>
-        </a>
-      )}
-      {lab && onPause && lab.agentsHere && (
+      {lab?.agentsHere && (
         <button
           type="button"
           className="button"
-          disabled={busy}
-          onClick={() => void toggle()}
+          disabled={pause.busy}
+          onClick={() => void pause.submit(!lab.paused)}
         >
           {lab.paused ? 'Resume' : 'Pause'}
         </button>
       )}
-      {error && (
+      {pause.error && (
         <span role="alert" className="composer__error">
-          {error}
+          {pause.error}
         </span>
       )}
     </header>

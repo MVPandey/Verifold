@@ -120,43 +120,26 @@ export default tseslint.config(
       ],
     },
   },
-  // The new app runs in the browser and talks to Verifold only through the
-  // protocol. It imports its own files, src/protocol/, and React. Its files
-  // sit at most one folder deep, in components/ and screens/.
+  // The new app runs in the browser and reaches Verifold only through the
+  // protocol. At any depth it may import its own files, src/protocol/,
+  // src/ui/, and React, and nothing from the server, the engine, the old
+  // desk, legacy, or the command line.
   {
-    files: ['src/app/*.{ts,tsx}'],
+    files: ['src/app/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
           patterns: [
             {
-              regex: '^\\.\\./(?!protocol/)',
-              message: 'the app imports only its own files and protocol.',
+              regex: '^(\\.\\./)+(core|server|desk|legacy|cli)(/|$)',
+              message:
+                'the app imports only its own files, protocol, ui and React.',
             },
             {
               regex: '^(?!\\.{1,2}/|react(-dom)?(/|$))',
-              message: 'the app imports only React and its own files.',
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    files: ['src/app/*/*.{ts,tsx}'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            {
-              regex: '^\\.\\./\\.\\./(?!protocol/)',
-              message: 'the app imports only its own files and protocol.',
-            },
-            {
-              regex: '^(?!\\.{1,2}/|react(-dom)?(/|$))',
-              message: 'the app imports only React and its own files.',
+              message:
+                'the app imports only its own files, protocol, ui and React.',
             },
           ],
         },

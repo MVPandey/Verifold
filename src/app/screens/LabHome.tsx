@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
+import type { ActOutcome } from '../api.ts';
 import { threads } from '../board.ts';
 import { clock } from '../format.ts';
 import type { Connection } from '../store.ts';
@@ -11,9 +12,9 @@ import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 
 export interface LabActions {
-  /** Write to the lab. Resolves to Verifold's reason when it refused. */
-  readonly post: (text: string) => Promise<string | null>;
-  readonly pause: (pause: boolean) => Promise<string | null>;
+  /** Write to the lab. `key` marks the person's intent (see intent.ts). */
+  readonly post: (text: string, key: string) => Promise<ActOutcome>;
+  readonly pause: (pause: boolean, key: string) => Promise<ActOutcome>;
 }
 
 /**
@@ -50,6 +51,12 @@ export function LabHome({
             <StatusBar tone="muted">
               Reconnecting to Verifold. This shows the lab as of{' '}
               {clock(snapshot.at)}.
+            </StatusBar>
+          )}
+          {connection === 'unreachable' && (
+            <StatusBar tone="muted">
+              Can't reach Verifold. Is it running? This shows the lab as of{' '}
+              {clock(snapshot.at)}. Reload the page to try again.
             </StatusBar>
           )}
           {first ? (

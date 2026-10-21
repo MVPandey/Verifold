@@ -865,6 +865,7 @@ await test('a new agent starts from the message box, and the box writes to its s
     ])
       await writeFile(join(assets, 'cli', name), 'fixture asset');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
     const sessions = pool();
     const owner = new AbortController();
     const server = await startDesk(
@@ -973,6 +974,7 @@ await test('desk actions need the token and a JSON body, and report state errors
     ])
       await writeFile(join(assets, 'cli', name), 'fixture asset');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
     const sessions = pool();
     const owner = new AbortController();
     const server = await startDesk(
@@ -1424,6 +1426,7 @@ await test('terminal answers need an unambiguous request and never become follow
       open: () => {
         opened++;
       },
+      openApp: () => {},
     };
     const sessions = pool();
     terminalInput(sessions, 'a', io, controls);

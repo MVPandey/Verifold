@@ -6,7 +6,7 @@ import {
 import { copyFile, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
-import { extname, join } from 'node:path';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -69,7 +69,7 @@ import {
 import { validAgents } from '../core/contracts.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi } from './api.ts';
-import { readJsonBody, record } from './http.ts';
+import { contentType, readJsonBody, record } from './http.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -1193,41 +1193,29 @@ export async function startDesk(
     ['/', { type: 'text/html; charset=utf-8', body: deskPage }],
     ['/terminal', { type: 'text/html; charset=utf-8', body: terminalPage }],
   ]);
-  for (const [path, file, type] of [
-    ['/desk.css', 'desk.css', 'text/css; charset=utf-8'],
-    ['/desk-client.js', 'desk-client.js', 'text/javascript; charset=utf-8'],
-    ['/desk-terminal.js', 'desk-terminal.js', 'text/javascript; charset=utf-8'],
-    ['/desk-lease.js', 'desk-lease.js', 'text/javascript; charset=utf-8'],
-    ['/desk-map.js', 'desk-map.js', 'text/javascript; charset=utf-8'],
-    ['/desk-motion.js', 'desk-motion.js', 'text/javascript; charset=utf-8'],
-    [
-      '/desk-terminals.js',
-      'desk-terminals.js',
-      'text/javascript; charset=utf-8',
-    ],
-    ['/vendor/xterm.js', 'vendor/xterm.js', 'text/javascript; charset=utf-8'],
-    ['/vendor/xterm.css', 'vendor/xterm.css', 'text/css; charset=utf-8'],
-    [
-      '/vendor/addon-fit.js',
-      'vendor/addon-fit.js',
-      'text/javascript; charset=utf-8',
-    ],
-    [
-      '/desk-transcript.js',
-      'desk-transcript.js',
-      'text/javascript; charset=utf-8',
-    ],
-    ['/manrope.ttf', 'manrope.ttf', 'font/ttf'],
-    ['/symbol.webp', 'symbol.webp', 'image/webp'],
-    ['/ui/dom.js', '../ui/dom.js', 'text/javascript; charset=utf-8'],
-    ['/vendor/purify.js', 'vendor/purify.js', 'text/javascript; charset=utf-8'],
-    [
-      '/vendor/idiomorph.js',
-      'vendor/idiomorph.js',
-      'text/javascript; charset=utf-8',
-    ],
+  for (const [path, file] of [
+    ['/desk.css', 'desk.css'],
+    ['/desk-client.js', 'desk-client.js'],
+    ['/desk-terminal.js', 'desk-terminal.js'],
+    ['/desk-lease.js', 'desk-lease.js'],
+    ['/desk-map.js', 'desk-map.js'],
+    ['/desk-motion.js', 'desk-motion.js'],
+    ['/desk-terminals.js', 'desk-terminals.js'],
+    ['/vendor/xterm.js', 'vendor/xterm.js'],
+    ['/vendor/xterm.css', 'vendor/xterm.css'],
+    ['/vendor/addon-fit.js', 'vendor/addon-fit.js'],
+    ['/desk-transcript.js', 'desk-transcript.js'],
+    ['/manrope.ttf', 'manrope.ttf'],
+    ['/symbol.webp', 'symbol.webp'],
+    ['/ui/dom.js', '../ui/dom.js'],
+    ['/ui/token.js', '../ui/token.js'],
+    ['/vendor/purify.js', 'vendor/purify.js'],
+    ['/vendor/idiomorph.js', 'vendor/idiomorph.js'],
   ] as const) {
-    assets.set(path, { type, body: await readFile(new URL(file, assetsRoot)) });
+    assets.set(path, {
+      type: contentType(file),
+      body: await readFile(new URL(file, assetsRoot)),
+    });
   }
   const app = await readAppBuild(
     options.appRoot ?? new URL('../app/', import.meta.url),
@@ -1540,6 +1528,12 @@ export async function startDesk(
     }
     const asset = assets.get(url.pathname);
     if (asset && !url.search) {
+      // The app's built files have content hashes in their names, so a browser may keep them. Their page stays no-store.
+      if (url.pathname.startsWith('/app/assets/'))
+        response.setHeader(
+          'Cache-Control',
+          'public, max-age=31536000, immutable',
+        );
       response.writeHead(200, { 'Content-Type': asset.type }).end(asset.body);
       return;
     }
@@ -2030,15 +2024,11 @@ export async function startDesk(
   };
 }
 
-const appTypes: Readonly<Record<string, string>> = {
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-};
-
 /**
  * The new app's files, by URL path: its page at /app and /app/, and the
- * hashed files that the build wrote to assets/. An empty map when the app
- * was not built, as in tests that pass their own desk assets.
+ * files that its build wrote to assets/. An empty map when there is no build,
+ * as in tests that pass their own desk assets. A file of a type that the desk
+ * does not know, or with an odd name, stops the desk at startup.
  */
 async function readAppBuild(
   root: URL,
@@ -2053,14 +2043,16 @@ async function readAppBuild(
     return files;
   }
   for (const path of ['/app', '/app/'])
-    files.set(path, { type: 'text/html; charset=utf-8', body: page });
+    files.set(path, { type: contentType('index.html'), body: page });
   for (const name of names) {
-    const type = appTypes[extname(name)];
-    if (type && /^[\w.-]+$/.test(name))
-      files.set(`/app/assets/${name}`, {
-        type,
-        body: await readFile(new URL(`assets/${name}`, root)),
-      });
+    if (!/^[\w.-]+$/.test(name))
+      throw new Error(
+        `The app build has a file with an unexpected name: ${JSON.stringify(name)}.`,
+      );
+    files.set(`/app/assets/${name}`, {
+      type: contentType(name),
+      body: await readFile(new URL(`assets/${name}`, root)),
+    });
   }
   return files;
 }

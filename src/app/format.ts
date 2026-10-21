@@ -1,4 +1,4 @@
-import type { Asker, Harness, StepCounts } from '../protocol/api.ts';
+import type { Asker, Harness } from '../protocol/api.ts';
 
 /** Dollars: whole amounts without cents, others with two decimals. */
 export function usd(value: number): string {
@@ -26,7 +26,11 @@ export function since(at: string, now: number): string {
   return span(now - Date.parse(at));
 }
 
-/** A deadline: "Fri 18:00" within a week, else "Oct 30 18:00". */
+/**
+ * A deadline. Within the next six days, the weekday and time: "Fri 18:00".
+ * Further out, in the past, or on today's weekday next week, the date as
+ * well, so a weekday is never ambiguous: "Mon 27 Oct, 07:00".
+ */
 export function due(at: string, now: number): string {
   const date = new Date(at);
   const time = date.toLocaleTimeString('en-GB', {
@@ -34,11 +38,15 @@ export function due(at: string, now: number): string {
     minute: '2-digit',
   });
   const days = (date.getTime() - now) / (24 * 60 * minute);
-  const day =
-    days >= 0 && days < 6.5
-      ? date.toLocaleDateString('en-US', { weekday: 'short' })
-      : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  return `${day} ${time}`;
+  const nextWeek = date.getDay() === new Date(now).getDay() && days > 1;
+  if (days >= 0 && days < 6 && !nextWeek)
+    return `${date.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`;
+  const day = date.toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+  return `${day}, ${time}`;
 }
 
 /** A clock time: "22:41". */
@@ -59,36 +67,4 @@ export function asked(askers: readonly Asker[]): string {
 
 export function harnessName(harness: Harness): string {
   return harness === 'claude' ? 'Claude' : 'Codex';
-}
-
-const kinds: readonly [keyof StepCounts, string, string][] = [
-  ['search', 'search', 'searches'],
-  ['page', 'page', 'pages'],
-  ['read', 'file read', 'files read'],
-  ['command', 'command', 'commands'],
-  ['edit', 'edit', 'edits'],
-  ['run', 'run', 'runs'],
-  ['post', 'post', 'posts'],
-  ['helper', 'helper', 'helpers'],
-  ['other', 'other step', 'other steps'],
-];
-
-/** A folded turn: "Worked 6 min · 4 searches · 3 pages". Running: "Working · 2 commands". */
-export function worked(
-  counts: StepCounts,
-  startedAt: string,
-  endedAt: string | null,
-  now: number,
-): string {
-  const parts = kinds
-    .filter(([kind]) => counts[kind] > 0)
-    .map(
-      ([kind, one, many]) =>
-        `${counts[kind]} ${counts[kind] === 1 ? one : many}`,
-    );
-  const head =
-    endedAt === null
-      ? `Working for ${since(startedAt, now)}`
-      : `Worked ${span(Date.parse(endedAt) - Date.parse(startedAt))}`;
-  return [head, ...parts].join(' · ');
 }

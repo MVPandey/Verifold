@@ -7,7 +7,7 @@ import {
 import { act } from './api.ts';
 import { parseRoute, type Route } from './route.ts';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
-import { ComingSoon, Notice } from './screens/Notice.tsx';
+import { ComingSoon, NotFound, Notice } from './screens/Notice.tsx';
 import type { LabStore, LabState } from './store.ts';
 
 function useRoute(): Route {
@@ -42,7 +42,7 @@ export function Screen({
   readonly now: number;
   readonly actions: LabActions;
 }): ReactNode {
-  const { snapshot, connection } = state;
+  const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
     return (
       <Notice title="Open Verifold from your terminal">
@@ -53,8 +53,32 @@ export function Screen({
         </p>
       </Notice>
     );
-  if (!snapshot)
+  if (connection === 'outdated')
     return (
+      <Notice title="This page is older than Verifold. Reload it.">
+        <p>
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={() => location.reload()}
+          >
+            Reload
+          </button>
+        </p>
+      </Notice>
+    );
+  if (route.page === 'unknown') return <NotFound />;
+  if (route.page !== 'lab') return <ComingSoon page={route.page} />;
+  if (!snapshot)
+    return connection === 'unreachable' ? (
+      <Notice title="Can't reach Verifold. Is it running?">
+        <p>
+          {retrying
+            ? 'This page keeps trying, and shows the lab as soon as Verifold answers.'
+            : 'Verifold refused the connection. Reload this page to try again.'}
+        </p>
+      </Notice>
+    ) : (
       <Notice title="Connecting to Verifold">
         <p>The lab shows here in a moment.</p>
       </Notice>
@@ -64,11 +88,10 @@ export function Screen({
       <Notice title={`${snapshot.project} has no lab yet`}>
         <p>
           Start one from the desk for now: <a href="/">open the desk</a>. The
-          new app's Ask page comes in a later step.
+          new app's first-run and Ask pages come in a later step.
         </p>
       </Notice>
     );
-  if (route.page !== 'lab') return <ComingSoon route={route} />;
   return (
     <LabHome
       snapshot={snapshot}
@@ -90,15 +113,14 @@ export function App({
   const state = useSyncExternalStore(store.subscribe, store.get);
   const route = useRoute();
   const now = useNow();
+  const signedOut = Promise.resolve({ refused: 'This tab has no access key.' });
   const actions: LabActions = {
-    post: (text) =>
+    post: (text, key) =>
+      token ? act(token, 'lab-post', { text }, key) : signedOut,
+    pause: (pause, key) =>
       token
-        ? act(token, 'lab-post', { text })
-        : Promise.resolve('No access key.'),
-    pause: (pause) =>
-      token
-        ? act(token, pause ? 'lab-pause' : 'lab-resume', {})
-        : Promise.resolve('No access key.'),
+        ? act(token, pause ? 'lab-pause' : 'lab-resume', {}, key)
+        : signedOut,
   };
   return <Screen state={state} route={route} now={now} actions={actions} />;
 }
