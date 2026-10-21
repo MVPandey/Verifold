@@ -12,17 +12,20 @@ import {
   answerActions,
   appActions,
   labActions,
+  type AppActions,
 } from './actions.ts';
 import type { ActOutcome } from './api.ts';
+import { startActions, type StartActions } from './ask.ts';
 import { needsTick, typing } from './call.ts';
-import { href, parseRoute, type Route } from './route.ts';
+import { href, parseRoute, replaceRoute, type Route } from './route.ts';
 import { isSearchKey, onMac } from './search.ts';
 import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
+import { AskPage } from './screens/AskPage.tsx';
 import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
-import { NotFound, Notice } from './screens/Notice.tsx';
+import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { SetupPage } from './screens/Setup.tsx';
 import { setupActions, type SetupActions } from './setup.ts';
 import { PostPage } from './screens/PostPage.tsx';
@@ -59,6 +62,8 @@ function useNow(fast: boolean): number {
 /** Answer and bring-in actions for a page without a token: each one is refused. */
 const signedOutAnswers = answerActions(null);
 const signedOutSetup = setupActions(null);
+const signedOutStart = startActions(null);
+const signedOutApp = appActions(null);
 
 /** How often a visible page tells Verifold that the person looks, as the desk's page does. */
 export const lookMs = 60_000;
@@ -119,6 +124,12 @@ function useSearchKey(open: () => void): void {
   }, [open]);
 }
 
+/** Go to `to` in place of this page, after it renders. */
+function Redirect({ to }: { readonly to: string }): ReactNode {
+  useEffect(() => replaceRoute(to), [to]);
+  return null;
+}
+
 /** The page for a state and a route. Separate from the hooks, so tests render it directly. */
 export function Screen({
   state,
@@ -128,6 +139,8 @@ export function Screen({
   agentActions,
   answers = signedOutAnswers,
   setup = signedOutSetup,
+  start = signedOutStart,
+  startLab = signedOutApp.startLab,
 }: {
   readonly state: LabState;
   readonly route: Route;
@@ -136,6 +149,8 @@ export function Screen({
   readonly agentActions: AgentActions;
   readonly answers?: AnswerActions;
   readonly setup?: SetupActions;
+  readonly start?: StartActions;
+  readonly startLab?: AppActions['startLab'];
 }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
@@ -168,12 +183,17 @@ export function Screen({
       <SetupPage
         step={route.step}
         actions={setup}
-        project={snapshot?.project ?? ''}
+        // Null until the first snapshot says whether a project exists.
+        project={snapshot ? snapshot.project : null}
       />
     );
-  // Without a project, the app is the first run. Its first open step opens.
+  // Without a project, the app asks the question of a new one, after the first run.
   if (snapshot && !snapshot.project)
-    return <SetupPage step={null} actions={setup} project="" />;
+    return route.page === 'ask' ? (
+      <AskPage setup={setup} start={start} now={now} connection={connection} />
+    ) : (
+      <SetupPage step={null} actions={setup} project="" />
+    );
   if (!snapshot)
     return connection === 'unreachable' ? (
       <Notice title="Can't reach Verifold. Is it running?">
@@ -188,17 +208,10 @@ export function Screen({
         <p>The lab shows here in a moment.</p>
       </Notice>
     );
+  // The Ask page is for a folder without a project. With one, the lab opens.
+  if (route.page === 'ask') return <Redirect to={href.lab} />;
   const lab = snapshot.lab;
-  if (!lab)
-    return (
-      <Notice title={`${snapshot.project} has no lab yet`}>
-        <p>
-          Start one from the desk for now: <a href="/">open the desk</a>. The
-          new app's Ask page comes in a later step. You can{' '}
-          <a href={href.setup('agents')}>change your profile</a> here.
-        </p>
-      </Notice>
-    );
+  if (!lab) return <NoLab snapshot={snapshot} onStart={startLab} />;
   if (route.page === 'lab' || route.page === 'call')
     return (
       <>
@@ -208,6 +221,7 @@ export function Screen({
           connection={connection}
           now={now}
           actions={actions}
+          agentActions={agentActions}
           show={route.page === 'lab' ? (route.post ?? null) : null}
         />
         {route.page === 'call' && (
@@ -316,6 +330,7 @@ export function App({
   const [agent] = useState(() => agentActions(token));
   const [answers] = useState(() => answerActions(token));
   const [setup] = useState(() => setupActions(token));
+  const [start] = useState(() => startActions(token));
   const [app] = useState(() => appActions(token));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
   const lab =
@@ -350,6 +365,8 @@ export function App({
         agentActions={agent}
         answers={answers}
         setup={setup}
+        start={start}
+        startLab={app.startLab}
       />
       {searching && lab && (
         <SearchDialog

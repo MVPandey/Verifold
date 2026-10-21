@@ -303,6 +303,8 @@ const actions: LabActions = {
   answer: ok,
   words: ok,
   undo: ok,
+  skip: ok,
+  questions: ok,
 };
 
 function render(state: Snapshot, hash = '#/answer'): string {

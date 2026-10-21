@@ -167,6 +167,8 @@ const actions: LabActions = {
   answer: () => Promise.resolve({ ok: true }),
   words: () => Promise.resolve({ ok: true }),
   undo: () => Promise.resolve({ ok: true }),
+  skip: () => Promise.resolve({ ok: true }),
+  questions: () => Promise.resolve({ ok: true }),
 };
 
 const tools: AppTools = {

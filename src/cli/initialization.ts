@@ -1,5 +1,4 @@
 import { resolve, join } from 'node:path';
-import { homedir } from 'node:os';
 import { setupProfile, memorySummary } from './agency.ts';
 import {
   agencyDirectory,
@@ -22,7 +21,13 @@ import type { CliIO } from './commands.ts';
 import type { Workspace } from '../core/contracts.ts';
 import { readJson } from '../core/storage.ts';
 import { researchInterview } from './onboarding.ts';
-import { checkProjectDirectory, createProject } from './project.ts';
+import {
+  checkProjectDirectory,
+  createProject,
+  defaultProfile,
+  expandHome,
+  homeShown,
+} from './project.ts';
 import { investigateProject } from './project-context.ts';
 import { loadPrompt } from './prompts.ts';
 import { hostName } from '../core/session.ts';
@@ -165,11 +170,7 @@ function settingsLine(
   root: string,
   askFirst: boolean,
 ): string {
-  const home = homedir();
-  const folder =
-    root === home || root.startsWith(`${home}/`)
-      ? `~${root.slice(home.length)}`
-      : root;
+  const folder = homeShown(root);
   const name = host === 'claude' || host === 'codex' ? hostName(host) : host;
   const lead = `with ${model ? `the model ${model}` : 'its default model'}`;
   return `${helper ? `${name} leads, ${lead}, and ${hostName(helper)} helps` : `${name}, ${lead}`}. Folder: ${folder}.${askFirst ? ' Asks you before the source search.' : ''}`;
@@ -243,13 +244,7 @@ export async function initializeProject(
     ));
   const profile = options.profile
     ? parseProfile(await readJson(resolve(cwd, options.profile)))
-    : {
-        name: 'Researcher',
-        interests: ['Computational research'],
-        scholar: '',
-        github: '',
-        session: '',
-      };
+    : defaultProfile;
   let research: Initialization['research'] = null;
   // The research plan waits for the person only when they ask for that stop.
   let askFirst = parseAutonomy(options.autonomy) === 'guided';
@@ -302,10 +297,7 @@ export async function initializeProject(
             placeholder: root,
           })
         ).trim();
-        if (selected)
-          root = selected.startsWith('~/')
-            ? resolve(homedir(), selected.slice(2))
-            : resolve(cwd, selected);
+        if (selected) root = expandHome(selected, cwd);
       }
       if (!options.lab)
         askFirst = /^(y|yes)$/i.test(
@@ -376,9 +368,7 @@ export async function initializeProject(
       if (topic.startsWith('/file ')) {
         const selected = topic.slice(6).trim();
         if (!selected) throw new Error('Provide a path after /file.');
-        const source = selected.startsWith('~/')
-          ? resolve(homedir(), selected.slice(2))
-          : resolve(cwd, selected);
+        const source = expandHome(selected, cwd);
         const consent = await io.ask(
           `Read only ${source} (up to 12000 bytes) and send its text to ${hostName(host)} (${model ?? 'harness default model'}) as project context? Your model provider may process it under your harness settings. [y/N]: `,
           {

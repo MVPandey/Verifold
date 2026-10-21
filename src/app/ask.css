@@ -1,0 +1,379 @@
+/* Ask, the planner's questions, and the plan of record. Values follow the v9 canvas artboards "5 Ask", "6 Scoping" and "7 Plan of record". */
+
+/* 5 Ask */
+.ask {
+  flex-grow: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px 16px 72px;
+}
+
+.ask__column {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ask__form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ask__label {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.ask__question {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  padding: 18px 20px;
+  border: 1.5px solid var(--control);
+  border-radius: 14px;
+  background: var(--surface);
+  font: 500 19px/1.45 var(--font);
+  color: var(--ink);
+}
+
+.ask__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ask__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-wash);
+  font: 700 14px var(--font);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.ask__chip[aria-expanded='true'] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.ask__hint {
+  margin-top: -6px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.ask__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.ask__agents,
+.ask__gpu,
+.ask__folder-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask__agent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.ask__folder-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.ask__path {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  font: 500 15px var(--mono);
+  color: var(--ink);
+}
+
+.ask__folder-edit .button {
+  align-self: flex-start;
+}
+
+.ask__start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.ask__where {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ask__where .link-button {
+  min-height: 0;
+}
+
+.ask__note {
+  margin: 8px 0 0;
+  max-width: 640px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* 6 Scoping */
+.scoping {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The facts and the questions sit under the planner's avatar, as its turn's text does. */
+.scoping__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 42px;
+}
+
+@media (max-width: 599px) {
+  .scoping__body {
+    padding-left: 0;
+  }
+}
+
+.scoping__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.scoping__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.scoping__label {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.scoping__send {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+
+.facts {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.facts__source {
+  color: var(--muted);
+}
+
+.facts__unverified {
+  color: var(--need-ink);
+}
+
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1.5px solid var(--accent-line);
+  border-radius: 14px;
+}
+
+.question__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.question__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--control);
+  border-radius: 12px;
+  background: var(--surface);
+  font: 700 15px var(--font);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.question__option--on {
+  padding: 9px 13px;
+  border: 2px solid var(--accent);
+  background: var(--accent-wash);
+}
+
+.question__detail {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.question__why {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.question__words {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.question__input {
+  margin-top: -6px;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  font: 500 15px var(--font);
+  color: var(--ink);
+}
+
+/* 7 Plan of record */
+.plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan__reading {
+  margin: 0;
+}
+
+.plan__table-box {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.plan__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.plan__table th,
+.plan__table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.plan__table thead th {
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom-color: var(--line);
+}
+
+.plan__table tbody tr:last-child th,
+.plan__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.plan__table th a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.plan__table th a:hover {
+  color: var(--accent-deep);
+  text-decoration: underline;
+}
+
+.plan__changed,
+.plan__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.plan__changed b {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.plan__facts summary {
+  min-height: 28px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.plan__facts .facts {
+  padding-top: 6px;
+}
+
+.plan__cost {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.call__detail {
+  font-weight: 500;
+  color: var(--muted);
+}
