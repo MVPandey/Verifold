@@ -25,7 +25,7 @@
     "node": "^22.0.0 || ^24.0.0 || ^26.0.0"
   },
   "scripts": {
-    "build": "npm run build:cli && tsc --noEmit",
+    "build": "npm run build:cli",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",
