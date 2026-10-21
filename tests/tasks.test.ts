@@ -20,13 +20,13 @@ import {
   TaskManager,
   type TaskRecord,
   type TaskSessions,
-} from '../src/cli/tasks.ts';
-import { SessionPool } from '../src/cli/workers.ts';
-import type { AgentTools } from '../src/cli/session-hosts.ts';
-import { startDesk } from '../src/cli/desk.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
-import { readDeskSnapshot } from '../src/cli/desk-records.ts';
+} from '../src/legacy/tasks.ts';
+import { SessionPool } from '../src/core/workers.ts';
+import type { AgentTools } from '../src/core/session-hosts.ts';
+import { startDesk } from '../src/server/desk.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
+import { renderDesk } from '../src/desk/desk-view.ts';
+import { readDeskSnapshot } from '../src/server/desk-records.ts';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, {

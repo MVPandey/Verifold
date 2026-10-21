@@ -16,14 +16,14 @@ import {
   renderDesk,
   renderSetup,
   terminalPage,
-} from './desk-view.ts';
-import { ptyLibrary, validLease } from './terminals.ts';
+} from '../desk/desk-view.ts';
+import { ptyLibrary, validLease } from '../core/terminals.ts';
 import {
   readDeskSnapshot,
   readDeskReport,
   validAttemptId,
 } from './desk-records.ts';
-import type { ResearchReport } from './research.ts';
+import type { ResearchReport } from '../legacy/research.ts';
 import {
   SessionActionError,
   hostName,
@@ -32,37 +32,43 @@ import {
   validSessionId,
   type SessionRecord,
   type SessionView,
-} from './session.ts';
-import type { SessionPool } from './workers.ts';
-import { TranscriptFile, type TranscriptLog } from './transcript.ts';
-import { markdownHtml } from './markdown.ts';
-import type { ResearchRunner } from './research-runner.ts';
-import type { ProjectMemory } from './memory.ts';
+} from '../core/session.ts';
+import type { SessionPool } from '../core/workers.ts';
+import { TranscriptFile, type TranscriptLog } from '../core/transcript.ts';
+import { markdownHtml } from '../desk/markdown.ts';
+import type { ResearchRunner } from '../legacy/research-runner.ts';
+import type { ProjectMemory } from '../core/memory.ts';
 import {
   archiveRun,
   listArchives,
   restoreRun,
   validArchiveId,
-} from './archive.ts';
-import type { SetupBridge } from './setup-bridge.ts';
+} from '../core/archive.ts';
+// eslint-disable-next-line no-restricted-imports -- old setup flow, replaced in A3 (#282)
+import type { SetupBridge } from '../cli/setup-bridge.ts';
 import {
   validTaskId,
   type TaskInputFields,
   type TaskManager,
-} from './tasks.ts';
-import { coordinatorContext, type Coordinator } from './coordinator.ts';
-import type { Compute } from './compute.ts';
-import { commitId, directionId, proofRef, runId } from './board.ts';
-import { startLabOn, type BringList, type Lab, type LabView } from './lab.ts';
-import type { Away, LabDiff, LabWork } from './desk-lab.ts';
+} from '../legacy/tasks.ts';
+import { coordinatorContext, type Coordinator } from '../legacy/coordinator.ts';
+import type { Compute } from '../core/compute.ts';
+import { commitId, directionId, proofRef, runId } from '../core/board.ts';
+import {
+  startLabOn,
+  type BringList,
+  type Lab,
+  type LabView,
+} from '../core/lab.ts';
+import type { Away, LabDiff, LabWork } from '../desk/desk-lab.ts';
 import {
   changeWorkspace,
   loadWorkspace,
   readJson,
   writePrivateFile,
-} from './storage.ts';
-import { validAgents } from './contracts.ts';
-import { startPageServer, type PageServer } from './pages.ts';
+} from '../core/storage.ts';
+import { validAgents } from '../core/contracts.ts';
+import { startPageServer, type PageServer } from '../legacy/pages.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -1140,7 +1146,7 @@ async function act(
 export async function startDesk(
   root: string | null,
   signal: AbortSignal,
-  assetsRoot: URL = new URL('./', import.meta.url),
+  assetsRoot: URL = new URL('../desk/', import.meta.url),
   sessions?: SessionPool,
   research?: ResearchRunner,
   setup?: SetupBridge,

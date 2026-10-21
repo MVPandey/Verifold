@@ -35,4 +35,55 @@ export default tseslint.config(
     },
     rules: { '@typescript-eslint/explicit-module-boundary-types': 'error' },
   },
+  // Layers. The engine (core) imports only itself. The old manager (legacy)
+  // imports the engine. The desk server and the old desk import neither the
+  // command line nor its setup. A marked line names the step that removes it.
+  {
+    files: ['src/core/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./(cli\\.ts$|(cli|desk|legacy|server|ui)/)',
+              message: 'core imports only core.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/legacy/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./(cli\\.ts$|(cli|desk|server|ui)/)',
+              message: 'legacy imports only core and legacy.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/{desk,server,ui}/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./(cli\\.ts$|cli/)',
+              message: 'the desk and its server do not import cli.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

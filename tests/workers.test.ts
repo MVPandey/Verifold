@@ -13,25 +13,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
 import {
   TaskManager,
   type TaskInputFields,
   type TaskRecord,
-} from '../src/cli/tasks.ts';
+} from '../src/legacy/tasks.ts';
 import {
   defaultAgents,
   PoolFullError,
   SessionPool,
-} from '../src/cli/workers.ts';
-import { ptyLibrary } from '../src/cli/terminals.ts';
-import { startDesk } from '../src/cli/desk.ts';
+} from '../src/core/workers.ts';
+import { ptyLibrary } from '../src/core/terminals.ts';
+import { startDesk } from '../src/server/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
-import { ResearchRunner } from '../src/cli/research-runner.ts';
-import { loadPaused } from '../src/cli/session.ts';
-import { readDeskSnapshot } from '../src/cli/desk-records.ts';
-import { parseWorkspace } from '../src/cli/contracts.ts';
+import { renderDesk } from '../src/desk/desk-view.ts';
+import { ResearchRunner } from '../src/legacy/research-runner.ts';
+import { loadPaused } from '../src/core/session.ts';
+import { readDeskSnapshot } from '../src/server/desk-records.ts';
+import { parseWorkspace } from '../src/core/contracts.ts';
 
 /** The first writable path in a task prompt. Plain sessions write to `out`. */
 const writable = `const match = /Writable paths:\\n- (\\S+)/.exec(text); const folder = match ? match[1] : 'out';`;
@@ -934,7 +934,7 @@ await test(
     const script = join(root, 'owner.mjs');
     await writeFile(
       script,
-      `import { SessionPool } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../src/cli/workers.ts', import.meta.url))).href)};
+      `import { SessionPool } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../src/core/workers.ts', import.meta.url))).href)};
 const sessions = new SessionPool(${JSON.stringify(root)}, { clientVersion: 'test', ownerId: 'doomed', executables: { codex: ${JSON.stringify(join(root, 'fake-codex'))} } });
 const id = await sessions.start({ host: 'codex', mode: 'auto', prompt: 'Start' });
 for (let tries = 0; tries < 1000 && sessions.view(id)?.record.status !== 'idle'; tries++) await new Promise((r) => setTimeout(r, 20));

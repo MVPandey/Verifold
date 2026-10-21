@@ -1,4 +1,4 @@
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import {
   mkdir,
   open,
@@ -10,23 +10,29 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { CliIO } from './commands.ts';
-import { withActivity } from './choices.ts';
-import { parseCandidates } from './contracts.ts';
-import type { Candidate, Workspace } from './contracts.ts';
-import { activityProgress, runHarness, type HarnessResult } from './harness.ts';
-import { TranscriptWriter } from './transcript.ts';
-import { hostName } from './session.ts';
-import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
-import { processStart, stopRecordedProcess } from './owner.ts';
+// eslint-disable-next-line no-restricted-imports -- legacy edge, removed in A6 (#282)
+import type { CliIO } from '../cli/commands.ts';
+// eslint-disable-next-line no-restricted-imports -- legacy edge, removed in A6 (#282)
+import { withActivity } from '../cli/choices.ts';
+import { parseCandidates } from '../core/contracts.ts';
+import type { Candidate, Workspace } from '../core/contracts.ts';
+import {
+  activityProgress,
+  runHarness,
+  type HarnessResult,
+} from '../core/harness.ts';
+import { TranscriptWriter } from '../core/transcript.ts';
+import { hostName } from '../core/session.ts';
+import { changeWorkspace, loadWorkspace, readJson } from '../core/storage.ts';
+import { processStart, stopRecordedProcess } from '../core/owner.ts';
 import {
   object,
   text,
   sourceUrl,
   parseHostJson,
   parseResearchPlan,
-} from './research-contracts.ts';
-import type { ResearchState } from './research-contracts.ts';
+} from '../core/research-contracts.ts';
+import type { ResearchState } from '../core/research-contracts.ts';
 
 export interface ResearchOptions {
   readonly topic?: string;

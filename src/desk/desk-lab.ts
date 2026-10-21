@@ -5,7 +5,7 @@ import {
   type Artifact,
   type Post,
   type PostKind,
-} from './board.ts';
+} from '../core/board.ts';
 import {
   askers,
   barSummary,
@@ -24,19 +24,19 @@ import {
   type DirectionView,
   type LabView,
   type Verdict,
-} from './lab.ts';
-import { usd } from './leases.ts';
-import { callLimits, checkableKinds, checkLimits } from './lab-tools.ts';
+} from '../core/lab.ts';
+import { usd } from '../core/leases.ts';
+import { callLimits, checkableKinds, checkLimits } from '../core/lab-tools.ts';
 import {
   metricsText,
   placeText,
   runActive,
   runSummary,
   type RunRecord,
-} from './runs.ts';
-import type { HarnessName } from './harness.ts';
-import { hostName } from './session.ts';
-import type { ChangedFile } from './workspaces.ts';
+} from '../core/runs.ts';
+import type { HarnessName } from '../core/harness.ts';
+import { hostName } from '../core/session.ts';
+import type { ChangedFile } from '../core/workspaces.ts';
 
 /**
  * The lab's screen in the desk. One header line, one Needs-you line, one row

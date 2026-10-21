@@ -21,8 +21,8 @@ import {
   withTranscript,
   type TranscriptEntry,
   type TranscriptUpdate,
-} from '../src/cli/transcript.ts';
-import { runHarness, type HarnessRequest } from '../src/cli/harness.ts';
+} from '../src/core/transcript.ts';
+import { runHarness, type HarnessRequest } from '../src/core/harness.ts';
 
 /** The event shapes that Claude Code 2.1.288 sent for one subagent run (probe, 2026-10-02). */
 const claudeRun = [

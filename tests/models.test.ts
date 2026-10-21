@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { validateModel } from '../src/cli/harness.ts';
-import { claudeModel, labModel, pickCodexModel } from '../src/cli/models.ts';
+import { validateModel } from '../src/core/harness.ts';
+import { claudeModel, labModel, pickCodexModel } from '../src/core/models.ts';
 
 await test('Codex gets the most capable model that its list offers', () => {
   const sol = { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true };

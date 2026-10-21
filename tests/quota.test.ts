@@ -12,13 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Quota } from '../src/cli/quota.ts';
+import { Quota } from '../src/core/quota.ts';
 import {
   claudeLimit,
   claudeLimitResult,
   codexLimit,
-} from '../src/cli/session-hosts.ts';
-import { SessionManager } from '../src/cli/session.ts';
+} from '../src/core/session-hosts.ts';
+import { SessionManager } from '../src/core/session.ts';
 
 /** Lines that Claude Code 2.1.303 and Codex 0.160.0 sent in a probe on 2026-10-19. */
 const probedClaude = {

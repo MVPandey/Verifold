@@ -1,4 +1,4 @@
-import { object } from '../src/cli/research-contracts.ts';
+import { object } from '../src/core/research-contracts.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { ensureGlobalProfile } from '../src/cli/profile.ts';
 import { saveAgencyFile } from '../src/cli/agency.ts';
-import type { runHarness } from '../src/cli/harness.ts';
+import type { runHarness } from '../src/core/harness.ts';
 
 function parseObject(value: string): Record<string, unknown> {
   return object(JSON.parse(value));

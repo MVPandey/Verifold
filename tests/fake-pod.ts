@@ -12,9 +12,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type test from 'node:test';
-import { Compute } from '../src/cli/compute.ts';
-import { KeyStore } from '../src/cli/credentials.ts';
-import type { TaskPlace } from '../src/cli/compute.ts';
+import { Compute } from '../src/core/compute.ts';
+import { KeyStore } from '../src/core/credentials.ts';
+import type { TaskPlace } from '../src/core/compute.ts';
 
 /**
  * A fake RunPod for tests: a local HTTP server for the RunPod API, a fake

@@ -1,4 +1,4 @@
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { resolve, join } from 'node:path';
 import {
@@ -12,9 +12,9 @@ import {
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { escapeHtml as e } from '../ui/dom.ts';
-import { parseCandidates } from './contracts.ts';
-import type { Workspace } from './contracts.ts';
-import { changeWorkspace, loadWorkspace, readJson } from './storage.ts';
+import { parseCandidates } from '../core/contracts.ts';
+import type { Workspace } from '../core/contracts.ts';
+import { changeWorkspace, loadWorkspace, readJson } from '../core/storage.ts';
 import {
   initializeProject,
   parseAutonomy,
@@ -25,24 +25,24 @@ import {
   runResearch,
   selectIdea,
   type ResearchOptions,
-} from './research.ts';
-import { ResearchRunner } from './research-runner.ts';
-import { ProjectMemory } from './memory.ts';
-import { object, text } from './research-contracts.ts';
+} from '../legacy/research.ts';
+import { ResearchRunner } from '../legacy/research-runner.ts';
+import { ProjectMemory } from '../core/memory.ts';
+import { object, text } from '../core/research-contracts.ts';
 import type { Choice } from './choices.ts';
-import { installedHarnesses, runHarness } from './harness.ts';
-import { nextResearchAction } from './desk-view.ts';
-import { startDesk, openDeskBrowser, type DeskServer } from './desk.ts';
+import { installedHarnesses, runHarness } from '../core/harness.ts';
+import { nextResearchAction } from '../desk/desk-view.ts';
+import { startDesk, openDeskBrowser, type DeskServer } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
-import { TaskManager } from './tasks.ts';
-import { ResultsStore } from './results.ts';
-import { defaultAgents, SessionPool } from './workers.ts';
-import { Quota } from './quota.ts';
-import { Coordinator } from './coordinator.ts';
-import { Lab, labOnDisk, startLabOn } from './lab.ts';
-import { labModel } from './models.ts';
-import { labWorks, RunTeam } from './team.ts';
-import { withTranscript } from './transcript.ts';
+import { TaskManager } from '../legacy/tasks.ts';
+import { ResultsStore } from '../legacy/results.ts';
+import { defaultAgents, SessionPool } from '../core/workers.ts';
+import { Quota } from '../core/quota.ts';
+import { Coordinator } from '../legacy/coordinator.ts';
+import { Lab, labOnDisk, startLabOn } from '../core/lab.ts';
+import { labModel } from '../core/models.ts';
+import { labWorks, RunTeam } from '../core/team.ts';
+import { withTranscript } from '../core/transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
 import { agencyDirectory } from './agency.ts';
 import {
@@ -51,8 +51,8 @@ import {
   SessionActionError,
   SessionManager,
   type SessionEvent,
-} from './session.ts';
-import { claimOwner, liveOwner, OwnerConflict } from './owner.ts';
+} from '../core/session.ts';
+import { claimOwner, liveOwner, OwnerConflict } from '../core/owner.ts';
 import {
   connectControl,
   newControl,
@@ -63,11 +63,11 @@ import {
   serveControl,
   type Control,
   type ControlClient,
-} from './control.ts';
-import { Compute, type TaskPlace } from './compute.ts';
-import { KeepAwake } from './awake.ts';
-import { KeyStore, type KeyStoreOptions } from './credentials.ts';
-import { spent, type Lease } from './leases.ts';
+} from '../server/control.ts';
+import { Compute, type TaskPlace } from '../core/compute.ts';
+import { KeepAwake } from '../server/awake.ts';
+import { KeyStore, type KeyStoreOptions } from '../core/credentials.ts';
+import { spent, type Lease } from '../core/leases.ts';
 /** How a view can show a question. The terminal shows only the question text. */
 export type AskHint =
   | { readonly kind: 'confirm'; readonly yes: string; readonly no: string }

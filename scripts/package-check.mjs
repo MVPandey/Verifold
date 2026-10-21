@@ -44,25 +44,26 @@ try {
   assert.ok(
     manifest.files.every(
       (file) =>
-        /^dist-cli\/cli\/[a-z-]+\.js$/.test(file.path) ||
-        /^dist-cli\/cli\/prompts\/[a-z-]+\.md$/.test(file.path) ||
+        /^dist-cli\/(cli|core|desk|legacy|server)\/[a-z-]+\.js$/.test(
+          file.path,
+        ) ||
+        /^dist-cli\/(cli|core|legacy)\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         [
           'dist-cli/cli.js',
-          'dist-cli/domain/profile.js',
           'dist-cli/ui/dom.js',
-          'dist-cli/cli/desk.css',
-          'dist-cli/cli/manrope.ttf',
-          'dist-cli/cli/OFL-Manrope.txt',
-          'dist-cli/cli/symbol.webp',
-          'dist-cli/cli/vendor/purify.js',
-          'dist-cli/cli/vendor/purify.LICENSE.txt',
-          'dist-cli/cli/vendor/idiomorph.js',
-          'dist-cli/cli/vendor/idiomorph.LICENSE.txt',
-          'dist-cli/cli/vendor/xterm.js',
-          'dist-cli/cli/vendor/xterm.css',
-          'dist-cli/cli/vendor/xterm.LICENSE.txt',
-          'dist-cli/cli/vendor/addon-fit.js',
-          'dist-cli/cli/vendor/addon-fit.LICENSE.txt',
+          'dist-cli/desk/desk.css',
+          'dist-cli/desk/manrope.ttf',
+          'dist-cli/desk/OFL-Manrope.txt',
+          'dist-cli/desk/symbol.webp',
+          'dist-cli/desk/vendor/purify.js',
+          'dist-cli/desk/vendor/purify.LICENSE.txt',
+          'dist-cli/desk/vendor/idiomorph.js',
+          'dist-cli/desk/vendor/idiomorph.LICENSE.txt',
+          'dist-cli/desk/vendor/xterm.js',
+          'dist-cli/desk/vendor/xterm.css',
+          'dist-cli/desk/vendor/xterm.LICENSE.txt',
+          'dist-cli/desk/vendor/addon-fit.js',
+          'dist-cli/desk/vendor/addon-fit.LICENSE.txt',
           'package.json',
           'README.md',
           'LICENSE',

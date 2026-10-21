@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadPrompt, type PromptId } from '../src/cli/prompts.ts';
+import { loadPrompt, type PromptId } from '../src/core/prompts.ts';
 import { readdir } from 'node:fs/promises';
-import { parseResearchPlan } from '../src/cli/research-contracts.ts';
-import { parseReport } from '../src/cli/research.ts';
+import { parseResearchPlan } from '../src/core/research-contracts.ts';
+import { parseReport } from '../src/legacy/research.ts';
 
 await test('every bundled Markdown prompt is registered and readable', async () => {
   const files = await readdir(new URL('../src/cli/prompts/', import.meta.url));

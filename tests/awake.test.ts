@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { KeepAwake } from '../src/cli/awake.ts';
+import { KeepAwake } from '../src/server/awake.ts';
 
 /** A fake caffeinate that writes its arguments, then waits until it is stopped. */
 async function fake(): Promise<{ program: string; log: string; dir: string }> {

@@ -1,6 +1,6 @@
 import { validateModel } from './harness.ts';
-import { parseProfile } from '../domain/profile.ts';
-import type { Profile } from '../domain/profile.ts';
+import { parseProfile } from './profile.ts';
+import type { Profile } from './profile.ts';
 import {
   object as record,
   parseResearchState,

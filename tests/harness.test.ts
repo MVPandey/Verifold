@@ -10,7 +10,7 @@ import {
   HarnessTimeoutError,
   runHarness,
   type HarnessName,
-} from '../src/cli/harness.ts';
+} from '../src/core/harness.ts';
 
 async function fixture(
   source: string,

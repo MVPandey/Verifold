@@ -6,10 +6,10 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SetupBridge, type SetupView } from '../src/cli/setup-bridge.ts';
-import { renderSetup } from '../src/cli/desk-view.ts';
+import { renderSetup } from '../src/desk/desk-view.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
-import { loadWorkspace } from '../src/cli/storage.ts';
-import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
+import { loadWorkspace } from '../src/core/storage.ts';
+import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
 
 // After setup, the project starts a lab, whose first agent starts a harness
 // process from PATH. Fake claude and codex commands that stop at once come
