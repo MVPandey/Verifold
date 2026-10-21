@@ -2413,3 +2413,26 @@ await test("a look after a time away starts the digest, a dismiss ends it, and s
   assert.equal((await fetch(`${api}/posts/x-2`, { headers })).status, 400);
   assert.equal((await fetch(`${api}/posts/p-2?x=1`, { headers })).status, 404);
 });
+
+await test("with a monthly limit, the snapshot's money holds all projects' month", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const month = {
+    limitUsd: 100,
+    spentUsd: 37.204,
+    heldUsd: 2,
+    leftUsd: 60.796,
+    at: at(1),
+  };
+  const reader = new ApiReader(
+    sources(root, seededView, {
+      compute: { view: () => ({ ...computeView(), month }) },
+    }),
+  );
+  assert.deepEqual(parse(await reader.snapshot()).lab?.money, {
+    plansUsd: 2.5,
+    gpuUsd: 4.2,
+    gpuLimitUsd: 25,
+    month: { spentUsd: 37.2, limitUsd: 100 },
+  });
+});

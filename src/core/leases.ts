@@ -230,6 +230,91 @@ export function usd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+/** A calendar month in this computer's time zone, such as `2026-10`. */
+export function monthKey(time: number): string {
+  const date = new Date(time);
+  return `${date.getFullYear().toString()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** When a lease started: its pod's first start, else the decision, else the request. */
+export function leaseStart(lease: Lease): string {
+  return lease.intervals[0]?.start ?? lease.decidedAt ?? lease.requestedAt;
+}
+
+/**
+ * What `leases` spent, and what their open pods still hold, in the month of
+ * `now`. An open lease counts in the month of `now`, whenever it started, so
+ * a pod that runs past the end of a month counts in the new one. A lease that
+ * ended counts in the month that it started.
+ */
+export function monthSpend(
+  leases: readonly Lease[],
+  now: number,
+): { readonly spentUsd: number; readonly heldUsd: number } {
+  const month = monthKey(now);
+  let spentUsd = 0;
+  let heldUsd = 0;
+  for (const lease of leases)
+    if (isOpen(lease)) {
+      spentUsd += spent(lease, now);
+      heldUsd += reserved(lease, now);
+    } else if (monthKey(Date.parse(leaseStart(lease))) === month)
+      spentUsd += spent(lease, now);
+  return { spentUsd, heldUsd };
+}
+
+/**
+ * The person's monthly GPU limit, and what the other projects spent and hold
+ * this month. `unknown`: why Verifold cannot tell the limit or the other
+ * projects' spend, so no new pod starts.
+ */
+export type OtherMonths =
+  | {
+      readonly limitUsd: number;
+      readonly spentUsd: number;
+      readonly heldUsd: number;
+      /** Something the person should know while the count still holds. */
+      readonly problem: string | null;
+    }
+  | { readonly unknown: string };
+
+/**
+ * The person's monthly GPU limit across projects. `others` reads the limit
+ * and the other projects' month: null means no monthly limit. `record` keeps
+ * this project's month, so that the other projects count it.
+ */
+export interface MonthHooks {
+  readonly others: (now: number) => Promise<OtherMonths | null>;
+  readonly record: (leases: readonly Lease[], now: number) => Promise<void>;
+}
+
+/** All projects' month against the monthly limit. `at`: when Verifold last read the other projects. */
+export interface MonthView {
+  readonly limitUsd: number;
+  readonly spentUsd: number;
+  readonly heldUsd: number;
+  /** What a new pod may still hold under the limit, never below zero. */
+  readonly leftUsd: number;
+  readonly at: string;
+}
+
+/** Where the person changes the monthly limit, for the lines that name it. */
+const raiseMonth = 'Raise the limit in your profile, under GPU money.';
+
+/** A problem for the view, with when Verifold met it. */
+interface Problem {
+  readonly at: string;
+  readonly text: string;
+}
+
+/** The monthly limit and the other projects' month, as one read found them. */
+interface OthersRead {
+  readonly limitUsd: number;
+  readonly spentUsd: number;
+  readonly heldUsd: number;
+  readonly at: string;
+}
+
 /** A request for a lease, from the person, the coordinator, or a lab agent. Every field is checked. */
 export interface LeaseRequest {
   readonly by: 'person' | 'coordinator' | 'agent';
@@ -267,6 +352,8 @@ export interface LeaseHooks {
   readonly closed?: (lease: Lease) => Promise<void>;
   /** Each read of a ready pod: tell its watchdog that Verifold still runs. */
   readonly alive?: (lease: Lease) => Promise<void>;
+  /** The monthly GPU limit across projects. Without it, only the project limit applies. */
+  readonly month?: MonthHooks;
 }
 
 /**
@@ -281,7 +368,21 @@ export class Leases {
   private leases: Lease[] = [];
   private queue: Promise<unknown> = Promise.resolve();
   /** The last RunPod problem in a poll, for the view. */
-  private problem: { readonly at: string; readonly text: string } | null = null;
+  private problem: Problem | null = null;
+  /**
+   * The monthly limit and the other projects' month at the last read. Null:
+   * no monthly limit, Verifold cannot tell the month, or no read yet.
+   */
+  private others: OthersRead | null = null;
+  /** Why Verifold could not tell the month at the last read. No new pod starts until it can. */
+  private monthUnknown: string | null = null;
+  /**
+   * The problems of the monthly limit, for the view: the last read of the
+   * other projects, and the last save of this project's record. Each clears
+   * only itself.
+   */
+  private readProblem: Problem | null = null;
+  private recordProblem: Problem | null = null;
 
   constructor(root: string, hooks: LeaseHooks) {
     this.root = root;
@@ -311,8 +412,120 @@ export class Leases {
     return this.leases;
   }
 
-  lastProblem(): { readonly at: string; readonly text: string } | null {
-    return this.problem;
+  lastProblem(): Problem | null {
+    return this.problem ?? this.recordProblem ?? this.readProblem;
+  }
+
+  /**
+   * All projects' month against the monthly limit: this project's from its
+   * leases now, the other projects' as the last read found them.
+   */
+  month(): MonthView | null {
+    return this.others ? this.withOwn(this.others, this.now()) : null;
+  }
+
+  private withOwn(others: OthersRead, now: number): MonthView {
+    const own = monthSpend(this.leases, now);
+    const spentUsd = own.spentUsd + others.spentUsd;
+    const heldUsd = own.heldUsd + others.heldUsd;
+    return {
+      limitUsd: others.limitUsd,
+      spentUsd,
+      heldUsd,
+      leftUsd: Math.max(0, others.limitUsd - spentUsd - heldUsd),
+      at: others.at,
+    };
+  }
+
+  /**
+   * Read the limit and the other projects' records again. In the queue.
+   * Null: no monthly limit, or Verifold cannot tell the month. Then
+   * `monthUnknown` says why, and the view shows it.
+   */
+  private async readMonth(): Promise<MonthView | null> {
+    const hooks = this.hooks.month;
+    if (!hooks) return null;
+    const now = this.now();
+    let others: OtherMonths | null;
+    try {
+      others = await hooks.others(now);
+    } catch (error) {
+      others = {
+        unknown: `Verifold can't check your monthly GPU limit, so no new pod starts until it can: ${error instanceof Error ? error.message : 'unknown error'}`,
+      };
+    }
+    if (others && 'unknown' in others) {
+      this.others = null;
+      this.monthUnknown = others.unknown;
+      this.readProblem = { at: this.stamp(), text: others.unknown };
+      return null;
+    }
+    this.monthUnknown = null;
+    this.readProblem = others?.problem
+      ? { at: this.stamp(), text: others.problem }
+      : null;
+    this.others = others
+      ? {
+          limitUsd: others.limitUsd,
+          spentUsd: others.spentUsd,
+          heldUsd: others.heldUsd,
+          at: new Date(now).toISOString(),
+        }
+      : null;
+    return this.others ? this.withOwn(this.others, now) : null;
+  }
+
+  /** Read the month again for the view, in the queue. */
+  refreshMonth(): Promise<void> {
+    return this.serial(async () => {
+      await this.readMonth();
+    });
+  }
+
+  /**
+   * Refuse a lease that can cost `cost` when the monthly limit across
+   * projects has less left, or when Verifold cannot tell the month. In the queue.
+   */
+  private async checkMonth(cost: number): Promise<void> {
+    const month = await this.readMonth();
+    if (this.monthUnknown) fail(this.monthUnknown);
+    if (month && cost > month.leftUsd)
+      fail(
+        `The pod can cost up to ${usd(cost)}, but only ${usd(month.leftUsd)} is left of your monthly GPU limit of ${usd(month.limitUsd)} across projects: ${usd(month.spentUsd)} spent this month and ${usd(month.heldUsd)} held by open pods. ${raiseMonth}`,
+      );
+  }
+
+  /** With the running pods' next minutes counted, `spentUsd` reaches `limitUsd`. */
+  private reaches(spentUsd: number, limitUsd: number): boolean {
+    return (
+      this.leases.some(isRunning) &&
+      spentUsd + this.budget().rate * (leaseLimits.marginMs / 3_600_000) >=
+        limitUsd
+    );
+  }
+
+  /** A limit is reached: every running pod ends, each with a notice. In the queue. */
+  private async endRunning(
+    reason: string,
+    notice: (lease: Lease) => string,
+  ): Promise<void> {
+    for (const lease of this.leases.filter(isRunning))
+      await this.endNow(lease, 'limit', reason, notice(lease));
+  }
+
+  /** Keep this project's month for the other projects. A failure shows in the view. */
+  private async recordMonth(): Promise<void> {
+    const hooks = this.hooks.month;
+    if (!hooks) return;
+    try {
+      await hooks.record(this.leases, this.now());
+      this.recordProblem = null;
+    } catch (error) {
+      this.recordProblem = {
+        at: this.stamp(),
+        text: `Verifold could not save this project's GPU spend for the monthly limit, so your other projects do not count it: ${error instanceof Error ? error.message : 'unknown error'}`,
+      };
+    }
   }
 
   get(id: unknown): Lease {
@@ -326,24 +539,32 @@ export class Leases {
     return budget(this.leases, this.hooks.settings().limitUsd, this.now());
   }
 
-  /** Read the saved leases. An unreadable record is left out. */
-  async load(): Promise<void> {
-    const names = await readdir(this.folder).catch(() => []);
-    const leases: Lease[] = [];
-    for (const name of names) {
-      if (!/^lease-\d{1,6}\.json$/.test(name)) continue;
-      try {
-        const path = join(this.folder, name);
-        const stats = await lstat(path);
-        if (!stats.isFile() || stats.size > 1_000_000) continue;
-        const value = JSON.parse(await readFile(path, 'utf8')) as Lease;
-        if (value.schemaVersion === 1 && `${value.id}.json` === name)
-          leases.push(value);
-      } catch {
-        /* An unreadable record. */
+  /**
+   * Read the saved leases. An unreadable record is left out. In the queue, so
+   * the month record that it writes never replaces a newer one.
+   */
+  load(): Promise<void> {
+    return this.serial(async () => {
+      const names = await readdir(this.folder).catch(() => []);
+      const leases: Lease[] = [];
+      for (const name of names) {
+        if (!/^lease-\d{1,6}\.json$/.test(name)) continue;
+        try {
+          const path = join(this.folder, name);
+          const stats = await lstat(path);
+          if (!stats.isFile() || stats.size > 1_000_000) continue;
+          const value = JSON.parse(await readFile(path, 'utf8')) as Lease;
+          if (value.schemaVersion === 1 && `${value.id}.json` === name)
+            leases.push(value);
+        } catch {
+          /* An unreadable record. */
+        }
       }
-    }
-    this.leases = leases.sort((a, b) => number(a.id) - number(b.id));
+      this.leases = leases.sort((a, b) => number(a.id) - number(b.id));
+      if (!this.hooks.month) return;
+      await this.recordMonth();
+      await this.readMonth();
+    });
   }
 
   private async save(lease: Lease): Promise<Lease> {
@@ -391,6 +612,7 @@ export class Leases {
       next.state !== lease.state
     )
       await this.hooks.closed?.(next).catch(() => undefined);
+    await this.recordMonth();
     this.hooks.onChange?.(next, `${next.id}: ${text}`);
     return next;
   }
@@ -483,6 +705,7 @@ export class Leases {
       fail(
         `The lease can cost ${usd(cost)}, but only ${usd(Math.max(0, left))} of the limit is left.`,
       );
+    await this.checkMonth(cost);
     return {
       gpu: input.gpu,
       hours,
@@ -592,6 +815,8 @@ export class Leases {
         fail(
           `The lease can cost ${usd(cost)}, but only ${usd(Math.max(0, left))} of your limit is left.`,
         );
+      // Other projects can spend while a request waits, so the monthly limit is checked again.
+      await this.checkMonth(cost);
       // A missing secret stops the approval here, so the lease keeps waiting.
       const secrets = lease.secrets?.length
         ? await (this.hooks.secrets?.(lease) ??
@@ -802,7 +1027,11 @@ export class Leases {
   poll(): Promise<void> {
     return this.serial(async () => {
       const openLeases = this.leases.filter(isOpen);
-      if (!openLeases.length) return;
+      // The other projects spend too, so each poll reads the month, also without pods here.
+      if (!openLeases.length) {
+        await this.readMonth();
+        return;
+      }
       const settings = this.hooks.settings();
       let client: RunPod;
       try {
@@ -966,21 +1195,27 @@ export class Leases {
         // The spend limit: with the running pods' next minutes counted, every pod stops and every lease ends.
         const limit = settings.limitUsd;
         const now = this.now();
-        const running = this.leases.filter(isRunning);
         if (
           limit !== null &&
-          running.length &&
-          this.leases.reduce((sum, lease) => sum + spent(lease, now), 0) +
-            this.budget().rate * (leaseLimits.marginMs / 3_600_000) >=
-            limit
+          this.reaches(
+            this.leases.reduce((sum, lease) => sum + spent(lease, now), 0),
+            limit,
+          )
         )
-          for (const lease of running)
-            await this.endNow(
-              lease,
-              'limit',
-              'the project spend limit is reached.',
+          await this.endRunning(
+            'the project spend limit is reached.',
+            (lease) =>
               `Verifold ended ${lease.id}: the project spend limit of ${usd(limit)} is reached.`,
-            );
+          );
+        // The monthly limit across projects, the same way. Without a known month, the project limit still holds.
+        const month = await this.readMonth();
+        if (month && this.reaches(month.spentUsd, month.limitUsd))
+          await this.endRunning(
+            'the monthly GPU limit across projects is reached.',
+            (lease) =>
+              `Verifold ended ${lease.id}: your projects reached the monthly GPU limit of ${usd(month.limitUsd)}, with ${usd(month.spentUsd)} spent this month. ${raiseMonth}`,
+          );
+        await this.recordMonth();
         this.problem = null;
       } catch (error) {
         this.problem = {
