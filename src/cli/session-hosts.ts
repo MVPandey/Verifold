@@ -898,6 +898,11 @@ function codex(options: HostOptions): HostSession {
       '-e',
       watchdog,
       options.executable ?? 'codex',
+      // Live web search: by default Codex searches only an index that OpenAI
+      // keeps, and agents need current facts. Search does not use the
+      // sandbox's network. A top-level -c reaches the app-server.
+      '-c',
+      'web_search="live"',
       'app-server',
       '--listen',
       `unix://${socket}`,

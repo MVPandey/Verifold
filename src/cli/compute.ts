@@ -386,6 +386,11 @@ export class Compute {
     return this.state.key !== null && this.state.settings.limitUsd !== null;
   }
 
+  /** A RunPod key is stored on this computer, with or without a spend limit. */
+  keySaved(): boolean {
+    return this.state.key !== null;
+  }
+
   /**
    * The pods part of an agent's state: the person's limits, the budget, the
    * leases, and the allowed GPUs now.
