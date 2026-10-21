@@ -75,6 +75,11 @@ button {
   font-size: 14px;
 }
 
+.header__link {
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -347,6 +352,11 @@ button {
 .avatar--lg {
   width: 30px;
   height: 30px;
+}
+
+.avatar--xl {
+  width: 34px;
+  height: 34px;
 }
 
 .avatar--claude {

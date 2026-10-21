@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { validateModel } from '../src/core/harness.ts';
-import { claudeModel, labModel, pickCodexModel } from '../src/core/models.ts';
+import {
+  claudeModel,
+  codexModelPages,
+  labModel,
+  listCodexModels,
+  pickCodexModel,
+  type CodexCall,
+} from '../src/core/models.ts';
 
 await test('Codex gets the most capable model that its list offers', () => {
   const sol = { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true };
@@ -101,6 +108,47 @@ await test("Claude Code keeps the person's own Opus default, and gets opus other
     null,
   );
   assert.equal(await labModel('codex', null), null);
+
+  // The person's profile picks a model for each harness. A project model still wins.
+  const profile = {
+    host: 'claude' as const,
+    model: 'fable',
+    helper: 'codex' as const,
+    helperModel: 'gpt-6.1-sol',
+  };
+  assert.equal(await labModel('claude', null, profile), 'fable');
+  assert.equal(await labModel('codex', null, profile), 'gpt-6.1-sol');
+  assert.equal(
+    await labModel('claude', { host: 'claude', model: 'sonnet' }, profile),
+    'sonnet',
+  );
+  // A harness that the profile leaves without a model keeps the defaults.
+  assert.equal(
+    await labModel('claude', null, { host: 'codex', model: 'gpt-6-astra' }),
+    'opus[1m]',
+  );
+  assert.equal(await labModel('codex', null, { host: 'claude' }), null);
+});
+
+await test("Codex's model list is read page by page, up to the same limit everywhere, and a refusal gives none", () => {
+  const asked: unknown[] = [];
+  // A list that never ends still ends.
+  const endless: CodexCall = (method, params, onResult) => {
+    asked.push(params.cursor ?? null);
+    onResult({ data: [{ id: `m-${asked.length}` }], nextCursor: 'more' });
+  };
+  const got: { models: unknown[] | null } = { models: [] };
+  listCodexModels(endless, (found) => {
+    got.models = found;
+  });
+  assert.equal(asked.length, codexModelPages);
+  assert.equal(got.models?.length, codexModelPages);
+  const refusing: CodexCall = (method, params, onResult, onError) =>
+    onError?.();
+  listCodexModels(refusing, (found) => {
+    got.models = found;
+  });
+  assert.equal(got.models, null);
 });
 
 await test('a model ID may end in a short suffix in brackets', () => {

@@ -1,200 +1,24 @@
 import { loadPrompt } from './prompts.ts';
-import { constants } from 'node:fs';
-import {
-  mkdir,
-  open,
-  lstat,
-  rename,
-  rm,
-  mkdtemp,
-  readdir,
-} from 'node:fs/promises';
+import { open, rm, mkdtemp, lstat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
 import { stripVTControlCharacters } from 'node:util';
 import type { CliIO } from './commands.ts';
 import { choose, withActivity } from './choices.ts';
+import { activityProgress, runHarness } from '../core/harness.ts';
+import { text } from '../core/research-contracts.ts';
 import {
-  activityProgress,
-  runHarness,
-  validateModel,
-  type HarnessName,
-} from '../core/harness.ts';
-import { object, text } from '../core/research-contracts.ts';
+  loadMemory,
+  prepareAgency,
+  readMemory,
+  saveAgencyFile,
+  withProfileLock,
+  writeSettings,
+  type Agency,
+  type ProfileState,
+} from '../core/agency.ts';
 import { researchInterview } from './onboarding.ts';
 import { contextFiles } from './context-files.ts';
-
-export interface Agency {
-  readonly host: HarnessName;
-  readonly model?: string;
-  /** The second harness of the team, saved as the default for the next project. */
-  readonly helper?: HarnessName;
-}
-
-export interface ProfileState {
-  readonly schemaVersion: 1;
-  readonly status: 'accepted' | 'skipped' | 'failed';
-}
-
-export function agencyDirectory(cwd: string, path?: string): string {
-  return resolve(cwd, path ?? join(homedir(), '.verifold', 'agency'));
-}
-
-/** Create only Verifold-owned private storage. Refuse redirected directories. */
-export async function prepareAgency(directory: string): Promise<void> {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  if (!(await lstat(directory)).isDirectory())
-    throw new Error(
-      'Agency directory must be a directory, not a symbolic link.',
-    );
-  const marker = join(directory, '.verifold-agency');
-  if ((await readdir(directory)).length > 0) {
-    try {
-      if ((await readMemory(marker, 100)) !== 'Verifold agency v1')
-        throw new Error('Invalid marker.');
-    } catch {
-      throw new Error(
-        'Choose an empty agency directory or an existing Verifold agency.',
-      );
-    }
-  } else {
-    const owner = await open(marker, 'wx', 0o600);
-    try {
-      await owner.writeFile('Verifold agency v1\n');
-    } finally {
-      await owner.close();
-    }
-  }
-  const ignore = await open(
-    join(directory, '.gitignore'),
-    constants.O_WRONLY |
-      constants.O_CREAT |
-      constants.O_TRUNC |
-      constants.O_NOFOLLOW |
-      constants.O_NONBLOCK,
-    0o600,
-  );
-  try {
-    if (!(await ignore.stat()).isFile())
-      throw new Error('Agency ignore file must be a regular file.');
-    await ignore.writeFile('*\n');
-  } finally {
-    await ignore.close();
-  }
-}
-
-/** Read a selected text file without following a final symlink or blocking on a pipe. */
-export async function readMemory(path: string, limit = 12000): Promise<string> {
-  const file = await open(
-    path,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > limit)
-      throw new Error(
-        `Memory must be a regular text file of at most ${limit} bytes.`,
-      );
-    const content = await file.readFile('utf8');
-    if (content.includes('\0') || Buffer.byteLength(content) > limit)
-      throw new Error('Memory must contain bounded plain text.');
-    return text(content, 'research memory', limit);
-  } finally {
-    await file.close();
-  }
-}
-
-function missing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
-}
-
-export async function loadAgency(
-  directory: string,
-): Promise<Agency | undefined> {
-  try {
-    if (!(await lstat(directory)).isDirectory())
-      throw new Error('Agency directory must not be a symbolic link.');
-    const data = object(
-      JSON.parse(await readMemory(join(directory, 'settings.json'))),
-    );
-    if (data.host !== 'claude' && data.host !== 'codex')
-      throw new Error('Saved agency harness must be claude or codex.');
-    validateModel(data.model);
-    const host = data.host;
-    const helper = (['claude', 'codex'] as const).find(
-      (name) => name === data.helper && name !== host,
-    );
-    return {
-      host,
-      ...(data.model === undefined ? {} : { model: data.model }),
-      ...(helper ? { helper } : {}),
-    };
-  } catch (error) {
-    if (missing(error)) return undefined;
-    throw error;
-  }
-}
-
-export async function loadMemory(
-  directory: string,
-): Promise<string | undefined> {
-  try {
-    if (!(await lstat(directory)).isDirectory())
-      throw new Error('Agency directory must not be a symbolic link.');
-    return await readMemory(join(directory, 'USER.md'));
-  } catch (error) {
-    if (missing(error)) return undefined;
-    throw error;
-  }
-}
-
-export async function loadProfileState(
-  directory: string,
-): Promise<ProfileState | undefined> {
-  try {
-    if (!(await lstat(directory)).isDirectory())
-      throw new Error('Agency directory must not be a symbolic link.');
-    const data = object(
-      JSON.parse(await readMemory(join(directory, 'profile-state.json'))),
-    );
-    if (
-      data.schemaVersion !== 1 ||
-      (data.status !== 'accepted' &&
-        data.status !== 'skipped' &&
-        data.status !== 'failed')
-    )
-      throw new Error(
-        `Invalid profile setup state: ${join(directory, 'profile-state.json')}.`,
-      );
-    return { schemaVersion: 1, status: data.status };
-  } catch (error) {
-    if (missing(error)) return undefined;
-    throw error;
-  }
-}
-
-/** Replace one owned file atomically. Existing symlink targets are never written. */
-export async function saveAgencyFile(
-  directory: string,
-  name: 'settings.json' | 'USER.md' | 'profile-state.json',
-  content: string,
-): Promise<void> {
-  await prepareAgency(directory);
-  const temporary = join(directory, `${randomUUID()}.tmp`);
-  try {
-    const file = await open(temporary, 'wx', 0o600);
-    try {
-      await file.writeFile(content);
-      await file.sync();
-    } finally {
-      await file.close();
-    }
-    await rename(temporary, join(directory, name));
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
 
 export function memorySummary(markdown: string): string {
   const paragraph =
@@ -213,48 +37,6 @@ export function memorySummary(markdown: string): string {
     : `${paragraph.slice(0, 597).trimEnd()}…`;
 }
 
-async function withProfileLock<T>(
-  directory: string,
-  signal: AbortSignal,
-  work: () => Promise<T>,
-): Promise<T> {
-  signal.throwIfAborted();
-  await prepareAgency(directory);
-  signal.throwIfAborted();
-  const lockPath = join(directory, 'profile.lock');
-  const lock = await open(lockPath, 'wx', 0o600).catch((error: unknown) => {
-    if (error instanceof Error && 'code' in error && error.code === 'EEXIST')
-      throw new Error(
-        `Agency settings are locked. Confirm no profile setup or initialization is running before removing ${lockPath}.`,
-      );
-    throw error;
-  });
-  try {
-    await lock.writeFile(`${process.pid}\n`);
-    await loadProfileState(directory);
-    await loadMemory(directory);
-    signal.throwIfAborted();
-    return await work();
-  } finally {
-    try {
-      await lock.close();
-    } finally {
-      await rm(lockPath, { force: true });
-    }
-  }
-}
-
-/** Preference updates share ownership with profile setup. */
-export async function saveAgencyPreferences(
-  directory: string,
-  agency: Agency,
-  signal: AbortSignal,
-): Promise<void> {
-  await withProfileLock(directory, signal, () =>
-    saveAgencyFile(directory, 'settings.json', JSON.stringify(agency, null, 2)),
-  );
-}
-
 /** Serialize reviewed profile changes and record outcomes separately from approved memory. */
 export async function setupProfile(
   directory: string,
@@ -266,11 +48,7 @@ export async function setupProfile(
   offerInterview = true,
 ): Promise<string | undefined> {
   return withProfileLock(directory, signal, async () => {
-    await saveAgencyFile(
-      directory,
-      'settings.json',
-      JSON.stringify(agency, null, 2),
-    );
+    await writeSettings(directory, (current) => ({ ...current, agency }));
     let status: ProfileState['status'];
     try {
       const approved = await personalize(

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { loadPrompt } from './prompts.ts';
 import type { CliIO } from './commands.ts';
-import type { Agency } from './agency.ts';
+import type { Agency } from '../core/agency.ts';
 import { withActivity, choose } from './choices.ts';
 import { activityProgress, runHarness } from '../core/harness.ts';
 import { text, parseHostJson } from '../core/research-contracts.ts';

@@ -148,7 +148,17 @@ Run `verifold profile --setup` to create, retry, or revise a profile without set
 
 `USER.md` decides which background later setups can reuse. `profile-state.json` records the outcome of the last setup separately. If you decline a replacement, or a draft fails, the approved profile stays. `verifold profile` reports when the approved file was deleted. Verifold saves the harness preference when setup starts. Cancelling keeps the previous profile and setup outcome, but it does not undo that preference.
 
-Profile setup and initialization share a lock on the global settings, so only one of them can change an agency at a time. If that process is killed, the error names `profile.lock`. Make sure that no setup runs before you remove it. Drafts still need your review before Verifold uses them. Editing the profile in the browser, and choosing several history sources, are planned.
+Profile setup and initialization share a lock on the global settings, so only one of them can change an agency at a time. If that process is killed, the error names `profile.lock`. Make sure that no setup runs before you remove it. Drafts still need your review before Verifold uses them. Choosing several history sources is planned.
+
+### The first run in the app
+
+`verifold --app` in a folder without a project opens the first run of the new app, a preview. No project starts, and Ctrl+C in the terminal stops it. There are three steps, and you can skip each one:
+
+1. **Agents.** Claude Code and Codex, each with its version, its sign-in, and a model. Verifold reads only the sign-in state and the plan from `claude auth status` and `codex login status`, never the account's email. It offers Fable only on a plan that includes it.
+2. **About you.** Verifold asks what you work on. Your agent, with the model that you picked, asks up to two more questions in an empty private folder, then drafts a card: "You work on", "To explore", and "Talk to me". Edit the card, or add a note and the agent changes it. Verifold saves the card as `USER.md`. Without a signed-in agent, Verifold asks the questions and fills the card from your answers.
+3. **GPU money.** The RunPod key, RunPod's prices now, the GPUs that agents may rent, and the limits for new projects. The key goes to the keyring through the same check as `verifold runpod key set`. "No GPUs for now" keeps pods off.
+
+`settings.json` keeps the agents in the fields that older versions read, and adds the GPU limits and the steps that you finished or skipped. A new project copies the harnesses and the GPU limits. The planner of each lab reads your whole profile. Every other agent, and each checker, gets only "Talk to me". An edit reaches a running lab with its next prompt. Open these pages again with Profile in the app's top bar.
 
 ### Editable harness prompts
 

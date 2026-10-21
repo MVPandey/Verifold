@@ -22,8 +22,11 @@ export interface Control {
 export type FromOwner =
   /** `feed`: a line of the person's own session, which a terminal keeps in its scrollback. */
   | { readonly progress: string; readonly feed?: true }
-  /** The desk's URL with its token, and the new app's URL when the package has its build. */
-  | { readonly url: string; readonly app?: string }
+  /**
+   * The desk's URL with its token, the new app's URL when the package has
+   * its build, and the folder of the profile that the owner reads.
+   */
+  | { readonly url: string; readonly app?: string; readonly agency?: string }
   /** The lab for the terminal's live view, again after each change. Null: the project has no lab. */
   | { readonly screen: LabScreen | null }
   | { readonly stopped: true };
@@ -231,6 +234,9 @@ export async function connectControl(
       onMessage({
         url: message.url,
         ...(typeof message.app === 'string' ? { app: message.app } : {}),
+        ...(typeof message.agency === 'string'
+          ? { agency: message.agency }
+          : {}),
       });
     else if (message.screen === null) onMessage({ screen: null });
     else if ('screen' in message) {

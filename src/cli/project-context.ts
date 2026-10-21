@@ -1,7 +1,7 @@
 import { loadPrompt } from './prompts.ts';
 import { opendir } from 'node:fs/promises';
 import type { CliIO } from './commands.ts';
-import type { Agency } from './agency.ts';
+import type { Agency } from '../core/agency.ts';
 import { contextFiles } from './context-files.ts';
 import { withActivity } from './choices.ts';
 import { activityProgress, runHarness } from '../core/harness.ts';

@@ -13,17 +13,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
+import { personalize, setupProfile } from '../src/cli/agency.ts';
 import {
   loadAgency,
   loadMemory,
   loadProfileState,
-  personalize,
   prepareAgency,
   readMemory,
   saveAgencyFile,
   saveAgencyPreferences,
-  setupProfile,
-} from '../src/cli/agency.ts';
+} from '../src/core/agency.ts';
 import type { CliIO } from '../src/cli/commands.ts';
 import type { runHarness } from '../src/core/harness.ts';
 
