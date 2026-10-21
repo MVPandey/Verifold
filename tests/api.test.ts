@@ -733,7 +733,9 @@ await test('the snapshot holds what the screens show, and no internal field, key
     since: at(50),
     spentThen: { plansUsd: 1.25, gpuUsd: 0 },
   });
-  // The open call names every asker, and a pod option counts its secrets.
+  // The open call names every asker, and a pod option counts its secrets
+  // and the ones this computer does not store yet. Its undo window shows
+  // before the person answers.
   const [waiting] = lab.needsYou;
   assert.ok(waiting);
   assert.deepEqual(
@@ -745,7 +747,9 @@ await test('the snapshot holds what the screens show, and no internal field, key
     gpu: 'NVIDIA H100 80GB HBM3',
     hours: 3,
     secrets: 1,
+    missing: 1,
   });
+  assert.equal(waiting.undoMinutes, 10);
   assert.equal(lab.answered[0]?.id, 'c-2');
   assert.equal(lab.answered[0]?.byVerifold, true);
   // The objection to p-2, which a running check takes, makes d-1 disputed.
@@ -818,6 +822,38 @@ await test('the snapshot holds what the screens show, and no internal field, key
     root,
   ])
     assert.equal(json.includes(hidden), false, `the snapshot shows ${hidden}`);
+});
+
+await test('a pod option says how many of its secrets this computer lacks, and storing one updates it', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const missing = async (reader: ApiReader): Promise<unknown> => {
+    const effect = parse(await reader.snapshot()).lab?.needsYou[0]?.options[0]
+      ?.effect;
+    return effect?.type === 'pod' ? effect.missing : 'no pod';
+  };
+  // Without Compute, Verifold cannot tell.
+  assert.equal(await missing(new ApiReader(sources(root, seededView))), null);
+  let secrets: ComputeView['secrets'] = [];
+  const reader = new ApiReader(
+    sources(root, seededView, {
+      compute: { view: () => ({ ...computeView(), secrets }) },
+    }),
+  );
+  assert.equal(await missing(reader), 1);
+  const before = await reader.signal();
+  secrets = [
+    {
+      name: 'RUNPOD_FAKE_SECRET',
+      place: 'keychain',
+      last4: 'cret',
+      savedAt: at(5),
+    },
+  ];
+  // The stored secret is part of the change signal, so a stream pushes the new count.
+  const after = await reader.signal();
+  assert.notDeepEqual(after, before);
+  assert.equal(await missing(reader), 0);
 });
 
 await test('a large lab stays inside the snapshot bound and says that it is trimmed', async (t) => {
