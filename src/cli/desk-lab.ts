@@ -509,6 +509,19 @@ function postText(post: Post, budget: { left: number }): string {
   return `${head}<details id="whole-${e(post.id)}"><summary>Show the whole post</summary><p class="pre">${whole}</p></details>`;
 }
 
+/** A web address as a link with its host and path. Text that is not an http(s) address stays text. */
+export function link(address: string): string {
+  try {
+    const url = new URL(address);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      throw new Error();
+    const shown = `${url.hostname}${url.pathname === '/' ? '' : url.pathname}`;
+    return `<a href="${e(url.href)}" target="_blank" rel="noopener noreferrer">${e(shown.length > 80 ? `${shown.slice(0, 80)}…` : shown)}</a>`;
+  } catch {
+    return `<span>${e(address)}</span>`;
+  }
+}
+
 /** The plan of record under its post: each direction with its bar and what it builds on. */
 function planTable(view: LabView, name: (author: string) => string): string {
   const plan = view.state.plan;
@@ -533,7 +546,11 @@ function planTable(view: LabView, name: (author: string) => string): string {
     writer.status !== 'stopped' &&
     writer.status !== 'closed' &&
     writer.status !== 'crashed';
-  return `<div class="table plan-table"><table><thead><tr><th scope="col">Direction</th><th scope="col">Holds up if</th><th scope="col">Builds on</th></tr></thead><tbody>${rows.join('')}</tbody></table></div><p class="fine">What costs money, says ${e(author)}: ${e(plan.cost)} ${listening ? `Reply to change the plan. A reply wakes ${e(author)}.` : `${e(author)} no longer works, so the plan stays as it is.`}</p>`;
+  // Each fact shows its source and date, so the person sees what is current and what nobody checked.
+  const facts = plan.facts.length
+    ? `<p class="fine">Facts that the plan rests on:</p><ul class="plan-facts">${plan.facts.map((fact) => `<li>${e(fact.claim)} <span class="fine">· ${fact.source ? `${link(fact.source)}${fact.sourceDate ? `, ${e(fact.sourceDate)}` : ''}` : 'unverified'}</span></li>`).join('')}</ul>`
+    : '';
+  return `<div class="table plan-table"><table><thead><tr><th scope="col">Direction</th><th scope="col">Holds up if</th><th scope="col">Builds on</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>${facts}<p class="fine">What costs money, says ${e(author)}: ${e(plan.cost)} ${listening ? `Reply to change the plan. A reply wakes ${e(author)}.` : `${e(author)} no longer works, so the plan stays as it is.`}</p>`;
 }
 
 function postHtml(

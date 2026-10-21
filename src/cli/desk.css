@@ -4273,3 +4273,9 @@ html:not(.mac) .search-key .key-mac {
     display: none;
   }
 }
+
+/* The facts that a plan rests on, under its table: each with its source and date. */
+.lab-screen .plan-facts {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
