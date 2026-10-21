@@ -63,4 +63,4 @@ The [roadmap](https://github.com/MVPandey/Verifold/issues/14) says what comes ne
 
 See [open issues](https://github.com/MVPandey/Verifold/issues). Read [AGENTS.md](AGENTS.md) before you change code. The guide explains how to [build from source](docs/guide.md#build-from-source) and the [engineering rules](docs/guide.md#engineering).
 
-The harness package is MIT licensed. The website and the visual brand assets are outside that grant. See [license scope](LICENSING.md).
+The harness package is MIT licensed. The visual brand assets in `public/assets/` are outside that grant. See [license scope](LICENSING.md).
