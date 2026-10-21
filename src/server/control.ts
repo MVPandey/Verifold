@@ -3,6 +3,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { record } from './http.ts';
+import { parseLabScreen, type LabScreen } from './screen.ts';
 
 /**
  * The channel between a terminal and the background owner of a project: a
@@ -16,11 +18,14 @@ export interface Control {
   readonly token: string;
 }
 
-/** From the owner: a status line, the desk URL (with its access token), or the end. */
+/** From the owner: a status line, the desk URL (with its access token), the lab's screen, or the end. */
 export type FromOwner =
-  | { readonly progress: string }
+  /** `feed`: a line of the person's own session, which a terminal keeps in its scrollback. */
+  | { readonly progress: string; readonly feed?: true }
   /** The desk's URL with its token, and the new app's URL when the package has its build. */
   | { readonly url: string; readonly app?: string }
+  /** The lab for the terminal's live view, again after each change. Null: the project has no lab. */
+  | { readonly screen: LabScreen | null }
   | { readonly stopped: true };
 
 /** From a terminal, after the key: a line that the person typed, or stop. */
@@ -128,18 +133,22 @@ function sameKey(given: unknown, token: string): boolean {
 export interface ControlServer {
   /** Send a message to every terminal that gave the key. */
   send(message: FromOwner): void;
+  /** How many terminals that gave the key are attached now. */
+  terminals(): number;
   close(): Promise<void>;
 }
 
 /**
  * Listen on the socket of `control`. A terminal must send the key first,
  * within `keyWait` ms, or the owner closes the connection. `attached` gets the
- * function that sends to the new terminal only.
+ * function that sends to the new terminal only. `detached`: a terminal that
+ * gave the key left.
  */
 export async function serveControl(
   control: Control,
   handlers: {
     readonly attached: (send: (message: FromOwner) => void) => void;
+    readonly detached?: () => void;
     readonly message: (message: ToOwner) => void;
   },
   keyWait = 2000,
@@ -150,7 +159,7 @@ export async function serveControl(
     const late = setTimeout(() => socket.destroy(), keyWait);
     socket.on('close', () => {
       clearTimeout(late);
-      clients.delete(socket);
+      if (clients.delete(socket)) handlers.detached?.();
     });
     readLines(socket, (value) => {
       const message = (value ?? {}) as Record<string, unknown>;
@@ -179,6 +188,7 @@ export async function serveControl(
     send: (message) => {
       for (const socket of clients) write(socket, message);
     },
+    terminals: () => clients.size,
     close: async () => {
       // Each terminal reads the last messages before its connection ends.
       for (const socket of clients) socket.end();
@@ -209,15 +219,25 @@ export async function connectControl(
   });
   const closed = new Promise<void>((resolve) => socket.on('close', resolve));
   readLines(socket, (value) => {
-    const message = (value ?? {}) as Record<string, unknown>;
+    // A line that is not a JSON object is left out, as each unknown message is.
+    if (!record(value)) return;
+    const message = value;
     if (typeof message.progress === 'string')
-      onMessage({ progress: message.progress });
+      onMessage({
+        progress: message.progress,
+        ...(message.feed === true ? { feed: true } : {}),
+      });
     else if (typeof message.url === 'string')
       onMessage({
         url: message.url,
         ...(typeof message.app === 'string' ? { app: message.app } : {}),
       });
-    else if (message.stopped === true) onMessage({ stopped: true });
+    else if (message.screen === null) onMessage({ screen: null });
+    else if ('screen' in message) {
+      // A screen that does not read right is left out. The next one comes at the next change.
+      const screen = parseLabScreen(message.screen);
+      if (screen) onMessage({ screen });
+    } else if (message.stopped === true) onMessage({ stopped: true });
   });
   socket.write(`${JSON.stringify({ token: control.token })}\n`);
   return {

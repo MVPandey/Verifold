@@ -85,3 +85,22 @@ export function wrapText(value: string, width: number): string[] {
   }
   return lines;
 }
+
+/**
+ * One line of at most `width` cells: the text with its runs of white space
+ * as one space, cut with "…" when it is wider. Graphemes stay whole.
+ */
+export function fitText(value: string, width: number): string {
+  const line = plainText(value).replace(/\s+/gu, ' ').trim();
+  if (visibleWidth(line) <= width) return line;
+  if (width < 1) return '';
+  let kept = '';
+  let used = 0;
+  for (const { segment } of graphemes.segment(line)) {
+    const cells = cellWidth(segment);
+    if (used + cells > width - 1) break;
+    kept += segment;
+    used += cells;
+  }
+  return `${kept.trimEnd()}…`;
+}
