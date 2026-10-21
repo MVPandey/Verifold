@@ -62,6 +62,7 @@
     "dist-cli/core/",
     "dist-cli/desk/",
     "dist-cli/legacy/",
+    "dist-cli/protocol/",
     "dist-cli/server/",
     "dist-cli/ui/dom.js",
     "LICENSING.md",
