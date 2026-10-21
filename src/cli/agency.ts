@@ -1,4 +1,4 @@
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import { constants } from 'node:fs';
 import {
   mkdir,
@@ -20,8 +20,8 @@ import {
   runHarness,
   validateModel,
   type HarnessName,
-} from './harness.ts';
-import { object, text } from './research-contracts.ts';
+} from '../core/harness.ts';
+import { object, text } from '../core/research-contracts.ts';
 import { researchInterview } from './onboarding.ts';
 import { contextFiles } from './context-files.ts';
 

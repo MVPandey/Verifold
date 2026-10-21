@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { researchInterview, suggestedAnswers } from '../src/cli/onboarding.ts';
 import type { AskHint } from '../src/cli/commands.ts';
 import type { CliIO } from '../src/cli/commands.ts';
-import type { HarnessRequest } from '../src/cli/harness.ts';
+import type { HarnessRequest } from '../src/core/harness.ts';
 
 const signal = (): AbortSignal => new AbortController().signal;
 

@@ -8,7 +8,7 @@ import {
   openTerminal,
   ptyLibrary,
   type Terminal,
-} from '../src/cli/terminals.ts';
+} from '../src/core/terminals.ts';
 
 /** A fake TUI: echoes each line, reports its size on resize, floods on FLOOD, exits on EXIT. */
 const fakeTui = `process.stdin.setRawMode?.(true);

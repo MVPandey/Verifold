@@ -1,13 +1,13 @@
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import { opendir } from 'node:fs/promises';
 import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
 import { contextFiles } from './context-files.ts';
 import { withActivity } from './choices.ts';
-import { activityProgress, runHarness } from './harness.ts';
-import { parseContext } from './contracts.ts';
+import { activityProgress, runHarness } from '../core/harness.ts';
+import { parseContext } from '../core/contracts.ts';
 import { stripVTControlCharacters } from 'node:util';
-import { hostName } from './session.ts';
+import { hostName } from '../core/session.ts';
 
 /** Offer project-scoped context. Declining never reads file contents or calls a model. */
 export async function investigateProject(

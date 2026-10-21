@@ -2,13 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
 import { withActivity, choose } from './choices.ts';
-import { activityProgress, runHarness } from './harness.ts';
-import { text, parseHostJson } from './research-contracts.ts';
-import { hostName } from './session.ts';
+import { activityProgress, runHarness } from '../core/harness.ts';
+import { text, parseHostJson } from '../core/research-contracts.ts';
+import { hostName } from '../core/session.ts';
 
 function cancelOnboarding(): never {
   throw new DOMException('Onboarding cancelled.', 'AbortError');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changes } from '../src/cli/desk-motion.ts';
+import { changes } from '../src/desk/desk-motion.ts';
 
 await test('motion shows only what changed since the last render', () => {
   const before = new Map([

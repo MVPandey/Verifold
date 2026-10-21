@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseProfile } from '../src/domain/profile.ts';
+import { parseProfile } from '../src/core/profile.ts';
 import { escapeHtml } from '../src/ui/dom.ts';
 const input = {
   name: ' Manav ',

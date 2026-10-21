@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ResultsStore } from '../src/cli/results.ts';
+import { ResultsStore } from '../src/legacy/results.ts';
 
 const checks = ['Distances match.', 'Settled nodes fall by 30 percent.'];
 const accepted = new Set(['results/summary.json', 'docs/report.md']);

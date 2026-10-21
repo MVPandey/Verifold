@@ -15,16 +15,16 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Compute } from '../src/cli/compute.ts';
-import { KeyStore } from '../src/cli/credentials.ts';
+import { Compute } from '../src/core/compute.ts';
+import { KeyStore } from '../src/core/credentials.ts';
 import {
   RunLedger,
   noPodsText,
   type PodRuns,
   type RunRecord,
-} from '../src/cli/runs.ts';
-import { secretGuard } from '../src/cli/runpod.ts';
-import { allocate, snapshot, type Workspace } from '../src/cli/workspaces.ts';
+} from '../src/core/runs.ts';
+import { secretGuard } from '../src/core/runpod.ts';
+import { allocate, snapshot, type Workspace } from '../src/core/workspaces.ts';
 import { fakePod, type FakePod } from './fake-pod.ts';
 
 const secret = 'hf_SECRETVALUE0123456789';

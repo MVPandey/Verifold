@@ -10,19 +10,19 @@ import {
   rm,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { validateModel, type HarnessName } from './harness.ts';
+import { validateModel, type HarnessName } from '../core/harness.ts';
 import { messageLimits, Messages, type Message } from './messages.ts';
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import {
   restrictions,
   validDomain,
   type AgentTool,
   type AgentTools,
-} from './session-hosts.ts';
-import type { PodTools, TaskPlace } from './compute.ts';
-import { memoryText, noteToolSpec } from './memory.ts';
+} from '../core/session-hosts.ts';
+import type { PodTools, TaskPlace } from '../core/compute.ts';
+import { memoryText, noteToolSpec } from '../core/memory.ts';
 import { pageFileLimit } from './pages.ts';
-import { hostName, SessionActionError } from './session.ts';
+import { hostName, SessionActionError } from '../core/session.ts';
 import {
   allocate,
   changes,
@@ -39,8 +39,8 @@ import {
   release,
   type ChangedFile,
   type Workspace,
-} from './workspaces.ts';
-import type { RunTeam } from './team.ts';
+} from '../core/workspaces.ts';
+import type { RunTeam } from '../core/team.ts';
 
 /**
  * Scoped tasks: what one worker must do, with its inputs, writable paths, and

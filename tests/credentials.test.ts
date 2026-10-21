@@ -16,8 +16,8 @@ import {
   validKey,
   validSecret,
   validSecretName,
-} from '../src/cli/credentials.ts';
-import { childEnvironment, storedSecretNames } from '../src/cli/harness.ts';
+} from '../src/core/credentials.ts';
+import { childEnvironment, storedSecretNames } from '../src/core/harness.ts';
 
 const key = 'rpa_TESTKEY0123456789abcdefWXYZ';
 

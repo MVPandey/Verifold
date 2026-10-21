@@ -1,11 +1,12 @@
-import type { CliIO } from './commands.ts';
-import { HarnessTimeoutError, runHarness } from './harness.ts';
+// eslint-disable-next-line no-restricted-imports -- legacy edge, removed in A6 (#282)
+import type { CliIO } from '../cli/commands.ts';
+import { HarnessTimeoutError, runHarness } from '../core/harness.ts';
 import { runResearch, selectIdea, type ResearchOptions } from './research.ts';
-import type { RunTeam } from './team.ts';
-import { mainDirection } from './contracts.ts';
-import { SessionActionError } from './session.ts';
-import { loadWorkspace } from './storage.ts';
-import type { TranscriptUpdate } from './transcript.ts';
+import type { RunTeam } from '../core/team.ts';
+import { mainDirection } from '../core/contracts.ts';
+import { SessionActionError } from '../core/session.ts';
+import { loadWorkspace } from '../core/storage.ts';
+import type { TranscriptUpdate } from '../core/transcript.ts';
 
 /** One line of the research feed. Tool lines come from the harness protocol. Status lines come from Verifold. */
 export interface ResearchActivity {

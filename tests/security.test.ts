@@ -13,8 +13,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import { runCli } from '../src/cli/commands.ts';
-import { changeWorkspace, readJson } from '../src/cli/storage.ts';
-import type { Workspace } from '../src/cli/contracts.ts';
+import { changeWorkspace, readJson } from '../src/core/storage.ts';
+import type { Workspace } from '../src/core/contracts.ts';
 
 const workspace: Workspace = {
   schemaVersion: 1,

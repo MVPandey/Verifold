@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Workspace } from './contracts.ts';
-import { validateModel, type HarnessName } from './harness.ts';
-import { WakeLoop, type QueuedEvent } from './agent-loop.ts';
+import type { Workspace } from '../core/contracts.ts';
+import { validateModel, type HarnessName } from '../core/harness.ts';
+import { WakeLoop, type QueuedEvent } from '../core/agent-loop.ts';
 import { messageLimits } from './messages.ts';
-import { loadPrompt } from './prompts.ts';
+import { loadPrompt } from '../core/prompts.ts';
 import {
   hostName,
   lastReply,
@@ -14,9 +14,9 @@ import {
   type SessionManager,
   type SessionRecord,
   type SessionView,
-} from './session.ts';
-import type { AgentTool, AgentTools } from './session-hosts.ts';
-import type { RunTeam } from './team.ts';
+} from '../core/session.ts';
+import type { AgentTool, AgentTools } from '../core/session-hosts.ts';
+import type { RunTeam } from '../core/team.ts';
 import {
   isDraft,
   isQuestion,
@@ -24,13 +24,13 @@ import {
   type TaskEvent,
   type TaskManager,
 } from './tasks.ts';
-import { memoryText, noteToolSpec } from './memory.ts';
+import { memoryText, noteToolSpec } from '../core/memory.ts';
 import { ResultsStore, type Results } from './results.ts';
-import type { Compute } from './compute.ts';
-import { loadWorkspace } from './storage.ts';
-import { defaultAgents } from './workers.ts';
-import type { LimitSignal } from './quota.ts';
-import { scratch } from './workspaces.ts';
+import type { Compute } from '../core/compute.ts';
+import { loadWorkspace } from '../core/storage.ts';
+import { defaultAgents } from '../core/workers.ts';
+import type { LimitSignal } from '../core/quota.ts';
+import { scratch } from '../core/workspaces.ts';
 
 /**
  * The coordinator: one harness session that turns an objective into tasks for

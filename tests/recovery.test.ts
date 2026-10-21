@@ -6,18 +6,18 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changeWorkspace } from '../src/cli/storage.ts';
-import { processStart } from '../src/cli/owner.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
+import { processStart } from '../src/core/owner.ts';
 import {
   reconcileSessions,
   SessionManager,
   type SessionRecord,
-} from '../src/cli/session.ts';
-import { reconcileAttempts } from '../src/cli/research.ts';
-import { readDeskSnapshot } from '../src/cli/desk-records.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
+} from '../src/core/session.ts';
+import { reconcileAttempts } from '../src/legacy/research.ts';
+import { readDeskSnapshot } from '../src/server/desk-records.ts';
+import { renderDesk } from '../src/desk/desk-view.ts';
 import { runCli } from '../src/cli/commands.ts';
-import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
+import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
 
 const posix = process.platform !== 'win32';
 

@@ -17,7 +17,7 @@ import {
   postLine,
   type Artifact,
   type NewPost,
-} from '../src/cli/board.ts';
+} from '../src/core/board.ts';
 
 const commitA = 'a'.repeat(40);
 const commitB = 'b'.repeat(40);
