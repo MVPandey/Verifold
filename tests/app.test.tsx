@@ -701,11 +701,11 @@ await test('routes: the first run, and pages that do not exist', () => {
   assert.deepEqual(parseRoute('#/board/p-12'), { page: 'lab', post: 'p-12' });
   assert.deepEqual(parseRoute('#/answer'), { page: 'answer' });
   assert.deepEqual(parseRoute('#/setup'), { page: 'setup', step: null });
-  for (const step of ['agents', 'about', 'money', 'done'])
+  for (const step of ['agents', 'about', 'skills', 'money', 'done'])
     assert.deepEqual(parseRoute(`#/setup/${step}`), { page: 'setup', step });
   for (const hash of [
     '#/first-run',
-    '#/setup/skills',
+    '#/setup/other',
     '#/setup/',
     '#/d/../x',
     '#/search',

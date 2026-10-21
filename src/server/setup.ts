@@ -35,8 +35,10 @@ import {
 } from '../core/profile-chat.ts';
 import type { GpuOffer } from '../core/runpod.ts';
 import { SessionActionError, hostName } from '../core/session.ts';
+import type { GitHubHosts } from '../core/skills.ts';
 import type { AgentTool, GpuPrice, SetupView } from '../protocol/api.ts';
 import { record } from './http.ts';
+import { SkillsStep } from './setup-skills.ts';
 
 function fail(message: string): never {
   throw new SessionActionError(message);
@@ -95,6 +97,8 @@ export interface FirstRunOptions {
   readonly detect?: () => Promise<readonly HarnessStatus[]>;
   /** The harness commands on the PATH. Tests use fakes. */
   readonly installed?: () => Promise<readonly HarnessName[]>;
+  /** Where the Skills step reads GitHub. Tests use a fake server. */
+  readonly github?: GitHubHosts;
 }
 
 /**
@@ -132,8 +136,18 @@ export class FirstRun {
     { readonly status: Promise<number>; readonly at: number }
   >();
 
+  private readonly skills: SkillsStep;
+
   constructor(options: FirstRunOptions) {
     this.options = options;
+    this.skills = new SkillsStep({
+      directory: options.directory,
+      signal: options.signal,
+      ...(options.harness ? { harness: options.harness } : {}),
+      ...(options.github ? { hosts: options.github } : {}),
+      picker: () => this.chatHarness(),
+      locked: (work) => this.locked(work),
+    });
   }
 
   /** Look for the harnesses, once at a time. */
@@ -173,6 +187,7 @@ export class FirstRun {
       steps: {
         agents: settings.steps.agents ?? null,
         about: settings.steps.about ?? null,
+        skills: settings.steps.skills ?? null,
         money: settings.steps.money ?? null,
       },
       agents: {
@@ -191,6 +206,7 @@ export class FirstRun {
         error: this.error,
         limits: { answer: answerLimit, ...cardLimits },
       },
+      skills: await this.skills.view(),
       money: {
         key: compute.key
           ? {
@@ -345,6 +361,18 @@ export class FirstRun {
         return 200;
       case 'setup-skip':
         await this.skip(body.step);
+        return 200;
+      case 'setup-skills-search':
+        return this.skills.search();
+      case 'setup-skill-add':
+        return this.skills.add(body.id);
+      case 'setup-skill-remove':
+        return this.skills.remove(body.id);
+      case 'setup-skills-done':
+        await this.write((current) => ({
+          ...current,
+          steps: { ...current.steps, skills: 'done' },
+        }));
         return 200;
       default:
         return 400;
@@ -627,9 +655,9 @@ export class FirstRun {
   }
 
   private async skip(step: unknown): Promise<void> {
-    const names: readonly SetupStep[] = ['agents', 'about', 'money'];
+    const names: readonly SetupStep[] = ['agents', 'about', 'skills', 'money'];
     if (step !== 'all' && !names.includes(step as SetupStep))
-      fail('Skip agents, about, money, or all.');
+      fail('Skip agents, about, skills, money, or all.');
     await this.write((current) => {
       const steps = { ...current.steps };
       for (const name of names)

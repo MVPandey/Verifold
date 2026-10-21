@@ -5,10 +5,11 @@ import { setupSteps } from '../setup.ts';
 const stepNames: Readonly<Record<SetupStep, string>> = {
   agents: 'Agents',
   about: 'About you',
+  skills: 'Skills (optional)',
   money: 'GPU money',
 };
 
-/** "Step 2 of 3: About you", a bar with one segment for each step, the title, and a lead line. */
+/** "Step 2 of 4: About you", a bar with one segment for each step, the title, and a lead line. */
 export function StepHeader({
   step,
   title,

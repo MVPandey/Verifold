@@ -1734,6 +1734,10 @@ const setupNames = new Set<string>([
   'setup-prices',
   'setup-money',
   'setup-skip',
+  'setup-skills-search',
+  'setup-skill-add',
+  'setup-skill-remove',
+  'setup-skills-done',
 ] satisfies ActionName[]);
 
 function json(response: ServerResponse, status: number, body: unknown): void {

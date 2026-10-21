@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement } from 'react';
-import type { AgentTool, SetupAbout, SetupView } from '../src/protocol/api.ts';
+import type {
+  AgentTool,
+  SetupAbout,
+  SetupSkills,
+  SetupView,
+} from '../src/protocol/api.ts';
 import {
   allowedGpus,
   firstPage,
@@ -14,6 +19,7 @@ import {
 import { AgentsStep } from '../src/app/screens/SetupAgents.tsx';
 import { AboutStep } from '../src/app/screens/SetupAbout.tsx';
 import { MoneyStep } from '../src/app/screens/SetupMoney.tsx';
+import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
 import { DoneStep } from '../src/app/screens/Setup.tsx';
 
 const claude: AgentTool = {
@@ -191,7 +197,7 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
     />,
   );
   for (const expected of [
-    /Step 1 of 3: Agents/,
+    /Step 1 of 4: Agents/,
     /Your agents/,
     /Claude Code 2\.1\.304 Signed in · Max plan/,
     /Fable is the most capable model\. Your Max plan includes it, so you can pick it here\./,
@@ -261,7 +267,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
       />,
     );
   const first = step({});
-  assert.match(first, /Step 2 of 3: About you/);
+  assert.match(first, /Step 2 of 4: About you/);
   assert.match(
     first,
     /Verifold What do you work on, and what would you like the agents to explore\?/,
@@ -344,7 +350,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
   );
 });
 
-await test('step 3 asks for a key without one, and with one shows the prices with the GPUs that agents may rent', () => {
+await test('step 4 asks for a key without one, and with one shows the prices with the GPUs that agents may rent', () => {
   const step = (
     money: Partial<SetupView['money']>,
     steps?: SetupView['steps'],
@@ -414,7 +420,12 @@ await test('after the last step, each step says done or skipped, with a way to c
   const done = text(
     <DoneStep
       view={view({
-        steps: { agents: 'done', about: 'skipped', money: 'done' },
+        steps: {
+          agents: 'done',
+          about: 'skipped',
+          skills: null,
+          money: 'done',
+        },
       })}
       project=""
     />,
@@ -422,7 +433,7 @@ await test('after the last step, each step says done or skipped, with a way to c
   assert.match(done, /Setup is saved/);
   assert.match(
     done,
-    /Your agents Done Change About you Skipped Set it up GPU money Done Change/,
+    /Your agents Done Change About you Skipped Set it up Skills Not yet Set it up GPU money Done Change/,
   );
   assert.match(
     done,
@@ -436,4 +447,150 @@ await test('after the last step, each step says done or skipped, with a way to c
   );
   assert.match(set, /You’re set/);
   assert.match(set, /New projects start from this profile\./);
+});
+
+await test('step 3 shows the skills that fit, pinned with what they can run, and says that nothing installs until the person adds it', () => {
+  assert.equal(pageAfter('about'), 'skills');
+  assert.equal(pageAfter('skills'), 'money');
+  assert.equal(
+    firstPage(
+      view({
+        steps: { agents: 'done', about: 'done', skills: null, money: null },
+      }),
+    ),
+    'skills',
+  );
+  const card = {
+    id: '0123456789abcdef',
+    name: 'transformer-lens',
+    what: 'Inspects and patches a transformer’s activations.',
+    repo: 'Orchestra-Research/AI-Research-SKILLs',
+    commit: 'a'.repeat(40),
+    path: '04-mechanistic-interpretability/transformer-lens',
+    updated: '2026-10-01T10:00:00Z',
+    license: 'MIT',
+    runs: {
+      scripts: [{ language: 'Python', files: 2 }],
+      executables: 1,
+      installs: ['pip install'],
+      hosts: ['huggingface.co'],
+    },
+    state: 'new' as const,
+  };
+  const skills = (fields: Partial<SetupSkills>): SetupSkills => ({
+    busy: null,
+    search: {
+      at: new Date().toISOString(),
+      catalogs: [
+        {
+          repo: 'Orchestra-Research/AI-Research-SKILLs',
+          commit: 'a'.repeat(40),
+          problem: null,
+        },
+        {
+          repo: 'openai/skills',
+          commit: null,
+          problem: 'GitHub answered 500.',
+        },
+      ],
+      picker: 'claude',
+    },
+    cards: [
+      card,
+      { ...card, id: 'fedcba9876543210', name: 'saelens', state: 'added' },
+    ],
+    added: [],
+    needsProfile: false,
+    problem: null,
+    ...fields,
+  });
+  const shown = text(
+    <SkillsStep
+      view={view({ skills: skills({}) })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  assert.match(shown, /Step 3 of 4: Skills \(optional\)/);
+  assert.match(shown, /Skills that fit your work/);
+  assert.match(
+    shown,
+    /Verifold read 1 skill catalog at \d\d:\d\d today and matched them to your profile\. Claude Code picked these/,
+  );
+  assert.match(
+    shown,
+    /Orchestra-Research\/AI-Research-SKILLs @ aaaaaaa · updated 1 Oct 2026/,
+  );
+  assert.match(
+    shown,
+    /Can run Python scripts \(2 files\)\. 1 file is executable\. Its files name pip install\. Web hosts in its files: huggingface\.co\. No hooks\. License: MIT\./,
+  );
+  assert.match(shown, /Add .*saelens.*Added/);
+  assert.match(
+    shown,
+    /Not read this time: openai\/skills \(GitHub answered 500\.\)/,
+  );
+  assert.match(
+    shown,
+    /Nothing installs until you add it\. An added skill is pinned to the version shown, and loads only for Verifold’s agents, not in your own Claude Code or Codex\. Read what each one can run before you add it\./,
+  );
+  assert.match(shown, /Continue Skip\. Ask me later\. Search again/);
+  const markup = renderToStaticMarkup(
+    <SkillsStep
+      view={view({ skills: skills({}) })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  assert.match(markup, /aria-pressed="true"[^>]*>Added</);
+  assert.match(
+    markup,
+    /href="https:\/\/github\.com\/Orchestra-Research\/AI-Research-SKILLs\/tree\/a{40}\/04-mechanistic-interpretability\/transformer-lens"/,
+  );
+  // An update, a profile that is missing, and a search that runs.
+  assert.match(
+    text(
+      <SkillsStep
+        view={view({
+          skills: skills({ cards: [{ ...card, state: 'update' }] }),
+        })}
+        actions={actions}
+        refresh={quiet}
+        onDone={quiet}
+      />,
+    ),
+    /Update/,
+  );
+  assert.match(
+    text(
+      <SkillsStep
+        view={view({
+          skills: skills({ search: null, cards: [], needsProfile: true }),
+        })}
+        actions={actions}
+        refresh={quiet}
+        onDone={quiet}
+      />,
+    ),
+    /this step needs About you first/,
+  );
+  assert.match(
+    text(
+      <SkillsStep
+        view={view({
+          skills: skills({ search: null, cards: [], busy: 'search' }),
+        })}
+        actions={actions}
+        refresh={quiet}
+        onDone={quiet}
+      />,
+    ),
+    /Reading the skill catalogs on GitHub/,
+  );
+  assert.equal(
+    runsLine({ scripts: [], executables: 0, installs: [], hosts: [] }),
+    'Has no scripts. No hooks.',
+  );
 });

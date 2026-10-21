@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -228,6 +228,8 @@ export type HostEvent =
       readonly costUsd?: number;
     }
   | { readonly type: 'notice'; readonly text: string }
+  /** The harness could not load the added skills, and why. Later sessions of it go without them. */
+  | { readonly type: 'skills'; readonly text: string }
   /** The harness reported its plan's usage window: open, or used up until a reset. */
   | ({ readonly type: 'limit' } & LimitSignal)
   /** The harness took a message that `steer` added to the running turn, or refused it. */
@@ -291,6 +293,12 @@ export interface HostOptions {
    * besides the credential paths. A lab's checker gets the lab's records.
    */
   readonly denyRead?: readonly string[];
+  /**
+   * Lab agents and checkers: the folder of Verifold's read-only plugin with
+   * the skills that the person added. Claude Code loads it with
+   * `--plugin-dir`, and Codex its `skills/` folder as an extra skill root.
+   */
+  readonly skills?: string;
   readonly onEvent: (event: HostEvent) => void;
 }
 
@@ -495,6 +503,8 @@ function launch(
   command: string,
   args: readonly string[],
   options: HostOptions,
+  /** Called with the exit code before the `exit` event, when all output is read. */
+  closing?: (code: number | null) => void,
 ): ChildProcessWithoutNullStreams {
   const child = spawn(command, args, {
     cwd: options.cwd,
@@ -519,7 +529,10 @@ function launch(
       text: `Could not start ${options.host === 'claude' ? 'Claude Code' : 'Codex'}. Check that it is installed and signed in.`,
     }),
   );
-  child.on('close', (code) => options.onEvent({ type: 'exit', code }));
+  child.on('close', (code) => {
+    closing?.(code);
+    options.onEvent({ type: 'exit', code });
+  });
   return child;
 }
 
@@ -580,11 +593,34 @@ function claudeDetail(tool: string, input: unknown): string | undefined {
   return undefined;
 }
 
+/** Claude Code's start event lists the plugins that it loaded and the ones that failed. */
+function pluginProblem(
+  event: Record<string, unknown>,
+  folder: string,
+): string | null {
+  const ours = (entry: unknown): boolean => {
+    const text = String(JSON.stringify(entry));
+    return text.includes('verifold-skills') || text.includes(folder);
+  };
+  const failed = Array.isArray(event.plugin_errors) ? event.plugin_errors : [];
+  // A start event without a plugin list says nothing either way.
+  if (
+    failed.some(ours) ||
+    (Array.isArray(event.plugins) && !event.plugins.some(ours))
+  )
+    return 'Claude Code could not load the added skills, so its agents run without them.';
+  return null;
+}
+
 /**
  * Claude Code through its stream-json control protocol. The CLI sends each
  * permission prompt to this process as a `can_use_tool` request.
  */
 function claude(options: HostOptions): HostSession {
+  /** Claude Code reported its start. */
+  let started = false;
+  /** The start of Claude Code's error output, kept in memory only while added skills load, to tell a blocked plugin. */
+  let errors = '';
   const child = launch(
     options.executable ?? 'claude',
     [
@@ -614,6 +650,7 @@ function claude(options: HostOptions): HostSession {
         : []),
       ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
       ...(options.model ? ['--model', options.model] : []),
+      ...(options.skills ? ['--plugin-dir', options.skills] : []),
       ...(options.tools
         ? [
             '--mcp-config',
@@ -634,7 +671,25 @@ function claude(options: HostOptions): HostSession {
           : []),
     ],
     options,
+    (code) => {
+      // A managed setting can forbid added plugins: Claude Code then stops before it starts.
+      if (
+        options.skills &&
+        !started &&
+        code !== 0 &&
+        /plugin|sideload/i.test(errors)
+      )
+        options.onEvent({
+          type: 'skills',
+          text: "Your organization's Claude Code settings block added skills, so agents run without them.",
+        });
+    },
   );
+  if (options.skills)
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (errors.length < 8192)
+        errors += chunk.toString('utf8').slice(0, 8192 - errors.length);
+    });
   const emit = options.onEvent;
   const tools = options.tools;
   const inputs = new Map<string, unknown>();
@@ -695,6 +750,11 @@ function claude(options: HostOptions): HostSession {
         if (signal) emit({ type: 'limit', ...signal });
       } else if (event.type === 'system') {
         if (event.subtype === 'init') {
+          started = true;
+          const problem = options.skills
+            ? pluginProblem(event, options.skills)
+            : null;
+          if (problem) emit({ type: 'skills', text: problem });
           const id = str(event.session_id);
           const model = str(event.model);
           const mode = str(event.permissionMode);
@@ -942,6 +1002,8 @@ function codex(options: HostOptions): HostSession {
       'app-server',
       '--listen',
       `unix://${socket}`,
+      // A skill's MCP dependencies would go into the person's own Codex settings.
+      ...(options.skills ? ['--disable', 'skill_mcp_dependency_install'] : []),
     ],
     options,
   );
@@ -969,7 +1031,7 @@ function codex(options: HostOptions): HostSession {
     {
       readonly method: string;
       readonly onResult?: (result: Record<string, unknown>) => void;
-      readonly onError?: () => void;
+      readonly onError?: (error: Record<string, unknown>) => void;
     }
   >();
   const requests = new Map<string, number | string>();
@@ -983,7 +1045,7 @@ function codex(options: HostOptions): HostSession {
     method: string,
     params: Record<string, unknown>,
     onResult?: (result: Record<string, unknown>) => void,
-    onError?: () => void,
+    onError?: (error: Record<string, unknown>) => void,
   ): void => {
     const id = nextId++;
     results.set(id, {
@@ -1197,7 +1259,7 @@ function codex(options: HostOptions): HostSession {
       results.delete(message.id);
       if (record(message.error)) {
         // A steer that comes after the turn ended is refused. The caller sends it another way.
-        if (pending?.onError) return pending.onError();
+        if (pending?.onError) return pending.onError(message.error);
         emit({
           type: 'notice',
           text: `Codex rejected ${pending?.method ?? 'a request'}: ${str(message.error.message) ?? 'unknown error'}.`,
@@ -1356,11 +1418,75 @@ function codex(options: HostOptions): HostSession {
           stop(child);
           return;
         }
-        if (options.bestModel && !options.model) chooseModel(config);
-        else startThread(config, options.model);
+        const begin = (): void => {
+          if (options.bestModel && !options.model) chooseModel(config);
+          else startThread(config, options.model);
+        };
+        if (options.skills) addSkills(options.skills, begin);
+        else begin();
       });
     },
   );
+
+  /**
+   * Add the skills folder of Verifold's plugin as a skill root of this
+   * app-server, which only this session uses, and check that Codex lists
+   * the skills. A Codex without the method, or one that cannot load them,
+   * starts the thread without them.
+   */
+  function addSkills(folder: string, then: () => void): void {
+    const root = join(folder, 'skills');
+    // Codex can report a path in its canonical form, so the plugin's own folder name identifies it.
+    const marker = `${basename(folder)}/skills/`;
+    const without = (text: string): void => {
+      emit({ type: 'skills', text });
+      then();
+    };
+    const failed =
+      'Codex could not load the added skills, so Codex agents run without them.';
+    call(
+      'skills/extraRoots/set',
+      { extraRoots: [root] },
+      () =>
+        call(
+          'skills/list',
+          { cwds: [options.cwd], forceReload: true },
+          (result) => {
+            const entries = Array.isArray(result.data)
+              ? result.data.filter(record)
+              : [];
+            const ours = (value: unknown): boolean =>
+              record(value) &&
+              typeof value.path === 'string' &&
+              value.path.includes(marker);
+            const listed = entries.some(
+              (entry) => Array.isArray(entry.skills) && entry.skills.some(ours),
+            );
+            const broken = entries.some(
+              (entry) => Array.isArray(entry.errors) && entry.errors.some(ours),
+            );
+            if (listed && !broken) return then();
+            // The root goes again, so the session runs without any of them, as the line says.
+            call(
+              'skills/extraRoots/set',
+              { extraRoots: [] },
+              () => without(failed),
+              () => without(failed),
+            );
+          },
+          () => without(failed),
+        ),
+      (error) =>
+        without(
+          error.code === -32601 ||
+            /method not found|unknown variant|unknown method/i.test(
+              str(error.message) ?? '',
+            )
+            ? 'This version of Codex cannot load added skills, so Codex agents run without them. Update Codex to use them.'
+            : failed,
+        ),
+    );
+  }
 
   /**
    * Read every page of `model/list`, then start the thread with the most

@@ -713,7 +713,12 @@ onLine((line) => {
       assert.equal(skipped.status, 200, await skipped.text());
       assert.deepEqual(
         JSON.parse(await readFile(join(agency, 'settings.json'), 'utf8')).steps,
-        { agents: 'skipped', about: 'skipped', money: 'skipped' },
+        {
+          agents: 'skipped',
+          about: 'skipped',
+          skills: 'skipped',
+          money: 'skipped',
+        },
       );
       // No project starts without a question.
       await assert.rejects(stat(join(folder, '.verifold')));
