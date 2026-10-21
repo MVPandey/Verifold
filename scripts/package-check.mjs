@@ -44,10 +44,8 @@ try {
   assert.ok(
     manifest.files.every(
       (file) =>
-        /^dist-cli\/(cli|core|desk|legacy|server)\/[a-z-]+\.js$/.test(
-          file.path,
-        ) ||
-        /^dist-cli\/(cli|core|legacy)\/prompts\/[a-z-]+\.md$/.test(file.path) ||
+        /^dist-cli\/[a-z]+\/[a-z-]+\.js$/.test(file.path) ||
+        /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         [
           'dist-cli/cli.js',
           'dist-cli/ui/dom.js',
@@ -155,6 +153,23 @@ try {
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
     assert.ok(manifest.files.some((file) => file.path === required));
+  // Each layer's loader lists its prompts. The tarball holds exactly those files.
+  const packedPrompts = manifest.files
+    .map((file) => file.path)
+    .filter((path) => /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(path));
+  const registered = [];
+  for (const { path } of manifest.files) {
+    const layer = /^dist-cli\/([a-z]+)\/prompts\.js$/.exec(path)?.[1];
+    if (!layer) continue;
+    const { promptIds } = await import(
+      pathToFileURL(join(directory, 'node_modules/verifold', path)).href
+    );
+    registered.push(
+      ...promptIds.map((id) => `dist-cli/${layer}/prompts/${id}.md`),
+    );
+  }
+  assert.deepEqual(registered.sort(), packedPrompts.sort());
+  assert.ok(registered.length > 0);
   const { runCli } = await import(
     pathToFileURL(
       join(directory, 'node_modules/verifold/dist-cli/cli/commands.js'),

@@ -5,7 +5,7 @@ import type { Workspace } from '../core/contracts.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
 import { WakeLoop, type QueuedEvent } from '../core/agent-loop.ts';
 import { messageLimits } from './messages.ts';
-import { loadPrompt } from '../core/prompts.ts';
+import { loadPrompt } from './prompts.ts';
 import {
   hostName,
   lastReply,

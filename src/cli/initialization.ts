@@ -24,7 +24,7 @@ import { readJson } from '../core/storage.ts';
 import { researchInterview } from './onboarding.ts';
 import { checkProjectDirectory, createProject } from './project.ts';
 import { investigateProject } from './project-context.ts';
-import { loadPrompt } from '../core/prompts.ts';
+import { loadPrompt } from './prompts.ts';
 import { hostName } from '../core/session.ts';
 
 export interface InitializationOptions {

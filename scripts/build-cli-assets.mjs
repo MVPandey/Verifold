@@ -1,9 +1,18 @@
-import { chmod, copyFile, cp, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, copyFile, mkdir, readdir } from 'node:fs/promises';
 
-for (const layer of ['cli', 'core', 'legacy'])
-  await cp(`src/${layer}/prompts`, `dist-cli/${layer}/prompts`, {
-    recursive: true,
-  });
+// Each layer keeps its prompts beside it, in src/<layer>/prompts/.
+for (const layer of await readdir('src', { withFileTypes: true })) {
+  const folder = `src/${layer.name}/prompts`;
+  if (!layer.isDirectory() || !existsSync(folder)) continue;
+  await mkdir(`dist-cli/${layer.name}/prompts`, { recursive: true });
+  for (const name of await readdir(folder))
+    if (name.endsWith('.md'))
+      await copyFile(
+        `${folder}/${name}`,
+        `dist-cli/${layer.name}/prompts/${name}`,
+      );
+}
 await mkdir('dist-cli/desk/vendor', { recursive: true });
 
 for (const [source, target] of [

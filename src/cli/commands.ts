@@ -1,4 +1,4 @@
-import { loadPrompt } from '../core/prompts.ts';
+import { loadPrompt } from './prompts.ts';
 import { parseArgs, stripVTControlCharacters } from 'node:util';
 import { resolve, join } from 'node:path';
 import {
