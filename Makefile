@@ -1,5 +1,3 @@
-.PHONY: validate dev
+.PHONY: validate
 validate:
 	npm run validate
-dev:
-	npm run dev
