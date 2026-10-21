@@ -40,6 +40,7 @@ import { defaultAgents, SessionPool } from '../core/workers.ts';
 import { Quota } from '../core/quota.ts';
 import { Coordinator } from '../legacy/coordinator.ts';
 import { Lab, labOnDisk, startLabOn } from '../core/lab.ts';
+import type { LabScreen } from '../server/screen.ts';
 import { labModel } from '../core/models.ts';
 import { labWorks, RunTeam } from '../core/team.ts';
 import { withTranscript } from '../core/transcript.ts';
@@ -137,6 +138,15 @@ export interface CliIO {
   ) => void;
   /** Background owners. Only the executable provides it. Without it, the desk runs in this process. */
   readonly background?: Background;
+  /**
+   * The lab for the terminal's live view. `show` gets the lab's screen, and
+   * again after each change of it: null when the project has no lab. While
+   * `wanted` is false, Verifold builds no screen. Only a terminal provides it.
+   */
+  readonly screens?: {
+    readonly show: (screen: LabScreen | null) => void;
+    readonly wanted?: () => boolean;
+  };
 }
 
 export interface Background {
@@ -220,7 +230,8 @@ const terminalHelp = (
   background: boolean,
 ): string => `Commands in this terminal:
 - \`/open\`: open the desk in your browser.
-- \`/app\`: open the new app, a preview of the next desk, in your browser.
+- \`/app\`: open the new app, a preview of the next desk, in your browser. Add the ID of a call, for example \`/app c-3\`, to open that call.
+- Enter on an empty line, in a lab: open the call that waits for you, or else the lab, in the new app.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
 - \`/research\`: continue research. In a project without research, add the question.
@@ -232,7 +243,7 @@ const terminalHelp = (
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
-When the agent waits for you, other text goes to it as a follow-up. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in the top bar of the desk.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
+When the agent of your session waits for you, other text goes to it as a follow-up. Without a session, in a lab, other text goes to the board as your message. Write @claude-2 in it to write to that agent. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in the top bar of the desk.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
 
 const requestHint =
   'Type a to allow once or d to deny. The desk shows the full request.';
@@ -270,13 +281,18 @@ export function feedLine(event: SessionEvent, worker?: string): string | null {
 export interface TerminalControls {
   /** Open the desk in a browser with a new one-time code. */
   readonly open: () => void;
-  /** Open the new app, a preview, in a browser with a new one-time code. */
-  readonly openApp: () => void;
+  /**
+   * Open the new app, a preview, in a browser with a new one-time code.
+   * `call`: the ID of a call to open there, such as c-3.
+   */
+  readonly openApp: (call?: string) => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
   /** The terminal is attached to a background owner. */
   readonly background?: boolean;
   readonly research?: ResearchRunner;
+  /** The project's lab. Text that is not a command goes to its board. */
+  readonly lab?: Pick<Lab, 'exists' | 'post'>;
 }
 
 /** Terminal controls call the same session operations as the desk. */
@@ -335,6 +351,12 @@ export function terminalInput(
         );
     } else if (value === '/open') controls.open();
     else if (value === '/app') controls.openApp();
+    else if (/^\/app c-[1-9][0-9]{0,5}$/.test(value))
+      controls.openApp(value.slice(5));
+    else if (value.startsWith('/app '))
+      io.progress?.(
+        'Write /app and the ID of a call, for example /app c-3, or /app alone.',
+      );
     else if (value === '/help')
       io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
@@ -394,7 +416,12 @@ export function terminalInput(
         'The session is working. Wait for the turn to end, or type /cancel.',
       );
       if (id) sessions.send(id, value);
-    } else
+    } else if (controls.lab?.exists)
+      // The same post as the app's box. A mention such as @claude-2 wakes that agent.
+      controls.lab
+        .post({ text: value })
+        .then(() => io.progress?.('Your message is on the board.'), report);
+    else
       io.progress?.(
         'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
       );
@@ -487,10 +514,13 @@ async function serveDesk(
   const stop = new AbortController();
   const deskSignal = AbortSignal.any([running, stop.signal]);
   let desk: DeskServer | undefined;
-  const open = async (app = run.app === true): Promise<boolean> =>
+  const open = async (
+    app = run.app === true,
+    call?: string,
+  ): Promise<boolean> =>
     desk
       ? (io.browse ?? openDeskBrowser)(
-          desk.launchUrl(app ? '/app/' : '/'),
+          desk.launchUrl(app ? '/app/' : '/', call && `/call/${call}`),
           deskSignal,
         )
       : false;
@@ -843,6 +873,8 @@ async function serveDesk(
               : 'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
           );
         }
+        // A terminal's live view follows the lab.
+        if (io.screens) desk.screens(io.screens.show, io.screens.wanted);
         const paused = sessions.paused().length;
         if (paused && !session)
           io.progress?.(
@@ -861,6 +893,7 @@ async function serveDesk(
               host,
               background: run.owner !== undefined,
               research: runner,
+              lab,
               open: () => {
                 void open(false).then((opened) =>
                   io.progress?.(
@@ -870,17 +903,19 @@ async function serveDesk(
                   ),
                 );
               },
-              openApp: () => {
+              openApp: (call) => {
                 if (!desk?.appUrl) {
                   io.progress?.(
                     'The new app is not available here. Type /open for the desk.',
                   );
                   return;
                 }
-                void open(true).then((opened) =>
+                void open(true, call).then((opened) =>
                   io.progress?.(
                     opened
-                      ? 'The new app opened in your browser.'
+                      ? call
+                        ? `Call ${call} opened in the new app in your browser.`
+                        : 'The new app opened in your browser.'
                       : 'The browser could not open. Open the printed URL, and add app/ after its port.',
                   ),
                 );
@@ -1077,6 +1112,8 @@ async function runOwner(
   let url: string | undefined;
   /** The app's URL, when the package has the app's build. */
   let appUrl: string | undefined;
+  /** The newest screen of the lab, for a terminal that attaches. */
+  let screen: LabScreen | null | undefined;
   let onLine: ((line: string) => void) | undefined;
   const waiting: string[] = [];
   const server = await serveControl(control, {
@@ -1084,6 +1121,7 @@ async function runOwner(
       for (const line of early ?? []) send({ progress: line });
       early = null;
       if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
+      if (screen !== undefined) send({ screen });
     },
     message: (message) => {
       if ('stop' in message) quit.abort();
@@ -1139,6 +1177,14 @@ async function runOwner(
             },
             { once: true },
           );
+        },
+        // Screens are built only while a terminal is attached to show them.
+        screens: {
+          show: (next) => {
+            screen = next;
+            server.send({ screen: next });
+          },
+          wanted: () => server.terminals() > 0,
         },
       },
       AbortSignal.any([signal, quit.signal]),
@@ -1235,6 +1281,7 @@ async function attachTeam(
     control,
     (message) => {
       if ('progress' in message) io.progress?.(message.progress);
+      else if ('screen' in message) io.screens?.show(message.screen);
       else if ('url' in message && !shown) {
         shown = true;
         const app = start.app ? message.app : undefined;

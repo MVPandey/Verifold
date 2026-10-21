@@ -27,17 +27,23 @@ function keep(token: string): void {
 /**
  * Read the URL fragment once, at load. A token is kept. A launch code comes
  * back to exchange. Either way the fragment becomes `fragment`, so the
- * secret leaves the address bar and the history.
+ * secret leaves the address bar and the history. A launch code can have a
+ * page of the app after it, such as `#launch-<code>/call/c-3`, which the
+ * terminal opens. The fragment then becomes that page.
  */
 export function readFragment(fragment: string): {
   readonly token: string;
   readonly launch: string;
 } {
   const hash = location.hash.slice(1);
-  const launch = hash.startsWith('launch-') ? hash.slice(7) : '';
+  const [, launch = '', page = ''] = /^launch-([^/]*)(\/.*)?$/.exec(hash) ?? [];
   if (tokenShape.test(hash)) keep(hash);
   if (launch || tokenShape.test(hash))
-    history.replaceState(null, '', `${location.pathname}${fragment}`);
+    history.replaceState(
+      null,
+      '',
+      `${location.pathname}${page ? `#${page}` : fragment}`,
+    );
   return { token: storedToken(), launch };
 }
 

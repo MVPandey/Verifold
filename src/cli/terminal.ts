@@ -8,6 +8,8 @@ export const palette = {
   lavender: '183;148;246',
   sky: '96;165;250',
   mint: '52;211;153',
+  // What needs the person, as the v9 terminal artboard shows it.
+  amber: '243;194;107',
 } as const;
 export type Tone = keyof typeof palette;
 

@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
   writeFile,
@@ -24,6 +25,7 @@ import {
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { claimOwner, liveOwner } from '../src/core/owner.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
+import type { LabScreen } from '../src/server/screen.ts';
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -629,4 +631,139 @@ await test('an owner with a question of setup in a project that has a lab starts
   assert.equal(lab.question, 'The first question.');
   owner.abort();
   await done.catch(() => {});
+});
+
+await test('an attached terminal gets the lab for its live view, and its text goes to the board', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await mkdir(join(root, '.verifold', 'lab', 'agents'), { recursive: true });
+  await writeFile(
+    join(root, '.verifold', 'lab.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      question: 'Do months lie on a circle?',
+      startedAt: new Date().toISOString(),
+      pausedAt: null,
+      handles: { claude: 0, codex: 0 },
+      directions: [],
+    }),
+  );
+  const owner = new AbortController();
+  let ownerDone: Promise<void> | undefined;
+  t.after(async () => {
+    owner.abort();
+    await ownerDone?.catch(() => {});
+  });
+  const background = {
+    keys,
+    start: (folder: string, line: string): Promise<void> => {
+      ownerDone = runCli(
+        ['owner', '--workspace', folder],
+        folder,
+        {
+          interactive: false,
+          ask: () => Promise.reject(new Error('No prompts')),
+          out: () => assert.fail('The owner prints nothing.'),
+          browse: () => Promise.resolve(true),
+          deskAssets: assets,
+          background: {
+            keys,
+            start: () =>
+              Promise.reject(new Error('The owner starts no owner.')),
+            input: () => Promise.resolve(line),
+          },
+        },
+        owner.signal,
+      );
+      return Promise.resolve();
+    },
+    input: () => Promise.reject(new Error('A terminal has no owner input.')),
+  };
+  const lines: string[] = [];
+  const screens: (LabScreen | null)[] = [];
+  const typed: ((line: string) => void)[] = [];
+  const terminal = new AbortController();
+  const attached = runCli(
+    ['ui', '--no-open'],
+    root,
+    {
+      interactive: true,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      progress: (line) => lines.push(line),
+      listen: (onLine) => typed.push(onLine),
+      screens: { show: (screen) => screens.push(screen) },
+      background,
+    },
+    terminal.signal,
+  );
+  // The owner builds screens only while a terminal is attached, and sends them to it.
+  await until(() => screens.some((screen) => screen !== null));
+  const screen = screens.find((entry) => entry !== null);
+  assert.equal(screen?.project, 'project');
+  assert.match(screen?.origin ?? '', /^http:\/\/127\.0\.0\.1:\d+$/);
+  assert.deepEqual(screen?.directions, []);
+  assert.equal(screen?.call, null);
+  // Text that is not a command goes to the lab's board as the person's post.
+  await until(() => typed.length === 1);
+  typed[0]?.('Try weekdays too @all');
+  await until(() => lines.includes('Your message is on the board.'));
+  const board = join(root, '.verifold', 'board');
+  const posts = await Promise.all(
+    (await readdir(board)).map((name) => readFile(join(board, name), 'utf8')),
+  );
+  assert.ok(posts.some((post) => post.includes('Try weekdays too @all')));
+  terminal.abort();
+  await attached;
+});
+
+await test('a terminal without a background owner gets the same live view of its lab', async (t) => {
+  const { root, assets } = await project(t);
+  await mkdir(join(root, '.verifold', 'lab', 'agents'), { recursive: true });
+  await writeFile(
+    join(root, '.verifold', 'lab.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      question: 'Do weekdays lie on a circle?',
+      startedAt: new Date().toISOString(),
+      pausedAt: null,
+      handles: { claude: 0, codex: 0 },
+      directions: [],
+    }),
+  );
+  const lines: string[] = [];
+  const screens: (LabScreen | null)[] = [];
+  const typed: ((line: string) => void)[] = [];
+  const stop = new AbortController();
+  const done = runCli(
+    ['ui', '--no-open'],
+    root,
+    {
+      interactive: true,
+      ask: () => Promise.reject(new Error('No prompts')),
+      out: () => {},
+      progress: (line) => lines.push(line),
+      listen: (onLine) => typed.push(onLine),
+      screens: { show: (screen) => screens.push(screen) },
+      deskAssets: assets,
+    },
+    stop.signal,
+  );
+  t.after(async () => {
+    stop.abort();
+    await done.catch(() => {});
+  });
+  await until(() => screens.some((screen) => screen !== null));
+  assert.equal(screens.find((entry) => entry !== null)?.project, 'project');
+  await until(() => typed.length === 1);
+  typed[0]?.('/app c-1');
+  // This package build in the tests has no app, so the terminal says so.
+  await until(() =>
+    lines.includes(
+      'The new app is not available here. Type /open for the desk.',
+    ),
+  );
+  typed[0]?.('A note for the lab');
+  await until(() => lines.includes('Your message is on the board.'));
+  stop.abort();
+  await done;
 });
