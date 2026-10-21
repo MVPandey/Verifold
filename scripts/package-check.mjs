@@ -44,7 +44,8 @@ try {
   assert.ok(
     manifest.files.every(
       (file) =>
-        /^dist-cli\/[a-z]+\/[a-z-]+\.js$/.test(file.path) ||
+        // A layer module, at the top of its layer or in one folder below it, such as core/lab/.
+        /^dist-cli\/[a-z]+\/(?:[a-z]+\/)?[a-z-]+\.js$/.test(file.path) ||
         /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         // The new app: its page, and the files that Vite names with a hash.
         /^dist-cli\/app\/assets\/[\w.-]+\.(js|css|ttf)$/.test(file.path) ||
