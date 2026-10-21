@@ -14,7 +14,11 @@
  */
 export const protocolVersion = 1;
 
-/** A turn's ID: the ID of the turn's first transcript entry. The API and the app's links check it with this. */
+/**
+ * A turn's ID: the ID of the turn's first transcript entry, such as
+ * `1a2b3c4d.#3` or `1a2b3c4d.toolu_01`. The API and the app's links check it
+ * with this.
+ */
 export const turnIdPattern = /^[0-9a-f]{8}\.[\w#:.-]{1,120}$/;
 
 export type Harness = 'claude' | 'codex';
