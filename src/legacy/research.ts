@@ -1,4 +1,4 @@
-import { loadPrompt } from '../core/prompts.ts';
+import { loadPrompt } from './prompts.ts';
 import {
   mkdir,
   open,

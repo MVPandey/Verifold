@@ -12,7 +12,7 @@ import {
 import { dirname, join } from 'node:path';
 import { validateModel, type HarnessName } from '../core/harness.ts';
 import { messageLimits, Messages, type Message } from './messages.ts';
-import { loadPrompt } from '../core/prompts.ts';
+import { loadPrompt } from './prompts.ts';
 import {
   restrictions,
   validDomain,

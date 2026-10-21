@@ -152,7 +152,7 @@ Profile setup and initialization share a lock on the global settings, so only on
 
 ### Editable harness prompts
 
-Harness instructions live in the `prompts/` folder of the layer that uses them: `src/core/prompts/` for the lab, `src/cli/prompts/` for setup and the profile, and `src/legacy/prompts/` for the older research and task flows. Each filename is a prompt ID that `src/core/prompts.ts` loads. Edit these files to change the instructions for interviews, profiles, project context, research, or handoffs. The caller adds the user's evidence separately.
+Harness instructions live in the `prompts/` folder of the layer that uses them: `src/core/prompts/` for the lab, `src/cli/prompts/` for setup, the profile and the CLI's research commands, and `src/legacy/prompts/` for the older research and task flows. Each filename is a prompt ID. Each layer lists its IDs in its own `prompts.ts`, which reads the files through the shared reader in `src/core/prompts.ts`. Edit these files to change the instructions for interviews, profiles, project context, research, or handoffs. The caller adds the user's evidence separately.
 
 Run `npm run build:cli` to copy the prompts into the matching `dist-cli/<layer>/prompts/` folders for the CLI package. Installed commands load these bundled files, whatever the working folder is. There is no template engine and no folder for per-user overrides.
 
