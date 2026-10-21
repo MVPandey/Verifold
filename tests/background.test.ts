@@ -57,7 +57,10 @@ async function project(t: test.TestContext): Promise<{
   assets: URL;
 }> {
   const base = await mkdtemp(join(tmpdir(), 'verifold-background-'));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  // An owner's lab can still save a session record after the owner stopped, so removal retries (#247).
+  t.after(() =>
+    rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
+  );
   const root = join(base, 'project');
   await mkdir(root);
   await changeWorkspace(root, () => ({
