@@ -12,7 +12,9 @@ import type { AgentTool } from './session-hosts.ts';
  * its older schema stays valid. None of them raises a version: a Codex agent
  * whose thread is older keeps its conversation, and gets them with its next
  * new thread. `verifold_direction` now accepts holds-up, which starts a
- * check; its schema did not change, so no version either.
+ * check; its schema did not change, so no version either. `facts` of
+ * `verifold_plan` is optional, so the plans of an older thread stay valid: no
+ * version.
  */
 export const labToolsVersion = 2;
 
@@ -28,6 +30,11 @@ export const planLimits = {
   noise: 120,
   buildsOn: 4,
   buildsOnText: 120,
+  /** The facts that a plan rests on, each with its source and the source's date. */
+  facts: 12,
+  claim: 160,
+  source: 300,
+  sourceDate: 40,
 };
 
 /** The kinds of post that an agent can write. A rerun comes from a checker that Verifold starts. */
@@ -623,7 +630,7 @@ export const askPersonToolSpec: AgentTool = {
 export const planToolSpec: AgentTool = {
   name: 'verifold_plan',
   description:
-    'Post the plan of record: how you read the question, and the directions that attack it. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id.',
+    "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id. A plan without facts keeps the facts of the plan before it.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -702,6 +709,37 @@ export const planToolSpec: AgentTool = {
         type: 'string',
         maxLength: planLimits.cost,
         description: 'What in the plan costs money, or that nothing does yet.',
+      },
+      facts: {
+        type: 'array',
+        maxItems: planLimits.facts,
+        items: {
+          type: 'object',
+          properties: {
+            claim: {
+              type: 'string',
+              maxLength: planLimits.claim,
+              description:
+                'The fact, such as "Model: Qwen3.8-8B" or "H100: $3.99 an hour".',
+            },
+            source: {
+              type: 'string',
+              maxLength: planLimits.source,
+              description:
+                'Where you checked it: a URL. Leave it out for a fact that you could not check: it is unverified.',
+            },
+            sourceDate: {
+              type: 'string',
+              maxLength: planLimits.sourceDate,
+              description:
+                "The source's date, such as 2026-08-14, or when you read a price.",
+            },
+          },
+          required: ['claim'],
+          additionalProperties: false,
+        },
+        description:
+          'The facts that change over time and that the plan rests on.',
       },
     },
     required: ['reading', 'directions', 'cost'],
