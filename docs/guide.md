@@ -6,7 +6,7 @@ Run `verifold` to connect the Claude Code or Codex that you have installed. You 
 
 We're building toward a research **meta-harness**: one workspace where several harness instances work together, from the first idea to a paper, a repository, a figure, a proof, or another result. Each harness keeps its own models, credentials, tools, and permissions. Verifold connects their tasks, messages, memory, and evidence across sessions. The [development plan](#development-plan) says what is done and what comes next.
 
-Contents: [Install](#install-the-cli) · [Start a research project](#start-a-research-project) · [The desk](#local-research-desk) · [Sessions](#controlled-harness-session) · [Tasks](#scoped-tasks) · [Coordinator](#coordinator) · [The lab](#the-lab-preview) · [GPU pods](#gpu-pods-on-runpod) · [Privacy](#privacy-and-website) · [Project status](#project-status) · [Development plan](#development-plan) · [Contribute](#help-build-verifold) · [Build from source](#build-from-source) · [Engineering](#engineering)
+Contents: [Install](#install-the-cli) · [Start a research project](#start-a-research-project) · [The desk](#local-research-desk) · [Sessions](#controlled-harness-session) · [Tasks](#scoped-tasks) · [Coordinator](#coordinator) · [The lab](#the-lab-preview) · [GPU pods](#gpu-pods-on-runpod) · [Privacy](#privacy) · [Project status](#project-status) · [Development plan](#development-plan) · [Contribute](#help-build-verifold) · [Build from source](#build-from-source) · [Engineering](#engineering)
 
 ## Install the CLI
 
@@ -655,7 +655,7 @@ When a pod becomes ready, Verifold starts a small loop on it. Each minute, the l
 
 When Verifold starts, it finds a pod whose create reply was lost, by its name. It stops a pod that ran while Verifold was not running, and tells you in Needs you what that time cost. `verifold pods` lists the leases. `verifold pods stop <lease|all>` stops pods when Verifold does not run in the project.
 
-## Privacy and website
+## Privacy
 
 Project state stays in `.verifold/workspace.json`. Research attempts keep briefs, responses, reports, and harness transcripts under `.verifold/runs/<attempt-id>/`. Session records under `.verifold/sessions/` keep your messages, agent text, exact commands, and harness transcripts. Task records under `.verifold/tasks/` keep each revision, copies of its input files, each version, and copies of the accepted files. Messages between you, the coordinator, and task agents are under `.verifold/messages/`. The coordinator's objective, events, and actions are in `.verifold/coordinator/state.json`, and its conversation is a session record. In a Git repository, the task branches `verifold/*` hold the versions as commits. A transcript keeps full tool inputs and results, for example the contents of files that a tool read. These files can contain private research.
 
@@ -663,7 +663,7 @@ Setup adds `/.verifold/` and `/.verifold.md` to the project's `.gitignore` and c
 
 Your harness uses its own model services and research tools. Local state does not mean that those services run offline. Verifold creates no remote profile and publishes nothing.
 
-`ui` serves only the selected project, on loopback, with authenticated project reads and bundled assets. Session actions use authenticated JSON requests to the same local server. The server rejects unexpected hosts and origins. It serves the harness transcripts of the project only to the authenticated page. It does not serve arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. The Vite website explains the CLI entry point. Remote profile sync is future work. The nested `verifold-website/` repository stays independent.
+`ui` serves only the selected project, on loopback, with authenticated project reads and bundled assets. Session actions use authenticated JSON requests to the same local server. The server rejects unexpected hosts and origins. It serves the harness transcripts of the project only to the authenticated page. It does not serve arbitrary files. `view` creates a read-only local HTML snapshot with no external assets. Remote profile sync is future work. The nested `verifold-website/` repository stays independent.
 
 ## Project status
 
@@ -787,4 +787,4 @@ git config --local core.hooksPath .githooks
 
 See [validation scope](validation.md). Source-link validation does not verify scientific claims or establish citation provenance.
 
-The harness package is MIT licensed. The website and the visual brand assets are outside that grant. See [license scope](../LICENSING.md). The bundled Manrope font keeps its SIL Open Font License.
+The harness package is MIT licensed. The visual brand assets in `public/assets/` are outside that grant. See [license scope](../LICENSING.md). The bundled Manrope font keeps its SIL Open Font License.
