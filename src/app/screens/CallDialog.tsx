@@ -214,7 +214,8 @@ function OpenCall({
               {lines && <p className="call__fine">{lines.does}</p>}
               {missing && (
                 <p className="call__fine call__fine--need">
-                  {missing} <a href="/">Open the desk</a> to store it.
+                  {missing} Store each one in a terminal with{' '}
+                  <code>verifold runpod secret set NAME</code>.
                 </p>
               )}
             </div>

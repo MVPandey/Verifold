@@ -1,8 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { MoneyLimits, SetupView } from '../../protocol/api.ts';
 import { Check } from '../components/Icons.tsx';
+import {
+  GpuTable,
+  LimitField,
+  numberOf,
+  readAt,
+} from '../components/Limits.tsx';
 import { StepHeader } from '../components/StepHeader.tsx';
-import { clock, usd } from '../format.ts';
+import { usd } from '../format.ts';
 import { newKey } from '../intent.ts';
 import { allowedGpus, type SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
@@ -28,71 +34,6 @@ function textOf(limits: MoneyLimits): LimitText {
     maxRunningPods: limits.maxRunningPods === 2 ? '2' : '1',
     monthUsd: String(limits.monthUsd ?? ''),
   };
-}
-
-/** A number that the person typed, or null when it is not one. */
-function numberOf(text: string): number | null {
-  const value = Number(text.trim());
-  return text.trim() && Number.isFinite(value) ? value : null;
-}
-
-/** When Verifold read the prices: "at 19:41 today", or with the date. */
-export function readAt(at: string): string {
-  const date = new Date(at);
-  return date.toDateString() === new Date().toDateString()
-    ? `at ${clock(at)} today`
-    : `on ${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} at ${clock(at)}`;
-}
-
-/** One number field with its unit, as in the artboard's "Limits". `note`: a line under it. */
-function LimitField({
-  label,
-  before,
-  after,
-  value,
-  onChange,
-  min,
-  step,
-  note,
-}: {
-  readonly label: string;
-  readonly before?: string;
-  readonly after?: string;
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-  readonly min: number;
-  readonly step: number;
-  readonly note?: ReactNode;
-}): ReactNode {
-  const id = useId();
-  const noteId = useId();
-  return (
-    <div className="limit">
-      <label htmlFor={id} className="limit__label">
-        {label}
-      </label>
-      <span className="limit__value">
-        {before}
-        <input
-          id={id}
-          className="limit__input"
-          type="number"
-          inputMode="decimal"
-          min={min}
-          step={step}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          {...(note ? { 'aria-describedby': noteId } : {})}
-        />
-        {after}
-      </span>
-      {note && (
-        <span id={noteId} className="limit__note">
-          {note}
-        </span>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -292,45 +233,11 @@ export function MoneyStep({
         </div>
         {money.prices ? (
           <>
-            <div className="prices__box">
-              <table className="prices__table">
-                <thead>
-                  <tr>
-                    <th scope="col">GPU</th>
-                    <th scope="col">Memory</th>
-                    <th scope="col" className="prices__number">
-                      Per hour
-                    </th>
-                    <th scope="col" className="prices__allow">
-                      Allow
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {money.prices.gpus.map((gpu) => (
-                    <tr key={gpu.id}>
-                      <td className="prices__name">{gpu.name}</td>
-                      <td>{gpu.memoryGb ? `${gpu.memoryGb} GB` : ''}</td>
-                      <td className="prices__number">{usd(gpu.usdPerHour)}</td>
-                      <td className="prices__allow">
-                        <input
-                          type="checkbox"
-                          aria-label={`Allow ${gpu.name}`}
-                          checked={allowed.includes(gpu.id)}
-                          onChange={(event) =>
-                            setTicked(
-                              event.target.checked
-                                ? [...allowed, gpu.id]
-                                : allowed.filter((id) => id !== gpu.id),
-                            )
-                          }
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <GpuTable
+              rows={money.prices.gpus}
+              allowed={allowed}
+              onAllow={setTicked}
+            />
             <span className="setup__meta">
               Agents may rent the GPUs that you allow, at or under the price cap
               below.

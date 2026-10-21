@@ -511,7 +511,7 @@ export class Compute {
     }
     if (missing.length)
       fail(
-        `Add the secret ${missing.join(' and ')} in Compute first. The pod of ${lease.id} needs it.`,
+        `Store ${missing.length === 1 ? 'the secret' : 'the secrets'} ${missing.join(' and ')} first, with \`verifold runpod secret set NAME\`. The pod of ${lease.id} needs ${missing.length === 1 ? 'it' : 'them'}.`,
       );
     this.hidden.set(lease.id, values);
     return values;
@@ -621,7 +621,7 @@ export class Compute {
     const what = `${lease.gpu} for ${lease.hours} ${lease.hours === 1 ? 'hour' : 'hours'} at ${usd(lease.rate)} per hour`;
     const missing = this.missingSecrets(lease);
     if (missing.length)
-      return `Asked the person to add the secret ${missing.join(' and ')} in Compute for ${lease.id}: ${what}. ${this.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
+      return `Asked the person to store the secret ${missing.join(' and ')} for ${lease.id}: ${what}. ${this.view().settings.askBeforePod ? 'Then the person approves the pod.' : 'The pod starts when the secret is there, if it still fits the limits.'} Nothing is created before that. An event tells you when the pod starts.`;
     if (!this.view().settings.askBeforePod) {
       const started = await this.leases
         .approve(lease.id, 'verifold')
@@ -783,7 +783,7 @@ export class Compute {
           )
             ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
             : stopped
-              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in Compute.`
+              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`
               : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },
@@ -1147,7 +1147,7 @@ export class Compute {
     return (
       (await this.store.read()) ??
       fail(
-        'Store a RunPod key first, in Compute or with `verifold runpod key set`.',
+        'Store a RunPod key first, under GPU money in your profile or with `verifold runpod key set`.',
       )
     );
   }

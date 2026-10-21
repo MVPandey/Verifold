@@ -58,8 +58,142 @@ export interface Snapshot {
   readonly question?: string | null;
   /** A project without a lab: why its lab's last start failed, or null. Added after version 1. */
   readonly startProblem?: string | null;
+  /**
+   * The project's GPU pods and their settings, with or without a lab.
+   * Absent without a project, or when this process does not manage pods.
+   * Added after version 1.
+   */
+  readonly compute?: ProjectCompute;
   /** The snapshot left items out: lists past their bounds, or less of a large lab to stay under the size bound. */
   readonly trimmed: boolean;
+}
+
+/**
+ * The pod settings of one project. Only the person changes them. A spend
+ * limit of null means pods are off. Added after version 1.
+ */
+export interface PodSettings {
+  readonly limitUsd: number | null;
+  /** The highest rate of one pod, in USD per hour. */
+  readonly maxUsdPerHour: number;
+  readonly maxHoursPerLease: number;
+  /** Minutes without a job before Verifold stops a pod. */
+  readonly idleMinutes: number;
+  readonly maxRunningPods: 1 | 2;
+  /** RunPod GPU type IDs that agents may rent. */
+  readonly gpuTypes: readonly string[];
+  /** RunPod images that a pod can use. */
+  readonly images: readonly string[];
+  /** The container disk of each pod, in GB. */
+  readonly diskGb: number;
+  /** The person approves each pod. Otherwise a request inside the limits starts at once. */
+  readonly askBeforePod: boolean;
+}
+
+/**
+ * `requested` waits for the person. `starting`, `ready`, and `stopped` are
+ * open: the pod exists. `denied`, `ended`, and `failed` are closed.
+ */
+export type PodState =
+  | 'requested'
+  | 'denied'
+  | 'starting'
+  | 'ready'
+  | 'stopped'
+  | 'ended'
+  | 'failed';
+
+/** One pod of the project, without its RunPod address. Added after version 1. */
+export interface PodLease {
+  /** `lease-1`, `lease-2`, … */
+  readonly id: string;
+  readonly state: PodState;
+  /** A RunPod GPU type ID. */
+  readonly gpu: string;
+  /** Who asked for it: the person, the agent of `directions`, or the coordinator of the earlier research flow. */
+  readonly asker: 'person' | 'agent' | 'coordinator';
+  /** The lab directions of the pod, such as `d-2`. */
+  readonly directions: readonly string[];
+  /** Why the pod is needed, in the asker's words. */
+  readonly reason: Text;
+  /** USD per hour now, its disk included. */
+  readonly rateUsd: number;
+  readonly hours: number;
+  /** The most that it can cost: its rate and disk for all its hours. */
+  readonly maxUsd: number;
+  readonly spentUsd: number;
+  readonly requestedAt: string;
+  /** When its hours end. Null before its pod first started. */
+  readonly endsAt: string | null;
+  /** Minutes since its last job, while it is ready. */
+  readonly idleMinutes: number | null;
+  /** How it ended, when it ended. */
+  readonly ended: {
+    readonly at: string;
+    readonly reason: string;
+  } | null;
+  /** Something that Verifold changed and the person should read, until they dismiss it. */
+  readonly notice: string | null;
+  readonly noticeAt: string | null;
+  /** The names of the pod secrets that it gets. Never their values. */
+  readonly secrets: readonly string[];
+  /** Those that this computer does not store yet. The pod waits for them. */
+  readonly missingSecrets: readonly string[];
+}
+
+/** A GPU type with RunPod's Secure Cloud list price and stock. Added after version 1. */
+export interface GpuType {
+  readonly id: string;
+  readonly name: string;
+  readonly memoryGb: number;
+  /** USD per hour for one GPU. Null: RunPod does not offer it now. */
+  readonly usdPerHour: number | null;
+  readonly stock: 'none' | 'low' | 'medium' | 'high' | null;
+  /** One of the GPUs that research uses most, which pages show first. */
+  readonly common: boolean;
+}
+
+/**
+ * The GPU pods of a project and their settings. It holds no key and no
+ * secret value. Added after version 1.
+ */
+export interface ProjectCompute {
+  /** What Verifold knows of the stored RunPod key, without the key. Null: none is stored. */
+  readonly keyStored: {
+    readonly last4: string;
+    /** The last check with RunPod failed, and why. */
+    readonly problem: string | null;
+  } | null;
+  readonly settings: PodSettings;
+  /** How many agents may work at once, 1 to 8. Null when this process cannot tell. */
+  readonly agentsAtOnce: number | null;
+  /** The project's pods against its spend limit. `leftUsd` is null without a limit. */
+  readonly budget: {
+    readonly spentUsd: number;
+    readonly heldUsd: number;
+    readonly leftUsd: number | null;
+    /** USD per hour of the pods that run now. */
+    readonly rateUsd: number;
+  };
+  /** All projects' GPU spend this month against the person's monthly limit. Null: no monthly limit. */
+  readonly month: {
+    readonly spentUsd: number;
+    readonly limitUsd: number;
+    readonly leftUsd: number;
+  } | null;
+  /** Pods that are open, wait for the person, or carry a notice, the newest first. */
+  readonly pods: readonly PodLease[];
+  /** The newest earlier pods, the newest first. */
+  readonly earlier: readonly PodLease[];
+  /** How many earlier pods there are in all, also those that `earlier` leaves out. */
+  readonly earlierCount: number;
+  /** RunPod's GPUs, after a read. Null before one. */
+  readonly gpus: {
+    readonly at: string;
+    readonly types: readonly GpuType[];
+  } | null;
+  /** The last problem that a check of the pods met. */
+  readonly problem: { readonly at: string; readonly text: string } | null;
 }
 
 /** The lists of a lab that a snapshot can cut. Posts and turns have their own `more` flags. */
@@ -1116,6 +1250,27 @@ export interface ActionBodies {
     }[];
     readonly key?: string;
   };
+  /**
+   * Save the project's pod settings, every field at once. A change applies at
+   * once. Added after version 1.
+   */
+  'compute-settings': PodSettings & { readonly key?: string };
+  /** Read RunPod's GPUs and prices again. Added after version 1. */
+  'compute-gpus': { readonly key?: string };
+  /** How many agents may work at once, 1 to 8. Added after version 1. */
+  'compute-agents': { readonly agents: number; readonly key?: string };
+  /** Approve a pod that waits for the person. RunPod bills from then on. Added after version 1. */
+  'compute-lease-approve': { readonly lease: string; readonly key?: string };
+  /** Deny a pod that waits for the person. Added after version 1. */
+  'compute-lease-deny': { readonly lease: string; readonly key?: string };
+  /** Stop a running pod. RunPod erases its disk. Added after version 1. */
+  'compute-lease-stop': { readonly lease: string; readonly key?: string };
+  /** Start a stopped pod again. Added after version 1. */
+  'compute-lease-start': { readonly lease: string; readonly key?: string };
+  /** End a pod: Verifold deletes it. Added after version 1. */
+  'compute-lease-end': { readonly lease: string; readonly key?: string };
+  /** Dismiss a pod's notice. Added after version 1. */
+  'compute-lease-dismiss': { readonly lease: string; readonly key?: string };
   'lab-away-dismiss': Record<string, never>;
   /**
    * The person looks at the lab now. A look after 30 minutes or more away
