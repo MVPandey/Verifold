@@ -11,21 +11,25 @@ import {
   terminalMessage,
   tint,
 } from './terminal.ts';
-import { visibleWidth } from './terminal-layout.ts';
+import {
+  terminalColumns,
+  terminalRows,
+  visibleWidth,
+} from './terminal-layout.ts';
 
 /** Redraw only the active component. Completed work remains in scrollback. */
 class LiveRegion {
   private lines: readonly string[] = [];
 
   clear(): void {
-    const width = Math.max(1, stderr.columns || 80);
+    const width = terminalColumns(stderr.columns);
     const rows = this.lines.reduce(
       (sum, line) => sum + Math.max(1, Math.ceil(visibleWidth(line) / width)),
       0,
     );
     if (rows)
       stderr.write(
-        `\r\u001b[${Math.min(rows, Math.max(1, (stderr.rows || 24) - 1))}A\u001b[0J`,
+        `\r\u001b[${Math.min(rows, Math.max(1, terminalRows(stderr.rows) - 1))}A\u001b[0J`,
       );
     this.lines = [];
   }
@@ -55,7 +59,7 @@ export class TerminalSession {
     const region = new LiveRegion();
     const fits = (): boolean =>
       terminalBanner(true, !this.color, stderr.columns).split('\n').length <=
-      (stderr.rows || 24) - 1;
+      terminalRows(stderr.rows) - 1;
     if (this.motion && fits()) {
       for (const frame of [0, 1, 2]) {
         if (!fits()) break;
@@ -194,11 +198,12 @@ export class TerminalSession {
       ].join('\n');
     const render = (): void => {
       const value = content();
-      if (value.split('\n').length <= (stderr.rows || 24) - 1)
+      if (value.split('\n').length <= terminalRows(stderr.rows) - 1)
         region.draw(value);
     };
     const animate =
-      this.motion && content().split('\n').length <= (stderr.rows || 24) - 1;
+      this.motion &&
+      content().split('\n').length <= terminalRows(stderr.rows) - 1;
     if (animate) render();
     else this.progress(label);
     const timer = animate ? setInterval(render, 160) : undefined;

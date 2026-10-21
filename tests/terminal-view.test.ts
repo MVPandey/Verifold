@@ -23,7 +23,11 @@ import {
 } from '../src/server/screen.ts';
 import { enterLine, plainLines, viewLines } from '../src/cli/lab-view.ts';
 import { LabTerminal, toColumn } from '../src/cli/terminal-view.ts';
-import { visibleWidth } from '../src/cli/terminal-layout.ts';
+import {
+  terminalColumns,
+  terminalRows,
+  visibleWidth,
+} from '../src/cli/terminal-layout.ts';
 import { terminalInput, type CliIO } from '../src/cli/commands.ts';
 import type { SessionPool } from '../src/core/workers.ts';
 import {
@@ -596,6 +600,36 @@ await test('the terminal draws the view, keeps a message line, and opens the cal
   // After the view, messages print line by line again.
   view.progress('Detached.');
   assert.deepEqual(printed, ['Detached.']);
+});
+
+await test('a terminal that reports no size gets the default of 80 columns by 24 rows', (t) => {
+  for (const reported of [0, -1, Number.NaN, undefined])
+    assert.equal(terminalColumns(reported), 80);
+  assert.equal(terminalColumns(120.7), 120);
+  for (const reported of [0, -1, Number.NaN, undefined])
+    assert.equal(terminalRows(reported), 24);
+  // A pseudo-terminal without a size reports 0 columns and 0 rows. The view draws at 80 by 24, with each line in 79 cells.
+  const { input, output } = fakeTerminal(0);
+  output.rows = 0;
+  const view = new LabTerminal({
+    streams: { input, output },
+    color: false,
+    draws: true,
+    cancel: () => {},
+    print: () => {},
+    now: () => now,
+  });
+  const stop = new AbortController();
+  t.after(() => stop.abort());
+  view.show(screenOf(), true);
+  view.listen(() => {}, stop.signal);
+  assert.equal(view.viewing, true);
+  const frame = stripVTControlCharacters(output.text())
+    .split(/\r?\n/)
+    .filter((line) => line.trim());
+  assert.ok(frame.some((line) => line.includes('cot-faithfulness')));
+  for (const line of frame) assert.ok(visibleWidth(line) < 80, line);
+  stop.abort();
 });
 
 await test('a narrow terminal, NO_COLOR, and a project without a lab get plain lines', async (t) => {

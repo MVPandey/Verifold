@@ -279,7 +279,10 @@ function picker(
 ) {
   return (request: HarnessRequest): Promise<{ text: string }> => {
     seen.push(request.prompt);
-    textOnly.push(request.textOnly);
+    textOnly.push({
+      textOnly: request.textOnly,
+      outsideText: request.outsideText,
+    });
     const marker = 'The input, as JSON:\n';
     const input = JSON.parse(
       request.prompt.slice(request.prompt.indexOf(marker) + marker.length),
@@ -450,8 +453,8 @@ await test('a search reads each catalog with two REST calls, then one, and offer
     hosts: github.hosts,
     run: picker(['transformer-lens', 'hooked', 'saelens'], prompts, textOnly),
   });
-  // The catalogs' text is untrusted, so the picker runs with no tools and no web search.
-  assert.deepEqual(textOnly, [true]);
+  // The catalogs' text comes from outside, so the picker runs as text only, and only with every MCP server off.
+  assert.deepEqual(textOnly, [{ textOnly: true, outsideText: true }]);
   // The commit and the tree of each catalog, and one date for each card.
   for (const catalog of catalogs.slice(1))
     assert.equal(github.rest.get(`${catalog.owner}/${catalog.repo}`), 2);

@@ -655,8 +655,9 @@ async function pick(
       signal,
       timeoutMs: 180_000,
       idleMs: 120_000,
-      // The catalogs' descriptions are untrusted, so the picker can neither search nor fetch.
+      // The catalogs' descriptions come from outside, so the picker can neither search nor fetch, and without every MCP server off it does not run.
       textOnly: true,
+      outsideText: true,
       prompt: `${await loadPrompt('skills-pick')}
 
 The input, as JSON:

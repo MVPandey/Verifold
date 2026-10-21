@@ -115,7 +115,8 @@ onLine((line) => {
     return out({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
   }
   if (message.method === 'initialize') out({ id: message.id, result: {} });
-  if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
+  // With an odd-mcp file beside it, the configuration names a server that a -c option cannot hold.
+  if (message.method === 'config/read') out({ id: message.id, result: { config: fs.existsSync(require('node:path').join(require('node:path').dirname(process.argv[1]), 'odd-mcp')) ? { mcp_servers: { 'my.server': { command: 'x' } } } : {} } });
   if (message.method === 'thread/start') start = message.params;
   if (message.method === 'thread/start') out({ id: message.id, result: { thread: { id: 'codex-thread-' + process.pid }, approvalsReviewer: message.params.approvalsReviewer } });
   if (message.method === 'turn/start') {
@@ -614,6 +615,27 @@ await test(
         (event) => event.text === 'You returned to Verifold.',
       ),
     );
+  },
+);
+
+await test(
+  'a Codex terminal stays closed when an MCP server name cannot be turned off in it',
+  { skip: terminals },
+  async (t) => {
+    const { root, sessions } = await owner(t);
+    await writeFile(join(root, 'odd-mcp'), '');
+    const id = await sessions.start({
+      host: 'codex',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    // The thread still turns the server off by name. Only the terminal cannot.
+    await assert.rejects(
+      sessions.takeTerminal(id, lease),
+      /cannot turn off in a terminal/,
+    );
+    assert.equal(sessions.view(id)?.record.status, 'idle');
   },
 );
 

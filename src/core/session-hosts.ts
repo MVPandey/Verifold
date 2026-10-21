@@ -5,7 +5,11 @@ import { basename, join } from 'node:path';
 import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { childEnvironment, type HarnessName } from './harness.ts';
+import {
+  childEnvironment,
+  codexOffOptions,
+  type HarnessName,
+} from './harness.ts';
 import { listCodexModels, pickCodexModel } from './models.ts';
 import {
   claudeUpdates,
@@ -312,8 +316,12 @@ export interface HostSession {
   readonly pid: number | undefined;
   /** Codex only: the app-server socket that a terminal can attach to. */
   readonly socket?: string;
-  /** Codex only: `-c` overrides that keep the user's MCP servers, plugins, and apps off in a terminal. */
-  readonly overrides?: readonly string[];
+  /**
+   * Codex only: `-c` overrides that keep the user's MCP servers, plugins, and
+   * apps off in a terminal. Null: a server name cannot be written as a `-c`
+   * key, so no terminal can keep them off.
+   */
+  readonly overrides?: readonly string[] | null;
   /** Start a new turn. The caller sends a follow-up only after the previous turn ends. */
   send(text: string): void;
   /**
@@ -1070,7 +1078,7 @@ function codex(options: HostOptions): HostSession {
   const requests = new Map<string, number | string>();
   const changes = new Map<string, { paths: string; diff: string }>();
   let nextId = 1;
-  let overrides: string[] = [];
+  let overrides: string[] | null = [];
   let thread: string | undefined;
   let turn: string | undefined;
   let cancelled = false;
@@ -1430,19 +1438,11 @@ function codex(options: HostOptions): HostSession {
       send({ method: 'initialized', params: {} });
       call('config/read', { cwd: options.cwd }, (result) => {
         const config = codexIsolation(result);
+        // The thread's configuration turns off any server. A terminal's `-c` options can name only some.
         if (config)
-          overrides = [
-            '-c',
-            'features.plugins=false',
-            '-c',
-            'features.apps=false',
-            ...Object.keys(
-              config.mcp_servers as Record<string, unknown>,
-            ).flatMap((name) => [
-              '-c',
-              `mcp_servers.${/^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name)}.enabled=false`,
-            ]),
-          ];
+          overrides = codexOffOptions(
+            Object.keys(config.mcp_servers as Record<string, unknown>),
+          );
         if (!config) {
           emit({
             type: 'notice',
