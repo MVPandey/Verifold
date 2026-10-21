@@ -1,12 +1,18 @@
+import type { SearchResult } from '../protocol/api.ts';
 import {
   act,
   isBringRead,
   isFileDiff,
+  isPostThread,
   isTurnDetail,
   isTurnPage,
   load,
   paths,
+  type ActOutcome,
+  type Loaded,
 } from './api.ts';
+import { newKey } from './intent.ts';
+import { isSearchResult, searchPath } from './search.ts';
 import type { AnswerActions } from './screens/AnswerPage.tsx';
 import type { AgentActions } from './screens/DirectionPage.tsx';
 import type { LabActions } from './screens/LabHome.tsx';
@@ -44,12 +50,13 @@ export function labActions(token: string | null): LabActions {
 }
 
 /**
- * The reads and writes of the direction and turn pages. A message to a
- * direction is a plain post in it, which wakes its agent (Board.wakes).
+ * The reads and writes of the direction, turn, and post pages. A message to
+ * a direction is a plain post in it, which wakes its agent (Board.wakes).
  * Without a token, each one is refused at once.
  */
 export function agentActions(token: string | null): AgentActions {
-  if (!token) return { message: signedOut, turns: unread, turn: unread };
+  if (!token)
+    return { message: signedOut, turns: unread, turn: unread, thread: unread };
   return {
     message: (direction, text, key) =>
       act(token, 'lab-post', { text, direction }, key),
@@ -57,6 +64,8 @@ export function agentActions(token: string | null): AgentActions {
       load(token, paths.turns(agent, before), isTurnPage, signal),
     turn: (agent, turn, query, signal) =>
       load(token, paths.turn(agent, turn, query), isTurnDetail, signal),
+    thread: (post, signal) =>
+      load(token, paths.thread(post), isPostThread, signal),
   };
 }
 
@@ -84,5 +93,26 @@ export function answerActions(token: string | null): AnswerActions {
       load(token, paths.bring(direction), isBringRead, signal),
     diff: (direction, file, commit, signal) =>
       load(token, paths.bringDiff(direction, file, commit), isFileDiff, signal),
+  };
+}
+
+/** The app's own reads and writes: the search, dismissing the time away, and the person's look. */
+export interface AppActions {
+  readonly search: (
+    q: string,
+    signal: AbortSignal,
+  ) => Promise<Loaded<SearchResult>>;
+  readonly dismissAway: (key: string) => Promise<ActOutcome>;
+  /** The person looks at the lab now. It needs no intent: a look again is harmless. */
+  readonly look: () => Promise<ActOutcome>;
+}
+
+export function appActions(token: string | null): AppActions {
+  if (!token)
+    return { search: unread, dismissAway: signedOut, look: signedOut };
+  return {
+    search: (q, signal) => load(token, searchPath(q), isSearchResult, signal),
+    dismissAway: (key) => act(token, 'lab-away-dismiss', {}, key),
+    look: () => act(token, 'lab-look', {}, newKey()),
   };
 }

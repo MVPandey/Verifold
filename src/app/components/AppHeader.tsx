@@ -1,14 +1,16 @@
-import type { ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import type { Lab } from '../../protocol/api.ts';
 import type { ActOutcome } from '../api.ts';
 import { due, usd } from '../format.ts';
+import { onMac, searchKey } from '../search.ts';
+import { ToolsContext } from '../tools.ts';
 import { useAction } from '../useAction.ts';
-import { Logo } from './Icons.tsx';
+import { Logo, Magnifier } from './Icons.tsx';
 
 /**
- * The top bar: the project, the money line, and pause. Search and the
- * project switcher come with later slices of #282, so the bar shows neither
- * until they work.
+ * The top bar: the project, the money line, search, and pause. The project
+ * switcher comes with a later slice of #282, so the bar shows none until it
+ * works. Search shows when the app gives it, as it does for a lab.
  */
 export function AppHeader({
   project,
@@ -22,12 +24,26 @@ export function AppHeader({
   readonly onPause: (pause: boolean, key: string) => Promise<ActOutcome>;
 }): ReactNode {
   const pause = useAction(onPause);
+  const tools = useContext(ToolsContext);
+  const key = searchKey(onMac);
   return (
     <header className="header">
       <Logo />
       <span className="header__project">{project}</span>
       <div className="header__spacer" />
       {lab && <MoneyLine lab={lab} now={now} />}
+      {lab && tools && (
+        <button
+          type="button"
+          className="button button--search"
+          aria-keyshortcuts={key.aria}
+          onClick={tools.openSearch}
+        >
+          <Magnifier />
+          Search
+          <kbd className="key">{key.label}</kbd>
+        </button>
+      )}
       {lab?.agentsHere && (
         <button
           type="button"

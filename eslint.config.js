@@ -95,15 +95,17 @@ export default tseslint.config(
         {
           patterns: [
             {
-              regex: '^\\.\\./(?!(core|legacy|server|ui|desk)/)',
-              message: 'the desk imports core, legacy, server and ui.',
+              regex: '^\\.\\./(?!(core|legacy|server|ui|desk|protocol)/)',
+              message:
+                'the desk imports core, legacy, server, ui and protocol.',
             },
           ],
         },
       ],
     },
   },
-  // The protocol is types that the server and the app share. It imports nothing.
+  // The protocol is types and constants that the server, the desk, and the
+  // app share. It imports nothing.
   {
     files: ['src/protocol/**/*.ts'],
     rules: {

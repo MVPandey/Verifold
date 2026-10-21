@@ -74,3 +74,17 @@ export function meet(
   const first = newest[0];
   return !last || !first || last.index + 1 >= first.index;
 }
+
+/**
+ * Where a run that a link names shows among an agent's turns: `shown` in a
+ * turn on the page, `older` when turns not read yet may hold it, or
+ * `absent` when no turn of the agent started it.
+ */
+export function runPlace(
+  run: string,
+  turns: readonly Turn[],
+  older: boolean,
+): 'shown' | 'older' | 'absent' {
+  if (turns.some((turn) => turn.runs?.includes(run))) return 'shown';
+  return older ? 'older' : 'absent';
+}

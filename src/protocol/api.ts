@@ -1,7 +1,8 @@
 /**
  * The desk API, version 1: the data that the server sends to the app, and
- * the actions that the app sends back. These are plain types with two
- * constants and no imports, so the server and the app can share them.
+ * the actions that the app sends back. These are plain types with a few
+ * constants and no imports, so the server, the desk, and the app can share
+ * them.
  *
  * Times are ISO 8601 strings. Money is in USD. The server never puts
  * internal record fields, keys, or paths outside the project into these
@@ -115,6 +116,23 @@ export interface Lab {
   readonly away: Away | null;
   /** How many items each cut list left out. A list that the snapshot did not cut is not named. */
   readonly omitted: Readonly<Partial<Record<LabList, number>>>;
+  /** What desktop notifications follow, uncut at every level. Added after version 1. */
+  readonly notify?: NotifyFeed;
+}
+
+/**
+ * The IDs of the events that a desktop notification can tell: each call that
+ * waits for the person and each settled direction. No level of the snapshot
+ * cuts these lists, so a page can tell a new event from an old one that a
+ * smaller snapshot left out. Each list holds at most the newest 300.
+ */
+export interface NotifyFeed {
+  /** The calls that wait for the person, as in `needsYou`. */
+  readonly calls: readonly string[];
+  /** The directions that hold up. */
+  readonly holdsUp: readonly string[];
+  /** The directions that are ruled out. */
+  readonly ruledOut: readonly string[];
 }
 
 export interface Money {
@@ -550,6 +568,102 @@ export interface Work {
 export interface Away {
   readonly since: string;
   readonly spentThen: { readonly plansUsd: number; readonly gpuUsd: number };
+  /** What changed since then, as the desk's Home says it. Added after version 1. */
+  readonly news?: AwayNews;
+}
+
+/** A direction with news since the person left. */
+export interface AwayLine {
+  readonly direction: string;
+  readonly title: string;
+  /** The mark of its row: its verdict, an open dispute, or `new` for a direction opened meanwhile that is still open. */
+  readonly mark: Verdict | 'disputed' | 'new';
+  /** What changed, in words, such as "Holds up (acc 0.7). 2 new posts." */
+  readonly said: string;
+}
+
+/** What changed while the person was away. */
+export interface AwayNews {
+  /** The directions with news, the most important first: a dispute first, then the most settled. */
+  readonly lines: readonly AwayLine[];
+  /** Directions with news that `lines` leaves out. */
+  readonly moreLines: number;
+  /** What came, such as "4 posts, 3 runs ended (1 failed: r-7), 1 call for you", or "" when nothing came. */
+  readonly counts: string;
+  /** What the lab spent since then, such as "Spent since then: ≈$1.20 (Claude Code ≈$0.70, GPU $0.50).", or "" under a cent. */
+  readonly cost: string;
+}
+
+/** A part of a search hit's text: plain, or a match of the search's words. */
+export interface SnippetPart {
+  readonly text: string;
+  readonly mark: boolean;
+}
+
+/** A post, run, or call that a search found. */
+export type SearchHit =
+  | {
+      readonly type: 'post';
+      readonly id: string;
+      readonly at: string;
+      readonly kind: PostKind;
+      /** The kind in words, such as "Claim", or "Message" for the person's question. */
+      readonly label: string;
+      /** "You", "Verifold", or an agent's handle. */
+      readonly author: string;
+      readonly direction: string | null;
+      /** The text on one line around its first match. */
+      readonly snippet: readonly SnippetPart[];
+    }
+  | {
+      readonly type: 'run';
+      readonly id: string;
+      readonly at: string;
+      readonly author: string;
+      readonly direction: string;
+      /** Where the run stands, such as "exit 0 in 6 min" or "running". */
+      readonly summary: string;
+      readonly snippet: readonly SnippetPart[];
+    }
+  | {
+      readonly type: 'call';
+      readonly id: string;
+      readonly at: string;
+      /** The kind in words, such as "Cost call". */
+      readonly label: string;
+      readonly author: string;
+      readonly state: Call['state'];
+      /** Where it stands in words, such as "waits for you" or what the person chose. */
+      readonly summary: string;
+      readonly question: string;
+      /**
+       * The person's answer: the option that they chose and when, or their
+       * own words, which the lab does not time. Null before an answer.
+       */
+      readonly answer:
+        | { readonly option: string; readonly at: string }
+        | { readonly words: string }
+        | null;
+      /** Why it was withdrawn, or what Verifold did. */
+      readonly note: string | null;
+      readonly snippet: readonly SnippetPart[];
+    };
+
+/** The most characters of a search: the app's and the desk's search boxes, and `GET /api/v1/search`. */
+export const searchQueryLimit = 100;
+
+/**
+ * `GET /api/v1/search?q=`: the lab's search, as the desk's panel runs it.
+ * Each word must match, in any case. Added after version 1.
+ */
+export interface SearchResult {
+  readonly q: string;
+  /** What to type, that nothing matched, or how many hits. */
+  readonly note: string;
+  /** The hits in all. `hits` holds at most the newest 50. */
+  readonly total: number;
+  /** The newest first. */
+  readonly hits: readonly SearchHit[];
 }
 
 /**
@@ -632,6 +746,18 @@ export interface FileDiff {
 }
 
 /**
+ * `GET /api/v1/posts/:id`: a post and the replies below it at any depth,
+ * oldest first, as the lab's agents read a thread. A search hit for a post
+ * that the snapshot's board leaves out opens it. Added after version 1.
+ */
+export interface PostThread {
+  /** The post first, then at most 49 replies. */
+  readonly posts: readonly Post[];
+  /** More replies exist than `posts` holds. */
+  readonly more: boolean;
+}
+
+/**
  * `POST /api/v1/actions/:name`: the body of each action. The server runs the
  * operation that the desk runs for the same action, with the same checks.
  * `key`: a random 32-character hex string; the same key within a minute
@@ -685,6 +811,12 @@ export interface ActionBodies {
   };
   'lab-dismiss': Record<string, never>;
   'lab-away-dismiss': Record<string, never>;
+  /**
+   * The person looks at the lab now. A look after 30 minutes or more away
+   * starts a time away, which the snapshot's `away` shows until the person
+   * dismisses it. Added after version 1.
+   */
+  'lab-look': Record<string, never>;
 }
 
 export type ActionName = keyof ActionBodies;

@@ -1,0 +1,115 @@
+/* "While you were away" and the notification line, on the lab home. Values follow the v9 canvas artboard "12. Back after a night". */
+.away {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.away__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.away__title {
+  margin: 0;
+  flex-grow: 1;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.away__since {
+  margin: -6px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.away__quiet {
+  margin: 0;
+}
+
+.away__lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.away__line {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.away__line:last-child {
+  border-bottom: 0;
+}
+
+.away__mark {
+  flex: none;
+  display: inline-flex;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.away__line--holds-up .away__mark {
+  color: var(--ok-ink);
+}
+
+.away__line--disputed .away__mark {
+  color: var(--need-ink);
+}
+
+.away__line--ruled-out .away__mark {
+  color: var(--ink-2);
+}
+
+.away__line--new .away__mark,
+.away__line--leading .away__mark {
+  color: var(--accent);
+}
+
+.away__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.away__direction {
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.away__direction:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.away__said {
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.away__fine {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.notify {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}

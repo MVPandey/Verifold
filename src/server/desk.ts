@@ -59,7 +59,8 @@ import {
   type Lab,
   type LabView,
 } from '../core/lab.ts';
-import type { Away, LabDiff, LabWork } from '../desk/desk-lab.ts';
+import type { Away } from '../core/away.ts';
+import type { LabDiff, LabWork } from '../desk/desk-lab.ts';
 import {
   changeWorkspace,
   loadWorkspace,
@@ -984,6 +985,19 @@ async function act(
     labDesk.works = [];
     labDesk.requests.clear();
     labDesk.look = undefined;
+    return 200;
+  }
+  // The app says that the person looks at the lab, as the desk's own page
+  // does with `look=1`. A desk of one session only shows the lab, so it notes nothing.
+  if (body.action === 'lab-look') {
+    const view = labDesk.lab?.runs ? labDesk.lab.view() : null;
+    if (view)
+      await noteLook(
+        root,
+        labDesk,
+        view,
+        compute ? labGpu(compute.view(), view.state.startedAt).spent : 0,
+      );
     return 200;
   }
   if (typeof body.action === 'string' && body.action.startsWith('lab-'))

@@ -5,6 +5,7 @@ import type {
   Direction,
   Lab,
   PostKind,
+  PostThread,
   Snapshot,
   Turn,
   TurnDetail,
@@ -15,7 +16,7 @@ import { foldQuery, refreshKey, stepTotal, turnSummary } from '../activity.ts';
 import { clock, harnessName, modelName, since } from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
-import { byStart, filled, joinTurns, type Older } from '../turns.ts';
+import { byStart, filled, joinTurns, runPlace, type Older } from '../turns.ts';
 import { ActivityFold } from '../components/ActivityFold.tsx';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { Avatar } from '../components/Avatar.tsx';
@@ -28,7 +29,7 @@ import { TurnMessage } from '../components/TurnMessage.tsx';
 import { Verdict } from '../components/Verdict.tsx';
 import type { LabActions } from './LabHome.tsx';
 
-/** What the direction and turn pages ask of Verifold. */
+/** What the direction, turn, and post pages ask of Verifold. */
 export interface AgentActions {
   /**
    * Write to a direction's agent: the person's post in its direction. The
@@ -53,6 +54,11 @@ export interface AgentActions {
     query: StepQuery,
     signal?: AbortSignal,
   ) => Promise<Loaded<TurnDetail>>;
+  /** A post and the replies below it. */
+  readonly thread: (
+    post: string,
+    signal?: AbortSignal,
+  ) => Promise<Loaded<PostThread>>;
 }
 
 /** Pages of older turns that a gap fill reads at most, before it gives the older turns up. */
@@ -127,14 +133,17 @@ const postNames: Record<PostKind, string> = {
 /**
  * What a turn left behind: the runs and posts that its tool calls made. A
  * run or post that the snapshot leaves out shows by its ID. An older server
- * names none, and the turn shows none.
+ * names none, and the turn shows none. `target`: a run that a link named,
+ * marked.
  */
 function TurnProof({
   turn,
   lab,
+  target,
 }: {
   readonly turn: Turn;
   readonly lab: Lab;
+  readonly target: string | null;
 }): ReactNode {
   const runIds = turn.runs ?? [];
   const postIds = turn.posts ?? [];
@@ -152,7 +161,7 @@ function TurnProof({
         : {})}
     >
       {runIds.map((id) => (
-        <RunChip key={id} id={id} runs={runs} />
+        <RunChip key={id} id={id} runs={runs} target={target} />
       ))}
       {postIds.map((id) => {
         const post = posts.get(id);
@@ -179,6 +188,7 @@ function TurnItem({
   direction,
   lab,
   now,
+  target,
   agentActions,
 }: {
   readonly turn: Turn;
@@ -186,6 +196,7 @@ function TurnItem({
   readonly direction: Direction;
   readonly lab: Lab;
   readonly now: number;
+  readonly target: string | null;
   readonly agentActions: AgentActions;
 }): ReactNode {
   const listId = useId();
@@ -250,7 +261,7 @@ function TurnItem({
             </p>
           ))}
         {turn.message && <TurnMessage message={turn.message} rest={turnHref} />}
-        <TurnProof turn={turn} lab={lab} />
+        <TurnProof turn={turn} lab={lab} target={target} />
       </div>
     </article>
   );
@@ -314,19 +325,22 @@ function reach(agent: Agent, lab: Lab): string {
  * The agent's turns: older ones read on request, then the snapshot's newest
  * page. When new turns push the older ones' anchor out of the page, the
  * turns between are read before anything older shows again, so no turn is
- * ever missing from the list.
+ * ever missing from the list. `run`: a run that a link named. Its chip is
+ * marked and comes into view once a turn on the page shows it.
  */
 function Turns({
   agent,
   direction,
   lab,
   now,
+  run,
   agentActions,
 }: {
   readonly agent: Agent;
   readonly direction: Direction;
   readonly lab: Lab;
   readonly now: number;
+  readonly run: string | null;
   readonly agentActions: AgentActions;
 }): ReactNode {
   const [older, setOlder] = useState<Older | null>(null);
@@ -377,6 +391,17 @@ function Turns({
     // The fill depends on the gap and the anchor, not on each new `older`.
   }, [gap, anchor, agent.id, agentActions]);
   const more = !gap && (older ? older.more : agent.turns.more);
+  const place = run ? runPlace(run, turns, more || gap !== null) : null;
+  // The run that the page brought into view, so a new snapshot does not scroll again.
+  const shown = useRef<string | null>(null);
+  useEffect(() => {
+    if (!run) shown.current = null;
+    if (!run || place !== 'shown' || shown.current === run) return;
+    shown.current = run;
+    const chip = document.getElementById(`run-${run}`);
+    chip?.scrollIntoView({ block: 'center' });
+    chip?.focus({ preventScroll: true });
+  }, [run, place]);
   const showOlder = async (): Promise<void> => {
     const first = turns[0];
     if (!first || loading.current) return;
@@ -409,6 +434,13 @@ function Turns({
   );
   return (
     <section className="turns" aria-label={`What ${agent.handle} did`}>
+      {run && place !== 'shown' && (
+        <p role="status" className="turns__none">
+          {place === 'older'
+            ? `Run ${run} is not in the turns on this page. It may be in an older turn.`
+            : `Run ${run} is not in ${agent.handle}'s turns.`}
+        </p>
+      )}
       {more && (
         <button
           type="button"
@@ -436,6 +468,7 @@ function Turns({
           direction={direction}
           lab={lab}
           now={now}
+          target={run}
           agentActions={agentActions}
         />
       ))}
@@ -448,6 +481,7 @@ function Turns({
  * A direction on its own page: its verdict and bar, what its agent did turn
  * by turn, folded the way the Claude Code and Codex apps fold their work,
  * and a box to write to that agent. As on the v9 canvas ("10. A direction").
+ * `run`: a run to bring into view, as a search hit for it asks.
  */
 export function DirectionPage({
   snapshot,
@@ -457,6 +491,7 @@ export function DirectionPage({
   now,
   actions,
   agentActions,
+  run = null,
 }: {
   readonly snapshot: Snapshot;
   readonly lab: Lab;
@@ -465,6 +500,7 @@ export function DirectionPage({
   readonly now: number;
   readonly actions: LabActions;
   readonly agentActions: AgentActions;
+  readonly run?: string | null;
 }): ReactNode {
   const agent = lab.agents.find((entry) => entry.id === direction.agent);
   const ended =
@@ -491,6 +527,7 @@ export function DirectionPage({
               direction={direction}
               lab={lab}
               now={now}
+              run={run}
               agentActions={agentActions}
             />
           ) : (

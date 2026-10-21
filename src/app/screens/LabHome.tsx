@@ -1,19 +1,22 @@
-import type { ReactNode } from 'react';
+import { useContext, useEffect, type ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
 import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
-import { threads } from '../board.ts';
+import { boardLink, threads } from '../board.ts';
+import { href, replaceRoute } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
-import { BoardThread } from '../components/BoardThread.tsx';
+import { BoardThread, showPost } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { DirectionRow } from '../components/DirectionRow.tsx';
 import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
+import { AwayDigest } from '../components/AwayDigest.tsx';
+import { NotifyLine } from '../components/NotifyLine.tsx';
 import { failureOf } from '../call.ts';
-import { href } from '../route.ts';
+import { ToolsContext } from '../tools.ts';
 
 export interface LabActions {
   /** Write to the lab. `key` marks the person's intent (see intent.ts). */
@@ -37,7 +40,8 @@ export interface LabActions {
 /**
  * The lab's home: what needs the person, the directions with their live
  * lines, the board, and a box to write to the lab. One column, as on the v9
- * canvas ("8. The lab at work"). Depth opens on its own page.
+ * canvas ("8. The lab at work"). Depth opens on its own page. `show`: a post
+ * on the board that a link to it (`#/board/<id>`) brings into view.
  */
 export function LabHome({
   snapshot,
@@ -45,15 +49,25 @@ export function LabHome({
   connection,
   now,
   actions,
+  show = null,
 }: {
   readonly snapshot: Snapshot;
   readonly lab: Lab;
   readonly connection: Connection;
   readonly now: number;
   readonly actions: LabActions;
+  readonly show?: string | null;
 }): ReactNode {
   const agents = new Map(lab.agents.map((agent) => [agent.id, agent]));
   const [first, ...rest] = lab.needsYou;
+  const tools = useContext(ToolsContext);
+  // After the board rendered: then the post is on the page.
+  useEffect(() => {
+    if (!show) return;
+    const link = boardLink(lab, show);
+    if (link.show) showPost(link.show);
+    replaceRoute(link.route);
+  }, [show, lab]);
   return (
     <div className="page">
       <AppHeader
@@ -65,6 +79,13 @@ export function LabHome({
       <main className="main">
         <div className="column">
           <ConnectionBar connection={connection} at={snapshot.at} />
+          {lab.away && (
+            <AwayDigest
+              away={lab.away}
+              now={now}
+              onDismiss={tools?.dismissAway ?? null}
+            />
+          )}
           {first ? (
             <NeedsYouLine
               call={first}
@@ -149,6 +170,7 @@ export function LabHome({
             maxLength={lab.postLimit}
             onSend={actions.post}
           />
+          <NotifyLine />
         </div>
       </main>
     </div>
