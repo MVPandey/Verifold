@@ -461,9 +461,11 @@ async function fixture(
     quota,
     script: (folder, turns) =>
       writeFile(join(base, 'scripts', `${folder}.json`), JSON.stringify(turns)),
+    // A fake appends each line while the test reads: only a line with its newline is whole.
     lines: async (folder, file) =>
       (await readFile(join(base, 'logs', folder, file), 'utf8').catch(() => ''))
         .split('\n')
+        .slice(0, -1)
         .filter(Boolean)
         .map((line) => JSON.parse(line) as unknown),
     inputs: async (folder) =>
