@@ -81,13 +81,36 @@ await test('a slow pod action answers 202 and goes on, and a failure after that 
     requests.works.map((work) => [work.label, work.error]),
     [['Starting the pod: lease-1', 'RunPod has no capacity for this GPU.']],
   );
-  // Dismiss removes the failures, and runs nothing.
+  // Dismiss removes the failures that the page named, and runs nothing.
+  const none = (): Promise<number> =>
+    Promise.reject(new Error('Dismiss runs no action.'));
+  const [shown] = requests.works;
+  assert.ok(shown);
+  const stop = later();
+  await requests.act(
+    { action: 'compute-lease-stop', lease: 'lease-3', key: 'c'.repeat(32) },
+    stop.run,
+  );
+  stop.refuse('RunPod did not answer.');
+  await tick();
+  assert.equal(requests.works.length, 2);
   assert.equal(
-    await requests.act({ action: 'compute-dismiss' }, () =>
-      Promise.reject(new Error('Dismiss runs no action.')),
+    await requests.act(
+      {
+        action: 'compute-dismiss',
+        works: [{ action: shown.action, at: shown.at }, 'not a work'],
+      },
+      none,
     ),
     200,
   );
+  // A failure that came after the page showed its list stays.
+  assert.deepEqual(
+    requests.works.map((work) => work.label),
+    ['Stopping the pod: lease-3'],
+  );
+  // Without names, as from an older page, every failure goes.
+  assert.equal(await requests.act({ action: 'compute-dismiss' }, none), 200);
   assert.deepEqual(requests.works, []);
 });
 

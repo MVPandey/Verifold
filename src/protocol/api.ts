@@ -1286,8 +1286,18 @@ export interface ActionBodies {
   'compute-lease-end': { readonly lease: string; readonly key?: string };
   /** Dismiss a pod's notice. Added after version 1. */
   'compute-lease-dismiss': { readonly lease: string; readonly key?: string };
-  /** Dismiss the pod actions that failed in the background. Added after version 1. */
-  'compute-dismiss': { readonly key?: string };
+  /**
+   * Clear pod actions that failed in the background. `works` names the
+   * failures that the page showed, by action and start time: only they go.
+   * Without it, every failure goes. Added after version 1.
+   */
+  'compute-dismiss': {
+    readonly works?: readonly {
+      readonly action: string;
+      readonly at: string;
+    }[];
+    readonly key?: string;
+  };
   'lab-away-dismiss': Record<string, never>;
   /**
    * The person looks at the lab now. A look after 30 minutes or more away

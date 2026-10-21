@@ -3,6 +3,7 @@ import { validAgents } from '../core/contracts.ts';
 import { SessionActionError } from '../core/session.ts';
 import { changeWorkspace } from '../core/storage.ts';
 import type { Work } from '../protocol/api.ts';
+import { record } from './http.ts';
 
 /**
  * The project's compute actions, for the desk and for API v1. The key and
@@ -130,7 +131,25 @@ export class ComputeRequests {
     run: () => Promise<number>,
   ): Promise<number> {
     if (body.action === 'compute-dismiss') {
-      this.works = this.works.filter((work) => work.error === null);
+      // A page names the failures that it shows, as for lab-dismiss. Without names, every failure goes.
+      const named = Array.isArray(body.works)
+        ? new Set(
+            body.works
+              .slice(0, 50)
+              .flatMap((entry: unknown) =>
+                record(entry) &&
+                typeof entry.action === 'string' &&
+                typeof entry.at === 'string'
+                  ? [`${entry.action}\0${entry.at}`]
+                  : [],
+              ),
+          )
+        : null;
+      this.works = this.works.filter(
+        (work) =>
+          work.error === null ||
+          (named !== null && !named.has(`${work.action}\0${work.at}`)),
+      );
       return Promise.resolve(200);
     }
     const action = typeof body.action === 'string' ? body.action : '';
