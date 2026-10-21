@@ -52,15 +52,37 @@ export function mentionQuery(
   return { start: caret - match[1].length - 1, query: match[1] };
 }
 
-/** The names that start with what the person typed, at most `mentionLimit`. */
+/**
+ * The names that start with what the person typed, at most `mentionLimit`.
+ * A name that is all of what they typed comes first, so that `@d-1` shows
+ * before `@d-10`.
+ */
 export function mentionMatches(
   names: readonly MentionName[],
   query: string,
 ): MentionName[] {
   const typed = query.toLowerCase();
-  return names
-    .filter((name) => name.value.slice(1).toLowerCase().startsWith(typed))
-    .slice(0, mentionLimit);
+  const matches = names.filter((name) =>
+    name.value.slice(1).toLowerCase().startsWith(typed),
+  );
+  const whole = matches.filter(
+    (name) => name.value.slice(1).toLowerCase() === typed,
+  );
+  return [...whole, ...matches.filter((name) => !whole.includes(name))].slice(
+    0,
+    mentionLimit,
+  );
+}
+
+/**
+ * Whether Enter puts the highlighted name in: only while the person typed
+ * the start of it. When they typed all of it, Enter sends. Tab always puts
+ * it in.
+ */
+export function enterCompletes(query: string, name: MentionName): boolean {
+  const typed = query.toLowerCase();
+  const whole = name.value.slice(1).toLowerCase();
+  return whole !== typed && whole.startsWith(typed);
 }
 
 /**

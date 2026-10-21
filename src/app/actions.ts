@@ -18,7 +18,8 @@ import type { AgentActions } from './screens/DirectionPage.tsx';
 import type { LabActions } from './screens/LabHome.tsx';
 import type { LabStart } from './screens/Notice.tsx';
 
-const signedOut = (): Promise<{ readonly refused: string }> =>
+/** The refusal of an action from a tab without a token. */
+export const signedOut = (): Promise<{ readonly refused: string }> =>
   Promise.resolve({ refused: 'This tab has no access key.' });
 
 const unread = (): Promise<{ readonly error: string }> =>

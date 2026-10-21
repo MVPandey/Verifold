@@ -2,6 +2,13 @@ import { useRef, useState } from 'react';
 import type { ActOutcome } from './api.ts';
 import { intentFor, unansweredAfter, type Intent } from './intent.ts';
 
+/** A lab action on a page: whether it runs now, why it did not run, and a way to run it. */
+export interface Action<T> {
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly submit: (value: T) => Promise<boolean>;
+}
+
 /**
  * Run a lab action for the person: one key per intent, the same key again
  * when a retry follows a lost answer, and Verifold's reason when it said no.
@@ -11,11 +18,7 @@ import { intentFor, unansweredAfter, type Intent } from './intent.ts';
 export function useAction<T>(
   run: (value: T, key: string) => Promise<ActOutcome>,
   same?: (a: T, b: T) => boolean,
-): {
-  readonly busy: boolean;
-  readonly error: string | null;
-  readonly submit: (value: T) => Promise<boolean>;
-} {
+): Action<T> {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unanswered = useRef<Intent<T> | null>(null);

@@ -280,8 +280,18 @@ export interface ApiSources {
   readonly reads?: LabReadSource | undefined;
 }
 
-/** The lab's own reads of a run's log and of a direction's diff, which the desk's panels use too. */
+/** The lab's own reads of a run and of a direction's diff, which the desk's panels use too. */
 export interface LabReadSource {
+  /**
+   * A run's record, the handle of its agent, and whether this process runs
+   * the lab's agents, without the whole lab view. Null for a run that the
+   * lab does not have.
+   */
+  readonly run: (run: string) => {
+    readonly record: RunRecord;
+    readonly handle: string | null;
+    readonly here: boolean;
+  } | null;
   /** The end of a run's log, at most `bytes`, or null when the run has none. */
   readonly runLog: (run: string, bytes: number) => Promise<RunLogPart | null>;
   /**
@@ -1584,14 +1594,14 @@ export class ApiReader {
 
   /** A run in full, with its kept files and the end of its log. Null for a run that the lab does not have. */
   async run(id: string): Promise<RunDetail | null> {
-    const sources = this.sources();
-    const view = sources.lab?.view();
-    const entry = view?.ledger.find((item) => item.id === id);
-    if (!view || !entry) return null;
-    const log = (await sources.reads?.runLog(id, apiLimits.runLog)) ?? null;
+    const reads = this.sources().reads;
+    const found = reads?.run(id);
+    if (!reads || !found) return null;
+    const { record: entry, handle, here } = found;
+    const log = await reads.runLog(id, apiLimits.runLog);
     return {
       run: run(entry),
-      handle: view.handles[entry.agent] ?? null,
+      handle,
       harness: entry.harness,
       minutes: entry.minutes,
       outputs: entry.outputs
@@ -1600,7 +1610,7 @@ export class ApiReader {
       moreOutputs: Math.max(0, entry.outputs.length - apiLimits.runOutputs),
       log,
       cancelable:
-        view.runs && (entry.status === 'queued' || entry.status === 'running'),
+        here && (entry.status === 'queued' || entry.status === 'running'),
     };
   }
 
@@ -2064,7 +2074,7 @@ export async function answerApi(
   }
   if (first === 'runs' && parts.length === 2 && !keys.length) {
     if (!second || !runId.test(second)) {
-      response.writeHead(400).end();
+      json(response, 400, { error: 'Name a run such as r-3.' });
       return;
     }
     const detail = await reader.run(second);
@@ -2087,7 +2097,10 @@ export async function answerApi(
       (file !== null && (!file || file.length > 300)) ||
       (proof !== null && !proofRef(proof))
     ) {
-      response.writeHead(400).end();
+      json(response, 400, {
+        error:
+          'Ask for at most one file, with a path of 1 to 300 characters, and at most one proof such as p-12.0.',
+      });
       return;
     }
     try {

@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import type { Lab, Post, PostKind, Proof } from '../../protocol/api.ts';
-import { checkLine } from '../answer.ts';
+import { checkWords } from '../answer.ts';
 import type { Thread } from '../board.ts';
+import { authorOf } from '../format.ts';
 import { href } from '../route.ts';
 import { Avatar, type Who } from './Avatar.tsx';
 import { PlanCard } from './PlanCard.tsx';
@@ -29,10 +30,6 @@ function who(post: Post): Who {
   if (post.harness && post.handle)
     return { harness: post.harness, handle: post.handle };
   return 'verifold';
-}
-
-function name(post: Post): string {
-  return post.author === 'person' ? 'You' : (post.handle ?? 'Verifold');
 }
 
 function proofLabel(proof: Proof): string {
@@ -88,8 +85,9 @@ const checkable: ReadonlySet<PostKind> = new Set([
 ]);
 
 /**
- * How a check tested a post that cites a run, such as "Codex reran it, and
- * it held", with a link to what the checker did once it started.
+ * How the newest check tested a post that cites a run, such as "Codex reran
+ * it, and it held", with a link to what the checker did once it started,
+ * while the snapshot still holds the checker.
  */
 function CheckNote({
   post,
@@ -105,17 +103,17 @@ function CheckNote({
     return null;
   // Before any check, the post says nothing about checks, as on the desk.
   const check = lab.checks.filter((entry) => entry.post === post.id).at(-1);
-  const line = check ? checkLine(lab, post.id) : null;
-  if (!check || !line) return null;
+  if (!check) return null;
   return (
     <span className="post__check">
-      {line}.
-      {check.state !== 'queued' && (
-        <>
-          {' '}
-          <a href={href.agent(check.agent)}>What {check.handle} did</a>
-        </>
-      )}
+      {checkWords(check)}.
+      {check.state !== 'queued' &&
+        lab.agents.some((agent) => agent.id === check.agent) && (
+          <>
+            {' '}
+            <a href={href.agent(check.agent)}>What {check.handle} did</a>
+          </>
+        )}
     </span>
   );
 }
@@ -145,13 +143,13 @@ function PostLines({
   return (
     <>
       <div className="post__head">
-        <b>{name(post)}</b>
+        <b>{authorOf(post)}</b>
         {chip && <span className={`chip chip--${post.kind}`}>{chip}</span>}
         {onReply && (
           <button
             type="button"
             className="post__reply"
-            aria-label={`Reply to ${name(post)}`}
+            aria-label={`Reply to ${authorOf(post)}`}
             onClick={() => onReply(post)}
           >
             Reply
@@ -207,7 +205,8 @@ export function BoardThread({
             >
               <Avatar who={who(reply)} size="xs" />
               <span>
-                <span className="ack__name">{name(reply)}</span> {reply.text}
+                <span className="ack__name">{authorOf(reply)}</span>{' '}
+                {reply.text}
                 <ProofLinks post={reply} />
               </span>
             </div>

@@ -1,10 +1,12 @@
-import { createContext } from 'react';
+import { createContext, useContext } from 'react';
 import type {
   BoardPage,
   DirectionDiff,
   Harness,
   RunDetail,
+  Work,
 } from '../protocol/api.ts';
+import { signedOut } from './actions.ts';
 import {
   act,
   isBoardPage,
@@ -15,6 +17,7 @@ import {
   type ActOutcome,
   type Loaded,
 } from './api.ts';
+import { useAction, type Action } from './useAction.ts';
 
 /** A direction that the person opens: its title, the harness of its agent, and its bar, which can be empty. */
 export interface NewDirection {
@@ -45,8 +48,11 @@ export interface LabControls {
   readonly cancelRun: (run: string, key: string) => Promise<ActOutcome>;
   /** More hours after the time budget ended. */
   readonly moreTime: (hours: number, key: string) => Promise<ActOutcome>;
-  /** Clear every background action that failed. */
-  readonly dismiss: (key: string) => Promise<ActOutcome>;
+  /** Clear the background actions that failed and that the page shows, by their action and start. */
+  readonly dismiss: (
+    works: readonly Pick<Work, 'action' | 'at'>[],
+    key: string,
+  ) => Promise<ActOutcome>;
   readonly reply: (
     post: string,
     text: string,
@@ -70,6 +76,24 @@ export interface LabControls {
 
 export const ControlsContext = createContext<LabControls | null>(null);
 
+/**
+ * A control on a page: the lab's controls, and the action that runs `run`
+ * with them, with each key of the person's intent. On a page without the
+ * controls, as in a test, `controls` is null: the page shows no control,
+ * and the action is refused.
+ */
+export function useControl<T>(
+  run: (controls: LabControls, value: T, key: string) => Promise<ActOutcome>,
+  same?: (a: T, b: T) => boolean,
+): { readonly controls: LabControls | null; readonly action: Action<T> } {
+  const controls = useContext(ControlsContext);
+  const action = useAction<T>(
+    (value, key) => (controls ? run(controls, value, key) : signedOut()),
+    same,
+  );
+  return { controls, action };
+}
+
 export function labControls(token: string): LabControls {
   return {
     addDirection: ({ title, harness, bar }, key) =>
@@ -85,7 +109,13 @@ export function labControls(token: string): LabControls {
       act(token, 'lab-agent-restart', { agent }, key),
     cancelRun: (run, key) => act(token, 'lab-run-cancel', { run }, key),
     moreTime: (hours, key) => act(token, 'lab-budget', { hours }, key),
-    dismiss: (key) => act(token, 'lab-dismiss', {}, key),
+    dismiss: (works, key) =>
+      act(
+        token,
+        'lab-dismiss',
+        { works: works.map(({ action, at }) => ({ action, at })) },
+        key,
+      ),
     reply: (post, text, key) =>
       act(token, 'lab-post', { text, replyTo: post }, key),
     run: (id, signal) => load(token, paths.run(id), isRunDetail, signal),

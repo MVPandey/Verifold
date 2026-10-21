@@ -1104,7 +1104,18 @@ export interface ActionBodies {
     readonly files: readonly string[];
     readonly key?: string;
   };
-  'lab-dismiss': Record<string, never>;
+  /**
+   * Clear background actions that failed. `works` names the failures that
+   * the page showed, by action and start time: only they go. Without it,
+   * every failure goes. `works` was added after version 1.
+   */
+  'lab-dismiss': {
+    readonly works?: readonly {
+      readonly action: string;
+      readonly at: string;
+    }[];
+    readonly key?: string;
+  };
   'lab-away-dismiss': Record<string, never>;
   /**
    * The person looks at the lab now. A look after 30 minutes or more away

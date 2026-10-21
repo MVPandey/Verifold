@@ -8,17 +8,33 @@ import type {
   Lab,
   Post,
   Run,
+  RunDetail,
   Snapshot,
   Work,
 } from '../src/protocol/api.ts';
-import { paths } from '../src/app/api.ts';
+import { checkWords } from '../src/app/answer.ts';
+import {
+  isDirectionDiff,
+  isRunDetail,
+  load,
+  paths,
+  type Loaded,
+} from '../src/app/api.ts';
 import { Screen } from '../src/app/App.tsx';
+import {
+  byNumber,
+  filledPosts,
+  joinPosts,
+  type OlderPosts,
+} from '../src/app/board.ts';
+import { intentFor, unansweredAfter } from '../src/app/intent.ts';
 import {
   ControlsContext,
   labControls,
   type LabControls,
 } from '../src/app/controls.ts';
 import {
+  enterCompletes,
   insertMention,
   mentionLimit,
   mentionMatches,
@@ -26,12 +42,20 @@ import {
   mentionQuery,
 } from '../src/app/mentions.ts';
 import { href, parseRoute } from '../src/app/route.ts';
-import { runState, runTimes, runWhere, size } from '../src/app/runs.ts';
-import { lineKind } from '../src/app/screens/DiffPage.tsx';
+import {
+  followRun,
+  retryAfter,
+  runState,
+  runTimes,
+  runWhere,
+  size,
+} from '../src/app/runs.ts';
+import { lineKinds } from '../src/app/screens/DiffPage.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import { labHours, validHours } from '../src/app/screens/Notice.tsx';
 import { proofHref } from '../src/app/components/BoardThread.tsx';
+import { sameSend, type Send } from '../src/app/components/Composer.tsx';
 
 /** A fixed "now": Tuesday 2026-10-20, 22:00 UTC. */
 const now = Date.UTC(2026, 9, 20, 22, 0);
@@ -620,12 +644,51 @@ await test("the diff page names what it shows, and lines read as added, removed,
     text(render(story(), href.diff('d-2'), null)),
     /Open this page from Verifold to read its changes\./,
   );
-  assert.equal(lineKind('@@ -1,2 +1,3 @@'), 'hunk');
-  assert.equal(lineKind('+new line'), 'add');
-  assert.equal(lineKind('-old line'), 'del');
-  assert.equal(lineKind('+++ b/probe.py'), null);
-  assert.equal(lineKind('--- a/probe.py'), null);
-  assert.equal(lineKind(' context'), null);
+  // `---` and `+++` name the files in a file's header. In a hunk they are removed and added lines.
+  assert.deepEqual(
+    lineKinds([
+      'diff --git a/probe.py b/probe.py',
+      'index 1111111..2222222 100644',
+      '--- a/probe.py',
+      '+++ b/probe.py',
+      '@@ -1,3 +1,3 @@',
+      ' context',
+      '-old line',
+      '+new line',
+      '--- a removed line that starts with --',
+      '+++ an added line that starts with ++',
+      '\\ No newline at end of file',
+      'diff --git a/gap.py b/gap.py',
+      '--- a/gap.py',
+      '+++ b/gap.py',
+      '@@ -0,0 +1 @@',
+      '+x = 1',
+    ]),
+    [
+      null,
+      null,
+      null,
+      null,
+      'hunk',
+      null,
+      'del',
+      'add',
+      'del',
+      'add',
+      null,
+      null,
+      null,
+      null,
+      'hunk',
+      'add',
+    ],
+  );
+  // A diff without its header starts at its first hunk.
+  assert.deepEqual(lineKinds(['@@ -1 +1 @@', '---x', '+++y']), [
+    'hunk',
+    'del',
+    'add',
+  ]);
 });
 
 await test('a lab start takes a question and whole hours within the limit', () => {
@@ -686,7 +749,13 @@ await test('the controls send the desk actions with their keys, and read with th
   await sent.restartAgent('a-2', 'k4');
   await sent.cancelRun('r-3', 'k5');
   await sent.moreTime(2, 'k6');
-  await sent.dismiss('k7');
+  const failure: Work = {
+    action: 'lab-pause',
+    label: 'Pausing the lab',
+    at: '2026-10-20T21:57:00.000Z',
+    error: 'An agent did not park in time.',
+  };
+  await sent.dismiss([failure], 'k7');
   await sent.reply('p-9', 'Which seed?', 'k8');
   const bodies = calls.map((call) => [
     call.url,
@@ -712,7 +781,14 @@ await test('the controls send the desk actions with their keys, and read with th
     ['/api/v1/actions/lab-agent-restart', { agent: 'a-2', key: 'k4' }],
     ['/api/v1/actions/lab-run-cancel', { run: 'r-3', key: 'k5' }],
     ['/api/v1/actions/lab-budget', { hours: 2, key: 'k6' }],
-    ['/api/v1/actions/lab-dismiss', { key: 'k7' }],
+    // Only the action and its start name a failure.
+    [
+      '/api/v1/actions/lab-dismiss',
+      {
+        works: [{ action: 'lab-pause', at: '2026-10-20T21:57:00.000Z' }],
+        key: 'k7',
+      },
+    ],
     [
       '/api/v1/actions/lab-post',
       { text: 'Which seed?', replyTo: 'p-9', key: 'k8' },
@@ -732,5 +808,260 @@ await test('the controls send the desk actions with their keys, and read with th
   // A read that sends something else says so.
   assert.deepEqual(await sent.run('r-3'), {
     error: 'Verifold sent something this page cannot read. Reload it.',
+  });
+});
+
+/** The lab of a story, which always has one. */
+function labOf(snapshot: Snapshot): Lab {
+  assert.ok(snapshot.lab);
+  return snapshot.lab;
+}
+
+await test('older posts join the newest page with no post left out, and a gap reads the posts in between first', () => {
+  const p = (n: number): Post => post(`p-${n}`, 'a-2', 'claim', `Post ${n}`);
+  const ids = (posts: readonly Post[]): string[] =>
+    posts.map((entry) => entry.id);
+  const older: OlderPosts = {
+    posts: [p(1), p(2), p(3)],
+    more: true,
+    anchor: 'p-4',
+  };
+  // The anchor is still on the newest page: one list, oldest first.
+  assert.deepEqual(joinPosts(older, [p(4), p(5)]), {
+    posts: [p(1), p(2), p(3), p(4), p(5)],
+    gap: null,
+  });
+  // New posts pushed the anchor out: the newest page alone, until the posts between are read.
+  const pushed = joinPosts(older, [p(8), p(9)]);
+  assert.deepEqual(ids(pushed.posts), ['p-8', 'p-9']);
+  assert.equal(pushed.gap, 'p-8');
+  // The pages before p-8 reached the anchor, so the older posts end before p-8 now.
+  const filled = filledPosts(
+    older,
+    [
+      [p(6), p(7)],
+      [p(4), p(5)],
+    ],
+    'p-8',
+  );
+  assert.ok(filled);
+  assert.equal(filled.anchor, 'p-8');
+  assert.equal(filled.more, true);
+  assert.deepEqual(ids(joinPosts(filled, [p(8), p(9)]).posts), [
+    'p-1',
+    'p-2',
+    'p-3',
+    'p-4',
+    'p-5',
+    'p-6',
+    'p-7',
+    'p-8',
+    'p-9',
+  ]);
+  // Pages that never reached the anchor give the older posts up.
+  assert.equal(filledPosts(older, [[p(6), p(7)]], 'p-8'), null);
+  // By number, so p-10 comes after p-9, and a post read twice shows once.
+  assert.deepEqual(ids(byNumber([[p(10), p(9)], [p(9)]])), ['p-9', 'p-10']);
+  assert.deepEqual(joinPosts(null, [p(1)]), { posts: [p(1)], gap: null });
+});
+
+await test('a run page reads a running run again, and after a failed read tries again, less often each time', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const detail = (status: Run['status']): RunDetail => ({
+    run: run('r-3', { status }),
+    handle: 'claude-2',
+    harness: 'claude',
+    minutes: 30,
+    outputs: [],
+    moreOutputs: 0,
+    log: null,
+    cancelable: status === 'running',
+  });
+  const answers: Loaded<RunDetail>[] = [
+    { error: 'one' },
+    { error: 'two' },
+    { error: 'three' },
+    { value: detail('running') },
+    { value: detail('done') },
+  ];
+  const shown: string[] = [];
+  let reads = 0;
+  const settle = async (): Promise<void> => {
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+  };
+  const wait = async (ms: number): Promise<void> => {
+    t.mock.timers.tick(ms);
+    await settle();
+  };
+  const controller = new AbortController();
+  followRun(
+    () => {
+      reads++;
+      return Promise.resolve(answers.shift() ?? { error: 'no more' });
+    },
+    (loaded) =>
+      shown.push('error' in loaded ? loaded.error : loaded.value.run.status),
+    controller.signal,
+  );
+  await settle();
+  assert.deepEqual(shown, ['one']);
+  // 5 s after the first failure, then 10 s, then 20 s.
+  await wait(4_999);
+  assert.equal(reads, 1);
+  await wait(1);
+  assert.deepEqual(shown, ['one', 'two']);
+  await wait(9_999);
+  assert.equal(reads, 2);
+  await wait(1);
+  assert.deepEqual(shown, ['one', 'two', 'three']);
+  await wait(20_000);
+  // A read that works goes back to every 5 s while the run runs.
+  assert.deepEqual(shown, ['one', 'two', 'three', 'running']);
+  await wait(5_000);
+  assert.deepEqual(shown, ['one', 'two', 'three', 'running', 'done']);
+  // A run that ended is not read again.
+  await wait(60_000);
+  assert.equal(reads, 5);
+  assert.deepEqual(
+    [1, 2, 3, 4, 5, 10].map(retryAfter),
+    [5_000, 10_000, 20_000, 30_000, 30_000, 30_000],
+  );
+  // An abort stops the reads, even after failures.
+  const stopped = new AbortController();
+  let tries = 0;
+  followRun(
+    () => {
+      tries++;
+      return Promise.resolve({ error: 'down' });
+    },
+    () => undefined,
+    stopped.signal,
+  );
+  await settle();
+  stopped.abort();
+  await wait(60_000);
+  assert.equal(tries, 1);
+});
+
+await test("a checker's page describes its own check, and a checker that the snapshot left out says it ended", () => {
+  const base = labOf(story());
+  // A newer check of the same post, by another checker, still runs.
+  const newer: CheckItem = {
+    ...checker,
+    id: 'k-2',
+    harness: 'claude',
+    agent: 'a-8',
+    handle: 'claude-9',
+    state: 'running',
+    outcome: null,
+    result: null,
+    endedAt: null,
+  };
+  assert.equal(checkWords(newer), 'Claude reruns it now');
+  const two = story({
+    checks: [checker, newer],
+    agents: [...base.agents, agent('a-8', 'claude-9', 'claude')],
+  });
+  const own = text(render(two, href.agent('a-7')));
+  assert.match(own, /Codex reran it, and it held\./);
+  assert.doesNotMatch(own, /Claude reruns it now/);
+  assert.match(
+    text(render(two, href.agent('a-8'))),
+    /claude-9 Claude .*Checks p-9 .*Claude reruns it now\./,
+  );
+  // The snapshot keeps only the newest checkers that ended, so codex-2 is not in it.
+  const ended = story({
+    agents: base.agents.filter((entry) => entry.id !== 'a-7'),
+  });
+  const gone = text(render(ended, href.agent('a-7')));
+  assert.match(
+    gone,
+    /codex-2 Codex · Checks p-9 in The CoT matches what probes read inside ?, without the author's reasoning/,
+  );
+  assert.match(gone, /Codex reran it, and it held\./);
+  assert.match(
+    gone,
+    /codex-2 ended\. This view shows only the newest checkers that ended, so it leaves out what codex-2 did\./,
+  );
+  // Nothing links to its page: not the post's check, and not the dispute.
+  const home = render(ended, href.lab);
+  assert.doesNotMatch(home, /href="#\/agent\/a-7"/);
+  assert.match(text(home), /Codex reran it, and it held\./);
+  // A run whose agent the snapshot leaves out names it without a link.
+  const runPage = render(story({ agents: [] }), href.runPage('r-3'));
+  assert.match(text(runPage), /Ran by a-2/);
+  assert.doesNotMatch(runPage, /href="#\/agent\/a-2"/);
+});
+
+await test('Enter puts a name in only while the person typed the start of it, and a whole name comes first', () => {
+  const names = [
+    { value: '@d-10', note: '' },
+    { value: '@d-1', note: '' },
+    { value: '@claude-2', note: '' },
+  ];
+  assert.deepEqual(
+    mentionMatches(names, 'd-1').map((name) => name.value),
+    ['@d-1', '@d-10'],
+  );
+  const claude = { value: '@claude-2', note: '' };
+  assert.equal(enterCompletes('cl', claude), true);
+  assert.equal(enterCompletes('', claude), true);
+  // The whole name is typed, so Enter sends.
+  assert.equal(enterCompletes('claude-2', claude), false);
+  assert.equal(enterCompletes('Claude-2', claude), false);
+  // The person moved to a longer name: Enter puts it in.
+  assert.equal(enterCompletes('d-1', { value: '@d-10', note: '' }), true);
+});
+
+await test('a send after a lost answer keeps its key only for the same text to the same post', () => {
+  let made = 0;
+  const key = (): string => `k${++made}`;
+  const first = intentFor<Send>(
+    null,
+    { text: 'Which seed?', to: 'p-9' },
+    key,
+    sameSend,
+  );
+  const lost = unansweredAfter(first, { lost: 'Verifold did not answer.' });
+  assert.equal(
+    intentFor(lost, { text: 'Which seed?', to: 'p-9' }, key, sameSend).key,
+    first.key,
+  );
+  // The same words as a reply to another post, or to the lab, are another intent.
+  assert.notEqual(
+    intentFor(lost, { text: 'Which seed?', to: 'p-10' }, key, sameSend).key,
+    first.key,
+  );
+  assert.notEqual(
+    intentFor(lost, { text: 'Which seed?', to: null }, key, sameSend).key,
+    first.key,
+  );
+});
+
+await test("a read that Verifold refuses shows Verifold's own reason when it gave one", async (t) => {
+  const answers: Response[] = [
+    Response.json({ error: 'p-9 cites no diff.' }, { status: 404 }),
+    Response.json({ error: 'Name a run such as r-3.' }, { status: 400 }),
+    new Response(null, { status: 404 }),
+    new Response('not json', { status: 500 }),
+  ];
+  const original = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(answers.shift() ?? new Response(null, { status: 500 }));
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  assert.deepEqual(
+    await load('tok', paths.diff('d-2', { proof: 'p-9.0' }), isDirectionDiff),
+    { error: 'p-9 cites no diff.' },
+  );
+  assert.deepEqual(await load('tok', paths.run('r-0'), isRunDetail), {
+    error: 'Name a run such as r-3.',
+  });
+  assert.deepEqual(await load('tok', paths.run('r-9'), isRunDetail), {
+    error: 'Verifold no longer has this. The lab may have moved on.',
+  });
+  assert.deepEqual(await load('tok', paths.run('r-9'), isRunDetail), {
+    error: 'Verifold could not send this. Try again.',
   });
 });

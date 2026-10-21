@@ -212,8 +212,9 @@ export function isFileDiff(value: unknown): value is FileDiff {
 
 /**
  * Read detail that a snapshot keeps folded, such as a turn's steps. The
- * answer is the data, or a reason in plain words. A read that `signal`
- * aborted answers with a reason too: the caller drops it.
+ * answer is the data, or a reason in plain words: Verifold's own, when it
+ * gave one, such as why a diff is not there. A read that `signal` aborted
+ * answers with a reason too: the caller drops it.
  */
 export async function load<T>(
   token: string,
@@ -235,10 +236,13 @@ export async function load<T>(
       error:
         'This tab has no access key. Open Verifold from your terminal again.',
     };
-  if (response.status === 404)
-    return { error: 'Verifold no longer has this. The lab may have moved on.' };
-  if (!response.ok)
-    return { error: 'Verifold could not send this. Try again.' };
+  if (!response.ok) {
+    const refusal: unknown = await response.json().catch(() => null);
+    if (isError(refusal)) return { error: refusal.error };
+    return response.status === 404
+      ? { error: 'Verifold no longer has this. The lab may have moved on.' }
+      : { error: 'Verifold could not send this. Try again.' };
+  }
   const value: unknown = await response.json().catch(() => null);
   return is(value)
     ? { value }
