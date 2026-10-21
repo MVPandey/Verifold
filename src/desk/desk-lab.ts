@@ -9,6 +9,7 @@ import {
 import {
   askers,
   barSummary,
+  bringGroups,
   budgetEnded,
   defaultLabHours,
   labEnded,
@@ -37,7 +38,7 @@ import {
 } from '../core/runs.ts';
 import type { HarnessName } from '../core/harness.ts';
 import { hostName } from '../core/session.ts';
-import type { ChangedFile } from '../core/workspaces.ts';
+import { workspaceName, type ChangedFile } from '../core/workspaces.ts';
 import {
   andList,
   costWords,
@@ -67,6 +68,8 @@ export interface LabWork {
   readonly call?: string;
   /** The option that an answer picked. */
   readonly option?: number;
+  /** The direction that the action is for, such as a bring-in's. */
+  readonly direction?: string;
 }
 
 /** One thing that waits for the person, in the order of the Needs-you line. `body` is HTML. */
@@ -1046,7 +1049,7 @@ export function diffPanel(
   return {
     kind: 'Diff',
     title: direction.title,
-    sub: `<span class="fine">${proof ? `The diff that ${e(proof.split('.')[0] ?? proof)} cites` : `${e(direction.workspace.branch ?? direction.workspace.path)}, since the direction started`}</span>`,
+    sub: `<span class="fine">${proof ? `The diff that ${e(proof.split('.')[0] ?? proof)} cites` : `${e(workspaceName(direction.workspace))}, since the direction started`}</span>`,
     // A root of its own scopes the lab panel's styles.
     body: `<div class="lab-panel">${body}</div>`,
   };
@@ -1462,7 +1465,7 @@ export function bringPanel(
       body: '<p class="empty-note">This direction is not in the lab, for example after Start over.</p>',
     };
   const { direction, agent } = entry;
-  const branch = direction.workspace.branch ?? direction.workspace.path;
+  const branch = workspaceName(direction.workspace);
   const shown =
     typeof list === 'object' && list?.direction === direction.id ? list : null;
   const panel = (body: string): Panel => ({
@@ -1496,27 +1499,10 @@ export function bringPanel(
     return `<li><input type="checkbox" id="${box(index)}" data-bring-file="${e(file.path)}"${file.code ? ` aria-describedby="${box(index)}-code"` : ''}${file.ticked ? ' checked' : ''}${file.since || !view.runs ? ' disabled' : ''}> <label for="${box(index)}"><code>${e(file.path)}</code></label> <span class="fine change-${file.change}">${file.change}</span> <button type="button" class="link" data-lab-diff="${e(file.path)}" data-lab-direction="${e(direction.id)}" data-bring-commit="${e(shown.commit)}" aria-pressed="false" aria-label="Diff of ${e(file.path)}">Diff</button>${why ? ` <span class="fine bring-why">${e(why)}</span>` : ''}${warn}</li>`;
   });
   // Each bring-in of this direction: the files that keep it as their base, by its time.
-  const times = new Map<
-    string,
-    { at: string; commit: string; paths: string[] }
-  >();
-  for (const brought of view.state.brought)
-    if (brought.direction === direction.id) {
-      const key = `${brought.at}|${brought.commit}`;
-      const group = times.get(key) ?? {
-        at: brought.at,
-        commit: brought.commit,
-        paths: [],
-      };
-      group.paths.push(brought.path);
-      times.set(key, group);
-    }
-  const history = [...times.values()]
-    .sort((a, b) => (a.at < b.at ? -1 : 1))
-    .map(
-      (group) =>
-        `<li>${e(clock(group.at))}: ${e(nameList(group.paths))} <span class="fine">at ${e(group.commit.slice(0, 7))}</span></li>`,
-    );
+  const history = bringGroups(view.state.brought, direction.id).map(
+    (group) =>
+      `<li>${e(clock(group.at))}: ${e(nameList(group.paths))} <span class="fine">at ${e(group.commit.slice(0, 7))}</span></li>`,
+  );
   const working = shown.working
     ? `<p class="notice" role="status">${e(agent.handle)} is working, so these are its files as of its last turn. When its turn ends, its newer work shows here.</p>`
     : '';

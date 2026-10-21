@@ -1,6 +1,7 @@
 import type {
   BringRead,
   Direction,
+  DirectionCounts,
   Fact,
   Lab,
   Post,
@@ -166,29 +167,53 @@ export function findings(lab: Lab): Finding[] {
   return [...directions, ...facts];
 }
 
-/** "The answer, draft · 2 of 4 directions hold up · 1 ruled out · 1 still open". After a sign-off, when it was signed. */
+/**
+ * The person signed off. A snapshot of an older server could leave a
+ * sign-off out of a large lab: then the lab is signed off too, with no time
+ * or line to show.
+ */
+export function signedOff(lab: Lab): boolean {
+  return lab.signoff !== null || lab.omitted.signoff !== undefined;
+}
+
+/**
+ * The lab's direction counts: Verifold's, over all its directions. An older
+ * server sends none: then the directions of this page, when it has them all.
+ */
+function directionCounts(lab: Lab): DirectionCounts | null {
+  if (lab.directionCounts) return lab.directionCounts;
+  if (lab.omitted.directions !== undefined) return null;
+  return {
+    total: lab.directions.length,
+    holdsUp: lab.directions.filter(
+      (direction) => direction.verdict === 'holds-up',
+    ).length,
+    ruledOut: lab.directions.filter(
+      (direction) => direction.verdict === 'ruled-out',
+    ).length,
+    open: stillOpen(lab).length,
+  };
+}
+
+/**
+ * "The answer, draft · 2 of 4 directions hold up · 1 ruled out · 1 still
+ * open". After a sign-off, when it was signed. "Still open" counts what the
+ * "Still open" list shows: open directions with no verdict or a disputed one.
+ */
 export function answerStatus(lab: Lab): string {
-  const all = lab.directions.length;
-  const held = lab.directions.filter(
-    (direction) => direction.verdict === 'holds-up',
-  ).length;
-  const ruled = lab.directions.filter(
-    (direction) => direction.verdict === 'ruled-out',
-  ).length;
-  const open = lab.directions.filter(
-    (direction) =>
-      direction.state === 'open' &&
-      direction.verdict !== 'holds-up' &&
-      direction.verdict !== 'ruled-out',
-  ).length;
   const head = lab.signoff
     ? `Signed off at ${clock(lab.signoff.at)}`
-    : 'The answer, draft';
-  if (!all) return `${head} · no direction yet`;
+    : signedOff(lab)
+      ? 'Signed off'
+      : 'The answer, draft';
+  const counts = directionCounts(lab);
+  if (!counts) return `${head} · this view leaves out some directions`;
+  const { total, holdsUp, ruledOut, open } = counts;
+  if (!total) return `${head} · no direction yet`;
   return [
     head,
-    `${held} of ${all} ${all === 1 ? 'direction holds' : 'directions hold'} up`,
-    ruled ? `${ruled} ruled out` : null,
+    `${holdsUp} of ${total} ${total === 1 ? 'direction holds' : 'directions hold'} up`,
+    ruledOut ? `${ruledOut} ruled out` : null,
     open ? `${open} still open` : null,
   ]
     .filter((part) => part !== null)
@@ -255,20 +280,25 @@ export function runsLine(lab: Lab): string {
 /** Bring-in actions that run in the background. */
 const bringActions = new Set(['lab-bring-look', 'lab-bring']);
 
-/** The newest bring-in action in the background, running or failed, or null. */
-export function bringWork(lab: Lab): Work | null {
-  return (
-    lab.works.filter((work) => bringActions.has(work.action)).at(-1) ?? null
+/** The bring-in actions of a direction in the background, running or failed, oldest first. */
+function bringWorks(lab: Lab, direction: string): Work[] {
+  return lab.works.filter(
+    (work) => bringActions.has(work.action) && work.direction === direction,
   );
+}
+
+/** The newest bring-in action of a direction in the background, running or failed, or null. */
+export function bringWork(lab: Lab, direction: string): Work | null {
+  return bringWorks(lab, direction).at(-1) ?? null;
 }
 
 /**
  * When a bring-in page reads its files again: its direction's newest commit
- * or bring-ins changed, or a bring-in action started, ended, or failed.
+ * or bring-ins changed, or a bring-in action of it started, ended, or
+ * failed.
  */
 export function bringKey(lab: Lab, direction: Direction): string {
-  const works = lab.works
-    .filter((work) => bringActions.has(work.action))
+  const works = bringWorks(lab, direction.id)
     .map((work) => `${work.action}:${work.at}:${work.error ?? ''}`)
     .join(',');
   return `${direction.head}|${direction.brought?.files ?? 0}|${direction.brought?.lastAt ?? ''}|${works}`;
@@ -280,6 +310,50 @@ export function firstTicked(read: BringRead): Set<string> {
     (read.list?.files ?? [])
       .filter((file) => file.ticked && file.out === null && file.since === null)
       .map((file) => file.path),
+  );
+}
+
+/** The person's ticks on a bring-in page, for the commit that they looked at. */
+export interface Ticks {
+  readonly commit: string;
+  readonly paths: ReadonlySet<string>;
+}
+
+/**
+ * The files that a bring-in sends: the person's ticks at the commit shown,
+ * or else the first ticks. Only files that can come in now count, so a file
+ * that came in meanwhile is not sent again.
+ */
+export function chosenFiles(
+  read: BringRead | null,
+  ticks: Ticks | null,
+): ReadonlySet<string> {
+  if (!read?.list) return new Set();
+  const { list } = read;
+  const can = new Set(
+    list.files
+      .filter((file) => file.out === null && file.since === null)
+      .map((file) => file.path),
+  );
+  const picked =
+    ticks?.commit === list.commit ? ticks.paths : firstTicked(read);
+  return new Set([...picked].filter((path) => can.has(path)));
+}
+
+/** What a bring-in sends: the commit that the person looked at, and the ticked files, sorted. */
+export interface BringIntent {
+  readonly commit: string;
+  readonly files: readonly string[];
+}
+
+/**
+ * Two bring-ins are one intent when they name the same commit and the same
+ * files. So a retry after a lost answer keeps its key, and a bring-in at a
+ * newer commit is a new intent, also with the same files.
+ */
+export function sameBring(a: BringIntent, b: BringIntent): boolean {
+  return (
+    JSON.stringify([a.commit, a.files]) === JSON.stringify([b.commit, b.files])
   );
 }
 
