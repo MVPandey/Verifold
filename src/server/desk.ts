@@ -69,6 +69,7 @@ import {
 import { validAgents } from '../core/contracts.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi } from './api.ts';
+import { readJsonBody, record } from './http.ts';
 
 export interface DeskServer {
   /** The desk URL with its access token. Print it, but do not pass it to another process. */
@@ -89,29 +90,6 @@ export interface DeskServer {
   /** The origin of the page server, the only other origin that the desk frames. */
   readonly pages: string;
   readonly closed: Promise<void>;
-}
-
-/** Read a JSON request body up to `limit` bytes. Returns null when it is too large or unreadable. */
-async function readJsonBody(
-  request: IncomingMessage,
-  limit: number,
-): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (size > limit) return null;
-    chunks.push(chunk as Buffer);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** The fields of a task form, as the page sends them. */

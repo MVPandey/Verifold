@@ -591,6 +591,18 @@ export class TranscriptFile {
     this.path = path;
   }
 
+  /**
+   * Read every new line up to the end of the file, or up to the size limit.
+   * One `refresh()` reads at most 4 MB, so a large file takes several reads.
+   */
+  async refreshAll(): Promise<void> {
+    for (;;) {
+      const before = this.offset;
+      await this.refresh();
+      if (this.offset === before) return;
+    }
+  }
+
   /** Read the new lines. Calls at the same time share one read. */
   refresh(): Promise<void> {
     this.reading ??= this.read().finally(() => {

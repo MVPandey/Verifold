@@ -28,10 +28,15 @@ function commandStep(command: string): string {
   return `Running ${name}${script ? ` ${script.split('/').at(-1)}` : ''}`;
 }
 
+/** A tool's own name: without Claude Code's MCP prefix (`mcp__verifold__`) or Codex's MCP server (`verifold.`). */
+function toolName(tool: string): string {
+  return tool.replace(/^mcp__\w+?__/, '').replace(/^[\w-]+\.(?=\w)/, '');
+}
+
 /** A tool call in plain words, for a Now line. The tool name and the full input stay in the transcript. */
 export function toolStep(tool: string, action = ''): string {
   const path = action.split(', ')[0]?.split(/[\\/]/).filter(Boolean).at(-1);
-  switch (tool.replace(/^mcp__\w+?__/, '')) {
+  switch (toolName(tool)) {
     case 'Bash':
     case 'Command':
       return commandStep(action);
@@ -116,8 +121,7 @@ const kindOfTool = new Map<string, StepKind>([
 
 /** The kind of a tool call, by its name. Claude Code's MCP prefix and Codex's server name do not count. */
 export function stepKind(tool: string): StepKind {
-  const name = tool.replace(/^mcp__\w+?__/, '').replace(/^[\w-]+\.(?=\w)/, '');
-  return kindOfTool.get(name) ?? 'other';
+  return kindOfTool.get(toolName(tool)) ?? 'other';
 }
 
 /** One turn of an agent: what started it, what it did, and what it said last. */
@@ -127,8 +131,6 @@ export interface ActivityTurn {
   readonly startedAt: string;
   /** The newest change in the turn. */
   readonly lastAt: string;
-  /** The message that started it: Verifold's prompt or the person's. Null for work before the first one. */
-  readonly request: TranscriptEntry | null;
   /** Its entries in creation order, with the request and any subagent work. */
   readonly entries: readonly TranscriptEntry[];
   /** Tool calls by kind, subagent calls too. */
@@ -187,8 +189,6 @@ export function turnsOf(entries: readonly TranscriptEntry[]): ActivityTurn[] {
       id: first?.id ?? '',
       startedAt: first?.at ?? '',
       lastAt,
-      request:
-        first?.kind === 'request' && first.parent === null ? first : null,
       entries: group,
       counts,
       message,
