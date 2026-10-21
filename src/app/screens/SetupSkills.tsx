@@ -74,7 +74,7 @@ function SkillRow({
           >
             {card.repo} @ {card.commit.slice(0, 7)}
           </a>
-          {card.updated ? ` · updated ${day(card.updated)}` : ''}
+          {` · updated${card.updated ? ` ${day(card.updated)}` : ': not read'}`}
         </span>
         <span className="skill__runs">
           {runsLine(card.runs)}
@@ -117,7 +117,8 @@ export function SkillsStep({
   const remove = useAction((id: string, key) => actions.skillRemove(id, key));
   const done = useAction((_: null, key) => actions.skillsDone(key));
   const skip = useAction((_: null, key) => actions.skip('skills', key));
-  // With a profile and no search yet, the step searches once when it opens.
+  // With no search yet, the step searches once when it opens: for new skills
+  // with a profile, and for updates of the added skills with or without one.
   const asked = useRef(false);
   useEffect(() => {
     if (
@@ -125,7 +126,7 @@ export function SkillsStep({
       !skills ||
       skills.search ||
       skills.busy ||
-      skills.needsProfile
+      (skills.needsProfile && !skills.added.length)
     )
       return;
     asked.current = true;
@@ -151,10 +152,14 @@ export function SkillsStep({
     <>
       <StepHeader step="skills" title="Skills that fit your work">
         {read
-          ? `Verifold read ${readable.length} skill ${readable.length === 1 ? 'catalog' : 'catalogs'} ${readAt(read.at)} and matched them to your profile. ${
-              read.picker
-                ? `${read.picker === 'claude' ? 'Claude Code' : 'Codex'} picked these from the best matches.`
-                : 'These match it best.'
+          ? `Verifold read ${readable.length} skill ${readable.length === 1 ? 'catalog' : 'catalogs'} ${readAt(read.at)} ${
+              skills?.needsProfile
+                ? 'to check your added skills for updates.'
+                : `and matched them to your profile. ${
+                    read.picker
+                      ? `${read.picker === 'claude' ? 'Claude Code' : 'Codex'} picked these from the best matches.`
+                      : 'These match it best.'
+                  }`
             }`
           : 'Verifold searches public skill catalogs for skills that fit your profile.'}
       </StepHeader>
@@ -263,7 +268,12 @@ export function SkillsStep({
           type="button"
           className="link-button"
           disabled={skip.busy}
-          onClick={() => void skip.submit(null).then((ok) => ok && onDone())}
+          onClick={() =>
+            // An older Verifold has no Skills step to skip.
+            skills
+              ? void skip.submit(null).then((ok) => ok && onDone())
+              : onDone()
+          }
         >
           Skip. Ask me later.
         </button>

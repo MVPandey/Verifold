@@ -13,7 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { prepareAgency, readMemory, saveAgencyFile } from './agency.ts';
 import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
@@ -283,26 +283,56 @@ async function isFolder(path: string): Promise<boolean> {
   }
 }
 
-/** The skills of one catalog's tree. Files of a folder with a SKILL.md make one skill. */
+/** Each folder above a path, the nearest first: `a/b/c` gives `a/b`, then `a`. */
+function parents(path: string): string[] {
+  const parts = path.split('/');
+  return parts
+    .slice(1)
+    .map((_, at) => parts.slice(0, parts.length - 1 - at).join('/'));
+}
+
+/**
+ * The skills of one catalog's tree, in one pass: each file belongs to the
+ * nearest folder above it that has a SKILL.md. A skill whose folder holds
+ * another skill, or that sits inside another skill's folder, is left out:
+ * its files would mix with the other's.
+ */
 function skillsOf(
   catalog: Catalog,
   commit: string,
   tree: readonly Record<string, unknown>[],
 ): CatalogSkill[] {
   const trees = new Map<string, string>();
-  for (const entry of tree)
-    if (entry.type === 'tree' && typeof entry.path === 'string')
-      trees.set(entry.path, String(entry.sha));
-  const skills: CatalogSkill[] = [];
+  const folders = new Set<string>();
   for (const entry of tree) {
     const path = typeof entry.path === 'string' ? entry.path : '';
-    if (entry.type !== 'blob' || !path.endsWith('/SKILL.md')) continue;
-    if (!path.startsWith(catalog.root)) continue;
-    const folder = path.slice(0, -'/SKILL.md'.length);
+    if (entry.type === 'tree') trees.set(path, String(entry.sha));
+    else if (entry.type === 'blob' && path.endsWith('/SKILL.md'))
+      folders.add(path.slice(0, -'/SKILL.md'.length));
+  }
+  // A folder inside another skill's folder, and that other folder: neither is offered.
+  const nested = new Set<string>();
+  for (const folder of folders)
+    for (const parent of parents(folder))
+      if (folders.has(parent)) {
+        nested.add(folder);
+        nested.add(parent);
+      }
+  const grouped = new Map<string, Record<string, unknown>[]>();
+  for (const entry of tree) {
+    const path = typeof entry.path === 'string' ? entry.path : '';
+    if (entry.type === 'tree') continue;
+    const owner = parents(path).find((folder) => folders.has(folder));
+    if (owner) grouped.set(owner, [...(grouped.get(owner) ?? []), entry]);
+  }
+  const skills: CatalogSkill[] = [];
+  for (const folder of folders) {
     const inside = folder.slice(catalog.root.length);
     // Hidden folders and the templates of a catalog are not skills.
     if (
+      !folder.startsWith(catalog.root) ||
       !inside ||
+      nested.has(folder) ||
       inside.split('/').some((part) => part.startsWith('.')) ||
       /(^|\/)template$/.test(inside) ||
       !safeRelativePath(folder)
@@ -312,10 +342,8 @@ function skillsOf(
     if (!sha || !hex40.test(sha)) continue;
     const files: SkillFile[] = [];
     let valid = true;
-    for (const file of tree) {
-      const filePath = typeof file.path === 'string' ? file.path : '';
-      if (!filePath.startsWith(`${folder}/`) || file.type === 'tree') continue;
-      const relative = filePath.slice(folder.length + 1);
+    for (const file of grouped.get(folder) ?? []) {
+      const relative = String(file.path).slice(folder.length + 1);
       const mode = String(file.mode);
       const blob = String(file.sha);
       if (
@@ -334,14 +362,13 @@ function skillsOf(
       });
     }
     if (!valid) continue;
-    const name = folder.split('/').at(-1) ?? '';
     skills.push({
       id: skillId(catalog.owner, catalog.repo, folder),
       owner: catalog.owner,
       repo: catalog.repo,
       commit,
       path: folder,
-      name,
+      name: folder.split('/').at(-1) ?? '',
       tree: sha,
       files,
     });
@@ -395,8 +422,39 @@ function parseRead(value: unknown, catalog: Catalog): CatalogRead | null {
     ...(typeof value.licenseName === 'string' || value.licenseName === null
       ? { licenseName: value.licenseName }
       : {}),
-    meta: meta as Record<string, SkillMeta>,
-    updated: updated as Record<string, string | null>,
+    meta: Object.fromEntries(
+      Object.entries(meta).flatMap(([id, entry]): [string, SkillMeta][] =>
+        hex16.test(id) &&
+        record(entry) &&
+        (entry.name === null || typeof entry.name === 'string') &&
+        typeof entry.description === 'string' &&
+        entry.description.length <= 1024 &&
+        (entry.license === null ||
+          (typeof entry.license === 'string' && entry.license.length <= 80))
+          ? [
+              [
+                id,
+                {
+                  name:
+                    entry.name === null
+                      ? null
+                      : String(entry.name).slice(0, 200),
+                  description: entry.description,
+                  license: entry.license,
+                },
+              ],
+            ]
+          : [],
+      ),
+    ),
+    updated: Object.fromEntries(
+      Object.entries(updated).filter(
+        ([id, date]) =>
+          hex16.test(id) &&
+          (date === null ||
+            (typeof date === 'string' && Number.isFinite(Date.parse(date)))),
+      ) as [string, string | null][],
+    ),
   };
 }
 
@@ -463,6 +521,9 @@ async function readCatalog(
       )
     ).toString('utf8'),
   ) as unknown;
+  // A partial list could split a skill's files, so it makes no skills.
+  if (record(body) && body.truncated === true)
+    throw new Error('GitHub sent only part of its file list.');
   const tree =
     record(body) && Array.isArray(body.tree)
       ? body.tree.filter(record)
@@ -557,8 +618,8 @@ async function readMeta(
       )
         .subarray(0, limits.head)
         .toString('utf8');
-    } catch (error) {
-      if (error instanceof GitHubLimitError) throw error;
+    } catch {
+      // A read that failed, GitHub's limit too, leaves the skill without a description.
       return;
     }
     const front = frontmatter(text);
@@ -594,6 +655,8 @@ async function pick(
       signal,
       timeoutMs: 180_000,
       idleMs: 120_000,
+      // The catalogs' descriptions are untrusted, so the picker can neither search nor fetch.
+      textOnly: true,
       prompt: `${await loadPrompt('skills-pick')}
 
 The input, as JSON:
@@ -722,7 +785,8 @@ async function folderDate(
         ? value
         : null;
   } catch (error) {
-    if (error instanceof GitHubLimitError) throw error;
+    // GitHub's limit: the card shows no date, and a later search reads it.
+    if (error instanceof GitHubLimitError) return null;
   }
   read.updated[skill.id] = date;
   return date;
@@ -752,7 +816,12 @@ export async function searchSkills(input: {
   const { signal } = input;
   const hosts = input.hosts ?? githubHosts;
   const root = await skillsRoot(input.directory);
-  const reads: { readonly catalog: Catalog; readonly read: CatalogRead }[] = [];
+  const reads: {
+    readonly catalog: Catalog;
+    readonly read: CatalogRead;
+    /** The copy as read, to tell whether this search changed it. */
+    readonly before: string;
+  }[] = [];
   const shown: SkillSearch['catalogs'][number][] = [];
   let stopped: string | null = null;
   for (const catalog of catalogs) {
@@ -763,7 +832,7 @@ export async function searchSkills(input: {
     }
     try {
       const read = await readCatalog(catalog, root, hosts, signal);
-      reads.push({ catalog, read });
+      reads.push({ catalog, read, before: JSON.stringify(read) });
       shown.push({ repo, commit: read.commit, problem: null });
     } catch (error) {
       signal.throwIfAborted();
@@ -874,8 +943,8 @@ export async function searchSkills(input: {
     let contents: Map<string, Buffer>;
     try {
       contents = await downloadSkill(item.skill, hosts, signal);
-    } catch (error) {
-      if (error instanceof GitHubLimitError) throw error;
+    } catch {
+      signal.throwIfAborted();
       continue;
     }
     if (
@@ -900,9 +969,10 @@ export async function searchSkills(input: {
       runs: whatItRuns(item.skill.files, contents),
     });
   }
-  // What Verifold read stays with each catalog's commit.
-  for (const { catalog, read } of reads)
-    await saveRead(root, catalog, read).catch(() => {});
+  // What Verifold read stays with each catalog's commit. Only a copy that changed is written.
+  for (const { catalog, read, before } of reads)
+    if (JSON.stringify(read) !== before)
+      await saveRead(root, catalog, read).catch(() => {});
   return { ...empty(picks ? (input.picker?.host ?? null) : null), cards };
 }
 
@@ -952,14 +1022,12 @@ export async function loadSkills(directory: string): Promise<AddedSkill[]> {
   });
 }
 
-/** Where an added skill's files are. */
+/**
+ * Where an added skill's files are. The skill's ID names the folder, so no
+ * stored skill sits inside another, whatever their folders in the catalog.
+ */
 function storePath(root: string, skill: AddedSkill): string {
-  return join(
-    root,
-    ...skill.repo.split('/'),
-    skill.commit,
-    ...skill.path.split('/'),
-  );
+  return join(root, ...skill.repo.split('/'), skill.commit, skill.id);
 }
 
 /** Make a folder read-only: its files 0444, or 0555 when they run, and its folders 0555. */
@@ -1009,7 +1077,8 @@ async function writeSkill(
       contents.get(file.path) ?? fail('A file of the skill is missing.');
     await writeFile(
       target,
-      file.path === 'SKILL.md'
+      // Every SKILL.md, a nested one too, loses its allowed-tools in the copy.
+      posix.basename(file.path) === 'SKILL.md'
         ? withoutAllowedTools(content.toString('utf8'))
         : content,
       { mode: file.mode === '100755' ? 0o755 : 0o644, flag: 'wx' },
@@ -1079,15 +1148,32 @@ export async function addSkill(input: {
       await removeTree(temporary);
     }
   }
-  const older = await input.locked(async () => {
-    const list = await loadSkills(input.directory);
-    const old = list.find((entry) => entry.id === skill.id);
-    await saveSkills(input.directory, [
-      ...list.filter((entry) => entry.id !== skill.id),
-      added,
-    ]);
-    return old && old.commit !== added.commit ? old : null;
-  });
+  let older: AddedSkill | null;
+  try {
+    older = await input.locked(async () => {
+      // The check and the write hold one lock, so two adds cannot both pass it.
+      const list = await loadSkills(input.directory);
+      if (
+        list.some((entry) => entry.name === skill.name && entry.id !== skill.id)
+      )
+        fail(`You added another skill named ${skill.name}. Remove it first.`);
+      const old = list.find((entry) => entry.id === skill.id);
+      await saveSkills(input.directory, [
+        ...list.filter((entry) => entry.id !== skill.id),
+        added,
+      ]);
+      return old && old.commit !== added.commit ? old : null;
+    });
+  } catch (error) {
+    // No record names these files, so they go.
+    if (
+      !before.some(
+        (entry) => entry.id === skill.id && entry.commit === skill.commit,
+      )
+    )
+      await removeTree(target).catch(() => {});
+    throw error;
+  }
   if (older) await removeTree(storePath(root, older)).catch(() => {});
   return added;
 }
@@ -1154,6 +1240,13 @@ export async function skillPlugin(
 ): Promise<string | null> {
   const list = await loadSkills(directory);
   if (!list.length) return null;
+  const twice = list.find((skill, at) =>
+    list.slice(at + 1).some((other) => other.name === skill.name),
+  );
+  if (twice)
+    throw new Error(
+      `Two added skills are named ${twice.name}. Remove one of them in the first run.`,
+    );
   const root = await skillsRoot(directory);
   await mkdir(plugins, { recursive: true, mode: 0o700 });
   if (!(await lstat(plugins)).isDirectory())
@@ -1201,7 +1294,10 @@ export async function skillPlugin(
   return target;
 }
 
-/** Remove the sets that no session used for a week, and unfinished ones after an hour. */
+/**
+ * Remove the sets that no session used for a week, and unfinished ones after
+ * an hour. Each launch and each turn of a session marks its set as used.
+ */
 async function prune(plugins: string, keep: string): Promise<void> {
   const now = Date.now();
   for (const name of await readdir(plugins)) {
@@ -1245,6 +1341,11 @@ export function skillLoader(
     problem: (host, text) => {
       blocked.add(host);
       tell(text);
+    },
+    // A turn marks its set as used, so pruning never takes a set that a live session reads.
+    used: (folder) => {
+      const now = new Date();
+      void utimes(folder, now, now).catch(() => {});
     },
   };
 }
