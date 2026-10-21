@@ -572,9 +572,9 @@ type Data = Omit<Snapshot, 'protocolVersion' | 'epoch' | 'rev' | 'at'>;
 const parse = (json: string): Data => JSON.parse(json) as Data;
 
 /** Wait until `check` holds, for at most 5 seconds. */
-async function until(check: () => boolean): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const stop = Date.now() + 5000;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > stop)
       throw new Error('The condition did not hold in time.');
     await delay(10);
@@ -1631,12 +1631,11 @@ await test("a bring-in that fails after Verifold accepted it names its direction
     });
   const failures = async (count: number) => {
     let shown: Snapshot | undefined;
-    await until(() => {
-      void snapshot().then((value) => {
-        shown = value;
-      });
+    // Each poll waits for its snapshot, so no request is still open when the test closes the desk.
+    await until(async () => {
+      shown = await snapshot();
       return (
-        (shown?.lab?.works.filter((work) => work.error).length ?? 0) === count
+        (shown.lab?.works.filter((work) => work.error).length ?? 0) === count
       );
     });
     return (shown?.lab?.works ?? []).map((work) => [
