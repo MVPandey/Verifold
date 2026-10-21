@@ -159,11 +159,11 @@ again.`,
 
 const help = `Verifold - private research with your existing agent harness
 
-verifold [--no-open]                  Set up a project and start a lab on its question, or open its desk
+verifold [--no-open] [--app]          Set up a project and start a lab on its question, or open its desk
 verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
 verifold init --setup-only [--profile profile.json] [--host name]
 verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
-verifold ui [--no-open]               Open the live research desk and control a harness session there
+verifold ui [--no-open] [--app]       Open the live research desk and control a harness session there
 verifold stop                         Stop the team that works in the background, with its pods
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
@@ -187,6 +187,9 @@ verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model 
                                       Run one harness session; answer its requests here or on the desk
 
 Options: --workspace path (default: the current folder), --help, --version
+
+In a project that exists, --app opens the new app, a preview of the next desk,
+instead of the desk. Type /app in the terminal to open it later.
 
 Setup connects your harness, asks for a project folder and your question, and has
 the harness draft a research brief for you to review. Then it creates literature/,
@@ -217,6 +220,7 @@ const terminalHelp = (
   background: boolean,
 ): string => `Commands in this terminal:
 - \`/open\`: open the desk in your browser.
+- \`/app\`: open the new app, a preview of the next desk, in your browser.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
 - \`/research\`: continue research. In a project without research, add the question.
@@ -266,6 +270,8 @@ export function feedLine(event: SessionEvent, worker?: string): string | null {
 export interface TerminalControls {
   /** Open the desk in a browser with a new one-time code. */
   readonly open: () => void;
+  /** Open the new app, a preview, in a browser with a new one-time code. */
+  readonly openApp: () => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
   /** The terminal is attached to a background owner. */
@@ -328,6 +334,7 @@ export function terminalInput(
               : 'No request is open. Type /help for the terminal commands.',
         );
     } else if (value === '/open') controls.open();
+    else if (value === '/app') controls.openApp();
     else if (value === '/help')
       io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
@@ -442,6 +449,8 @@ interface DeskRun {
   readonly handoff?: boolean;
   /** `--lab` in a project that exists: start a lab on its saved question, unless it has one. */
   readonly lab?: boolean;
+  /** `--app`: open the new app (a preview) instead of the desk. */
+  readonly app?: boolean;
   /** This process is the background owner. Its control is saved under its owner ID while it owns the project. */
   readonly owner?: {
     readonly control: Control;
@@ -478,12 +487,21 @@ async function serveDesk(
   const stop = new AbortController();
   const deskSignal = AbortSignal.any([running, stop.signal]);
   let desk: DeskServer | undefined;
-  const open = async (): Promise<boolean> =>
-    desk ? (io.browse ?? openDeskBrowser)(desk.launchUrl(), deskSignal) : false;
+  const open = async (app = run.app === true): Promise<boolean> =>
+    desk
+      ? (io.browse ?? openDeskBrowser)(
+          desk.launchUrl(app ? '/app/' : '/'),
+          deskSignal,
+        )
+      : false;
   const announce = async (server: DeskServer, ready: string): Promise<void> => {
     io.out(
       JSON.stringify({
         url: server.url,
+        // A background owner always passes the app's URL on: a terminal that attached with --app prints it.
+        ...((run.app || run.owner) && server.appUrl
+          ? { app: server.appUrl }
+          : {}),
         visibility: 'private',
         readOnly: false,
       }),
@@ -492,7 +510,9 @@ async function serveDesk(
     if (run.owner) return;
     if (run.noOpen)
       io.progress?.(
-        'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
+        run.app && server.appUrl
+          ? 'Open the printed app URL to use the new app. Keep this terminal open. Type /help for commands.'
+          : 'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
       );
     else if (await open()) io.progress?.(ready);
     else
@@ -818,7 +838,9 @@ async function serveDesk(
           );
           await announce(
             desk,
-            'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
+            run.app && desk.appUrl
+              ? 'The new app, a preview, is open in your browser. Keep this terminal open. Type /help for commands.'
+              : 'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
           );
         }
         const paused = sessions.paused().length;
@@ -840,11 +862,26 @@ async function serveDesk(
               background: run.owner !== undefined,
               research: runner,
               open: () => {
-                void open().then((opened) =>
+                void open(false).then((opened) =>
                   io.progress?.(
                     opened
                       ? 'The desk opened in your browser.'
                       : 'The browser could not open. Open the printed URL.',
+                  ),
+                );
+              },
+              openApp: () => {
+                if (!desk?.appUrl) {
+                  io.progress?.(
+                    'The new app is not available here. Type /open for the desk.',
+                  );
+                  return;
+                }
+                void open(true).then((opened) =>
+                  io.progress?.(
+                    opened
+                      ? 'The new app opened in your browser.'
+                      : 'The browser could not open. Open the printed URL, and add app/ after its port.',
                   ),
                 );
               },
@@ -1038,13 +1075,15 @@ async function runOwner(
   // Lines from before the first terminal attached wait for it.
   let early: string[] | null = [];
   let url: string | undefined;
+  /** The app's URL, when the package has the app's build. */
+  let appUrl: string | undefined;
   let onLine: ((line: string) => void) | undefined;
   const waiting: string[] = [];
   const server = await serveControl(control, {
     attached: (send) => {
       for (const line of early ?? []) send({ progress: line });
       early = null;
-      if (url) send({ url });
+      if (url) send({ url, ...(appUrl ? { app: appUrl } : {}) });
     },
     message: (message) => {
       if ('stop' in message) quit.abort();
@@ -1076,7 +1115,11 @@ async function runOwner(
               typeof shown.url === 'string'
             ) {
               url = shown.url;
-              server.send({ url });
+              appUrl =
+                'app' in shown && typeof shown.app === 'string'
+                  ? shown.app
+                  : undefined;
+              server.send({ url, ...(appUrl ? { app: appUrl } : {}) });
             }
           } catch {
             /* Only the desk URL is output. */
@@ -1153,6 +1196,7 @@ async function attachTeam(
     readonly research?: ResearchOptions | undefined;
     readonly desk?: DeskPlace;
     readonly lab?: boolean;
+    readonly app?: boolean;
   },
 ): Promise<void> {
   const running = await liveOwner(root);
@@ -1193,9 +1237,11 @@ async function attachTeam(
       if ('progress' in message) io.progress?.(message.progress);
       else if ('url' in message && !shown) {
         shown = true;
+        const app = start.app ? message.app : undefined;
         io.out(
           JSON.stringify({
             url: message.url,
+            ...(app ? { app } : {}),
             visibility: 'private',
             readOnly: false,
           }),
@@ -1204,8 +1250,12 @@ async function attachTeam(
         if (start.desk && new URL(message.url).port === String(start.desk.port))
           io.progress?.('The desk in your browser now shows the project.');
         else if (start.noOpen)
-          io.progress?.('Open the printed URL to use the desk.');
-        else client?.send({ line: '/open' });
+          io.progress?.(
+            app
+              ? 'Open the printed app URL to use the new app.'
+              : 'Open the printed URL to use the desk.',
+          );
+        else client?.send({ line: start.app ? '/app' : '/open' });
       }
     },
     signal,
@@ -1502,6 +1552,7 @@ export async function runCli(
       id: { type: 'string' },
       'no-open': { type: 'boolean' },
       lab: { type: 'boolean' },
+      app: { type: 'boolean' },
       file: { type: 'boolean' },
       mode: { type: 'string' },
       prompt: { type: 'string' },
@@ -1569,7 +1620,7 @@ export async function runCli(
     handoff: [],
     view: [],
     status: [],
-    ui: ['no-open', 'lab'],
+    ui: ['no-open', 'lab', 'app'],
     owner: [],
     stop: [],
     session: ['host', 'mode', 'model', 'prompt', 'no-open'],
@@ -1660,9 +1711,10 @@ export async function runCli(
     }
     const noOpen = values['no-open'] ?? false;
     const lab = values.lab ?? false;
+    const app = values.app ?? false;
     if (io.interactive && io.background)
-      await attachTeam(root, io, signal, io.background, { noOpen, lab });
-    else await serveDesk(root, io, signal, { noOpen, lab });
+      await attachTeam(root, io, signal, io.background, { noOpen, lab, app });
+    else await serveDesk(root, io, signal, { noOpen, lab, app });
     return;
   }
   if (command === 'owner') {

@@ -1,6 +1,7 @@
 import { Terminal } from './vendor/xterm.js';
 import { FitAddon } from './vendor/addon-fit.js';
 import { viewLease } from './desk-lease.ts';
+import { storedToken } from '../ui/token.ts';
 
 /**
  * The terminal page: one harness terminal in xterm.js. It reads output from
@@ -13,12 +14,8 @@ const screen = document.getElementById('terminal');
 const state = document.getElementById('terminal-state');
 const take = document.getElementById('terminal-take');
 const session = new URLSearchParams(location.search).get('session') ?? '';
-let token = '';
-try {
-  token = sessionStorage.getItem('verifold-desk-token') ?? '';
-} catch {
-  /* Without the token, the page says how to reconnect. */
-}
+// Without the token, the page says how to reconnect.
+const token = storedToken();
 const lease = viewLease();
 
 if (

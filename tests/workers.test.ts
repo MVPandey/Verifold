@@ -403,7 +403,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
     out: () => {},
     progress: (value: string) => messages.push(value),
   };
-  const controls = { host: 'claude', open: () => {} };
+  const controls = { host: 'claude', open: () => {}, openApp: () => {} };
   const first = await sessions.start({
     host: 'claude',
     mode: 'ask',
@@ -759,6 +759,7 @@ await test(
     ])
       await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
     const stop = new AbortController();
     const desk = await startDesk(
       root,
@@ -1015,7 +1016,12 @@ await test('research and two workers run together, and each stop reaches only it
 
   // With research and a turn running, the terminal sends the choice to the desk.
   const lines: string[] = [];
-  const controls = { host: 'claude', open: () => {}, research: runner };
+  const controls = {
+    host: 'claude',
+    open: () => {},
+    openApp: () => {},
+    research: runner,
+  };
   const io = {
     interactive: true,
     ask: () => Promise.reject(new Error('No prompts')),

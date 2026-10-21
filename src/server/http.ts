@@ -1,4 +1,24 @@
 import type { IncomingMessage } from 'node:http';
+import { extname } from 'node:path';
+
+/** The content types of the files that the desk serves, by extension. One table for the desk's assets and the app's build. */
+const contentTypes: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.ttf': 'font/ttf',
+  '.webp': 'image/webp',
+};
+
+/** The content type of a file the desk serves. Throws for an extension that the table does not name, so a new kind of file fails at startup, never later in a browser. */
+export function contentType(name: string): string {
+  const type = contentTypes[extname(name)];
+  if (!type)
+    throw new Error(
+      `The desk has no content type for ${name}. Add its extension to the table in src/server/http.ts.`,
+    );
+  return type;
+}
 
 /** Read a JSON request body up to `limit` bytes. Returns null when it is too large or unreadable. */
 export async function readJsonBody(

@@ -472,6 +472,7 @@ await test('the desk stores a key and limits through actions, and no reply holds
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   const compute = new Compute(root, { store, url: api.url });
   await compute.load();
   const owner = new AbortController();

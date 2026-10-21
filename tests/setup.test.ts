@@ -132,7 +132,15 @@ for (const background of [false, true])
   await test(`bare verifold sets up a new project in the desk and opens the project there${background ? ', in a background owner' : ''}`, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'verifold-setup-'));
     const agencyDir = join(root, 'agency');
-    t.after(() => rm(root, { recursive: true, force: true }));
+    // An owner's lab can still save a session record after the owner stopped, so removal retries (#247).
+    t.after(() =>
+      rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      }),
+    );
     const project = join(root, 'project');
     const assets = join(root, 'assets');
     await mkdir(join(assets, 'cli', 'vendor'), { recursive: true });
@@ -155,6 +163,7 @@ for (const background of [false, true])
     for (const name of ['xterm.js', 'xterm.css', 'addon-fit.js'])
       await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
     await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+    await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
     let interview = 0;
     // The research requests that reach the harness. A lab starts none.
     const asked: string[] = [];

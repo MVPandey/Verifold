@@ -1234,6 +1234,7 @@ async function deskAssets(root: string): Promise<URL> {
   ])
     await writeFile(join(assets, 'cli', 'vendor', name), 'fixture');
   await writeFile(join(assets, 'ui', 'dom.js'), 'fixture module');
+  await writeFile(join(assets, 'ui', 'token.js'), 'fixture module');
   return pathToFileURL(`${assets}/cli/`);
 }
 
