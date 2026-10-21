@@ -21,7 +21,8 @@ import {
 } from '../legacy/tasks.ts';
 import type { Message } from '../legacy/messages.ts';
 import type { CheckResult, Results } from '../legacy/results.ts';
-import type { ComputeView } from '../core/compute.ts';
+import { labGpu, type ComputeView } from '../core/compute.ts';
+import { toolStep } from '../core/activity.ts';
 import type { ArchivedRun } from '../core/archive.ts';
 import { placeNames } from '../core/credentials.ts';
 import {
@@ -1645,27 +1646,6 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
   return live.lab ? labOrder(items) : items;
 }
 
-/**
- * What this lab's pods cost so far, and the project's limit. Pods of tasks,
- * and of earlier labs before Start over, are not this lab's.
- */
-export function labGpu(
-  compute: ComputeView,
-  startedAt: string,
-): { spent: number; limit: number | null } {
-  const now = Date.now();
-  return {
-    spent: compute.leases
-      .filter(
-        (lease) =>
-          lease.directions?.length &&
-          Date.parse(lease.requestedAt) >= Date.parse(startedAt),
-      )
-      .reduce((sum, lease) => sum + spent(lease, now), 0),
-    limit: compute.settings.limitUsd,
-  };
-}
-
 /** The order of a lab's needs. The sort is stable, so each kind keeps its own order. */
 function labOrder(items: readonly Need[]): Need[] {
   const order = [
@@ -2289,65 +2269,6 @@ function handoffWords(task: TaskRecord): string {
     .map(([kind]) => kind);
   if (kinds.length === 1 || kinds.length === 2) return kinds.join(' and ');
   return files.length ? 'files' : '';
-}
-
-/** A shell command in plain words: the program that it runs, and the file that the program gets. */
-function commandStep(command: string): string {
-  const step = command
-    .split(/\n|&&|\|\||;/)
-    .map((part) => part.trim())
-    .find((part) => part && !/^(cd|export|set|source)\b/.test(part));
-  const [program = '', ...rest] = (step ?? '').split(/\s+/);
-  const name = program.split('/').at(-1) ?? '';
-  if (!/^[\w.+-]+$/.test(name) || /^(for|while|if|do|then|case)$/.test(name))
-    return 'Running a command';
-  // A script comes first, then any other file: `python -m cProfile -o out.prof bench.py` runs bench.py.
-  const files = rest.filter((word) => /^[\w./-]+\.\w+$/.test(word));
-  const script =
-    files.find((word) => /\.(py|js|mjs|cjs|ts|sh|r|jl|rb|pl)$/i.test(word)) ??
-    files[0];
-  return `Running ${name}${script ? ` ${script.split('/').at(-1)}` : ''}`;
-}
-
-/** A tool call in plain words, for a Now line. The tool name and the full input stay in the transcript. */
-function toolStep(tool: string, action = ''): string {
-  const path = action.split(', ')[0]?.split(/[\\/]/).filter(Boolean).at(-1);
-  switch (tool.replace(/^mcp__\w+?__/, '')) {
-    case 'Bash':
-    case 'Command':
-      return commandStep(action);
-    case 'Read':
-      return path ? `Reading ${path}` : 'Reading a file';
-    case 'Write':
-    case 'Edit':
-    case 'MultiEdit':
-    case 'NotebookEdit':
-    case 'File change':
-      return path ? `Writing ${path}` : 'Writing a file';
-    case 'Grep':
-    case 'Glob':
-      return 'Searching the files';
-    case 'WebSearch':
-    case 'Web search':
-      return 'Searching the web';
-    case 'WebFetch':
-      return 'Reading a web page';
-    case 'Task':
-    case 'Agent':
-      return 'Starting a helper agent';
-    case 'verifold_post':
-      return 'Writing a note';
-    case 'verifold_block':
-      return 'Asking for help';
-    case 'verifold_object':
-      return 'Raising an objection';
-    case 'verifold_pod_run':
-    case 'verifold_pod_job':
-    case 'verifold_pod_copy':
-      return 'Working on the GPU pod';
-    default:
-      return 'Working';
-  }
 }
 
 /** The latest step of research in plain words, from the harness events that Verifold observed. */

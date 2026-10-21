@@ -15,6 +15,7 @@
     "src/server/**/*.ts",
     "src/desk/**/*.ts",
     "src/legacy/**/*.ts",
+    "src/protocol/**/*.ts",
     "src/ui/dom.ts"
   ]
 }

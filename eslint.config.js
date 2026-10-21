@@ -35,9 +35,9 @@ export default tseslint.config(
     },
     rules: { '@typescript-eslint/explicit-module-boundary-types': 'error' },
   },
-  // Layers, as allow-lists: a folder not named here, such as a new
-  // src/protocol or src/app, is blocked until a rule allows it. cli may import
-  // anything. A marked line names the step of #282 that removes it.
+  // Layers, as allow-lists: a folder not named here, such as a new src/app,
+  // is blocked until a rule allows it. cli may import anything. A marked line
+  // names the step of #282 that removes it.
   {
     files: ['src/core/**/*.ts'],
     rules: {
@@ -78,8 +78,9 @@ export default tseslint.config(
         {
           patterns: [
             {
-              regex: '^\\.\\./(?!(core|legacy|desk|ui|server)/)',
-              message: 'the desk server imports core, legacy, desk and ui.',
+              regex: '^\\.\\./(?!(core|legacy|desk|ui|server|protocol)/)',
+              message:
+                'the desk server imports core, legacy, desk, ui and protocol.',
             },
           ],
         },
@@ -96,6 +97,23 @@ export default tseslint.config(
             {
               regex: '^\\.\\./(?!(core|legacy|server|ui|desk)/)',
               message: 'the desk imports core, legacy, server and ui.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The protocol is types that the server and the app share. It imports nothing.
+  {
+    files: ['src/protocol/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '.',
+              message: 'the protocol imports nothing.',
             },
           ],
         },

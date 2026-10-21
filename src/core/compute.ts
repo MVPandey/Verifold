@@ -94,6 +94,27 @@ export interface ComputeView {
   readonly problem: { readonly at: string; readonly text: string } | null;
 }
 
+/**
+ * What this lab's pods cost so far, and the project's limit. Pods of tasks,
+ * and of earlier labs before Start over, are not this lab's.
+ */
+export function labGpu(
+  compute: ComputeView,
+  startedAt: string,
+): { spent: number; limit: number | null } {
+  const now = Date.now();
+  return {
+    spent: compute.leases
+      .filter(
+        (lease) =>
+          lease.directions?.length &&
+          Date.parse(lease.requestedAt) >= Date.parse(startedAt),
+      )
+      .reduce((sum, lease) => sum + spent(lease, now), 0),
+    limit: compute.settings.limitUsd,
+  };
+}
+
 /** A pod for lab directions that a person's call starts. */
 export interface LabPod {
   readonly gpu: unknown;

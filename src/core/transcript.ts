@@ -20,6 +20,8 @@ export interface TranscriptEntry {
   readonly order: number;
   readonly parent: string | null;
   readonly at: string;
+  /** When the harness last changed the entry, such as when a tool call got its result. */
+  readonly updatedAt?: string;
   readonly kind: (typeof kinds)[number];
   /** Tool name. */
   readonly name?: string;
@@ -526,6 +528,7 @@ export class TranscriptLog implements TranscriptSink {
       ...previous,
       ...fields,
       at: previous?.at ?? update.at,
+      updatedAt: update.at,
       id: update.id,
       seq: ++this.seq,
       order: previous?.order ?? ++this.created,
@@ -533,6 +536,16 @@ export class TranscriptLog implements TranscriptSink {
     // A changed entry moves to the end, so a page in update order holds each entry once.
     this.entries.delete(update.id);
     this.entries.set(update.id, entry);
+  }
+
+  /** The number of the newest update. It grows with every change. */
+  get last(): number {
+    return this.seq;
+  }
+
+  /** Every entry, in creation order. */
+  list(): TranscriptEntry[] {
+    return [...this.entries.values()].sort((a, b) => a.order - b.order);
   }
 
   /** Entries changed after `after`, in update order, up to about `limit` characters. */
@@ -576,6 +589,18 @@ export class TranscriptFile {
 
   constructor(path: string) {
     this.path = path;
+  }
+
+  /**
+   * Read every new line up to the end of the file, or up to the size limit.
+   * One `refresh()` reads at most 4 MB, so a large file takes several reads.
+   */
+  async refreshAll(): Promise<void> {
+    for (;;) {
+      const before = this.offset;
+      await this.refresh();
+      if (this.offset === before) return;
+    }
   }
 
   /** Read the new lines. Calls at the same time share one read. */
