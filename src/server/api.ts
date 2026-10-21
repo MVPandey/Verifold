@@ -16,6 +16,8 @@ import {
   directionId,
   number,
   postId,
+  proofRef,
+  runId,
   type Artifact,
   type Post as BoardPost,
 } from '../core/board.ts';
@@ -43,7 +45,7 @@ import {
   type LabView,
 } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
-import { runSummary, type RunRecord } from '../core/runs.ts';
+import { runSummary, type RunLogPart, type RunRecord } from '../core/runs.ts';
 import { loadWorkspace } from '../core/storage.ts';
 import {
   callSearchText,
@@ -60,7 +62,7 @@ import {
   type SessionView,
 } from '../core/session.ts';
 import { TranscriptFile, type TranscriptEntry } from '../core/transcript.ts';
-import { workspaceName } from '../core/workspaces.ts';
+import { workspaceName, type ChangedFile } from '../core/workspaces.ts';
 import {
   protocolVersion,
   searchQueryLimit,
@@ -77,6 +79,7 @@ import {
   type CheckItem,
   type Direction,
   type DirectionCounts,
+  type DirectionDiff,
   type Effect,
   type Fact,
   type FileDiff,
@@ -86,6 +89,7 @@ import {
   type PostThread,
   type Proof,
   type Run,
+  type RunDetail,
   type SearchHit,
   type SearchResult,
   type StartView,
@@ -154,6 +158,12 @@ export const apiLimits = {
   bringPaths: 50,
   /** IDs in each list of the snapshot's `notify`, which no level cuts. */
   notify: 300,
+  /** Bytes of the end of a run's log in a run read. */
+  runLog: 64 * 1024,
+  /** Kept files of a run in a run read. */
+  runOutputs: 200,
+  /** Files in a direction's diff read. */
+  diffFiles: 2000,
 };
 
 /** How many items of each list a snapshot keeps, and how much of each message. */
@@ -266,6 +276,40 @@ export interface ApiSources {
   readonly bring?: BringSource | undefined;
   /** Why the project's lab did not start, when its start failed. */
   readonly startProblem?: (() => string | null) | undefined;
+  /** The lab's reads that the snapshot keeps folded: a run's log, and a direction's diff. */
+  readonly reads?: LabReadSource | undefined;
+}
+
+/** The lab's own reads of a run and of a direction's diff, which the desk's panels use too. */
+export interface LabReadSource {
+  /**
+   * A run's record, the handle of its agent, and whether this process runs
+   * the lab's agents, without the whole lab view. Null for a run that the
+   * lab does not have.
+   */
+  readonly run: (run: string) => {
+    readonly record: RunRecord;
+    readonly handle: string | null;
+    readonly here: boolean;
+  } | null;
+  /** The end of a run's log, at most `bytes`, or null when the run has none. */
+  readonly runLog: (run: string, bytes: number) => Promise<RunLogPart | null>;
+  /**
+   * What a direction changed since its start, or the diff that `proof`
+   * cites, with the diff of `file` when it is one of its files. Null for a
+   * direction or a proof that the lab does not have. It throws a
+   * SessionActionError when the file is not in the diff.
+   */
+  readonly diff: (
+    direction: string,
+    file: string | undefined,
+    proof: string | undefined,
+  ) => Promise<{
+    readonly from: string;
+    readonly to: string;
+    readonly files: readonly ChangedFile[];
+    readonly diff: { readonly text: string; readonly cut: boolean } | null;
+  } | null>;
 }
 
 /** The desk's own bring-in reads, which its bring-in panel uses too. */
@@ -1547,6 +1591,55 @@ export class ApiReader {
       ? { text: shown.text, trimmed: shown.cut, commit: shown.to }
       : null;
   }
+
+  /** A run in full, with its kept files and the end of its log. Null for a run that the lab does not have. */
+  async run(id: string): Promise<RunDetail | null> {
+    const reads = this.sources().reads;
+    const found = reads?.run(id);
+    if (!reads || !found) return null;
+    const { record: entry, handle, here } = found;
+    const log = await reads.runLog(id, apiLimits.runLog);
+    return {
+      run: run(entry),
+      handle,
+      harness: entry.harness,
+      minutes: entry.minutes,
+      outputs: entry.outputs
+        .slice(0, apiLimits.runOutputs)
+        .map((output) => ({ path: output.path, bytes: output.bytes })),
+      moreOutputs: Math.max(0, entry.outputs.length - apiLimits.runOutputs),
+      log,
+      cancelable:
+        here && (entry.status === 'queued' || entry.status === 'running'),
+    };
+  }
+
+  /**
+   * What a direction changed since its start, or the diff that `proof`
+   * cites, with one file's diff when `file` names one of its files. Null for
+   * a direction or a proof that the lab does not have. A SessionActionError
+   * says why a file is not in the diff.
+   */
+  async directionDiff(
+    id: string,
+    file?: string,
+    proof?: string,
+  ): Promise<DirectionDiff | null> {
+    const shown = await this.sources().reads?.diff(id, file, proof);
+    if (!shown) return null;
+    return {
+      from: shown.from,
+      to: shown.to,
+      files: shown.files
+        .slice(0, apiLimits.diffFiles)
+        .map(({ path, change, regular }) => ({ path, change, regular })),
+      moreFiles: Math.max(0, shown.files.length - apiLimits.diffFiles),
+      diff:
+        shown.diff && file !== undefined
+          ? { path: file, text: shown.diff.text, trimmed: shown.diff.cut }
+          : null,
+    };
+  }
 }
 
 /**
@@ -1978,6 +2071,51 @@ export async function answerApi(
       }
       return;
     }
+  }
+  if (first === 'runs' && parts.length === 2 && !keys.length) {
+    if (!second || !runId.test(second)) {
+      json(response, 400, { error: 'Name a run such as r-3.' });
+      return;
+    }
+    const detail = await reader.run(second);
+    if (detail) json(response, 200, detail);
+    else response.writeHead(404).end();
+    return;
+  }
+  if (
+    first === 'directions' &&
+    second &&
+    directionId.test(second) &&
+    third === 'diff' &&
+    parts.length === 3
+  ) {
+    const file = url.searchParams.get('file');
+    const proof = url.searchParams.get('proof');
+    if (
+      new Set(keys).size !== keys.length ||
+      !keys.every((key) => key === 'file' || key === 'proof') ||
+      (file !== null && (!file || file.length > 300)) ||
+      (proof !== null && !proofRef(proof))
+    ) {
+      json(response, 400, {
+        error:
+          'Ask for at most one file, with a path of 1 to 300 characters, and at most one proof such as p-12.0.',
+      });
+      return;
+    }
+    try {
+      const shown = await reader.directionDiff(
+        second,
+        file ?? undefined,
+        proof ?? undefined,
+      );
+      if (shown) json(response, 200, shown);
+      else response.writeHead(404).end();
+    } catch (error) {
+      if (!(error instanceof SessionActionError)) throw error;
+      json(response, 404, { error: error.message });
+    }
+    return;
   }
   // A turn's steps also take `limit` (1 to 200) and `tools=1`.
   const stepQuery =

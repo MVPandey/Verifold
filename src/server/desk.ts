@@ -818,7 +818,25 @@ async function labRequest(
       'This desk runs one session, so the lab only shows here. Run verifold in the project folder to work in the lab.',
     );
   if (body.action === 'lab-dismiss') {
-    desk.works = desk.works.filter((work) => work.error === null);
+    // A page names the failures that it shows. Without names, as from an older page, every failure goes.
+    const named = Array.isArray(body.works)
+      ? new Set(
+          body.works
+            .slice(0, 50)
+            .flatMap((entry: unknown) =>
+              record(entry) &&
+              typeof entry.action === 'string' &&
+              typeof entry.at === 'string'
+                ? [`${entry.action}\0${entry.at}`]
+                : [],
+            ),
+        )
+      : null;
+    desk.works = desk.works.filter(
+      (work) =>
+        work.error === null ||
+        (named !== null && !named.has(`${work.action}\0${work.at}`)),
+    );
     return 200;
   }
   if (body.action === 'lab-away-dismiss') {
@@ -1261,6 +1279,18 @@ export async function startDesk(
         );
         return shown?.diff ? { ...shown.diff, to: shown.to } : null;
       },
+    },
+    // The same reads as the desk's run and diff panels.
+    reads: {
+      run: (run) => {
+        const lab = labDesk.lab;
+        const found = lab?.runRecord(run);
+        return lab && found ? { ...found, here: lab.runs } : null;
+      },
+      runLog: async (run, bytes) =>
+        (await labDesk.lab?.runLog(run, bytes)) ?? null,
+      diff: async (direction, file, proof) =>
+        (await labDesk.lab?.directionDiff(direction, file, proof)) ?? null,
     },
   }));
   const apiFeed = new ApiFeed(apiReader, options.api);

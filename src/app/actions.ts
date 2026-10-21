@@ -16,8 +16,10 @@ import { isSearchResult, searchPath } from './search.ts';
 import type { AnswerActions } from './screens/AnswerPage.tsx';
 import type { AgentActions } from './screens/DirectionPage.tsx';
 import type { LabActions } from './screens/LabHome.tsx';
+import type { LabStart } from './screens/Notice.tsx';
 
-const signedOut = (): Promise<{ readonly refused: string }> =>
+/** The refusal of an action from a tab without a token. */
+export const signedOut = (): Promise<{ readonly refused: string }> =>
   Promise.resolve({ refused: 'This tab has no access key.' });
 
 const unread = (): Promise<{ readonly error: string }> =>
@@ -110,8 +112,8 @@ export interface AppActions {
   readonly dismissAway: (key: string) => Promise<ActOutcome>;
   /** The person looks at the lab now. It needs no intent: a look again is harmless. */
   readonly look: () => Promise<ActOutcome>;
-  /** Start the project's lab on its question, as the desk's Start the lab does. */
-  readonly startLab: (question: string, key: string) => Promise<ActOutcome>;
+  /** Start the project's lab on a question, with a time budget, as the desk's Start the lab does. */
+  readonly startLab: (start: LabStart, key: string) => Promise<ActOutcome>;
 }
 
 export function appActions(token: string | null): AppActions {
@@ -126,6 +128,7 @@ export function appActions(token: string | null): AppActions {
     search: (q, signal) => load(token, searchPath(q), isSearchResult, signal),
     dismissAway: (key) => act(token, 'lab-away-dismiss', {}, key),
     look: () => act(token, 'lab-look', {}, newKey()),
-    startLab: (question, key) => act(token, 'lab-start', { question }, key),
+    startLab: ({ question, hours }, key) =>
+      act(token, 'lab-start', { question, hours }, key),
   };
 }

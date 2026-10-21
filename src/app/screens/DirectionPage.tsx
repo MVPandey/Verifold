@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type {
   Agent,
   Call,
@@ -12,6 +19,7 @@ import type {
   TurnPage,
 } from '../../protocol/api.ts';
 import type { ActOutcome, Loaded, StepQuery } from '../api.ts';
+import { ControlsContext, useControl } from '../controls.ts';
 import { foldQuery, refreshKey, stepTotal, turnSummary } from '../activity.ts';
 import { clock, harnessName, modelName, since } from '../format.ts';
 import { href } from '../route.ts';
@@ -21,8 +29,10 @@ import { ActivityFold } from '../components/ActivityFold.tsx';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { Avatar } from '../components/Avatar.tsx';
 import { Composer } from '../components/Composer.tsx';
+import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
+import { MoreMenu } from '../components/MoreMenu.tsx';
 import { RunChip } from '../components/RunChip.tsx';
 import { StepList } from '../components/StepList.tsx';
 import { TurnMessage } from '../components/TurnMessage.tsx';
@@ -80,10 +90,13 @@ function sentence(text: string): string {
 function DirectionHead({
   direction,
   agent,
+  lab,
 }: {
   readonly direction: Direction;
   readonly agent: Agent | undefined;
+  readonly lab: Lab;
 }): ReactNode {
+  const controls = useContext(ControlsContext);
   const repeats =
     direction.runs !== null
       ? `${direction.runs} ${direction.runs === 1 ? 'run' : 'runs'}${direction.noise ? `, noise ${direction.noise}` : ''}`
@@ -98,6 +111,19 @@ function DirectionHead({
       <div className="direction-head__top">
         <Verdict direction={direction} />
         <h1 className="direction-head__title">{direction.title}</h1>
+        <MoreMenu>
+          <a className="more-menu__item" href={href.diff(direction.id)}>
+            Files and changes
+          </a>
+          {controls && lab.agentsHere && direction.state === 'open' && (
+            <ConfirmButton
+              className="more-menu__item"
+              label="Stop this direction"
+              confirm="Click again to stop it"
+              run={(key) => controls.stopDirection(direction.id, key)}
+            />
+          )}
+        </MoreMenu>
       </div>
       <p className="direction-head__meta">
         <b>{agent?.handle ?? direction.agent}</b>
@@ -185,7 +211,7 @@ function TurnProof({
 export function TurnItem({
   turn,
   agent,
-  direction,
+  turnHref,
   lab,
   now,
   target,
@@ -193,7 +219,8 @@ export function TurnItem({
 }: {
   readonly turn: Turn;
   readonly agent: Agent;
-  readonly direction: Direction;
+  /** The page of this turn with every step. */
+  readonly turnHref: string;
   readonly lab: Lab;
   readonly now: number;
   readonly target: string | null;
@@ -219,7 +246,6 @@ export function TurnItem({
     return () => controller.abort();
     // The read depends on the turn's revision, not on the whole turn object.
   }, [open, agent.id, turn.id, refreshKey(turn), agentActions]);
-  const turnHref = href.turn(direction.id, turn.id);
   return (
     <article className="turn">
       <Avatar
@@ -274,10 +300,12 @@ export function TurnItem({
 function LiveLine({
   agent,
   call,
+  lab,
   now,
 }: {
   readonly agent: Agent;
   readonly call: Call | undefined;
+  readonly lab: Lab;
   readonly now: number;
 }): ReactNode {
   const { live } = agent;
@@ -306,7 +334,35 @@ function LiveLine({
       {live.state !== 'working' && !call && (
         <div role="status" className="live live--quiet">
           <span className="live__text">{live.text}</span>
+          {agent.status === 'crashed' && lab.agentsHere && (
+            <StartAgain agent={agent.id} />
+          )}
         </div>
+      )}
+    </>
+  );
+}
+
+/** Start an agent again after it stopped by itself too often, as the desk's Start again does. */
+function StartAgain({ agent }: { readonly agent: string }): ReactNode {
+  const { controls, action } = useControl<null>((controls, _, key) =>
+    controls.restartAgent(agent, key),
+  );
+  if (!controls) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className="button button--dark"
+        disabled={action.busy}
+        onClick={() => void action.submit(null)}
+      >
+        Start again
+      </button>
+      {action.error && (
+        <span role="alert" className="composer__error">
+          {action.error}
+        </span>
       )}
     </>
   );
@@ -328,16 +384,17 @@ function reach(agent: Agent, lab: Lab): string {
  * ever missing from the list. `run`: a run that a link named. Its chip is
  * marked and comes into view once a turn on the page shows it.
  */
-function Turns({
+export function Turns({
   agent,
-  direction,
+  turnHref,
   lab,
   now,
   run,
   agentActions,
 }: {
   readonly agent: Agent;
-  readonly direction: Direction;
+  /** The page of a turn with every step. */
+  readonly turnHref: (turn: string) => string;
   readonly lab: Lab;
   readonly now: number;
   readonly run: string | null;
@@ -465,14 +522,14 @@ function Turns({
           key={turn.id}
           turn={turn}
           agent={agent}
-          direction={direction}
+          turnHref={turnHref(turn.id)}
           lab={lab}
           now={now}
           target={run}
           agentActions={agentActions}
         />
       ))}
-      <LiveLine agent={agent} call={call} now={now} />
+      <LiveLine agent={agent} call={call} lab={lab} now={now} />
     </section>
   );
 }
@@ -520,11 +577,11 @@ export function DirectionPage({
             <Chevron to="left" />
             The lab
           </a>
-          <DirectionHead direction={direction} agent={agent} />
+          <DirectionHead direction={direction} agent={agent} lab={lab} />
           {agent ? (
             <Turns
               agent={agent}
-              direction={direction}
+              turnHref={(turn) => href.turn(direction.id, turn)}
               lab={lab}
               now={now}
               run={run}
