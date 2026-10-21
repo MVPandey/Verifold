@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { claudeModel, pickCodexModel } from '../src/cli/models.ts';
+import { validateModel } from '../src/cli/harness.ts';
+import { claudeModel, labModel, pickCodexModel } from '../src/cli/models.ts';
 
 await test('Codex gets the most capable model that its list offers', () => {
   const sol = { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true };
@@ -33,58 +34,85 @@ await test('Codex gets the most capable model that its list offers', () => {
   );
 });
 
-await test('Claude Code gets best only on a Max plan, and opus otherwise', async (t) => {
+await test("Claude Code keeps the person's own Opus default, and gets opus otherwise", async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-model-')));
   t.after(() => rm(base, { recursive: true, force: true }));
-  /** A fake `claude` that records its arguments and environment, then prints `output` and exits with `code`. */
-  const fake = async (name: string, output: string, code = 0) => {
+  /** A Claude Code settings folder whose `settings.json` holds `text`. */
+  const folder = async (name: string, text: string): Promise<string> => {
     const path = join(base, name);
-    await writeFile(
-      path,
-      `#!${process.execPath}
-const fs = require('node:fs');
-fs.writeFileSync(${JSON.stringify(`${path}.seen.json`)}, JSON.stringify({ args: process.argv.slice(2), runpod: process.env.RUNPOD_API_KEY ?? null }));
-process.stdout.write(${JSON.stringify(output)});
-process.exit(${code});
-`,
-      { mode: 0o700 },
-    );
+    await mkdir(path);
+    await writeFile(join(path, 'settings.json'), text);
     return path;
   };
-  const status = (fields: Record<string, unknown>) =>
-    JSON.stringify({ loggedIn: true, apiProvider: 'firstParty', ...fields });
-  const before = process.env.RUNPOD_API_KEY;
-  process.env.RUNPOD_API_KEY = 'secret-runpod-key';
-  t.after(() => {
-    if (before === undefined) delete process.env.RUNPOD_API_KEY;
-    else process.env.RUNPOD_API_KEY = before;
-  });
+  const model = (value: unknown) =>
+    JSON.stringify({ model: value, theme: 'dark' });
 
-  const max = await fake(
-    'max',
-    status({ authMethod: 'claude.ai', subscriptionType: 'max' }),
-  );
-  assert.equal(await claudeModel(max), 'best');
-  const seen = JSON.parse(await readFile(`${max}.seen.json`, 'utf8')) as {
-    args: string[];
-    runpod: string | null;
-  };
-  assert.deepEqual(seen.args, ['auth', 'status', '--json']);
-  // The status command gets the same environment as a harness: no RunPod key.
-  assert.equal(seen.runpod, null);
-
-  for (const [name, output, code] of [
-    ['pro', status({ authMethod: 'claude.ai', subscriptionType: 'pro' }), 0],
-    // An API key bills at API rates, also for a person on a Max plan.
-    ['api', status({ authMethod: 'apiKey', subscriptionType: 'max' }), 0],
-    ['unknown', status({ authMethod: 'claude.ai' }), 0],
-    ['signed-out', JSON.stringify({ loggedIn: false }), 1],
-    ['garbled', 'not json', 0],
+  // An Opus default stays exactly as written, so the 1M context stays too.
+  for (const kept of [
+    'opus',
+    'opus[1m]',
+    'claude-opus-5-5',
+    'claude-opus-5-5[1m]',
+  ])
+    assert.equal(await claudeModel(await folder(kept, model(kept))), kept);
+  // Any other model, and any broken file, gives opus. Verifold never picks best or fable.
+  for (const [name, text] of [
+    ['sonnet', model('sonnet')],
+    ['best', model('best')],
+    ['fable', model('fable')],
+    ['opus-2m', model('opus[2m]')],
+    ['number', model(5)],
+    ['none', JSON.stringify({ theme: 'dark' })],
+    ['garbled', '{ "model": "opus[1m]"'],
+    ['array', '["opus"]'],
   ] as const)
-    assert.equal(
-      await claudeModel(await fake(name, output, code)),
-      'opus',
-      name,
-    );
+    assert.equal(await claudeModel(await folder(name, text)), 'opus', name);
   assert.equal(await claudeModel(join(base, 'missing')), 'opus');
+  // A folder in place of the file is not read.
+  await mkdir(join(base, 'odd', 'settings.json'), { recursive: true });
+  assert.equal(await claudeModel(join(base, 'odd')), 'opus');
+
+  // CLAUDE_CONFIG_DIR names the folder, as it does for Claude Code.
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = await folder('configured', model('opus[1m]'));
+  t.after(() => {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  });
+  assert.equal(await claudeModel(), 'opus[1m]');
+
+  // The project's model for its main harness wins over the person's default.
+  assert.equal(
+    await labModel('claude', { host: 'claude', model: 'sonnet' }),
+    'sonnet',
+  );
+  assert.equal(
+    await labModel('claude', { host: 'codex', model: 'gpt-x' }),
+    'opus[1m]',
+  );
+  assert.equal(await labModel('claude', null), 'opus[1m]');
+  // Codex picks on its own app-server, unless the project names its model.
+  assert.equal(
+    await labModel('codex', { host: 'codex', model: 'gpt-x' }),
+    'gpt-x',
+  );
+  assert.equal(
+    await labModel('codex', { host: 'claude', model: 'opus' }),
+    null,
+  );
+  assert.equal(await labModel('codex', null), null);
+});
+
+await test('a model ID may end in a short suffix in brackets', () => {
+  validateModel('opus[1m]');
+  validateModel('claude-opus-5-5[1m]');
+  for (const bad of [
+    'opus[1m',
+    'opus[]',
+    'opus[1M]',
+    '[1m]',
+    'opus[1m] x',
+    'opus[1m][1m]',
+  ])
+    assert.throws(() => validateModel(bad), /valid identifier/, bad);
 });

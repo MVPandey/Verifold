@@ -39,7 +39,7 @@ import { defaultAgents, SessionPool } from './workers.ts';
 import { Quota } from './quota.ts';
 import { Coordinator } from './coordinator.ts';
 import { Lab, labOnDisk, startLabOn } from './lab.ts';
-import { claudeModel } from './models.ts';
+import { labModel } from './models.ts';
 import { labWorks, RunTeam } from './team.ts';
 import { withTranscript } from './transcript.ts';
 import { ensureGlobalProfile, profileCommand } from './profile.ts';
@@ -712,23 +712,14 @@ async function serveDesk(
         }),
       });
       owned.coordinator = coordinator;
-      // One `claude auth status` for each owner process: a plan rarely changes while it runs.
-      let claudeChoice: Promise<string> | undefined;
       // The lab's agents share the worker slots with tasks and plain sessions.
       const lab = new Lab(root, {
         sessions,
         memory,
         quota,
         team,
-        // The project's model for its main harness wins. Otherwise Claude Code
-        // gets the most capable model that the plan includes, and Codex picks
-        // its most capable model on its app-server (`bestModel`).
-        model: async (host) => {
-          const workspace = await loadWorkspace(root).catch(() => null);
-          if (workspace?.host === host && workspace.model)
-            return workspace.model;
-          return host === 'claude' ? (claudeChoice ??= claudeModel()) : null;
-        },
+        model: async (host) =>
+          labModel(host, await loadWorkspace(root).catch(() => null)),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);

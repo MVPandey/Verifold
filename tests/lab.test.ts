@@ -1044,14 +1044,17 @@ await test('without a sandbox for runs, agents get no run tools and run experime
   assert.match(first, /run experiments that fit on this computer/);
 });
 
-await test('lab agents run the most capable model', async (t) => {
-  // The owner answers for Claude Code. Codex picks on the agent's own
-  // app-server: the most capable model on any page of its list.
+await test('lab agents run Opus in Claude Code and the most capable Codex model', async (t) => {
+  // The owner answers for Claude Code, here with the person's own Opus
+  // default. Codex picks on the agent's own app-server: the most capable
+  // model on any page of its list.
   let claudeAsks = 0;
   const lab = await fixture(t, {
     // A direction opens before its model is known, so its first conversation asks again.
     model: (host) =>
-      Promise.resolve(host === 'claude' && claudeAsks++ > 0 ? 'best' : null),
+      Promise.resolve(
+        host === 'claude' && claudeAsks++ > 0 ? 'opus[1m]' : null,
+      ),
   });
   await open(lab, [
     { title: 'Alpha', harness: 'claude' },
@@ -1065,7 +1068,7 @@ await test('lab agents run the most capable model', async (t) => {
   const args = JSON.parse(
     await readFile(join(lab.base, 'logs', 'd-1-alpha', 'args.json'), 'utf8'),
   ) as string[];
-  assert.equal(args[args.indexOf('--model') + 1], 'best');
+  assert.equal(args[args.indexOf('--model') + 1], 'opus[1m]');
   assert.equal((await lab.lines('d-2-beta', 'models.jsonl')).length, 2);
   const thread = (
     (await lab.lines('d-2-beta', 'threads.jsonl')) as {
@@ -4959,7 +4962,11 @@ await test('a rerun that does not hold takes back the verdict, and the claim can
 
 await test('with one harness a fresh session of the same harness checks, and a check that runs out of time fails and keeps the dispute open', async (t) => {
   // With a team, the lab's first agent plans it (claude-1), so Alpha is d-2 (claude-2).
-  const lab = await fixture(t, { harnesses: ['claude'], minuteMs: 10 });
+  const lab = await fixture(t, {
+    harnesses: ['claude'],
+    minuteMs: 10,
+    model: (host) => Promise.resolve(host === 'claude' ? 'opus[1m]' : null),
+  });
   await claimWithRun(lab, [], 'd-2-alpha');
   // The checker never posts: its turn waits until its time ends.
   await lab.script('k-1', [{ calls: [{ name: 'WAIT' }] }]);
@@ -4987,6 +4994,8 @@ await test('with one harness a fresh session of the same harness checks, and a c
   const args = JSON.parse(
     await readFile(join(lab.base, 'logs', 'k-1', 'args.json'), 'utf8'),
   ) as string[];
+  // The checker gets the same model as the lab's other Claude Code agents.
+  assert.equal(args[args.indexOf('--model') + 1], 'opus[1m]');
   const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}') as {
     sandbox: { filesystem: { denyRead: string[] } };
     permissions: { deny: string[] };
