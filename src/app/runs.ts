@@ -1,9 +1,48 @@
-import type { Run } from '../protocol/api.ts';
+import type { Run, RunDetail } from '../protocol/api.ts';
+import type { Loaded } from './api.ts';
 import { clock, since, span } from './format.ts';
+
+/** How often a run's page reads a run that waits or runs, as the desk's run log does. */
+export const runRefreshMs = 5_000;
+
+/** The longest wait between two reads of a run after reads failed. */
+export const runRetryMaxMs = 30_000;
 
 /** A run that waits or runs, so its page reads it again until it ends. */
 export function runActive(run: Run): boolean {
   return run.status === 'queued' || run.status === 'running';
+}
+
+/** How long to wait after `failures` reads in a row failed: 5 s, then twice as long each time, at most 30 s. */
+export function retryAfter(failures: number): number {
+  return Math.min(runRefreshMs * 2 ** Math.max(0, failures - 1), runRetryMaxMs);
+}
+
+/**
+ * Read a run now, and again while it waits or runs, until `signal` aborts.
+ * After a read that failed, the next read waits longer each time, so a
+ * failure does not stop the reads. `show` gets each answer.
+ */
+export function followRun(
+  read: (signal: AbortSignal) => Promise<Loaded<RunDetail>>,
+  show: (loaded: Loaded<RunDetail>) => void,
+  signal: AbortSignal,
+): void {
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+  const next = async (): Promise<void> => {
+    const loaded = await read(signal);
+    if (signal.aborted) return;
+    show(loaded);
+    failures = 'error' in loaded ? failures + 1 : 0;
+    if (failures || ('value' in loaded && runActive(loaded.value.run)))
+      timer = setTimeout(
+        () => void next(),
+        failures ? retryAfter(failures) : runRefreshMs,
+      );
+  };
+  void next();
 }
 
 /** How a run stands, in a few words: "Running for 6 min", "Done in 19 min", "Ended with exit 1". */

@@ -3,7 +3,14 @@ import type { Lab, Run, RunDetail, Snapshot } from '../../protocol/api.ts';
 import { ControlsContext } from '../controls.ts';
 import { harnessName } from '../format.ts';
 import { href } from '../route.ts';
-import { runActive, runState, runTimes, runWhere, size } from '../runs.ts';
+import {
+  followRun,
+  runActive,
+  runState,
+  runTimes,
+  runWhere,
+  size,
+} from '../runs.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { ConfirmButton } from '../components/ConfirmButton.tsx';
@@ -11,15 +18,13 @@ import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
 import type { LabActions } from './LabHome.tsx';
 
-/** How often the page reads a run that waits or runs again, as the desk's run log does. */
-export const runRefreshMs = 5_000;
-
 /**
  * A run on its own page: what ran and why, where and when, its metrics, the
  * files that Verifold kept from it, and the end of its log. The log is read
- * again every few seconds while the run waits or runs. While it does, the
- * person can cancel it. The snapshot's own copy of the run shows at once,
- * and the read adds the rest.
+ * again every few seconds while the run waits or runs, and a read that
+ * failed is tried again, less often each time. While the run waits or runs,
+ * the person can cancel it. The snapshot's own copy of the run shows at
+ * once, and the read adds the rest.
  */
 export function RunPage({
   snapshot,
@@ -39,30 +44,29 @@ export function RunPage({
   const controls = useContext(ControlsContext);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // The person cancelled the run, so its Cancel goes at once.
+  const [cancelled, setCancelled] = useState(false);
+  // A cancel reads the run again at once.
+  const [round, setRound] = useState(0);
   const listed = lab.runs.find((entry) => entry.id === id);
   // A change of state in the snapshot, such as the end of the run, reads it once more.
   useEffect(() => {
     if (!controls) return;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const read = async (): Promise<void> => {
-      const loaded = await controls.run(id, controller.signal);
-      if (controller.signal.aborted) return;
-      if ('error' in loaded) {
-        setProblem(loaded.error);
-        return;
-      }
-      setDetail(loaded.value);
-      setProblem(null);
-      if (runActive(loaded.value.run))
-        timer = setTimeout(() => void read(), runRefreshMs);
-    };
-    void read();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [controls, id, listed?.status]);
+    followRun(
+      (signal) => controls.run(id, signal),
+      (loaded) => {
+        if ('error' in loaded) {
+          setProblem(loaded.error);
+          return;
+        }
+        setDetail(loaded.value);
+        setProblem(null);
+      },
+      controller.signal,
+    );
+    return () => controller.abort();
+  }, [controls, id, listed?.status, round]);
   const run = detail?.run ?? listed;
   const direction = run
     ? lab.directions.find((entry) => entry.id === run.direction)
@@ -126,12 +130,16 @@ export function RunPage({
           {run && <Metrics run={run} />}
           {detail && <RunLog detail={detail} />}
           {detail && <Outputs detail={detail} />}
-          {controls && detail?.cancelable && (
+          {controls && detail?.cancelable && !cancelled && (
             <div className="run-actions">
               <ConfirmButton
                 label="Cancel the run"
                 confirm="Click again to cancel it"
                 run={(key) => controls.cancelRun(id, key)}
+                onDone={() => {
+                  setCancelled(true);
+                  setRound((count) => count + 1);
+                }}
               />
             </div>
           )}
@@ -170,7 +178,8 @@ function RunFacts({
       <dd>{runWhere(run)}</dd>
       <dt>Ran by</dt>
       <dd>
-        <a href={href.agent(run.agent)}>{handle}</a>
+        {/* An agent that the snapshot leaves out has no page to link. */}
+        {agent ? <a href={href.agent(run.agent)}>{handle}</a> : handle}
         {harness && ` · ${harnessName(harness)}`}
       </dd>
       <dt>Direction</dt>

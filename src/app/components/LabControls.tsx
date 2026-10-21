@@ -1,10 +1,9 @@
-import { useContext, useId, useState, type ReactNode } from 'react';
-import type { Harness, Lab } from '../../protocol/api.ts';
-import { checkLine } from '../answer.ts';
-import { ControlsContext, type NewDirection } from '../controls.ts';
+import { useId, useState, type ReactNode } from 'react';
+import type { Harness, Lab, Work } from '../../protocol/api.ts';
+import { checkWords } from '../answer.ts';
+import { useControl, type NewDirection } from '../controls.ts';
 import { authorOf, clock, cut, harnessName } from '../format.ts';
 import { href } from '../route.ts';
-import { useAction } from '../useAction.ts';
 import { Warning } from './Icons.tsx';
 
 /** The most characters of a direction's title and bar, as the lab checks them. */
@@ -21,16 +20,12 @@ export const moreHours = [2, 8] as const;
  * actions says when it is done or why it failed.
  */
 export function OpenDirection(): ReactNode {
-  const controls = useContext(ControlsContext);
   const id = useId();
   const [title, setTitle] = useState('');
   const [harness, setHarness] = useState<Harness>('claude');
   const [bar, setBar] = useState('');
-  const action = useAction<NewDirection>(
-    (direction, key) =>
-      controls
-        ? controls.addDirection(direction, key)
-        : Promise.resolve({ refused: 'This tab has no access key.' }),
+  const { controls, action } = useControl<NewDirection>(
+    (controls, direction, key) => controls.addDirection(direction, key),
     (a, b) => a.title === b.title && a.harness === b.harness && a.bar === b.bar,
   );
   if (!controls) return null;
@@ -109,11 +104,8 @@ export function OpenDirection(): ReactNode {
 
 /** More hours for a lab whose time budget ended, as the desk's buttons give them. */
 export function MoreTime(): ReactNode {
-  const controls = useContext(ControlsContext);
-  const action = useAction<number>((hours, key) =>
-    controls
-      ? controls.moreTime(hours, key)
-      : Promise.resolve({ refused: 'This tab has no access key.' }),
+  const { controls, action } = useControl<number>((controls, hours, key) =>
+    controls.moreTime(hours, key),
   );
   if (!controls) return null;
   return (
@@ -139,7 +131,7 @@ export function MoreTime(): ReactNode {
 }
 
 /** Background actions that answers and bring-ins do not show on their own. */
-function shownWork(work: Lab['works'][number]): boolean {
+function shownWork(work: Work): boolean {
   return (
     work.call === undefined &&
     work.action !== 'lab-bring' &&
@@ -147,21 +139,34 @@ function shownWork(work: Lab['works'][number]): boolean {
   );
 }
 
+/** Two lists of background actions that name the same actions, in the same order. */
+function sameWorks(
+  a: readonly Pick<Work, 'action' | 'at'>[],
+  b: readonly Pick<Work, 'action' | 'at'>[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (work, index) =>
+        work.action === b[index]?.action && work.at === b[index]?.at,
+    )
+  );
+}
+
 /**
  * The lab's actions that go on in the background, such as opening a
  * direction, and the ones that failed there, with one Dismiss for the
- * failures.
+ * failures that the line shows. Failures that an answer or a bring-in shows
+ * stay until they are dismissed there.
  */
 export function WorksLine({ lab }: { readonly lab: Lab }): ReactNode {
-  const controls = useContext(ControlsContext);
-  const action = useAction<null>((_, key) =>
-    controls
-      ? controls.dismiss(key)
-      : Promise.resolve({ refused: 'This tab has no access key.' }),
+  const { controls, action } = useControl<readonly Work[]>(
+    (controls, works, key) => controls.dismiss(works, key),
+    sameWorks,
   );
   const works = lab.works.filter(shownWork);
   if (!works.length) return null;
-  const failed = works.some((work) => work.error !== null);
+  const failed = works.filter((work) => work.error !== null);
   return (
     <div className="works">
       {works.map((work) =>
@@ -184,12 +189,12 @@ export function WorksLine({ lab }: { readonly lab: Lab }): ReactNode {
           </p>
         ),
       )}
-      {failed && controls && (
+      {failed.length > 0 && controls && (
         <button
           type="button"
           className="link-button"
           disabled={action.busy}
-          onClick={() => void action.submit(null)}
+          onClick={() => void action.submit(failed)}
         >
           Dismiss
         </button>
@@ -199,7 +204,7 @@ export function WorksLine({ lab }: { readonly lab: Lab }): ReactNode {
 }
 
 /** Where a dispute's check is, in a few words. */
-function checkWhere(lab: Lab, post: string, checkId: string | null): string {
+function checkWhere(lab: Lab, checkId: string | null): string {
   const check = checkId
     ? lab.checks.find((entry) => entry.id === checkId)
     : undefined;
@@ -214,7 +219,7 @@ function checkWhere(lab: Lab, post: string, checkId: string | null): string {
     case 'dropped':
       return `Check ${check.id} did not finish${check.note ? `: ${check.note}` : ''}. Another objection starts a new check.`;
     case 'done':
-      return `${checkLine(lab, post) ?? 'Checked'}.`;
+      return `${checkWords(check)}.`;
   }
 }
 
@@ -225,6 +230,8 @@ function checkWhere(lab: Lab, post: string, checkId: string | null): string {
 export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
   if (!lab.disputes.length) return null;
   const posts = new Map(lab.board.posts.map((post) => [post.id, post]));
+  // A checker that ended long ago is not in the snapshot, so it has no page to link.
+  const agents = new Set(lab.agents.map((agent) => agent.id));
   return (
     <ul className="pinned" aria-label="Open disputes">
       {lab.disputes.map((dispute) => {
@@ -267,15 +274,17 @@ export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
                 </p>
               )}
               <p className="muted">
-                {checkWhere(lab, dispute.post, dispute.check)}
-                {check && check.state !== 'queued' && (
-                  <>
-                    {' '}
-                    <a href={href.agent(check.agent)}>
-                      What {check.handle} did
-                    </a>
-                  </>
-                )}
+                {checkWhere(lab, dispute.check)}
+                {check &&
+                  check.state !== 'queued' &&
+                  agents.has(check.agent) && (
+                    <>
+                      {' '}
+                      <a href={href.agent(check.agent)}>
+                        What {check.handle} did
+                      </a>
+                    </>
+                  )}
               </p>
             </div>
           </li>

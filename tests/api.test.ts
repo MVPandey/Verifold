@@ -2443,9 +2443,15 @@ await test("with a monthly limit, the snapshot's money holds all projects' month
 await test('a run read holds the run, its kept files within the bound, the end of its log, and whether the person can cancel it', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
-  let view = seededView();
+  let ledger: RunRecord[] = [runRecord('r-1')];
+  let here = true;
+  let views = 0;
   const asked: [string, number][] = [];
   const reads: LabReadSource = {
+    run: (id) => {
+      const record = ledger.find((entry) => entry.id === id);
+      return record ? { record, handle: 'claude-1', here } : null;
+    },
     runLog: (run, bytes) => {
       asked.push([run, bytes]);
       return Promise.resolve({
@@ -2456,8 +2462,19 @@ await test('a run read holds the run, its kept files within the bound, the end o
     },
     diff: () => Promise.resolve(null),
   };
-  const reader = new ApiReader(sources(root, () => view, { reads }));
+  // A run read needs no lab view: it reads the run's record alone.
+  const reader = new ApiReader(
+    sources(
+      root,
+      () => {
+        views++;
+        return seededView();
+      },
+      { reads },
+    ),
+  );
   const done = await reader.run('r-1');
+  assert.equal(views, 0);
   assert.ok(done);
   assert.equal(done.run.id, 'r-1');
   assert.equal(done.run.command, 'python probe_train.py --seed 1');
@@ -2483,12 +2500,7 @@ await test('a run read holds the run, its kept files within the bound, the end o
       sha256: 'f'.repeat(64),
     }),
   );
-  view = {
-    ...view,
-    ledger: [
-      { ...runRecord('r-1'), status: 'running', endedAt: null, outputs },
-    ],
-  };
+  ledger = [{ ...runRecord('r-1'), status: 'running', endedAt: null, outputs }];
   const running = await reader.run('r-1');
   assert.ok(running);
   assert.equal(running.cancelable, true);
@@ -2505,12 +2517,12 @@ await test('a run read holds the run, its kept files within the bound, the end o
   );
 
   // A Verifold that only shows the lab cannot cancel a run.
-  view = { ...view, runs: false };
+  here = false;
   assert.equal((await reader.run('r-1'))?.cancelable, false);
-  // A run that the lab does not have, and a lab without a log source.
+  // A run that the lab does not have, and a desk without the lab's reads.
   assert.equal(await reader.run('r-9'), null);
   const bare = new ApiReader(sources(root, () => seededView()));
-  assert.equal((await bare.run('r-1'))?.log, null);
+  assert.equal(await bare.run('r-1'), null);
 });
 
 await test("a diff read lists a direction's changed files within the bound, gives one file's diff when asked, and passes a proof on", async (t) => {
@@ -2523,6 +2535,7 @@ await test("a diff read lists a direction's changed files within the bound, give
   }));
   const asked: unknown[] = [];
   const reads: LabReadSource = {
+    run: () => null,
     runLog: () => Promise.resolve(null),
     diff: (direction, file, proof) => {
       asked.push([direction, file, proof]);
@@ -2573,6 +2586,8 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
   const lab = {
     runs: true,
     view: () => seededView(),
+    runRecord: (id: unknown) =>
+      id === 'r-1' ? { record: runRecord('r-1'), handle: 'claude-1' } : null,
     runLog: (id: unknown, bytes: unknown) =>
       Promise.resolve(
         id === 'r-1' && bytes === apiLimits.runLog
@@ -2626,7 +2641,9 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
   assert.equal(run.run.id, 'r-1');
   assert.deepEqual(run.log, { text: 'done\n', bytes: 5, partial: false });
   assert.equal((await get('/runs/r-9')).status, 404);
-  assert.equal((await get('/runs/x-1')).status, 400);
+  const bad = await get('/runs/x-1');
+  assert.equal(bad.status, 400);
+  assert.match(((await bad.json()) as { error: string }).error, /r-3/);
   assert.equal((await get('/runs/r-1?tail=1')).status, 404);
 
   assert.equal((await get('/directions/d-1/diff', false)).status, 401);
@@ -2667,4 +2684,89 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
       400,
       query,
     );
+});
+
+await test('a dismiss clears only the background failures that the page names, and every failure without names', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const releases: (() => void)[] = [];
+  // Each action waits longer than the desk does, then fails after the desk accepted it (202).
+  const slow = (reason: string) => async (): Promise<void> => {
+    await new Promise<void>((resolve) => releases.push(resolve));
+    throw new Error(reason);
+  };
+  const lab = {
+    runs: true,
+    view: () => seededView(),
+    pause: slow('An agent did not park in time.'),
+    resume: slow('The lab is not paused.'),
+  } as unknown as Lab;
+  const sessions = {
+    view: () => null,
+    views: () => [],
+  } as unknown as SessionPool;
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    await deskAssets(root),
+    sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab, api: { pollMs: 40, heartbeatMs: 100 } },
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const api = `${url.origin}/api/v1`;
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const act = (name: string, body: object, key: string): Promise<Response> =>
+    fetch(`${api}/actions/${name}`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, key }),
+    });
+  const works = async (): Promise<
+    Snapshot['lab'] extends infer L ? L : never
+  > =>
+    ((await (await fetch(`${api}/snapshot`, { headers })).json()) as Snapshot)
+      .lab;
+  const [paused, resumed] = await Promise.all([
+    act('lab-pause', {}, 'a'.repeat(32)),
+    act('lab-resume', {}, 'b'.repeat(32)),
+  ]);
+  assert.equal(paused.status, 202);
+  assert.equal(resumed.status, 202);
+  for (const release of releases) release();
+  await until(
+    async () =>
+      ((await works())?.works.filter((work) => work.error).length ?? 0) === 2,
+  );
+  const failed = (await works())?.works ?? [];
+  const pause = failed.find((work) => work.action === 'lab-pause');
+  assert.ok(pause);
+  // The page names the pause failure only, so the other one stays.
+  assert.equal(
+    (
+      await act(
+        'lab-dismiss',
+        { works: [{ action: pause.action, at: pause.at }] },
+        'c'.repeat(32),
+      )
+    ).status,
+    200,
+  );
+  assert.deepEqual(
+    (await works())?.works.map((work) => work.action),
+    ['lab-resume'],
+  );
+  // An older page names nothing: every failure goes.
+  assert.equal((await act('lab-dismiss', {}, 'd'.repeat(32))).status, 200);
+  assert.deepEqual((await works())?.works, []);
 });

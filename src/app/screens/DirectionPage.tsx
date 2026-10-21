@@ -19,7 +19,7 @@ import type {
   TurnPage,
 } from '../../protocol/api.ts';
 import type { ActOutcome, Loaded, StepQuery } from '../api.ts';
-import { ControlsContext } from '../controls.ts';
+import { ControlsContext, useControl } from '../controls.ts';
 import { foldQuery, refreshKey, stepTotal, turnSummary } from '../activity.ts';
 import { clock, harnessName, modelName, since } from '../format.ts';
 import { href } from '../route.ts';
@@ -37,7 +37,6 @@ import { RunChip } from '../components/RunChip.tsx';
 import { StepList } from '../components/StepList.tsx';
 import { TurnMessage } from '../components/TurnMessage.tsx';
 import { Verdict } from '../components/Verdict.tsx';
-import { useAction } from '../useAction.ts';
 import type { LabActions } from './LabHome.tsx';
 
 /** What the direction, turn, and post pages ask of Verifold. */
@@ -346,11 +345,8 @@ function LiveLine({
 
 /** Start an agent again after it stopped by itself too often, as the desk's Start again does. */
 function StartAgain({ agent }: { readonly agent: string }): ReactNode {
-  const controls = useContext(ControlsContext);
-  const action = useAction<null>((_, key) =>
-    controls
-      ? controls.restartAgent(agent, key)
-      : Promise.resolve({ refused: 'This tab has no access key.' }),
+  const { controls, action } = useControl<null>((controls, _, key) =>
+    controls.restartAgent(agent, key),
   );
   if (!controls) return null;
   return (

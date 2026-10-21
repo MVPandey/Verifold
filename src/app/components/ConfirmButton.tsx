@@ -9,18 +9,20 @@ const confirmMs = 5_000;
  * A button for an action that cannot be undone, such as stopping a
  * direction. The first click asks to click again, as the desk's buttons do.
  * The second click within a few seconds runs it. Verifold's reason shows
- * under the button when it says no.
+ * under the button when it says no. `onDone` runs after the action ran.
  */
 export function ConfirmButton({
   label,
   confirm,
   run,
+  onDone,
   className = 'button',
 }: {
   readonly label: string;
   /** What the button says after the first click, such as "Click again to stop it". */
   readonly confirm: string;
   readonly run: (key: string) => Promise<ActOutcome>;
+  readonly onDone?: () => void;
   readonly className?: string;
 }): ReactNode {
   const [armed, setArmed] = useState(false);
@@ -42,7 +44,9 @@ export function ConfirmButton({
             return;
           }
           setArmed(false);
-          void action.submit(null);
+          void action.submit(null).then((ran) => {
+            if (ran) onDone?.();
+          });
         }}
       >
         {armed ? confirm : label}

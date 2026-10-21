@@ -10,6 +10,7 @@ import {
 import type { ActOutcome } from '../api.ts';
 import { afterSend } from '../intent.ts';
 import {
+  enterCompletes,
   insertMention,
   mentionMatches,
   mentionQuery,
@@ -17,6 +18,17 @@ import {
 } from '../mentions.ts';
 import { useAction } from '../useAction.ts';
 import { Cross } from './Icons.tsx';
+
+/** What a send is: the text, and the post that it answers, or null. */
+export interface Send {
+  readonly text: string;
+  readonly to: string | null;
+}
+
+/** Two sends are one intent when both the text and the post that they answer are the same. */
+export function sameSend(a: Send, b: Send): boolean {
+  return a.text === b.text && a.to === b.to;
+}
 
 /**
  * A box to write to the lab or an agent. After a send goes through, the box
@@ -30,9 +42,11 @@ import { Cross } from './Icons.tsx';
  * without one a multiline box sets none and the server checks the length.
  * `hint`: one line under the box, such as when the message reaches its
  * reader. A refusal shows in its place. `names`: the names that the
- * one-line box completes after an `@`, with the arrow keys and Enter or Tab.
- * `replying`: the post that a send answers, shown above the box with a way
- * to stop replying. `onSent` runs after a send went through.
+ * one-line box completes after an `@`, with the arrow keys and Tab, or Enter
+ * while the person typed only the start of a name. `replying`: the post that
+ * a send answers, shown above the box with a way to stop replying. A send
+ * to another post is another intent, with its own key. `onSent` runs after
+ * a send went through.
  */
 export function Composer({
   label,
@@ -54,6 +68,9 @@ export function Composer({
   readonly names?: readonly MentionName[] | undefined;
   readonly replying?:
     | {
+        /** The post's ID. */
+        readonly post: string;
+        /** Who wrote it. */
         readonly to: string;
         readonly text: string;
         readonly onStop: () => void;
@@ -76,13 +93,16 @@ export function Composer({
     input.current.setSelectionRange(moveTo.current, moveTo.current);
     moveTo.current = null;
   }, [text]);
-  const action = useAction(onSend);
+  const action = useAction<Send>(
+    (value, key) => onSend(value.text, key),
+    sameSend,
+  );
   const send = async (event: FormEvent | KeyboardEvent): Promise<void> => {
     event.preventDefault();
     const sent = text;
     const value = sent.trim();
     if (!value || action.busy) return;
-    if (await action.submit(value)) {
+    if (await action.submit({ text: value, to: replying?.post ?? null })) {
       setText((current) => afterSend(current, sent));
       onSent?.();
     }
@@ -199,7 +219,10 @@ export function Composer({
               setActive((chosen + step + matches.length) % matches.length);
             } else if (event.key === 'Enter' || event.key === 'Tab') {
               const name = matches[chosen];
-              if (!name) return;
+              if (!name || !query) return;
+              // When the person typed a whole name, Enter sends the message.
+              if (event.key === 'Enter' && !enterCompletes(query.query, name))
+                return;
               event.preventDefault();
               complete(name);
             } else if (event.key === 'Escape') {

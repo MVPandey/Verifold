@@ -1,5 +1,6 @@
 import type {
   BringRead,
+  CheckItem,
   Direction,
   DirectionCounts,
   Fact,
@@ -65,8 +66,13 @@ const settled: Readonly<Partial<Record<Verdict, number>>> = {
 export function checkLine(lab: Lab, post: string): string | null {
   const latest = lab.checks.filter((check) => check.post === post).at(-1);
   if (!latest) return lab.omitted.checks === undefined ? 'Not rerun yet' : null;
-  const who = harnessName(latest.harness);
-  switch (latest.state) {
+  return checkWords(latest);
+}
+
+/** How one check went, in plain words, such as "Codex reran it, and it held". */
+export function checkWords(check: CheckItem): string {
+  const who = harnessName(check.harness);
+  switch (check.state) {
     case 'queued':
       return `A rerun by ${who} waits to start`;
     case 'running':
@@ -75,11 +81,11 @@ export function checkLine(lab: Lab, post: string): string | null {
     case 'dropped':
       return `A rerun by ${who} did not finish`;
     case 'done':
-      return latest.outcome === 'holds'
+      return check.outcome === 'holds'
         ? `${who} reran it, and it held`
-        : latest.outcome === 'fails'
+        : check.outcome === 'fails'
           ? `${who} reran it, and it did not hold`
-          : latest.outcome === 'differs'
+          : check.outcome === 'differs'
             ? `${who} reran it, and got a different result`
             : `${who} reran it`;
   }
