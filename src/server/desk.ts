@@ -1198,6 +1198,23 @@ export async function startDesk(
         ? (await lookOf(project, labDesk, view.state.startedAt)).away
         : null;
     },
+    // The same reads as the desk's bring-in panel and its diffs.
+    bring: {
+      list: async (direction) => {
+        const lab = labDesk.lab;
+        const view = lab?.view();
+        return lab && view ? labBring(lab, view, direction, labReads) : null;
+      },
+      diff: async (direction, file, commit) => {
+        const shown = await labDesk.lab?.directionDiff(
+          direction,
+          file,
+          undefined,
+          commit,
+        );
+        return shown?.diff ? { ...shown.diff, to: shown.to } : null;
+      },
+    },
   }));
   const apiFeed = new ApiFeed(apiReader, options.api);
   if (project) await readDeskSnapshot(project);

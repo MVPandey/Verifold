@@ -1,4 +1,13 @@
-import { act, isTurnDetail, isTurnPage, load, paths } from './api.ts';
+import {
+  act,
+  isBringRead,
+  isFileDiff,
+  isTurnDetail,
+  isTurnPage,
+  load,
+  paths,
+} from './api.ts';
+import type { AnswerActions } from './screens/AnswerPage.tsx';
 import type { AgentActions } from './screens/DirectionPage.tsx';
 import type { LabActions } from './screens/LabHome.tsx';
 
@@ -48,5 +57,32 @@ export function agentActions(token: string | null): AgentActions {
       load(token, paths.turns(agent, before), isTurnPage, signal),
     turn: (agent, turn, query, signal) =>
       load(token, paths.turn(agent, turn, query), isTurnDetail, signal),
+  };
+}
+
+/**
+ * The answer and bring-in pages' actions and reads: the desk's sign-off,
+ * look, and bring-in, with all of the desk's checks. Without a token, each
+ * one is refused at once.
+ */
+export function answerActions(token: string | null): AnswerActions {
+  if (!token)
+    return {
+      signOff: signedOut,
+      look: signedOut,
+      bring: signedOut,
+      read: unread,
+      diff: unread,
+    };
+  return {
+    signOff: (note, key) =>
+      act(token, 'lab-signoff', note ? { note } : {}, key),
+    look: (direction, key) => act(token, 'lab-bring-look', { direction }, key),
+    bring: (direction, commit, files, key) =>
+      act(token, 'lab-bring', { direction, commit, files }, key),
+    read: (direction, signal) =>
+      load(token, paths.bring(direction), isBringRead, signal),
+    diff: (direction, file, commit, signal) =>
+      load(token, paths.bringDiff(direction, file, commit), isFileDiff, signal),
   };
 }

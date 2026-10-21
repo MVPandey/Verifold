@@ -27,14 +27,15 @@ import { startDesk } from '../src/server/desk.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
 import { computeDefaults, type ComputeView } from '../src/core/compute.ts';
 import { SessionActionError } from '../src/core/session.ts';
-import type {
-  AgentRecord,
-  Call,
-  Check,
-  Direction,
-  Lab,
-  LabState,
-  LabView,
+import {
+  labLimits,
+  type AgentRecord,
+  type Call,
+  type Check,
+  type Direction,
+  type Lab,
+  type LabState,
+  type LabView,
 } from '../src/core/lab.ts';
 import { boardLimits, type Post } from '../src/core/board.ts';
 import type { RunRecord } from '../src/core/runs.ts';
@@ -762,6 +763,12 @@ await test('the snapshot holds what the screens show, and no internal field, key
       ['d-2', false],
     ],
   );
+  // Nothing came in from either direction yet, and the sign-off line has its limit.
+  assert.deepEqual(
+    lab.directions.map((entry) => entry.brought),
+    [null, null],
+  );
+  assert.equal(lab.signoffLimit, labLimits.signoff);
   assert.deepEqual(lab.disputes, [
     { post: 'p-2', objections: ['p-3'], check: 'k-1' },
   ]);
