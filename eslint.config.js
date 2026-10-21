@@ -39,7 +39,7 @@ export default tseslint.config(
   // is blocked until a rule allows it. cli may import anything. A marked line
   // names the step of #282 that removes it.
   {
-    files: ['src/core/**/*.ts'],
+    files: ['src/core/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -48,6 +48,95 @@ export default tseslint.config(
             {
               regex: '^\\.\\./(?!core/)',
               message: 'core imports only core.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // A core folder one level down, such as src/core/lab/, reaches the rest of
+  // core with ../. A ../../ path leaves core, or comes back into it the long way.
+  {
+    files: ['src/core/*/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./\\.\\./',
+              message:
+                'core imports only core, with ../ from a folder in core.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // src/core/lab/ splits lab.ts, so nothing in it imports lab.ts back.
+  // Each block repeats the patterns before it: a later block replaces them.
+  {
+    files: ['src/core/lab/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./\\.\\./',
+              message:
+                'core imports only core, with ../ from a folder in core.',
+            },
+            {
+              regex: '^\\.\\./lab(\\.[jt]s)?$',
+              message:
+                'src/core/lab/ splits lab.ts, so it does not import lab.ts.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The records come first: schema.ts imports only core modules outside src/core/lab/.
+  {
+    files: ['src/core/lab/schema.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^\\.\\./\\.\\./',
+              message:
+                'core imports only core, with ../ from a folder in core.',
+            },
+            {
+              regex: '^\\.\\./lab(\\.[jt]s)?$',
+              message:
+                'src/core/lab/ splits lab.ts, so it does not import lab.ts.',
+            },
+            {
+              regex: '^(?!\\.\\./)',
+              message:
+                'schema.ts imports only core modules outside src/core/lab/.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // A deeper core folder has no rule of its own yet, so it may import nothing until one is added.
+  {
+    files: ['src/core/*/*/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '.',
+              message:
+                'core folders nest one level deep. Add a layer rule for a deeper folder.',
             },
           ],
         },
