@@ -7,6 +7,7 @@ import type {
   QuestionAnswer,
 } from '../../protocol/api.ts';
 import { harnessName, modelName } from '../format.ts';
+import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { Composer } from '../components/Composer.tsx';
@@ -146,7 +147,7 @@ export function Scoping({
             key={turn.id}
             turn={turn}
             agent={planner}
-            direction={direction}
+            turnHref={href.turn(direction.id, turn.id)}
             lab={lab}
             now={now}
             target={null}

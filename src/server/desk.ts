@@ -1262,6 +1262,13 @@ export async function startDesk(
         return shown?.diff ? { ...shown.diff, to: shown.to } : null;
       },
     },
+    // The same reads as the desk's run and diff panels.
+    reads: {
+      runLog: async (run, bytes) =>
+        (await labDesk.lab?.runLog(run, bytes)) ?? null,
+      diff: async (direction, file, proof) =>
+        (await labDesk.lab?.directionDiff(direction, file, proof)) ?? null,
+    },
   }));
   const apiFeed = new ApiFeed(apiReader, options.api);
   if (project) await readDeskSnapshot(project);

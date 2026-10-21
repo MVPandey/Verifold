@@ -11,7 +11,11 @@ import type { SetupPage } from './setup.ts';
  * with a run marked in the turn that started it. The first run is
  * `#/setup/<step>`, and `#/setup` opens its first step without a record.
  * `#/ask` asks the question of a new project, while Verifold runs without
- * one. Any other fragment is a page that does not exist.
+ * one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's page,
+ * such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`, and
+ * `#/d/<id>/diff` what a direction changed, or with a proof such as
+ * `#/d/<id>/diff/p-12.0` the diff that a post cites. Any other fragment is a
+ * page that does not exist.
  */
 export type Route =
   | {
@@ -40,6 +44,19 @@ export type Route =
       readonly step: SetupPage | null;
     }
   | { readonly page: 'ask' }
+  | { readonly page: 'run'; readonly id: string }
+  | { readonly page: 'agent'; readonly id: string }
+  | {
+      readonly page: 'agent-turn';
+      readonly agent: string;
+      readonly turn: string;
+    }
+  | {
+      readonly page: 'diff';
+      readonly direction: string;
+      /** The proof that a post cites, such as p-12.0. Without one, the direction's changes since its start. */
+      readonly proof?: string;
+    }
   | { readonly page: 'unknown' };
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
@@ -76,6 +93,26 @@ export function parseRoute(hash: string): Route {
       ? { page: 'turn', direction: turn[1], turn: decoded }
       : { page: 'unknown' };
   }
+  const runPage = /^\/run\/(r-[1-9][0-9]{0,5})$/.exec(path);
+  if (runPage?.[1]) return { page: 'run', id: runPage[1] };
+  const agent = /^\/agent\/(a-[1-9][0-9]{0,3})$/.exec(path);
+  if (agent?.[1]) return { page: 'agent', id: agent[1] };
+  const agentTurn = /^\/agent\/(a-[1-9][0-9]{0,3})\/turn\/([^/]{1,400})$/.exec(
+    path,
+  );
+  if (agentTurn?.[1] && agentTurn[2]) {
+    const decoded = decode(agentTurn[2]);
+    return decoded && turnIdPattern.test(decoded)
+      ? { page: 'agent-turn', agent: agentTurn[1], turn: decoded }
+      : { page: 'unknown' };
+  }
+  const diff = new RegExp(
+    `^/d/(${id})/diff(?:/(p-[1-9][0-9]{0,5}\\.[0-9]))?$`,
+  ).exec(path);
+  if (diff?.[1])
+    return diff[2]
+      ? { page: 'diff', direction: diff[1], proof: diff[2] }
+      : { page: 'diff', direction: diff[1] };
   if (path === '/answer') return { page: 'answer' };
   if (path === '/ask') return { page: 'ask' };
   if (path === '/setup') return { page: 'setup', step: null };
@@ -96,6 +133,14 @@ export const href = {
   post: (id: string): string => `#/post/${id}`,
   run: (direction: string, run: string): string =>
     `#/d/${direction}/run/${run}`,
+  /** A run's own page. */
+  runPage: (id: string): string => `#/run/${id}`,
+  agent: (id: string): string => `#/agent/${id}`,
+  agentTurn: (agent: string, turn: string): string =>
+    `#/agent/${agent}/turn/${encodeURIComponent(turn)}`,
+  /** What a direction changed, or with `proof` the diff that a post cites. */
+  diff: (direction: string, proof?: string): string =>
+    `#/d/${direction}/diff${proof ? `/${proof}` : ''}`,
   setup: (step?: SetupPage): string => (step ? `#/setup/${step}` : '#/setup'),
   ask: '#/ask',
 } as const;

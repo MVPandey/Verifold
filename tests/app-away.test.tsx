@@ -587,7 +587,7 @@ function screen(shown: Snapshot, hash: string): string {
   );
 }
 
-await test('every hit opens from what this snapshot holds: a post on the board or on its own page, a run on its direction, and a call in its dialog or here', () => {
+await test('every hit opens from what this snapshot holds: a post on the board or on its own page, a run on its own page, and a call in its dialog or here', () => {
   // A trimmed snapshot: p-40 is among the newest 50 posts, but the board holds the newest 5.
   const small = trimmed();
   const lab = small.lab;
@@ -602,7 +602,7 @@ await test('every hit opens from what this snapshot holds: a post on the board o
   });
   assert.deepEqual(hitAction(hits.run, lab), {
     type: 'go',
-    route: '#/d/d-2/run/r-3',
+    route: '#/run/r-3',
   });
   assert.deepEqual(hitAction(hits.call, lab), {
     type: 'go',
@@ -654,7 +654,7 @@ await test('a hit is a link to its page, or shows a call that the snapshot leave
   assert.match(render(hits.older), /<a class="hit__open" href="#\/post\/p-40"/);
 
   const run = render(hits.run);
-  assert.match(run, /href="#\/d\/d-2\/run\/r-3"/);
+  assert.match(run, /href="#\/run\/r-3"/);
   assert.match(
     run,
     /<code class="hit__text hit__text--code">python probe_train\.py --<mark>seed<\/mark> 1<\/code>/,

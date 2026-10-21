@@ -88,7 +88,7 @@ export function hitAction(hit: SearchHit, lab: Lab): HitAction {
         route: onBoard(lab, hit.id) ? href.board(hit.id) : href.post(hit.id),
       };
     case 'run':
-      return { type: 'go', route: href.run(hit.direction, hit.id) };
+      return { type: 'go', route: href.runPage(hit.id) };
     case 'call':
       return callView(lab, hit.id).kind === 'missing'
         ? { type: 'read' }

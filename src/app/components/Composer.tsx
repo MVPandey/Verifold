@@ -1,5 +1,7 @@
 import {
+  useEffect,
   useId,
+  useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
@@ -7,7 +9,14 @@ import {
 } from 'react';
 import type { ActOutcome } from '../api.ts';
 import { afterSend } from '../intent.ts';
+import {
+  insertMention,
+  mentionMatches,
+  mentionQuery,
+  type MentionName,
+} from '../mentions.ts';
 import { useAction } from '../useAction.ts';
+import { Cross } from './Icons.tsx';
 
 /**
  * A box to write to the lab or an agent. After a send goes through, the box
@@ -20,7 +29,10 @@ import { useAction } from '../useAction.ts';
  * Ctrl with Enter sends. `maxLength`: the server's limit, when it gave one;
  * without one a multiline box sets none and the server checks the length.
  * `hint`: one line under the box, such as when the message reaches its
- * reader. A refusal shows in its place.
+ * reader. A refusal shows in its place. `names`: the names that the
+ * one-line box completes after an `@`, with the arrow keys and Enter or Tab.
+ * `replying`: the post that a send answers, shown above the box with a way
+ * to stop replying. `onSent` runs after a send went through.
  */
 export function Composer({
   label,
@@ -29,6 +41,9 @@ export function Composer({
   multiline = false,
   maxLength,
   hint,
+  names,
+  replying,
+  onSent,
 }: {
   readonly label: string;
   readonly placeholder: string;
@@ -36,17 +51,59 @@ export function Composer({
   readonly multiline?: boolean;
   readonly maxLength?: number | undefined;
   readonly hint?: string | undefined;
+  readonly names?: readonly MentionName[] | undefined;
+  readonly replying?:
+    | {
+        readonly to: string;
+        readonly text: string;
+        readonly onStop: () => void;
+      }
+    | undefined;
+  readonly onSent?: (() => void) | undefined;
 }): ReactNode {
   const id = useId();
+  const listId = useId();
   const [text, setText] = useState('');
+  const [caret, setCaret] = useState(0);
+  const [active, setActive] = useState(0);
+  // Escape closes the list until the person types again.
+  const [closed, setClosed] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  // Where the caret goes after a name comes in, once the box shows the new text.
+  const moveTo = useRef<number | null>(null);
+  useEffect(() => {
+    if (moveTo.current === null || !input.current) return;
+    input.current.setSelectionRange(moveTo.current, moveTo.current);
+    moveTo.current = null;
+  }, [text]);
   const action = useAction(onSend);
   const send = async (event: FormEvent | KeyboardEvent): Promise<void> => {
     event.preventDefault();
     const sent = text;
     const value = sent.trim();
     if (!value || action.busy) return;
-    if (await action.submit(value))
+    if (await action.submit(value)) {
       setText((current) => afterSend(current, sent));
+      onSent?.();
+    }
+  };
+  const query = names && !closed ? mentionQuery(text, caret) : null;
+  const matches = names && query ? mentionMatches(names, query.query) : [];
+  const listing = matches.length > 0;
+  const chosen = Math.min(active, matches.length - 1);
+  const complete = (name: MentionName): void => {
+    if (!query) return;
+    const next = insertMention(text, query.start, caret, name.value);
+    moveTo.current = next.caret;
+    setText(next.text);
+    setCaret(next.caret);
+    setActive(0);
+  };
+  const type = (value: string, at: number | null): void => {
+    setText(value);
+    setCaret(at ?? value.length);
+    setActive(0);
+    setClosed(false);
   };
   const below = action.error ? (
     <span role="alert" className="composer__error">
@@ -91,17 +148,65 @@ export function Composer({
     );
   return (
     <form className="composer" onSubmit={(event) => void send(event)}>
+      {replying && (
+        <p className="composer__replying">
+          <span>
+            Replying to <b>{replying.to}</b>: {replying.text}
+          </span>
+          <button
+            type="button"
+            className="composer__stop"
+            aria-label="Stop replying"
+            onClick={replying.onStop}
+          >
+            <Cross size={14} />
+          </button>
+        </p>
+      )}
       <div className="composer__box">
         <label htmlFor={id} className="visually-hidden">
           {label}
         </label>
         <input
+          ref={input}
           id={id}
           className="composer__input"
           placeholder={placeholder}
           value={text}
           maxLength={maxLength ?? 4000}
-          onChange={(event) => setText(event.target.value)}
+          {...(names
+            ? {
+                role: 'combobox',
+                'aria-autocomplete': 'list' as const,
+                'aria-expanded': listing,
+                'aria-controls': listId,
+                ...(listing
+                  ? { 'aria-activedescendant': `${listId}-${chosen}` }
+                  : {}),
+              }
+            : {})}
+          onChange={(event) =>
+            type(event.target.value, event.target.selectionStart)
+          }
+          onSelect={(event) =>
+            setCaret(event.currentTarget.selectionStart ?? text.length)
+          }
+          onKeyDown={(event) => {
+            if (!listing) return;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              const step = event.key === 'ArrowDown' ? 1 : -1;
+              setActive((chosen + step + matches.length) % matches.length);
+            } else if (event.key === 'Enter' || event.key === 'Tab') {
+              const name = matches[chosen];
+              if (!name) return;
+              event.preventDefault();
+              complete(name);
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              setClosed(true);
+            }
+          }}
         />
         <button
           type="submit"
@@ -111,6 +216,34 @@ export function Composer({
           Send
         </button>
       </div>
+      {names && (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label="Names"
+          className="mentions"
+          hidden={!listing}
+        >
+          {matches.map((name, index) => (
+            <li
+              key={name.value}
+              id={`${listId}-${index}`}
+              role="option"
+              aria-selected={index === chosen}
+              className={
+                index === chosen ? 'mentions__item is-active' : 'mentions__item'
+              }
+              // A press keeps the focus in the box, so the name comes in where the person types.
+              onMouseDown={(event) => {
+                event.preventDefault();
+                complete(name);
+              }}
+            >
+              <b>{name.value}</b> <span className="muted">{name.note}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {below}
     </form>
   );

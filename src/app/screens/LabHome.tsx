@@ -1,8 +1,16 @@
-import { useContext, useEffect, type ReactNode } from 'react';
-import type { Lab, QuestionAnswer, Snapshot } from '../../protocol/api.ts';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import type {
+  Lab,
+  Post,
+  QuestionAnswer,
+  Snapshot,
+} from '../../protocol/api.ts';
 import { signedOff } from '../answer.ts';
 import type { ActOutcome } from '../api.ts';
 import { boardLink, threads } from '../board.ts';
+import { ControlsContext } from '../controls.ts';
+import { authorOf, cut } from '../format.ts';
+import { mentionNames } from '../mentions.ts';
 import { href, replaceRoute } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -14,6 +22,12 @@ import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { AwayDigest } from '../components/AwayDigest.tsx';
+import {
+  Disputes,
+  MoreTime,
+  OpenDirection,
+  WorksLine,
+} from '../components/LabControls.tsx';
 import { NotifyLine } from '../components/NotifyLine.tsx';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
@@ -90,6 +104,12 @@ export function LabHome({
     ? lab.board.posts.filter((post) => !announced.has(post.id))
     : lab.board.posts;
   const tools = useContext(ToolsContext);
+  const controls = useContext(ControlsContext);
+  const [replyTo, setReplyTo] = useState<Post | null>(null);
+  const older = useOlderPosts(lab);
+  const shownPosts = older.join(posts);
+  const replies = controls && lab.agentsHere ? controls : null;
+  const box = useRef<HTMLDivElement>(null);
   // After the board rendered: then the post is on the page.
   useEffect(() => {
     if (!show) return;
@@ -132,6 +152,8 @@ export function LabHome({
             // Before the plan, the planner's own line says what happens.
             !scoping && <StatusBar tone="ok">Nothing needs you.</StatusBar>
           )}
+          {lab.paused?.reason === 'deadline' && lab.agentsHere && <MoreTime />}
+          <WorksLine lab={lab} />
           {lab.answered.map((call) => (
             <AnswerLine
               key={call.id}
@@ -183,18 +205,42 @@ export function LabHome({
               ready.
             </StatusBar>
           )}
-          {posts.length > 0 && (
+          {!scoping && lab.agentsHere && <OpenDirection />}
+          {shownPosts.length > 0 && (
             <section className="section section--board" aria-labelledby="board">
               <h2 id="board" className="section__title">
                 Board
               </h2>
-              {lab.board.more && (
-                <span className="more">
-                  Older posts are not shown here yet.
+              <Disputes lab={lab} />
+              {older.more && (
+                <button
+                  type="button"
+                  className="link-button"
+                  disabled={older.busy}
+                  onClick={() => void older.show(shownPosts[0]?.id)}
+                >
+                  Show older posts
+                </button>
+              )}
+              {older.problem && (
+                <span role="alert" className="composer__error">
+                  {older.problem}
                 </span>
               )}
-              {threads(posts).map((thread) => (
-                <BoardThread key={thread.root.id} thread={thread} lab={lab} />
+              {threads(shownPosts).map((thread) => (
+                <BoardThread
+                  key={thread.root.id}
+                  thread={thread}
+                  lab={lab}
+                  {...(replies
+                    ? {
+                        onReply: (post: Post) => {
+                          setReplyTo(post);
+                          box.current?.querySelector('input')?.focus();
+                        },
+                      }
+                    : {})}
+                />
               ))}
             </section>
           )}
@@ -206,16 +252,78 @@ export function LabHome({
           {scoping ? (
             <PlannerComposer lab={lab} {...scoping} />
           ) : (
-            <Composer
-              label="Write to the lab"
-              placeholder="Reply, or @mention an agent"
-              maxLength={lab.postLimit}
-              onSend={actions.post}
-            />
+            <div ref={box}>
+              <Composer
+                label="Write to the lab"
+                placeholder="Reply, or @mention an agent"
+                maxLength={lab.postLimit}
+                names={mentionNames(lab)}
+                onSend={
+                  replyTo && replies
+                    ? (text, key) => replies.reply(replyTo.id, text, key)
+                    : actions.post
+                }
+                replying={
+                  replyTo
+                    ? {
+                        to: authorOf(replyTo),
+                        text: cut(replyTo.text, 80),
+                        onStop: () => setReplyTo(null),
+                      }
+                    : undefined
+                }
+                onSent={() => setReplyTo(null)}
+              />
+            </div>
           )}
           <NotifyLine />
         </div>
       </main>
     </div>
   );
+}
+
+/**
+ * Older pages of the board, read on request, before the snapshot's newest
+ * page. The pages join the newest posts by ID, so no post shows twice.
+ */
+function useOlderPosts(lab: Lab): {
+  readonly more: boolean;
+  readonly busy: boolean;
+  readonly problem: string | null;
+  readonly show: (before: string | undefined) => Promise<void>;
+  readonly join: (newest: readonly Post[]) => readonly Post[];
+} {
+  const controls = useContext(ControlsContext);
+  const [pages, setPages] = useState<{
+    readonly posts: readonly Post[];
+    readonly more: boolean;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  return {
+    more: controls !== null && (pages ? pages.more : lab.board.more),
+    busy,
+    problem,
+    show: async (before) => {
+      if (!controls || !before || busy) return;
+      setBusy(true);
+      const loaded = await controls.board(before);
+      setBusy(false);
+      if ('error' in loaded) {
+        setProblem(loaded.error);
+        return;
+      }
+      setProblem(null);
+      setPages((current) => ({
+        posts: [...loaded.value.posts, ...(current?.posts ?? [])],
+        more: loaded.value.more,
+      }));
+    },
+    join: (newest) => {
+      if (!pages) return newest;
+      const known = new Set(newest.map((post) => post.id));
+      return [...pages.posts.filter((post) => !known.has(post.id)), ...newest];
+    },
+  };
 }

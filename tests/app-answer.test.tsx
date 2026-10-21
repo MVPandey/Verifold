@@ -502,7 +502,7 @@ await test('the answer page shows the tagged findings, what is open, the calls, 
     /class="finding__tag finding__tag--literature">Literature</,
   );
   // One run map for the page: each finding's runs show by their labels.
-  assert.match(html, /<span class="proof">Run r-4<\/span>/);
+  assert.match(html, /<a href="#\/run\/r-4" class="proof">Run r-4<\/a>/);
   // A source links only as a web address, and reads short.
   assert.match(
     html,

@@ -22,6 +22,7 @@ import {
   ApiReader,
   apiLimits,
   type ApiSources,
+  type LabReadSource,
 } from '../src/server/api.ts';
 import { startDesk } from '../src/server/desk.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
@@ -46,7 +47,9 @@ import {
   type Away,
   type BoardPage,
   type BringRead,
+  type DirectionDiff,
   type PostThread,
+  type RunDetail,
   type SearchResult,
   type Snapshot,
   type TurnDetail,
@@ -2435,4 +2438,233 @@ await test("with a monthly limit, the snapshot's money holds all projects' month
     gpuLimitUsd: 25,
     month: { spentUsd: 37.2, limitUsd: 100 },
   });
+});
+
+await test('a run read holds the run, its kept files within the bound, the end of its log, and whether the person can cancel it', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let view = seededView();
+  const asked: [string, number][] = [];
+  const reads: LabReadSource = {
+    runLog: (run, bytes) => {
+      asked.push([run, bytes]);
+      return Promise.resolve({
+        text: 'step 900 gap=0.34\n',
+        bytes: 900_000,
+        partial: true,
+      });
+    },
+    diff: () => Promise.resolve(null),
+  };
+  const reader = new ApiReader(sources(root, () => view, { reads }));
+  const done = await reader.run('r-1');
+  assert.ok(done);
+  assert.equal(done.run.id, 'r-1');
+  assert.equal(done.run.command, 'python probe_train.py --seed 1');
+  assert.equal(done.handle, 'claude-1');
+  assert.equal(done.harness, 'claude');
+  assert.equal(done.minutes, 60);
+  assert.deepEqual(done.outputs, []);
+  assert.deepEqual(done.log, {
+    text: 'step 900 gap=0.34\n',
+    bytes: 900_000,
+    partial: true,
+  });
+  // A run that ended cannot be cancelled. The read asks for the bounded end of the log.
+  assert.equal(done.cancelable, false);
+  assert.deepEqual(asked, [['r-1', apiLimits.runLog]]);
+
+  // A running run with more kept files than the bound.
+  const outputs = Array.from(
+    { length: apiLimits.runOutputs + 3 },
+    (_, index) => ({
+      path: `figures/seed-${index}.png`,
+      bytes: 1000 + index,
+      sha256: 'f'.repeat(64),
+    }),
+  );
+  view = {
+    ...view,
+    ledger: [
+      { ...runRecord('r-1'), status: 'running', endedAt: null, outputs },
+    ],
+  };
+  const running = await reader.run('r-1');
+  assert.ok(running);
+  assert.equal(running.cancelable, true);
+  assert.equal(running.outputs.length, apiLimits.runOutputs);
+  assert.equal(running.moreOutputs, 3);
+  assert.deepEqual(running.outputs[0], {
+    path: 'figures/seed-0.png',
+    bytes: 1000,
+  });
+  // No internal field leaves the server: the harness call's key, the config hash, or the run's folder.
+  assert.doesNotMatch(
+    JSON.stringify(running),
+    /SECRET|run-1-1a2b3c4d|"sha256"|"key"/,
+  );
+
+  // A Verifold that only shows the lab cannot cancel a run.
+  view = { ...view, runs: false };
+  assert.equal((await reader.run('r-1'))?.cancelable, false);
+  // A run that the lab does not have, and a lab without a log source.
+  assert.equal(await reader.run('r-9'), null);
+  const bare = new ApiReader(sources(root, () => seededView()));
+  assert.equal((await bare.run('r-1'))?.log, null);
+});
+
+await test("a diff read lists a direction's changed files within the bound, gives one file's diff when asked, and passes a proof on", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const files = Array.from({ length: apiLimits.diffFiles + 2 }, (_, index) => ({
+    path: `src/file-${index}.py`,
+    change: index === 0 ? ('added' as const) : ('modified' as const),
+    regular: index !== 1,
+  }));
+  const asked: unknown[] = [];
+  const reads: LabReadSource = {
+    runLog: () => Promise.resolve(null),
+    diff: (direction, file, proof) => {
+      asked.push([direction, file, proof]);
+      if (direction !== 'd-1') return Promise.resolve(null);
+      if (file === 'outside.txt')
+        return Promise.reject(
+          new SessionActionError('That file is not in this diff.'),
+        );
+      return Promise.resolve({
+        from: 'a'.repeat(40),
+        to: 'b'.repeat(40),
+        files,
+        diff: file ? { text: '@@ -1 +1 @@\n-old\n+new\n', cut: false } : null,
+      });
+    },
+  };
+  const reader = new ApiReader(sources(root, () => seededView(), { reads }));
+  const list = await reader.directionDiff('d-1');
+  assert.ok(list);
+  assert.equal(list.files.length, apiLimits.diffFiles);
+  assert.equal(list.moreFiles, 2);
+  assert.deepEqual(list.files[1], {
+    path: 'src/file-1.py',
+    change: 'modified',
+    regular: false,
+  });
+  assert.equal(list.diff, null);
+  const one = await reader.directionDiff('d-1', 'src/file-0.py', 'p-2.0');
+  assert.deepEqual(one?.diff, {
+    path: 'src/file-0.py',
+    text: '@@ -1 +1 @@\n-old\n+new\n',
+    trimmed: false,
+  });
+  assert.deepEqual(asked, [
+    ['d-1', undefined, undefined],
+    ['d-1', 'src/file-0.py', 'p-2.0'],
+  ]);
+  assert.equal(await reader.directionDiff('d-9'), null);
+  await assert.rejects(
+    reader.directionDiff('d-1', 'outside.txt'),
+    /not in this diff/,
+  );
+});
+
+await test('the run and diff reads answer over HTTP with the token, and refuse a bad ID, an unknown query, and a file outside the diff', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lab = {
+    runs: true,
+    view: () => seededView(),
+    runLog: (id: unknown, bytes: unknown) =>
+      Promise.resolve(
+        id === 'r-1' && bytes === apiLimits.runLog
+          ? { text: 'done\n', bytes: 5, partial: false }
+          : null,
+      ),
+    directionDiff: (id: unknown, path: unknown, proof: unknown) => {
+      if (id !== 'd-1') return Promise.resolve(null);
+      if (path === 'missing.py')
+        return Promise.reject(
+          new SessionActionError('That file is not in this diff.'),
+        );
+      return Promise.resolve({
+        from: 'a'.repeat(40),
+        to: proof ? 'c'.repeat(40) : 'b'.repeat(40),
+        files: [{ path: 'probe.py', change: 'added', regular: true }],
+        diff: path === undefined ? null : { text: '+x\n', cut: false },
+      });
+    },
+  } as unknown as Lab;
+  const sessions = {
+    view: () => null,
+    views: () => [],
+  } as unknown as SessionPool;
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    await deskAssets(root),
+    sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab, api: { pollMs: 40, heartbeatMs: 100 } },
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const api = `${url.origin}/api/v1`;
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const get = (path: string, auth = true): Promise<Response> =>
+    fetch(`${api}${path}`, auth ? { headers } : {});
+
+  assert.equal((await get('/runs/r-1', false)).status, 401);
+  const run = (await (await get('/runs/r-1')).json()) as RunDetail;
+  assert.equal(run.run.id, 'r-1');
+  assert.deepEqual(run.log, { text: 'done\n', bytes: 5, partial: false });
+  assert.equal((await get('/runs/r-9')).status, 404);
+  assert.equal((await get('/runs/x-1')).status, 400);
+  assert.equal((await get('/runs/r-1?tail=1')).status, 404);
+
+  assert.equal((await get('/directions/d-1/diff', false)).status, 401);
+  const list = (await (
+    await get('/directions/d-1/diff')
+  ).json()) as DirectionDiff;
+  assert.deepEqual(list.files, [
+    { path: 'probe.py', change: 'added', regular: true },
+  ]);
+  assert.equal(list.diff, null);
+  const one = (await (
+    await get('/directions/d-1/diff?file=probe.py&proof=p-2.0')
+  ).json()) as DirectionDiff;
+  assert.equal(one.to, 'c'.repeat(40));
+  assert.deepEqual(one.diff, {
+    path: 'probe.py',
+    text: '+x\n',
+    trimmed: false,
+  });
+  // A file outside the diff is refused with the reason, and an unknown direction is not found.
+  const outside = await get('/directions/d-1/diff?file=missing.py');
+  assert.equal(outside.status, 404);
+  assert.match(
+    ((await outside.json()) as { error: string }).error,
+    /not in this diff/,
+  );
+  assert.equal((await get('/directions/d-9/diff')).status, 404);
+  // A bad proof, a repeated or unknown key, and an empty file are refused before any read.
+  for (const query of [
+    '?proof=p-2',
+    '?proof=x',
+    '?file=a.py&file=b.py',
+    '?path=a.py',
+    '?file=',
+  ])
+    assert.equal(
+      (await get(`/directions/d-1/diff${query}`)).status,
+      400,
+      query,
+    );
 });

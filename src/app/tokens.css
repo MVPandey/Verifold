@@ -36,6 +36,10 @@
   --rerun-ink: #1d3f8f;
   --code-bg: #17151c;
   --code-ink: #ece8f1;
+  /* Diff lines on the code ground: not on the canvas, which shows no diff. */
+  --code-add: #a6e3b8;
+  --code-del: #f2a7a7;
+  --code-hunk: #c9b3f5;
 
   --font: 'Manrope', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
