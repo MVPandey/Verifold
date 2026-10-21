@@ -28,11 +28,9 @@ import { href, parseRoute } from '../src/app/route.ts';
 import { byIndex, byStart, filled, joinTurns, meet } from '../src/app/turns.ts';
 import { agentActions } from '../src/app/actions.ts';
 import { Screen } from '../src/app/App.tsx';
+import { runLabel } from '../src/app/components/RunChip.tsx';
 import { StepList, StepRow } from '../src/app/components/StepList.tsx';
-import {
-  runLabel,
-  type AgentActions,
-} from '../src/app/screens/DirectionPage.tsx';
+import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import type { LabState } from '../src/app/store.ts';
 

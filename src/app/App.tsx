@@ -4,9 +4,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { agentActions, labActions } from './actions.ts';
+import { agentActions, answerActions, labActions } from './actions.ts';
 import { needsTick } from './call.ts';
 import { href, parseRoute, type Route } from './route.ts';
+import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
+import { BringPage } from './screens/BringPage.tsx';
 import { CallDialog } from './screens/CallDialog.tsx';
 import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
@@ -38,6 +40,9 @@ function useNow(fast: boolean): number {
   return now;
 }
 
+/** Answer and bring-in actions for a page without a token: each one is refused. */
+const signedOutAnswers = answerActions(null);
+
 /** The page for a state and a route. Separate from the hooks, so tests render it directly. */
 export function Screen({
   state,
@@ -45,12 +50,14 @@ export function Screen({
   now,
   actions,
   agentActions,
+  answers = signedOutAnswers,
 }: {
   readonly state: LabState;
   readonly route: Route;
   readonly now: number;
   readonly actions: LabActions;
   readonly agentActions: AgentActions;
+  readonly answers?: AnswerActions;
 }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
@@ -78,8 +85,7 @@ export function Screen({
       </Notice>
     );
   if (route.page === 'unknown') return <NotFound />;
-  if (route.page === 'answer' || route.page === 'first-run')
-    return <ComingSoon page={route.page} />;
+  if (route.page === 'first-run') return <ComingSoon page={route.page} />;
   if (!snapshot)
     return connection === 'unreachable' ? (
       <Notice title="Can't reach Verifold. Is it running?">
@@ -125,6 +131,17 @@ export function Screen({
         )}
       </>
     );
+  if (route.page === 'answer')
+    return (
+      <AnswerPage
+        snapshot={snapshot}
+        lab={lab}
+        connection={connection}
+        now={now}
+        actions={actions}
+        answerActions={answers}
+      />
+    );
   const direction = lab.directions.find(
     (entry) => entry.id === route.direction,
   );
@@ -149,9 +166,22 @@ export function Screen({
     agentActions,
   };
   // Keyed by the route, so no state carries from one direction or turn to another.
-  return route.page === 'direction' ? (
-    <DirectionPage key={direction.id} {...page} />
-  ) : (
+  if (route.page === 'direction')
+    return <DirectionPage key={direction.id} {...page} />;
+  if (route.page === 'bring')
+    return (
+      <BringPage
+        key={direction.id}
+        snapshot={snapshot}
+        lab={lab}
+        direction={direction}
+        connection={connection}
+        now={now}
+        actions={actions}
+        answerActions={answers}
+      />
+    );
+  return (
     <TurnScreen
       key={`${direction.id}/${route.turn}`}
       {...page}
@@ -176,6 +206,7 @@ export function App({
   }, [state, now]);
   const [actions] = useState(() => labActions(token));
   const [agent] = useState(() => agentActions(token));
+  const [answers] = useState(() => answerActions(token));
   return (
     <Screen
       state={state}
@@ -183,6 +214,7 @@ export function App({
       now={now}
       actions={actions}
       agentActions={agent}
+      answers={answers}
     />
   );
 }

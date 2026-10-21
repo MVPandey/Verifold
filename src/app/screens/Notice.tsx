@@ -18,7 +18,6 @@ export function Notice({
 }
 
 const later: Record<LaterPage, string> = {
-  answer: 'The answer',
   'first-run': 'Setting up',
 };
 

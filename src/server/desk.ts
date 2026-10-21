@@ -840,6 +840,11 @@ async function labRequest(
       Number.isInteger(body.option)
         ? body.option
         : undefined;
+    // A bring-in names its direction, so its bring-in page shows only its own work.
+    const direction =
+      typeof body.direction === 'string' && directionId.test(body.direction)
+        ? body.direction
+        : undefined;
     const work: LabWork = {
       action,
       label:
@@ -852,14 +857,16 @@ async function labRequest(
       error: null,
       ...(call === undefined ? {} : { call }),
       ...(option === undefined ? {} : { option }),
+      ...(direction === undefined ? {} : { direction }),
     };
-    // A new try of an action replaces its earlier failure, for the same call when it has one.
+    // A new try of an action replaces its earlier failure, for the same call or direction when it has one.
     desk.works = [
       ...desk.works.filter(
         (entry) =>
           entry.action !== action ||
           entry.error === null ||
-          entry.call !== call,
+          entry.call !== call ||
+          entry.direction !== direction,
       ),
       work,
     ];
@@ -1197,6 +1204,23 @@ export async function startDesk(
       return project && view
         ? (await lookOf(project, labDesk, view.state.startedAt)).away
         : null;
+    },
+    // The same reads as the desk's bring-in panel and its diffs.
+    bring: {
+      list: async (direction) => {
+        const lab = labDesk.lab;
+        const view = lab?.view();
+        return lab && view ? labBring(lab, view, direction, labReads) : null;
+      },
+      diff: async (direction, file, commit) => {
+        const shown = await labDesk.lab?.directionDiff(
+          direction,
+          file,
+          undefined,
+          commit,
+        );
+        return shown?.diff ? { ...shown.diff, to: shown.to } : null;
+      },
     },
   }));
   const apiFeed = new ApiFeed(apiReader, options.api);

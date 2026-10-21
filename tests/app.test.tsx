@@ -592,14 +592,21 @@ await test('a send keeps text typed while it was in flight, and a retry after a 
   assert.deepEqual(await act('t', 'lab-post', { text: 'Hi' }, 'k1'), {
     refused: 'The lab is paused.',
   });
+  // A slow action that goes on in the background says so.
   answer = () =>
     Promise.resolve(
       new Response('{"ok":true,"pending":true}', { status: 202 }),
     );
   assert.deepEqual(await act('t', 'lab-post', { text: 'Hi' }, 'k1'), {
     ok: true,
+    pending: true,
+  });
+  answer = () => Promise.resolve(new Response('{"ok":true}', { status: 200 }));
+  assert.deepEqual(await act('t', 'lab-post', { text: 'Hi' }, 'k1'), {
+    ok: true,
   });
   assert.deepEqual(bodies, [
+    { text: 'Hi', key: 'k1' },
     { text: 'Hi', key: 'k1' },
     { text: 'Hi', key: 'k1' },
     { text: 'Hi', key: 'k1' },

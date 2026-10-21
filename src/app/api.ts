@@ -3,6 +3,8 @@ import {
   type ActionBodies,
   type ActionName,
   type ActionResult,
+  type BringRead,
+  type FileDiff,
   type Snapshot,
   type TurnDetail,
   type TurnPage,
@@ -21,12 +23,13 @@ export async function takeToken(): Promise<string | null> {
 }
 
 /**
- * How an action ended. `refused`: Verifold answered and said no, so a new
- * attempt needs a new key. `lost`: no answer came, so nobody knows whether it
- * ran, and a retry keeps the key.
+ * How an action ended. `pending`: Verifold took it, and it goes on in the
+ * background (202), so a later snapshot shows how it ends. `refused`:
+ * Verifold answered and said no, so a new attempt needs a new key. `lost`:
+ * no answer came, so nobody knows whether it ran, and a retry keeps the key.
  */
 export type ActOutcome =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly pending?: true }
   | { readonly refused: string }
   | { readonly lost: string };
 
@@ -65,7 +68,8 @@ export async function act<Name extends ActionName>(
   } catch {
     return { lost: 'Verifold did not answer. Send again to retry.' };
   }
-  if (response.ok) return { ok: true };
+  if (response.ok)
+    return response.status === 202 ? { ok: true, pending: true } : { ok: true };
   const result: unknown = await response.json().catch(() => null);
   return {
     refused: isError(result)
@@ -96,6 +100,12 @@ export const paths = {
     const rest = search.toString();
     return `/api/v1/agents/${encodeURIComponent(agent)}/turns/${encodeURIComponent(turn)}${rest ? `?${rest}` : ''}`;
   },
+  /** What a bring-in of a direction can copy. */
+  bring: (direction: string): string =>
+    `/api/v1/directions/${encodeURIComponent(direction)}/bring`,
+  /** One file's diff at the commit of a bring-in. */
+  bringDiff: (direction: string, file: string, commit: string): string =>
+    `/api/v1/directions/${encodeURIComponent(direction)}/bring/diff?${new URLSearchParams({ file, commit }).toString()}`,
 } as const;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -116,6 +126,27 @@ export function isTurnDetail(value: unknown): value is TurnDetail {
     object(value.turn) &&
     Array.isArray(value.steps) &&
     typeof value.more === 'boolean'
+  );
+}
+
+export function isBringRead(value: unknown): value is BringRead {
+  return (
+    object(value) &&
+    (value.list === null ||
+      (object(value.list) &&
+        typeof value.list.commit === 'string' &&
+        Array.isArray(value.list.files))) &&
+    (value.error === null || typeof value.error === 'string') &&
+    Array.isArray(value.history)
+  );
+}
+
+export function isFileDiff(value: unknown): value is FileDiff {
+  return (
+    object(value) &&
+    typeof value.text === 'string' &&
+    typeof value.trimmed === 'boolean' &&
+    typeof value.commit === 'string'
   );
 }
 

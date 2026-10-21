@@ -27,14 +27,15 @@ import { startDesk } from '../src/server/desk.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
 import { computeDefaults, type ComputeView } from '../src/core/compute.ts';
 import { SessionActionError } from '../src/core/session.ts';
-import type {
-  AgentRecord,
-  Call,
-  Check,
-  Direction,
-  Lab,
-  LabState,
-  LabView,
+import {
+  labLimits,
+  type AgentRecord,
+  type Call,
+  type Check,
+  type Direction,
+  type Lab,
+  type LabState,
+  type LabView,
 } from '../src/core/lab.ts';
 import { boardLimits, type Post } from '../src/core/board.ts';
 import type { RunRecord } from '../src/core/runs.ts';
@@ -42,6 +43,7 @@ import type { Lease } from '../src/core/leases.ts';
 import type { SessionPool } from '../src/core/workers.ts';
 import type {
   BoardPage,
+  BringRead,
   Snapshot,
   TurnDetail,
   TurnPage,
@@ -762,6 +764,19 @@ await test('the snapshot holds what the screens show, and no internal field, key
       ['d-2', false],
     ],
   );
+  // Nothing came in from either direction yet, and the sign-off line has its limit.
+  assert.deepEqual(
+    lab.directions.map((entry) => entry.brought),
+    [null, null],
+  );
+  assert.equal(lab.signoffLimit, labLimits.signoff);
+  // Both directions are open with no verdict, so both are still open.
+  assert.deepEqual(lab.directionCounts, {
+    total: 2,
+    holdsUp: 0,
+    ruledOut: 0,
+    open: 2,
+  });
   assert.deepEqual(lab.disputes, [
     { post: 'p-2', objections: ['p-3'], check: 'k-1' },
   ]);
@@ -1163,6 +1178,161 @@ await test('a lab huge in every list stays in bound, counts what it left out, an
   assert.equal(lab.money.plansUsd, 2.5);
 });
 
+await test('a snapshot counts every direction, also those it leaves out, and keeps the sign-off at every size', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = seededView();
+  const [first, second] = base.state.directions;
+  assert.ok(first && second);
+  // d-1 holds up but an objection disputes it, d-2 leads, and of 300 more, half were ruled out.
+  const directions: Direction[] = [
+    { ...first, verdict: 'holds-up' },
+    { ...second, verdict: 'leading' },
+    ...Array.from({ length: 300 }, (_, index) => ({
+      ...direction(
+        `d-${index + 3}`,
+        `Direction ${index + 3}`,
+        `a-${index + 3}`,
+      ),
+      ...(index % 2
+        ? {}
+        : { verdict: 'ruled-out' as const, state: 'closed' as const }),
+    })),
+  ];
+  const view: LabView = {
+    ...base,
+    state: {
+      ...base.state,
+      directions,
+      signoff: {
+        at: at(90),
+        note: 'Partly yes.',
+        directions: directions.map((entry) => ({
+          id: entry.id,
+          verdict: entry.verdict,
+          commit: entry.head,
+          check: null,
+        })),
+      },
+    },
+    directions: directions.map((entry, index) => ({
+      direction: entry,
+      agent: agentRecord(
+        entry.agent,
+        `claude-${index + 1}`,
+        'claude',
+        entry.id,
+        null,
+      ),
+      status: 'idle' as const,
+      until: null,
+    })),
+  };
+  const counts = { total: 302, holdsUp: 1, ruledOut: 150, open: 151 };
+  const data = parse(await new ApiReader(sources(root, () => view)).snapshot());
+  const lab = data.lab;
+  assert.ok(lab);
+  assert.equal(data.trimmed, true);
+  assert.equal(lab.directions.length, apiLimits.directions);
+  assert.equal(lab.omitted.directions, 302 - apiLimits.directions);
+  // A leading direction is not still open, and a disputed one is.
+  assert.deepEqual(lab.directionCounts, counts);
+  // The sign-off stays, with the directions that the snapshot keeps.
+  assert.equal(lab.signoff?.note, 'Partly yes.');
+  assert.deepEqual(
+    lab.signoff?.directions.map((entry) => entry.id),
+    lab.directions.map((entry) => entry.id),
+  );
+  assert.equal(lab.omitted.signoff, undefined);
+
+  // Calls so large that no list fits: the sign-off still says when, and its line.
+  const heavy: LabView = {
+    ...view,
+    state: {
+      ...view.state,
+      calls: Array.from({ length: 20 }, (_, index) =>
+        call({
+          id: `c-${index + 1}`,
+          joined: [],
+          question: 'q'.repeat(200_000),
+        }),
+      ),
+    },
+  };
+  const json = await new ApiReader(sources(root, () => heavy)).snapshot();
+  assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
+  const last = parse(json).lab;
+  assert.ok(last);
+  assert.equal(last.directions.length, 0);
+  assert.equal(last.plan, null);
+  assert.deepEqual(last.signoff, {
+    at: at(90),
+    note: 'Partly yes.',
+    directions: [],
+  });
+  assert.equal(last.omitted.signoff, undefined);
+  assert.deepEqual(last.directionCounts, counts);
+});
+
+await test('a bring-in read names the files that its lists leave out, and keeps the newest bring-ins', async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = seededView();
+  const commit = 'e'.repeat(40);
+  // 25 bring-ins of d-1, the last one of 60 files, and one of d-2.
+  const brought = [
+    ...Array.from({ length: 24 }, (_, index) => ({
+      direction: 'd-1',
+      path: `early-${index}.md`,
+      commit,
+      at: at(100 + index),
+    })),
+    ...Array.from({ length: 60 }, (_, index) => ({
+      direction: 'd-1',
+      path: `late-${index}.md`,
+      commit,
+      at: at(200),
+    })),
+    { direction: 'd-2', path: 'other.md', commit, at: at(300) },
+  ];
+  const view: LabView = { ...base, state: { ...base.state, brought } };
+  const reader = new ApiReader(
+    sources(root, () => view, {
+      bring: {
+        list: () =>
+          Promise.resolve({
+            direction: 'd-1',
+            from: 'a'.repeat(40),
+            commit,
+            head: commit,
+            working: false,
+            newer: false,
+            left: Array.from({ length: 2003 }, (_, index) => ({
+              path: `big-${index}.bin`,
+              why: 'It is larger than 50 MB.',
+            })),
+            files: [],
+          }),
+        diff: () => Promise.resolve(null),
+      },
+    }),
+  );
+  const read: BringRead | null = await reader.bring('d-1');
+  assert.ok(read?.list);
+  assert.equal(read.list.branch, 'verifold/d-1');
+  assert.equal(read.list.left.length, apiLimits.bringFiles);
+  assert.equal(read.list.leftOmitted, 3);
+  assert.equal(read.list.omitted, 0);
+  // The newest 20 bring-ins, oldest first, each with at most 50 of its files.
+  assert.equal(read.history.length, apiLimits.bringGroups);
+  assert.equal(read.history[0]?.at, at(105));
+  const newest = read.history.at(-1);
+  assert.equal(newest?.at, at(200));
+  assert.equal(newest?.paths.length, apiLimits.bringPaths);
+  assert.equal(newest?.more, 60 - apiLimits.bringPaths);
+  assert.ok(!read.history.some((group) => group.paths.includes('other.md')));
+});
+
 await test('every checker that the snapshot names has turns to fetch, an old one too', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1376,6 +1546,118 @@ await test('an answer that Verifold accepts and then fails shows why on the call
   assert.equal(lab2.needsYou[0]?.id, 'c-1');
   assert.equal(lab2.needsYou[0]?.state, 'open');
   assert.equal(lab2.needsYou[0]?.applying, false);
+});
+
+await test("a bring-in that fails after Verifold accepted it names its direction, and a new try replaces only that direction's failure", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const current = seededView();
+  // Each look or bring-in waits until the test lets it fail.
+  const waiting: (() => void)[] = [];
+  const failLater = (why: string) => (): Promise<void> =>
+    new Promise((_, reject) => {
+      waiting.push(() => reject(new Error(why)));
+    });
+  const lab = {
+    runs: true,
+    view: () => current,
+    lookToBring: failLater('The folder is gone.'),
+    bring: failLater('A project file changed.'),
+  } as unknown as Lab;
+  const sessions = {
+    view: () => null,
+    views: () => [],
+  } as unknown as SessionPool;
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    await deskAssets(root),
+    sessions,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { lab, api: { pollMs: 40, heartbeatMs: 100 } },
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const api = `${url.origin}/api/v1`;
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const snapshot = async (): Promise<Snapshot> =>
+    (await (await fetch(`${api}/snapshot`, { headers })).json()) as Snapshot;
+  const act = (name: string, body: Record<string, unknown>) =>
+    fetch(`${api}/actions/${name}`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const failures = async (count: number) => {
+    let shown: Snapshot | undefined;
+    await until(() => {
+      void snapshot().then((value) => {
+        shown = value;
+      });
+      return (
+        (shown?.lab?.works.filter((work) => work.error).length ?? 0) === count
+      );
+    });
+    return (shown?.lab?.works ?? []).map((work) => [
+      work.action,
+      work.direction,
+      work.error,
+    ]);
+  };
+
+  // A look at d-1 and a bring-in of d-2 take longer than the desk waits.
+  const look = act('lab-bring-look', { direction: 'd-1' });
+  await until(() => waiting.length === 1);
+  const bring = act('lab-bring', {
+    direction: 'd-2',
+    commit: 'e'.repeat(40),
+    files: ['a.md'],
+  });
+  await until(() => waiting.length === 2);
+  assert.deepEqual([(await look).status, (await bring).status], [202, 202]);
+  const running = await snapshot();
+  assert.deepEqual(
+    running.lab?.works.map((work) => [work.action, work.direction]),
+    [
+      ['lab-bring-look', 'd-1'],
+      ['lab-bring', 'd-2'],
+    ],
+  );
+  for (const fail of waiting.splice(0)) fail();
+  assert.deepEqual(await failures(2), [
+    ['lab-bring-look', 'd-1', 'The folder is gone.'],
+    ['lab-bring', 'd-2', 'A project file changed.'],
+  ]);
+
+  // A new look at d-2 leaves the failure of d-1 in place.
+  assert.equal((await act('lab-bring-look', { direction: 'd-2' })).status, 202);
+  for (const fail of waiting.splice(0)) fail();
+  assert.deepEqual(await failures(3), [
+    ['lab-bring-look', 'd-1', 'The folder is gone.'],
+    ['lab-bring', 'd-2', 'A project file changed.'],
+    ['lab-bring-look', 'd-2', 'The folder is gone.'],
+  ]);
+  // A new look at d-1 replaces its own failure.
+  assert.equal((await act('lab-bring-look', { direction: 'd-1' })).status, 202);
+  for (const fail of waiting.splice(0)) fail();
+  const again = await failures(3);
+  assert.deepEqual(
+    again.map(([action, direction]) => [action, direction]),
+    [
+      ['lab-bring', 'd-2'],
+      ['lab-bring-look', 'd-2'],
+      ['lab-bring-look', 'd-1'],
+    ],
+  );
 });
 
 await test('the API needs the token, pushes one snapshot for a burst of changes, pages the board and turns, and runs desk actions', async (t) => {
