@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
-import { defuse, startPageServer } from '../src/cli/pages.ts';
+import { defuse, startPageServer } from '../src/legacy/pages.ts';
 
 await test('every link and meta tag becomes inert, in any case, with any separator or prefix', () => {
   const page = [

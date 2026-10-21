@@ -1,11 +1,15 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import { markdownHtml } from './markdown.ts';
-import type { Candidate, Workspace } from './contracts.ts';
-import type { DeskSnapshot, DeskAttempt } from './desk-records.ts';
-import type { ResearchReport } from './research.ts';
-import type { ResearchSource, ResearchView } from './research-runner.ts';
-import { object } from './research-contracts.ts';
-import type { SetupPrompt, SetupView } from './setup-bridge.ts';
+import type { Candidate, Workspace } from '../core/contracts.ts';
+import type { DeskSnapshot, DeskAttempt } from '../server/desk-records.ts';
+import type { ResearchReport } from '../legacy/research.ts';
+import type {
+  ResearchSource,
+  ResearchView,
+} from '../legacy/research-runner.ts';
+import { object } from '../core/research-contracts.ts';
+// eslint-disable-next-line no-restricted-imports -- old setup flow, replaced in A3 (#282)
+import type { SetupPrompt, SetupView } from '../cli/setup-bridge.ts';
 import {
   forPerson,
   isDraft,
@@ -14,12 +18,12 @@ import {
   type TaskAttempt,
   type TaskRecord,
   type TaskVersion,
-} from './tasks.ts';
-import type { Message } from './messages.ts';
-import type { CheckResult, Results } from './results.ts';
-import type { ComputeView } from './compute.ts';
-import type { ArchivedRun } from './archive.ts';
-import { placeNames } from './credentials.ts';
+} from '../legacy/tasks.ts';
+import type { Message } from '../legacy/messages.ts';
+import type { CheckResult, Results } from '../legacy/results.ts';
+import type { ComputeView } from '../core/compute.ts';
+import type { ArchivedRun } from '../core/archive.ts';
+import { placeNames } from '../core/credentials.ts';
 import {
   asker,
   diskRate,
@@ -29,17 +33,17 @@ import {
   spent,
   usd,
   type Lease,
-} from './leases.ts';
-import { agentId, proofRef, runId } from './board.ts';
+} from '../core/leases.ts';
+import { agentId, proofRef, runId } from '../core/board.ts';
 import {
   coordinatorLimits,
   directionObjective,
   type CoordinatorAction,
   type CoordinatorView,
-} from './coordinator.ts';
-import { defaultAgents } from './workers.ts';
-import type { BringList, LabView } from './lab.ts';
-import { labWorks } from './team.ts';
+} from '../legacy/coordinator.ts';
+import { defaultAgents } from '../core/workers.ts';
+import type { BringList, LabView } from '../core/lab.ts';
+import { labWorks } from '../core/team.ts';
 import {
   answerPanel,
   bringPanel,
@@ -58,7 +62,7 @@ import {
   type LabWork,
   type Panel,
 } from './desk-lab.ts';
-import { scratch } from './workspaces.ts';
+import { scratch } from '../core/workspaces.ts';
 import {
   decisionLabel,
   hostName,
@@ -70,7 +74,7 @@ import {
   type SessionEvent,
   type SessionRecord,
   type SessionView,
-} from './session.ts';
+} from '../core/session.ts';
 
 export interface DeskSession {
   /** The worker that the page shows in full. */

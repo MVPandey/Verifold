@@ -20,10 +20,10 @@ import {
   serveControl,
   type FromOwner,
   type ToOwner,
-} from '../src/cli/control.ts';
+} from '../src/server/control.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
-import { claimOwner, liveOwner } from '../src/cli/owner.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { claimOwner, liveOwner } from '../src/core/owner.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

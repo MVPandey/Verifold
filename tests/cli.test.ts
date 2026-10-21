@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli } from '../src/cli/commands.ts';
-import { parseCandidates } from '../src/cli/contracts.ts';
+import { parseCandidates } from '../src/core/contracts.ts';
 
 await test('bare noninteractive launch requires an explicit command and does not create files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-launch-pipe-'));

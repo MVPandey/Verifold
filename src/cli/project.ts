@@ -1,7 +1,7 @@
 import { lstat, mkdir, open, rm, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Workspace } from './contracts.ts';
-import { changeWorkspace, loadWorkspace } from './storage.ts';
+import type { Workspace } from '../core/contracts.ts';
+import { changeWorkspace, loadWorkspace } from '../core/storage.ts';
 
 const folders = {
   literature: 'Source notes, papers, and citation provenance.',

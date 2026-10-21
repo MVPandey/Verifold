@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   parseHostJson,
   parseResearchPlan,
-} from '../src/cli/research-contracts.ts';
+} from '../src/core/research-contracts.ts';
 
 await test('host JSON accepts raw JSON without interpreting string content as fences', () => {
   assert.deepEqual(parseHostJson(' \n{"text":"```json"}\n '), {

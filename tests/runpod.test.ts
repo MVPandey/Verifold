@@ -14,14 +14,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { RunPod } from '../src/cli/runpod.ts';
-import { Compute, computeDefaults } from '../src/cli/compute.ts';
-import { KeyStore } from '../src/cli/credentials.ts';
+import { RunPod } from '../src/core/runpod.ts';
+import { Compute, computeDefaults } from '../src/core/compute.ts';
+import { KeyStore } from '../src/core/credentials.ts';
 import { runCli } from '../src/cli/commands.ts';
-import { startDesk } from '../src/cli/desk.ts';
-import { renderDesk, parseFrame } from '../src/cli/desk-view.ts';
-import { SessionPool } from '../src/cli/workers.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { startDesk } from '../src/server/desk.ts';
+import { renderDesk, parseFrame } from '../src/desk/desk-view.ts';
+import { SessionPool } from '../src/core/workers.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
 
 const key = 'rpa_TESTKEY0123456789abcdefWXYZ';
 

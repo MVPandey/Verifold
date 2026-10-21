@@ -30,7 +30,7 @@ import {
   release,
   scratch,
   snapshot,
-} from '../src/cli/workspaces.ts';
+} from '../src/core/workspaces.ts';
 
 function run(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, {

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { SessionActionError } from './session.ts';
+import { SessionActionError } from '../core/session.ts';
 
 /** The result of one check of the chosen direction. A judgement waits for the person. */
 export type CheckOutcome = 'passed' | 'failed' | 'partial' | 'judgement';

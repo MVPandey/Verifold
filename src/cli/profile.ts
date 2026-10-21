@@ -10,7 +10,7 @@ import {
   type Agency,
 } from './agency.ts';
 import { choose } from './choices.ts';
-import { runHarness, validateModel } from './harness.ts';
+import { runHarness, validateModel } from '../core/harness.ts';
 import type { CliIO } from './commands.ts';
 
 export interface ProfileOptions {

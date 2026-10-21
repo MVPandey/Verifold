@@ -13,9 +13,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Compute } from '../src/cli/compute.ts';
-import { parseFrame, renderDesk } from '../src/cli/desk-view.ts';
-import { KeyStore } from '../src/cli/credentials.ts';
+import { Compute } from '../src/core/compute.ts';
+import { parseFrame, renderDesk } from '../src/desk/desk-view.ts';
+import { KeyStore } from '../src/core/credentials.ts';
 import {
   accrued,
   budget,
@@ -23,7 +23,7 @@ import {
   reserved,
   spent,
   type Lease,
-} from '../src/cli/leases.ts';
+} from '../src/core/leases.ts';
 
 const key = 'rpa_TESTKEY0123456789abcdefWXYZ';
 

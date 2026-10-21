@@ -59,7 +59,10 @@
   "files": [
     "dist-cli/cli.js",
     "dist-cli/cli/",
-    "dist-cli/domain/profile.js",
+    "dist-cli/core/",
+    "dist-cli/desk/",
+    "dist-cli/legacy/",
+    "dist-cli/server/",
     "dist-cli/ui/dom.js",
     "LICENSING.md",
     "SECURITY.md"

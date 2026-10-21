@@ -13,10 +13,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initializeProject } from '../src/cli/initialization.ts';
-import { runResearch } from '../src/cli/research.ts';
-import { loadWorkspace } from '../src/cli/storage.ts';
+import { runResearch } from '../src/legacy/research.ts';
+import { loadWorkspace } from '../src/core/storage.ts';
 import type { CliIO } from '../src/cli/commands.ts';
-import type { HarnessRequest, HarnessResult } from '../src/cli/harness.ts';
+import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
 
 function prompts(answers: readonly string[]): {
   io: CliIO;
@@ -811,7 +811,7 @@ await test('concurrent project creation has one winner with an intact scaffold',
 });
 
 await test('failed preparation rolls back before releasing the workspace lock', async (t) => {
-  const { changeWorkspace } = await import('../src/cli/storage.ts');
+  const { changeWorkspace } = await import('../src/core/storage.ts');
   const base = await mkdtemp(join(tmpdir(), 'verifold-rollback-'));
   t.after(() => rm(base, { recursive: true, force: true }));
   const marker = join(base, '.verifold.md');

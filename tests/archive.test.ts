@@ -10,8 +10,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { archiveRun, listArchives, restoreRun } from '../src/cli/archive.ts';
-import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
+import { archiveRun, listArchives, restoreRun } from '../src/core/archive.ts';
+import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
 
 async function write(root: string, path: string, text: string): Promise<void> {
   await mkdir(join(root, path, '..'), { recursive: true });

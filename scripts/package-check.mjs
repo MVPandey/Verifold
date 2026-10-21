@@ -44,25 +44,24 @@ try {
   assert.ok(
     manifest.files.every(
       (file) =>
-        /^dist-cli\/cli\/[a-z-]+\.js$/.test(file.path) ||
-        /^dist-cli\/cli\/prompts\/[a-z-]+\.md$/.test(file.path) ||
+        /^dist-cli\/[a-z]+\/[a-z-]+\.js$/.test(file.path) ||
+        /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         [
           'dist-cli/cli.js',
-          'dist-cli/domain/profile.js',
           'dist-cli/ui/dom.js',
-          'dist-cli/cli/desk.css',
-          'dist-cli/cli/manrope.ttf',
-          'dist-cli/cli/OFL-Manrope.txt',
-          'dist-cli/cli/symbol.webp',
-          'dist-cli/cli/vendor/purify.js',
-          'dist-cli/cli/vendor/purify.LICENSE.txt',
-          'dist-cli/cli/vendor/idiomorph.js',
-          'dist-cli/cli/vendor/idiomorph.LICENSE.txt',
-          'dist-cli/cli/vendor/xterm.js',
-          'dist-cli/cli/vendor/xterm.css',
-          'dist-cli/cli/vendor/xterm.LICENSE.txt',
-          'dist-cli/cli/vendor/addon-fit.js',
-          'dist-cli/cli/vendor/addon-fit.LICENSE.txt',
+          'dist-cli/desk/desk.css',
+          'dist-cli/desk/manrope.ttf',
+          'dist-cli/desk/OFL-Manrope.txt',
+          'dist-cli/desk/symbol.webp',
+          'dist-cli/desk/vendor/purify.js',
+          'dist-cli/desk/vendor/purify.LICENSE.txt',
+          'dist-cli/desk/vendor/idiomorph.js',
+          'dist-cli/desk/vendor/idiomorph.LICENSE.txt',
+          'dist-cli/desk/vendor/xterm.js',
+          'dist-cli/desk/vendor/xterm.css',
+          'dist-cli/desk/vendor/xterm.LICENSE.txt',
+          'dist-cli/desk/vendor/addon-fit.js',
+          'dist-cli/desk/vendor/addon-fit.LICENSE.txt',
           'package.json',
           'README.md',
           'LICENSE',
@@ -154,6 +153,23 @@ try {
     assert.equal(metadata.scripts[script], undefined);
   for (const required of ['LICENSE', 'LICENSING.md', 'SECURITY.md'])
     assert.ok(manifest.files.some((file) => file.path === required));
+  // Each layer's loader lists its prompts. The tarball holds exactly those files.
+  const packedPrompts = manifest.files
+    .map((file) => file.path)
+    .filter((path) => /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(path));
+  const registered = [];
+  for (const { path } of manifest.files) {
+    const layer = /^dist-cli\/([a-z]+)\/prompts\.js$/.exec(path)?.[1];
+    if (!layer) continue;
+    const { promptIds } = await import(
+      pathToFileURL(join(directory, 'node_modules/verifold', path)).href
+    );
+    registered.push(
+      ...promptIds.map((id) => `dist-cli/${layer}/prompts/${id}.md`),
+    );
+  }
+  assert.deepEqual(registered.sort(), packedPrompts.sort());
+  assert.ok(registered.length > 0);
   const { runCli } = await import(
     pathToFileURL(
       join(directory, 'node_modules/verifold/dist-cli/cli/commands.js'),

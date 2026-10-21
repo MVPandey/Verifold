@@ -6,9 +6,9 @@ import { loadPrompt } from './prompts.ts';
 import type { CliIO } from './commands.ts';
 import type { Agency } from './agency.ts';
 import { withActivity, choose } from './choices.ts';
-import { activityProgress, runHarness } from './harness.ts';
-import { text, parseHostJson } from './research-contracts.ts';
-import { hostName } from './session.ts';
+import { activityProgress, runHarness } from '../core/harness.ts';
+import { text, parseHostJson } from '../core/research-contracts.ts';
+import { hostName } from '../core/session.ts';
 
 function cancelOnboarding(): never {
   throw new DOMException('Onboarding cancelled.', 'AbortError');

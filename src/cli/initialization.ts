@@ -11,17 +11,21 @@ import {
   memorySummary,
   type Agency,
 } from './agency.ts';
-import { validateModel, runHarness, type HarnessName } from './harness.ts';
+import {
+  validateModel,
+  runHarness,
+  type HarnessName,
+} from '../core/harness.ts';
 import { choose } from './choices.ts';
-import { parseProfile } from '../domain/profile.ts';
+import { parseProfile } from '../core/profile.ts';
 import type { CliIO } from './commands.ts';
-import type { Workspace } from './contracts.ts';
-import { readJson } from './storage.ts';
+import type { Workspace } from '../core/contracts.ts';
+import { readJson } from '../core/storage.ts';
 import { researchInterview } from './onboarding.ts';
 import { checkProjectDirectory, createProject } from './project.ts';
 import { investigateProject } from './project-context.ts';
 import { loadPrompt } from './prompts.ts';
-import { hostName } from './session.ts';
+import { hostName } from '../core/session.ts';
 
 export interface InitializationOptions {
   readonly profile?: string;

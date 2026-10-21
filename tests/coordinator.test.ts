@@ -12,25 +12,25 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { changeWorkspace, loadWorkspace } from '../src/cli/storage.ts';
-import { ResearchRunner } from '../src/cli/research-runner.ts';
-import { SessionManager } from '../src/cli/session.ts';
-import type { AgentTools } from '../src/cli/session-hosts.ts';
+import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
+import { ResearchRunner } from '../src/legacy/research-runner.ts';
+import { SessionManager } from '../src/core/session.ts';
+import type { AgentTools } from '../src/core/session-hosts.ts';
 import {
   isDraft,
   TaskManager,
   type TaskRecord,
   type TaskSessions,
-} from '../src/cli/tasks.ts';
-import { Coordinator } from '../src/cli/coordinator.ts';
-import { Compute } from '../src/cli/compute.ts';
-import { KeyStore } from '../src/cli/credentials.ts';
+} from '../src/legacy/tasks.ts';
+import { Coordinator } from '../src/legacy/coordinator.ts';
+import { Compute } from '../src/core/compute.ts';
+import { KeyStore } from '../src/core/credentials.ts';
 import { createServer } from 'node:http';
-import { startDesk } from '../src/cli/desk.ts';
-import { SessionPool } from '../src/cli/workers.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
-import { readDeskSnapshot } from '../src/cli/desk-records.ts';
-import { Quota } from '../src/cli/quota.ts';
+import { startDesk } from '../src/server/desk.ts';
+import { SessionPool } from '../src/core/workers.ts';
+import { renderDesk } from '../src/desk/desk-view.ts';
+import { readDeskSnapshot } from '../src/server/desk-records.ts';
+import { Quota } from '../src/core/quota.ts';
 
 /**
  * A fake Claude Code coordinator. Each turn runs the next list of tool calls

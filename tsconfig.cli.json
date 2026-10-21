@@ -11,7 +11,10 @@
   "include": [
     "src/cli.ts",
     "src/cli/**/*.ts",
-    "src/domain/profile.ts",
+    "src/core/**/*.ts",
+    "src/server/**/*.ts",
+    "src/desk/**/*.ts",
+    "src/legacy/**/*.ts",
     "src/ui/dom.ts"
   ]
 }

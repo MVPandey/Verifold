@@ -22,19 +22,19 @@ import {
   type CommandEntry,
   type SessionManagerOptions,
   type SessionRecord,
-} from '../src/cli/session.ts';
-import { startDesk } from '../src/cli/desk.ts';
-import { TranscriptFile } from '../src/cli/transcript.ts';
+} from '../src/core/session.ts';
+import { startDesk } from '../src/server/desk.ts';
+import { TranscriptFile } from '../src/core/transcript.ts';
 import {
   codexCommand,
   credentialPaths,
   strictClaudeSettings,
-} from '../src/cli/session-hosts.ts';
-import { SessionPool } from '../src/cli/workers.ts';
-import { readDeskSnapshot } from '../src/cli/desk-records.ts';
-import { renderDesk } from '../src/cli/desk-view.ts';
+} from '../src/core/session-hosts.ts';
+import { SessionPool } from '../src/core/workers.ts';
+import { readDeskSnapshot } from '../src/server/desk-records.ts';
+import { renderDesk } from '../src/desk/desk-view.ts';
 import { feedLine, runCli, terminalInput } from '../src/cli/commands.ts';
-import { changeWorkspace } from '../src/cli/storage.ts';
+import { changeWorkspace } from '../src/core/storage.ts';
 
 /** A fake Claude Code that speaks the stream-json control protocol. */
 const claudeHost = `const fs = require('node:fs');

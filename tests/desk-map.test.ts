@@ -10,7 +10,7 @@ import {
   type Edge,
   type Node,
   type Point,
-} from '../src/cli/desk-map.ts';
+} from '../src/desk/desk-map.ts';
 
 /** The pilot's map: five tasks in four columns after the objective. */
 const box = (left: number, top: number, bottom: number): Box => ({

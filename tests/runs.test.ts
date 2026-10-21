@@ -24,8 +24,8 @@ import {
   seatbelt,
   type RunRecord,
   type Sandbox,
-} from '../src/cli/runs.ts';
-import { allocate, snapshot, type Workspace } from '../src/cli/workspaces.ts';
+} from '../src/core/runs.ts';
+import { allocate, snapshot, type Workspace } from '../src/core/workspaces.ts';
 
 /** No sandbox: the command runs as it is. Tests of the ledger use it on every platform. */
 const open: Sandbox = (spec) => ({
