@@ -51,8 +51,8 @@ import { TranscriptWriter } from '../src/core/transcript.ts';
 import { secretGuard } from '../src/core/runpod.ts';
 import { ResearchRunner } from '../src/legacy/research-runner.ts';
 import { boardLimits, clip } from '../src/core/board.ts';
-import { checkToolSpecs } from '../src/core/lab-tools.ts';
-import { moreHeld } from '../src/core/lab/schema.ts';
+import { checkToolSpecs, planLimits } from '../src/core/lab-tools.ts';
+import { moreHeld, planFacts } from '../src/core/lab/schema.ts';
 import { Coordinator } from '../src/legacy/coordinator.ts';
 import { parseFrame, renderDesk } from '../src/desk/desk-view.ts';
 import {
@@ -6511,7 +6511,8 @@ await test("an access answer gives the agent's shell its domains while it stands
 });
 
 await test('a call that asks what an open call asks joins it, its answer reaches every agent that asked, and the person can answer in their own words', async (t) => {
-  const lab = await fixture(t);
+  // Pods are off, so the person can turn them on: a call for pods can open.
+  const lab = await fixture(t, { compute: keyCompute(false) });
   const pods = (question: string): Call => ({
     name: 'verifold_ask_person',
     arguments: {
@@ -10094,4 +10095,195 @@ await test('the plan of record keeps the facts that it rests on, with sources an
   assert.match(again.text, /^Posted the plan p-\d+\./);
   await lab.restart();
   assert.equal(lab.lab.view()?.state.plan?.facts.length, 4);
+});
+
+await test('without GPU pods at all, a pod request or a call for pods says that GPUs are not available here, and no call opens', async (t) => {
+  const lab = await fixture(t);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  assert.match(
+    (await lab.inputs('d-1-alpha'))[0] ?? '',
+    /GPU pods: this Verifold has none\./,
+  );
+  const none =
+    'GPUs are not available here: this Verifold has no GPU pods, and the person cannot turn them on. Do the work without a GPU, or post on the board why it needs one.';
+  // A pod request, a call that asks the person to turn pods on, and a call with a pod to rent.
+  for (const [name, input] of [
+    [
+      'verifold_request_pod',
+      { gpuType: 'NVIDIA A40', hours: 2, why: 'Seeds.' },
+    ],
+    [
+      'verifold_ask_person',
+      {
+        kind: 'access',
+        need: 'pods',
+        question: 'Turn on GPU pods?',
+        options: [{ label: 'Yes' }, { label: 'No' }],
+        pick: 0,
+        why: 'Seeds.',
+      },
+    ],
+    [
+      'verifold_ask_person',
+      {
+        kind: 'cost',
+        question: 'A pod for the seeds?',
+        options: [
+          {
+            label: 'Rent it',
+            effect: { pod: { gpuType: 'NVIDIA A40', hours: 2 } },
+          },
+          { label: 'No pod' },
+        ],
+        pick: 0,
+        why: 'Seeds.',
+      },
+    ],
+  ] as const) {
+    const reply = await agentCall(lab.lab, 'a-1', name, input);
+    assert.equal(reply.ok, false);
+    assert.equal(reply.text, none);
+  }
+  assert.deepEqual(lab.lab.view()?.state.calls, []);
+});
+
+await test('one bad optional field of a fact does not refuse the plan: a blank one counts as missing, and a long one is cut', () => {
+  const at = '2026-10-22T10:00:00.000Z';
+  const [blank, long, other] = planFacts(
+    [
+      { claim: 'H100: $3.99 an hour', source: '   ', sourceDate: '\n' },
+      {
+        claim: 'Model: Qwen3.8-8B',
+        source: `https://huggingface.co/${'q'.repeat(400)}`,
+        sourceDate: 'x'.repeat(60),
+      },
+      { claim: 'Probe kit 3.2', source: 7, sourceDate: false },
+    ],
+    at,
+  );
+  assert.deepEqual(blank, {
+    claim: 'H100: $3.99 an hour',
+    source: null,
+    sourceDate: null,
+    checkedAt: at,
+  });
+  assert.equal(long?.source?.length, planLimits.source);
+  assert.match(long?.source ?? '', /^https:\/\/huggingface\.co\/q+…$/);
+  assert.equal(long?.sourceDate, `${'x'.repeat(planLimits.sourceDate - 1)}…`);
+  assert.equal(other?.source, null);
+  assert.equal(other?.sourceDate, null);
+  // The claim is the fact itself, so a fact without one is refused.
+  assert.throws(() => planFacts([{ claim: ' ' }], at), {
+    message: `Write each fact, up to ${planLimits.claim} characters.`,
+  });
+});
+
+await test("running agents get a later plan's facts once, in their next digest, and not again after a plan that keeps them or a restart", async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      calls: [
+        {
+          name: 'verifold_plan',
+          arguments: {
+            ...firstPlan,
+            facts: [
+              {
+                claim: 'Model: Qwen3.8-8B',
+                source: 'https://huggingface.co/Qwen/Qwen3.8-8B',
+                sourceDate: '2026-08-14',
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(async () => (await lab.inputs('d-2-helix')).length > 0, 20_000);
+  // A first prompt has the plan with its facts.
+  assert.match(
+    (await lab.inputs('d-2-helix'))[0] ?? '',
+    /- "Model: Qwen3\.8-8B": source/,
+  );
+  const inside = lab.lab as unknown as LabInside;
+  // No turn runs, each agent waits its long backoff, and no wakeup is due, so a post goes out in a digest.
+  const quiet = (): boolean =>
+    lab.lab
+      .view()
+      ?.directions.every(
+        (entry) => entry.status === 'idle' && entry.agent.idleStreak >= 2,
+      ) === true && [...inside.loops.values()].every((loop) => !loop.pending);
+  const heard =
+    /The plan of record \(p-\d+\) rests on these facts\. Check their dates before you use them:/;
+  const wake = async (text: string): Promise<void> => {
+    await until(quiet);
+    await lab.lab.post({ text: `@all ${text}` });
+    for (const folder of ['d-1-plan-the-lab', 'd-2-helix'])
+      await until(async () =>
+        (await lab.inputs(folder)).some((input) => input.includes(text)),
+      );
+  };
+  const helix = (await lab.inputs('d-2-helix')).length;
+  const planner = (await lab.inputs('d-1-plan-the-lab')).length;
+  const directions = [{ id: 'd-1' }, { id: 'd-2' }, { id: 'd-3' }];
+  await until(quiet);
+  // A later plan with other facts: a blank source counts as no source.
+  assert.match(
+    (
+      await agentCall(lab.lab, 'a-1', 'verifold_plan', {
+        reading: firstPlan.reading,
+        cost: 'Nothing costs money yet.',
+        directions,
+        facts: [
+          {
+            claim: 'Model: Qwen3.9-8B',
+            source: 'https://huggingface.co/Qwen/Qwen3.9-8B',
+            sourceDate: '2026-10-20',
+          },
+          { claim: 'A100 80GB: $1.79 an hour', source: '  ' },
+        ],
+      })
+    ).text,
+    /^Posted the plan p-\d+\./,
+  );
+  await wake('Use 3 seeds.');
+  await wake('Use 4 seeds.');
+  // A plan that lists no facts keeps them, and sends nothing again.
+  await until(quiet);
+  assert.match(
+    (
+      await agentCall(lab.lab, 'a-1', 'verifold_plan', {
+        reading: firstPlan.reading,
+        cost: 'Nothing costs money yet.',
+        directions,
+      })
+    ).text,
+    /^Posted the plan p-\d+\./,
+  );
+  assert.equal(lab.lab.view()?.state.plan?.factsCarried, true);
+  await wake('Use 5 seeds.');
+  // The agent keeps what it got across a restart.
+  await until(quiet);
+  await lab.restart();
+  assert.equal(lab.lab.view()?.state.plan?.factsCarried, true);
+  await wake('Use 6 seeds.');
+  const got = (await lab.inputs('d-2-helix'))
+    .slice(helix)
+    .filter((input) => heard.test(input));
+  assert.equal(got.length, 1);
+  assert.match(
+    got[0] ?? '',
+    /rests on these facts\. Check their dates before you use them:\n- "Model: Qwen3\.9-8B": source "https:\/\/huggingface\.co\/Qwen\/Qwen3\.9-8B" of "2026-10-20", listed \d{4}-\d{2}-\d{2}\.\n- "A100 80GB: \$1\.79 an hour": unverified \(no source\)\./,
+  );
+  assert.doesNotMatch(got[0] ?? '', /Qwen3\.8-8B/);
+  // The planner listed the facts, so it does not get them back.
+  assert.equal(
+    (await lab.inputs('d-1-plan-the-lab'))
+      .slice(planner)
+      .some((input) => heard.test(input)),
+    false,
+  );
 });

@@ -8,6 +8,7 @@ import {
   type Post,
   agentId,
   boardLimits,
+  clip,
   commitId,
   directionId,
   object,
@@ -181,6 +182,8 @@ export interface PlanOfRecord {
   /** The directions of the plan, in its order. */
   readonly directions: readonly string[];
   readonly facts: readonly PlanFact[];
+  /** The plan listed no facts, so it kept the facts of the plan before it. */
+  readonly factsCarried?: boolean;
   /** 1 for the first plan. A plan from before versions has none. */
   readonly version?: number;
   /** The plan post before this one. */
@@ -556,6 +559,12 @@ export interface AgentRecord {
    * thread when pods are on.
    */
   readonly pods: boolean;
+  /**
+   * When the plan facts that the agent got were listed, in its first prompt
+   * or in a digest. A plan with other facts sends them once, in its next
+   * digest. Absent: the agent got no plan facts yet.
+   */
+  readonly factsAt?: string;
   /** Claude Code's cost estimate of the agent's sessions. */
   readonly spend?: Spend;
 }
@@ -1431,6 +1440,7 @@ export function parseState(
               )
               .slice(0, labLimits.directions),
             facts: storedFacts(plan.facts),
+            ...(plan.factsCarried === true ? { factsCarried: true } : {}),
             ...(Number.isSafeInteger(plan.version) &&
             (plan.version as number) >= 1
               ? { version: plan.version as number }
@@ -1551,7 +1561,7 @@ export function works(value: unknown): BuildsOn[] {
 }
 
 /** An optional text field: absent or empty gives null. */
-function optionalText(
+export function optionalText(
   value: unknown,
   limit: number,
   what: string,
@@ -1561,37 +1571,40 @@ function optionalText(
     : text(value, limit, what);
 }
 
+/**
+ * A fact's source or its date. One bad field does not refuse the whole plan
+ * or call: a blank one counts as missing, and a long one is cut.
+ */
+function factField(value: unknown, limit: number): string | null {
+  return typeof value === 'string' && value.trim()
+    ? clip(value.trim(), limit)
+    : null;
+}
+
+/** One fact of a plan or a call. `at`: when the plan or the call is posted. */
+function planFact(value: unknown, at: string): PlanFact {
+  const entry = object(value) ?? fail('Give each fact as an object.');
+  return {
+    claim: text(entry.claim, planLimits.claim, 'each fact'),
+    source: factField(entry.source, planLimits.source),
+    sourceDate: factField(entry.sourceDate, planLimits.sourceDate),
+    checkedAt: at,
+  };
+}
+
 /** The facts of an agent's plan or call, checked. `at`: when the plan or the call is posted. */
 export function planFacts(value: unknown, at: string): PlanFact[] {
   if (!Array.isArray(value) || value.length > planLimits.facts)
     fail(`Give facts as a list of at most ${planLimits.facts}.`);
-  return value.map((item) => {
-    const entry = object(item) ?? fail('Give each fact as an object.');
-    return {
-      claim: text(entry.claim, planLimits.claim, 'each fact'),
-      source: optionalText(
-        entry.source,
-        planLimits.source,
-        'the source of each fact',
-      ),
-      sourceDate: optionalText(
-        entry.sourceDate,
-        planLimits.sourceDate,
-        "the source's date",
-      ),
-      checkedAt: at,
-    };
-  });
+  return value.map((item) => planFact(item, at));
 }
 
 /** A fact of a plan or a call from `lab.json`, or null for one that is not valid. */
 function storedFact(value: unknown): PlanFact | null {
+  const checkedAt = recordTime(object(value)?.checkedAt);
+  if (!checkedAt) return null;
   try {
-    const entry = object(value);
-    const checkedAt = recordTime(entry?.checkedAt);
-    return entry && checkedAt
-      ? (planFacts([entry], checkedAt)[0] ?? null)
-      : null;
+    return planFact(value, checkedAt);
   } catch {
     return null;
   }
@@ -1656,6 +1669,7 @@ export function parseAgent(
             typeof entry === 'string' && !Number.isNaN(Date.parse(entry)),
         )
       : [];
+  const factsAt = recordTime(value.factsAt);
   return {
     schemaVersion: 1,
     id: value.id,
@@ -1748,6 +1762,7 @@ export function parseAgent(
     held: value.held === true,
     // A record from before this field: its thread may have had the pod tools, so it keeps its conversation.
     pods: value.pods !== false,
+    ...(factsAt ? { factsAt } : {}),
     ...spendOf(value.spend),
   };
 }

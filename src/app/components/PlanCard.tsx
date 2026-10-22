@@ -98,7 +98,10 @@ export function PlanCard({
       )}
       {plan.facts.length > 0 && (
         <details className="plan__facts" open>
-          <summary>Facts checked ({plan.facts.length})</summary>
+          <summary>
+            Facts checked ({plan.facts.length})
+            {plan.factsCarried && ' · from an earlier plan'}
+          </summary>
           <FactsList facts={plan.facts} />
         </details>
       )}

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Fact } from '../../protocol/api.ts';
+import { clock } from '../format.ts';
 
 /** The most characters of a source as the page shows it. A longer one is cut with "…". */
 const sourceChars = 44;
@@ -31,6 +32,25 @@ export function sourceName(source: string): string {
     : name;
 }
 
+/**
+ * When the plan or the call that listed a fact was posted: "today 19:40", or
+ * the day, "19 Oct 19:40", with the year when it is not this year.
+ */
+export function listedWhen(at: string, now = new Date()): string {
+  const date = new Date(at);
+  const day =
+    date.toDateString() === now.toDateString()
+      ? 'today'
+      : date.toLocaleDateString('en-GB', {
+          day: 'numeric',
+          month: 'short',
+          ...(date.getFullYear() === now.getFullYear()
+            ? {}
+            : { year: 'numeric' }),
+        });
+  return `${day} ${clock(at)}`;
+}
+
 /** The same facts once, by their claim, in their first order. */
 export function uniqueFacts(facts: readonly Fact[]): Fact[] {
   const seen = new Set<string>();
@@ -42,10 +62,19 @@ export function uniqueFacts(facts: readonly Fact[]): Fact[] {
   });
 }
 
-/** Where a fact came from, as a link when it is a web address, with the source's date. A fact without a source is unverified. */
+/**
+ * Where a fact came from, as a link when it is a web address, with the
+ * source's date, and when it was listed. A fact without a source is
+ * unverified.
+ */
 export function FactSource({ fact }: { readonly fact: Fact }): ReactNode {
+  const listed = ` · listed ${listedWhen(fact.listedAt)}`;
   if (!fact.source)
-    return <span className="facts__unverified">· unverified (no source)</span>;
+    return (
+      <span className="facts__unverified">
+        · unverified (no source){listed}
+      </span>
+    );
   const link = sourceLink(fact.source);
   const name = sourceName(fact.source);
   return (
@@ -59,6 +88,7 @@ export function FactSource({ fact }: { readonly fact: Fact }): ReactNode {
         name
       )}
       {fact.sourceDate && ` · ${fact.sourceDate}`}
+      {listed}
     </span>
   );
 }

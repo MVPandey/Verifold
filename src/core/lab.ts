@@ -137,6 +137,7 @@ import {
   labLimits,
   labTiming,
   moreHeld,
+  optionalText,
   parseAgent,
   parseState,
   planFacts,
@@ -157,14 +158,16 @@ import {
   budgetEnded,
   codeSetting,
   evidenceText,
+  factLines,
   fileText,
   gpuApproved,
   labEnded,
   linkedText,
-  localDay,
   movingText,
   nameList,
   networkOf,
+  type PodsState,
+  podsWords,
   sameAsk,
   sameFile,
   slug,
@@ -995,14 +998,11 @@ export class Lab {
           'a short title for the direction',
         ),
         host,
-        bar:
-          input.bar === undefined || input.bar === null || input.bar === ''
-            ? null
-            : text(
-                input.bar,
-                labLimits.bar,
-                'what makes the direction hold up',
-              ),
+        bar: optionalText(
+          input.bar,
+          labLimits.bar,
+          'what makes the direction hold up',
+        ),
         runs: input.runs ?? null,
         noise: input.noise ?? null,
         buildsOn: input.buildsOn ?? [],
@@ -2320,11 +2320,13 @@ export class Lab {
               : style === null
                 ? 'The person removed their note on how to write to them.'
                 : `The person asks agents to write to them this way: ${JSON.stringify(style)}`;
+          const facts = this.newFacts(agent);
           // The posts get the room that the rest of the message leaves, so a
           // post that is not shown stays unread.
           const room =
             labLimits.digestText -
-            this.digestText(agent, events, left, [], ask, restyle).length;
+            this.digestText(agent, events, left, [], ask, restyle, facts?.text)
+              .length;
           const digest = this.board.digest(
             { id, direction: agent.direction },
             this.readState(agent),
@@ -2337,7 +2339,15 @@ export class Lab {
           const session = agent.session ?? fail('The agent has no session.');
           this.options.sessions.continueTask(
             session,
-            this.digestText(agent, events, left, digest.lines, ask, restyle),
+            this.digestText(
+              agent,
+              events,
+              left,
+              digest.lines,
+              ask,
+              restyle,
+              facts?.text,
+            ),
           );
           this.rt(id).style = style;
           this.begin(id, digest.read);
@@ -2345,6 +2355,11 @@ export class Lab {
             void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(
               () => {},
             );
+          if (facts)
+            void this.update(id, (entry) => ({
+              ...entry,
+              factsAt: facts.at,
+            })).catch(() => {});
         },
       },
       {
@@ -2358,6 +2373,28 @@ export class Lab {
     return loop;
   }
 
+  /**
+   * The plan's facts for an agent that did not get them yet, and when they
+   * were listed. A first prompt has the whole plan, and the planner wrote
+   * the facts, so a digest sends them only for a later plan.
+   */
+  private newFacts(
+    agent: AgentRecord,
+  ): { readonly text: string; readonly at: string } | null {
+    const state = this.current();
+    const plan = state.plan;
+    const at = plan?.facts[0]?.checkedAt;
+    if (!plan || !at || agent.id === state.opener || agent.factsAt === at)
+      return null;
+    return {
+      text: [
+        `The plan of record (${plan.post}) rests on these facts. Check their dates before you use them:`,
+        ...factLines(plan.facts),
+      ].join('\n'),
+      at,
+    };
+  }
+
   private digestText(
     agent: AgentRecord,
     events: readonly QueuedEvent<LabEvent>[],
@@ -2365,6 +2402,7 @@ export class Lab {
     posts: readonly string[],
     ask: string | null,
     restyle = '',
+    facts = '',
   ): string {
     const direction = this.direction(agent.direction);
     const notes = events
@@ -2383,6 +2421,7 @@ export class Lab {
       events.some((event) => event.again === 'limit')
         ? "Your harness's usage window ran out in your last turn, so that turn did no work."
         : '',
+      facts,
       `Your direction: ${direction.id} ${JSON.stringify(direction.title)}, ${verdictLine(direction)}. Holds up if: ${barText(direction)}.`,
       // The key or the spend limit can change while the session runs.
       this.computeLine(),
@@ -2445,8 +2484,10 @@ export class Lab {
     return this.person;
   }
 
-  private async firstPrompt(agent: AgentRecord): Promise<string> {
-    const state = this.current();
+  private async firstPrompt(
+    agent: AgentRecord,
+    state: LabState,
+  ): Promise<string> {
     const direction = this.direction(agent.direction);
     const others = state.directions
       .filter((entry) => entry.id !== direction.id && entry.state === 'open')
@@ -2689,8 +2730,11 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       case 'verifold_request_pod': {
         const direction = await this.ownDirection(id, generation, true);
         const why = text(args.why, 1000, 'why your direction needs the pod');
+        const pods = this.podsState();
+        // Without pods at all, no call can help.
+        if (pods === 'none') fail(podsWords.none.off);
         // Without a key or a spend limit, the person adds them first.
-        if (!this.podsOn()) return this.podCall(id, generation, why, null);
+        if (pods !== 'on') return this.podCall(id, generation, why, pods);
         // The lab's first GPU pod always asks the person, also when the project's limits would start it.
         if (await this.serial(() => !gpuApproved(this.current()))) {
           const effect = callEffect(
@@ -2782,27 +2826,26 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     return this.options.compute ?? fail('This Verifold has no pods.');
   }
 
-  /** Whether pods are on and a RunPod key is saved, for an agent's first prompt. */
-  private computeLine(): string {
+  /**
+   * The GPU pods now. The key and the spend limit can change while the lab
+   * runs. Off names only what is missing, so an agent never asks for a key
+   * that is saved.
+   */
+  private podsState(): PodsState {
     const compute = this.options.compute;
-    if (!compute) return 'GPU pods: this Verifold has none.';
-    if (compute.podsOn())
-      return 'GPU pods: on. A RunPod key is saved, and the person set a spend limit.';
-    return compute.keySaved()
-      ? "GPU pods: off. A RunPod key is saved, but the person set no spend limit in the project's settings yet."
-      : 'GPU pods: off. No RunPod key is saved yet.';
+    if (!compute) return 'none';
+    if (compute.podsOn()) return 'on';
+    return compute.keySaved() ? 'no-limit' : 'no-key';
   }
 
-  /** Why pods are off, for an agent: only what is missing, so it never asks for a key that is saved. */
-  private podsOffText(): string {
-    return this.options.compute?.keySaved()
-      ? "Pods are off: a RunPod key is saved, but the person set no spend limit in the project's settings."
-      : 'Pods are off: no RunPod key is saved, and no spend limit is set.';
+  /** The pods state as a line of an agent's prompts and digests. */
+  private computeLine(): string {
+    return podsWords[this.podsState()].line;
   }
 
   /** Pods are on when a session starts: its agent gets the pod tools and the pod part of its prompt. */
   private podsOn(): boolean {
-    return this.options.compute?.podsOn() ?? false;
+    return this.podsState() === 'on';
   }
 
   /** `verifold_ask_person`: a call for the person, with options, the agent's pick, and why. */
@@ -2825,6 +2868,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           fail('Give need as pods, or leave it out.'));
     if (need === 'pods' && kind !== 'access')
       fail('need pods goes with an access call.');
+    // Without pods at all, the person cannot turn them on, so no call opens.
+    if (need === 'pods' && this.podsState() === 'none')
+      fail(podsWords.none.off);
     const draft = {
       question: text(args.question, callLimits.question, 'the question'),
       why: text(args.why, callLimits.why, 'why you advise your pick'),
@@ -2850,8 +2896,13 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         priced.push(option);
         continue;
       }
-      if (!this.podsOn())
-        fail(`${this.podsOffText()} Ask the person with an access call first.`);
+      const pods = this.podsState();
+      if (pods !== 'on')
+        fail(
+          podsWords[pods].call
+            ? `${podsWords[pods].off} Ask the person with an access call first.`
+            : podsWords[pods].off,
+        );
       const cost = await this.pods().podCost({
         gpu: effect.gpuType,
         hours: effect.hours,
@@ -2967,53 +3018,57 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
 
   /**
    * A pod request that the person decides: the lab's first GPU pod, with the
-   * most that it can cost, or, while pods are off, an access call to add a
-   * RunPod key and a spend limit in the project's settings.
+   * most that it can cost, or, while pods are off, an access call to add
+   * what is missing in the project's settings: a RunPod key, a spend limit,
+   * or both.
    */
   private async podCall(
     id: string,
     generation: string,
     why: string,
-    pod: {
-      readonly effect: Extract<CallEffect, { type: 'pod' }>;
-      readonly cost: number;
-    } | null,
+    request:
+      | {
+          readonly effect: Extract<CallEffect, { type: 'pod' }>;
+          readonly cost: number;
+        }
+      | 'no-limit'
+      | 'no-key',
   ): Promise<string> {
-    // With a key saved, the call asks only for the spend limit.
-    const keySaved = this.options.compute?.keySaved() ?? false;
-    const question = pod
-      ? `The lab's first GPU pod: ${pod.effect.gpuType} for ${pod.effect.hours} ${pod.effect.hours === 1 ? 'hour' : 'hours'}?`
-      : keySaved
-        ? "Set a spend limit in the project's settings, so agents can rent GPUs?"
-        : 'Add a RunPod key and a spend limit, so agents can rent GPUs?';
+    const pod = typeof request === 'string' ? null : request;
+    // While pods are off, the call asks for what is missing: with a key saved, only the spend limit.
+    const question =
+      typeof request === 'string'
+        ? podsWords[request].call.question
+        : `The lab's first GPU pod: ${request.effect.gpuType} for ${request.effect.hours} ${request.effect.hours === 1 ? 'hour' : 'hours'}?`;
     const ask = {
       kind: pod ? 'cost' : 'access',
       // While pods are off, one call turns them on for the whole lab.
       need: pod ? null : 'pods',
-      options: pod
-        ? [
-            {
-              label: `Rent it, for at most ${usd(pod.cost)}`,
-              usd: Number(pod.cost.toFixed(2)),
-              minutes: null,
-              effect: pod.effect,
-            },
-            { label: 'No pod now', usd: 0, minutes: null, effect: null },
-          ]
-        : [
-            {
-              label: keySaved ? 'I set a limit' : 'I added them',
-              usd: null,
-              minutes: null,
-              effect: null,
-            },
-            {
-              label: 'No GPU for this lab',
-              usd: null,
-              minutes: null,
-              effect: null,
-            },
-          ],
+      options:
+        typeof request === 'string'
+          ? [
+              {
+                label: podsWords[request].call.done,
+                usd: null,
+                minutes: null,
+                effect: null,
+              },
+              {
+                label: 'No GPU for this lab',
+                usd: null,
+                minutes: null,
+                effect: null,
+              },
+            ]
+          : [
+              {
+                label: `Rent it, for at most ${usd(request.cost)}`,
+                usd: Number(request.cost.toFixed(2)),
+                minutes: null,
+                effect: request.effect,
+              },
+              { label: 'No pod now', usd: 0, minutes: null, effect: null },
+            ],
     } satisfies Pick<Call, 'kind' | 'need' | 'options'>;
     const { call, joined } = await this.serial(async () => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
@@ -3050,11 +3105,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       return { call, joined: false };
     });
     this.progressed(id, generation);
-    return pod
-      ? `The lab's first GPU pod waits for the person: Verifold asked them in ${call.id}, with the most that it can cost, ${usd(pod.cost)}. Nothing is billed before they answer. Verifold wakes you with the answer.`
-      : joined
-        ? `${this.podsOffText()} ${this.name(call.by)} asked the person already in ${call.id}, and your request joined it. Verifold wakes you with the answer.`
-        : `${this.podsOffText()} Verifold asked the person in ${call.id}. Verifold wakes you with the answer.`;
+    if (typeof request !== 'string')
+      return `The lab's first GPU pod waits for the person: Verifold asked them in ${call.id}, with the most that it can cost, ${usd(request.cost)}. Nothing is billed before they answer. Verifold wakes you with the answer.`;
+    const off = podsWords[request].off;
+    return joined
+      ? `${off} ${this.name(call.by)} asked the person already in ${call.id}, and your request joined it. Verifold wakes you with the answer.`
+      : `${off} Verifold asked the person in ${call.id}. Verifold wakes you with the answer.`;
   }
 
   /**
@@ -6714,6 +6770,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
             cost: draft.cost,
             directions: order,
             facts: draft.facts ?? state.plan?.facts ?? [],
+            ...(draft.facts === null && state.plan?.facts.length
+              ? { factsCarried: true }
+              : {}),
             // A plan from before versions counts as the first.
             version: state.plan ? (state.plan.version ?? 1) + 1 : 1,
             ...(previous ? { previous } : {}),
@@ -6839,10 +6898,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       ...(plan.facts.length
         ? [
             'Facts that the plan rests on. Check their dates before you use them:',
-            ...plan.facts.map(
-              (fact) =>
-                `- ${JSON.stringify(fact.claim)}: ${fact.source ? `source ${JSON.stringify(fact.source)}${fact.sourceDate ? ` of ${JSON.stringify(fact.sourceDate)}` : ''}, listed ${localDay(new Date(fact.checkedAt))}` : 'unverified (no source)'}.`,
-            ),
+            ...factLines(plan.facts),
           ]
         : []),
     ];
@@ -7592,6 +7648,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     let saved: SessionRecord | null;
     let prompt: string | null;
     let model: string | null = agent.model;
+    // When the facts that the first prompt lists were listed.
+    let listed: string | undefined;
     try {
       // A Codex thread keeps its tools, so a thread with older tools, or
       // without the pod tools while pods are on, gives way to a new one.
@@ -7603,8 +7661,12 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         )
           ? await readRecord(this.root, agent.session)
           : null;
+      const state = this.current();
       prompt =
-        saved && agentResumable(saved) ? null : await this.firstPrompt(agent);
+        saved && agentResumable(saved)
+          ? null
+          : await this.firstPrompt(agent, state);
+      listed = prompt === null ? undefined : state.plan?.facts[0]?.checkedAt;
       // A new conversation of an agent without a model, such as one from
       // before Verifold chose models, asks for the model again.
       if (prompt !== null && model === null)
@@ -7678,6 +7740,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           session,
           toolsVersion: labToolsVersion,
           pods,
+          ...(listed ? { factsAt: listed } : {}),
           events: current.events.filter(
             (event) => event.kind !== 'restart' || event.seq <= current.cursor,
           ),
