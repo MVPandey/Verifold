@@ -692,7 +692,7 @@ export interface RunLedgerOptions {
   /**
    * A run ended. In the lab's queue. Returns true when its agent heard it.
    * Not called for a run that ended before its `start` call returned: that
-   * call's result tells the agent.
+   * call's caller tells the agent, then calls `told`.
    */
   readonly ended: (run: RunRecord) => boolean;
   /** One minute of a run's time limit. */
@@ -714,8 +714,8 @@ export class RunLedger {
   private readonly starting = new Map<string, Live['stop']>();
   /** The work of each run from its start to its end, by run ID. Close waits for it. */
   private readonly work = new Map<string, Promise<void>>();
-  /** Runs whose `start` call has no record back yet. The call's result tells the agent how such a run ended. */
-  private readonly waiting = new Set<string>();
+  /** The record that each `start` call waits for, by run ID, until the run starts or ends. Its caller tells the agent how such a run ended. */
+  private readonly waiting = new Map<string, Promise<RunRecord>>();
   /** The leases whose pods stop now. No run starts on them. */
   private readonly stopping = new Set<string>();
   /** The background work that ends the pod runs of an earlier owner. */
@@ -975,6 +975,10 @@ export class RunLedger {
       input.where === 'pod'
         ? { pods: this.options.pods ?? fail(noPodsText) }
         : { sandbox: this.options.sandbox ?? fail(noSandboxText) };
+    let started!: (run: RunRecord) => void;
+    const ready = new Promise<RunRecord>((resolve) => {
+      started = resolve;
+    });
     const made = await this.options.serial(async () => {
       const known = [...this.records.values()].find(
         (run) => run.agent === input.agent && run.key === input.key,
@@ -1026,17 +1030,20 @@ export class RunLedger {
       await this.save(run);
       this.records.set(id, run);
       this.starting.set(id, null);
+      this.waiting.set(id, ready);
       return { run, known: false, lease: place?.lease ?? null };
     });
-    if (made.known) return made.run;
-    this.waiting.add(made.run.id);
-    let started!: (run: RunRecord) => void;
-    const ready = new Promise<RunRecord>((resolve) => {
-      started = (run) => {
-        this.waiting.delete(made.run.id);
-        resolve(run);
-      };
-    });
+    // A repeated call waits with the first one, so both get the run as it started, or as it ended at once.
+    if (made.known)
+      return (
+        this.waiting.get(made.run.id) ??
+        this.records.get(made.run.id) ??
+        made.run
+      );
+    const report = (run: RunRecord): void => {
+      this.waiting.delete(made.run.id);
+      started(run);
+    };
     const work = (
       'pods' in runner
         ? this.executePod(
@@ -1044,13 +1051,13 @@ export class RunLedger {
             runner.pods,
             made.lease ?? '',
             input.workspace,
-            started,
+            report,
           )
         : this.execute(
             made.run,
             runner.sandbox,
             input.workspace,
-            started,
+            report,
             input.deny ?? [],
           )
     )
@@ -1060,7 +1067,7 @@ export class RunLedger {
       .finally(() => {
         this.work.delete(made.run.id);
         // The caller never waits for good, also when the end's record failed.
-        started(this.records.get(made.run.id) ?? made.run);
+        report(this.records.get(made.run.id) ?? made.run);
       });
     this.work.set(made.run.id, work);
     return ready;
@@ -1573,8 +1580,8 @@ export class RunLedger {
         next,
         `Verifold could not save the end of ${next.id}`,
       );
-      // A run that ended before its start call returned: the call's result tells the agent, so it needs no wake.
-      if (!this.waiting.has(run.id) && !this.options.ended(next)) return next;
+      // A run that ended before its start call returned: the caller tells the agent, and marks it as heard.
+      if (this.waiting.has(run.id) || !this.options.ended(next)) return next;
       const told = { ...next, told: true };
       this.records.set(run.id, told);
       await this.saveOrSay(
