@@ -27,12 +27,18 @@ import {
   type ResearchOptions,
 } from '../legacy/research.ts';
 import { ResearchRunner } from '../legacy/research-runner.ts';
+import { researchRunOnDisk } from '../core/history.ts';
 import { ProjectMemory } from '../core/memory.ts';
 import { object, text } from '../core/research-contracts.ts';
 import type { Choice } from './choices.ts';
 import { installedHarnesses, runHarness } from '../core/harness.ts';
 import { nextResearchAction } from '../desk/desk-view.ts';
-import { startDesk, openDeskBrowser, type DeskServer } from '../server/desk.ts';
+import {
+  hasAppBuild,
+  startDesk,
+  openDeskBrowser,
+  type DeskServer,
+} from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { askStart, type Begun } from './ask-start.ts';
 import { FirstRun } from '../server/setup.ts';
@@ -115,8 +121,12 @@ export interface CliIO {
   readonly out: (value: string) => void;
   /** `agent`: text from the harness. `tool`: a harness event that Verifold observed. */
   readonly progress?: (value: string, source?: 'agent' | 'tool') => void;
-  /** A line of the person's own session, which a terminal keeps in its scrollback. Without it, the line goes to `progress`. */
-  readonly feed?: (line: string) => void;
+  /**
+   * A line of the person's own session, which a terminal keeps in its
+   * scrollback. Without it, the line goes to `progress`. `logged`: the line
+   * for a log, when it leaves out part of `line`, such as a request's change.
+   */
+  readonly feed?: (line: string, logged?: string) => void;
   /** Review a draft brief with direct editing. Only the desk provides it. */
   readonly review?: (brief: string, final: boolean) => Promise<BriefDecision>;
   /** Mark the current setup step for a view that shows it. */
@@ -251,7 +261,7 @@ const terminalHelp = (
 ): string => `Commands in this terminal:
 - \`/open\` or \`/app\`: open Verifold in your browser. Add the ID of a call, for example \`/app c-3\`, to open that call.
 - Enter on an empty line, in a lab: open the call that waits for you, or else the lab.
-- \`/desk\`: open the old desk in your browser, for this release.
+- \`/desk\`: open the old desk in your browser, for this release. In a terminal that started with --desk, \`/open\` and Enter open it too.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
 - \`/research\`: continue research. In a project without research, add the question.
@@ -270,22 +280,22 @@ const requestHint = 'Type a to allow once or d to deny.';
 /** The lines of a request's change that the terminal shows, at most. */
 const requestLines = 40;
 
+/** Why a request asks, on one line. */
+function requestReason(request: Pick<PendingRequest, 'reason'>): string {
+  return request.reason ? `Why: ${request.reason.replace(/\s+/g, ' ')}` : '';
+}
+
 /**
  * Why a request asks, and the change that it would make, under its line. The
- * harness wrote both, so each line has a margin that no Verifold line has,
- * and no control characters.
+ * harness wrote both, so each line has a margin that no Verifold line has.
+ * The session removed their control characters when it recorded the request
+ * (see clean() in core/session.ts).
  */
 function requestText(
   request: Pick<PendingRequest, 'reason' | 'detail'>,
 ): string {
-  const reason = request.reason
-    ? [
-        `  Why: ${stripVTControlCharacters(request.reason).replace(/\s+/g, ' ')}`,
-      ]
-    : [];
-  const lines = request.detail
-    ? stripVTControlCharacters(request.detail).split('\n')
-    : [];
+  const reason = request.reason ? [`  ${requestReason(request)}`] : [];
+  const lines = request.detail ? request.detail.split('\n') : [];
   const change = lines.slice(0, requestLines).map((line) => `  │ ${line}`);
   if (lines.length > requestLines)
     change.push(`  │ … ${lines.length - requestLines} more lines`);
@@ -303,26 +313,40 @@ const feedLabels: Record<SessionEvent['kind'], string> = {
 };
 
 /**
- * One terminal line for a session event. Harness tool events stay in the desk,
- * so they have none. `worker` names the session when two can run.
+ * One terminal line for a session event, and its line for the owner's log.
+ * Harness tool events stay in the desk, so they have none. `worker` names the
+ * session when two can run. The terminal shows a request in full, with the
+ * change that it would make, so that the person can answer it there. The
+ * log gets only the request's ID and why it asks: the change and the tool's
+ * input stay out of diagnostics.
  */
 export function feedLine(
   event: SessionEvent,
   worker?: string,
-  request?: Pick<PendingRequest, 'reason' | 'detail'>,
-): string | null {
+  request?: Pick<PendingRequest, 'id' | 'reason' | 'detail'>,
+): { readonly text: string; readonly log: string } | null {
   if (event.kind === 'tool') return null;
   const time = new Date(event.at).toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
   });
+  const head = `${time}  ${worker ? `${worker} · ` : ''}${feedLabels[event.kind]}: `;
+  if (event.kind === 'request') {
+    const id = request?.id ?? /^R\d+(?=:)/.exec(event.text)?.[0] ?? 'a request';
+    const reason = request ? requestReason(request) : '';
+    return {
+      // One line for the request, so harness text cannot print a line that looks like one.
+      text: `${head}${event.text.replace(/\s*\n\s*/g, ' ⏎ ')}${request ? requestText(request) : ''}\n${requestHint}`,
+      log: `${head}${id}.${reason ? ` ${reason}` : ''}`,
+    };
+  }
   // One line for each event, so harness text cannot print a line that looks like a request.
   const line = event.text.replace(/\s*\n\s*/g, ' ⏎ ');
   const text =
     event.kind === 'agent' && line.length > 600
       ? `${line.slice(0, 600)}…`
       : line;
-  return `${time}  ${worker ? `${worker} · ` : ''}${feedLabels[event.kind]}: ${text}${event.kind === 'request' ? `${request ? requestText(request) : ''}\n${requestHint}` : ''}`;
+  return { text: `${head}${text}`, log: `${head}${text}` };
 }
 
 /** What the owner terminal can do besides session actions. */
@@ -342,6 +366,15 @@ export interface TerminalControls {
   readonly research?: ResearchRunner;
   /** The project's lab. Text that is not a command goes to its board. */
   readonly lab?: Pick<Lab, 'exists' | 'post'>;
+}
+
+/**
+ * A line of a terminal that started with --desk: there, /open, alone or with
+ * the ID of a call as Enter on an empty line sends it, opens the old desk.
+ * /app still opens the app.
+ */
+export function deskTerminalLine(line: string): string {
+  return /^\/open(?: c-[1-9][0-9]{0,5})?$/.test(line.trim()) ? '/desk' : line;
 }
 
 /** Terminal controls call the same session operations as the desk. */
@@ -406,6 +439,8 @@ export function terminalInput(
         'Write /app and the ID of a call, for example /app c-3, or /app alone.',
       );
     else if (value === '/desk') controls.openDesk();
+    else if (value.startsWith('/desk '))
+      io.progress?.('Write /desk alone to open the old desk.');
     else if (value === '/help')
       io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
@@ -595,6 +630,8 @@ async function serveDesk(
         url: run.useDesk ? server.deskUrl : server.url,
         // A background owner passes the app's URL on too. A terminal that attached with --desk leaves it out.
         ...(server.appUrl && !run.useDesk ? { app: server.appUrl } : {}),
+        // A terminal that attaches with --desk prints the old desk's URL, from here.
+        ...(run.owner ? { desk: server.deskUrl } : {}),
         visibility: 'private',
         readOnly: false,
       }),
@@ -747,7 +784,8 @@ async function serveDesk(
                     : undefined,
                 )
               : null;
-          if (line) (io.feed ?? io.progress)?.(line);
+          if (line && io.feed) io.feed(line.text, line.log);
+          else if (line) io.progress?.(line.text);
           // The session that `verifold session` started decides when this command ends.
           if (!owned.session || view?.record.id !== owned.session) return;
           const { status } = view.record;
@@ -999,35 +1037,40 @@ async function serveDesk(
           labProblem = await startLab(root, lab, research ?? {}, io, run.hours);
         io.listen?.(
           (line) =>
-            terminalInput(sessions, line, io, {
-              host,
-              background: run.owner !== undefined,
-              research: runner,
-              lab,
-              openApp: (call) => {
-                // Without the app's build, the launch opens the old desk.
-                void open('/app/', call).then((opened) =>
-                  io.progress?.(
-                    !opened
-                      ? 'The browser could not open. Open the printed URL.'
-                      : !desk?.appUrl
-                        ? 'This Verifold has no app build, so the old desk opened in your browser.'
-                        : call
-                          ? `Call ${call} opened in your browser.`
-                          : 'Verifold opened in your browser.',
-                  ),
-                );
+            terminalInput(
+              sessions,
+              run.useDesk ? deskTerminalLine(line) : line,
+              io,
+              {
+                host,
+                background: run.owner !== undefined,
+                research: runner,
+                lab,
+                openApp: (call) => {
+                  // Without the app's build, the launch opens the old desk.
+                  void open('/app/', call).then((opened) =>
+                    io.progress?.(
+                      !opened
+                        ? 'The browser could not open. Open the printed URL.'
+                        : !desk?.appUrl
+                          ? 'This Verifold has no app build, so the old desk opened in your browser.'
+                          : call
+                            ? `Call ${call} opened in your browser.`
+                            : 'Verifold opened in your browser.',
+                    ),
+                  );
+                },
+                openDesk: () => {
+                  void open('/desk').then((opened) =>
+                    io.progress?.(
+                      opened
+                        ? 'The old desk opened in your browser.'
+                        : 'The browser could not open. Open the printed URL with /desk after its port number.',
+                    ),
+                  );
+                },
               },
-              openDesk: () => {
-                void open('/desk').then((opened) =>
-                  io.progress?.(
-                    opened
-                      ? 'The old desk opened in your browser.'
-                      : 'The browser could not open. Open the printed URL with /desk after its port number.',
-                  ),
-                );
-              },
-            }),
+            ),
           deskSignal,
         );
         if (session) {
@@ -1140,6 +1183,9 @@ async function serveStart(
   );
   const app = desk.appUrl;
   if (!app) {
+    // The launch checked for the app's build first. When it went away since, nothing stays running.
+    handed.abort();
+    await desk.closed;
     throw new Error(
       'This Verifold package has no app build. Run verifold --desk to set up the project in the old desk.',
     );
@@ -1171,7 +1217,7 @@ async function serveStart(
             : 'The browser could not open. Open the printed app URL.',
         ),
       );
-    else if (value === '/desk')
+    else if (value === '/desk' || value.startsWith('/desk '))
       io.progress?.(
         'The old desk opens only in a project. To set up this project there, press Ctrl+C and run verifold --desk.',
       );
@@ -1349,9 +1395,10 @@ async function runOwner(
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
   let early: { readonly progress: string; readonly feed?: true }[] | null = [];
-  let url: string | undefined;
-  /** The app's URL, when the package has the app's build. */
-  let appUrl: string | undefined;
+  /** The URLs with the desk's token: its own, the app's when the package has the app's build, and the old desk's. */
+  let urls:
+    | { readonly url: string; readonly app?: string; readonly desk?: string }
+    | undefined;
   /**
    * The lab's screens, built only while a terminal is attached: the desk's
    * watch, its stop while it runs, and its newest screen.
@@ -1373,8 +1420,7 @@ async function runOwner(
     attached: (send) => {
       for (const message of early ?? []) send(message);
       early = null;
-      if (url)
-        send({ url, ...(appUrl ? { app: appUrl } : {}), agency: profile });
+      if (urls) send({ ...urls, agency: profile });
       // A screen is fresh only while the watch runs for another terminal.
       if (unfollow && screen !== undefined) send({ screen });
       else watch();
@@ -1392,8 +1438,9 @@ async function runOwner(
     },
   });
   const log = ownerLog(root);
-  const progress = (value: string, feed = false): void => {
-    log(value);
+  /** `logged`: the line for the log, when it leaves out part of `value`. */
+  const progress = (value: string, feed = false, logged = value): void => {
+    log(logged);
     const message = feed
       ? { progress: value, feed: true as const }
       : { progress: value };
@@ -1417,16 +1464,16 @@ async function runOwner(
               'url' in shown &&
               typeof shown.url === 'string'
             ) {
-              url = shown.url;
-              appUrl =
-                'app' in shown && typeof shown.app === 'string'
-                  ? shown.app
-                  : undefined;
-              server.send({
-                url,
-                ...(appUrl ? { app: appUrl } : {}),
-                agency: profile,
-              });
+              urls = {
+                url: shown.url,
+                ...('app' in shown && typeof shown.app === 'string'
+                  ? { app: shown.app }
+                  : {}),
+                ...('desk' in shown && typeof shown.desk === 'string'
+                  ? { desk: shown.desk }
+                  : {}),
+              };
+              server.send({ ...urls, agency: profile });
             }
           } catch {
             /* Only the desk URL is output. */
@@ -1436,7 +1483,8 @@ async function runOwner(
         progress: (value, source) => {
           if (source !== 'tool') progress(value);
         },
-        feed: (line) => progress(line, true),
+        // A request's change goes to the terminals, never to the log.
+        feed: (line, logged) => progress(line, true, logged),
         listen: (handler, until) => {
           onLine = handler;
           for (const line of waiting.splice(0)) handler(line);
@@ -1571,12 +1619,11 @@ async function attachTeam(
           io.progress?.(
             `The running Verifold uses the profile in ${message.agency}, so stop it with verifold stop to use another.`,
           );
-        const deskUrl = new URL(message.url);
-        deskUrl.pathname = '/desk';
         const app = start.useDesk ? undefined : message.app;
         io.out(
           JSON.stringify({
-            url: start.useDesk ? deskUrl.href : message.url,
+            // An owner of an earlier version sends no desk URL. Its URL opens the old desk.
+            url: start.useDesk ? (message.desk ?? message.url) : message.url,
             ...(app ? { app } : {}),
             visibility: 'private',
             readOnly: false,
@@ -1612,7 +1659,14 @@ async function attachTeam(
   const attached = new AbortController();
   const until = AbortSignal.any([signal, attached.signal]);
   const connection = client;
-  io.listen?.((line) => connection.send({ line }), until);
+  // The owner serves every terminal, so this one turns /open into /desk itself.
+  io.listen?.(
+    (line) =>
+      connection.send({
+        line: start.useDesk ? deskTerminalLine(line) : line,
+      }),
+    until,
+  );
   await Promise.race([
     connection.closed,
     new Promise((resolve) =>
@@ -1687,7 +1741,7 @@ async function recover(
   const stopped = sessions.stopped + attempts.stopped;
   if (parts.length)
     io.progress?.(
-      `Verifold stopped earlier without saving the end of its work. ${parts.join(' and ')} stopped with an unknown outcome.${stopped ? ` Verifold stopped ${stopped} harness ${stopped === 1 ? 'process' : 'processes'} that kept running.` : ''} Resume a session in the desk or with /resume. Continue research to run the step again.`,
+      `Verifold stopped earlier without saving the end of its work. ${parts.join(' and ')} stopped with an unknown outcome.${stopped ? ` Verifold stopped ${stopped} harness ${stopped === 1 ? 'process' : 'processes'} that kept running.` : ''} Resume a session with /resume, or in the old desk: type /desk. Continue research to run the step again.`,
     );
 }
 
@@ -2045,8 +2099,17 @@ export async function runCli(
     return;
   }
   if (command === 'ui') {
+    // While the old desk exists, a project whose run is from the research
+    // flow opens there by default: the app shows that run only in History.
+    const researchFlow =
+      !useDesk && !values.app && (await researchRunOnDisk(root));
+    if (researchFlow)
+      io.progress?.(
+        "This project uses the earlier research flow, so it opens in the old desk. Its records also show read-only in the app's History.",
+      );
+    const desk = useDesk || researchFlow;
     // The app has its own first run. Only the old desk asks for the profile in the terminal.
-    if (launch && useDesk) {
+    if (launch && desk) {
       const workspace = await loadWorkspace(root);
       await ensureGlobalProfile(
         agencyDirectory(cwd, values['agency-dir']),
@@ -2072,14 +2135,14 @@ export async function runCli(
       await attachTeam(root, io, signal, io.background, {
         noOpen,
         lab,
-        useDesk,
+        useDesk: desk,
         agency,
       });
     else
       await serveDesk(root, io, signal, {
         noOpen,
         lab,
-        useDesk,
+        useDesk: desk,
         ...(agency ? { agency } : {}),
       });
     return;
@@ -2113,7 +2176,15 @@ export async function runCli(
   }
   if (command === 'init') {
     // A bare verifold in a new folder opens the app's first run and Ask page. --desk keeps the old setup.
-    if (launch && !useDesk) {
+    // Without the app's build, setup goes the way of --desk.
+    const toApp = launch && !useDesk && (await hasAppBuild(io.appAssets));
+    if (launch && !useDesk && !toApp)
+      io.progress?.(
+        values['no-open']
+          ? 'This Verifold has no app build, so setup runs in this terminal.'
+          : 'This Verifold has no app build, so setup opens in the old desk.',
+      );
+    if (toApp) {
       const extra = (
         ['profile', 'host', 'model', 'topic', 'autonomy', 'setup-only'] as const
       ).find((key) => values[key] !== undefined);
@@ -2371,7 +2442,7 @@ export async function runCli(
     );
     return;
   }
-  const page = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verifold — private workspace</title><style>body{font:16px system-ui;background:#f8f7fa;color:#101014;max-width:900px;margin:50px auto;padding:24px}h1{color:#4c1d95}article{padding:20px 0;border-top:1px solid #ddd}p{line-height:1.7}</style><h1>Verifold</h1><p>Private workspace · managed by the CLI · ${e(workspace.profile.name)}</p><p>${workspace.profile.interests.map(e).join(', ')}</p><p>Host: ${e(workspace.host)} · Selection: ${e(workspace.selectedId ?? 'Awaiting your choice')}</p>${workspace.candidates.map((idea) => `<article><h2>${e(idea.title)}</h2><p>${e(idea.recommendation)}</p><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></article>`).join('')}<p>Run <code>verifold</code> in this project directory to open the desk and choose a direction there. This view sends no data and starts no experiments.</p></html>`;
+  const page = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verifold — private workspace</title><style>body{font:16px system-ui;background:#f8f7fa;color:#101014;max-width:900px;margin:50px auto;padding:24px}h1{color:#4c1d95}article{padding:20px 0;border-top:1px solid #ddd}p{line-height:1.7}</style><h1>Verifold</h1><p>Private workspace · managed by the CLI · ${e(workspace.profile.name)}</p><p>${workspace.profile.interests.map(e).join(', ')}</p><p>Host: ${e(workspace.host)} · Selection: ${e(workspace.selectedId ?? 'Awaiting your choice')}</p>${workspace.candidates.map((idea) => `<article><h2>${e(idea.title)}</h2><p>${e(idea.recommendation)}</p><ul>${idea.gates.map((gate) => `<li>${e(gate)}</li>`).join('')}</ul></article>`).join('')}<p>Run <code>verifold --desk</code> in this project directory to open the old desk and choose a direction there. This view sends no data and starts no experiments.</p></html>`;
   const path = join(root, '.verifold', 'workspace.html');
   const temporary = join(root, '.verifold', `${randomUUID()}.html.tmp`);
   try {

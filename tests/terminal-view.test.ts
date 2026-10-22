@@ -348,7 +348,7 @@ await test('the needs-you line, a lab without a call, and Enter on an empty line
       '  Needs you  Rent an H100 for the probe reruns? $11.97 · 1 more call   enter: open it',
     ),
   );
-  assert.equal(enterLine(both), '/app c-4');
+  assert.equal(enterLine(both), '/open c-4');
   const calm = screenOf(story({ needsYou: [] }));
   assert.ok(
     viewLines(calm, {
@@ -359,8 +359,8 @@ await test('the needs-you line, a lab without a call, and Enter on an empty line
       detaches: true,
     }).includes('  Nothing needs you.   enter: open the lab'),
   );
-  assert.equal(enterLine(calm), '/app');
-  assert.equal(enterLine({ ...calm, app: false }), '/open');
+  assert.equal(enterLine(calm), '/open');
+  assert.equal(enterLine({ ...both, app: false }), '/open');
   const ended = screenOf(
     story({ needsYou: [], paused: { at: ago(1), reason: 'deadline' } }),
   );
@@ -567,7 +567,7 @@ await test('the terminal draws the view, keeps a message line, and opens the cal
   input.write('hi @claude-2\r');
   input.write('\r');
   await until(() => lines.length === 2);
-  assert.deepEqual(lines, ['hi @claude-2', '/app c-4']);
+  assert.deepEqual(lines, ['hi @claude-2', '/open c-4']);
   // Verifold's newest message becomes the line under the view.
   view.progress('Your message is on the board.');
   await until(
@@ -663,7 +663,7 @@ await test('a narrow terminal, NO_COLOR, and a project without a lab get plain l
   // Enter on an empty line still opens the call.
   input.write('\n');
   await until(() => lines.length === 2);
-  assert.deepEqual(lines, ['hello', '/app c-4']);
+  assert.deepEqual(lines, ['hello', '/open c-4']);
   const count = printed.length;
   view.show(screenOf(story({ needsYou: [] })), true);
   assert.equal(printed.length, count);
@@ -869,7 +869,7 @@ await test('calls that the smallest snapshot only counts still show, and Enter o
       detaches: true,
     }).includes('  3 calls need you.   enter: open the lab'),
   );
-  assert.equal(enterLine(hidden), '/app');
+  assert.equal(enterLine(hidden), '/open');
   const shown = screenOf();
   assert.deepEqual(plainLines(shown, hidden, now), [
     '3 calls need you. Press Enter on an empty line to open the lab.',

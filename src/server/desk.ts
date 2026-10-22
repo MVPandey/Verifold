@@ -1329,9 +1329,7 @@ export async function startDesk(
       body: await readFile(new URL(file, assetsRoot)),
     });
   }
-  const app = await readAppBuild(
-    options.appRoot ?? new URL('../app/', import.meta.url),
-  );
+  const app = await readAppBuild(options.appRoot ?? appBuild);
   for (const [path, asset] of app) assets.set(path, asset);
   // Without the app's build, `/` is the old desk. With it, `/` leads to the app.
   if (!app.size)
@@ -2163,6 +2161,23 @@ export async function startDesk(
     pages: pages.origin,
     closed,
   };
+}
+
+/** The folder of the app's build in the installed package. */
+const appBuild = new URL('../app/', import.meta.url);
+
+/**
+ * Whether the package has the app's build, as `readAppBuild` finds it: its
+ * page and its assets folder. `root`: a test's build instead.
+ */
+export async function hasAppBuild(root: URL = appBuild): Promise<boolean> {
+  try {
+    await readFile(new URL('index.html', root));
+    await readdir(new URL('assets/', root));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

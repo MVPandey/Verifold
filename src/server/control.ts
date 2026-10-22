@@ -24,9 +24,15 @@ export type FromOwner =
   | { readonly progress: string; readonly feed?: true }
   /**
    * The desk's URL with its token, the new app's URL when the package has
-   * its build, and the folder of the profile that the owner reads.
+   * its build, the old desk's URL, and the folder of the profile that the
+   * owner reads.
    */
-  | { readonly url: string; readonly app?: string; readonly agency?: string }
+  | {
+      readonly url: string;
+      readonly app?: string;
+      readonly desk?: string;
+      readonly agency?: string;
+    }
   /** The lab for the terminal's live view, again after each change. Null: the project has no lab. */
   | { readonly screen: LabScreen | null }
   | { readonly stopped: true };
@@ -234,6 +240,7 @@ export async function connectControl(
       onMessage({
         url: message.url,
         ...(typeof message.app === 'string' ? { app: message.app } : {}),
+        ...(typeof message.desk === 'string' ? { desk: message.desk } : {}),
         ...(typeof message.agency === 'string'
           ? { agency: message.agency }
           : {}),

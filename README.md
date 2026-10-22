@@ -48,7 +48,7 @@ Run `verifold` in an empty folder, or in a folder that already holds your work. 
 
 You can close the terminal. While it is open, it shows the lab in a few lines. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, the lab page lists what changed.
 
-`verifold --desk` opens the old desk instead, for this release.
+`verifold --desk` opens the old desk instead, for this release. A project whose run is from the earlier research flow opens there by default.
 
 ## Where things stand
 
