@@ -875,7 +875,8 @@ await test('the snapshot names the planner, the facts and option details of a ca
       ...seeded.state,
       plan: {
         ...plan,
-        factsCarried: true,
+        // The facts last changed in an earlier plan post.
+        factsPost: 'p-0',
         version: 2,
         previous: 'p-0',
         changed: 'Qwen3-4B → Qwen3.5-9B, as the person chose.',

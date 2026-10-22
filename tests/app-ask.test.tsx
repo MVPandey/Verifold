@@ -32,10 +32,10 @@ import { Screen } from '../src/app/App.tsx';
 import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import {
   FactsList,
-  listedWhen,
   sourceLink,
   sourceName,
 } from '../src/app/components/FactsList.tsx';
+import { dayClock } from '../src/app/format.ts';
 import { QuestionCard } from '../src/app/components/QuestionCard.tsx';
 import { AskForm } from '../src/app/screens/AskPage.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
@@ -1028,11 +1028,30 @@ await test('a fact names its source as people read it: a link without the scheme
   );
 });
 
-await test('a fact says when its plan or call listed it: today, or the day, with the year in another year', () => {
-  const today = new Date(2026, 9, 22, 12, 0);
-  const at = (year: number, day: number): string =>
-    new Date(year, 9, day, 9, 5).toISOString();
-  assert.equal(listedWhen(at(2026, 22), today), 'today 09:05');
-  assert.equal(listedWhen(at(2026, 19), today), '19 Oct 09:05');
-  assert.equal(listedWhen(at(2025, 19), today), '19 Oct 2025 09:05');
+await test('a time says its day as the pages write it: today, or the day with a fixed month, and the year in another year', () => {
+  const today = new Date(2026, 9, 22, 12, 0).getTime();
+  const at = (year: number, month: number, day: number): string =>
+    new Date(year, month, day, 9, 5).toISOString();
+  assert.equal(dayClock(at(2026, 9, 22), today), 'today at 09:05');
+  assert.equal(dayClock(at(2026, 9, 19), today), 'on 19 Oct at 09:05');
+  // A fixed month name: en-GB would give "Sept".
+  assert.equal(dayClock(at(2026, 8, 3), today), 'on 3 Sep at 09:05');
+  assert.equal(dayClock(at(2025, 9, 19), today), 'on 19 Oct 2025 at 09:05');
+  // A fact says when its plan or call listed it, by the app's clock.
+  assert.match(
+    renderToStaticMarkup(
+      <FactsList
+        facts={[
+          {
+            claim: 'H100 $3.99 an hour',
+            source: null,
+            sourceDate: null,
+            listedAt: at(2026, 9, 22),
+          },
+        ]}
+        now={today}
+      />,
+    ),
+    /· unverified \(no source\) · listed today at 09:05<\/span>/,
+  );
 });

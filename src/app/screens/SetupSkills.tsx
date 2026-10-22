@@ -6,7 +6,7 @@ import { newKey } from '../intent.ts';
 import { href } from '../route.ts';
 import type { SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
-import { readAt } from '../components/Limits.tsx';
+import { dayClock } from '../format.ts';
 
 /** "A", "A and B", "A, B and C". */
 function list(items: readonly string[]): string {
@@ -152,7 +152,7 @@ export function SkillsStep({
     <>
       <StepHeader step="skills" title="Skills that fit your work">
         {read
-          ? `Verifold read ${readable.length} skill ${readable.length === 1 ? 'catalog' : 'catalogs'} ${readAt(read.at)} ${
+          ? `Verifold read ${readable.length} skill ${readable.length === 1 ? 'catalog' : 'catalogs'} ${dayClock(read.at)} ${
               skills?.needsProfile
                 ? 'to check your added skills for updates.'
                 : `and matched them to your profile. ${
