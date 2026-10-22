@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -953,10 +954,13 @@ await test(
 );
 
 await test(
-  'a Codex worker stops when its owner is killed',
+  'a Codex worker stops when its owner is killed, and its socket folder goes',
   { skip: process.platform === 'win32' && 'POSIX process groups' },
   async (t) => {
     const { root } = await owner(t);
+    // The killed owner's temporary folder, where its Codex socket folder is made. A short path keeps the socket path short.
+    const temporary = await mkdtemp(join(tmpdir(), 'vt-'));
+    t.after(() => rm(temporary, { recursive: true, force: true }));
     const script = join(root, 'owner.mjs');
     await writeFile(
       script,
@@ -970,7 +974,10 @@ setInterval(() => {}, 1000);`,
     const child = spawn(
       process.execPath,
       ['--experimental-strip-types', script],
-      { stdio: ['ignore', 'pipe', 'inherit'] },
+      {
+        stdio: ['ignore', 'pipe', 'inherit'],
+        env: { ...process.env, TMPDIR: temporary },
+      },
     );
     t.after(() => child.kill('SIGKILL'));
     let printed = '';
@@ -992,10 +999,15 @@ setInterval(() => {}, 1000);`,
         return false;
       }
     };
+    const sockets = async (): Promise<string[]> =>
+      (await readdir(temporary)).filter((name) => name.startsWith('vf-'));
+    assert.equal((await sockets()).length, 1);
     assert.equal(running(), true);
     child.kill('SIGKILL');
     for (let tries = 0; tries < 1000 && running(); tries++) await delay(20);
     assert.equal(running(), false);
+    // The killed owner removed nothing. The watchdog removed the folder before it exited.
+    assert.deepEqual(await sockets(), []);
   },
 );
 
