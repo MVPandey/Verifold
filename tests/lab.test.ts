@@ -52,7 +52,8 @@ import { secretGuard } from '../src/core/runpod.ts';
 import { ResearchRunner } from '../src/legacy/research-runner.ts';
 import { boardLimits, clip } from '../src/core/board.ts';
 import { checkToolSpecs, planLimits } from '../src/core/lab-tools.ts';
-import { moreHeld, planFacts } from '../src/core/lab/schema.ts';
+import { moreHeld, parseState, planFacts } from '../src/core/lab/schema.ts';
+import { networkOf } from '../src/core/lab/words.ts';
 import { Coordinator } from '../src/legacy/coordinator.ts';
 import { parseFrame, renderDesk } from '../src/desk/desk-view.ts';
 import {
@@ -6771,6 +6772,46 @@ await test('a call that asks what an open call asks joins it, its answer reaches
     lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id)?.note,
     "claude-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
   );
+  // The record of what the answer changed names the first asker, so earlier builds read it too.
+  const file = join(lab.root, '.verifold', 'lab.json');
+  const saved = async (): Promise<
+    Record<string, unknown> & { calls: Record<string, unknown>[] }
+  > =>
+    JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown> & {
+      calls: Record<string, unknown>[];
+    };
+  assert.deepEqual(
+    (await saved()).calls.find((call) => call.id === pypi?.id)?.applied,
+    {
+      type: 'domains',
+      agent: lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id)
+        ?.by,
+    },
+  );
+  // No code reads that name: a record without it still gives the domains after a restart.
+  await lab.restart(async () => {
+    const state = await saved();
+    for (const call of state.calls)
+      if (call.id === pypi?.id) call.applied = { type: 'domains' };
+    await writeFile(file, JSON.stringify(state));
+  });
+  const restored = lab.lab.view()?.state;
+  assert.deepEqual(restored ? networkOf(restored, 'a-2') : [], [
+    'files.pythonhosted.org',
+    'pypi.org',
+  ]);
+  assert.equal(
+    restored?.calls.find((call) => call.id === pypi?.id)?.note,
+    "claude-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
+  );
+  // A record that does not fit the chosen option is damaged: it makes no call stand, and it approves no pod.
+  const damaged = await saved();
+  for (const call of damaged.calls)
+    if (call.id === pypi?.id) call.applied = { type: 'pod', lease: 'lease-1' };
+  assert.equal(
+    parseState(damaged)?.calls.find((call) => call.id === pypi?.id)?.applied,
+    null,
+  );
   // When no asker's direction is open, the call is withdrawn.
   await lab.lab.stopDirection('d-2');
   assert.equal(
@@ -7185,6 +7226,68 @@ await test('pod requests while pods are off ask the person once for the whole la
     1,
   );
   assert.equal(count(/^Your call c-1 waits for the person already\./), 2);
+});
+
+await test('a pod request waits only for a pods call, and a pods call saved before calls had a need loads as one', async (t) => {
+  const lab = await fixture(t, { compute: keyCompute(true) });
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  // Each start gives an agent a new generation, so its tools are called once it started.
+  const started = (count: number): Promise<void> =>
+    until(async () =>
+      (
+        await Promise.all(
+          ['d-1-alpha', 'd-2-beta'].map((folder) =>
+            lab.lines(folder, 'launches.jsonl'),
+          ),
+        )
+      ).every((lines) => lines.length === count),
+    );
+  await started(1);
+  // An access call about something else does not hold the agent's pod request.
+  assert.match(
+    (
+      await agentCall(lab.lab, 'a-1', 'verifold_ask_person', {
+        kind: 'access',
+        question: 'Add HF_TOKEN in Compute?',
+        options: [{ label: 'Added' }, { label: 'No' }],
+        pick: 0,
+        why: 'A gated model.',
+      })
+    ).text,
+    /^Asked the person in c-1\./,
+  );
+  const request = { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' };
+  assert.match(
+    (await agentCall(lab.lab, 'a-1', 'verifold_request_pod', request)).text,
+    /Verifold asked the person in c-2\./,
+  );
+  // Calls saved before calls had a need: Verifold's pods call loads as one, and the other access call does not.
+  await lab.restart(async () => {
+    const path = join(lab.root, '.verifold', 'lab.json');
+    const saved = JSON.parse(await readFile(path, 'utf8')) as {
+      calls: Record<string, unknown>[];
+    };
+    for (const call of saved.calls) delete call.need;
+    await writeFile(path, JSON.stringify(saved));
+  });
+  await started(2);
+  assert.deepEqual(
+    lab.lab.view()?.state.calls.map((call) => call.need),
+    [null, 'pods'],
+  );
+  // The agent that asked waits for its pods call, and another agent's request joins it.
+  assert.match(
+    (await agentCall(lab.lab, 'a-1', 'verifold_request_pod', request)).text,
+    /^Your call c-2 waits for the person already\./,
+  );
+  assert.match(
+    (await agentCall(lab.lab, 'a-2', 'verifold_request_pod', request)).text,
+    /asked the person already in c-2, and your request joined it\./,
+  );
+  assert.equal(lab.lab.view()?.state.calls.length, 2);
 });
 
 await test('a scope call opens or stops a direction, and its undo reverses it', async (t) => {
