@@ -223,7 +223,8 @@ export function validArchiveId(id: unknown): id is string {
  * run; its question, brief, and settings stay as they are now.
  */
 export async function restoreRun(root: string, id: unknown): Promise<void> {
-  if (!validArchiveId(id)) throw new Error('Choose an archive from Records.');
+  if (!validArchiveId(id))
+    throw new Error('Choose one of the listed archives.');
   const source = join(folder(root), id);
   if (!(await exists(source))) throw new Error('That archive does not exist.');
   const saved = parseWorkspace(

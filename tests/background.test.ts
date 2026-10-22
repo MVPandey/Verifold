@@ -229,6 +229,13 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   await until(() => urls.length === 1 && opened.length === 1);
   const url = new URL((JSON.parse(urls[0] ?? '{}') as { url: string }).url);
   const token = url.hash.slice(1);
+  // The terminal asked for the app. This test package has no app build, so the owner opened the old desk and said so.
+  assert.match(opened[0] ?? '', /\/desk#launch-[0-9a-f]+$/);
+  await until(() =>
+    lines.includes(
+      'This Verifold has no app build, so the old desk opened in your browser.',
+    ),
+  );
   // The terminal asked the owner to open the desk, and the owner used a one-time code.
   assert.match(opened[0] ?? '', /#launch-[0-9a-f]+$/);
   assert.ok(
@@ -294,7 +301,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   );
   assert.ok(
     again.includes(
-      'Verifold already works in the background, so --lab started nothing. Start the lab from Home in the desk.',
+      'Verifold already works in the background, so --lab started nothing. Type /app, then start the lab there.',
     ),
   );
   assert.equal(existsSync(join(root, '.verifold', 'lab.json')), false);
@@ -316,6 +323,25 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.ok(
     !again.some((line) => line.startsWith('The running Verifold uses')),
   );
+  // --desk prints the old desk's URL, without the app's.
+  const deskLines: string[] = [];
+  const deskUrls: string[] = [];
+  const fourth = runCli(
+    ['ui', '--desk', '--no-open'],
+    root,
+    terminal(deskLines, deskUrls, []),
+  );
+  await until(() => deskUrls.length === 1);
+  const printed = JSON.parse(deskUrls[0] ?? '{}') as {
+    url: string;
+    app?: string;
+  };
+  assert.equal(new URL(printed.url).pathname, '/desk');
+  assert.equal(new URL(printed.url).hash, url.hash);
+  assert.equal(printed.app, undefined);
+  await until(() =>
+    deskLines.includes('Open the printed URL to use the old desk.'),
+  );
   // verifold stop stops the owner. The attached terminal says so and ends.
   const said: string[] = [];
   await runCli(['stop'], root, {
@@ -327,6 +353,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.deepEqual(said, ['Verifold stopped.']);
   await second;
   await third;
+  await fourth;
   assert.equal(again.at(-1), 'Verifold stopped.');
   await ownerDone;
   assert.equal(await liveOwner(root), null);
@@ -362,8 +389,15 @@ await test('verifold stop says when nothing runs, and points to an older owner i
   const help = out.pop() ?? '';
   assert.match(
     help,
-    /verifold pods \[stop <lease\|all>\][^\n]*\n\nOlder commands:\nverifold recommend[\s\S]*verifold session --prompt/,
+    /verifold pods \[stop <lease\|all>\][^\n]*\n\nOlder commands, for the old desk and the research flow:\nverifold ui [\s\S]*verifold session --prompt/,
   );
+  // A bare verifold opens the app. --desk opens the old desk, for this release.
+  assert.match(
+    help,
+    /^verifold \[--no-open\] \[--desk\] +Open Verifold in your browser/m,
+  );
+  assert.match(help, /--desk opens the old desk instead, for this release\./);
+  assert.doesNotMatch(help, /--app\b/);
   assert.doesNotMatch(help, /runs no experiments|older flow/);
   assert.match(help, /task agents run the experiments/);
   await runCli(['stop'], root, io(out));
@@ -761,6 +795,7 @@ await test('a terminal without a background owner gets the same live view of its
   const lines: string[] = [];
   const screens: (LabScreen | null)[] = [];
   const typed: ((line: string) => void)[] = [];
+  const browsed: string[] = [];
   let unfollow: (() => void) | undefined;
   const stop = new AbortController();
   const done = runCli(
@@ -771,6 +806,10 @@ await test('a terminal without a background owner gets the same live view of its
       ask: () => Promise.reject(new Error('No prompts')),
       out: () => {},
       progress: (line) => lines.push(line),
+      browse: (url) => {
+        browsed.push(url);
+        return Promise.resolve(true);
+      },
       listen: (onLine) => typed.push(onLine),
       // The terminal of an in-process desk owns its watch of the lab.
       screens: {
@@ -790,12 +829,16 @@ await test('a terminal without a background owner gets the same live view of its
   assert.equal(screens.find((entry) => entry !== null)?.project, 'project');
   await until(() => typed.length === 1);
   typed[0]?.('/app c-1');
-  // This package build in the tests has no app, so the terminal says so.
+  // This package build in the tests has no app, so the old desk opens, and the terminal says so.
   await until(() =>
     lines.includes(
-      'The new app is not available here. Type /open for the desk.',
+      'This Verifold has no app build, so the old desk opened in your browser.',
     ),
   );
+  assert.match(browsed[0] ?? '', /\/desk#launch-[0-9a-f]+$/);
+  typed[0]?.('/desk');
+  await until(() => lines.includes('The old desk opened in your browser.'));
+  assert.match(browsed[1] ?? '', /\/desk#launch-[0-9a-f]+$/);
   typed[0]?.('A note for the lab');
   await until(() => lines.includes('Your message is on the board.'));
   unfollow?.();

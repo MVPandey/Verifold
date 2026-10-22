@@ -882,7 +882,7 @@ const inTerminal =
   'You hold the terminal of this session. Return to Verifold first.';
 
 const taskSession =
-  'This session belongs to a task. Use the task actions in the desk: accept, ask for changes, or reject.';
+  'This session belongs to a task. Use the task actions in the old desk: accept, ask for changes, or reject.';
 
 const agentSession =
   'This session belongs to an agent of the lab. Write to it on the board.';
@@ -1929,7 +1929,7 @@ export class SessionManager {
         }));
         this.event(
           'request',
-          `${request.id}: ${name} asks to use ${request.tool}: ${request.action}${request.detail ? ' Read the change on the desk before you answer.' : ''}`,
+          `${request.id}: ${name} asks to use ${request.tool}: ${request.action}${request.detail ? ' Read the change before you answer.' : ''}`,
         );
         break;
       }

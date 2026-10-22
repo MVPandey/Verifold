@@ -703,7 +703,7 @@ await test('terminal input: text goes to the lab board, and /app with a call ID 
   const opened: (string | undefined)[] = [];
   const controls = {
     host: 'claude',
-    open: () => {},
+    openDesk: () => {},
     openApp: (callId?: string) => opened.push(callId),
     lab: {
       exists: true,
@@ -791,10 +791,10 @@ await test('a launch URL can open a page of the app after its one-time code', as
     server.launchUrl('/app/', '/call/c-3'),
     /\/app\/#launch-[0-9a-f]{48}\/call\/c-3$/,
   );
-  // The desk takes no page, and an odd page is left out.
+  // The old desk takes no page, and an odd page is left out.
   assert.match(
-    server.launchUrl('/', '/call/c-3'),
-    /:\d+\/#launch-[0-9a-f]{48}$/,
+    server.launchUrl('/desk', '/call/c-3'),
+    /:\d+\/desk#launch-[0-9a-f]{48}$/,
   );
   assert.match(
     server.launchUrl('/app/', 'javascript:alert(1)'),

@@ -404,7 +404,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
     out: () => {},
     progress: (value: string) => messages.push(value),
   };
-  const controls = { host: 'claude', open: () => {}, openApp: () => {} };
+  const controls = { host: 'claude', openApp: () => {}, openDesk: () => {} };
   const first = await sessions.start({
     host: 'claude',
     mode: 'ask',
@@ -466,7 +466,10 @@ await test('the terminal names the worker, routes answers by request ID, and sen
     await delay(20);
   // Two idle sessions: a follow-up goes to the desk.
   terminalInput(sessions, 'Continue', io, controls);
-  assert.match(messages.at(-1) ?? '', /2 sessions match. Use the desk/);
+  assert.match(
+    messages.at(-1) ?? '',
+    /2 sessions match\. Choose one in the old desk: type \/desk\./,
+  );
   terminalInput(sessions, '/end', io, controls);
   assert.match(messages.at(-1) ?? '', /2 sessions match/);
   sessions.end(first);
@@ -1040,7 +1043,7 @@ await test('research and two workers run together, and each stop reaches only it
   const lines: string[] = [];
   const controls = {
     host: 'claude',
-    open: () => {},
+    openDesk: () => {},
     openApp: () => {},
     research: runner,
   };
@@ -1051,7 +1054,10 @@ await test('research and two workers run together, and each stop reaches only it
     progress: (line: string) => lines.push(line),
   };
   terminalInput(sessions, '/cancel', io, controls);
-  assert.match(lines.at(-1) ?? '', /Research and a session run\. Use the desk/);
+  assert.match(
+    lines.at(-1) ?? '',
+    /Research and a session run\. Choose what to cancel in the old desk/,
+  );
   assert.equal(runner.running, true);
   assert.equal(sessions.view(slow)?.record.status, 'running');
 

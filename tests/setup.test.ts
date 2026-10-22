@@ -246,8 +246,9 @@ for (const background of [false, true])
       },
       input: () => Promise.reject(new Error('A terminal has no owner input.')),
     };
+    // --desk keeps the old setup in the desk for this release. A bare verifold opens the app's first run.
     const done = runCli(
-      ['--agency-dir', agencyDir, '--workspace', project],
+      ['--desk', '--agency-dir', agencyDir, '--workspace', project],
       root,
       {
         interactive: true,
@@ -276,6 +277,9 @@ for (const background of [false, true])
       await new Promise((resolve) => setTimeout(resolve, 10));
     const url = new URL((JSON.parse(urls[0] ?? '{}') as { url: string }).url);
     assert.equal(opened.length, 1);
+    // --desk prints and opens the old desk's page.
+    assert.equal(url.pathname, '/desk');
+    assert.match(opened[0] ?? '', /\/desk#launch-[0-9a-f]{48}$/);
     const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
     // The page server's origin, which the open tab's CSP lets the desk frame.
     const frames = async (): Promise<string | undefined> =>
@@ -406,7 +410,7 @@ for (const background of [false, true])
       assert.equal(handoffs.length, 1);
       assert.equal(opened.length, 1);
       assert.ok(
-        lines.includes('The desk in your browser now shows the project.'),
+        lines.includes('The page in your browser now shows the project.'),
       );
       // The page server moved to the same port too, so the tab can still frame pages.
       assert.equal(await frames(), framed);

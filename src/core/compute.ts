@@ -243,12 +243,12 @@ export function parseSettings(
       ? current.gpuTypes
       : Array.isArray(input.gpuTypes)
         ? input.gpuTypes
-        : fail('The desk sent an unreadable GPU list.');
+        : fail('Verifold got an unreadable GPU list.');
   if (
     gpus.length > 30 ||
     !gpus.every((entry) => typeof entry === 'string' && gpuId.test(entry))
   )
-    fail('The desk sent an unreadable GPU list.');
+    fail('Verifold got an unreadable GPU list.');
   const pods = number(input.maxRunningPods, 'the number of pods', 1, 2, true);
   return {
     schemaVersion: 1,

@@ -48,7 +48,7 @@ try {
         /^dist-cli\/(?:[a-z]+|core\/lab)\/[a-z-]+\.js$/.test(file.path) ||
         /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         // The new app: its page, and the files that Vite names with a hash.
-        /^dist-cli\/app\/assets\/[\w.-]+\.(js|css|ttf)$/.test(file.path) ||
+        /^dist-cli\/app\/assets\/[\w.-]+\.(js|css|ttf|webp)$/.test(file.path) ||
         [
           'dist-cli/cli.js',
           'dist-cli/app/index.html',
@@ -184,8 +184,10 @@ try {
   const root = join(directory, 'bare-launch');
   await mkdir(root);
   const agency = join(root, 'agency');
+  // The old setup in the terminal, and the profile of an older project, are the old desk's (--desk). A bare launch in a project opens the app.
   for (const args of [
     [
+      '--desk',
       '--setup-only',
       '--host',
       'codex',
@@ -196,12 +198,11 @@ try {
       '--no-open',
     ],
     ['--no-open', '--agency-dir', agency],
-    ['--no-open', '--agency-dir', join(root, 'legacy-agency')],
+    ['--desk', '--no-open', '--agency-dir', join(root, 'legacy-agency')],
   ]) {
-    const previousWorkspace =
-      args[0] === '--setup-only'
-        ? undefined
-        : await readFile(join(root, '.verifold', 'workspace.json'));
+    const previousWorkspace = args.includes('--setup-only')
+      ? undefined
+      : await readFile(join(root, '.verifold', 'workspace.json'));
     const owner = new AbortController();
     const results = [];
     await runCli(
@@ -526,7 +527,11 @@ onLine((line) => {
         throw new Error(`Desk exited before startup: ${diagnostics}`);
       }),
     ]);
-    const url = new URL(JSON.parse(output).url);
+    const printed = JSON.parse(output);
+    const url = new URL(printed.url);
+    // Verifold opens the app by default, so the printed line names it too.
+    assert.equal(new URL(printed.app).pathname, '/app/');
+    assert.equal(new URL(printed.app).hash, url.hash);
     const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
     assert.equal((await fetch(`${url.origin}/api/view`)).status, 401);
     assert.equal(
@@ -543,8 +548,12 @@ onLine((line) => {
     assert.match(await view('?panel=coordinator'), /Compare proof search/);
     // The attempt panel shows the native session of the research attempt.
     assert.match(await view('?view=records&panel=attempt'), /package-session/);
+    // `/` leads to the app. The old desk's page is at /desk for this release.
+    const home = await fetch(`${url.origin}/`, { redirect: 'manual' });
+    assert.equal(home.status, 302);
+    assert.equal(home.headers.get('location'), '/app/');
     for (const path of [
-      '/',
+      '/desk',
       '/desk-client.js',
       '/desk-transcript.js',
       '/desk-terminal.js',
@@ -580,6 +589,11 @@ onLine((line) => {
     );
     assert.ok(
       appFiles.some((path) => path.endsWith('.css')),
+      appHtml,
+    );
+    // The app's own icon, for the tab and for desktop notifications.
+    assert.ok(
+      appFiles.some((path) => path.endsWith('.webp')),
       appHtml,
     );
     for (const path of appFiles) {

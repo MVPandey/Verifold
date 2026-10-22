@@ -41,13 +41,15 @@ function background(): boolean {
   return document.visibilityState === 'hidden' || !document.hasFocus();
 }
 
-/** Show one note. A click brings the tab forward on the note's page. */
+/** Show one note, with the page's own icon. A click brings the tab forward on the note's page. */
 function show(note: Note): void {
   try {
+    const icon =
+      document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href;
     const shown = new Notification(note.title, {
       body: note.body,
       tag: note.key,
-      icon: '/symbol.webp',
+      ...(icon ? { icon } : {}),
     });
     shown.addEventListener('click', () => {
       window.focus();
