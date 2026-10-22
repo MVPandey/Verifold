@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   cp,
   mkdir,
@@ -20,6 +21,7 @@ import { KeyStore } from '../src/core/credentials.ts';
 import {
   RunLedger,
   noPodsText,
+  runLimits,
   type PodRuns,
   type RunRecord,
 } from '../src/core/runs.ts';
@@ -426,6 +428,7 @@ async function fakeRuns(
   files: Record<string, string>,
   options: { readonly failOn?: string; readonly closeDuring?: boolean } = {},
 ): Promise<{
+  root: string;
   ledger: RunLedger;
   ended: RunRecord[];
   calls: { guard: number; remove: number };
@@ -499,6 +502,7 @@ async function fakeRuns(
   });
   t.after(() => ledger.close());
   return {
+    root,
     ledger,
     ended,
     calls,
@@ -569,6 +573,46 @@ await test('a lease that closes during the copy back still keeps the secrets out
   // The guard came once, when the run started.
   assert.equal(fx.calls.guard, 1);
   assert.equal(fx.calls.remove, 1);
+});
+
+await test('a guard finds a secret value that starts in one part and ends in the next', () => {
+  const guard = secretGuard({ HF_TOKEN: secret });
+  const split = guard.stream();
+  assert.equal(split(Buffer.from(`head ${secret.slice(0, 7)}`)), false);
+  assert.equal(split(Buffer.from(`${secret.slice(7)} tail`)), true);
+  const clean = guard.stream();
+  assert.equal(clean(Buffer.from(`head ${secret.slice(0, 7)}`)), false);
+  assert.equal(clean(Buffer.from(`not ${secret.slice(7)}`)), false);
+  assert.equal(guard.stream()(Buffer.from(`a ${secret} b`)), true);
+  assert.equal(secretGuard({}).stream()(Buffer.from(secret)), false);
+});
+
+await test('an output with a secret value across two copy parts keeps no copy, and a long output keeps its hash', async (t) => {
+  // The value starts 5 bytes before the end of the first part that Verifold copies.
+  const span = `${'y'.repeat(runLimits.copyPart - 5)}${secret}\n`;
+  const long = 'x'.repeat(runLimits.copyPart * 2 + 1234);
+  const fx = await fakeRuns(t, { 'out/span.txt': span, 'out/long.txt': long });
+  await fx.start(['out']);
+  await until(() => fx.ended.length === 1);
+  const run = fx.ledger.get('r-1');
+  assert.deepEqual(run?.outputs, [
+    {
+      path: 'out/long.txt',
+      bytes: long.length,
+      sha256: createHash('sha256').update(long).digest('hex'),
+    },
+  ]);
+  assert.match(
+    run?.note ?? '',
+    /Verifold kept no copy of out\/span\.txt, because it holds the value of a pod secret\./,
+  );
+  // No part of it stays in the run's record.
+  const outputs = join(fx.root, '.verifold', 'lab', 'runs', 'r-1', 'outputs');
+  assert.equal(existsSync(join(outputs, 'out', 'span.txt')), false);
+  assert.equal(
+    (await readFile(join(outputs, 'out', 'long.txt'), 'utf8')) === long,
+    true,
+  );
 });
 
 await test('a secret that a cut splits does not reach the log', async (t) => {
