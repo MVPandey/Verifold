@@ -669,7 +669,26 @@ await test('a worktree is removed without reading its own Git data again', async
   assert.equal(existsSync(join(root, workspace.path)), false);
 });
 
-await test('a worktree with an untracked or ignored file, or a folder with its own Git data, stays when released', async (t) => {
+await test('a worktree that holds only ignored files is released', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, '.gitignore', 'build/\n__pycache__/\n');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-10-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  await write(target, 'build/out.bin', 'x');
+  await write(target, 'results/__pycache__/m.cpython-312.pyc', 'cache');
+  assert.equal(await release(root, workspace), true);
+  assert.equal(existsSync(target), false);
+});
+
+await test('a worktree with a change, a new file that is not ignored, or a folder with its own Git data stays', async (t) => {
   const root = await folder(t);
   run(root, 'init', '-q');
   await write(root, '.gitignore', 'build/\n');
@@ -677,11 +696,17 @@ await test('a worktree with an untracked or ignored file, or a folder with its o
   run(root, 'add', '.');
   run(root, 'commit', '-qm', 'base');
   const cases: readonly (readonly [string, (target: string) => unknown])[] = [
-    ['task-10-r1-a1', (target) => write(target, 'results/new.md', 'n\n')],
-    ['task-11-r1-a1', (target) => write(target, 'build/out.bin', 'x')],
+    ['task-11-r1-a1', (target) => write(target, 'results/new.md', 'n\n')],
     [
       'task-12-r1-a1',
       (target) => run(root, 'init', '-q', join(target, 'inner')),
+    ],
+    [
+      'task-13-r1-a1',
+      async (target) => {
+        await write(target, 'results/a.md', 'a, staged\n');
+        run(target, 'add', 'results/a.md');
+      },
     ],
   ];
   for (const [name, add] of cases) {

@@ -1651,10 +1651,12 @@ export async function sameTree(
  * repository.
  *
  * A folder workspace goes when no change stays, as before: environments and
- * caches go with it. A worktree goes only when nothing in it would have kept
- * it: no change, no untracked or ignored file or folder (an environment or a
- * cache too), no staged change, and no folder with its own Git data. So the
- * forced removal never deletes what a plain removal would have kept.
+ * caches go with it. A worktree stays when a plain removal would have kept it:
+ * a tracked or staged change, or a new file that the project's ignore rules do
+ * not ignore (an environment or a cache that is not ignored counts). It also
+ * stays when it holds a folder with its own Git data. Ignored files do not
+ * keep it, as they would not keep a plain removal. Then the forced removal
+ * deletes nothing that a plain removal would have kept.
  */
 export async function release(
   root: string,
@@ -1682,7 +1684,8 @@ export async function release(
       await rm(target, { recursive: true, force: true });
       return true;
     }
-    const kept = await list(
+    // A change, or a new file that the project's own ignore rules do not ignore, with none of Verifold's cache rules.
+    const changed = await list(
       target,
       [
         'status',
@@ -1690,7 +1693,6 @@ export async function release(
         '--porcelain=v1',
         '-z',
         '--untracked-files=all',
-        '--ignored=traditional',
         '--',
         '.',
       ],
@@ -1701,7 +1703,17 @@ export async function release(
       ['diff', '--cached', '--name-only', '-z'],
       repo,
     );
-    if (kept.length || staged.length) return false;
+    // A folder with its own Git data, found without entering it. The worktree's own `.git` is not one.
+    const top = (await readdir(target, { withFileTypes: true }).catch(() => []))
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          entry.name !== '.git' &&
+          !toolFolders.includes(entry.name),
+      )
+      .map((entry) => entry.name);
+    const nested = await nestedRepos(target, top);
+    if (changed.length || staged.length || nested.length) return false;
     // Nothing above stays in the worktree, so the removal does not need to read its own Git data again.
     await git(root, ['worktree', 'remove', '--force', target]);
     return true;
