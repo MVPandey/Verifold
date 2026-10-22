@@ -13,7 +13,9 @@ import { MoreMenu } from './MoreMenu.tsx';
  * The top bar: the project, the money line, search, pause, and links to the
  * project's settings and the person's profile. The project switcher comes
  * with a later slice of #282, so the bar shows none until it works. Search
- * shows when the app gives it, as it does for a lab.
+ * shows when the app gives it, as it does for a lab. In a narrow window,
+ * Settings and Profile move into the ⋯ menu, and the money line goes under
+ * the bar (app.css).
  */
 export function AppHeader({
   project,
@@ -30,7 +32,7 @@ export function AppHeader({
   const tools = useContext(ToolsContext);
   const key = searchKey(onMac);
   return (
-    <header className="header">
+    <header className="header header--app">
       <Logo />
       <span className="header__project">{project}</span>
       <div className="header__spacer" />
@@ -43,7 +45,7 @@ export function AppHeader({
           onClick={tools.openSearch}
         >
           <Magnifier />
-          Search
+          <span className="button__label">Search</span>
           <kbd className="key">{key.label}</kbd>
         </button>
       )}
@@ -68,8 +70,17 @@ export function AppHeader({
       <a className="header__link" href={href.setup('agents')}>
         Profile
       </a>
-      {/* The project menu: its earlier runs, and Start over while a lab is here. */}
+      {/* The project menu: its earlier runs, and Start over while a lab is here. In a narrow window, also Settings and Profile. */}
       <MoreMenu>
+        <a className="more-menu__item header__in-menu" href={href.settings}>
+          Settings
+        </a>
+        <a
+          className="more-menu__item header__in-menu"
+          href={href.setup('agents')}
+        >
+          Profile
+        </a>
         <a className="more-menu__item" href={href.history}>
           History
         </a>

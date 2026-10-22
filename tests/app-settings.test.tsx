@@ -263,13 +263,28 @@ function text(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-await test('the settings page has its own address, and the header links to it', () => {
+await test('the settings page has its own address, and the header links to it in the bar and in the narrow menu', () => {
   assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
   assert.equal(href.settings, '#/settings');
   assert.deepEqual(parseRoute('#/settings/x'), { page: 'unknown' });
+  const html = render(snapshot(compute()), '#/');
   assert.match(
-    render(snapshot(compute()), '#/'),
+    html,
     /<a class="header__link" href="#\/settings">Settings<\/a>/,
+  );
+  // In a narrow window, app.css shows Settings and Profile in the header's ⋯ menu instead of in the bar.
+  const header = html.slice(
+    html.indexOf('<header class="header header--app">'),
+    html.indexOf('</header>'),
+  );
+  const menu = header.slice(header.indexOf('<details class="more-menu">'));
+  assert.match(
+    menu,
+    /<a class="more-menu__item header__in-menu" href="#\/settings">Settings<\/a>/,
+  );
+  assert.match(
+    menu,
+    /<a class="more-menu__item header__in-menu" href="#\/setup\/agents">Profile<\/a>/,
   );
 });
 
