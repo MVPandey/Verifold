@@ -62,6 +62,7 @@ import {
   askers,
   bringGroups,
   labLimits,
+  type Bring,
   type BringList as LabBringList,
   type Brought,
   type Call as LabCall,
@@ -70,7 +71,6 @@ import {
   type Direction as LabDirection,
   type FigureRead,
   type LabView,
-  type UndoneBring,
 } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
 import { runSummary, type RunLogPart, type RunRecord } from '../core/runs.ts';
@@ -104,7 +104,6 @@ import {
   type AgentStatus,
   type BoardPage,
   type BringGroup,
-  type UndoneGroup,
   type BringList,
   type BringRead,
   type Call,
@@ -784,13 +783,11 @@ function broughtByDirection(
   return counts;
 }
 
-/** Each direction's newest undo of a bring-in, by direction. */
-function undoneByDirection(
-  undone: readonly UndoneBring[],
-): Map<string, string> {
+/** When the person last undid a bring-in of each direction, by direction. */
+function undoneByDirection(brings: readonly Bring[]): Map<string, string> {
   const newest = new Map<string, string>();
-  for (const entry of undone)
-    if (entry.undoneAt > (newest.get(entry.direction) ?? ''))
+  for (const entry of brings)
+    if (entry.undoneAt && entry.undoneAt > (newest.get(entry.direction) ?? ''))
       newest.set(entry.direction, entry.undoneAt);
   return newest;
 }
@@ -1552,7 +1549,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
   const brought = broughtByDirection(state.brought);
-  const undone = undoneByDirection(state.undoneBrings);
+  const undone = undoneByDirection(state.brings);
   const directions = keep(state.directions, level.directions, 'directions');
   const kept = new Set(directions.map((entry) => entry.id));
   return {
@@ -1738,83 +1735,52 @@ function bringList(list: LabBringList, branch: string): BringList {
 
 /**
  * A direction's newest bring-ins, oldest first, within their bounds. A
- * bring-in has an undo while it has files that no undo left as they are,
- * and Verifold knows the earlier version of each of them.
+ * bring-in with a record has an undo until the person undoes it, unless a
+ * file and a folder traded places in it. A bring-in without one, from
+ * before undo, shows the files that keep it as their base, and has none.
  */
 function bringHistory(
   state: {
     readonly brought: readonly Brought[];
-    readonly undoneBrings: readonly UndoneBring[];
+    readonly brings: readonly Bring[];
   },
   direction: string,
 ): BringGroup[] {
   const key = (entry: { readonly at: string; readonly commit: string }) =>
     `${entry.at}|${entry.commit}`;
-  const groups = new Map<
-    string,
-    { open: number; known: boolean; undoneAt: string | null }
-  >();
-  for (const entry of state.brought) {
-    if (entry.direction !== direction) continue;
-    const group = groups.get(key(entry)) ?? {
-      open: 0,
-      known: true,
+  const recorded = state.brings.filter(
+    (entry) => entry.direction === direction,
+  );
+  const known = new Set(recorded.map(key));
+  return [
+    ...bringGroups(
+      state.brought.filter((entry) => !known.has(key(entry))),
+      direction,
+    ).map((group) => ({
+      ...group,
+      undoable: false,
       undoneAt: null,
-    };
-    if (entry.keptAt === undefined) {
-      group.open++;
-      if (entry.before === undefined) group.known = false;
-    } else if (entry.keptAt > (group.undoneAt ?? ''))
-      group.undoneAt = entry.keptAt;
-    groups.set(key(entry), group);
-  }
-  for (const entry of state.undoneBrings) {
-    const group = groups.get(key(entry));
-    if (
-      entry.direction === direction &&
-      group &&
-      entry.undoneAt > (group.undoneAt ?? '')
-    )
-      group.undoneAt = entry.undoneAt;
-  }
-  return bringGroups(state.brought, direction)
-    .slice(-apiLimits.bringGroups)
-    .map((group) => {
-      const seen = groups.get(key(group));
-      return {
-        at: group.at,
-        commit: group.commit,
-        paths: group.paths.slice(0, apiLimits.bringPaths),
-        more: Math.max(0, group.paths.length - apiLimits.bringPaths),
-        undoable: seen !== undefined && seen.open > 0 && seen.known,
-        undoneAt: seen?.undoneAt ?? null,
-      };
-    });
-}
-
-/** A direction's newest undone bring-ins, oldest first, within their bounds. */
-function undoneHistory(
-  undone: readonly UndoneBring[],
-  direction: string,
-): UndoneGroup[] {
-  const shown = apiLimits.bringPaths;
-  return undone
-    .filter((entry) => entry.direction === direction)
-    .slice(-apiLimits.bringGroups)
-    .map((entry) => ({
+      swapped: false,
+    })),
+    ...recorded.map((entry) => ({
       at: entry.at,
       commit: entry.commit,
+      paths: entry.files.map((file) => file.path),
+      undoable: !entry.swapped && entry.undoneAt === null,
       undoneAt: entry.undoneAt,
-      restored: entry.restored.slice(0, shown),
-      kept: entry.kept.slice(0, shown),
-      newer: entry.newer.slice(0, shown),
-      failed: entry.failed.slice(0, shown),
-      more:
-        entry.more +
-        Math.max(0, entry.restored.length - shown) +
-        Math.max(0, entry.kept.length - shown) +
-        Math.max(0, entry.newer.length - shown) +
-        Math.max(0, entry.failed.length - shown),
+      swapped: entry.swapped,
+    })),
+  ]
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    .slice(-apiLimits.bringGroups)
+    .map((group) => ({
+      at: group.at,
+      commit: group.commit,
+      paths: group.paths.slice(0, apiLimits.bringPaths),
+      more: Math.max(0, group.paths.length - apiLimits.bringPaths),
+      undoable: group.undoable,
+      undoneAt: group.undoneAt,
+      swapped: group.swapped,
     }));
 }
 
@@ -2338,7 +2304,6 @@ export class ApiReader {
           : null,
       error: typeof read === 'string' ? read : null,
       history: bringHistory(view.state, id),
-      undone: undoneHistory(view.state.undoneBrings, id),
     };
   }
 

@@ -261,9 +261,14 @@
   color: var(--muted);
 }
 
-/* setup.css gives .link-button a 44 px height, and it loads after this file. */
-.link-button.link-button--inline {
+.link-button--inline {
   align-self: auto;
+  min-height: 0;
+}
+
+/* setup.css, which loads later, gives .link-button 44 px. A link in a line of the
+   bring-in page has the line's height instead. Settings keeps the 44 px. */
+.bring-text .link-button--inline {
   min-height: 0;
 }
 

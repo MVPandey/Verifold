@@ -7,7 +7,6 @@ import type {
   Direction,
   Lab,
   Snapshot,
-  UndoneGroup,
 } from '../../protocol/api.ts';
 import {
   bringKey,
@@ -227,109 +226,66 @@ export function BringFiles({
   );
 }
 
-/** Files as one list: "a.md, b.md", with how many the list leaves out. */
-function fileList(paths: readonly string[], more: number): string {
-  return `${paths.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
-}
-
-/**
- * One undo of a bring-in: which files went back, which stayed because the
- * person or a later bring-in changed them, and which could not go back.
- */
-function UndoneLine({ entry }: { readonly entry: UndoneGroup }): ReactNode {
-  const { restored, kept, newer, failed, more } = entry;
-  const one = (files: readonly string[]): boolean => files.length === 1;
-  return (
-    <li>
-      {clock(entry.undoneAt)}: you undid the bring-in of {clock(entry.at)}{' '}
-      <span className="muted">at {entry.commit.slice(0, 7)}</span>.
-      {restored.length > 0 && ` ${restored.join(', ')} went back.`}
-      {kept.length > 0 &&
-        ` ${kept.join(', ')} stayed as ${one(kept) ? 'it is' : 'they are'}, because you changed ${one(kept) ? 'it' : 'them'}.`}
-      {newer.length > 0 &&
-        ` ${newer.join(', ')} stayed as ${one(newer) ? 'it is' : 'they are'}, because a later bring-in changed ${one(newer) ? 'it' : 'them'}. Undo that bring-in first to put ${one(newer) ? 'it' : 'them'} back too.`}
-      {failed.length > 0 &&
-        ` ${failed.join(', ')} could not go back. Undo again to try ${one(failed) ? 'it' : 'them'} once more.`}
-      {more > 0 &&
-        ` ${more} more ${more === 1 ? 'file is' : 'files are'} not listed.`}
-    </li>
-  );
-}
-
 /**
  * The direction's bring-ins so far: when, which files, at which commit, and
- * an undo for each one that has it. Then the bring-ins that the person
- * undid. Without `onUndo`, as when the lab's agents are not here, no undo
- * shows.
+ * whether it was undone. With `onUndo`, a bring-in that has an undo shows
+ * Undo. A field that an older server leaves out shows nothing.
  */
 export function BringHistory({
   history,
-  undone = [],
   onUndo,
   undoBusy = false,
 }: {
   readonly history: readonly BringGroup[];
-  readonly undone?: readonly UndoneGroup[];
   readonly onUndo?: (group: BringGroup) => void;
   readonly undoBusy?: boolean;
 }): ReactNode {
-  if (!history.length && !undone.length) return null;
-  const undoable = onUndo
-    ? history.filter((group) => group.undoable === true)
-    : [];
+  if (!history.length) return null;
+  const undoable = Boolean(onUndo) && history.some((group) => group.undoable);
   return (
     <section className="section" aria-labelledby="brought-title">
       <h2 id="brought-title" className="section__title">
         Brought in
       </h2>
-      {history.length > 0 && (
-        <ul className="bring-history">
-          {history.map((group) => {
-            const key = `${group.at}|${group.commit}`;
-            return (
-              <li key={key}>
-                {clock(group.at)}: {fileList(group.paths, group.more)}{' '}
-                <span className="muted">at {group.commit.slice(0, 7)}</span>
-                {group.undoneAt && (
-                  <span className="muted">
-                    {' '}
-                    · undone at {clock(group.undoneAt)}
-                  </span>
-                )}
-                {onUndo && group.undoable === true && (
-                  <button
-                    type="button"
-                    className="answer__undo bring-history__undo"
-                    disabled={undoBusy}
-                    aria-label={`Undo the bring-in of ${clock(group.at)}`}
-                    onClick={() => onUndo(group)}
-                  >
-                    {group.undoneAt ? 'Undo again' : 'Undo'}
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {undoable.length > 0 && (
+      <ul className="bring-history">
+        {history.map((group) => (
+          <li key={`${group.at}|${group.commit}`}>
+            {clock(group.at)}: {group.paths.join(', ')}
+            {group.more > 0 && ` and ${group.more} more`}{' '}
+            <span className="muted">at {group.commit.slice(0, 7)}</span>
+            {group.undoneAt ? (
+              <span className="muted">
+                {' '}
+                · undone at {clock(group.undoneAt)}
+              </span>
+            ) : group.swapped ? (
+              <span className="muted">
+                {' '}
+                · no undo: a file and a folder traded places
+              </span>
+            ) : (
+              onUndo &&
+              group.undoable === true && (
+                <button
+                  type="button"
+                  className="answer__undo bring-history__undo"
+                  disabled={undoBusy}
+                  aria-label={`Undo the bring-in of ${clock(group.at)}`}
+                  onClick={() => onUndo(group)}
+                >
+                  Undo
+                </button>
+              )
+            )}
+          </li>
+        ))}
+      </ul>
+      {undoable && (
         <p className="bring-text bring-text--fine">
-          Undo puts each file of a bring-in back to the version that it had
-          before. A file that you changed since it came in stays as it is.
+          Undo puts each file of a bring-in back as it was before it came in.
+          When a file changed since, nothing goes back, and Verifold names the
+          file.
         </p>
-      )}
-      {undone.length > 0 && (
-        <>
-          <p className="bring-text">Undone:</p>
-          <ul className="bring-history">
-            {undone.map((entry) => (
-              <UndoneLine
-                key={`${entry.at}|${entry.commit}|${entry.undoneAt}`}
-                entry={entry}
-              />
-            ))}
-          </ul>
-        </>
       )}
     </section>
   );
@@ -455,9 +411,7 @@ export function BringPage({
     setDone(null);
     if (await undo.submit({ at: group.at, commit: group.commit })) {
       if (!undoPending.current)
-        setDone(
-          'The list below shows which files went back, and which stayed as they are and why.',
-        );
+        setDone('Undone. Each file is back as it was before the bring-in.');
       reload();
     }
   };
@@ -603,7 +557,6 @@ export function BringPage({
           {shown && (
             <BringHistory
               history={shown.history}
-              undone={shown.undone ?? []}
               {...(lab.agentsHere
                 ? { onUndo: (group: BringGroup) => void doUndo(group) }
                 : {})}

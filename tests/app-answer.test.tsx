@@ -716,80 +716,77 @@ await test('a bring-in shows its files: code files start unticked with the warni
     text(history),
     /Brought in .*a\.md, b\.md and 3 more at ddddddd/,
   );
-  // An older bring-in from before undo has none.
-  assert.doesNotMatch(history, /Undo/);
+  // A server without undo leaves its fields out: no undo, no mark, no line about undo.
+  assert.doesNotMatch(
+    renderToStaticMarkup(
+      <BringHistory
+        history={[
+          { at: ago(20), commit: 'd'.repeat(40), paths: ['a.md'], more: 0 },
+        ]}
+        onUndo={() => {}}
+      />,
+    ),
+    /<button|undone|no undo|Undo puts/,
+  );
 
-  // A bring-in with an undo shows it only when the page can act, with a line on what it does.
+  // A bring-in with an undo, one that the person undid, and one in which a file and a folder traded places.
   const group = {
     at: ago(20),
     commit: 'd'.repeat(40),
     paths: ['a.md'],
     more: 0,
     undoable: true,
+    undoneAt: null,
+    swapped: false,
   };
-  const acting = renderToStaticMarkup(
-    <BringHistory history={[group]} onUndo={() => {}} />,
-  );
-  assert.match(
-    acting,
-    new RegExp(
-      `aria-label="Undo the bring-in of ${clock(group.at)}">Undo</button>`,
-    ),
-  );
-  assert.match(
-    text(acting),
-    /Undo puts each file of a bring-in back to the version that it had before\. A file that you changed since it came in stays as it is\./,
-  );
-  assert.doesNotMatch(
-    renderToStaticMarkup(<BringHistory history={[group]} />),
-    /Undo/,
-  );
-  // While an action runs, the undo waits.
-  assert.match(
-    renderToStaticMarkup(
-      <BringHistory history={[group]} onUndo={() => {}} undoBusy />,
-    ),
-    /<button[^>]*disabled=""[^>]*>Undo<\/button>/,
-  );
-
-  // An undone bring-in says when, which files went back, which stayed because the person or a later bring-in changed them, and which could not go back.
-  const undone = renderToStaticMarkup(
+  const lines = renderToStaticMarkup(
     <BringHistory
       history={[
-        { ...group, paths: ['c.md'], undoable: false, undoneAt: ago(5) },
-      ]}
-      undone={[
+        group,
         {
-          at: group.at,
-          commit: group.commit,
+          ...group,
+          at: ago(15),
+          paths: ['b.md'],
+          undoable: false,
           undoneAt: ago(5),
-          restored: ['a.md', 'b.md'],
-          kept: ['c.md'],
-          newer: ['e.md'],
-          failed: ['d.md'],
-          more: 2,
+        },
+        {
+          ...group,
+          at: ago(10),
+          paths: ['data', 'data/part.csv'],
+          undoable: false,
+          swapped: true,
         },
       ]}
       onUndo={() => {}}
     />,
   );
-  assert.doesNotMatch(undone, />Undo<\/button>/);
-  assert.match(text(undone), new RegExp(`undone at ${clock(ago(5))}`));
+  // The button's name holds its text and the bring-in's time.
   assert.match(
-    text(undone),
+    lines,
     new RegExp(
-      `${clock(ago(5))}: you undid the bring-in of ${clock(group.at)} at ddddddd ?\\. a\\.md, b\\.md went back\\. c\\.md stayed as it is, because you changed it\\. e\\.md stayed as it is, because a later bring-in changed it\\. Undo that bring-in first to put it back too\\. d\\.md could not go back\\. Undo again to try it once more\\. 2 more files are not listed\\.`,
+      `<button type="button" class="answer__undo bring-history__undo" aria-label="Undo the bring-in of ${clock(ago(20))}">Undo</button>`,
     ),
   );
-  // A bring-in with files that could not go back has its undo again.
+  assert.equal(lines.match(/<button/g)?.length, 1);
+  assert.match(
+    text(lines),
+    new RegExp(`b\\.md at ddddddd · undone at ${clock(ago(5))}`),
+  );
+  assert.match(
+    text(lines),
+    /data, data\/part\.csv at ddddddd · no undo: a file and a folder traded places/,
+  );
+  assert.match(
+    text(lines),
+    /Undo puts each file of a bring-in back as it was before it came in\./,
+  );
+  // While a bring-in or an undo runs, the undo waits.
   assert.match(
     renderToStaticMarkup(
-      <BringHistory
-        history={[{ ...group, undoneAt: ago(5) }]}
-        onUndo={() => {}}
-      />,
+      <BringHistory history={[group]} onUndo={() => {}} undoBusy />,
     ),
-    /class="answer__undo bring-history__undo"[^>]*>Undo again<\/button>/,
+    /<button[^>]*disabled=""[^>]*>Undo<\/button>/,
   );
 });
 
@@ -830,7 +827,6 @@ await test('routes, links, and the reads and actions of the answer and bring-in 
   const none = answerActions(null);
   assert.ok('refused' in (await none.signOff('', 'k')));
   assert.ok('refused' in (await none.bring('d-1', 'c', ['a'], 'k')));
-  assert.ok('refused' in (await none.undo('d-1', ago(1), 'c', 'k')));
   assert.ok('error' in (await none.read('d-1')));
 
   // With one, they send the desk's actions with the person's key.
@@ -852,7 +848,6 @@ await test('routes, links, and the reads and actions of the answer and bring-in 
   await some.signOff('Partly yes.', 'k2');
   await some.look('d-1', 'k3');
   await some.bring('d-1', 'c'.repeat(40), ['a.md'], 'k4');
-  await some.undo('d-1', ago(1), 'c'.repeat(40), 'k5');
   assert.deepEqual(await some.read('d-1'), {
     value: { list: null, error: null, history: [] },
   });
@@ -864,11 +859,6 @@ await test('routes, links, and the reads and actions of the answer and bring-in 
       '/api/v1/actions/lab-bring',
       'POST',
       { direction: 'd-1', commit: 'c'.repeat(40), files: ['a.md'], key: 'k4' },
-    ],
-    [
-      '/api/v1/actions/lab-bring-undo',
-      'POST',
-      { direction: 'd-1', at: ago(1), commit: 'c'.repeat(40), key: 'k5' },
     ],
     ['/api/v1/directions/d-1/bring', 'GET', null],
   ]);

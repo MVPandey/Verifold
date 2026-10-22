@@ -1429,17 +1429,16 @@ export async function copyAt(
  * Copy the selected files of a version into the project. Each file in the
  * project must still match its start content, or nothing is copied. A
  * folder that the version replaces with a file counts as missing when the
- * copy deletes every file in it, and a folder of the version counts as no
- * file. New content goes to temporary files in `.verifold/staging` first,
- * one file at a time. Then the deletions come, so a file can take the place
- * of a folder and a folder the place of a file, and each new file is renamed
- * into place. `bases` names another commit whose content a file must match
- * instead of the start, such as the version that came in before. `versions`
- * names another commit whose content a file gets instead of `version`, and
- * `modes` another mode than its commit's, such as its content and the
- * person's mode before a bring-in, for an undo. `staged` runs after every
- * check passed and every temporary file is written, before the first change
- * in the project. When it throws, nothing is copied.
+ * copy deletes every file in it. New content goes to temporary files in
+ * `.verifold/staging` first, one file at a time. Then the deletions come,
+ * so a file can take the place of a folder and a folder the place of a
+ * file, and each new file is renamed into place. `bases` names another
+ * commit whose content a file must match instead of the start, such as the
+ * version that came in before. `versions` names another commit whose
+ * content a file gets instead of `version`, and `modes` another Git mode
+ * than its commit's, as for an undo. `staged` runs after every check passed
+ * and every temporary file is written, before the first change in the
+ * project. When it throws, nothing is copied.
  */
 export async function integrate(
   root: string,
@@ -1463,7 +1462,6 @@ export async function integrate(
     string,
     { readonly mode: string; readonly id: string; readonly bytes: number }
   >();
-  // A folder of the version is no file: its own files come in under it.
   for (const commit of new Set(paths.map(versionOf)))
     for (const [path, entry] of await treeAt(
       root,
@@ -1471,20 +1469,14 @@ export async function integrate(
       commit,
       paths.filter((path) => versionOf(path) === commit),
     ))
-      if (entry.mode !== '040000') tree.set(path, entry);
+      tree.set(path, entry);
   const deleted = new Set(paths.filter((path) => !tree.has(path)));
   const conflicts: string[] = [];
   for (const path of paths) {
     const destination = join(root, path);
     await contained(root, destination);
-    const stats = await lstat(destination).catch(() => null);
-    const current = !stats
-      ? null
-      : stats.isFile()
-        ? await readFile(destination)
-        : stats.isDirectory() && (await emptied(root, path, deleted))
-          ? null
-          : undefined;
+    const entry = await projectEntry(root, path, deleted);
+    const current = entry ? await readFile(destination) : entry;
     const start = await fileAt(
       repo,
       options.bases?.get(path) ?? workspace.start,
@@ -1521,11 +1513,10 @@ export async function integrate(
       written.push({ temporary, destination: join(root, path) });
     }
     await options.staged?.();
-    for (const path of paths)
-      if (deleted.has(path)) {
-        await rm(join(root, path), { force: true });
-        await removeEmpty(root, dirname(join(root, path)));
-      }
+    for (const path of deleted) {
+      await rm(join(root, path), { force: true });
+      await removeEmpty(root, dirname(join(root, path)));
+    }
     for (const { temporary, destination } of written) {
       await mkdir(dirname(destination), { recursive: true });
       await contained(root, destination);
@@ -1538,10 +1529,44 @@ export async function integrate(
 }
 
 /**
+ * What the project folder has at `path`, as Git sees it: a file with its
+ * Git mode, null when nothing is there, or undefined for anything else,
+ * such as a folder or a link. Git keeps one executable bit: the owner's. A
+ * folder counts as nothing when it holds only files of `deleted`, which a
+ * copy deletes, so that a file can take its place. Throws when Verifold
+ * cannot read the path.
+ */
+export async function projectEntry(
+  root: string,
+  path: string,
+  deleted?: ReadonlySet<string>,
+): Promise<{ readonly mode: '100644' | '100755' } | null | undefined> {
+  let stats;
+  try {
+    stats = await lstat(join(root, path));
+  } catch (error) {
+    // A file in the place of a folder on the path leaves nothing there too.
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+    )
+      return null;
+    throw error;
+  }
+  if (stats.isFile()) return { mode: stats.mode & 0o100 ? '100755' : '100644' };
+  return stats.isDirectory() &&
+    deleted !== undefined &&
+    (await emptied(root, path, deleted))
+    ? null
+    : undefined;
+}
+
+/**
  * The folder at `path` holds only files that this copy deletes, so a file
  * can take its place.
  */
-export async function emptied(
+async function emptied(
   root: string,
   path: string,
   deleted: ReadonlySet<string>,
@@ -1593,7 +1618,8 @@ export async function clearStaged(root: string): Promise<void> {
 
 /**
  * The mode, blob ID, and size of these files at a commit, by path. A path
- * that the commit does not have is not in the map. A submodule has no size.
+ * that the commit does not have is not in the map, and a folder of the
+ * commit is no file. A submodule has no size.
  */
 export async function treeAt(
   root: string,
@@ -1629,6 +1655,7 @@ export async function treeAt(
       // An entry is `<mode> <type> <id> <size>\t<path>`, and the path can hold a tab itself.
       const tab = line.indexOf('\t');
       const [mode = '', , id = '', size = ''] = line.slice(0, tab).split(/ +/);
+      if (mode === '040000') continue;
       found.set(line.slice(tab + 1), {
         mode,
         id,

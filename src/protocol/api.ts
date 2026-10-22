@@ -911,41 +911,22 @@ export interface BringList {
   readonly omitted: number;
 }
 
-/** One bring-in of a direction: when, at which commit, and the files that keep it as their base. */
+/**
+ * One bring-in of a direction: when, at which commit, and its files. A
+ * bring-in from before undo lists the files that keep it as their base.
+ */
 export interface BringGroup {
   readonly at: string;
   readonly commit: string;
   readonly paths: readonly string[];
   /** Paths that the group leaves out past its bound. */
   readonly more: number;
-  /**
-   * The person can undo it (`lab-bring-undo`): Verifold knows the earlier
-   * version of each of its files that an undo did not leave as it is.
-   * Added after version 1.
-   */
+  /** The person can undo it with `lab-bring-undo`. Added after version 1. */
   readonly undoable?: boolean;
-  /** When the person last undid it, or null. Added after version 1. */
+  /** When the person undid it, or null. Added after version 1. */
   readonly undoneAt?: string | null;
-}
-
-/**
- * An undo of a bring-in: when the bring-in came in and at which commit,
- * when the person undid it, the files that went back, the files that stayed
- * because the person changed them or a later bring-in changed them, and the
- * files that Verifold could not put back. Added after version 1.
- */
-export interface UndoneGroup {
-  readonly at: string;
-  readonly commit: string;
-  readonly undoneAt: string;
-  readonly restored: readonly string[];
-  readonly kept: readonly string[];
-  /** An undo of the later bring-in first lets these go back too. */
-  readonly newer: readonly string[];
-  /** Another undo of the bring-in tries these again. */
-  readonly failed: readonly string[];
-  /** Paths that the lists leave out. */
-  readonly more: number;
+  /** A file and a folder traded places in it, so it has no undo. Added after version 1. */
+  readonly swapped?: boolean;
 }
 
 /**
@@ -958,8 +939,6 @@ export interface BringRead {
   readonly error: string | null;
   /** The direction's bring-ins so far, oldest first. */
   readonly history: readonly BringGroup[];
-  /** The direction's bring-ins that the person undid, oldest first. Added after version 1. */
-  readonly undone?: readonly UndoneGroup[];
 }
 
 /**
@@ -1303,8 +1282,8 @@ export interface ActionBodies {
   };
   /**
    * Undo a bring-in of a direction, named by its `at` and `commit`: each of
-   * its files goes back to its earlier version, unless the person changed it
-   * since. Added after version 1.
+   * its files gets back what it had before, all of them or none. Added
+   * after version 1.
    */
   'lab-bring-undo': {
     readonly direction: string;

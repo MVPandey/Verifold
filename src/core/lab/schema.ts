@@ -93,12 +93,11 @@ export const labLimits = {
   recordText: 2_500_000,
   /** Files of one bring-in. */
   bringFiles: 1000,
-  /** Undone bring-ins in the lab's record: the newest ones stay. */
-  undoneBrings: 20,
-  /** Files that the record of one undo names in all its lists: the files that stayed come first. */
-  undonePaths: 100,
-  /** Earlier bring-ins of one file that the record keeps for an undo, the newest first. */
-  bringSteps: 10,
+  /**
+   * Files that the records of bring-ins hold in all, for their history and
+   * undo. The oldest bring-ins go first, and the newest one always stays.
+   */
+  bringRecords: 2000,
   /** Directions in a sign-off. */
   signoffDirections: 500,
 };
@@ -226,82 +225,55 @@ export interface LabState {
   readonly calls: readonly Call[];
   /** The files that the person brought into the project folder, oldest first. */
   readonly brought: readonly Brought[];
+  /** The newest bring-ins, oldest first, for their history and undo. */
+  readonly brings: readonly Bring[];
   /** A bring-in, or its undo, that Verifold began and did not end. */
   readonly bringing: Bringing | null;
-  /** The bring-ins that the person undid, oldest first. */
-  readonly undoneBrings: readonly UndoneBring[];
   /** The person's newest sign-off of the lab's answer. */
   readonly signoff: Signoff | null;
 }
 
 /**
- * One bring-in of a file from a direction: the commit that it came from,
- * when, the bring-in of the file before it, and the mode that the project
- * file had before it.
+ * A file that the person brought in from a direction: the commit that it
+ * came from, and when. It is the file's base for the next bring-in from that
+ * direction, so a later bring-in of the same file replaces it.
  */
-export interface BroughtStep {
-  readonly commit: string;
-  readonly at: string;
-  /**
-   * The bring-in of this file from this direction that came before it, or
-   * null when the file had the direction's start content before. An undo
-   * puts that back. Undefined: Verifold did not record it, so this bring-in
-   * has no undo.
-   */
-  readonly before?: BroughtStep | null;
-  /**
-   * The mode of the project file before this bring-in, '100644' or
-   * '100755', or null when the project had no file there. An undo gives the
-   * file this mode again. Undefined: Verifold did not record it, and an undo
-   * gives the mode of the earlier commit.
-   */
-  readonly beforeMode?: string | null;
-}
-
-/**
- * A file that the person brought in from a direction. It is the file's base
- * for the next bring-in from that direction, so a later bring-in of the
- * same file replaces it, and keeps it as its step before.
- */
-export interface Brought extends BroughtStep {
+export interface Brought {
   readonly direction: string;
   readonly path: string;
-  /**
-   * When an undo of this bring-in left the file as it is, because the person
-   * changed it after it came in. A second undo of the bring-in skips it.
-   */
-  readonly keptAt?: string;
+  readonly commit: string;
+  readonly at: string;
 }
 
 /**
- * An undo of a bring-in, named by the bring-in's direction, time, and
- * commit: the files that went back, the files that stayed because the
- * person changed them after they came in or a later bring-in changed them,
- * and the files that Verifold could not put back. The lists name at most
- * `labLimits.undonePaths` files in all.
+ * A bring-in: what each of its files had before it came in, so that an undo
+ * can put that back.
  */
-export interface UndoneBring {
+export interface Bring {
   readonly direction: string;
   readonly commit: string;
   readonly at: string;
-  readonly undoneAt: string;
-  /** The files that went back. */
-  readonly restored: readonly string[];
-  /** The files that the person changed since. */
-  readonly kept: readonly string[];
-  /** The files that a later bring-in from the direction changed. An undo of that bring-in first lets them go back too. */
-  readonly newer: readonly string[];
-  /** The files that Verifold could not put back. Another undo tries them again. */
-  readonly failed: readonly string[];
-  /** The files that the lists leave out. */
-  readonly more: number;
+  /**
+   * Each file that came in, with its base then: the bring-in that it came
+   * from last time, or null for the direction's start. The project file had
+   * the base's content and `mode`, or there was no file when `mode` is null.
+   */
+  readonly files: readonly {
+    readonly path: string;
+    readonly base: { readonly commit: string; readonly at: string } | null;
+    readonly mode: string | null;
+  }[];
+  /** A file and a folder traded places in it, so it has no undo. */
+  readonly swapped: boolean;
+  /** When the person undid it, or null. */
+  readonly undoneAt: string | null;
 }
 
 /**
- * A bring-in that Verifold began. `checking`: Verifold compares the files
- * and writes temporary copies; the project has none of them yet. `copying`:
- * every file passed, and Verifold changes the project. After a stop in the
- * middle, the next start finishes the copy.
+ * A bring-in, or its undo, that Verifold began. `checking`: Verifold
+ * compares the files and writes temporary copies. The project has none of
+ * them yet. `copying`: every file passed, and Verifold changes the project.
+ * After a stop in the middle, the next start finishes the copy.
  */
 export interface Bringing {
   readonly direction: string;
@@ -309,30 +281,16 @@ export interface Bringing {
   readonly files: readonly string[];
   readonly at: string;
   readonly phase: 'checking' | 'copying';
-  /** A bring-in: the mode of each project file before the copy, or null when it had none. */
+  /**
+   * A bring-in: the Git mode of each project file before the copy, or null
+   * when there was no file. A record from before undo has none.
+   */
   readonly modes?: readonly {
     readonly path: string;
     readonly mode: string | null;
   }[];
-  /**
-   * An undo of the bring-in at `at` of `commit`: each file goes back from
-   * the content of `commit` to the content of its `to` commit, with its
-   * earlier mode when Verifold knows it.
-   */
-  readonly undo?: {
-    readonly at: string;
-    readonly to: readonly {
-      readonly path: string;
-      readonly commit: string;
-      readonly mode?: string;
-    }[];
-    /** The files of the bring-in that the person changed since: they stay as they are. */
-    readonly kept: readonly string[];
-    /** The files of the bring-in that a later bring-in changed: they stay as they are. */
-    readonly newer: readonly string[];
-    /** The files that Verifold could not read before the copy: they stay as they are. */
-    readonly unread: readonly string[];
-  };
+  /** An undo of the bring-in of `commit` at `at`: each file gets back what it had before. */
+  readonly undo?: { readonly at: string };
 }
 
 /** The person's sign-off of the lab's answer: each direction's verdict, its newest commit, and the check behind it. */
@@ -1475,145 +1433,84 @@ function recordTime(value: unknown): string | null {
     : null;
 }
 
-/** A file mode in a lab record: '100644', '100755', null, or undefined for anything else. */
-function parseMode(value: unknown): string | null | undefined {
-  if (value === null) return null;
-  return value === '100644' || value === '100755' ? value : undefined;
+function parseBrought(value: unknown): Brought | null {
+  const entry = object(value);
+  const at = recordTime(entry?.at);
+  const path = recordPath(entry?.path);
+  return entry &&
+    at &&
+    path &&
+    typeof entry.direction === 'string' &&
+    directionId.test(entry.direction) &&
+    typeof entry.commit === 'string' &&
+    commitId.test(entry.commit)
+    ? { direction: entry.direction, path, commit: entry.commit, at }
+    : null;
 }
 
-/**
- * A bring-in of a file, with the steps before it up to
- * `labLimits.bringSteps`. Null: the direction's start. Undefined: no
- * readable step, so no undo.
- */
-function parseStep(value: unknown, depth = 0): BroughtStep | null | undefined {
-  if (value === null) return null;
+/** A file's Git mode in a lab record: '100644', '100755', or null for no file. */
+function recordMode(value: unknown): string | null | undefined {
+  return value === null || value === '100644' || value === '100755'
+    ? value
+    : undefined;
+}
+
+function parseBring(value: unknown): Bring | null {
   const entry = object(value);
   const at = recordTime(entry?.at);
   if (
     !entry ||
     !at ||
-    typeof entry.commit !== 'string' ||
-    !commitId.test(entry.commit)
-  )
-    return undefined;
-  // Past the limit, only the direction's start stays as the step before.
-  const before =
-    entry.before === null
-      ? null
-      : depth < labLimits.bringSteps
-        ? parseStep(entry.before, depth + 1)
-        : undefined;
-  const beforeMode = parseMode(entry.beforeMode);
-  return {
-    commit: entry.commit,
-    at,
-    ...(before === undefined ? {} : { before }),
-    ...(beforeMode === undefined ? {} : { beforeMode }),
-  };
-}
-
-function parseBrought(value: unknown): Brought | null {
-  const entry = object(value);
-  const path = recordPath(entry?.path);
-  const step = parseStep(value);
-  if (
-    !entry ||
-    !path ||
-    !step ||
     typeof entry.direction !== 'string' ||
-    !directionId.test(entry.direction)
+    !directionId.test(entry.direction) ||
+    typeof entry.commit !== 'string' ||
+    !commitId.test(entry.commit) ||
+    !Array.isArray(entry.files)
   )
     return null;
-  const keptAt = recordTime(entry.keptAt);
-  return {
-    direction: entry.direction,
-    path,
-    ...step,
-    ...(keptAt ? { keptAt } : {}),
-  };
-}
-
-function parseUndone(value: unknown): UndoneBring | null {
-  const entry = object(value);
-  const at = recordTime(entry?.at);
-  const undoneAt = recordTime(entry?.undoneAt);
-  const paths = (list: unknown): string[] =>
-    Array.isArray(list)
-      ? list
-          .flatMap((path) => recordPath(path) ?? [])
-          .slice(0, labLimits.undonePaths)
+  const files = entry.files.flatMap((item): Bring['files'][number][] => {
+    const file = object(item);
+    const path = recordPath(file?.path);
+    const mode = recordMode(file?.mode);
+    const base = object(file?.base);
+    const baseAt = recordTime(base?.at);
+    if (!path || mode === undefined) return [];
+    if (file?.base === null) return [{ path, base: null, mode }];
+    return base &&
+      baseAt &&
+      typeof base.commit === 'string' &&
+      commitId.test(base.commit)
+      ? [{ path, base: { commit: base.commit, at: baseAt }, mode }]
       : [];
-  return entry &&
-    at &&
-    undoneAt &&
-    typeof entry.direction === 'string' &&
-    directionId.test(entry.direction) &&
-    typeof entry.commit === 'string' &&
-    commitId.test(entry.commit)
+  });
+  // A bring-in whose files Verifold cannot read in full has no record: it would undo only a part.
+  return files.length &&
+    files.length === entry.files.length &&
+    files.length <= labLimits.bringFiles
     ? {
         direction: entry.direction,
         commit: entry.commit,
         at,
-        undoneAt,
-        restored: paths(entry.restored),
-        kept: paths(entry.kept),
-        newer: paths(entry.newer),
-        failed: paths(entry.failed),
-        more:
-          Number.isSafeInteger(entry.more) && (entry.more as number) > 0
-            ? (entry.more as number)
-            : 0,
+        files,
+        swapped: entry.swapped === true,
+        undoneAt: recordTime(entry.undoneAt),
       }
     : null;
 }
 
-/** The modes of a bring-in's project files before its copy, or nothing. */
-function parseModes(value: unknown): Pick<Bringing, 'modes'> {
-  if (!Array.isArray(value)) return {};
-  return {
-    modes: value
-      .flatMap((item) => {
-        const entry = object(item);
-        const path = recordPath(entry?.path);
-        const mode = parseMode(entry?.mode);
-        return path && mode !== undefined ? [{ path, mode }] : [];
-      })
-      .slice(0, labLimits.bringFiles),
-  };
-}
-
-/** An undo in a bring-in record, or nothing when the record is a bring-in. */
-function parseUndo(value: unknown): Pick<Bringing, 'undo'> {
-  const entry = object(value);
-  const at = recordTime(entry?.at);
-  if (!entry || !at || !Array.isArray(entry.to)) return {};
-  const paths = (list: unknown): string[] =>
-    Array.isArray(list)
-      ? list
-          .flatMap((path) => recordPath(path) ?? [])
-          .slice(0, labLimits.bringFiles)
-      : [];
-  return {
-    undo: {
-      at,
-      to: entry.to
-        .flatMap((item) => {
-          const back = object(item);
-          const path = recordPath(back?.path);
-          const mode = parseMode(back?.mode);
-          return path &&
-            typeof back?.commit === 'string' &&
-            commitId.test(back.commit)
-            ? [{ path, commit: back.commit, ...(mode ? { mode } : {}) }]
-            : [];
-        })
-        .slice(0, labLimits.bringFiles),
-      kept: paths(entry.kept),
-      newer: paths(entry.newer),
-      unread: paths(entry.unread),
-    },
-  };
+/**
+ * The records of bring-ins that the lab keeps: the newest ones, with at most
+ * `labLimits.bringRecords` files in all, and always the newest one.
+ */
+export function keptBrings(list: readonly Bring[]): readonly Bring[] {
+  let files = 0;
+  let from = list.length;
+  while (from > 0) {
+    files += list[from - 1]?.files.length ?? 0;
+    if (from < list.length && files > labLimits.bringRecords) break;
+    from -= 1;
+  }
+  return list.slice(from);
 }
 
 function parseSignoff(value: unknown): Signoff | null {
@@ -1780,6 +1677,7 @@ export function parseState(
     bringing: (() => {
       const entry = object(value.bringing);
       const at = recordTime(entry?.at);
+      const undoAt = recordTime(object(entry?.undo)?.at);
       return entry &&
         at &&
         typeof entry.direction === 'string' &&
@@ -1796,15 +1694,30 @@ export function parseState(
               .slice(0, labLimits.bringFiles),
             at,
             phase: entry.phase,
-            ...parseModes(entry.modes),
-            ...parseUndo(entry.undo),
+            ...(Array.isArray(entry.modes)
+              ? {
+                  modes: entry.modes
+                    .flatMap((item) => {
+                      const file = object(item);
+                      const path = recordPath(file?.path);
+                      const mode = recordMode(file?.mode);
+                      return path && mode !== undefined ? [{ path, mode }] : [];
+                    })
+                    .slice(0, labLimits.bringFiles),
+                }
+              : {}),
+            ...(undoAt ? { undo: { at: undoAt } } : {}),
           }
         : null;
     })(),
-    undoneBrings: Array.isArray(value.undoneBrings)
-      ? value.undoneBrings
-          .flatMap((item) => parseUndone(item) ?? [])
-          .slice(-labLimits.undoneBrings)
+    // A lab from before undo has none.
+    brings: Array.isArray(value.brings)
+      ? keptBrings(
+          value.brings.flatMap((item) => {
+            const entry = parseBring(item);
+            return entry ? [entry] : [];
+          }),
+        )
       : [],
     signoff: parseSignoff(value.signoff),
   };

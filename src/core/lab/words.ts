@@ -5,16 +5,20 @@
  */
 import { createHash } from 'node:crypto';
 import { boardLimits, clip, safePath, type NewPost } from '../board.ts';
-import { type SessionRecord, usdValue } from '../session.ts';
+import {
+  SessionActionError,
+  type SessionRecord,
+  usdValue,
+} from '../session.ts';
 import {
   type ChangedFile,
   scratch,
+  WorkspaceError,
   limits as workspaceLimits,
 } from '../workspaces.ts';
 import {
-  type Bringing,
+  type Bring,
   type Brought,
-  type BroughtStep,
   type Call,
   type Direction,
   type Evidence,
@@ -188,92 +192,104 @@ export const stoppedText =
 export const movingText =
   'Verifold is moving the lab to the archive. Try again in a moment.';
 
-/** A bring-in that Start over stopped before the copy: the lab moves to the archive, so a retry is no help. */
 export const bringStoppedText =
   'Nothing came in: Start over stopped the bring-in.';
 
-/** An undo of a bring-in that Start over stopped before the copy. */
 export const undoStoppedText =
   'Nothing went back: Start over stopped the undo.';
 
+/** Why an undo puts nothing back: files that changed after they came in. */
+export function undoChangedText(files: readonly string[]): string {
+  return files.length === 1
+    ? `This file changed after it came in, so nothing went back: ${nameList(files)}.`
+    : `These files changed after they came in, so nothing went back: ${nameList(files)}.`;
+}
+
+/** Plain reasons for a copy into the project folder that failed, by error code. */
+const copyErrors: Readonly<Record<string, string>> = {
+  EACCES: 'Verifold may not read or write there.',
+  EPERM: 'Verifold may not read or write there.',
+  EROFS: 'The project folder is read-only.',
+  ENOSPC: 'The disk is full.',
+  EDQUOT: 'The disk is full.',
+  EEXIST: 'A file or folder is in the way.',
+  ENOTDIR: 'A file is in the place of a folder.',
+  EISDIR: 'A folder is in the place of a file.',
+  ENOTEMPTY: 'A folder is in the way.',
+  EBUSY: 'A file is in use.',
+};
+
 /**
- * A bring-in as the step before a newer one: without its direction, path,
- * and mark, and with at most `depth` steps before it. Past that depth a step
- * has no record before it, so it has no undo.
+ * Why a copy into the project folder failed, in plain words: Verifold's own
+ * message, or a reason by the error's code. The text of Git and of the
+ * system stays out.
  */
-function stepOf(entry: BroughtStep, depth: number): BroughtStep {
-  const { commit, at, before, beforeMode } = entry;
-  return {
-    commit,
-    at,
-    ...(before === null
-      ? { before: null }
-      : before && depth > 0
-        ? { before: stepOf(before, depth - 1) }
-        : {}),
-    ...(beforeMode === undefined ? {} : { beforeMode }),
-  };
+export function copyReason(error: unknown): string {
+  if (error instanceof SessionActionError) return error.message;
+  // Verifold's own checks have no cause. A Git command that failed has one.
+  if (error instanceof WorkspaceError)
+    return error.cause === undefined
+      ? error.message
+      : 'Verifold could not read the files in Git.';
+  const code =
+    error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : '';
+  return copyErrors[code] ?? 'Verifold could not copy the files.';
+}
+
+/** A file and a folder trade places among these paths: one of them is a folder above another. */
+export function tradesPlaces(paths: readonly string[]): boolean {
+  const all = new Set(paths);
+  return paths.some((path) => {
+    for (let at = path.indexOf('/'); at !== -1; at = path.indexOf('/', at + 1))
+      if (all.has(path.slice(0, at))) return true;
+    return false;
+  });
 }
 
 /**
- * The bring-ins with the files of `record` that came in: each file of a
- * direction keeps only its newest bring-in, with the bring-ins before it for
- * an undo, and the mode that the project file had before the copy. Without
- * files, the same list.
+ * The bring-ins with the files of `record` that came in at `at`: each file
+ * of a direction keeps only its newest base. Without files, the same list.
  */
 export function withBrought(
   list: readonly Brought[],
-  record: Pick<Bringing, 'direction' | 'commit' | 'modes'>,
+  record: { readonly direction: string; readonly commit: string },
   done: readonly string[],
+  at: string,
 ): readonly Brought[] {
   if (!done.length) return list;
-  const at = new Date().toISOString();
   const now = new Set(done);
-  const earlier = new Map(
-    list.flatMap((entry) =>
-      entry.direction === record.direction && now.has(entry.path)
-        ? [[entry.path, stepOf(entry, labLimits.bringSteps - 1)] as const]
-        : [],
-    ),
-  );
-  const modes = new Map(
-    (record.modes ?? []).map((entry) => [entry.path, entry.mode] as const),
-  );
   return [
     ...list.filter(
       (entry) => entry.direction !== record.direction || !now.has(entry.path),
     ),
-    ...done.map((path) => {
-      const mode = modes.get(path);
-      return {
-        direction: record.direction,
-        path,
-        commit: record.commit,
-        at,
-        before: earlier.get(path) ?? null,
-        ...(mode === undefined ? {} : { beforeMode: mode }),
-      };
-    }),
+    ...done.map((path) => ({
+      direction: record.direction,
+      path,
+      commit: record.commit,
+      at,
+    })),
   ];
 }
 
 /**
- * The bring-ins after an undo of a direction's files: each file that went
- * back has the bring-in before it again, with that bring-in's own steps and
- * mode, or none when it had the direction's start content.
+ * The bring-ins after an undo of these files of a direction: each file has
+ * its base from before the bring-in again, or none for the direction's
+ * start.
  */
 export function undoneBrought(
   list: readonly Brought[],
   direction: string,
-  restored: readonly Brought[],
+  files: Bring['files'],
 ): readonly Brought[] {
-  const back = new Set(restored.map((entry) => entry.path));
+  const back = new Set(files.map((file) => file.path));
   return [
     ...list.filter(
       (entry) => entry.direction !== direction || !back.has(entry.path),
     ),
-    ...restored.flatMap((entry) =>
-      entry.before ? [{ direction, path: entry.path, ...entry.before }] : [],
+    ...files.flatMap((file) =>
+      file.base ? [{ direction, path: file.path, ...file.base }] : [],
     ),
   ];
 }
