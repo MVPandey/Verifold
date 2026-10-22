@@ -54,6 +54,11 @@ export function askers(call: Call): string[] {
   ];
 }
 
+/** The directions of the agents that asked a call: the first asker's, then those of the agents that joined. */
+export function askerDirections(call: Call): (string | null)[] {
+  return [call.direction, ...call.joined.map((asker) => asker.direction)];
+}
+
 /**
  * Two calls ask for the same thing: the same kind, the same need, and the
  * same effects, with domains compared as sets. A pod is for one direction,
