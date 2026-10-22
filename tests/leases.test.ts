@@ -285,6 +285,8 @@ async function setup(
   api: Awaited<ReturnType<typeof fakeRunPod>>;
   clock: { now: number };
   lines: string[];
+  /** The lines of the changes that wake agents. */
+  woke: string[];
   restart: () => Promise<Compute>;
 }> {
   const api = await fakeRunPod(t);
@@ -313,13 +315,17 @@ async function setup(
   });
   const clock = options.clock ?? { now: Date.parse('2026-10-05T12:00:00Z') };
   const lines: string[] = [];
+  const woke: string[] = [];
   const make = async (): Promise<Compute> => {
     const compute = new Compute(root, {
       store,
       url: api.url,
       programs: { keyscan, ssh },
       now: () => clock.now,
-      onChange: (_lease, line) => lines.push(line),
+      onChange: (_lease, line, wake) => {
+        lines.push(line);
+        if (wake) woke.push(line);
+      },
       ...(options.month ? { month: options.month(root) } : {}),
     });
     await compute.load();
@@ -342,7 +348,7 @@ async function setup(
     ],
     ...limits,
   });
-  return { root, compute, api, clock, lines, restart: make };
+  return { root, compute, api, clock, lines, woke, restart: make };
 }
 
 const ask = {
@@ -461,6 +467,32 @@ await test('a request must fit the limits, and only the person approves it', asy
     host: '203.0.113.7',
     port: 22001,
   });
+});
+
+await test('an approval wakes the agents once: when the pod is ready, or when RunPod does not create it', async (t) => {
+  const { compute, api, woke } = await setup(t);
+  const leases = compute.leases;
+  const lease = await leases.request(ask);
+  const before = woke.length;
+  // The approval and the create are no news yet: the pod does not run.
+  await leases.approve(lease.id);
+  assert.equal(woke.length, before);
+  await leases.poll();
+  await leases.poll();
+  assert.equal(leases.get(lease.id).state, 'ready');
+  assert.equal(woke.length, before + 1);
+  assert.match(
+    woke.at(-1) ?? '',
+    /^lease-1: The pod is ready, with SSH at 203\.0\.113\.7:22001\./,
+  );
+  // A create that fails wakes them at once.
+  await leases.end(lease.id, 'person', 'Done.');
+  api.mode.create = 'capacity';
+  const failed = await leases.request({ ...ask, tasks: ['task-3'] });
+  const at = woke.length;
+  assert.equal((await leases.approve(failed.id)).state, 'failed');
+  assert.equal(woke.length, at + 1);
+  assert.match(woke.at(-1) ?? '', /^lease-2: RunPod did not create the pod\./);
 });
 
 await test('Verifold stops an idle pod, starts it again, and deletes it at the end of the lease', async (t) => {

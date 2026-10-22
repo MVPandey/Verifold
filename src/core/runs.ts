@@ -144,7 +144,7 @@ export interface PodRuns {
   start(lease: string, run: string, script: string): Promise<void>;
   state(lease: string, run: string): Promise<PodRunState>;
   stop(lease: string, run: string, signal: 'TERM' | 'KILL'): Promise<void>;
-  /** The job's log: its first `head` and last `tail` bytes, and its size on the pod. */
+  /** The job's log as the pod wrote it: its first `head` and last `tail` bytes, and its size on the pod. */
   log(
     lease: string,
     run: string,
@@ -152,8 +152,8 @@ export interface PodRuns {
     tail: number,
   ): Promise<{
     readonly bytes: number;
-    readonly head: string;
-    readonly tail: string | null;
+    readonly head: Buffer;
+    readonly tail: Buffer | null;
   }>;
   /** The `METRIC` lines of the job's log. */
   metrics(lease: string, run: string): Promise<string>;
@@ -803,6 +803,10 @@ function noCollected(): { readonly kept: Collected; readonly log: LogResult } {
   return { kept: { metrics: new Map(), outputs: [], note: null }, log: noLog };
 }
 
+/** The note when the stop of a pod run's job did not reach its pod. */
+const unreachedText =
+  'Verifold could not reach the pod to stop the job. The job can continue to run until the pod stops.';
+
 export interface RunLedgerOptions {
   /** Null: this computer has no sandbox, so local runs are refused. */
   readonly sandbox: Sandbox | null;
@@ -820,7 +824,7 @@ export interface RunLedgerOptions {
    * call's caller tells the agent, then calls `told`.
    */
   readonly ended: (run: RunRecord) => boolean;
-  /** One minute of a run's time limit. */
+  /** One minute: of a run's time limit, of the time that a stopped job gets to end, and of the 10 minutes that a pod can be out of reach. */
   readonly minuteMs?: number;
   /** The home folder whose credential paths a run cannot read. */
   readonly home?: string;
@@ -972,7 +976,8 @@ export class RunLedger {
    * A pod run that an earlier owner left, as owned background work: a job
    * that ended gives its exit code, and a job that runs stops as
    * interrupted. Then its outputs and log come back, as far as the pod still
-   * answers, and the run ends in the lab's queue.
+   * answers, and the run ends in the lab's queue. A job that left no file
+   * did not start, so its run takes no outputs and its copy goes.
    */
   private recoverPod(run: RunRecord, lease: string): Promise<void> {
     const work = (async () => {
@@ -980,25 +985,62 @@ export class RunLedger {
       let exit: Exit = { code: null, signal: null, error: null };
       let stop: Live['stop'] = 'interrupted';
       let note = 'Verifold stopped while the run ran.';
-      // A pod that does not answer gives nothing back, so no copy waits for it.
+      // The pod answered, so its files can come back.
       let reached = false;
+      // A SIGKILL that the pod answered reached the job's process group.
+      let killed = false;
+      // The job's state once a read showed its end. Null: no read did.
+      let state: PodRunState | null = null;
+      // The job ran: a read found its files. Without a read, only a run that was running did.
+      let ran = run.status !== 'queued';
+      // The job ended by itself before Verifold read it, so its exit code counts. A job that Verifold stopped is interrupted.
+      let done = false;
       const guard = pods ? await pods.guard(lease) : null;
       if (pods)
         try {
-          const state = await pods.state(lease, run.folder);
-          if (state.state === 'done') {
-            stop = null;
-            exit = { code: state.exit, signal: null, error: null };
-          } else if (state.state === 'running')
-            await this.stopJob(pods, lease, run.folder);
+          state = await pods.state(lease, run.folder);
           reached = true;
+          ran = state.state !== 'none';
+          done = state.state === 'done';
+          if (state.state === 'running')
+            state = await this.stopJob(pods, lease, run.folder);
         } catch (error) {
           note = `Verifold stopped while the run ran, and could not read its job on the pod after: ${error instanceof Error ? error.message : 'unknown error'}`;
+          // A job that can still run gets a stop. A pod that answers it shows what the job did.
+          const stopped = await this.stopLost(pods, lease, run.folder);
+          if (stopped === 'unreached') note = `${note} ${unreachedText}`;
+          if (stopped === 'stopped') {
+            reached = true;
+            killed = true;
+            state = await this.endState(pods, lease, run.folder);
+            if (state) ran = state.state !== 'none';
+          }
         }
-      const collected =
-        pods && guard && reached
-          ? await this.collectPod(run, pods, lease, guard)
-          : noCollected();
+      if (done && state?.state === 'done') {
+        stop = null;
+        exit = { code: state.exit, signal: null, error: null };
+      } else if (state?.state === 'gone')
+        note = `${note} The job on the pod ended without an exit code, so how it ended is not known.`;
+      else if (state?.state === 'none')
+        note =
+          run.status === 'queued'
+            ? 'Verifold stopped before the run started.'
+            : 'Verifold stopped while the run ran, and the pod has no file of its job.';
+      let collected = noCollected();
+      if (pods && guard && reached) {
+        // A job that did not start leaves only the copy of the commit, which is no output.
+        if (state?.state === 'none')
+          await pods.remove(lease, run.folder).catch(() => {});
+        else
+          collected = await this.collectPod(
+            run,
+            pods,
+            lease,
+            guard,
+            { killed, ended: state !== null },
+            ran,
+          );
+      }
       // A folder that cannot go stays. The record ends all the same.
       await this.clear(run).catch(() => {});
       await this.end(run, {
@@ -1034,7 +1076,7 @@ export class RunLedger {
   ): Promise<PodRunState | null> {
     const from = Date.now();
     await pods.stop(lease, folder, 'TERM').catch(() => {});
-    while (Date.now() - from < 60_000) {
+    while (Date.now() - from < (this.options.minuteMs ?? 60_000)) {
       await delay(500);
       const state = await pods.state(lease, folder).catch(() => null);
       if (state && state.state !== 'running') return state;
@@ -1042,6 +1084,42 @@ export class RunLedger {
         await pods.stop(lease, folder, 'KILL').catch(() => {});
     }
     return null;
+  }
+
+  /**
+   * The state of a pod run's job once a read shows that it ended, after a
+   * stop. Null when no read shows that within 10 seconds.
+   */
+  private async endState(
+    pods: PodRuns,
+    lease: string,
+    folder: string,
+  ): Promise<PodRunState | null> {
+    for (let tries = 0; tries < 20; tries++) {
+      const state = await pods.state(lease, folder).catch(() => null);
+      if (state && state.state !== 'running') return state;
+      await delay(Math.min(500, this.options.pollMs ?? 500));
+    }
+    return null;
+  }
+
+  /**
+   * Stop the job of a pod run that Verifold lost sight of. `stopped`: the
+   * pod answered the stop. `gone`: the pod does not run, so the job ended
+   * with it. `unreached`: the pod did not answer, so the job can still run.
+   */
+  private stopLost(
+    pods: PodRuns,
+    lease: string,
+    folder: string,
+  ): Promise<'stopped' | 'gone' | 'unreached'> {
+    return pods.stop(lease, folder, 'KILL').then(
+      () => 'stopped' as const,
+      (error: unknown) =>
+        error instanceof PodGoneError
+          ? ('gone' as const)
+          : ('unreached' as const),
+    );
   }
 
   /**
@@ -1381,10 +1459,17 @@ export class RunLedger {
     let stop: Live['stop'] = null;
     let exit: Exit = { code: null, signal: null, error: null };
     let note: string | null = null;
+    // The pod can hold the run's copy of the commit, or a part of one.
+    let sent = false;
+    // Verifold asked the pod to start the job. A start that fails can still have started it.
+    let asked = false;
     // The job started, so the pod holds its work.
     let ran = false;
     // The pod answered to the end. A pod that does not answer gives nothing back.
     let reached = true;
+    // A read showed the end of the job, and a SIGKILL reached its process group.
+    let ended = false;
+    let killed = false;
     let live: Live | undefined;
     // The lease's secrets as the run starts. They hide in its texts and keep its outputs clean to its end, also after the lease closes.
     let guard: SecretGuard | null = null;
@@ -1396,23 +1481,19 @@ export class RunLedger {
       await rm(join(tree, 'metrics.json'), { force: true }).catch(() => {});
       stop = this.starting.get(run.id) ?? null;
       if (stop) return;
+      sent = true;
       await pods.send(lease, run.folder, tree);
       // The outputs come back into an empty folder.
       await rm(tree, { recursive: true, force: true });
       await mkdir(tree, { mode: 0o700 });
       stop = this.starting.get(run.id) ?? null;
       if (stop) return;
-      try {
-        await pods.start(
-          lease,
-          run.folder,
-          `export VERIFOLD_RUN=${run.id} VERIFOLD_COMMIT=${run.commit}\n${run.command}\n`,
-        );
-      } catch (error) {
-        // The job can have started before the start failed. It must not hold the GPU unwatched.
-        await pods.stop(lease, run.folder, 'KILL').catch(() => {});
-        throw error;
-      }
+      asked = true;
+      await pods.start(
+        lease,
+        run.folder,
+        `export VERIFOLD_RUN=${run.id} VERIFOLD_COMMIT=${run.commit}\n${run.command}\n`,
+      );
       ran = true;
       live = {
         pid: null,
@@ -1430,7 +1511,7 @@ export class RunLedger {
       );
       live.timer.unref();
       started(await this.markRunning(run, null));
-      ({ exit, note, reached } = await this.watch(
+      ({ exit, note, reached, ended, killed } = await this.watch(
         run,
         pods,
         lease,
@@ -1448,10 +1529,30 @@ export class RunLedger {
       this.live.delete(run.id);
       this.starting.delete(run.id);
       clearTimeout(live?.timer);
+      if (asked && (!ran || !reached)) {
+        // A job whose start failed, or that Verifold lost sight of, must not hold the GPU unwatched. A pod that answers the stop gives the log back.
+        const stopped = await this.stopLost(pods, lease, run.folder);
+        if (stopped === 'unreached')
+          note = note ? `${note} ${unreachedText}` : unreachedText;
+        reached = stopped === 'stopped';
+        killed = reached;
+        ended =
+          reached && (await this.endState(pods, lease, run.folder)) !== null;
+      }
+      // Only a job that started has outputs.
       const collected =
-        ran && reached && guard
-          ? await this.collectPod(run, pods, lease, guard)
+        asked && reached && guard
+          ? await this.collectPod(
+              run,
+              pods,
+              lease,
+              guard,
+              { killed, ended },
+              ran,
+            )
           : noCollected();
+      // A job that Verifold did not ask to start leaves no copy of the commit on the pod.
+      if (sent && !asked) await pods.remove(lease, run.folder).catch(() => {});
       await this.clear(run).catch(() => {});
       started(
         await this.end(run, {
@@ -1475,6 +1576,8 @@ export class RunLedger {
    * in log.txt. A stop sends SIGTERM, then SIGKILL after the grace time and
    * again with each read. A job that a stop does not end in a minute, a pod
    * that stops, or 10 minutes of failed reads end the run as interrupted.
+   * `reached`: the pod answered to the end. `ended`: a read showed the end
+   * of the job. `killed`: a SIGKILL reached the pod.
    */
   private async watch(
     run: RunRecord,
@@ -1486,41 +1589,65 @@ export class RunLedger {
     readonly exit: Exit;
     readonly note: string | null;
     readonly reached: boolean;
+    readonly ended: boolean;
+    readonly killed: boolean;
   }> {
     const none: Exit = { code: null, signal: null, error: null };
+    const minute = this.options.minuteMs ?? 60_000;
     let failing: number | null = null;
     let termAt: number | null = null;
+    // A stop that reached the pod, and a SIGKILL that did.
+    let stopped = false;
+    let killed = false;
+    const send = async (signal: 'TERM' | 'KILL'): Promise<void> => {
+      try {
+        await pods.stop(lease, run.folder, signal);
+        stopped = true;
+        if (signal === 'KILL') killed = true;
+      } catch {
+        /* The reads tell whether the pod answers. */
+      }
+    };
     for (;;) {
       if (live.stop && termAt === null) {
         termAt = Date.now();
-        await pods.stop(lease, run.folder, 'TERM').catch(() => {});
+        await send('TERM');
       } else if (termAt !== null && Date.now() - termAt >= runLimits.graceMs)
-        await pods.stop(lease, run.folder, 'KILL').catch(() => {});
-      if (termAt !== null && Date.now() - termAt >= 60_000)
-        return {
-          exit: none,
-          note: 'The job on the pod did not end after SIGKILL.',
-          reached: true,
-        };
+        await send('KILL');
+      if (termAt !== null && Date.now() - termAt >= minute)
+        return failing !== null || !stopped
+          ? // The stop did not reach the pod. The run's end tries once more, and says when the job can still run.
+            { exit: none, note: null, reached: false, ended: false, killed }
+          : {
+              exit: none,
+              note: 'The job on the pod did not end after SIGKILL.',
+              reached: true,
+              ended: false,
+              killed,
+            };
       try {
         const state = await pods.state(lease, run.folder);
         failing = null;
         // The tail is cut from a longer log, and its end is still written.
         await writePrivateFile(
           join(this.record(run.id), 'log.txt'),
-          guard.hide(state.tail, { start: true, end: true }),
+          guard.hideBytes(state.tail, { start: true, end: true }),
         ).catch(() => {});
         if (state.state === 'done')
           return {
             exit: { code: state.exit, signal: null, error: null },
             note: null,
             reached: true,
+            ended: true,
+            killed,
           };
-        if (state.state === 'gone')
+        if (state.state !== 'running')
           return {
             exit: none,
             note: 'The job on the pod ended without an exit code, for example when the pod ran out of memory or started again.',
             reached: true,
+            ended: true,
+            killed,
           };
       } catch (error) {
         const message =
@@ -1528,7 +1655,7 @@ export class RunLedger {
         failing ??= Date.now();
         if (
           error instanceof PodGoneError ||
-          Date.now() - failing >= 10 * 60_000
+          Date.now() - failing >= 10 * minute
         ) {
           live.stop ??= 'interrupted';
           return {
@@ -1538,6 +1665,8 @@ export class RunLedger {
                 ? message
                 : `Verifold could not reach the pod for 10 minutes: ${message}`,
             reached: false,
+            ended: false,
+            killed,
           };
         }
       }
@@ -1560,28 +1689,32 @@ export class RunLedger {
   }
 
   /**
-   * After a pod run: stop what is left of its process group, then copy its
-   * metrics.json and each named output back into its empty folder, one at a
-   * time, and take them as a local run's, with the guard's check of each
-   * file. Then copy its log and its metric lines, hidden with the guard.
-   * When every copy worked, its folder on the pod goes, so the pod's disk
-   * does not fill. Otherwise its files stay on the pod until the lease ends.
+   * After a pod run: stop what is left of its process group, unless a
+   * SIGKILL reached it already. Then copy its metrics.json and each named
+   * output back into its empty folder, one at a time, and take them as a
+   * local run's, with the guard's check of each file. A job that did not
+   * start right has no outputs: only its log comes back. Then copy its log
+   * and its metric lines, hidden with the guard. The run's folder and job
+   * files on the pod go only when every copy worked and a read showed the
+   * end of the job. Otherwise they stay on the pod until the lease ends.
    */
   private async collectPod(
     run: RunRecord,
     pods: PodRuns,
     lease: string,
     guard: SecretGuard,
+    job: { readonly killed: boolean; readonly ended: boolean },
+    outputs = true,
   ): Promise<{ readonly kept: Collected; readonly log: LogResult }> {
     const notes: string[] = [];
     const tree = join(this.trees(run).folder, 'tree');
     // A process that the job left in the background stops with it, as for a local run.
-    await pods.stop(lease, run.folder, 'KILL').catch(() => {});
+    if (!job.killed) await pods.stop(lease, run.folder, 'KILL').catch(() => {});
     // A folder that cannot be made fails each copy below, and the note says so.
     await mkdir(tree, { recursive: true, mode: 0o700 }).catch(() => {});
     // Each entry comes on its own, so one that is too large or fails leaves the others.
     const failed: string[] = [];
-    for (const path of ['metrics.json', ...run.want])
+    for (const path of outputs ? ['metrics.json', ...run.want] : [])
       try {
         await pods.fetch(lease, run.folder, [path], tree);
       } catch (error) {
@@ -1590,14 +1723,15 @@ export class RunLedger {
           `Verifold could not copy ${path} back: ${guard.hide(error instanceof Error ? error.message : 'unknown error')}`,
         );
       }
-    const kept = await this.keep(run, guard, failed).catch(
-      (error: unknown) => ({
-        metrics: new Map<string, number | null>(),
-        outputs: [],
-        note: `Verifold could not read the copied outputs: ${error instanceof Error ? error.message : 'unknown error'}`,
-      }),
-    );
+    const kept: Collected = outputs
+      ? await this.keep(run, guard, failed).catch((error: unknown) => ({
+          metrics: new Map<string, number | null>(),
+          outputs: [],
+          note: `Verifold could not read the copied outputs: ${error instanceof Error ? error.message : 'unknown error'}`,
+        }))
+      : { metrics: new Map(), outputs: [], note: null };
     let log: LogResult = noLog;
+    let logged = false;
     try {
       const head = runLimits.logBytes - runLimits.logTail;
       const got = await pods.log(lease, run.folder, head, runLimits.logTail);
@@ -1607,21 +1741,31 @@ export class RunLedger {
         .hide(await pods.metrics(lease, run.folder), { start: true })
         .split('\n'))
         addMetric(metrics, line);
+      // The log keeps the pod's bytes. Hidden secrets change their size, so the cut line counts only the bytes that it leaves out.
+      const start = guard.hideBytes(got.head, { end: true });
       await writePrivateFile(
         join(this.record(run.id), 'log.txt'),
         got.tail === null
-          ? guard.hide(got.head, { end: true })
-          : `${guard.hide(got.head, { end: true })}\n[Verifold cut ${got.bytes - head - runLimits.logTail} bytes of the log here. The last ${runLimits.logTail} bytes follow.]\n${guard.hide(got.tail, { start: true, end: true })}`,
+          ? start
+          : Buffer.concat([
+              start,
+              Buffer.from(
+                `\n[Verifold cut ${Math.max(0, got.bytes - got.head.length - got.tail.length)} bytes of the log here. The end of the log follows.]\n`,
+              ),
+              guard.hideBytes(got.tail, { start: true, end: true }),
+            ]),
       );
       log = { bytes: got.bytes, cut: got.tail !== null, metrics };
+      logged = true;
     } catch (error) {
       notes.push(
         `Verifold could not copy the log back: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
     }
-    if (failed.length)
+    // A job that can still run keeps the files that a later stop reads, and a failed copy keeps what it did not bring back.
+    if (failed.length || !logged || !job.ended)
       notes.push(
-        `The run's files stay on the pod in /root/verifold/${run.folder} until its lease ends.`,
+        `The run's files stay on the pod in /root/verifold/${run.folder} and /root/verifold/.runs until its lease ends.`,
       );
     else await pods.remove(lease, run.folder).catch(() => {});
     return {
