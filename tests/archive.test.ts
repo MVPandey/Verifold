@@ -107,7 +107,10 @@ await test('Start over archives the run, keeps the question and the brief, and R
   assert.ok((listed?.bytes ?? 0) > 0);
   // Restore moves the current run to the archive first, then brings the old run back where it was.
   await write(root, '.verifold/tasks/task-1/task.json', '{"next": true}');
-  await assert.rejects(restoreRun(root, '../x'), /Choose an archive/);
+  await assert.rejects(
+    restoreRun(root, '../x'),
+    /Choose one of the listed archives/,
+  );
   await restoreRun(root, id);
   assert.equal(
     await readFile(join(root, '.verifold/tasks/task-1/task.json'), 'utf8'),

@@ -2261,18 +2261,18 @@ await test('an agent cannot mention all, and the terminal and cancel leave lab a
     progress: (line: string) => lines.push(line),
   } as unknown as CliIO;
   terminalInput(lab.sessions, '/cancel', io, {
-    open: () => {},
     openApp: () => {},
+    openDesk: () => {},
     host: 'claude',
   });
   terminalInput(lab.sessions, 'Hello?', io, {
-    open: () => {},
     openApp: () => {},
+    openDesk: () => {},
     host: 'claude',
   });
   assert.deepEqual(lines, [
     'Nothing is running.',
-    'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
+    'No session is running, so this text went nowhere. Type /start and a request.',
   ]);
   assert.equal(lab.lab.view()?.directions[0]?.status, 'working');
 });

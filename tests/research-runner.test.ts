@@ -426,8 +426,8 @@ await test('terminal commands and desk actions call the same research operations
   };
   const controls = {
     host: 'claude',
-    open: () => {},
     openApp: () => {},
+    openDesk: () => {},
     research: runner,
   };
   // This project asks before the source search, so the desk shows each research decision.

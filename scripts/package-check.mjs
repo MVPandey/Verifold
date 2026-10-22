@@ -48,7 +48,7 @@ try {
         /^dist-cli\/(?:[a-z]+|core\/lab)\/[a-z-]+\.js$/.test(file.path) ||
         /^dist-cli\/[a-z]+\/prompts\/[a-z-]+\.md$/.test(file.path) ||
         // The new app: its page, and the files that Vite names with a hash.
-        /^dist-cli\/app\/assets\/[\w.-]+\.(js|css|ttf)$/.test(file.path) ||
+        /^dist-cli\/app\/assets\/[\w.-]+\.(js|css|ttf|webp)$/.test(file.path) ||
         [
           'dist-cli/cli.js',
           'dist-cli/app/index.html',
@@ -184,8 +184,10 @@ try {
   const root = join(directory, 'bare-launch');
   await mkdir(root);
   const agency = join(root, 'agency');
+  // The old setup in the terminal, and the profile of an older project, are the old desk's (--desk). A bare launch in a project opens the app.
   for (const args of [
     [
+      '--desk',
       '--setup-only',
       '--host',
       'codex',
@@ -196,12 +198,11 @@ try {
       '--no-open',
     ],
     ['--no-open', '--agency-dir', agency],
-    ['--no-open', '--agency-dir', join(root, 'legacy-agency')],
+    ['--desk', '--no-open', '--agency-dir', join(root, 'legacy-agency')],
   ]) {
-    const previousWorkspace =
-      args[0] === '--setup-only'
-        ? undefined
-        : await readFile(join(root, '.verifold', 'workspace.json'));
+    const previousWorkspace = args.includes('--setup-only')
+      ? undefined
+      : await readFile(join(root, '.verifold', 'workspace.json'));
     const owner = new AbortController();
     const results = [];
     await runCli(
@@ -216,6 +217,11 @@ try {
             const desk = JSON.parse(value);
             assert.equal(new URL(desk.url).hostname, '127.0.0.1');
             assert.equal(desk.readOnly, false);
+            // A bare launch prints the app's URL too. --desk prints the old desk's alone.
+            if (args.includes('--desk')) {
+              assert.equal(new URL(desk.url).pathname, '/desk');
+              assert.equal(desk.app, undefined);
+            } else assert.equal(new URL(desk.app).pathname, '/app/');
             owner.abort();
           }
         },
@@ -526,8 +532,19 @@ onLine((line) => {
         throw new Error(`Desk exited before startup: ${diagnostics}`);
       }),
     ]);
-    const url = new URL(JSON.parse(output).url);
+    const printed = JSON.parse(output);
+    const url = new URL(printed.url);
+    // The run of this project is from the research flow, so it opens in the old desk.
+    assert.equal(url.pathname, '/desk');
+    assert.equal(printed.app, undefined);
     const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+    // The app's API answers with the token only. It shows this run in History.
+    assert.equal((await fetch(`${url.origin}/api/v1/snapshot`)).status, 401);
+    const snapshot = await (
+      await fetch(`${url.origin}/api/v1/snapshot`, { headers })
+    ).json();
+    assert.equal(snapshot.researchRun, true);
+    assert.equal(snapshot.lab, null);
     assert.equal((await fetch(`${url.origin}/api/view`)).status, 401);
     assert.equal(
       (await fetch(`${url.origin}/api/action`, { method: 'POST' })).status,
@@ -543,8 +560,12 @@ onLine((line) => {
     assert.match(await view('?panel=coordinator'), /Compare proof search/);
     // The attempt panel shows the native session of the research attempt.
     assert.match(await view('?view=records&panel=attempt'), /package-session/);
+    // `/` leads to the app. The old desk's page is at /desk for this release.
+    const home = await fetch(`${url.origin}/`, { redirect: 'manual' });
+    assert.equal(home.status, 302);
+    assert.equal(home.headers.get('location'), '/app/');
     for (const path of [
-      '/',
+      '/desk',
       '/desk-client.js',
       '/desk-transcript.js',
       '/desk-terminal.js',
@@ -582,11 +603,19 @@ onLine((line) => {
       appFiles.some((path) => path.endsWith('.css')),
       appHtml,
     );
+    // The app's own icon, for the tab and for desktop notifications.
+    const icon = appFiles.find((path) => path.endsWith('.webp'));
+    assert.ok(icon, appHtml);
+    let appCode = '';
     for (const path of appFiles) {
       const asset = await fetch(url.origin + path);
       assert.equal(asset.status, 200, path);
-      assert.ok((await asset.arrayBuffer()).byteLength > 0, path);
+      const body = await asset.arrayBuffer();
+      assert.ok(body.byteLength > 0, path);
+      if (path.endsWith('.js')) appCode += Buffer.from(body).toString('utf8');
     }
+    // The code imports the icon, so the build gives it the same file's URL for notifications.
+    assert.ok(appCode.includes(icon), `The app's code does not name ${icon}.`);
     // The terminal page alone allows inline styles for xterm.js, and only the desk may frame it.
     const terminal = await fetch(
       `${url.origin}/terminal?session=20261003T000000000Z-aaaaaaaa`,
@@ -644,7 +673,7 @@ onLine((line) => {
     clearTimeout(force);
     assert.equal(code, 0, diagnostics);
   }
-  // verifold --app in a folder without a project: the packed app's first run, with the fake harnesses only.
+  // A bare verifold in a folder without a project: the packed app's first run, with the fake harnesses only.
   {
     const folder = join(directory, 'first-run');
     await mkdir(folder);
@@ -658,14 +687,23 @@ onLine((line) => {
     process.env.CLAUDE_CONFIG_DIR = join(directory, 'no-claude-config');
     const stopStart = new AbortController();
     let shown;
+    let typed;
+    const opened = [];
     const started = runCli(
-      ['--app', '--no-open', '--agency-dir', agency],
+      ['--no-open', '--agency-dir', agency],
       folder,
       {
         interactive: true,
         ask: () => Promise.reject(new Error('No prompts')),
         out: (value) => {
           shown = JSON.parse(value);
+        },
+        browse: (url) => {
+          opened.push(url);
+          return Promise.resolve(true);
+        },
+        listen: (onLine) => {
+          typed = onLine;
         },
         compute: {
           store: {
@@ -678,12 +716,30 @@ onLine((line) => {
       stopStart.signal,
     );
     try {
-      for (let tries = 0; tries < 100 && !shown; tries++)
+      for (let tries = 0; tries < 100 && !(shown && typed); tries++)
         await new Promise((resolve) => setTimeout(resolve, 50));
       assert.ok(shown?.app, 'The first run printed no app URL.');
       const url = new URL(shown.url);
       const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
       assert.equal((await fetch(`${url.origin}/app/`)).status, 200);
+      // /app in the terminal opens the app with a one-time code. The page trades it for the token, once.
+      typed('/app');
+      for (let tries = 0; tries < 100 && !opened.length; tries++)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      const launch = new URL(opened[0]);
+      assert.equal(launch.pathname, '/app/');
+      const code = /^#launch-([0-9a-f]{48})$/.exec(launch.hash)?.[1];
+      assert.ok(code, launch.hash);
+      const exchange = () =>
+        fetch(`${url.origin}/api/launch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+      const traded = await exchange();
+      assert.equal(traded.status, 200);
+      assert.deepEqual(await traded.json(), { token: url.hash.slice(1) });
+      assert.equal((await exchange()).status, 403);
       let setup;
       for (let tries = 0; tries < 200; tries++) {
         setup = await (
@@ -776,10 +832,12 @@ onLine((line) => {
     const [first] = await once(messages, 'line', {
       signal: AbortSignal.timeout(10000),
     });
-    assert.match(
-      JSON.parse(first).url,
-      /^http:\/\/127\.0\.0\.1:\d+\/#[0-9a-f]{64}$/,
-    );
+    const urls = JSON.parse(first);
+    assert.match(urls.url, /^http:\/\/127\.0\.0\.1:\d+\/#[0-9a-f]{64}$/);
+    // The owner passes on the app's URL, and the old desk's for a terminal that attaches with --desk.
+    const place = new URL(urls.url);
+    assert.equal(urls.app, `${place.origin}/app/${place.hash}`);
+    assert.equal(urls.desk, `${place.origin}/desk${place.hash}`);
     const command = run('ps', ['-o', 'command=', '-p', String(owner.pid)]);
     assert.ok(!command.stdout.includes(control.token));
     owner.kill('SIGHUP');

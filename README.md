@@ -21,14 +21,14 @@ A research question can take days of agent work. One Claude Code or Codex sessio
 Verifold runs them as a research team:
 
 - It keeps working in a background process after you close the terminal.
-- Research compares directions from sources and recommends one.
-- A coordinator splits that direction into tasks, each in its own copy of your project.
-- Agents object to each other's work with evidence. With both harnesses, the second one does the independent half of a check.
+- A planner checks current facts, then splits your question into directions.
+- Each direction gets its own agent, in its own copy of your project.
+- Agents object to each other's claims with evidence, and checks settle the disputes. With both harnesses, the agents check each other across model families.
 - Every agent reads a shared project memory, also in later runs.
 
 Three terminal tabs give you none of this.
 
-You ask, then decide what the team brings to you. You get reviewed files, check results, and a proposed answer. Agents use your harness plan. GPU pods stay off until you set a spend limit.
+You ask, then decide what the team brings to you. You get check results, a proposed answer, and the files to bring into your project. Agents use your harness plan. GPU pods stay off until you set a spend limit.
 
 ## Quick start
 
@@ -39,22 +39,24 @@ npm install -g verifold
 verifold
 ```
 
-Run `verifold` in an empty folder, or in a folder that already holds your work. Your browser opens the desk.
+Run `verifold` in an empty folder, or in a folder that already holds your work. Verifold opens in your browser.
 
-1. Type your question. Your harness asks up to three quick questions.
-2. Accept the brief of about 120 words. Verifold creates the project and starts a lab on your question.
-3. The first agent posts a plan that splits the question into directions. Each direction gets its own agent. The agents post what they find on one board and check each other's claims.
-4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick.
+1. The first time, set up your agents, a short profile, skills, and GPU limits. You can skip each step.
+2. Ask your question. The planner checks current facts first, and it can ask you up to three questions. Each one has options and a box for your own words.
+3. The planner posts a plan that splits the question into directions. Each direction gets its own agent. The agents post what they find on one board and check each other's claims.
+4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick and a box for your own words.
 
-You can close the terminal. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, Home lists what changed.
+You can close the terminal. While it is open, it shows the lab in a few lines. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, the lab page lists what changed.
+
+`verifold --desk` opens the old desk instead, for this release. A project whose run is from the earlier research flow opens there by default.
 
 ## Where things stand
 
 Verifold is in early development. The [guide](docs/guide.md) describes everything that works in this checkout. Limits to know first:
 
-- Three agents run tasks or sessions at the same time unless you change "Agents at once" in Compute (1 to 8). Research and the coordinator do not count.
+- Three agents work at the same time unless you change "Agents at once" in the project's Settings (1 to 8).
 - Verifold needs a terminal and Node. There is no desktop app yet.
-- The desk is a local web page on this computer. Other devices cannot open it.
+- Verifold's page is a local web page on this computer. Other devices cannot open it.
 - Your harness sends what it reads to its model provider. Verifold keeps its records in your project folder and publishes nothing.
 
 The [roadmap](https://github.com/MVPandey/Verifold/issues/14) says what comes next.

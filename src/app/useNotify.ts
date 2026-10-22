@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Snapshot } from '../protocol/api.ts';
+import icon from '../../public/assets/verifold-symbol.webp';
 import {
   freshMemory,
   notesFor,
@@ -41,13 +42,13 @@ function background(): boolean {
   return document.visibilityState === 'hidden' || !document.hasFocus();
 }
 
-/** Show one note. A click brings the tab forward on the note's page. */
+/** Show one note, with the app's icon. A click brings the tab forward on the note's page. */
 function show(note: Note): void {
   try {
     const shown = new Notification(note.title, {
       body: note.body,
       tag: note.key,
-      icon: '/symbol.webp',
+      icon,
     });
     shown.addEventListener('click', () => {
       window.focus();
