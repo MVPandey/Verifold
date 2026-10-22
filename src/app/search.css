@@ -170,6 +170,25 @@
 }
 
 @media (max-width: 600px) {
+  /* On a phone, the search button shows only its icon. Its name stays "Search" for a screen reader. */
+  .button--search {
+    min-width: 44px;
+    justify-content: center;
+  }
+
+  .button--search .key {
+    display: none;
+  }
+
+  .button--search .button__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .search {
     margin-top: 16px;
     padding: 18px;
