@@ -12,7 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync } from 'node:fs';
@@ -349,6 +349,73 @@ await test('detection reads versions, sign-in and models, offers Fable on a Max 
   });
   assert.equal(signedOut?.signedIn, false);
   assert.deepEqual(signedOut?.models, []);
+});
+
+await test('detection stops the Codex app-server and removes its socket folder when Codex never listens or refuses to start', async (t) => {
+  /** Whether any process of the group still runs. */
+  const running = (group: number): boolean => {
+    try {
+      process.kill(-group, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** A signed-in fake Codex whose app-server saves its process group and socket, then never listens or refuses `initialize`. */
+  const fake = async (
+    name: 'silent' | 'refusing',
+  ): Promise<{ readonly codex: string; readonly server: string }> => {
+    const base = await folder(t, `detect-${name}`);
+    const codex = join(base, 'codex');
+    const server = join(base, 'server.json');
+    await writeFile(
+      codex,
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === '--version') console.log('codex-cli 0.160.0');
+else if (args[0] === 'login') console.error('Logged in using ChatGPT');
+else if (args[0] === 'app-server') {
+  // The watchdog that starts this server leads its process group.
+  require('node:fs').writeFileSync(${JSON.stringify(server)}, JSON.stringify({ group: process.ppid, listen: args[args.indexOf('--listen') + 1] }));
+  ${
+    name === 'silent'
+      ? 'setInterval(() => {}, 60_000);'
+      : `const { out, onLine } = require(${JSON.stringify(codexSocket)})(process.argv);
+  onLine((line) => {
+    const message = JSON.parse(line);
+    if (message.method === 'initialize') out({ id: message.id, error: { code: -32600, message: 'refused' } });
+  });`
+  }
+}
+`,
+      { mode: 0o700 },
+    );
+    return { codex, server };
+  };
+  // A Codex that never listens holds detection for its whole 10 seconds, so both run at once.
+  await Promise.all(
+    (['silent', 'refusing'] as const).map(async (name) => {
+      const { codex, server } = await fake(name);
+      const [, found] = await detectHarnesses({
+        claude: join(dirname(codex), 'no-claude'),
+        codex,
+        claudeConfig: dirname(codex),
+      });
+      assert.equal(found?.signedIn, true, name);
+      assert.deepEqual(found?.models, [], name);
+      const { group, listen } = JSON.parse(await readFile(server, 'utf8')) as {
+        readonly group: number;
+        readonly listen: string;
+      };
+      t.after(() => {
+        if (running(group)) process.kill(-group, 'SIGKILL');
+      });
+      await until(() => Promise.resolve(!running(group)));
+      await until(() =>
+        Promise.resolve(!existsSync(dirname(listen.replace(/^unix:\/\//, '')))),
+      );
+    }),
+  );
 });
 
 /** A fake harness run: it answers each call with the next reply and keeps the requests. */

@@ -56,6 +56,8 @@ export class LabTerminal {
   private handler: ((line: string) => void) | null = null;
   /** The newest screen. Undefined before the first one. */
   private screen: LabScreen | null | undefined;
+  /** The state of each direction's last plain line, by ID. */
+  private readonly printed = new Map<string, string>();
   /** Ctrl+C only detaches this terminal from a background owner. */
   private detaches = true;
   /** Stops the watch of the lab, when this terminal's own desk serves it. */
@@ -122,6 +124,9 @@ export class LabTerminal {
    */
   serve(follow: FollowScreens): void {
     this.unfollow?.();
+    // The new desk's screens are not compared with the last desk's.
+    this.screen = undefined;
+    this.printed.clear();
     this.unfollow = follow((screen) => this.show(screen, false));
   }
 
@@ -133,8 +138,10 @@ export class LabTerminal {
     const before = this.screen ?? null;
     this.screen = screen;
     this.detaches = detaches;
+    // Without a lab, or with a new one, each direction of the lab prints.
+    if (!screen || screen.started !== before?.started) this.printed.clear();
     if (!this.line && screen && !this.fits())
-      for (const line of plainLines(before, screen, this.now()))
+      for (const line of plainLines(before, screen, this.now(), this.printed))
         this.print(line);
     this.update();
   }
@@ -184,7 +191,13 @@ export class LabTerminal {
         this.print(
           'The terminal is too small for the live view. Verifold prints a line for each change until it is larger.',
         );
-        for (const line of plainLines(null, this.screen, this.now()))
+        this.printed.clear();
+        for (const line of plainLines(
+          null,
+          this.screen,
+          this.now(),
+          this.printed,
+        ))
           this.print(line);
       }
     }
