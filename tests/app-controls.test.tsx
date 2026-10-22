@@ -15,6 +15,7 @@ import type {
 } from '../src/protocol/api.ts';
 import { checkWords } from '../src/app/answer.ts';
 import {
+  dispositionName,
   isDirectionDiff,
   isRunDetail,
   load,
@@ -53,6 +54,7 @@ import {
   size,
 } from '../src/app/runs.ts';
 import { lineKinds } from '../src/app/screens/DiffPage.tsx';
+import { savedName } from '../src/app/screens/FigurePage.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import { labHours, validHours } from '../src/app/screens/Notice.tsx';
@@ -610,6 +612,29 @@ await test('the figure page reads the figure with the lab controls, leads back t
   const bare = text(render(story(), href.figure('p-9.0'), null));
   assert.match(bare, /Open this page from Verifold to see the figure\./);
   assert.doesNotMatch(bare, /Reading the figure/);
+});
+
+await test("a figure is saved under the name that Verifold sends, else as figure with its type's extension", () => {
+  assert.equal(
+    dispositionName('attachment; filename="report_v2.pdf"'),
+    'report_v2.pdf',
+  );
+  // A name with other characters is not Verifold's, so the page does not take it.
+  assert.equal(dispositionName('attachment; filename="../x.pdf"'), null);
+  assert.equal(dispositionName(null), null);
+  const pdf = new Blob(['%PDF'], { type: 'application/pdf' });
+  assert.equal(
+    savedName({ blob: pdf, name: 'report_v2.pdf' }),
+    'report_v2.pdf',
+  );
+  assert.equal(savedName({ blob: pdf, name: null }), 'figure.pdf');
+  assert.equal(
+    savedName({
+      blob: new Blob(['<svg/>'], { type: 'image/svg+xml' }),
+      name: null,
+    }),
+    'figure.svg',
+  );
 });
 
 await test('the lab home offers more time when the budget ended, and lists background actions with one Dismiss for failures', () => {

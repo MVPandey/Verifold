@@ -34,9 +34,10 @@ function who(post: Post): Who {
 
 function proofLabel(proof: Proof): string {
   if (proof.type === 'run') return `Run ${proof.run}`;
-  if (proof.type === 'figure') return 'Figure';
   if (proof.type === 'diff') return 'Diff';
-  return proof.path.split('/').at(-1) ?? proof.path;
+  const name = proof.path.split('/').at(-1) ?? proof.path;
+  // A figure's chip reads as its page's heading.
+  return proof.type === 'figure' ? `Figure ${name}` : name;
 }
 
 /**

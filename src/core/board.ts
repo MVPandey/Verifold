@@ -129,7 +129,22 @@ export function proofRef(
 }
 /** A commit: SHA-1, or SHA-256 in a repository that uses it. */
 export const commitId = commitPattern;
-const figure = /\.(png|jpe?g|gif|svg|webp|pdf)$/i;
+/** The content type of each figure that the board takes, by its extension in lowercase. */
+const figureTypes: ReadonlyMap<string, string> = new Map([
+  ['png', 'image/png'],
+  ['jpg', 'image/jpeg'],
+  ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'],
+  ['svg', 'image/svg+xml'],
+  ['webp', 'image/webp'],
+  ['pdf', 'application/pdf'],
+]);
+
+/** The content type of a figure at `path`, by its extension. Undefined: the board takes no figure with that extension. */
+export function figureType(path: string): string | undefined {
+  const extension = /\.([^./]+)$/.exec(path)?.[1]?.toLowerCase();
+  return extension === undefined ? undefined : figureTypes.get(extension);
+}
 
 /** A JSON object, or null for anything else. */
 export function object(value: unknown): Record<string, unknown> | null {
@@ -163,7 +178,7 @@ function parseArtifact(value: unknown): Artifact | null {
   if (
     (entry.type === 'file' || entry.type === 'figure') &&
     safePath(entry.path) &&
-    (entry.type === 'file' || figure.test(entry.path)) &&
+    (entry.type === 'file' || figureType(entry.path) !== undefined) &&
     typeof entry.commit === 'string' &&
     commitId.test(entry.commit) &&
     typeof entry.sha256 === 'string' &&

@@ -14,6 +14,7 @@ import {
   clip,
   commitId,
   directionId,
+  figureType,
   number,
   postId,
   proofRef,
@@ -67,6 +68,7 @@ import {
   type CallEffect,
   type Check as LabCheck,
   type Direction as LabDirection,
+  type FigureRead,
   type LabView,
 } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
@@ -140,6 +142,7 @@ import {
   type HistoryTask,
   type HistoryTurns,
 } from '../protocol/api.ts';
+import { figureHeaders, figurePixels, imageSize } from './figure.ts';
 import { readJsonBody, record } from './http.ts';
 import type { FirstRun } from './setup.ts';
 
@@ -363,15 +366,8 @@ export interface LabReadSource {
     readonly files: readonly ChangedFile[];
     readonly diff: { readonly text: string; readonly cut: boolean } | null;
   } | null>;
-  /**
-   * The figure that a post cites, such as p-12.0, as the post pinned it.
-   * Null for a proof that is not a figure of the lab. It throws a
-   * SessionActionError for a figure larger than `bytes`.
-   */
-  readonly figure: (
-    proof: string,
-    bytes: number,
-  ) => Promise<{ readonly path: string; readonly content: Buffer } | null>;
+  /** The figure that a post cites, such as p-12.0, as the post pinned it, up to `bytes`, or why there is none. */
+  readonly figure: (proof: string, bytes: number) => Promise<FigureRead>;
 }
 
 /** The desk's own bring-in reads, which its bring-in panel uses too. */
@@ -2326,10 +2322,8 @@ export class ApiReader {
     };
   }
 
-  /** The figure that a post cites, such as p-12.0, or null. A SessionActionError says why Verifold does not show it. */
-  async figure(
-    proof: string,
-  ): Promise<{ readonly path: string; readonly content: Buffer } | null> {
+  /** The figure that a post cites, such as p-12.0, or why there is none. Null without a lab. */
+  async figure(proof: string): Promise<FigureRead | null> {
     return (
       (await this.sources().reads?.figure(proof, apiLimits.figure)) ?? null
     );
@@ -2601,17 +2595,6 @@ export interface ProjectStart {
   readonly act: (body: Record<string, unknown>) => Promise<number>;
 }
 
-/** The content type of each figure that the board takes (board.ts), by its extension. */
-const figureTypes = new Map([
-  ['png', 'image/png'],
-  ['jpg', 'image/jpeg'],
-  ['jpeg', 'image/jpeg'],
-  ['gif', 'image/gif'],
-  ['svg', 'image/svg+xml'],
-  ['webp', 'image/webp'],
-  ['pdf', 'application/pdf'],
-]);
-
 function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
@@ -2833,30 +2816,45 @@ export async function answerApi(
       });
       return;
     }
-    let figure: Awaited<ReturnType<ApiReader['figure']>>;
-    try {
-      figure = await reader.figure(second);
-    } catch (error) {
-      if (!(error instanceof SessionActionError)) throw error;
-      json(response, 404, { error: error.message });
+    const read = await reader.figure(second);
+    if (!read) {
+      json(response, 404, { error: 'Verifold runs no lab here.' });
       return;
     }
-    const type =
-      figure &&
-      figureTypes.get(figure.path.split('.').at(-1)?.toLowerCase() ?? '');
-    if (!figure || !type) {
-      response.writeHead(404).end();
+    if ('missing' in read) {
+      json(response, 404, { error: read.missing });
       return;
+    }
+    if ('changed' in read) {
+      json(response, 409, { error: read.changed });
+      return;
+    }
+    if ('large' in read) {
+      json(response, 413, { error: read.large });
+      return;
+    }
+    // The lab reads only a figure extension.
+    const type = figureType(read.path) ?? 'application/octet-stream';
+    // The browser decodes every pixel that an image declares, so a huge one never reaches it.
+    if (type.startsWith('image/') && type !== 'image/svg+xml') {
+      const size = imageSize(type, read.content);
+      if (
+        !size ||
+        size.width > figurePixels.side ||
+        size.height > figurePixels.side ||
+        size.width * size.height > figurePixels.total
+      ) {
+        json(response, 413, {
+          error: size
+            ? `This image is ${size.width} × ${size.height} pixels. Verifold shows images up to ${figurePixels.side} pixels on a side and ${figurePixels.total / 1_000_000} million pixels in all.`
+            : 'Verifold cannot read the size of this image, so it does not show it.',
+        });
+        return;
+      }
     }
     response
-      .writeHead(200, {
-        'Content-Type': type,
-        'Content-Length': figure.content.length,
-        // An agent made these bytes. Opened as a page, they get no script, no origin, and no loads.
-        'Content-Security-Policy':
-          "sandbox; default-src 'none'; style-src 'unsafe-inline'",
-      })
-      .end(figure.content);
+      .writeHead(200, figureHeaders(read.path, type, read.content.length))
+      .end(read.content);
     return;
   }
   if (first === 'board' && parts.length === 1 && onlyBefore) {
