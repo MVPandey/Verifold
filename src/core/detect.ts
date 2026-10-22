@@ -1,7 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { execFile } from 'node:child_process';
 import { childEnvironment, type HarnessName } from './harness.ts';
 import {
   claudeOpus,
@@ -10,8 +7,8 @@ import {
   pickCodexModel,
   type CodexCall,
 } from './models.ts';
-import { watchdog } from './session-hosts.ts';
-import { connectWhenListening, type UnixWebSocket } from './unix-websocket.ts';
+import { codexInitialize, startCodexServer } from './session-hosts.ts';
+import type { UnixWebSocket } from './unix-websocket.ts';
 
 /** One model that the first run offers for a harness. */
 export interface ModelChoice {
@@ -153,21 +150,7 @@ export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
  * refuses.
  */
 async function codexModelList(executable: string): Promise<unknown[] | null> {
-  const folder = await mkdtemp(join(tmpdir(), 'vf-'));
-  const socket = join(folder, 'codex.sock');
-  const child = spawn(
-    process.execPath,
-    ['-e', watchdog, executable, 'app-server', '--listen', `unix://${socket}`],
-    {
-      env: childEnvironment(),
-      shell: false,
-      detached: process.platform !== 'win32',
-      stdio: ['pipe', 'ignore', 'ignore'],
-    },
-  );
-  child.on('error', () => {
-    /* No socket comes, so the wait ends at the deadline. */
-  });
+  const server = startCodexServer({ executable, config: [] });
   let finish: (value: unknown[] | null) => void = () => {};
   const answer = new Promise<unknown[] | null>((resolve) => {
     finish = resolve;
@@ -185,12 +168,8 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
     >();
     let nextId = 1;
     const opened = await Promise.race([
-      connectWhenListening(
-        socket,
-        {
-          alive: () => child.exitCode === null && child.signalCode === null,
-          deadline,
-        },
+      server.connect(
+        deadline,
         (text) => {
           let message: unknown;
           try {
@@ -216,31 +195,15 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
       answers.set(id, { onResult, onError });
       opened.send(JSON.stringify({ method, id, params }));
     };
-    call(
-      'initialize',
-      {
-        clientInfo: { name: 'verifold', title: 'Verifold', version: '1' },
-        capabilities: { experimentalApi: true },
-      },
-      () => {
-        opened.send(JSON.stringify({ method: 'initialized', params: {} }));
-        listCodexModels(call, finish);
-      },
-    );
+    call('initialize', codexInitialize('1'), () => {
+      opened.send(JSON.stringify({ method: 'initialized', params: {} }));
+      listCodexModels(call, finish);
+    });
     return await answer;
   } finally {
     clearTimeout(timer);
     connection?.close();
-    // The watchdog stops Codex when its input ends. The kill covers a watchdog that hangs.
-    child.stdin.end();
-    if (child.pid !== undefined && child.exitCode === null)
-      try {
-        if (process.platform === 'win32') child.kill('SIGTERM');
-        else process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        /* It exited already. */
-      }
-    await rm(folder, { recursive: true, force: true });
+    server.stop();
   }
 }
 
