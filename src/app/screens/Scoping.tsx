@@ -32,6 +32,30 @@ export function planQuestions(lab: Lab): Call[] {
   );
 }
 
+/** How a planner that ended before the plan ended, in the words of the lab home. */
+const plannerEnds: Partial<Record<Agent['status'], string>> = {
+  stopped: 'You stopped the planner before it made a plan.',
+  closed: 'The planner closed its direction before it made a plan.',
+  crashed: 'The planner stopped by itself too often before it made a plan.',
+};
+
+/**
+ * What the lab home says about a planner that ended before the plan, and
+ * what the person can do next when the lab's agents are here. Null: the
+ * planner still works. Only a crashed agent can start again.
+ */
+export function plannerEnded(
+  planner: Agent,
+  agentsHere: boolean,
+): string | null {
+  const ended = plannerEnds[planner.status];
+  if (!ended) return null;
+  if (!agentsHere) return ended;
+  return planner.status === 'crashed'
+    ? `${ended} Start it again, or open a direction yourself.`
+    : `${ended} Open a direction yourself to go on.`;
+}
+
 /** The answer that a card sends: the person's own words, else the option. */
 export function answerOf(choice: Choice): {
   readonly words: string | null;
