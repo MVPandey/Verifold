@@ -511,12 +511,12 @@ await test('Git variables from the environment cannot redirect a workspace to an
   );
 });
 
-await test("a workspace folder's own .git link cannot redirect Verifold to another repository", async (t) => {
-  const decoy = await folder(t);
-  run(decoy, 'init', '-q');
-  await write(decoy, 'a.txt', 'a\n');
-  run(decoy, 'add', '.');
-  run(decoy, 'commit', '-qm', 'decoy');
+await test('workspace commands use the repository Verifold set up, not one a .git link names', async (t) => {
+  const other = await folder(t);
+  run(other, 'init', '-q');
+  await write(other, 'a.txt', 'a\n');
+  run(other, 'add', '.');
+  run(other, 'commit', '-qm', 'other');
   const root = await folder(t);
   run(root, 'init', '-q');
   await write(root, 'results/a.md', 'a\n');
@@ -528,8 +528,8 @@ await test("a workspace folder's own .git link cannot redirect Verifold to anoth
     inputs: [],
   });
   const target = join(root, workspace.path);
-  // The folder's own .git link now points at the decoy repository.
-  await writeFile(join(target, '.git'), `gitdir: ${join(decoy, '.git')}\n`);
+  // The folder's own .git link now names the other repository.
+  await writeFile(join(target, '.git'), `gitdir: ${join(other, '.git')}\n`);
   await write(target, 'results/b.md', 'b\n');
   const version = await commitVersion(
     root,
@@ -560,12 +560,12 @@ await test("a workspace folder's own .git link cannot redirect Verifold to anoth
     ).text,
     /^\+b$/m,
   );
-  // The decoy keeps its one commit and gains no branch.
-  assert.equal(run(decoy, 'log', '--format=%s').trim(), 'decoy');
-  assert.equal(run(decoy, 'branch', '--list', 'verifold/*').trim(), '');
+  // The other repository keeps its one commit and gains no branch.
+  assert.equal(run(other, 'log', '--format=%s').trim(), 'other');
+  assert.equal(run(other, 'branch', '--list', 'verifold/*').trim(), '');
 });
 
-await test('a filter in a repository that a .git link points at never runs', async (t) => {
+await test('workspace commands use the recorded repository and its config', async (t) => {
   const root = await folder(t);
   run(root, 'init', '-q');
   await write(root, 'results/a.md', 'a\n');
@@ -577,16 +577,99 @@ await test('a filter in a repository that a .git link points at never runs', asy
     inputs: [],
   });
   const target = join(root, workspace.path);
-  // Build a repository whose filter writes a marker, and aim the folder's .git link at it.
-  const decoy = await folder(t);
-  run(decoy, 'init', '-q');
-  const marker = join(decoy, 'ran');
-  run(decoy, 'config', 'filter.mark.clean', `sh -c 'touch ${marker}; cat'`);
+  // A second repository has a content filter; the folder's link names it.
+  const other = await folder(t);
+  run(other, 'init', '-q');
+  const marker = join(other, 'ran');
+  run(other, 'config', 'filter.mark.clean', `sh -c 'touch ${marker}; cat'`);
   await write(target, '.gitattributes', '* filter=mark\n');
-  await writeFile(join(target, '.git'), `gitdir: ${join(decoy, '.git')}\n`);
+  await writeFile(join(target, '.git'), `gitdir: ${join(other, '.git')}\n`);
   await write(target, 'results/b.md', 'b\n');
   await commitVersion(root, workspace, ['results'], 'Version 1');
   assert.equal(existsSync(marker), false);
+});
+
+await test('a folder with its own Git data stays out of the commit, and its config never runs', async (t) => {
+  const root = await folder(t);
+  await write(root, 'exp/a.py', 'a\n');
+  const workspace = await allocate(root, {
+    name: 'task-8-r1-a1',
+    writable: ['exp'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // A folder with its own Git data, and a commit, appears inside a writable path.
+  const inner = join(target, 'exp', 'inner');
+  run(root, 'init', '-q', inner);
+  const marker = join(root, 'ran');
+  run(inner, 'config', 'filter.mark.clean', `sh -c 'touch ${marker}; cat'`);
+  await write(inner, '.gitattributes', '* filter=mark\n');
+  await write(inner, 'secret.txt', 's\n');
+  run(inner, 'add', '.');
+  run(inner, 'commit', '-qm', 'inner');
+  // The filter ran for the nested repository's own commit above. Clear its mark, so the test sees only what Verifold does next.
+  await rm(marker, { force: true });
+  await write(target, 'exp/b.py', 'b\n');
+  const version = await commitVersion(root, workspace, ['exp'], 'Version 1');
+  // The nested folder is left out of the commit, and nothing of it is recorded as a link.
+  assert.ok(version.skipped.includes('exp/inner'));
+  const files = await changes(root, workspace, workspace.start, version.commit);
+  assert.ok(files.every((file) => !file.path.startsWith('exp/inner')));
+  // The nested folder's content filter never ran.
+  assert.equal(existsSync(marker), false);
+});
+
+await test("a worktree's repository is found again after a restart, and a wrong name is refused", async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const start = run(root, 'rev-parse', 'HEAD').trim();
+  // A worktree that Verifold did not make in this run, so nothing of it is held in memory.
+  const path = join('.verifold', 'workspaces', 'w2');
+  run(
+    root,
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'verifold/w2',
+    join(root, path),
+    'HEAD',
+  );
+  const loaded = { kind: 'git', path, branch: 'verifold/w2', start } as const;
+  // A record that names the wrong administrative folder is refused before the folder is read.
+  await assert.rejects(
+    readFileAt(
+      root,
+      { ...loaded, admin: 'not-the-one' },
+      start,
+      'results/a.md',
+    ),
+    /does not match/,
+  );
+  // With the right name, the file reads from the worktree's own repository.
+  assert.equal(
+    (await readFileAt(root, loaded, start, 'results/a.md'))?.toString('utf8'),
+    'a\n',
+  );
+});
+
+await test('a worktree is removed without reading its own Git data again', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-9-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  assert.equal(workspace.kind, 'git');
+  assert.equal(await release(root, workspace), true);
+  assert.equal(existsSync(join(root, workspace.path)), false);
 });
 
 await test('a version leaves out environments, caches, and what the task ignores', async (t) => {
