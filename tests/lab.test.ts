@@ -77,6 +77,7 @@ import { startDesk } from '../src/server/desk.ts';
 import type { BringRead, FileDiff, Snapshot } from '../src/protocol/api.ts';
 import { TaskManager } from '../src/legacy/tasks.ts';
 import { ProjectMemory } from '../src/core/memory.ts';
+import { until } from './wait.ts';
 
 /**
  * A fake Claude Code for lab agents. Its folder name (such as d-1-circles)
@@ -208,8 +209,11 @@ const codexSocket = fileURLToPath(
 /**
  * A fake Codex app-server for lab agents, with the same scripts and logs as
  * the fake Claude Code. A thread keeps the tools that it started with, as in
- * Codex: with a `strict-tools` file, it calls only those. With --remote it
- * is the terminal, as the fake Claude Code is without -p.
+ * Codex: with a `strict-tools` file, it calls only those. A steer joins the
+ * running turn: it takes the first unused turn whose `when` text it contains,
+ * and that turn's calls run in the running one. After a turn ends, a steer
+ * gets an error, as in Codex. With --remote it is the terminal, as the fake
+ * Claude Code is without -p.
  */
 const codexHost = `if (process.argv.includes('--remote')) {
   process.stdin.setRawMode?.(true);
@@ -233,13 +237,14 @@ const usedFile = path.join(log, 'used.json');
 let calls = [];
 let next = 0;
 let turn = null;
+let running = false;
 let thread = null;
 let seq = 0;
-const take = (text) => {
+const take = (text, steer = false) => {
   let script = [];
   try { script = JSON.parse(fs.readFileSync(path.join(base, 'scripts', name + '.json'), 'utf8')); } catch {}
   const used = fs.existsSync(usedFile) ? JSON.parse(fs.readFileSync(usedFile, 'utf8')) : [];
-  const index = script.findIndex((entry, at) => !used.includes(at) && (!entry.when || text.includes(entry.when)));
+  const index = script.findIndex((entry, at) => !used.includes(at) && (entry.when ? text.includes(entry.when) : !steer));
   if (index < 0) return [];
   fs.writeFileSync(usedFile, JSON.stringify([...used, index]));
   return script[index].calls;
@@ -247,7 +252,7 @@ const take = (text) => {
 const threadTools = () => { try { return JSON.parse(fs.readFileSync(path.join(log, 'tools-' + thread + '.json'), 'utf8')); } catch { return []; } };
 const call = () => {
   const entry = calls[next];
-  if (!entry) return out({ method: 'turn/completed', params: { turn: { id: turn, status: 'completed' } } });
+  if (!entry) { running = false; return out({ method: 'turn/completed', params: { turn: { id: turn, status: 'completed' } } }); }
   if (entry.name.startsWith('verifold_') && fs.existsSync(path.join(base, 'strict-tools')) && !threadTools().includes(entry.name)) {
     fs.appendFileSync(path.join(log, 'results.jsonl'), JSON.stringify({ call: entry.name, result: { contentItems: [{ text: 'NO_SUCH_TOOL' }] } }) + '\\n');
     next++;
@@ -299,13 +304,20 @@ onLine((line) => {
     out({ id: message.id, result: { turn: { id: turn } } });
     calls = take(text);
     next = 0;
+    running = true;
     setTimeout(call, 10);
   }
   if (message.method === 'turn/steer') {
-    fs.appendFileSync(path.join(log, 'steers.jsonl'), JSON.stringify(message.params.input[0].text) + '\\n');
+    if (!running || message.params.expectedTurnId !== turn) return out({ id: message.id, error: { code: -32600, message: 'No active turn to steer.' } });
+    const text = message.params.input[0].text;
+    fs.appendFileSync(path.join(log, 'steers.jsonl'), JSON.stringify(text) + '\\n');
+    calls = [...calls, ...take(text, true)];
     out({ id: message.id, result: {} });
   }
-  if (message.method === 'turn/interrupt') out({ method: 'turn/completed', params: { turn: { id: turn, status: 'interrupted' } } });
+  if (message.method === 'turn/interrupt') {
+    running = false;
+    out({ method: 'turn/completed', params: { turn: { id: turn, status: 'interrupted' } } });
+  }
 });`;
 
 interface Call {
@@ -500,19 +512,6 @@ async function fixture(
     await rm(base, { recursive: true, force: true, maxRetries: 5 });
   });
   return fixture;
-}
-
-/** Wait until `check` holds, for at most `ms`. */
-async function until(
-  check: () => Promise<boolean> | boolean,
-  ms = 10_000,
-): Promise<void> {
-  const end = Date.now() + ms;
-  while (!(await check())) {
-    if (Date.now() > end)
-      throw new Error('The condition did not hold in time.');
-    await delay(20);
-  }
 }
 
 /**
@@ -2461,17 +2460,17 @@ await test('a conversation that cannot resume starts new, without the notes abou
     await until(() => holding);
     const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
     const record = join(lab.root, '.verifold', 'sessions', `${session}.json`);
-    // The process stops by itself, and its session saves the stop.
+    // The process stops by itself, and its session saves the stop. The record
+    // goes once the file holds what the session holds: a save that still runs
+    // would write the record again.
     await writeFile(join(lab.base, 'logs', 'd-1-alpha', 'stop'), '');
     await until(async () => {
-      try {
-        const status = (
-          JSON.parse(await readFile(record, 'utf8')) as { status: string }
-        ).status;
-        return status === 'ended' || status === 'failed';
-      } catch {
-        return false;
-      }
+      const held = lab.sessions.view(session)?.record;
+      return (
+        (held?.status === 'ended' || held?.status === 'failed') &&
+        (await readFile(record, 'utf8').catch(() => '')) ===
+          JSON.stringify(held)
+      );
     });
     await rm(record);
   } finally {
@@ -7080,7 +7079,8 @@ await test('pod requests while pods are off ask the person once for the whole la
     { title: 'Alpha', harness: 'codex' },
     { title: 'Beta', harness: 'codex' },
   ]);
-  // Both first turns end, so the post starts new turns instead of steering a running one.
+  // Both first turns end, so both threads have their pod tools. The post then
+  // starts a turn or steers a running one, and the script takes it either way.
   await until(
     async () =>
       (await lab.inputs('d-1-alpha')).length > 0 &&
