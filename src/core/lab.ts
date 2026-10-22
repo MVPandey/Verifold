@@ -20,7 +20,6 @@ import {
   postLine,
   proofRef,
   type Artifact,
-  type NewPost,
   type Post,
   type PostKind,
   type ReadState,
@@ -159,6 +158,7 @@ import {
   bringGroups,
   bringOut,
   budgetEnded,
+  callStatus,
   codeSetting,
   evidenceText,
   factLines,
@@ -182,6 +182,8 @@ import {
   verdictWord,
   verdictWords,
   withBrought,
+  wordsLine,
+  wordsPost,
 } from './lab/words.ts';
 export {
   addSpend,
@@ -3094,10 +3096,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           entry.state === 'open' &&
           askers(entry).includes(agent.id) &&
           entry.kind === ask.kind &&
-          // While pods are off, a pod request asks with need pods or no effect at all, else with a pod option.
+          // While pods are off, a pod request asks with need pods, else with a pod option.
           (off
-            ? entry.need === 'pods' ||
-              entry.options.every((option) => option.effect === null)
+            ? entry.need === 'pods'
             : entry.options.some((option) => option.effect?.type === 'pod')),
       );
       if (waiting)
@@ -3382,44 +3383,27 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         await this.withdraw(call, stale);
         fail(`Verifold withdrew ${call.id}: ${stale}`);
       }
-      const verifold = call.by === 'verifold';
-      // Words on Verifold's call go to the whole lab. Words on an agent's
-      // call go in the call's thread, else in a status line.
-      const record: Omit<NewPost, 'mentions' | 'artifacts'> = verifold
-        ? { author: 'person', kind: 'question', text: body }
-        : call.post
-          ? {
-              author: 'person',
-              kind: 'question',
-              replyTo: call.post,
-              text: body,
-            }
-          : {
-              author: 'verifold',
-              kind: 'status',
-              ...(call.direction ? { direction: call.direction } : {}),
-              text: clip(
-                `The person answered ${call.id} in their own words: ${JSON.stringify(body)}`,
-                boardLimits.text,
-              ),
-            };
-      if (!verifold)
-        await this.changeCall(call.id, (entry) => ({
-          ...entry,
-          state: 'answered',
-          words: body,
-        }));
-      const adding = this.add({ ...record, mentions: [], artifacts: [] });
-      if (verifold) {
+      if (call.by === 'verifold') {
         // The post is what reaches the agents, so a board that refuses it refuses the words.
-        await adding;
+        await this.add({
+          author: 'person',
+          kind: 'question',
+          text: body,
+          mentions: [],
+          artifacts: [],
+        });
         await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
         return;
       }
-      // The record of the answer. A full board refuses it, and the call keeps the words.
-      const post = await adding.catch(() => null);
+      await this.changeCall(call.id, (entry) => ({
+        ...entry,
+        state: 'answered',
+        words: body,
+      }));
+      // The record of the answer on the board. A full board refuses it, and the call keeps the words.
+      const post = await this.add(wordsPost(call, body)).catch(() => null);
       this.unheard(call, post);
-      const line = `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(body)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
+      const line = wordsLine(call, body);
       if (this.planQuestion(this.current(), call)) await this.hold(call, line);
       else this.wakeAskers(call, line);
     });
@@ -3498,8 +3482,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const at = new Date().toISOString();
     const lineOf = (answer: (typeof answers)[number]): string => {
       const { call, words, option } = answer;
-      if (words !== null)
-        return `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(words)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
+      if (words !== null) return wordsLine(call, words);
       const label = JSON.stringify(call.options[option ?? 0]?.label ?? '');
       return skipped
         ? `The person skipped ${call.id}, so your pick ${label} stands.`
@@ -3531,32 +3514,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     });
     for (const answer of answers) {
       const { call, words } = answer;
-      // The record on the board: the person's words in the call's thread,
-      // else a status line, as for any answer. A full board refuses it; the
-      // call keeps the answer.
+      // The record on the board, as for any answer. A full board refuses it,
+      // and the call keeps the answer.
       const post = await this.add(
-        words !== null && call.post
-          ? {
-              author: 'person',
-              kind: 'question',
-              replyTo: call.post,
-              text: words,
-              mentions: [],
-              artifacts: [],
-            }
-          : {
-              author: 'verifold',
-              kind: 'status',
-              ...(call.direction ? { direction: call.direction } : {}),
-              text: clip(
-                words !== null
-                  ? `The person answered ${call.id} in their own words: ${JSON.stringify(words)}`
-                  : lineOf(answer),
-                boardLimits.text,
-              ),
-              mentions: [],
-              artifacts: [],
-            },
+        words !== null
+          ? wordsPost(call, words)
+          : callStatus(call, lineOf(answer)),
       ).catch(() => null);
       this.unheard(call, post);
     }
@@ -3804,7 +3767,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
                 `${agent.handle}'s shell would reach more than ${callLimits.domains} domains. Undo an earlier access call first.`,
               );
           }
-          return { type: 'domains' };
+          return { type: 'domains', agent: call.by };
         });
     }
   }

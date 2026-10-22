@@ -420,8 +420,12 @@ export type CallApplied =
     }
   | { readonly type: 'open'; readonly direction: string }
   | { readonly type: 'stop'; readonly direction: string }
-  /** The shell of each agent that asked reaches the option's domains while the answer stands. */
-  | { readonly type: 'domains' };
+  /**
+   * The shell of each agent that asked reaches the option's domains while
+   * the answer stands. `agent`: the agent that asked first. Earlier builds
+   * read a record only with it, and no code here reads it.
+   */
+  | { readonly type: 'domains'; readonly agent: string };
 
 /**
  * A call for the person: cost, scope, access, or go. An agent asks with
@@ -1046,9 +1050,18 @@ export function callOptions(
   });
 }
 
-function parseApplied(value: unknown): CallApplied | null {
+/**
+ * What an answer changed, from `lab.json`. It must fit the effect of the
+ * chosen option, so a damaged file cannot make a call stand. `by`: the
+ * call's first asker, which a record of domains names.
+ */
+function parseApplied(
+  value: unknown,
+  by: string,
+  effect: CallEffect | null,
+): CallApplied | null {
   const entry = object(value);
-  if (!entry) return null;
+  if (!entry || entry.type !== effect?.type) return null;
   if (entry.type === 'pod' && typeof entry.lease === 'string')
     return /^lease-\d{1,6}$/.test(entry.lease)
       ? { type: 'pod', lease: entry.lease }
@@ -1078,9 +1091,7 @@ function parseApplied(value: unknown): CallApplied | null {
     directionId.test(entry.direction)
   )
     return { type: entry.type, direction: entry.direction };
-  // An earlier record also names the agent that asked first. The domains
-  // reach every agent that asked, so the name is not kept.
-  if (entry.type === 'domains') return { type: 'domains' };
+  if (entry.type === 'domains') return { type: 'domains', agent: by };
   return null;
 }
 
@@ -1113,6 +1124,13 @@ function parseCall(value: unknown): Call | null {
   const answer = object(entry.answer);
   const option = answer?.option;
   const at = recordTime(answer?.at);
+  const answered =
+    Number.isSafeInteger(option) &&
+    (option as number) >= 0 &&
+    (option as number) < options.length &&
+    at
+      ? { option: option as number, at }
+      : null;
   const facts = storedFacts(entry.facts);
   return {
     id: entry.id,
@@ -1146,7 +1164,17 @@ function parseCall(value: unknown): Call | null {
         })
       : [],
     kind,
-    need: callNeeds.find((item) => item === entry.need) ?? null,
+    need:
+      callNeeds.find((item) => item === entry.need) ??
+      // A pods call from before calls had a need: Verifold wrote it with two
+      // options without effects, the second "No GPU for this lab".
+      (entry.need === undefined &&
+      kind === 'access' &&
+      options.length === 2 &&
+      options.every((item) => !item.effect) &&
+      options[1]?.label === 'No GPU for this lab'
+        ? 'pods'
+        : null),
     question: entry.question.slice(0, callLimits.question),
     options,
     pick:
@@ -1164,13 +1192,7 @@ function parseCall(value: unknown): Call | null {
       : callLimits.defaultUndo,
     deadline: recordTime(entry.deadline),
     state,
-    answer:
-      Number.isSafeInteger(option) &&
-      (option as number) >= 0 &&
-      (option as number) < options.length &&
-      at
-        ? { option: option as number, at }
-        : null,
+    answer: answered,
     words:
       typeof entry.words === 'string' && entry.words.trim()
         ? entry.words.slice(0, callLimits.words)
@@ -1180,7 +1202,11 @@ function parseCall(value: unknown): Call | null {
         ? entry.post
         : null,
     undoUntil: recordTime(entry.undoUntil),
-    applied: parseApplied(entry.applied),
+    applied: parseApplied(
+      entry.applied,
+      entry.by,
+      answered ? (options[answered.option]?.effect ?? null) : null,
+    ),
     note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : null,
     ...(facts.length ? { facts } : {}),
     ...(typeof entry.held === 'string' && entry.held
