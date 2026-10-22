@@ -414,14 +414,15 @@ export class Compute {
 
   /**
    * `url` is the RunPod API origin. Tests use a fake server, a fake key store,
-   * and a clock. `onChange` gets one line for each lease change.
+   * and a clock. `onChange` gets one line for each lease change, and
+   * whether the change wakes agents.
    */
   constructor(
     root: string,
     options: {
       readonly store?: KeyStore;
       readonly url?: string;
-      readonly onChange?: (lease: Lease, line: string) => void;
+      readonly onChange?: (lease: Lease, line: string, wake: boolean) => void;
       readonly now?: () => number;
       /** The folder and writable paths of a task, for the copy back before a stop. */
       readonly taskFolder?: (task: string) => Promise<TaskPlace | null>;
@@ -820,14 +821,7 @@ export class Compute {
       stop: (id, run, signal) =>
         hidden(id, (target) => this.shell.stopRun(target, run, signal)),
       log: (id, run, head, tail) =>
-        hidden(id, async (target) => {
-          const log = await this.shell.runLog(target, run, head, tail);
-          return {
-            bytes: log.bytes,
-            head: log.head.toString('utf8'),
-            tail: log.tail ? log.tail.toString('utf8') : null,
-          };
-        }),
+        hidden(id, (target) => this.shell.runLog(target, run, head, tail)),
       metrics: (id, run) =>
         hidden(id, (target) => this.shell.runMetrics(target, run)),
       fetch: (id, run, paths, folder) =>

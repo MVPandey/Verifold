@@ -1296,10 +1296,18 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
     send: () => Promise.resolve(),
     start: () => Promise.resolve(),
     state: () =>
-      Promise.resolve({ state: 'done', exit: 0, tail: 'METRIC acc=0.9\n' }),
+      Promise.resolve({
+        state: 'done',
+        exit: 0,
+        tail: Buffer.from('METRIC acc=0.9\n'),
+      }),
     stop: () => Promise.resolve(),
     log: () =>
-      Promise.resolve({ bytes: 15, head: 'METRIC acc=0.9\n', tail: null }),
+      Promise.resolve({
+        bytes: 15,
+        head: Buffer.from('METRIC acc=0.9\n'),
+        tail: null,
+      }),
     metrics: () => Promise.resolve('METRIC acc=0.9\n'),
     fetch: () => Promise.resolve(),
     remove: () => Promise.resolve(),

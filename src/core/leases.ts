@@ -336,8 +336,13 @@ export interface LeaseHooks {
   readonly settings: () => ComputeSettings;
   /** The price and stock of a GPU type now, from the catalog. */
   readonly offer: (gpu: string) => Promise<GpuOffer | null>;
-  /** One line for the terminal and the coordinator when a lease changes. */
-  readonly onChange?: (lease: Lease, line: string) => void;
+  /**
+   * One line for the terminal and the coordinator when a lease changes.
+   * `wake`: false for a step that is not news for the agents yet, such as
+   * an approval while the pod starts. They wake when the pod is ready, or
+   * when the start fails.
+   */
+  readonly onChange?: (lease: Lease, line: string, wake: boolean) => void;
   /** Tests use a clock that they move. */
   readonly now?: () => number;
   /** A new SSH key pair for a lease. The pod gets the public key. */
@@ -610,6 +615,7 @@ export class Leases {
     patch: Partial<Lease>,
     by: Cause | 'verifold',
     text: string,
+    wake = true,
   ): Promise<Lease> {
     const next = await this.save({
       ...lease,
@@ -626,7 +632,7 @@ export class Leases {
     )
       await this.hooks.closed?.(next).catch(() => undefined);
     await this.recordMonth();
-    this.hooks.onChange?.(next, `${next.id}: ${text}`);
+    this.hooks.onChange?.(next, `${next.id}: ${text}`, wake);
     return next;
   }
 
@@ -846,6 +852,8 @@ export class Leases {
         by === 'person'
           ? 'You approved the lease. Verifold asks RunPod for the pod.'
           : 'The lease fits your limits, so Verifold started it without asking. Verifold asks RunPod for the pod.',
+        // The agents wake when the pod is ready, or when RunPod does not create it.
+        false,
       );
       let pod: Pod | null = null;
       try {
@@ -908,6 +916,7 @@ export class Leases {
         },
         'verifold',
         `RunPod created pod ${pod.id}. It starts now.`,
+        false,
       );
     });
   }
