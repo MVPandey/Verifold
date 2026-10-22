@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -345,6 +346,52 @@ await test('agency reads reject redirected directories and files', async () => {
     await assert.rejects(readMemory(join(target, 'USER.md')));
   });
 });
+
+await test('two first writes at once share one new agency directory', async () => {
+  await temporary(async (_root, directory) => {
+    await Promise.all([prepareAgency(directory), prepareAgency(directory)]);
+    assert.equal(
+      await readFile(join(directory, '.verifold-agency'), 'utf8'),
+      'Verifold agency v1\n',
+    );
+    assert.deepEqual(await readdir(directory), [
+      '.gitignore',
+      '.verifold-agency',
+    ]);
+  });
+});
+
+/** A draft marker: a call writes it before it puts the marker in place. */
+const draft = '.verifold-agency.00000000-0000-4000-8000-000000000000.tmp';
+
+await test("a directory with only another call's draft marker is still new", async () => {
+  await temporary(async (_root, directory) => {
+    await mkdir(directory);
+    await writeFile(join(directory, draft), 'Verifold agency v1\n');
+    await prepareAgency(directory);
+    assert.equal(
+      await readFile(join(directory, '.verifold-agency'), 'utf8'),
+      'Verifold agency v1\n',
+    );
+  });
+});
+
+for (const marker of ['link', 'folder', 'other text'] as const) {
+  await test(`a marker that is not Verifold's is refused next to a draft marker: ${marker}`, async () => {
+    await temporary(async (root, directory) => {
+      await mkdir(directory);
+      await writeFile(join(directory, draft), 'Verifold agency v1\n');
+      const path = join(directory, '.verifold-agency');
+      const source = join(root, 'marker.txt');
+      await writeFile(source, 'Verifold agency v1\n');
+      if (marker === 'link') await symlink(source, path);
+      else if (marker === 'folder') await mkdir(path);
+      else await writeFile(path, 'Another application');
+      await assert.rejects(prepareAgency(directory), /empty agency directory/);
+      assert.deepEqual(await readdir(directory), ['.verifold-agency', draft]);
+    });
+  });
+}
 
 for (const existing of [false, true]) {
   for (const outcome of ['accepted', 'skipped', 'failed'] as const) {

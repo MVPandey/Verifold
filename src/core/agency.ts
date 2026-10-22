@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
+import { link, lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { validateModel, type HarnessName } from './harness.ts';
@@ -77,6 +78,9 @@ export function agencyDirectory(cwd: string, path?: string): string {
   return resolve(cwd, path ?? join(homedir(), '.verifold', 'agency'));
 }
 
+/** The name of a draft marker. A call writes the draft, then puts it in place as the marker. */
+const markerDraft = /^\.verifold-agency\.[0-9a-f-]{36}\.tmp$/;
+
 /** Create only Verifold-owned private storage. Refuse redirected directories. */
 export async function prepareAgency(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -85,22 +89,16 @@ export async function prepareAgency(directory: string): Promise<void> {
       'Agency directory must be a directory, not a symbolic link.',
     );
   const marker = join(directory, '.verifold-agency');
-  if ((await readdir(directory)).length > 0) {
-    try {
-      if ((await readMemory(marker, 100)) !== 'Verifold agency v1')
-        throw new Error('Invalid marker.');
-    } catch {
-      throw new Error(
-        'Choose an empty agency directory or an existing Verifold agency.',
-      );
-    }
-  } else {
-    const owner = await open(marker, 'wx', 0o600);
-    try {
-      await owner.writeFile('Verifold agency v1\n');
-    } finally {
-      await owner.close();
-    }
+  // A new directory gets the marker. A draft is from another call that makes the marker at the same time, so the directory is still new.
+  if ((await readdir(directory)).every((name) => markerDraft.test(name)))
+    await placeMarker(marker);
+  try {
+    if ((await readMemory(marker, 100)) !== 'Verifold agency v1')
+      throw new Error('Invalid marker.');
+  } catch {
+    throw new Error(
+      'Choose an empty agency directory or an existing Verifold agency.',
+    );
   }
   const ignore = await open(
     join(directory, '.gitignore'),
@@ -117,6 +115,32 @@ export async function prepareAgency(directory: string): Promise<void> {
     await ignore.writeFile('*\n');
   } finally {
     await ignore.close();
+  }
+}
+
+/**
+ * Put the whole marker in place: write a draft, then make a hard link to it
+ * at the marker's path. A link never replaces a file that is already at that
+ * path. Thus a marker that another call made first stays, and the check after
+ * this function decides if it is real.
+ */
+async function placeMarker(marker: string): Promise<void> {
+  const draft = `${marker}.${randomUUID()}.tmp`;
+  try {
+    const file = await open(draft, 'wx', 0o600);
+    try {
+      await file.writeFile('Verifold agency v1\n');
+    } finally {
+      await file.close();
+    }
+    await link(draft, marker).catch((error: unknown) => {
+      if (
+        !(error instanceof Error && 'code' in error && error.code === 'EEXIST')
+      )
+        throw error;
+    });
+  } finally {
+    await rm(draft, { force: true });
   }
 }
 
