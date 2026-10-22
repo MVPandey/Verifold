@@ -24,9 +24,8 @@ import {
   type SessionRecord,
 } from '../src/core/session.ts';
 import { startDesk } from '../src/server/desk.ts';
-import { TranscriptFile } from '../src/core/transcript.ts';
+import { codexCommand, TranscriptFile } from '../src/core/transcript.ts';
 import {
-  codexCommand,
   credentialPaths,
   strictClaudeSettings,
   strictCodexOptions,
