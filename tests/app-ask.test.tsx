@@ -32,6 +32,7 @@ import { Screen } from '../src/app/App.tsx';
 import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import {
   FactsList,
+  listedWhen,
   sourceLink,
   sourceName,
 } from '../src/app/components/FactsList.tsx';
@@ -674,7 +675,7 @@ await test("before the plan, the lab home is the planner's: its work folded, its
   // Each fact once, with where it came from, or that it is unverified.
   assert.match(
     page,
-    /Facts I checked Qwen3\.5-9B has official SAEs · huggingface\.co\/Qwen · 2026-04-27 An H100 costs \$3\.99 an hour · unverified \(no source\)/,
+    /Facts I checked Qwen3\.5-9B has official SAEs · huggingface\.co\/Qwen · 2026-04-27 · listed [^·]+ An H100 costs \$3\.99 an hour · unverified \(no source\) · listed /,
   );
   assert.equal(page.match(/Qwen3\.5-9B has official SAEs/g)?.length, 1);
   assert.match(
@@ -924,7 +925,24 @@ await test('the plan of record is a card that leads its thread: the reading, a t
   );
   assert.match(html, /href="#\/board\/p-2">See v1<\/a>/);
   assert.match(html, /<details class="plan__facts" open="">/);
-  assert.match(shown, /Facts checked \(2\)/);
+  assert.match(shown, /Facts checked \(2\) Qwen3\.5-9B/);
+  // Each fact says when its plan listed it.
+  assert.match(
+    shown,
+    /Qwen3\.5-9B, with SAEs from April 27, 2026 · huggingface\.co\/Qwen · 2026-04-27 · listed /,
+  );
+  // A plan that listed no facts kept those of an earlier plan, and says so.
+  assert.match(
+    renderToStaticMarkup(
+      <BoardThread
+        thread={thread}
+        lab={{ ...lab, plan: { ...lab.plan!, factsCarried: true } }}
+      />,
+    )
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' '),
+    /Facts checked \(2\) · from an earlier plan Qwen3\.5-9B/,
+  );
   assert.match(
     shown,
     /No paper shows a cheap fix that survives a monitor · unverified \(no source\)/,
@@ -1000,9 +1018,21 @@ await test('a fact names its source as people read it: a link without the scheme
   );
   assert.match(
     html,
-    /H100 \$3\.99 an hour <span class="facts__source">· <a href="https:\/\/www\.runpod\.io\/pricing" target="_blank" rel="noreferrer noopener">runpod\.io\/pricing<\/a> · today 19:41<\/span>/,
+    /H100 \$3\.99 an hour <span class="facts__source">· <a href="https:\/\/www\.runpod\.io\/pricing" target="_blank" rel="noreferrer noopener">runpod\.io\/pricing<\/a> · today 19:41 · listed [^<]+<\/span>/,
   );
   assert.doesNotMatch(html, /href="javascript:/);
-  assert.match(html, /· javascript:alert\(1\)<\/span>/);
-  assert.match(html, /· 9 papers read, newest March 2026<\/span>/);
+  assert.match(html, /· javascript:alert\(1\) · listed [^<]+<\/span>/);
+  assert.match(
+    html,
+    /· 9 papers read, newest March 2026 · listed [^<]+<\/span>/,
+  );
+});
+
+await test('a fact says when its plan or call listed it: today, or the day, with the year in another year', () => {
+  const today = new Date(2026, 9, 22, 12, 0);
+  const at = (year: number, day: number): string =>
+    new Date(year, 9, day, 9, 5).toISOString();
+  assert.equal(listedWhen(at(2026, 22), today), 'today 09:05');
+  assert.equal(listedWhen(at(2026, 19), today), '19 Oct 09:05');
+  assert.equal(listedWhen(at(2025, 19), today), '19 Oct 2025 09:05');
 });

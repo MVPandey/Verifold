@@ -1587,6 +1587,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
             cost: plan.cost,
             directions: [...plan.directions],
             facts: keep(plan.facts, level.facts, 'facts').map(fact),
+            ...(plan.factsCarried ? { factsCarried: true } : {}),
             ...(plan.version === undefined ? {} : { version: plan.version }),
             previous: plan.previous ?? null,
             changed: plan.changed ?? null,
