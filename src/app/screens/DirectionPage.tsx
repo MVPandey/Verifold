@@ -346,7 +346,7 @@ function LiveLine({
 }
 
 /** Start an agent again after it stopped by itself too often, as the desk's Start again does. */
-function StartAgain({ agent }: { readonly agent: string }): ReactNode {
+export function StartAgain({ agent }: { readonly agent: string }): ReactNode {
   const { controls, action } = useControl<null>((controls, _, key) =>
     controls.restartAgent(agent, key),
   );

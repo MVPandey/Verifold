@@ -40,8 +40,13 @@ import { PodNeeds, PodsLine, type PodActions } from '../components/Pods.tsx';
 import { waitingPods } from '../pods.ts';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
-import type { AgentActions } from './DirectionPage.tsx';
-import { PlannerComposer, Scoping, planQuestions } from './Scoping.tsx';
+import { StartAgain, type AgentActions } from './DirectionPage.tsx';
+import {
+  PlannerComposer,
+  Scoping,
+  planQuestions,
+  plannerEnded,
+} from './Scoping.tsx';
 
 /** Pages of older posts that a gap fill reads at most, before it gives the older posts up. */
 const gapPages = 10;
@@ -78,7 +83,9 @@ export interface LabActions {
  * canvas ("8. The lab at work"). Depth opens on its own page. `show`: a post
  * on the board that a link to it (`#/board/<id>`) brings into view. Before
  * the plan, the planner's work and its questions take the place of the
- * directions ("6 Scoping"). With `pods`, a pod that waits for the person
+ * directions ("6 Scoping"). A planner that ended before the plan leaves the
+ * home as it is after the plan, with a line that says how it ended and, for
+ * a crash, Start again. With `pods`, a pod that waits for the person
  * shows in Needs you, with Approve and Deny, and so do pod actions that
  * failed in the background and pod notices.
  */
@@ -107,8 +114,10 @@ export function LabHome({
   const plannerDirection = lab.directions.find(
     (entry) => entry.id === planner?.direction,
   );
+  const ended =
+    !lab.plan && planner ? plannerEnded(planner, lab.agentsHere) : null;
   const scoping =
-    !lab.plan && planner && plannerDirection && agentActions
+    !lab.plan && !ended && planner && plannerDirection && agentActions
       ? { planner, direction: plannerDirection, agentActions }
       : null;
   // The planner's questions show as cards, so the Needs-you line leaves them out.
@@ -174,7 +183,18 @@ export function LabHome({
           ) : (
             // Before the plan, the planner's own line says what happens.
             !scoping &&
+            !ended &&
             !waiting && <StatusBar tone="ok">Nothing needs you.</StatusBar>
+          )}
+          {ended && planner && (
+            <>
+              <StatusBar tone="muted">{ended}</StatusBar>
+              {planner.status === 'crashed' && lab.agentsHere && (
+                <div className="start-again">
+                  <StartAgain agent={planner.id} />
+                </div>
+              )}
+            </>
           )}
           {lab.paused?.reason === 'deadline' && lab.agentsHere && <MoreTime />}
           <WorksLine lab={lab} />

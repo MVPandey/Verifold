@@ -26,6 +26,7 @@ import {
   type StartActions,
 } from '../src/app/ask.ts';
 import { threads } from '../src/app/board.ts';
+import { ControlsContext, type LabControls } from '../src/app/controls.ts';
 import { intentFor, unansweredAfter } from '../src/app/intent.ts';
 import { href, parseRoute } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
@@ -740,6 +741,104 @@ await test("before the plan, the lab home is the planner's: its work folded, its
     ),
     /The planner waits for your answers\./,
   );
+});
+
+await test('a planner that ended before the plan leaves the usual lab home: a line says how it ended, Open a direction shows, and Start again only after a crash', () => {
+  const [planner] = scopingLab().agents;
+  assert.ok(planner);
+  const ok = (): Promise<{ ok: true }> => Promise.resolve({ ok: true });
+  const unread = (): Promise<{ error: string }> =>
+    Promise.resolve({ error: 'not in this test' });
+  const controls: LabControls = {
+    addDirection: ok,
+    stopDirection: ok,
+    restartAgent: ok,
+    cancelRun: ok,
+    moreTime: ok,
+    dismiss: ok,
+    reply: ok,
+    run: unread,
+    diff: unread,
+    board: unread,
+  };
+  // A stop or a close ends the planner's questions; a crash leaves them open.
+  const home = (
+    status: Agent['status'],
+    live: string,
+    fields: Partial<Lab> = {},
+  ): { readonly page: string; readonly html: string } => {
+    const lab = scopingLab({
+      agents: [
+        {
+          ...planner,
+          status,
+          live: {
+            state: status === 'working' ? 'working' : 'ended',
+            text: live,
+            since: ago(1),
+          },
+        },
+      ],
+      ...(status === 'stopped' || status === 'closed' ? { needsYou: [] } : {}),
+      ...fields,
+    });
+    const element = (
+      <ControlsContext.Provider value={controls}>
+        <LabHome
+          snapshot={snapshot(lab)}
+          lab={lab}
+          connection="live"
+          now={now}
+          actions={actions}
+          agentActions={agentActions}
+        />
+      </ControlsContext.Provider>
+    );
+    return { page: text(element), html: renderToStaticMarkup(element) };
+  };
+  const working = home('working', 'Reading a page');
+  assert.match(
+    working.page,
+    /Planning\. The planner keeps reading while you answer\./,
+  );
+  assert.doesNotMatch(working.html, /class="open-direction"/);
+  const stopped = home('stopped', 'Stopped');
+  assert.match(
+    stopped.page,
+    /You stopped the planner before it made a plan\. Open a direction yourself to go on\./,
+  );
+  const closed = home('closed', 'Closed by its agent');
+  assert.match(
+    closed.page,
+    /The planner closed its direction before it made a plan\. Open a direction yourself to go on\./,
+  );
+  for (const ended of [stopped, closed]) {
+    // The usual home: the directions with the planner's own, Open a direction, and the box to the lab.
+    assert.match(ended.page, /Directions .*Plan the lab/);
+    assert.match(ended.html, /class="open-direction"/);
+    assert.match(ended.page, /Write to the lab/);
+    assert.doesNotMatch(ended.page, /Send answers|Start again|Planning\./);
+    assert.doesNotMatch(ended.page, /Nothing needs you/);
+  }
+  const crashed = home('crashed', 'Stopped by itself too often');
+  assert.match(
+    crashed.page,
+    /The planner stopped by itself too often before it made a plan\. Start it again, or open a direction yourself\. Start again/,
+  );
+  assert.match(crashed.html, /class="open-direction"/);
+  // Its questions wait on the Needs-you line, not as cards.
+  assert.match(crashed.page, /Needs you/);
+  assert.doesNotMatch(crashed.page, /Send answers/);
+  // Without the lab's agents, nothing can start: the line only says what happened.
+  const away = home('crashed', 'Stopped by itself too often', {
+    agentsHere: false,
+  });
+  assert.match(
+    away.page,
+    /The planner stopped by itself too often before it made a plan\./,
+  );
+  assert.doesNotMatch(away.page, /Start it again|Start again/);
+  assert.doesNotMatch(away.html, /class="open-direction"/);
 });
 
 await test("an answer in the person's own words replaces the options, and a call that is not the planner's waits on the Needs-you line", () => {
