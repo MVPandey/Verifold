@@ -411,7 +411,10 @@ interface Loaded {
   readonly works: readonly Work[];
   readonly away: Lab['away'];
   readonly turns: ReadonlyMap<string, readonly ActivityTurn[]>;
+  /** The model that each agent's harness reported, by agent ID. */
   readonly models: ReadonlyMap<string, string>;
+  /** The model that each agent's session asked for, by agent ID, such as one that Verifold picked for Codex. */
+  readonly requested: ReadonlyMap<string, string>;
 }
 
 /** A transcript file that the API follows, with its turns as of `key`. */
@@ -1508,6 +1511,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         handle: ref.handle,
         harness: ref.harness,
         model: loaded.models.get(ref.id) ?? ref.model,
+        requestedModel: ref.model ?? loaded.requested.get(ref.id) ?? null,
         direction: ref.direction,
         check: ref.check,
         status: ref.status,
@@ -1833,6 +1837,9 @@ export class ApiReader {
         agent.session
           ? sources.session(agent.session)?.record.reportedModel
           : undefined,
+        agent.session
+          ? sources.session(agent.session)?.record.model
+          : undefined,
       );
     this.prune(root, agents);
     if (view.runs) {
@@ -1853,12 +1860,14 @@ export class ApiReader {
     );
     const turns = new Map<string, readonly ActivityTurn[]>();
     const models = new Map<string, string>();
+    const requested = new Map<string, string>();
     for (const [index, agent] of agents.entries()) {
       turns.set(agent.id, this.turnsOf(followed[index] ?? null));
-      const reported = agent.session
-        ? sources.session(agent.session)?.record.reportedModel
+      const session = agent.session
+        ? sources.session(agent.session)?.record
         : undefined;
-      if (reported) models.set(agent.id, reported);
+      if (session?.reportedModel) models.set(agent.id, session.reportedModel);
+      if (session?.model) requested.set(agent.id, session.model);
     }
     const away = view.runs ? await sources.away() : null;
     const compute = sources.compute?.view() ?? null;
@@ -1874,6 +1883,7 @@ export class ApiReader {
       away: away ? awayOf(view, away, gpu?.spent ?? null, disputes) : null,
       turns,
       models,
+      requested,
     };
   }
 

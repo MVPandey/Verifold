@@ -863,6 +863,37 @@ await test('the snapshot holds what the screens show, and no internal field, key
     assert.equal(json.includes(hidden), false, `the snapshot shows ${hidden}`);
 });
 
+await test("an agent's requested model is its own, else the one that its session asked for, as when Verifold picked Codex's model", async (t) => {
+  const root = await project();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const view = seededView();
+  const [first, second] = view.directions;
+  assert.ok(first && second);
+  const picked: LabView = {
+    ...view,
+    directions: [first, { ...second, agent: { ...second.agent, model: null } }],
+  };
+  const reader = new ApiReader(
+    sources(root, () => picked, {
+      session: (id) =>
+        id === sessionOf.a2
+          ? ({
+              record: { model: 'gpt-6-astra', reportedModel: 'gpt-6.1-sol' },
+            } as unknown as ReturnType<ApiSources['session']>)
+          : null,
+    }),
+  );
+  const agents = parse((await reader.build()).json).lab?.agents ?? [];
+  const codex = agents.find((agent) => agent.id === 'a-2');
+  assert.equal(codex?.requestedModel, 'gpt-6-astra');
+  assert.equal(codex?.model, 'gpt-6.1-sol');
+  // The agent's own model comes first.
+  assert.equal(
+    agents.find((agent) => agent.id === 'a-1')?.requestedModel,
+    'opus[1m]',
+  );
+});
+
 await test('the snapshot names the planner, the facts and option details of a call, and the version of the plan and what changed', async (t) => {
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));

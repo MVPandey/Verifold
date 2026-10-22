@@ -21,7 +21,7 @@ import type {
 import type { ActOutcome, Loaded, StepQuery } from '../api.ts';
 import { ControlsContext, useControl } from '../controls.ts';
 import { foldQuery, refreshKey, stepTotal, turnSummary } from '../activity.ts';
-import { clock, harnessName, modelName, since } from '../format.ts';
+import { agentModelName, clock, harnessName, since } from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { byStart, filled, joinTurns, runPlace, type Older } from '../turns.ts';
@@ -135,7 +135,9 @@ function DirectionHead({
             {agent.model && (
               <>
                 {' '}
-                <span title={agent.model}>{modelName(agent.model)}</span>
+                <span title={agent.model}>
+                  {agentModelName(agent.model, agent.requestedModel)}
+                </span>
               </>
             )}
           </>

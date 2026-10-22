@@ -65,24 +65,74 @@ const families: Readonly<Record<string, string>> = {
 };
 
 /**
- * A model ID as a name: "claude-opus-5-5[1m]" is "Opus 5.5 (1M)", and
- * "gpt-6-astra" is "GPT-6 Astra". An alias such as "opus[1m]" shows its
- * family without a version, "Opus (1M)", because an alias moves to newer
- * models over time. Any other ID shows as it is.
+ * A model ID, read once: its family and its name as the app shows it.
+ * "claude-opus-5-5[1m]" is Opus, "Opus 5.5 (1M)", and "gpt-6-astra" is
+ * "GPT-6 Astra". A Claude family counts wherever it stands in a Claude ID,
+ * so a Bedrock ID such as "us.anthropic.claude-opus-5-5-v1:0" and an older
+ * one such as "claude-3-opus-20240229" are Opus too. An alias such as
+ * "opus[1m]" shows no version, "Opus (1M)", because an alias moves to newer
+ * models over time. Any other ID is a family of its own and shows as it is.
  */
-export function modelName(id: string): string {
-  const oneM = /\[1m\]$/i.test(id);
+function readModel(id: string): {
+  readonly family: string;
+  readonly name: string;
+} {
+  const context = /\[1m\]$/i.test(id) ? ' (1M)' : '';
   const bare = id.replace(/\[1m\]$/i, '');
-  const context = oneM ? ' (1M)' : '';
-  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?(?:-\d{8})?$/.exec(bare);
-  const family = claude ? families[claude[1] ?? ''] : families[bare];
-  if (claude && family)
-    return `${family} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}${context}`;
-  if (family) return `${family}${context}`;
+  // The version comes after the family in "claude-opus-5-5", and before it in "claude-3-5-sonnet".
+  const after =
+    /claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2})(?!\d))?/.exec(bare);
+  const before = /claude-(\d+)(?:-(\d{1,2}))?-(opus|sonnet|haiku|fable)/.exec(
+    bare,
+  );
+  const family = families[bare]
+    ? bare
+    : bare.includes('claude')
+      ? (after?.[1] ??
+        before?.[3] ??
+        /(opus|sonnet|haiku|fable)/.exec(bare)?.[1])
+      : undefined;
+  if (family) {
+    const [major, minor] = after
+      ? [after[2], after[3]]
+      : before
+        ? [before[1], before[2]]
+        : [];
+    const version = major ? ` ${major}${minor ? `.${minor}` : ''}` : '';
+    return {
+      family,
+      name: `${families[family] ?? family}${version}${context}`,
+    };
+  }
   const gpt = /^gpt-(\d+(?:\.\d+)?)-([a-z]+)$/.exec(bare);
-  if (gpt?.[1] && gpt[2])
-    return `GPT-${gpt[1]} ${gpt[2].charAt(0).toUpperCase()}${gpt[2].slice(1)}${context}`;
-  return id;
+  return {
+    family: bare,
+    name:
+      gpt?.[1] && gpt[2]
+        ? `GPT-${gpt[1]} ${gpt[2].charAt(0).toUpperCase()}${gpt[2].slice(1)}${context}`
+        : id,
+  };
+}
+
+/** A model ID as a name, such as "Opus 5.5 (1M)". */
+export function modelName(id: string): string {
+  return readModel(id).name;
+}
+
+/**
+ * An agent's model by name. When the harness reports a model of another
+ * family than the one that Verifold asked for, the name says so: "Sonnet
+ * 5.5, asked for Opus".
+ */
+export function agentModelName(
+  model: string,
+  requested: string | null | undefined,
+): string {
+  const shown = readModel(model);
+  const asked = requested ? readModel(requested) : null;
+  return asked && asked.family !== shown.family
+    ? `${shown.name}, asked for ${asked.name}`
+    : shown.name;
 }
 
 /** A text cut to `max` characters, with "…" at the cut. */

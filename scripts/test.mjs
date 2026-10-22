@@ -5,6 +5,10 @@ const names = (await readdir('tests')).filter((name) =>
 );
 if (!names.length) throw new Error('No test files found');
 
+// No test depends on the person's own Claude Code model.
+const env = { ...process.env };
+delete env.ANTHROPIC_MODEL;
+
 /**
  * Run test files in one `node --test`. A hung test fails after 3 minutes
  * with its name. On CI, TAP prints each failure with its details at once, so
@@ -23,7 +27,7 @@ function run(files, flags) {
       ...(process.env.CI ? ['--test-reporter=tap'] : []),
       ...files.map((name) => `tests/${name}`),
     ],
-    { stdio: 'inherit', timeout: 600_000, killSignal: 'SIGKILL' },
+    { env, stdio: 'inherit', timeout: 600_000, killSignal: 'SIGKILL' },
   );
   if (result.error && result.signal !== 'SIGKILL') throw result.error;
   if (result.signal === 'SIGKILL')

@@ -526,6 +526,12 @@ export interface Agent {
   readonly harness: Harness;
   /** The model that the harness reported, or else the one Verifold asked for. */
   readonly model: string | null;
+  /**
+   * The model that Verifold asked for: the project's, the profile's, or
+   * Verifold's own pick. Null: Verifold asked for none, so the harness runs
+   * the person's own model. An earlier server leaves it out.
+   */
+  readonly requestedModel?: string | null;
   /** The direction that it owns. Null for a checker. */
   readonly direction: string | null;
   /** The check that it runs. Null for a direction's agent. */

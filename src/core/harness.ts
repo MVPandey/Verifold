@@ -332,9 +332,8 @@ export function validateModel(
   if (
     model !== undefined &&
     (typeof model !== 'string' ||
-      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,189}(?:\[[a-z0-9]{1,8}\])?$/.test(
-        model,
-      ))
+      model.length > 200 ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*(?:\[[a-z0-9]{1,8}\])?$/.test(model))
   )
     throw new Error(
       'Harness model must be a valid identifier of at most 200 characters.',
