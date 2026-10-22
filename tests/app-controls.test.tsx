@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type {
   Agent,
+  Call,
   CheckItem,
   Direction,
   Lab,
@@ -33,6 +34,7 @@ import {
   labControls,
   type LabControls,
 } from '../src/app/controls.ts';
+import { controls } from './app-controls-fixture.ts';
 import {
   enterCompletes,
   insertMention,
@@ -257,21 +259,6 @@ const agentStub: AgentActions = {
   turn: () => Promise.resolve({ error: 'not in this test' }),
   thread: () => Promise.resolve({ error: 'not in this test' }),
 };
-const unread = (): Promise<{ error: string }> =>
-  Promise.resolve({ error: 'not in this test' });
-const controls: LabControls = {
-  addDirection: ok,
-  stopDirection: ok,
-  restartAgent: ok,
-  cancelRun: ok,
-  moreTime: ok,
-  dismiss: ok,
-  reply: ok,
-  run: unread,
-  diff: unread,
-  board: unread,
-};
-
 /** The page for a route, with the lab's controls or, as a tab without a token, without them. */
 function render(
   snapshot: Snapshot,
@@ -465,26 +452,61 @@ await test("the direction page's menu opens its changes, and stops it only where
   );
 });
 
-await test('an agent that stopped by itself too often can start again from its line', () => {
-  const crashed = story({
-    agents: [
-      agent('a-2', 'claude-2', 'claude', {
-        direction: 'd-2',
-        status: 'crashed',
-        live: {
-          state: 'ended',
-          text: 'Stopped by itself too often',
-          since: ago(5),
-        },
-      }),
-    ],
-  });
+await test('an agent that stopped by itself too often can start again from its line, also while its call waits', () => {
+  const agents = [
+    agent('a-2', 'claude-2', 'claude', {
+      direction: 'd-2',
+      status: 'crashed',
+      live: {
+        state: 'ended',
+        text: 'Stopped by itself too often',
+        since: ago(5),
+      },
+    }),
+  ];
+  const crashed = story({ agents });
   const page = text(render(crashed, href.direction('d-2')));
   assert.match(page, /Stopped by itself too often Start again/);
   assert.doesNotMatch(
     text(render(crashed, href.direction('d-2'), null)),
     /Start again/,
   );
+  // The call stays open for the person, and the agent hears the answer when it starts again.
+  const waiting: Call = {
+    id: 'c-4',
+    at: ago(3),
+    kind: 'access',
+    question: 'Let me install scikit-learn?',
+    why: 'The probes need it.',
+    askers: [
+      {
+        agent: 'a-2',
+        handle: 'claude-2',
+        direction: 'd-2',
+        why: 'The probes need it.',
+      },
+    ],
+    byVerifold: false,
+    options: [
+      { label: 'Allow', usd: null, minutes: null, effect: null },
+      { label: 'Deny', usd: null, minutes: null, effect: null },
+    ],
+    pick: 0,
+    undoMinutes: 10,
+    wordsLimit: 2000,
+    applying: false,
+    state: 'open',
+    answer: null,
+    words: null,
+    undoUntil: null,
+    note: null,
+    post: 'p-12',
+  };
+  const both = text(
+    render(story({ agents, needsYou: [waiting] }), href.direction('d-2')),
+  );
+  assert.match(both, /Waiting for your answer/);
+  assert.match(both, /Stopped by itself too often Start again/);
 });
 
 await test('the lab home: open a direction, open disputes pinned, how a check went, older posts, and Reply', () => {

@@ -19,7 +19,7 @@ import type {
   TurnPage,
 } from '../../protocol/api.ts';
 import type { ActOutcome, Loaded, StepQuery } from '../api.ts';
-import { ControlsContext, useControl } from '../controls.ts';
+import { ControlsContext, useControl, type LabControls } from '../controls.ts';
 import { foldQuery, refreshKey, stepTotal, turnSummary } from '../activity.ts';
 import { agentModelName, clock, harnessName, since } from '../format.ts';
 import { href } from '../route.ts';
@@ -313,6 +313,7 @@ function LiveLine({
   readonly now: number;
 }): ReactNode {
   const { live } = agent;
+  const restart = canStartAgain(agent, lab, useContext(ControlsContext));
   return (
     <>
       {live.state === 'working' && (
@@ -333,23 +334,40 @@ function LiveLine({
           <DecideLink call={call.id} className="button button--dark" />
         </div>
       )}
-      {live.state !== 'working' && !call && (
+      {/* A crashed agent can start again while a call waits: the call stays open for the person. */}
+      {live.state !== 'working' && (!call || restart) && (
         <div role="status" className="live live--quiet">
           <span className="live__text">{live.text}</span>
-          {agent.status === 'crashed' && lab.agentsHere && (
-            <StartAgain agent={agent.id} />
-          )}
+          {restart && <StartAgain agent={agent.id} />}
         </div>
       )}
     </>
   );
 }
 
+/**
+ * Whether the person can start the agent again from here: only after it
+ * stopped by itself too often, while the lab's agents are here, in a tab
+ * with the lab's controls.
+ */
+export function canStartAgain(
+  agent: Agent,
+  lab: Lab,
+  controls: LabControls | null,
+): boolean {
+  return agent.status === 'crashed' && lab.agentsHere && controls !== null;
+}
+
+/** What Start again sends for an agent: the lab starts that agent again. */
+export function startAgainWith(
+  agent: string,
+): (controls: LabControls, _: null, key: string) => Promise<ActOutcome> {
+  return (controls, _, key) => controls.restartAgent(agent, key);
+}
+
 /** Start an agent again after it stopped by itself too often, as the desk's Start again does. */
 export function StartAgain({ agent }: { readonly agent: string }): ReactNode {
-  const { controls, action } = useControl<null>((controls, _, key) =>
-    controls.restartAgent(agent, key),
-  );
+  const { controls, action } = useControl<null>(startAgainWith(agent));
   if (!controls) return null;
   return (
     <>

@@ -1582,6 +1582,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     directionCounts: directionCounts(state.directions, settled, disputed),
     agents,
     planner: state.opener,
+    plannerStarting: view.openingPlanner === true,
     plan:
       plan && level.whole
         ? {

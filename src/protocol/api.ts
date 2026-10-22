@@ -258,6 +258,12 @@ export interface Lab {
    * are its questions to the person. Added after version 1.
    */
   readonly planner?: string | null;
+  /**
+   * The lab opens its planner now. False: it opens none, so a lab without a
+   * planner stays without one. Added after version 1: an earlier server
+   * leaves it out.
+   */
+  readonly plannerStarting?: boolean;
   readonly plan: Plan | null;
   /** The newest posts, oldest first. `GET /api/v1/board?before=` pages back. */
   readonly board: BoardPage;

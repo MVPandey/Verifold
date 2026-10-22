@@ -562,6 +562,8 @@ export class Lab {
   private parking: Promise<void> | null = null;
   /** A plan opens its directions now. A second plan waits for it. */
   private planning = false;
+  /** `start` opens the planner now, so a lab without one is not without it for good. */
+  private openingPlanner = false;
   /** Closed directions whose close runs now. */
   private readonly finishing = new Set<string>();
   /** The calls whose answer Verifold applies now. Each one still answers its deadline. */
@@ -823,6 +825,7 @@ export class Lab {
         (sum, entry) => sum + (entry.spend?.usd ?? 0),
         0,
       ),
+      openingPlanner: this.openingPlanner,
       directions: state.directions.flatMap((direction) => {
         const agent = this.agents.get(direction.agent);
         return agent
@@ -883,6 +886,8 @@ export class Lab {
       const budget = options.hours === undefined ? null : hours(options.hours);
       const take = async (): Promise<void> => {
         const now = Date.now();
+        // From the first view of the lab on, until the planner opens or fails below.
+        this.openingPlanner = Boolean(this.runs && this.options.harnesses);
         this.state = {
           schemaVersion: 1,
           question: asked,
@@ -918,6 +923,7 @@ export class Lab {
         } catch (error) {
           // The lab did not start: nothing of it stays in memory, so the run is free again.
           this.state = null;
+          this.openingPlanner = false;
           throw error;
         }
       };
@@ -958,6 +964,9 @@ export class Lab {
         });
       }).catch(() => {});
       return false;
+    } finally {
+      this.openingPlanner = false;
+      this.options.onChange?.();
     }
   }
 
@@ -1459,6 +1468,8 @@ export class Lab {
         restarts: [],
         session: null,
       }));
+      // A crashed planner's answers waited for it: it hears them in this wake.
+      await this.tellHeld();
       this.loop(agent.id).add(
         [{ kind: 'restart', text: 'The person started you again.' }],
         0,
