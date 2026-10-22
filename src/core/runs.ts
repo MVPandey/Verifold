@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import {
   chmod,
@@ -11,7 +11,6 @@ import {
   realpath,
   rename,
   rm,
-  writeFile,
   type FileHandle,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -67,6 +66,8 @@ export const runLimits = {
   outputBytes: 100 * 1024 * 1024,
   /** Files and folders that Verifold looks at for the outputs of one run. */
   outputEntries: 10_000,
+  /** Verifold copies a kept output in parts of this size, so its memory does not grow with the output. */
+  copyPart: 1024 * 1024,
   /** The log keeps its start up to this size. Past it, a cut line and the last `logTail` bytes. */
   logBytes: 20 * 1024 * 1024,
   logTail: 1024 * 1024,
@@ -618,15 +619,15 @@ class RunLog {
 }
 
 /**
- * Read a file of a run's folder that no sandboxed process can change any
+ * Open a file of a run's folder that no sandboxed process can change any
  * more: a regular file with one link on the folder's device, opened without
- * following a link, of at most `max` bytes. Null otherwise.
+ * following a link. Null otherwise. The caller reads at most its limit, and
+ * closes the handle.
  */
-async function readKept(
+async function openKept(
   path: string,
   device: number,
-  max: number,
-): Promise<Buffer | null> {
+): Promise<FileHandle | null> {
   let handle: FileHandle;
   try {
     handle = await open(
@@ -636,20 +637,144 @@ async function readKept(
   } catch {
     return null;
   }
+  let kept = false;
   try {
     const stats = await handle.stat();
-    if (
-      !stats.isFile() ||
-      stats.nlink !== 1 ||
-      stats.dev !== device ||
-      stats.size > max
-    )
-      return null;
-    const content = await handle.readFile();
-    return content.length > max ? null : content;
+    kept = stats.isFile() && stats.nlink === 1 && stats.dev === device;
+  } finally {
+    if (!kept) await handle.close();
+  }
+  return kept ? handle : null;
+}
+
+/** A small file of a run's folder, as `openKept` opens it. Null for one that is not kept, or that is larger than `max`. */
+async function readKept(
+  path: string,
+  device: number,
+  max: number,
+): Promise<Buffer | null> {
+  const handle = await openKept(path, device);
+  if (!handle) return null;
+  try {
+    // One byte more than `max` shows a file that is too large.
+    const content = Buffer.alloc(max + 1);
+    let size = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(
+        content,
+        size,
+        content.length - size,
+        null,
+      );
+      if (bytesRead === 0) return content.subarray(0, size);
+      size += bytesRead;
+      if (size > max) return null;
+    }
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * What a copy of a kept output gives: its size and hash; 'held' when it
+ * holds a secret value; null when the file grew past the limit during the
+ * copy.
+ */
+type Copied =
+  | { readonly bytes: number; readonly sha256: string }
+  | 'held'
+  | null;
+
+/**
+ * Copy an open kept file to `target`, `runLimits.copyPart` bytes at a time,
+ * and hash it on the way. The copy goes to a temporary file in `folder`, on
+ * the same disk, and only a copy that is kept gets its parent folders and its
+ * name, so nothing else stays in the outputs. With a guard, the last bytes
+ * that a later part could make a secret value of wait: as many as the
+ * longest value has, and one more. So no byte of a secret value reaches the
+ * disk, and memory stays under a part and that many bytes.
+ */
+async function copyKept(
+  handle: FileHandle,
+  folder: string,
+  target: string,
+  max: number,
+  guard: SecretGuard | undefined,
+): Promise<Copied> {
+  const temporary = join(folder, `.${randomUUID()}.part`);
+  const scan = guard?.stream();
+  const hold = scan ? scan.longest + 1 : 0;
+  const hash = createHash('sha256');
+  const part = Buffer.allocUnsafe(runLimits.copyPart);
+  let waiting = Buffer.alloc(0);
+  let bytes = 0;
+  let copied: Copied = null;
+  try {
+    const out = await open(temporary, 'wx', 0o600);
+    try {
+      for (;;) {
+        const { bytesRead } = await handle.read(part, 0, part.length, null);
+        if (bytesRead === 0) {
+          await out.writeFile(waiting);
+          copied = { bytes, sha256: hash.digest('hex') };
+          break;
+        }
+        bytes += bytesRead;
+        if (bytes > max) break;
+        const read = part.subarray(0, bytesRead);
+        if (scan?.holds(read)) {
+          copied = 'held';
+          break;
+        }
+        hash.update(read);
+        if (read.length >= hold) {
+          await out.writeFile(waiting);
+          await out.writeFile(read.subarray(0, read.length - hold));
+          waiting = Buffer.from(read.subarray(read.length - hold));
+        } else {
+          const joined = Buffer.concat([waiting, read]);
+          const free = Math.max(0, joined.length - hold);
+          await out.writeFile(joined.subarray(0, free));
+          waiting = joined.subarray(free);
+        }
+      }
+    } finally {
+      await out.close();
+    }
+    if (copied === null || copied === 'held') return copied;
+    const made = await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    try {
+      await rename(temporary, target);
+    } catch (error) {
+      // The folders that this copy made go with it.
+      if (made)
+        await rm(made, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+    return copied;
+  } finally {
+    // A cleanup that fails changes nothing that the run's note says.
+    await rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+/** Plain reasons for a move of a run's folder that failed, by error code. */
+const moveErrors: Readonly<Record<string, string>> = {
+  ENOENT: 'the folder is not there',
+  EACCES: 'no permission to move it',
+  EPERM: 'no permission to move it',
+  EBUSY: 'the folder is in use',
+  EEXIST: 'a kept folder of that name is there already',
+  ENOTEMPTY: 'a kept folder of that name is there already',
+};
+
+/** Why the move of a run's folder failed, in a few words. */
+function moveError(error: unknown): string {
+  const code =
+    error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : '';
+  return moveErrors[code] ?? 'the move failed';
 }
 
 /** A run's process while it runs. */
@@ -1622,15 +1747,18 @@ export class RunLedger {
     };
     try {
       await rename(paths.folder, paths.kept);
-    } catch {
-      return collected;
+    } catch (error) {
+      return {
+        ...collected,
+        note: `Verifold could not keep the run's folder (${moveError(error)}), so it read no metrics.json and kept no outputs.`,
+      };
     }
     const top = await lstat(paths.kept);
     const tree = await lstat(join(paths.kept, 'tree')).catch(() => null);
     if (!top.isDirectory() || !tree?.isDirectory() || tree.dev !== top.dev)
       return {
         ...collected,
-        note: 'The run replaced its folder, so Verifold took no metrics and no outputs.',
+        note: 'The run replaced its folder, so Verifold read no metrics.json and kept no outputs.',
       };
     const base = join(paths.kept, 'tree');
     const json = await readKept(
@@ -1686,6 +1814,8 @@ export class RunLedger {
           failed.push(rel);
         }
         for (const name of names) await copy(`${rel}/${name}`);
+        // A folder counts as copied once a file in it is, also by an earlier, more specific entry.
+        if (names.some((name) => copied.has(`${rel}/${name}`))) copied.add(rel);
         return;
       }
       if (!stats.isFile()) return;
@@ -1697,28 +1827,41 @@ export class RunLedger {
         return;
       }
       try {
-        const content = await readKept(
-          path,
-          top.dev,
-          runLimits.outputBytes - bytes,
-        );
-        if (!content) return;
-        if (guard?.holds(rel) || guard?.holds(content)) {
-          if (guard.holds(rel)) named++;
-          else held.push(rel);
+        const handle = await openKept(path, top.dev);
+        if (!handle) return;
+        try {
+          if (guard?.holds(rel)) {
+            named++;
+            copied.add(rel);
+            return;
+          }
+          const record = this.record(run.id);
+          const kept = await copyKept(
+            handle,
+            record,
+            join(record, 'outputs', rel),
+            runLimits.outputBytes - bytes,
+            guard,
+          );
+          // The file grew past the limit while Verifold copied it.
+          if (!kept) {
+            full = true;
+            return;
+          }
           copied.add(rel);
-          return;
+          if (kept === 'held') {
+            held.push(rel);
+            return;
+          }
+          bytes += kept.bytes;
+          collected.outputs.push({
+            path: rel,
+            bytes: kept.bytes,
+            sha256: kept.sha256,
+          });
+        } finally {
+          await handle.close();
         }
-        const target = join(this.record(run.id), 'outputs', rel);
-        await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-        await writeFile(target, content, { flag: 'wx', mode: 0o600 });
-        copied.add(rel);
-        bytes += content.length;
-        collected.outputs.push({
-          path: rel,
-          bytes: content.length,
-          sha256: createHash('sha256').update(content).digest('hex'),
-        });
       } catch {
         failed.push(rel);
       }
