@@ -8,6 +8,7 @@ import {
   type Post,
   agentId,
   boardLimits,
+  clip,
   commitId,
   directionId,
   object,
@@ -181,6 +182,12 @@ export interface PlanOfRecord {
   /** The directions of the plan, in its order. */
   readonly directions: readonly string[];
   readonly facts: readonly PlanFact[];
+  /**
+   * The plan post where the facts last changed. A later plan that lists no
+   * facts, or the same ones, keeps it, so agents get each change once. A
+   * plan from before this field has none: its own post stands for it.
+   */
+  readonly factsPost?: string;
   /** 1 for the first plan. A plan from before versions has none. */
   readonly version?: number;
   /** The plan post before this one. */
@@ -556,6 +563,12 @@ export interface AgentRecord {
    * thread when pods are on.
    */
   readonly pods: boolean;
+  /**
+   * The `factsPost` of the plan facts that the agent has: from its first
+   * prompt, a digest, or its own plan. A plan whose facts changed after it
+   * tells the agent once, in its next digest. Absent: none yet.
+   */
+  readonly factsPost?: string;
   /** Claude Code's cost estimate of the agent's sessions. */
   readonly spend?: Spend;
 }
@@ -1431,6 +1444,10 @@ export function parseState(
               )
               .slice(0, labLimits.directions),
             facts: storedFacts(plan.facts),
+            ...(typeof plan.factsPost === 'string' &&
+            postId.test(plan.factsPost)
+              ? { factsPost: plan.factsPost }
+              : {}),
             ...(Number.isSafeInteger(plan.version) &&
             (plan.version as number) >= 1
               ? { version: plan.version as number }
@@ -1551,7 +1568,7 @@ export function works(value: unknown): BuildsOn[] {
 }
 
 /** An optional text field: absent or empty gives null. */
-function optionalText(
+export function optionalText(
   value: unknown,
   limit: number,
   what: string,
@@ -1561,40 +1578,72 @@ function optionalText(
     : text(value, limit, what);
 }
 
+/** An optional field of a fact: text that is not blank, else null. */
+function factText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * One fact of a plan or a call. `at`: when the plan or the call is posted.
+ * `place`: the fact's place in the list, for the error. One bad source or
+ * date does not refuse the plan: it counts as missing, or a long date is cut.
+ */
+function planFact(value: unknown, at: string, place: number): PlanFact {
+  const entry =
+    object(value) ?? fail(`Fact ${place}: give it as an object with a claim.`);
+  const claim = factText(entry.claim);
+  if (!claim || claim.length > planLimits.claim)
+    fail(
+      `Fact ${place}: write its claim in ${planLimits.claim} characters or fewer.`,
+    );
+  const source = factText(entry.source);
+  const sourceDate = factText(entry.sourceDate);
+  return {
+    claim,
+    // A cut web address still looks like a link, so a long source counts as missing.
+    source: source && source.length <= planLimits.source ? source : null,
+    sourceDate: sourceDate && clip(sourceDate, planLimits.sourceDate),
+    checkedAt: at,
+  };
+}
+
 /** The facts of an agent's plan or call, checked. `at`: when the plan or the call is posted. */
 export function planFacts(value: unknown, at: string): PlanFact[] {
-  if (!Array.isArray(value) || value.length > planLimits.facts)
+  if (!Array.isArray(value))
     fail(`Give facts as a list of at most ${planLimits.facts}.`);
-  return value.map((item) => {
-    const entry = object(item) ?? fail('Give each fact as an object.');
-    return {
-      claim: text(entry.claim, planLimits.claim, 'each fact'),
-      source: optionalText(
-        entry.source,
-        planLimits.source,
-        'the source of each fact',
-      ),
-      sourceDate: optionalText(
-        entry.sourceDate,
-        planLimits.sourceDate,
-        "the source's date",
-      ),
-      checkedAt: at,
-    };
-  });
+  if (value.length > planLimits.facts)
+    fail(`List at most ${planLimits.facts} facts. You listed ${value.length}.`);
+  return value.map((item, index) => planFact(item, at, index + 1));
 }
 
 /** A fact of a plan or a call from `lab.json`, or null for one that is not valid. */
 function storedFact(value: unknown): PlanFact | null {
+  const checkedAt = recordTime(object(value)?.checkedAt);
+  if (!checkedAt) return null;
   try {
-    const entry = object(value);
-    const checkedAt = recordTime(entry?.checkedAt);
-    return entry && checkedAt
-      ? (planFacts([entry], checkedAt)[0] ?? null)
-      : null;
+    return planFact(value, checkedAt, 1);
   } catch {
     return null;
   }
+}
+
+/** Two lists of facts say the same: the same claims, sources and dates, in the same order. */
+export function sameFacts(
+  first: readonly PlanFact[],
+  second: readonly PlanFact[],
+): boolean {
+  return (
+    first.length === second.length &&
+    first.every((fact, index) => {
+      const other = second[index];
+      return (
+        other !== undefined &&
+        fact.claim === other.claim &&
+        fact.source === other.source &&
+        fact.sourceDate === other.sourceDate
+      );
+    })
+  );
 }
 
 /** The valid facts of a stored list, within the limit. */
@@ -1656,6 +1705,10 @@ export function parseAgent(
             typeof entry === 'string' && !Number.isNaN(Date.parse(entry)),
         )
       : [];
+  const factsPost =
+    typeof value.factsPost === 'string' && postId.test(value.factsPost)
+      ? value.factsPost
+      : null;
   return {
     schemaVersion: 1,
     id: value.id,
@@ -1748,6 +1801,7 @@ export function parseAgent(
     held: value.held === true,
     // A record from before this field: its thread may have had the pod tools, so it keeps its conversation.
     pods: value.pods !== false,
+    ...(factsPost ? { factsPost } : {}),
     ...spendOf(value.spend),
   };
 }

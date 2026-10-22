@@ -13,6 +13,38 @@ export function clock(at: string): string {
   });
 }
 
+/** Month names that do not change with the browser's language: en-GB gives "Sept". */
+const months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/**
+ * A time with its day: "today at 19:40", "on 19 Oct at 19:40", or "on 19 Oct
+ * 2025 at 19:40" in another year. `now`: the app's clock. Without it, the
+ * time when the page renders, and the app's clock renders every page again
+ * every 30 seconds, so "today" changes at midnight.
+ */
+export function dayClock(at: string, now = Date.now()): string {
+  const date = new Date(at);
+  const today = new Date(now);
+  if (date.toDateString() === today.toDateString())
+    return `today at ${clock(at)}`;
+  const year =
+    date.getFullYear() === today.getFullYear() ? '' : ` ${date.getFullYear()}`;
+  return `on ${date.getDate()} ${months[date.getMonth()] ?? ''}${year} at ${clock(at)}`;
+}
+
 /** Who asked: "claude-2 asked", "claude-2 and codex-2 asked". */
 export function asked(askers: readonly Asker[]): string {
   const names = askers.map((asker) => asker.handle);

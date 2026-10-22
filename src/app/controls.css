@@ -79,9 +79,11 @@
   color: var(--accent-ink);
 }
 
-.facts {
+.run-facts {
   margin: 0;
   display: grid;
+  font-size: 14px;
+  overflow-wrap: anywhere;
   grid-template-columns: minmax(0, 130px) minmax(0, 1fr);
   gap: 8px 16px;
   padding: 16px 18px;
@@ -90,12 +92,12 @@
   border-radius: 14px;
 }
 
-.facts dt {
+.run-facts dt {
   color: var(--muted);
   font-weight: 700;
 }
 
-.facts dd {
+.run-facts dd {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -502,12 +504,12 @@ textarea.field__input {
 }
 
 @media (max-width: 600px) {
-  .facts {
+  .run-facts {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px 0;
   }
 
-  .facts dd + dt {
+  .run-facts dd + dt {
     margin-top: 8px;
   }
 }
