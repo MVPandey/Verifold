@@ -1508,6 +1508,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         handle: ref.handle,
         harness: ref.harness,
         model: loaded.models.get(ref.id) ?? ref.model,
+        requestedModel: ref.model,
         direction: ref.direction,
         check: ref.check,
         status: ref.status,

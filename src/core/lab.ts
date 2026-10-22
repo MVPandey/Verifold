@@ -5672,9 +5672,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const generation = randomBytes(4).toString('hex');
     let prompt: string;
     let denied: Denials;
+    let model = check.model;
     try {
       denied = await this.checkDenials(check);
       prompt = await this.checkPrompt(check, workspace, denied.blind);
+      // A check queued before Verifold chose models asks for the model now.
+      model ??= (await this.options.model?.(check.harness)) ?? null;
     } catch (error) {
       await this.retry(
         check,
@@ -5710,12 +5713,13 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       generation,
       session: null,
       blind: denied.blind,
+      model: entry.model ?? model,
       startedAt: entry.startedAt ?? new Date().toISOString(),
     }));
     try {
       const session = await sessions.startAgent({
         host: check.harness,
-        ...(check.model ? { model: check.model } : {}),
+        ...(model ? { model } : {}),
         prompt,
         cwd: join(this.root, workspace.path),
         agent: check.agent,
@@ -7762,6 +7766,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         await this.update(id, (current) => ({
           ...current,
           session,
+          // An agent from before Verifold chose models keeps the model that it asked for now.
+          model: current.model ?? model,
           toolsVersion: labToolsVersion,
           pods,
           ...(listed ? { factsPost: listed } : {}),

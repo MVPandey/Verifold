@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { childEnvironment, type HarnessName } from './harness.ts';
 import {
   claudeOpus,
+  codexDefault,
   codexModels,
   listCodexModels,
   pickCodexModel,
@@ -108,11 +109,13 @@ export function claudeChoices(
 }
 
 /**
- * Codex's models from `model/list`, the one for lab agents first: the
- * first of Verifold's list that Codex offers, else its default.
+ * Codex's models from `model/list`, Verifold's pick first: the first of
+ * Verifold's list that Codex offers, else the model that Codex marks as its
+ * default. When Codex offers none of Verifold's list, a lab agent without a
+ * chosen model runs the person's own Codex model.
  */
 export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
-  const pick = pickCodexModel(entries);
+  const pick = pickCodexModel(entries) ?? codexDefault(entries);
   const choices: ModelChoice[] = [];
   for (const entry of entries) {
     if (!record(entry) || entry.hidden === true) continue;

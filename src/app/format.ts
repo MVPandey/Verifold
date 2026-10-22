@@ -85,6 +85,26 @@ export function modelName(id: string): string {
   return id;
 }
 
+/** A model's family: "opus" for "opus[1m]" and for "claude-opus-5-5", else the ID without "[1m]". */
+function modelFamily(id: string): string {
+  const bare = id.replace(/\[1m\]$/i, '');
+  return /^claude-([a-z]+)-\d/.exec(bare)?.[1] ?? bare;
+}
+
+/**
+ * An agent's model by name. When the harness reports a model of another
+ * family than the one that Verifold asked for, the name says so: "Sonnet
+ * 5.5, asked for Opus".
+ */
+export function agentModelName(
+  model: string,
+  requested: string | null | undefined,
+): string {
+  return requested && modelFamily(requested) !== modelFamily(model)
+    ? `${modelName(model)}, asked for ${modelName(requested)}`
+    : modelName(model);
+}
+
 /** A text cut to `max` characters, with "…" at the cut. */
 export function cut(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
