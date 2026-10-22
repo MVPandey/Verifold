@@ -206,8 +206,7 @@ export function BoardThread({
               <Avatar who={who(reply)} size="xs" />
               <span>
                 <span className="ack__name">{authorOf(reply)}</span>
-                {/* A reply that continues a sentence has the name as its subject: "claude-1 added it…". */}
-                {/^\p{Ll}/u.test(reply.text) ? ' ' : ' · '}
+                {' · '}
                 {reply.text}
                 <ProofLinks post={reply} />
               </span>

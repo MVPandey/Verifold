@@ -5,7 +5,13 @@ import {
   undoWords,
   type EffectWords,
 } from '../ui/call-words.ts';
-import { href, parseRoute, replaceRoute, type Route } from './route.ts';
+import {
+  href,
+  parseRoute,
+  replaceRoute,
+  type Opener,
+  type PageRoute,
+} from './route.ts';
 
 /**
  * The options in the order that the dialog shows them: the agents' pick
@@ -245,12 +251,19 @@ export function onBoard(lab: Lab, post: string): boolean {
   return lab.board.posts.some((entry) => entry.id === post);
 }
 
+/** This load of the app. A reload starts a new one, whose history entries are new too. */
+const thisLoad = performance.timeOrigin;
+
 /**
  * The history state of a call that a page of the app opened: that page's
- * address, so the call shows over it and its Close goes back to it.
+ * address, so the call shows over it and its Close goes back to it, and
+ * this load of the app.
  */
-export function openedFrom(hash: string): { readonly from: string } {
-  return { from: hash || href.lab };
+export function openedFrom(hash: string): {
+  readonly from: string;
+  readonly load: number;
+} {
+  return { from: hash || href.lab, load: thisLoad };
 }
 
 /**
@@ -258,7 +271,7 @@ export function openedFrom(hash: string): { readonly from: string } {
  * that state. Null for a call that came from anywhere else, such as a
  * notification or an address typed in: it shows over the lab home.
  */
-export function callOpener(state: unknown): Route | null {
+export function callOpener(state: unknown): Opener | null {
   if (
     typeof state !== 'object' ||
     state === null ||
@@ -266,13 +279,23 @@ export function callOpener(state: unknown): Route | null {
     typeof state.from !== 'string'
   )
     return null;
+  // The build before this one wrote { from: 'lab' }, and its Close went Back, which leaves no second lab entry.
+  if (state.from === 'lab')
+    return { hash: href.lab, route: { page: 'lab' }, back: true };
   const route = parseRoute(state.from);
-  return route.page === 'call' ||
+  if (
+    route.page === 'call' ||
     route.page === 'setup' ||
     route.page === 'ask' ||
     route.page === 'unknown'
-    ? null
-    : route;
+  )
+    return null;
+  // After a reload, Back would load the app again, so Close replaces the call's entry instead.
+  return {
+    hash: state.from,
+    route,
+    back: 'load' in state && state.load === thisLoad,
+  };
 }
 
 /** Open a call over this page, so that its Close comes back here. */
@@ -287,28 +310,68 @@ export function openCall(id: string): void {
  * leaves for the lab home. `post`: "See the thread", which leaves for that
  * post on the lab home.
  */
-export function leaveCall(post: string | null): void {
-  const opener = callOpener(history.state);
-  if (opener && (opener.page === 'lab' || !post)) history.back();
-  else replaceRoute(post ? href.board(post) : href.lab);
+export function leaveCall(opener: Opener | null, post: string | null): void {
+  if (opener?.back && (opener.route.page === 'lab' || !post)) history.back();
+  else replaceRoute(post ? href.board(post) : (opener?.hash ?? href.lab));
 }
 
-/** Where focus goes after the dialog closes, when it went nowhere: the needs-you line's Decide link. */
+/** The settled call's way out, which names the page under the call. */
+export function backLabel(under: PageRoute | null, lab: Lab): string {
+  if (!under || under.page === 'lab') return 'Back to the lab';
+  switch (under.page) {
+    case 'direction': {
+      const direction = lab.directions.find(
+        (entry) => entry.id === under.direction,
+      );
+      const agent = lab.agents.find((entry) => entry.id === direction?.agent);
+      return agent
+        ? `Back to ${agent.handle}'s direction`
+        : 'Back to the direction';
+    }
+    case 'answer':
+      return 'Back to the answer';
+    case 'post':
+      return 'Back to the post';
+    case 'run':
+      return `Back to run ${under.id}`;
+    case 'settings':
+      return 'Back to Settings';
+    case 'history':
+    case 'history-run':
+      return 'Back to History';
+    default:
+      return 'Back';
+  }
+}
+
+/** The lab home's Decide link, where focus goes after a call when the page has no heading. */
 export const decideId = 'needs-decide';
+
+/** An element that `returnFocus` can focus. */
+interface Focusable {
+  focus(options?: { readonly preventScroll?: boolean }): void;
+  setAttribute(name: string, value: string): void;
+}
 
 /** The parts of a document that `returnFocus` reads, so a test can pass a stand-in. */
 export interface FocusDocument {
   readonly activeElement: unknown;
   readonly body: unknown;
-  getElementById(id: string): { focus(): void } | null;
+  getElementById(id: string): Focusable | null;
+  querySelector(selector: string): Focusable | null;
 }
 
 /**
  * After the dialog closes the browser returns focus to where it was before.
- * When that was nowhere, as when the page opened on the call's address,
- * focus goes to the Decide link.
+ * When that was nowhere, as when the Decide link that opened the call is
+ * gone, or the page opened on the call's address, focus goes to the
+ * heading of the page under the call, or else to the lab home's Decide
+ * link. The page does not scroll for it.
  */
 export function returnFocus(doc: FocusDocument): void {
   if (doc.activeElement && doc.activeElement !== doc.body) return;
-  doc.getElementById(decideId)?.focus();
+  const heading = doc.querySelector('main h1');
+  // A heading takes focus only from a script, and keeps out of the Tab order.
+  heading?.setAttribute('tabindex', '-1');
+  (heading ?? doc.getElementById(decideId))?.focus({ preventScroll: true });
 }

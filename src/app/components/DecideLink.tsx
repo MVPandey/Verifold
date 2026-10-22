@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { openCall } from '../call.ts';
-import { href } from '../route.ts';
+import { href, plainClick } from '../route.ts';
 
 /**
  * Decide: a link that opens a call over this page. A plain click keeps the
- * page under the call, and the call's Close comes back to it. A click with
- * a key held, or with another button, follows the link as usual.
+ * page under the call, and the call's Close comes back to it. Any other
+ * click follows the link as usual.
  */
 export function DecideLink({
   call,
@@ -22,13 +22,7 @@ export function DecideLink({
       className={className}
       href={href.call(call)}
       onClick={(event) => {
-        if (
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey
-        )
-          return;
+        if (!plainClick(event)) return;
         event.preventDefault();
         openCall(call);
       }}

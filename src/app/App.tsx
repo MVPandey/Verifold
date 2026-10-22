@@ -15,11 +15,18 @@ import {
   labActions,
   type AppActions,
 } from './actions.ts';
+import type { Lab } from '../protocol/api.ts';
 import type { ActOutcome } from './api.ts';
 import { startActions, type StartActions } from './ask.ts';
 import { ControlsContext, labControls } from './controls.ts';
 import { callOpener, needsTick, typing } from './call.ts';
-import { href, parseRoute, replaceRoute, type Route } from './route.ts';
+import {
+  href,
+  parseRoute,
+  replaceRoute,
+  type PageRoute,
+  type Route,
+} from './route.ts';
 import { isSearchKey, onMac } from './search.ts';
 import { AgentPage } from './screens/AgentPage.tsx';
 import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
@@ -52,8 +59,15 @@ import { useNotify } from './useNotify.ts';
 /** This page's route. A call's comes with the page that opened it, from the history state. */
 function currentRoute(): Route {
   const route = parseRoute(location.hash);
-  const under = route.page === 'call' ? callOpener(history.state) : null;
-  return route.page === 'call' && under ? { ...route, under } : route;
+  const opener = route.page === 'call' ? callOpener(history.state) : null;
+  return route.page === 'call' && opener ? { ...route, opener } : route;
+}
+
+/** The lab that the page shows: none while this tab is signed out or older than Verifold. */
+function shownLab(state: LabState): Lab | null {
+  return state.connection === 'signed-out' || state.connection === 'outdated'
+    ? null
+    : (state.snapshot?.lab ?? null);
 }
 
 function useRoute(): Route {
@@ -173,15 +187,19 @@ interface ScreenProps {
  */
 export function Screen(props: ScreenProps): ReactNode {
   const { state, route, now, actions } = props;
+  const lab = shownLab(state);
   const call = route.page === 'call' ? route : null;
-  const shown =
-    state.connection !== 'signed-out' && state.connection !== 'outdated'
-      ? state.snapshot
-      : null;
-  const lab = shown?.project ? shown.lab : null;
+  // One shape with or without a call, so the page under it is never mounted again.
   return (
     <>
-      <Page {...props} route={call ? (call.under ?? { page: 'lab' }) : route} />
+      <Page
+        {...props}
+        route={
+          route.page === 'call'
+            ? (route.opener?.route ?? { page: 'lab' })
+            : route
+        }
+      />
       {call && lab && (
         <CallDialog
           key={call.id}
@@ -189,9 +207,7 @@ export function Screen(props: ScreenProps): ReactNode {
           id={call.id}
           now={now}
           actions={actions}
-          back={
-            call.under && call.under.page !== 'lab' ? 'Back' : 'Back to the lab'
-          }
+          opener={call.opener ?? null}
         />
       )}
     </>
@@ -209,7 +225,7 @@ function Page({
   start = signedOutStart,
   startLab = signedOutApp.startLab,
   compute = signedOutCompute,
-}: ScreenProps): ReactNode {
+}: Omit<ScreenProps, 'route'> & { readonly route: PageRoute }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
     return (
@@ -293,7 +309,7 @@ function Page({
   // A project whose current run is from the earlier research flow opens it in History.
   if (!snapshot.lab && snapshot.researchRun && route.page === 'lab')
     return <HistoryRunPage key="current" {...pageProps} id="current" />;
-  const lab = snapshot.lab;
+  const lab = shownLab(state);
   if (!lab)
     return (
       <div className="page">
@@ -318,7 +334,7 @@ function Page({
         <NoLab snapshot={snapshot} onStart={startLab} />
       </div>
     );
-  if (route.page === 'lab' || route.page === 'call')
+  if (route.page === 'lab')
     return (
       <LabHome
         snapshot={snapshot}
@@ -328,7 +344,7 @@ function Page({
         actions={actions}
         agentActions={agentActions}
         pods={compute}
-        show={route.page === 'lab' ? (route.post ?? null) : null}
+        show={route.post ?? null}
       />
     );
   if (route.page === 'answer')
@@ -502,10 +518,7 @@ export function App({
   const [controls] = useState(() => (token ? labControls(token) : null));
   const [compute] = useState(() => computeActions(token));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
-  const lab =
-    state.connection === 'signed-out' || state.connection === 'outdated'
-      ? null
-      : (state.snapshot?.lab ?? null);
+  const lab = shownLab(state);
   const shown = lab !== null;
   const hasLab = useRef(false);
   hasLab.current = shown;

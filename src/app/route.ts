@@ -38,11 +38,8 @@ export type Route =
   | {
       readonly page: 'call';
       readonly id: string;
-      /**
-       * The page under the call, which opened it. The history state holds it,
-       * not the address. Without one, the lab home.
-       */
-      readonly under?: Route;
+      /** The page that opened the call, from its history entry. Without one, the call shows over the lab home. */
+      readonly opener?: Opener;
     }
   | { readonly page: 'post'; readonly id: string }
   | { readonly page: 'answer' }
@@ -72,6 +69,18 @@ export type Route =
   | { readonly page: 'history-run'; readonly id: string }
   | { readonly page: 'start-over' }
   | { readonly page: 'unknown' };
+
+/** A page that a call can show over: any page but a call. */
+export type PageRoute = Exclude<Route, { readonly page: 'call' }>;
+
+/** The page that opened a call, from the call's history entry. */
+export interface Opener {
+  /** Its address, such as `#/d/d-2`. */
+  readonly hash: string;
+  readonly route: PageRoute;
+  /** Close can go Back to the opener's entry without loading the app again. */
+  readonly back: boolean;
+}
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
 const id = '[A-Za-z0-9][A-Za-z0-9._-]{0,99}';
@@ -181,4 +190,24 @@ export function replaceRoute(route: string): void {
     `${location.pathname}${location.search}${route}`,
   );
   dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+/**
+ * A plain click with the main button and no key held. Any other click on a
+ * link does what the browser does with it, such as open it in a new tab.
+ */
+export function plainClick(event: {
+  readonly button: number;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+}): boolean {
+  return (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
 }

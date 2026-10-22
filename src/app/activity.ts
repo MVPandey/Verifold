@@ -151,12 +151,27 @@ const shortMs = 10_000;
 /** Short commands in a row fold into one line when there are at least this many. */
 const foldMin = 3;
 
+/**
+ * A command that starts work in the background: Claude Code's Bash with
+ * `run_in_background`, or a command line that starts with `nohup` or ends
+ * with `&`. It ends at once, but its work goes on, so it is never short.
+ */
+function background(step: Step): boolean {
+  const command = step.title?.trim() ?? '';
+  return (
+    /^nohup\b/.test(command) ||
+    /(?:^|[^&])&$/.test(command) ||
+    /"run_in_background"\s*:\s*true/.test(step.input?.text ?? '')
+  );
+}
+
 function short(step: Step): boolean {
   return (
     commandLike(step) &&
     step.status === 'done' &&
     step.endedAt !== null &&
-    Date.parse(step.endedAt) - Date.parse(step.at) < shortMs
+    Date.parse(step.endedAt) - Date.parse(step.at) < shortMs &&
+    !background(step)
   );
 }
 
@@ -169,29 +184,40 @@ export type StepLine =
  * Steps as the lines of a list. Short commands in a row fold into one line,
  * "Ran 5 short commands", as on the v9 turn artboard. Thoughts between them
  * fold in with them. Any other step ends the row: a command that runs,
- * failed, or took longer, words, and any other tool call.
+ * failed, took longer, or works in the background, words, and any other
+ * tool call. `live`: the turn still runs, so the row that reaches its
+ * newest step stays unfolded, as it can still grow.
  */
-export function stepLines(steps: readonly Step[]): StepLine[] {
+export function stepLines(steps: readonly Step[], live: boolean): StepLine[] {
+  const shortAt = steps.map(short);
   const lines: StepLine[] = [];
-  let row: Step[] = [];
-  const end = (): void => {
-    // Thoughts after the row's last command are not part of it.
-    const last = row.findLastIndex(short) + 1;
-    const commands = row.filter(short).length;
-    if (commands >= foldMin)
-      lines.push({ steps: row.slice(0, last), commands });
-    else lines.push(...row.slice(0, last).map((step) => ({ step })));
-    lines.push(...row.slice(last).map((step) => ({ step })));
-    row = [];
-  };
-  for (const step of steps) {
-    if (short(step) || (row.length > 0 && step.type === 'thinking'))
-      row.push(step);
-    else {
-      end();
+  // The first step that is not on a line yet.
+  let next = 0;
+  for (const [at, step] of steps.entries()) {
+    if (at < next) continue;
+    if (!shortAt[at]) {
       lines.push({ step });
+      continue;
     }
+    // The row runs to its last short command. Thoughts after that one are not part of it.
+    let last = at;
+    let end = at;
+    let commands = 0;
+    while (
+      end < steps.length &&
+      (shortAt[end] || steps[end]?.type === 'thinking')
+    ) {
+      if (shortAt[end]) {
+        last = end;
+        commands += 1;
+      }
+      end += 1;
+    }
+    const row = steps.slice(at, last + 1);
+    if (commands >= foldMin && !(live && end === steps.length))
+      lines.push({ steps: row, commands });
+    else lines.push(...row.map((entry) => ({ step: entry })));
+    next = last + 1;
   }
-  end();
   return lines;
 }

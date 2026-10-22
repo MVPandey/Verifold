@@ -10,6 +10,7 @@ import type {
 } from '../src/protocol/api.ts';
 import { agentActions, labActions } from '../src/app/actions.ts';
 import {
+  backLabel,
   callOpener,
   callView,
   costLine,
@@ -18,6 +19,7 @@ import {
   leaveCall,
   needsTick,
   openedFrom,
+  type FocusDocument,
   onBoard,
   optionForKey,
   optionLines,
@@ -27,7 +29,7 @@ import {
   undoLeft,
 } from '../src/app/call.ts';
 import { costWords, undoWords } from '../src/ui/call-words.ts';
-import { parseRoute, type Route } from '../src/app/route.ts';
+import { parseRoute, type Opener } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 
@@ -217,12 +219,12 @@ const actions: LabActions = {
   questions: ok,
 };
 
-function render(state: Snapshot, hash = '#/call/c-4', under?: Route): string {
+function render(state: Snapshot, hash = '#/call/c-4', opener?: Opener): string {
   const route = parseRoute(hash);
   return renderToStaticMarkup(
     <Screen
       state={{ snapshot: state, connection: 'live', retrying: false }}
-      route={route.page === 'call' && under ? { ...route, under } : route}
+      route={route.page === 'call' && opener ? { ...route, opener } : route}
       now={now}
       actions={actions}
       agentActions={agentActions(null)}
@@ -743,38 +745,56 @@ await test("the call words: costs, each effect, and the article, the same as the
 });
 
 await test('a call shows over the page that opened it, and its Close goes back there with no new history entry', (t) => {
-  // The history state names the page that opened the call, and a reload keeps it.
-  assert.deepEqual(openedFrom('#/d/d-2'), { from: '#/d/d-2' });
-  assert.deepEqual(openedFrom(''), { from: '#/' });
-  assert.deepEqual(callOpener(openedFrom('#/d/d-2')), {
-    page: 'direction',
-    direction: 'd-2',
+  // The history state names the page that opened the call, and this load of the app. A reload keeps the state.
+  const here = openedFrom('#/d/d-2');
+  assert.equal(here.from, '#/d/d-2');
+  assert.equal(openedFrom('').from, '#/');
+  const direction = callOpener(here);
+  assert.deepEqual(direction, {
+    hash: '#/d/d-2',
+    route: { page: 'direction', direction: 'd-2' },
+    back: true,
   });
-  assert.deepEqual(callOpener(openedFrom('')), { page: 'lab' });
+  const home = callOpener(openedFrom(''));
+  assert.deepEqual(home, { hash: '#/', route: { page: 'lab' }, back: true });
+  // An entry from an earlier load of the app, as after a reload: Back would load the app again.
+  const reloaded = callOpener({ from: '#/d/d-2', load: 1 });
+  assert.equal(reloaded?.back, false);
+  assert.equal(callOpener({ from: '#/answer' })?.back, false);
+  // The build before this one wrote { from: 'lab' }, and went Back from it, which leaves no second lab entry.
+  assert.deepEqual(callOpener({ from: 'lab' }), {
+    hash: '#/',
+    route: { page: 'lab' },
+    back: true,
+  });
   // A call from a link, a notification, or a state that names no page shows over the lab home.
   for (const state of [
     null,
     'lab',
-    { from: 'lab' },
     { from: 3 },
     { from: '#/call/c-3' },
     { from: '#/setup/agents' },
     { from: '#/no-such-page' },
   ])
     assert.equal(callOpener(state), null, JSON.stringify(state));
-  // The page under the call is the one that opened it, and the dialog's way out says so.
+  // The page under the call is the one that opened it, and the settled call's way out names it.
   const settled = snapshot({
     needsYou: [],
     answered: [call({ state: 'answered', answer: { option: 0, at: ago(5) } })],
   });
-  const over = render(settled, '#/call/c-4', {
-    page: 'direction',
-    direction: 'd-2',
-  });
+  assert.ok(direction);
+  const over = render(settled, '#/call/c-4', direction);
   assert.match(over, /class="direction-head"/);
   assert.doesNotMatch(over, new RegExp(`id="${decideId}"`));
-  assert.match(text(dialog(over)), /Back(?! to the lab)/);
+  assert.match(text(dialog(over)), /Back to claude-2's direction/);
   assert.match(text(dialog(render(settled))), /Back to the lab/);
+  assert.equal(backLabel({ page: 'answer' }, lab()), 'Back to the answer');
+  assert.equal(backLabel({ page: 'run', id: 'r-3' }, lab()), 'Back to run r-3');
+  assert.equal(
+    backLabel({ page: 'direction', direction: 'd-9' }, lab()),
+    'Back to the direction',
+  );
+  assert.equal(backLabel({ page: 'agent', id: 'a-2' }, lab()), 'Back');
   // Close: back, to the page that opened the call. "See the thread" goes to its post on the lab home.
   const done: string[] = [];
   const stand = (name: string, value: unknown): void => {
@@ -789,28 +809,28 @@ await test('a call shows over the page that opened it, and its Close goes back t
       else Reflect.deleteProperty(globalThis, name);
     });
   };
-  const history = {
-    state: null as unknown,
+  stand('history', {
     back: () => done.push('back'),
     replaceState: (_state: unknown, _title: string, url: string) =>
       done.push(`replace ${url}`),
-  };
-  stand('history', history);
+  });
   stand('location', { pathname: '/app/', search: '' });
   stand('HashChangeEvent', Event);
   stand('dispatchEvent', () => true);
-  const leave = (state: unknown, post: string | null): string | undefined => {
-    history.state = state;
-    leaveCall(post);
+  const leave = (
+    opener: Opener | null,
+    post: string | null,
+  ): string | undefined => {
+    leaveCall(opener, post);
     return done.pop();
   };
-  assert.equal(leave(openedFrom('#/d/d-2'), null), 'back');
-  assert.equal(leave(openedFrom('#/'), null), 'back');
-  assert.equal(leave(openedFrom('#/'), 'p-12'), 'back');
-  assert.equal(
-    leave(openedFrom('#/d/d-2'), 'p-12'),
-    'replace /app/#/board/p-12',
-  );
+  assert.equal(leave(direction, null), 'back');
+  assert.equal(leave(home, null), 'back');
+  assert.equal(leave(home, 'p-12'), 'back');
+  assert.equal(leave(direction, 'p-12'), 'replace /app/#/board/p-12');
+  // After a reload, the call's entry becomes the page that opened it.
+  assert.equal(leave(reloaded, null), 'replace /app/#/d/d-2');
+  assert.equal(leave(reloaded, 'p-12'), 'replace /app/#/board/p-12');
   // A call from anywhere else: its entry becomes the lab's.
   assert.equal(leave(null, null), 'replace /app/#/');
   assert.equal(leave(null, 'p-12'), 'replace /app/#/board/p-12');
@@ -899,30 +919,37 @@ await test("the call's actions are the desk's actions, sent with the intent's ke
   assert.equal(sent.length, 3);
 });
 
-await test('after the dialog closes, focus goes to the Decide link only when it went nowhere', () => {
+await test("after the dialog closes, focus that went nowhere goes to the page's heading, or else to the lab home's Decide link", () => {
   const focused: string[] = [];
-  const element = (id: string) => ({ focus: () => focused.push(id) });
+  const element = (name: string) => ({
+    focus: (options?: { readonly preventScroll?: boolean }) =>
+      focused.push(options?.preventScroll ? name : `${name}, scrolled`),
+    setAttribute: (key: string, value: string) =>
+      focused.push(`${name} ${key}=${value}`),
+  });
   const body = {};
+  const page = (
+    heading: boolean,
+    decide: boolean,
+    active: unknown = body,
+  ): FocusDocument => ({
+    activeElement: active,
+    body,
+    getElementById: (id) =>
+      decide && id === decideId ? element('decide') : null,
+    querySelector: (selector) =>
+      heading && selector === 'main h1' ? element('heading') : null,
+  });
   // The browser returned focus to the Decide link it came from: nothing to do.
-  returnFocus({
-    activeElement: { id: 'needs-decide' },
-    body,
-    getElementById: (id) => element(id),
-  });
+  returnFocus(page(true, true, { id: decideId }));
   assert.deepEqual(focused, []);
-  // The page opened on the call's address: focus was nowhere, so it goes to Decide.
-  returnFocus({
-    activeElement: body,
-    body,
-    getElementById: (id) => element(id),
-  });
-  returnFocus({
-    activeElement: null,
-    body,
-    getElementById: (id) => element(id),
-  });
-  assert.deepEqual(focused, [decideId, decideId]);
-  // No call waits any more, so no Decide link: nothing breaks.
-  returnFocus({ activeElement: body, body, getElementById: () => null });
-  assert.deepEqual(focused, [decideId, decideId]);
+  // The Decide link went with the call, or the page opened on the call's address: the page's heading, without a scroll.
+  returnFocus(page(true, true));
+  assert.deepEqual(focused.splice(0), ['heading tabindex=-1', 'heading']);
+  // The lab home has no heading: its Decide link.
+  returnFocus(page(false, true, null));
+  assert.deepEqual(focused.splice(0), ['decide']);
+  // Neither: nothing breaks.
+  returnFocus(page(false, false));
+  assert.deepEqual(focused, []);
 });
