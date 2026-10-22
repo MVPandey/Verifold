@@ -1,6 +1,13 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type { Lab, Snapshot, Step, TurnDetail } from '../../protocol/api.ts';
-import { refreshKey, turnSummary } from '../activity.ts';
+import { refreshKey, stepLines, turnSummary } from '../activity.ts';
 import { clock } from '../format.ts';
 import type { Connection } from '../store.ts';
 import { byIndex, meet } from '../turns.ts';
@@ -8,15 +15,21 @@ import { AppHeader } from '../components/AppHeader.tsx';
 import { Avatar } from '../components/Avatar.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
-import { StepRow } from '../components/StepList.tsx';
+import {
+  groupKey,
+  StepGroup,
+  StepRow,
+  type Opened,
+} from '../components/StepList.tsx';
 import { TurnMessage } from '../components/TurnMessage.tsx';
 import { leftOut, type AgentActions } from './DirectionPage.tsx';
 import type { LabActions } from './LabHome.tsx';
 
 /**
  * One turn of an agent, opened: every step, newest page first, with "Show
- * earlier steps" for the rest. A command shows the end of its output. As on
- * the v9 canvas ("11. One turn, opened"). `back` leads to the direction's
+ * earlier steps" for the rest. A command shows the end of its output, and
+ * short commands in a row fold into one line. As on the v9 canvas ("11. One
+ * turn, opened"). `back` leads to the direction's
  * page, or to the agent's own page for a checker.
  *
  * The newest page is read again whenever the turn's revision in the snapshot
@@ -55,6 +68,24 @@ export function TurnScreen({
   } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [earlierProblem, setEarlierProblem] = useState<string | null>(null);
+  // What the person opened, kept here so a step stays open when the rows of short commands change.
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const setOpen = useCallback((keys: readonly string[], open: boolean) => {
+    setOpenKeys((current) => {
+      const next = new Set(current);
+      for (const key of keys) {
+        if (open) next.add(key);
+        else next.delete(key);
+      }
+      return next;
+    });
+  }, []);
+  const opened: Opened = useMemo(
+    () => ({ has: (key) => openKeys.has(key), set: setOpen }),
+    [openKeys, setOpen],
+  );
   const [busy, setBusy] = useState(false);
   // A ref, so two clicks in one frame read once.
   const loading = useRef(false);
@@ -80,7 +111,12 @@ export function TurnScreen({
     // The read depends on the turn's revision, not on the whole turn object.
   }, [agentId, turnId, folded ? refreshKey(folded) : '', agentActions]);
   const turn = newest?.turn ?? folded;
-  const steps = byIndex([earlier?.steps ?? [], newest?.steps ?? []]);
+  const steps = useMemo(
+    () => byIndex([earlier?.steps ?? [], newest?.steps ?? []]),
+    [earlier, newest],
+  );
+  const live = turn ? turn.endedAt === null : false;
+  const lines = useMemo(() => stepLines(steps, live), [steps, live]);
   const more = earlier ? earlier.more : (newest?.more ?? false);
   const showEarlier = async (): Promise<void> => {
     const first = steps[0];
@@ -162,9 +198,25 @@ export function TurnScreen({
           )}
           {steps.length > 0 && (
             <ol className="step-rows" aria-label="Steps">
-              {steps.map((step) => (
-                <StepRow key={step.index} step={step} />
-              ))}
+              {lines.map((line) =>
+                'step' in line ? (
+                  <StepRow
+                    key={line.step.index}
+                    step={line.step}
+                    open={opened.has(line.step.id)}
+                    onToggle={() =>
+                      opened.set([line.step.id], !opened.has(line.step.id))
+                    }
+                  />
+                ) : (
+                  <StepGroup
+                    key={groupKey(line.steps)}
+                    steps={line.steps}
+                    commands={line.commands}
+                    opened={opened}
+                  />
+                ),
+              )}
             </ol>
           )}
           {turn?.message && (

@@ -205,7 +205,8 @@ export function BoardThread({
             >
               <Avatar who={who(reply)} size="xs" />
               <span>
-                <span className="ack__name">{authorOf(reply)}</span>{' '}
+                <span className="ack__name">{authorOf(reply)}</span>
+                {' · '}
                 {reply.text}
                 <ProofLinks post={reply} />
               </span>

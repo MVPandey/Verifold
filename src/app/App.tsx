@@ -15,11 +15,18 @@ import {
   labActions,
   type AppActions,
 } from './actions.ts';
+import type { Lab } from '../protocol/api.ts';
 import type { ActOutcome } from './api.ts';
 import { startActions, type StartActions } from './ask.ts';
 import { ControlsContext, labControls } from './controls.ts';
-import { needsTick, typing } from './call.ts';
-import { href, parseRoute, replaceRoute, type Route } from './route.ts';
+import { callOpener, needsTick, typing } from './call.ts';
+import {
+  href,
+  parseRoute,
+  replaceRoute,
+  type PageRoute,
+  type Route,
+} from './route.ts';
 import { isSearchKey, onMac } from './search.ts';
 import { AgentPage } from './screens/AgentPage.tsx';
 import { AnswerPage, type AnswerActions } from './screens/AnswerPage.tsx';
@@ -49,10 +56,24 @@ import type { LabStore, LabState } from './store.ts';
 import { ToolsContext, type AppTools } from './tools.ts';
 import { useNotify } from './useNotify.ts';
 
+/** This page's route. A call's comes with the page that opened it, from the history state. */
+function currentRoute(): Route {
+  const route = parseRoute(location.hash);
+  const opener = route.page === 'call' ? callOpener(history.state) : null;
+  return route.page === 'call' && opener ? { ...route, opener } : route;
+}
+
+/** The lab that the page shows: none while this tab is signed out or older than Verifold. */
+function shownLab(state: LabState): Lab | null {
+  return state.connection === 'signed-out' || state.connection === 'outdated'
+    ? null
+    : (state.snapshot?.lab ?? null);
+}
+
 function useRoute(): Route {
-  const [route, setRoute] = useState(() => parseRoute(location.hash));
+  const [route, setRoute] = useState(currentRoute);
   useEffect(() => {
-    const update = (): void => setRoute(parseRoute(location.hash));
+    const update = (): void => setRoute(currentRoute());
     addEventListener('hashchange', update);
     return () => removeEventListener('hashchange', update);
   }, []);
@@ -145,19 +166,7 @@ function Redirect({ to }: { readonly to: string }): ReactNode {
   return null;
 }
 
-/** The page for a state and a route. Separate from the hooks, so tests render it directly. */
-export function Screen({
-  state,
-  route,
-  now,
-  actions,
-  agentActions,
-  answers = signedOutAnswers,
-  setup = signedOutSetup,
-  start = signedOutStart,
-  startLab = signedOutApp.startLab,
-  compute = signedOutCompute,
-}: {
+interface ScreenProps {
   readonly state: LabState;
   readonly route: Route;
   readonly now: number;
@@ -168,7 +177,55 @@ export function Screen({
   readonly start?: StartActions;
   readonly startLab?: AppActions['startLab'];
   readonly compute?: ComputeActions;
-}): ReactNode {
+}
+
+/**
+ * The page for a state and a route. Separate from the hooks, so tests
+ * render it directly. A call shows over the page that opened it, or over
+ * the lab home. That page stays in the same place in the tree, so it keeps
+ * its scroll and its open folds while the call opens and closes.
+ */
+export function Screen(props: ScreenProps): ReactNode {
+  const { state, route, now, actions } = props;
+  const lab = shownLab(state);
+  const call = route.page === 'call' ? route : null;
+  // One shape with or without a call, so the page under it is never mounted again.
+  return (
+    <>
+      <Page
+        {...props}
+        route={
+          route.page === 'call'
+            ? (route.opener?.route ?? { page: 'lab' })
+            : route
+        }
+      />
+      {call && lab && (
+        <CallDialog
+          key={call.id}
+          lab={lab}
+          id={call.id}
+          now={now}
+          actions={actions}
+          opener={call.opener ?? null}
+        />
+      )}
+    </>
+  );
+}
+
+function Page({
+  state,
+  route,
+  now,
+  actions,
+  agentActions,
+  answers = signedOutAnswers,
+  setup = signedOutSetup,
+  start = signedOutStart,
+  startLab = signedOutApp.startLab,
+  compute = signedOutCompute,
+}: Omit<ScreenProps, 'route'> & { readonly route: PageRoute }): ReactNode {
   const { snapshot, connection, retrying } = state;
   if (connection === 'signed-out')
     return (
@@ -252,7 +309,7 @@ export function Screen({
   // A project whose current run is from the earlier research flow opens it in History.
   if (!snapshot.lab && snapshot.researchRun && route.page === 'lab')
     return <HistoryRunPage key="current" {...pageProps} id="current" />;
-  const lab = snapshot.lab;
+  const lab = shownLab(state);
   if (!lab)
     return (
       <div className="page">
@@ -277,29 +334,18 @@ export function Screen({
         <NoLab snapshot={snapshot} onStart={startLab} />
       </div>
     );
-  if (route.page === 'lab' || route.page === 'call')
+  if (route.page === 'lab')
     return (
-      <>
-        <LabHome
-          snapshot={snapshot}
-          lab={lab}
-          connection={connection}
-          now={now}
-          actions={actions}
-          agentActions={agentActions}
-          pods={compute}
-          show={route.page === 'lab' ? (route.post ?? null) : null}
-        />
-        {route.page === 'call' && (
-          <CallDialog
-            key={route.id}
-            lab={lab}
-            id={route.id}
-            now={now}
-            actions={actions}
-          />
-        )}
-      </>
+      <LabHome
+        snapshot={snapshot}
+        lab={lab}
+        connection={connection}
+        now={now}
+        actions={actions}
+        agentActions={agentActions}
+        pods={compute}
+        show={route.post ?? null}
+      />
     );
   if (route.page === 'answer')
     return (
@@ -472,10 +518,7 @@ export function App({
   const [controls] = useState(() => (token ? labControls(token) : null));
   const [compute] = useState(() => computeActions(token));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
-  const lab =
-    state.connection === 'signed-out' || state.connection === 'outdated'
-      ? null
-      : (state.snapshot?.lab ?? null);
+  const lab = shownLab(state);
   const shown = lab !== null;
   const hasLab = useRef(false);
   hasLab.current = shown;

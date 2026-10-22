@@ -353,6 +353,27 @@
   cursor: pointer;
 }
 
+/* Show, after the count of short commands, as a link in the line. */
+.step-row__show {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.step-row__show:hover {
+  color: var(--accent-deep);
+}
+
+/* The rows of short commands that fold into one line, open under it. */
+.step-rows--folded {
+  margin-left: 86px;
+}
+
 .step-row__text {
   margin: 0;
   white-space: pre-wrap;
@@ -390,7 +411,8 @@
   }
 
   .step-row__more,
-  .step-row__toggle {
+  .step-row__toggle,
+  .step-rows--folded {
     margin-left: 0;
   }
 }

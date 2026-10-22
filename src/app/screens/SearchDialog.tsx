@@ -16,7 +16,9 @@ import {
   type SnippetPart,
 } from '../../protocol/api.ts';
 import type { Loaded } from '../api.ts';
+import { openCall } from '../call.ts';
 import { clock } from '../format.ts';
+import { href, plainClick } from '../route.ts';
 import { callRead, hitAction, nextHit, type HitAction } from '../search.ts';
 import { Cross } from '../components/Icons.tsx';
 
@@ -94,9 +96,9 @@ function HitText({ hit }: { readonly hit: SearchHit }): ReactNode {
 
 /**
  * One hit. A hit that opens a page is a link: Enter or a click goes there
- * and closes the search. A link opened in a new tab leaves the search open
- * here. A call that the snapshot leaves out shows its question and answer
- * here instead.
+ * and closes the search. A call opens over this page, as Decide opens it.
+ * A link opened in a new tab leaves the search open here. A call that the
+ * snapshot leaves out shows its question and answer here instead.
  */
 export function Hit({
   hit,
@@ -111,21 +113,19 @@ export function Hit({
   readonly onGo: () => void;
   readonly onRead: () => void;
 }): ReactNode {
-  if (action.type === 'go')
+  if (action.type !== 'read')
     return (
       <li className="hit">
         <a
           className="hit__open"
-          href={action.route}
+          href={action.type === 'go' ? action.route : href.call(action.id)}
           data-hit=""
           onClick={(event: MouseEvent) => {
-            if (
-              event.button === 0 &&
-              !event.metaKey &&
-              !event.ctrlKey &&
-              !event.shiftKey
-            )
-              onGo();
+            if (!plainClick(event)) return;
+            onGo();
+            if (action.type === 'go') return;
+            event.preventDefault();
+            openCall(action.id);
           }}
         >
           <HitHead hit={hit} />

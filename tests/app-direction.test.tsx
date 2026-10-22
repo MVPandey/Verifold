@@ -17,6 +17,7 @@ import {
   counted,
   foldQuery,
   refreshKey,
+  stepLines,
   stepTotal,
   stepVerb,
   stepWhat,
@@ -36,7 +37,13 @@ import {
 import { agentActions } from '../src/app/actions.ts';
 import { Screen } from '../src/app/App.tsx';
 import { runLabel } from '../src/app/components/RunChip.tsx';
-import { StepList, StepRow } from '../src/app/components/StepList.tsx';
+import {
+  groupKey,
+  StepGroup,
+  StepList,
+  StepRow,
+  type Opened,
+} from '../src/app/components/StepList.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import type { LabState } from '../src/app/store.ts';
@@ -413,6 +420,9 @@ await test('a turn folds into one line of its work, counted the way the harness 
     counted({ ...none, search: 1, read: 2, command: 9, run: 1 }),
     ['1 search', '2 files read', '9 commands', '1 run'],
   );
+  // A tool call of no known kind counts as what it is.
+  assert.deepEqual(counted({ ...none, other: 1 }), ['1 other tool call']);
+  assert.deepEqual(counted({ ...none, other: 2 }), ['2 other tool calls']);
   const [first, second] = turns;
   assert.ok(first && second);
   assert.equal(
@@ -773,6 +783,7 @@ await test('an open fold lists the newest tool calls, counts the earlier ones fr
       steps={steps}
       total={11}
       turnHref={href.turn('d-2', '0a1b2c3d.t2')}
+      live={false}
     />,
   );
   const page = text(html);
@@ -784,18 +795,169 @@ await test('an open fold lists the newest tool calls, counts the earlier ones fr
   // "No tool calls" only when the turn's counts say so.
   const quiet = text(
     renderToStaticMarkup(
-      <StepList id="s" steps={[]} total={0} turnHref="#/" />,
+      <StepList id="s" steps={[]} total={0} turnHref="#/" live={false} />,
     ),
   );
   assert.match(quiet, /No tool calls in this turn\./);
   // A page that came back empty, for a turn with tool calls, still says how many there were.
   const empty = text(
     renderToStaticMarkup(
-      <StepList id="s" steps={[]} total={2} turnHref="#/" />,
+      <StepList id="s" steps={[]} total={2} turnHref="#/" live={false} />,
     ),
   );
   assert.match(empty, /2 earlier steps/);
   assert.doesNotMatch(empty, /No tool calls/);
+});
+
+/** A command that ended well after 2 seconds. */
+function quick(index: number, title: string, fields: Partial<Step> = {}): Step {
+  const at = ago(10);
+  return step(index, {
+    title,
+    at,
+    endedAt: new Date(Date.parse(at) + 2_000).toISOString(),
+    ...fields,
+  });
+}
+
+await test('short commands in a row fold into one line, with the thoughts between them, and anything else ends the row', () => {
+  const thought = (index: number): Step =>
+    step(index, { type: 'thinking', kind: null, endedAt: null });
+  const shape = (steps: readonly Step[], live = false): string[] =>
+    stepLines(steps, live).map((line) =>
+      'step' in line
+        ? String(line.step.index)
+        : `${line.commands}:${line.steps.map((entry) => entry.index).join(',')}`,
+    );
+  assert.deepEqual(
+    shape([
+      thought(0),
+      step(1, {}),
+      quick(2, 'ls'),
+      thought(3),
+      quick(4, 'cat gap.json'),
+      quick(5, 'head train.log'),
+      thought(6),
+      step(7, { type: 'text', kind: null, endedAt: null }),
+      quick(8, 'ls'),
+      quick(9, 'wc -l out.csv'),
+    ]),
+    // A thought before the row and after it stays out of it; two commands do not fold.
+    ['0', '1', '3:2,3,4,5', '6', '7', '8', '9'],
+  );
+  // A command that failed, still runs, or took 10 seconds or more ends the row.
+  for (const breaker of [
+    quick(3, 'pytest', { status: 'failed' }),
+    quick(3, 'sleep 1', { status: 'running', endedAt: null }),
+    quick(3, 'sleep 10', {
+      endedAt: new Date(Date.parse(ago(10)) + 10_000).toISOString(),
+    }),
+    step(3, { kind: 'read', title: 'gap.json' }),
+    // Work in the background ends at once, but goes on: never short.
+    quick(3, 'nohup python train.py > train.log 2>&1'),
+    quick(3, 'python train.py > train.log 2>&1 &'),
+    quick(3, 'python train.py', {
+      input: {
+        text: '{\n  "command": "python train.py",\n  "run_in_background": true\n}',
+        trimmed: false,
+      },
+    }),
+  ])
+    assert.deepEqual(
+      shape([quick(1, 'ls'), quick(2, 'ls'), breaker, quick(4, 'ls')]),
+      ['1', '2', '3', '4'],
+      breaker.title ?? '',
+    );
+  // "&&" between commands is not work in the background.
+  assert.deepEqual(
+    shape([quick(1, 'ls'), quick(2, 'cd out && ls'), quick(3, 'ls')]),
+    ['3:1,2,3'],
+  );
+  // While the turn runs, the row that reaches its newest step stays unfolded, even with a thought after it.
+  const tail = [step(0, {}), quick(1, 'ls'), quick(2, 'ls'), quick(3, 'ls')];
+  assert.deepEqual(shape(tail, true), ['0', '1', '2', '3']);
+  assert.deepEqual(
+    shape(
+      [...tail, step(4, { type: 'thinking', kind: null, endedAt: null })],
+      true,
+    ),
+    ['0', '1', '2', '3', '4'],
+  );
+  assert.deepEqual(shape(tail, false), ['0', '3:1,2,3']);
+  // A row that a later step ended folds while the turn runs.
+  assert.deepEqual(shape([...tail, step(4, {})], true), ['0', '3:1,2,3', '4']);
+  // The fold's list folds them too, and names the long command apart.
+  const fold = text(
+    renderToStaticMarkup(
+      <StepList
+        id="s"
+        steps={[
+          quick(1, 'ls'),
+          quick(2, 'cat gap.json'),
+          quick(3, 'head train.log'),
+          quick(4, 'wc -l out.csv'),
+          step(5, { title: 'python filter.py --keep 0.3' }),
+        ]}
+        total={5}
+        turnHref="#/"
+        live={false}
+      />,
+    ),
+  );
+  assert.match(
+    fold,
+    /Ran 4 short commands Ran python filter\.py --keep 0\.3 Open every step/,
+  );
+  // On the turn's page the line opens its rows on Show, which says what it opens.
+  const rows = [quick(1, 'ls'), quick(2, 'cat gap.json'), quick(3, 'ls')];
+  const opened = (keys: readonly string[]): Opened => ({
+    has: (key) => keys.includes(key),
+    set: () => {},
+  });
+  const row = renderToStaticMarkup(
+    <ol>
+      <StepGroup steps={rows} commands={3} opened={opened([])} />
+    </ol>,
+  );
+  assert.match(
+    text(row),
+    new RegExp(`Ran 3 short commands Show ${clock(ago(10))}`),
+  );
+  assert.match(
+    row,
+    /aria-label="Show the 3 short commands" aria-expanded="false">/,
+  );
+  assert.doesNotMatch(row, /aria-controls/);
+  assert.doesNotMatch(row, /cat gap\.json/);
+  // Opened, by the person or by a step in it that the person opened, which stays open.
+  const kept = renderToStaticMarkup(
+    <ol>
+      <StepGroup
+        steps={rows}
+        commands={3}
+        opened={opened([rows[1]?.id ?? ''])}
+      />
+    </ol>,
+  );
+  assert.match(
+    kept,
+    /aria-label="Hide the 3 short commands" aria-expanded="true" aria-controls="[^"]+"/,
+  );
+  assert.match(text(kept), /cat gap\.json/);
+  assert.match(
+    renderToStaticMarkup(
+      <ol>
+        <StepGroup
+          steps={rows}
+          commands={3}
+          opened={opened([groupKey(rows)])}
+        />
+      </ol>,
+    ),
+    /aria-expanded="true"/,
+  );
+  // A row keeps its key when earlier steps load in front of it.
+  assert.equal(groupKey([quick(0, 'pwd'), ...rows]), groupKey(rows));
 });
 
 await test('a step on the turn page: a command shows the end of its output, other steps open on a button', () => {
@@ -807,6 +969,8 @@ await test('a step on the turn page: a command shows the end of its output, othe
           trimmed: true,
         },
       })}
+      open={false}
+      onToggle={() => {}}
     />,
   );
   assert.match(command, /class="step-row step-row--log"/);
@@ -818,11 +982,21 @@ await test('a step on the turn page: a command shows the end of its output, othe
   );
   assert.match(text(command), /19 min/);
   const failed = text(
-    renderToStaticMarkup(<StepRow step={step(4, { status: 'failed' })} />),
+    renderToStaticMarkup(
+      <StepRow
+        step={step(4, { status: 'failed' })}
+        open={false}
+        onToggle={() => {}}
+      />,
+    ),
   );
   assert.match(failed, /failed/);
   const running = renderToStaticMarkup(
-    <StepRow step={step(5, { status: 'running', endedAt: null })} />,
+    <StepRow
+      step={step(5, { status: 'running', endedAt: null })}
+      open={false}
+      onToggle={() => {}}
+    />,
   );
   assert.match(running, /step-row__dot/);
   assert.match(text(running), /Running python probe_train\.py/);
@@ -834,6 +1008,8 @@ await test('a step on the turn page: a command shows the end of its output, othe
         input: { text: '{"query":"qwen sae"}', trimmed: false },
         output: { text: '6 results', trimmed: false },
       })}
+      open={false}
+      onToggle={() => {}}
     />,
   );
   assert.match(search, /aria-expanded="false"/);
@@ -847,6 +1023,8 @@ await test('a step on the turn page: a command shows the end of its output, othe
         title: null,
         text: { text: 'Check the control length first.', trimmed: false },
       })}
+      open={false}
+      onToggle={() => {}}
     />,
   );
   // A one-line thought shows in full in its row, so nothing opens.
@@ -863,6 +1041,8 @@ await test('a step on the turn page: a command shows the end of its output, othe
           trimmed: false,
         },
       })}
+      open={false}
+      onToggle={() => {}}
     />,
   );
   assert.match(

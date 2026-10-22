@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import type { Step, Text } from '../../protocol/api.ts';
 import {
   commandLike,
   foldSteps,
+  stepLines,
   stepTook,
   stepVerb,
   stepWhat,
@@ -11,20 +12,23 @@ import { clock } from '../format.ts';
 
 /**
  * The steps of an open fold: the turn's newest tool calls, one line each,
- * then a link to the turn's page, which has every step and its output.
+ * with short commands in a row on one line, then a link to the turn's
+ * page, which has every step and its output.
  * `total`: the turn's tool calls, from its counts, so the list says how
- * many came before the ones it shows.
+ * many came before the ones it shows. `live`: the turn still runs.
  */
 export function StepList({
   id,
   steps,
   total,
   turnHref,
+  live,
 }: {
   readonly id: string;
   readonly steps: readonly Step[];
   readonly total: number;
   readonly turnHref: string;
+  readonly live: boolean;
 }): ReactNode {
   const shown = steps.filter((step) => step.type === 'tool').slice(-foldSteps);
   const earlier = Math.max(0, total - shown.length);
@@ -36,16 +40,25 @@ export function StepList({
           {earlier} earlier {earlier === 1 ? 'step' : 'steps'}
         </li>
       )}
-      {shown.map((step) => (
-        <li key={step.id} className="steps__item">
-          <b className="steps__verb">{stepVerb(step)}</b>
-          <span
-            className={commandLike(step) ? 'steps__what mono' : 'steps__what'}
-          >
-            {stepWhat(step)}
-          </span>
-        </li>
-      ))}
+      {stepLines(shown, live).map((line) =>
+        'step' in line ? (
+          <li key={line.step.id} className="steps__item">
+            <b className="steps__verb">{stepVerb(line.step)}</b>
+            <span
+              className={
+                commandLike(line.step) ? 'steps__what mono' : 'steps__what'
+              }
+            >
+              {stepWhat(line.step)}
+            </span>
+          </li>
+        ) : (
+          <li key={line.steps[0]?.id} className="steps__item">
+            <b className="steps__verb">Ran</b>
+            <span className="steps__what">{line.commands} short commands</span>
+          </li>
+        ),
+      )}
       <li>
         <a className="steps__all" href={turnHref}>
           Open every step
@@ -80,10 +93,18 @@ function Block({
 /**
  * One step of a turn, on the turn's page. A command shows the end of its
  * output at once, as a log. Any other step with more to show opens it on a
- * button.
+ * button. The page keeps `open`, so a step stays open when it moves into or
+ * out of a row of short commands.
  */
-export function StepRow({ step }: { readonly step: Step }): ReactNode {
-  const [open, setOpen] = useState(false);
+export function StepRow({
+  step,
+  open,
+  onToggle,
+}: {
+  readonly step: Step;
+  readonly open: boolean;
+  readonly onToggle: () => void;
+}): ReactNode {
   const log =
     step.type === 'tool' && step.output !== null && commandLike(step)
       ? step.output
@@ -128,7 +149,7 @@ export function StepRow({ step }: { readonly step: Step }): ReactNode {
           type="button"
           className="step-row__toggle"
           aria-expanded={open}
-          onClick={() => setOpen(!open)}
+          onClick={onToggle}
         >
           {open ? 'Hide' : 'Show'}{' '}
           {step.type === 'tool' ? 'input and output' : 'the words'}
@@ -140,6 +161,79 @@ export function StepRow({ step }: { readonly step: Step }): ReactNode {
           {step.output && <Block label="Output" value={step.output} end />}
           {step.text && <p className="step-row__text">{step.text.text}</p>}
         </div>
+      )}
+    </li>
+  );
+}
+
+/** What the person opened on a turn's page: steps by ID, and rows of short commands by `groupKey`. */
+export interface Opened {
+  readonly has: (key: string) => boolean;
+  readonly set: (keys: readonly string[], open: boolean) => void;
+}
+
+/** A row of short commands, by its last step, which stays the same when earlier steps load in front. */
+export function groupKey(steps: readonly Step[]): string {
+  return `group:${steps.at(-1)?.id ?? ''}`;
+}
+
+/**
+ * Short commands in a row, on the turn's page, folded into one line as on
+ * the v9 turn artboard: "Ran 5 short commands". Show opens their rows. The
+ * row is open while the person keeps it or any step in it open.
+ */
+export function StepGroup({
+  steps,
+  commands,
+  opened,
+}: {
+  readonly steps: readonly Step[];
+  readonly commands: number;
+  readonly opened: Opened;
+}): ReactNode {
+  const listId = useId();
+  const key = groupKey(steps);
+  const open = opened.has(key) || steps.some((step) => opened.has(step.id));
+  const first = steps[0];
+  return (
+    <li className="step-row">
+      <div className="step-row__line">
+        <b className="step-row__verb">Ran</b>
+        <span className="step-row__what">
+          {commands} short commands{' '}
+          <button
+            type="button"
+            className="step-row__show"
+            aria-label={`${open ? 'Hide' : 'Show'} the ${commands} short commands`}
+            aria-expanded={open}
+            aria-controls={open ? listId : undefined}
+            onClick={() =>
+              opened.set(
+                open ? [key, ...steps.map((step) => step.id)] : [key],
+                !open,
+              )
+            }
+          >
+            {open ? 'Hide' : 'Show'}
+          </button>
+        </span>
+        {first && <span className="step-row__time">{clock(first.at)}</span>}
+      </div>
+      {open && (
+        <ol
+          id={listId}
+          className="step-rows step-rows--folded"
+          aria-label="Short commands"
+        >
+          {steps.map((step) => (
+            <StepRow
+              key={step.index}
+              step={step}
+              open={opened.has(step.id)}
+              onToggle={() => opened.set([step.id], !opened.has(step.id))}
+            />
+          ))}
+        </ol>
       )}
     </li>
   );

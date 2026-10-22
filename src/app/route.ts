@@ -4,16 +4,16 @@ import type { SetupPage } from './setup.ts';
 /**
  * The app's pages, from the URL fragment. The lab home is `#/`, a direction
  * is `#/d/<id>`, one turn of its agent is `#/d/<id>/turn/<turn>`, a call
- * opens over the lab at `#/call/<id>`, the answer is `#/answer`, and a
- * direction's bring-in is `#/d/<id>/bring`. `#/board/<id>` is the lab home
- * with a post of its board brought into view, and `#/post/<id>` is a post's
- * own page, with its replies. `#/d/<id>/run/<run>` is a direction's page
- * with a run marked in the turn that started it. The first run is
- * `#/setup/<step>`, and `#/setup` opens its first step without a record.
- * `#/ask` asks the question of a new project, while Verifold runs without
- * one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's page,
- * such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`, and
- * `#/d/<id>/diff` what a direction changed, or with a proof such as
+ * opens over the page that opened it at `#/call/<id>`, the answer is
+ * `#/answer`, and a direction's bring-in is `#/d/<id>/bring`. `#/board/<id>`
+ * is the lab home with a post of its board brought into view, and
+ * `#/post/<id>` is a post's own page, with its replies. `#/d/<id>/run/<run>`
+ * is a direction's page with a run marked in the turn that started it. The
+ * first run is `#/setup/<step>`, and `#/setup` opens its first step without
+ * a record. `#/ask` asks the question of a new project, while Verifold runs
+ * without one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's
+ * page, such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`,
+ * and `#/d/<id>/diff` what a direction changed, or with a proof such as
  * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/settings` is the
  * project's settings, with its pods. Any other fragment is a page that does
  * not exist.
@@ -35,7 +35,12 @@ export type Route =
       readonly direction: string;
       readonly turn: string;
     }
-  | { readonly page: 'call'; readonly id: string }
+  | {
+      readonly page: 'call';
+      readonly id: string;
+      /** The page that opened the call, from its history entry. Without one, the call shows over the lab home. */
+      readonly opener?: Opener;
+    }
   | { readonly page: 'post'; readonly id: string }
   | { readonly page: 'answer' }
   | { readonly page: 'bring'; readonly direction: string }
@@ -64,6 +69,18 @@ export type Route =
   | { readonly page: 'history-run'; readonly id: string }
   | { readonly page: 'start-over' }
   | { readonly page: 'unknown' };
+
+/** A page that a call can show over: any page but a call. */
+export type PageRoute = Exclude<Route, { readonly page: 'call' }>;
+
+/** The page that opened a call, from the call's history entry. */
+export interface Opener {
+  /** Its address, such as `#/d/d-2`. */
+  readonly hash: string;
+  readonly route: PageRoute;
+  /** Close can go Back to the opener's entry without loading the app again. */
+  readonly back: boolean;
+}
 
 /** A direction ID, such as d-2. It starts with a letter or digit, so ".." is never one. */
 const id = '[A-Za-z0-9][A-Za-z0-9._-]{0,99}';
@@ -173,4 +190,24 @@ export function replaceRoute(route: string): void {
     `${location.pathname}${location.search}${route}`,
   );
   dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+/**
+ * A plain click with the main button and no key held. Any other click on a
+ * link does what the browser does with it, such as open it in a new tab.
+ */
+export function plainClick(event: {
+  readonly button: number;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+}): boolean {
+  return (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
 }

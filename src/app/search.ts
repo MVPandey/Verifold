@@ -71,13 +71,14 @@ export function isSearchKey(
 /**
  * What opening a hit does, from what this page's snapshot holds. `go`: a
  * link to the hit's page. A post opens on the lab home's board, or on its
- * own page when the board leaves it out. A run opens on its direction's
- * page, and a call in its dialog. `read`: a call that the snapshot leaves
- * out shows its question and answer in the search, since its dialog could
- * not.
+ * own page when the board leaves it out. A run opens on its own page.
+ * `call`: the call's dialog, over this page, as Decide opens it. `read`: a
+ * call that the snapshot leaves out shows its question and answer in the
+ * search, since its dialog could not.
  */
 export type HitAction =
   | { readonly type: 'go'; readonly route: string }
+  | { readonly type: 'call'; readonly id: string }
   | { readonly type: 'read' };
 
 export function hitAction(hit: SearchHit, lab: Lab): HitAction {
@@ -92,7 +93,7 @@ export function hitAction(hit: SearchHit, lab: Lab): HitAction {
     case 'call':
       return callView(lab, hit.id).kind === 'missing'
         ? { type: 'read' }
-        : { type: 'go', route: href.call(hit.id) };
+        : { type: 'call', id: hit.id };
   }
 }
 
