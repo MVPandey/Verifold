@@ -227,6 +227,11 @@ button {
   color: var(--ink-2);
 }
 
+.status--need {
+  background: var(--need-bg);
+  color: var(--need-ink);
+}
+
 .dot {
   width: 9px;
   height: 9px;

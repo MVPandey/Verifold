@@ -40,7 +40,16 @@ import { PodNeeds, PodsLine, type PodActions } from '../components/Pods.tsx';
 import { waitingPods } from '../pods.ts';
 import { failureOf } from '../call.ts';
 import { ToolsContext } from '../tools.ts';
-import type { AgentActions } from './DirectionPage.tsx';
+import {
+  noDirectionsLine,
+  plannerEndLine,
+  plannerState,
+} from '../../ui/lab-lines.ts';
+import {
+  StartAgain,
+  canStartAgain,
+  type AgentActions,
+} from './DirectionPage.tsx';
 import { PlannerComposer, Scoping, planQuestions } from './Scoping.tsx';
 
 /** Pages of older posts that a gap fill reads at most, before it gives the older posts up. */
@@ -78,7 +87,10 @@ export interface LabActions {
  * canvas ("8. The lab at work"). Depth opens on its own page. `show`: a post
  * on the board that a link to it (`#/board/<id>`) brings into view. Before
  * the plan, the planner's work and its questions take the place of the
- * directions ("6 Scoping"). With `pods`, a pod that waits for the person
+ * directions ("6 Scoping"). A planner that ended before the plan leaves the
+ * home as it is after the plan, with a line that says how it ended and, for
+ * a crash, Start again. A lab whose planner did not start says so. With
+ * `pods`, a pod that waits for the person
  * shows in Needs you, with Approve and Deny, and so do pod actions that
  * failed in the background and pod notices.
  */
@@ -107,8 +119,22 @@ export function LabHome({
   const plannerDirection = lab.directions.find(
     (entry) => entry.id === planner?.direction,
   );
+  const controls = useContext(ControlsContext);
+  // The person can open a direction, and start a crashed planner again, from this tab.
+  const act = controls !== null && lab.agentsHere;
+  const state = plannerState(lab, planner?.status);
+  const ended =
+    planner && state && state !== 'missing'
+      ? {
+          line: plannerEndLine(state, act),
+          restart: canStartAgain(planner, lab, controls),
+        }
+      : null;
+  // Without a planner or directions, nothing works in the lab until the person acts.
+  const stuck =
+    ended !== null || (state === 'missing' && lab.directions.length === 0);
   const scoping =
-    !lab.plan && planner && plannerDirection && agentActions
+    !lab.plan && !ended && planner && plannerDirection && agentActions
       ? { planner, direction: plannerDirection, agentActions }
       : null;
   // The planner's questions show as cards, so the Needs-you line leaves them out.
@@ -119,14 +145,13 @@ export function LabHome({
   const compute = snapshot.compute;
   const waiting = compute && pods ? waitingPods(compute).length : 0;
   const tools = useContext(ToolsContext);
-  const controls = useContext(ControlsContext);
   const [replyTo, setReplyTo] = useState<Post | null>(null);
   const older = useOlderPosts(lab);
   // Older pages hold question posts too, so the filter applies after the join.
   const shownPosts = scoping
     ? older.posts.filter((post) => !announced.has(post.id))
     : older.posts;
-  const replies = controls && lab.agentsHere ? controls : null;
+  const replies = act ? controls : null;
   const box = useRef<HTMLDivElement>(null);
   // After the board rendered: then the post is on the page.
   useEffect(() => {
@@ -174,7 +199,18 @@ export function LabHome({
           ) : (
             // Before the plan, the planner's own line says what happens.
             !scoping &&
+            !stuck &&
             !waiting && <StatusBar tone="ok">Nothing needs you.</StatusBar>
+          )}
+          {ended && planner && (
+            <>
+              <StatusBar tone="need">{ended.line}</StatusBar>
+              {ended.restart && (
+                <div className="start-again">
+                  <StartAgain agent={planner.id} />
+                </div>
+              )}
+            </>
           )}
           {lab.paused?.reason === 'deadline' && lab.agentsHere && <MoreTime />}
           <WorksLine lab={lab} />
@@ -225,9 +261,8 @@ export function LabHome({
               )}
             </section>
           ) : (
-            <StatusBar tone="plan">
-              The planner is reading. Directions show here when the plan is
-              ready.
+            <StatusBar tone={state === 'missing' ? 'need' : 'plan'}>
+              {noDirectionsLine(state === 'missing', act)}
             </StatusBar>
           )}
           {!scoping && lab.agentsHere && <OpenDirection />}
