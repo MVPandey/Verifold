@@ -4,16 +4,16 @@ import type { SetupPage } from './setup.ts';
 /**
  * The app's pages, from the URL fragment. The lab home is `#/`, a direction
  * is `#/d/<id>`, one turn of its agent is `#/d/<id>/turn/<turn>`, a call
- * opens over the lab at `#/call/<id>`, the answer is `#/answer`, and a
- * direction's bring-in is `#/d/<id>/bring`. `#/board/<id>` is the lab home
- * with a post of its board brought into view, and `#/post/<id>` is a post's
- * own page, with its replies. `#/d/<id>/run/<run>` is a direction's page
- * with a run marked in the turn that started it. The first run is
- * `#/setup/<step>`, and `#/setup` opens its first step without a record.
- * `#/ask` asks the question of a new project, while Verifold runs without
- * one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's page,
- * such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`, and
- * `#/d/<id>/diff` what a direction changed, or with a proof such as
+ * opens over the page that opened it at `#/call/<id>`, the answer is
+ * `#/answer`, and a direction's bring-in is `#/d/<id>/bring`. `#/board/<id>`
+ * is the lab home with a post of its board brought into view, and
+ * `#/post/<id>` is a post's own page, with its replies. `#/d/<id>/run/<run>`
+ * is a direction's page with a run marked in the turn that started it. The
+ * first run is `#/setup/<step>`, and `#/setup` opens its first step without
+ * a record. `#/ask` asks the question of a new project, while Verifold runs
+ * without one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's
+ * page, such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`,
+ * and `#/d/<id>/diff` what a direction changed, or with a proof such as
  * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/settings` is the
  * project's settings, with its pods. Any other fragment is a page that does
  * not exist.
@@ -35,7 +35,15 @@ export type Route =
       readonly direction: string;
       readonly turn: string;
     }
-  | { readonly page: 'call'; readonly id: string }
+  | {
+      readonly page: 'call';
+      readonly id: string;
+      /**
+       * The page under the call, which opened it. The history state holds it,
+       * not the address. Without one, the lab home.
+       */
+      readonly under?: Route;
+    }
   | { readonly page: 'post'; readonly id: string }
   | { readonly page: 'answer' }
   | { readonly page: 'bring'; readonly direction: string }

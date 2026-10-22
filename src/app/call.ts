@@ -5,6 +5,7 @@ import {
   undoWords,
   type EffectWords,
 } from '../ui/call-words.ts';
+import { href, parseRoute, replaceRoute, type Route } from './route.ts';
 
 /**
  * The options in the order that the dialog shows them: the agents' pick
@@ -244,21 +245,52 @@ export function onBoard(lab: Lab, post: string): boolean {
   return lab.board.posts.some((entry) => entry.id === post);
 }
 
-/** The history state of a call opened from the lab home. */
-export const fromLab = { from: 'lab' } as const;
+/**
+ * The history state of a call that a page of the app opened: that page's
+ * address, so the call shows over it and its Close goes back to it.
+ */
+export function openedFrom(hash: string): { readonly from: string } {
+  return { from: hash || href.lab };
+}
 
 /**
- * How closing the dialog leaves its address without a new history entry:
- * back, when the lab home opened the call, so Back cannot reopen it; else,
- * as for a link from elsewhere, the call's entry becomes the lab's.
+ * The page that opened the call, from the history state. A reload keeps
+ * that state. Null for a call that came from anywhere else, such as a
+ * notification or an address typed in: it shows over the lab home.
  */
-export function closeHow(state: unknown): 'back' | 'replace' {
-  return typeof state === 'object' &&
-    state !== null &&
-    'from' in state &&
-    state.from === fromLab.from
-    ? 'back'
-    : 'replace';
+export function callOpener(state: unknown): Route | null {
+  if (
+    typeof state !== 'object' ||
+    state === null ||
+    !('from' in state) ||
+    typeof state.from !== 'string'
+  )
+    return null;
+  const route = parseRoute(state.from);
+  return route.page === 'call' ||
+    route.page === 'setup' ||
+    route.page === 'ask' ||
+    route.page === 'unknown'
+    ? null
+    : route;
+}
+
+/** Open a call over this page, so that its Close comes back here. */
+export function openCall(id: string): void {
+  history.pushState(openedFrom(location.hash), '', href.call(id));
+  dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+/**
+ * Leave the call's address without a new history entry: back to the page
+ * that opened it, so Back cannot reopen the call. A call from anywhere else
+ * leaves for the lab home. `post`: "See the thread", which leaves for that
+ * post on the lab home.
+ */
+export function leaveCall(post: string | null): void {
+  const opener = callOpener(history.state);
+  if (opener && (opener.page === 'lab' || !post)) history.back();
+  else replaceRoute(post ? href.board(post) : href.lab);
 }
 
 /** Where focus goes after the dialog closes, when it went nowhere: the needs-you line's Decide link. */

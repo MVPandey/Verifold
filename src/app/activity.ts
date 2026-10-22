@@ -18,7 +18,7 @@ const nouns: readonly (readonly [StepKind, string, string])[] = [
   ['run', 'run', 'runs'],
   ['post', 'post', 'posts'],
   ['helper', 'helper', 'helpers'],
-  ['other', 'other step', 'other steps'],
+  ['other', 'other tool call', 'other tool calls'],
 ];
 
 /** What a turn's tool calls did, counted: ["9 commands", "1 run"]. Kinds with no calls are left out. */
@@ -143,4 +143,55 @@ export function stepTook(step: Step): string | null {
   return step.endedAt
     ? span(Date.parse(step.endedAt) - Date.parse(step.at))
     : null;
+}
+
+/** A command that ended well within this time is short. */
+const shortMs = 10_000;
+
+/** Short commands in a row fold into one line when there are at least this many. */
+const foldMin = 3;
+
+function short(step: Step): boolean {
+  return (
+    commandLike(step) &&
+    step.status === 'done' &&
+    step.endedAt !== null &&
+    Date.parse(step.endedAt) - Date.parse(step.at) < shortMs
+  );
+}
+
+/** A line of a step list: one step, or short commands in a row with the thoughts between them. */
+export type StepLine =
+  | { readonly step: Step }
+  | { readonly steps: readonly Step[]; readonly commands: number };
+
+/**
+ * Steps as the lines of a list. Short commands in a row fold into one line,
+ * "Ran 5 short commands", as on the v9 turn artboard. Thoughts between them
+ * fold in with them. Any other step ends the row: a command that runs,
+ * failed, or took longer, words, and any other tool call.
+ */
+export function stepLines(steps: readonly Step[]): StepLine[] {
+  const lines: StepLine[] = [];
+  let row: Step[] = [];
+  const end = (): void => {
+    // Thoughts after the row's last command are not part of it.
+    const last = row.findLastIndex(short) + 1;
+    const commands = row.filter(short).length;
+    if (commands >= foldMin)
+      lines.push({ steps: row.slice(0, last), commands });
+    else lines.push(...row.slice(0, last).map((step) => ({ step })));
+    lines.push(...row.slice(last).map((step) => ({ step })));
+    row = [];
+  };
+  for (const step of steps) {
+    if (short(step) || (row.length > 0 && step.type === 'thinking'))
+      row.push(step);
+    else {
+      end();
+      lines.push({ step });
+    }
+  }
+  end();
+  return lines;
 }

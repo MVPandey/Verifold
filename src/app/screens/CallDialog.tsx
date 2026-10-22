@@ -9,10 +9,10 @@ import {
 import type { Call, Lab } from '../../protocol/api.ts';
 import {
   callView,
-  closeHow,
   costLine,
   failureOf,
   footLine,
+  leaveCall,
   missingSecrets,
   onBoard,
   optionForKey,
@@ -27,7 +27,7 @@ import {
 } from '../call.ts';
 import { andList } from '../../ui/call-words.ts';
 import { asked, since, usd } from '../format.ts';
-import { href, replaceRoute } from '../route.ts';
+import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { FactSource, uniqueFacts } from '../components/FactsList.tsx';
@@ -36,19 +36,6 @@ import { Composer } from '../components/Composer.tsx';
 import { Cross } from '../components/Icons.tsx';
 import { SecretCommands } from '../components/Pods.tsx';
 import type { LabActions } from './LabHome.tsx';
-
-/**
- * Leave the call's address for the lab home without a new history entry:
- * back when the lab home opened the call, else the call's entry becomes the
- * lab's. Back after this cannot reopen the call.
- */
-function goHome(): void {
-  if (closeHow(history.state) === 'back') {
-    history.back();
-    return;
-  }
-  replaceRoute(href.lab);
-}
 
 /** What the call rests on: the money spent so far, the facts that the asker checked, and those of the plan. */
 function Facts({
@@ -271,6 +258,7 @@ function Settled({
   now,
   titleId,
   actions,
+  back,
   onClose,
 }: {
   readonly view: Exclude<CallView, { readonly kind: 'open' }>;
@@ -278,6 +266,7 @@ function Settled({
   readonly now: number;
   readonly titleId: string;
   readonly actions: LabActions;
+  readonly back: string;
   readonly onClose: () => void;
 }): ReactNode {
   const label = settledLabel(view);
@@ -360,7 +349,7 @@ function Settled({
           className="button button--primary"
           onClick={onClose}
         >
-          Back to the lab
+          {back}
         </button>
       </div>
     </div>
@@ -368,9 +357,10 @@ function Settled({
 }
 
 /**
- * A call, over the lab home, as on the v9 canvas ("9. A call"). The person
- * picks an option, or answers in their own words. Escape and Close leave
- * without answering; nothing is bought then.
+ * A call, over the page that opened it, as on the v9 canvas ("9. A call").
+ * The person picks an option, or answers in their own words. Escape and
+ * Close leave without answering; nothing is bought then. `back`: the label
+ * of the way out once the call is settled.
  *
  * A modal `<dialog>` keeps focus inside. Leaving closes it first, so the
  * browser returns focus to where it was when the call opened, and then
@@ -382,11 +372,13 @@ export function CallDialog({
   id,
   now,
   actions,
+  back,
 }: {
   readonly lab: Lab;
   readonly id: string;
   readonly now: number;
   readonly actions: LabActions;
+  readonly back: string;
 }): ReactNode {
   const ref = useRef<HTMLDialogElement>(null);
   // Set when the person leaves; what to bring into view after the dialog is gone.
@@ -440,7 +432,7 @@ export function CallDialog({
         leave();
       }}
       onClose={() => {
-        if (leaving.current) goHome();
+        if (leaving.current) leaveCall(leaving.current.post);
       }}
     >
       {view.kind === 'open' ? (
@@ -468,6 +460,7 @@ export function CallDialog({
           now={now}
           titleId={titleId}
           actions={actions}
+          back={back}
           onClose={() => leave()}
         />
       )}
