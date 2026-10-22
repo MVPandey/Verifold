@@ -373,7 +373,9 @@ function addMetric(metrics: Map<string, number | null>, line: string): void {
 }
 
 /** A saved run record, or null when it is not valid. */
-function parseRun(value: Record<string, unknown> | null): RunRecord | null {
+export function parseRun(
+  value: Record<string, unknown> | null,
+): RunRecord | null {
   if (!value) return null;
   const text = (field: unknown): field is string => typeof field === 'string';
   const time = (field: unknown): field is string | null =>

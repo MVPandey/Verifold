@@ -1,3 +1,4 @@
+import { researchRunOnDisk } from './history.ts';
 import { SessionActionError } from './session.ts';
 
 /**
@@ -14,10 +15,11 @@ export type TeamKind = 'lab' | 'coordinator';
 
 /** Why research, the coordinator, or a task cannot work: a lab works on the run. */
 export const labWorks =
-  'A lab works on this run. Start over in Records to use research and the coordinator on a new run.';
+  "A lab works on this run, so research and the coordinator are not available. Start over in the old desk's Records moves this run into the archive. Then research and the coordinator can work on a new run.";
 
-const coordinatorWorks =
-  "This run belongs to the coordinator's team. Start over in Records, then start the lab on the new run.";
+/** Why a lab cannot start: the run is from the research flow that came before the lab. */
+export const researchRunWorks =
+  "This project's current run is from the research flow that came before the lab. Open History in the app and choose Start a lab: it archives that run first.";
 
 const researchRuns =
   'Research is running. Wait for its step to end, or cancel it in Research, then start the lab.';
@@ -31,6 +33,8 @@ export class RunTeam {
     readonly coordinator: () => Promise<boolean>;
     /** A research step runs, checks its input, or chooses a direction. */
     readonly researchBusy: () => boolean;
+    /** The project folder. A lab start also reads its records for a research-flow run. */
+    readonly root?: string;
   };
 
   constructor(owners: RunTeam['owners']) {
@@ -44,8 +48,13 @@ export class RunTeam {
   async refusal(kind: TeamKind | 'research'): Promise<string | null> {
     if (kind !== 'lab') return this.owners.lab() ? labWorks : null;
     if (this.owners.lab()) return 'The lab already runs.';
-    if (await this.owners.coordinator()) return coordinatorWorks;
-    return this.owners.researchBusy() ? researchRuns : null;
+    // A research step that runs has its run on disk too, and Start a lab waits for the step as well.
+    if (this.owners.researchBusy()) return researchRuns;
+    return (await this.owners.coordinator()) ||
+      (this.owners.root !== undefined &&
+        (await researchRunOnDisk(this.owners.root)))
+      ? researchRunWorks
+      : null;
   }
 
   /**

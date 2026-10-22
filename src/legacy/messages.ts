@@ -9,6 +9,14 @@ import {
   rm,
 } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  parseMessage,
+  type Delivery,
+  type Message,
+  type MessageKind,
+} from '../core/team-records.ts';
+
+export type { Delivery, Message, MessageKind };
 
 /**
  * Messages between the person, the coordinator, research, and task workers.
@@ -19,62 +27,6 @@ import { join } from 'node:path';
  * its own.
  */
 
-export type MessageKind =
-  | 'note'
-  | 'blocker'
-  | 'objection'
-  | 'withdrawal'
-  | 'decision';
-
-/**
- * How far a message got. A task worker gets its messages with its next turn:
- * `sent` with the turn, then `delivered` when that turn ends normally, or
- * `uncertain` when it fails or the process stops first. Verifold never resends
- * an uncertain message by itself. A message from the person to a running
- * worker goes into its turn: `sent`, then `delivered` when the harness takes
- * it in. Research gets its messages with its next step. `board`: the desk shows
- * it to the person.
- */
-export type Delivery = 'queued' | 'sent' | 'delivered' | 'uncertain' | 'board';
-
-export interface Message {
-  readonly schemaVersion: 1;
-  readonly id: string;
-  readonly at: string;
-  /** `person`, `coordinator`, or a task ID. */
-  readonly from: string;
-  /** For a worker: the attempt that sent it. The harness pipe identifies it, never the message text. */
-  readonly sender?: {
-    readonly claim: string;
-    readonly attempt: number;
-    readonly revision: number;
-  };
-  /** `person`, `coordinator`, `research`, or a task ID. Only the person writes to research. */
-  readonly to: string;
-  /** The recipient task's revision when the message was sent. */
-  readonly revision?: number;
-  readonly kind: MessageKind;
-  readonly text: string;
-  /** An objection: the artifact version it is about, and its evidence. */
-  readonly about?: { readonly task: string; readonly version: number };
-  readonly evidence?: readonly string[];
-  /** A withdrawal or decision: the objection or blocker that it closes. */
-  readonly closes?: string;
-  /** Blockers and objections stay open until a decision or a withdrawal closes them. */
-  readonly status?: 'open' | 'withdrawn' | 'upheld' | 'overruled' | 'resolved';
-  readonly delivery: Delivery;
-  readonly deliveredAt?: string;
-  /**
-   * `turn`: Verifold added the message to the agent's running turn.
-   * `coordinator`: research ended first, or the task's agent ended, so Verifold passed it to the coordinator.
-   */
-  readonly via?: 'turn' | 'coordinator';
-  /** The recipient's next text after the message, a model claim. Messages from the person only. */
-  readonly answer?: { readonly at: string; readonly text: string };
-  /** The harness call that made it, so a repeated call adds nothing. */
-  readonly key?: string;
-}
-
 export const messageLimits = {
   /** Messages in one project. A full project refuses new messages; none is deleted. */
   project: 2000,
@@ -84,54 +36,6 @@ export const messageLimits = {
   evidence: 10,
   evidenceText: 500,
 };
-
-const kinds: readonly MessageKind[] = [
-  'note',
-  'blocker',
-  'objection',
-  'withdrawal',
-  'decision',
-];
-const deliveries: readonly Delivery[] = [
-  'queued',
-  'sent',
-  'delivered',
-  'uncertain',
-  'board',
-];
-
-function object(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function parseMessage(value: unknown): Message | null {
-  const entry = object(value);
-  if (
-    !entry ||
-    entry.schemaVersion !== 1 ||
-    typeof entry.id !== 'string' ||
-    !/^m-[1-9]\d{0,5}$/.test(entry.id) ||
-    typeof entry.at !== 'string' ||
-    typeof entry.from !== 'string' ||
-    typeof entry.to !== 'string' ||
-    typeof entry.text !== 'string' ||
-    !kinds.includes(entry.kind as MessageKind) ||
-    !deliveries.includes(entry.delivery as Delivery)
-  )
-    return null;
-  // A harness that can write in the project can write here, so the fields that the desk shows are checked.
-  const { via, answer, ...rest } = entry;
-  const reply = object(answer);
-  return {
-    ...(rest as unknown as Message),
-    ...(via === 'turn' || via === 'coordinator' ? { via } : {}),
-    ...(reply && typeof reply.at === 'string' && typeof reply.text === 'string'
-      ? { answer: { at: reply.at, text: reply.text } }
-      : {}),
-  };
-}
 
 export class Messages {
   private readonly directory: string;
