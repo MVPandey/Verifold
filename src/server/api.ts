@@ -205,6 +205,8 @@ export const apiLimits = {
   runOutputs: 200,
   /** Files in a direction's diff read. */
   diffFiles: 2000,
+  /** Bytes of a figure that a post cites. */
+  figure: 20 * 1024 * 1024,
   /** Pods in the snapshot that are open, wait for the person, or carry a notice. */
   pods: 50,
   /** Earlier pods in the snapshot, the newest kept. */
@@ -361,6 +363,15 @@ export interface LabReadSource {
     readonly files: readonly ChangedFile[];
     readonly diff: { readonly text: string; readonly cut: boolean } | null;
   } | null>;
+  /**
+   * The figure that a post cites, such as p-12.0, as the post pinned it.
+   * Null for a proof that is not a figure of the lab. It throws a
+   * SessionActionError for a figure larger than `bytes`.
+   */
+  readonly figure: (
+    proof: string,
+    bytes: number,
+  ) => Promise<{ readonly path: string; readonly content: Buffer } | null>;
 }
 
 /** The desk's own bring-in reads, which its bring-in panel uses too. */
@@ -2314,6 +2325,15 @@ export class ApiReader {
           : null,
     };
   }
+
+  /** The figure that a post cites, such as p-12.0, or null. A SessionActionError says why Verifold does not show it. */
+  async figure(
+    proof: string,
+  ): Promise<{ readonly path: string; readonly content: Buffer } | null> {
+    return (
+      (await this.sources().reads?.figure(proof, apiLimits.figure)) ?? null
+    );
+  }
 }
 
 /** A snapshot without the fields that the feed sets. */
@@ -2581,6 +2601,17 @@ export interface ProjectStart {
   readonly act: (body: Record<string, unknown>) => Promise<number>;
 }
 
+/** The content type of each figure that the board takes (board.ts), by its extension. */
+const figureTypes = new Map([
+  ['png', 'image/png'],
+  ['jpg', 'image/jpeg'],
+  ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'],
+  ['svg', 'image/svg+xml'],
+  ['webp', 'image/webp'],
+  ['pdf', 'application/pdf'],
+]);
+
 function json(response: ServerResponse, status: number, body: unknown): void {
   response
     .writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
@@ -2793,6 +2824,39 @@ export async function answerApi(
     const thread = reader.thread(second);
     if (thread) json(response, 200, thread);
     else response.writeHead(404).end();
+    return;
+  }
+  if (first === 'figures' && parts.length === 2 && !keys.length) {
+    if (!second || !proofRef(second)) {
+      json(response, 400, {
+        error: 'Name a figure by its post and place, such as p-12.0.',
+      });
+      return;
+    }
+    let figure: Awaited<ReturnType<ApiReader['figure']>>;
+    try {
+      figure = await reader.figure(second);
+    } catch (error) {
+      if (!(error instanceof SessionActionError)) throw error;
+      json(response, 404, { error: error.message });
+      return;
+    }
+    const type =
+      figure &&
+      figureTypes.get(figure.path.split('.').at(-1)?.toLowerCase() ?? '');
+    if (!figure || !type) {
+      response.writeHead(404).end();
+      return;
+    }
+    response
+      .writeHead(200, {
+        'Content-Type': type,
+        'Content-Length': figure.content.length,
+        // An agent made these bytes. Opened as a page, they get no script, no origin, and no loads.
+        'Content-Security-Policy':
+          "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+      })
+      .end(figure.content);
     return;
   }
   if (first === 'board' && parts.length === 1 && onlyBefore) {

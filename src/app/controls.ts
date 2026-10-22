@@ -13,6 +13,7 @@ import {
   isDirectionDiff,
   isRunDetail,
   load,
+  loadBlob,
   paths,
   type ActOutcome,
   type Loaded,
@@ -72,6 +73,11 @@ export interface LabControls {
     before: string,
     signal?: AbortSignal,
   ) => Promise<Loaded<BoardPage>>;
+  /** The figure that a post cites, such as p-12.0: its bytes, as the post pinned them. */
+  readonly figure: (
+    proof: string,
+    signal?: AbortSignal,
+  ) => Promise<Loaded<Blob>>;
 }
 
 export const ControlsContext = createContext<LabControls | null>(null);
@@ -123,5 +129,6 @@ export function labControls(token: string): LabControls {
       load(token, paths.diff(direction, query), isDirectionDiff, signal),
     board: (before, signal) =>
       load(token, paths.board(before), isBoardPage, signal),
+    figure: (proof, signal) => loadBlob(token, paths.figure(proof), signal),
   };
 }

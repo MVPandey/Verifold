@@ -1292,6 +1292,8 @@ export async function startDesk(
         (await labDesk.lab?.runLog(run, bytes)) ?? null,
       diff: async (direction, file, proof) =>
         (await labDesk.lab?.directionDiff(direction, file, proof)) ?? null,
+      figure: async (proof, bytes) =>
+        (await labDesk.lab?.figure(proof, bytes)) ?? null,
     },
   }));
   const apiFeed = new ApiFeed(apiReader, options.api);

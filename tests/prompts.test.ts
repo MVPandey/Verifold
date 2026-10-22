@@ -130,3 +130,12 @@ await test("the lab's prompts send the person to the project's settings, which t
     /a RunPod key, or a spend limit in the project's settings/,
   );
 });
+
+await test('lab agents write their evidence in plain words, with a metric code name only when it helps', async () => {
+  const prompt = await corePrompt('lab-peer');
+  assert.match(
+    prompt,
+    /plain words that the person can read without your code/,
+  );
+  assert.match(prompt, /Say in words what each metric measures/);
+});
