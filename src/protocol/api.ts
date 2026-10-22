@@ -662,7 +662,7 @@ export interface Plan {
   /** The plan's directions, in its order. */
   readonly directions: readonly string[];
   readonly facts: readonly Fact[];
-  /** True: the plan listed no facts and kept those of an earlier plan. Absent otherwise. Added after version 1. */
+  /** True: the facts are those of an earlier plan, because this plan listed none or the same ones. Absent otherwise. Added after version 1. */
   readonly factsCarried?: boolean;
   /** 1 for the first plan. Absent for a plan from before versions. Added after version 1. */
   readonly version?: number;

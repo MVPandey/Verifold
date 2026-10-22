@@ -1587,7 +1587,10 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
             cost: plan.cost,
             directions: [...plan.directions],
             facts: keep(plan.facts, level.facts, 'facts').map(fact),
-            ...(plan.factsCarried ? { factsCarried: true } : {}),
+            // The facts are those of an earlier plan: this one listed none, or the same ones.
+            ...(plan.factsPost !== undefined && plan.factsPost !== plan.post
+              ? { factsCarried: true }
+              : {}),
             ...(plan.version === undefined ? {} : { version: plan.version }),
             previous: plan.previous ?? null,
             changed: plan.changed ?? null,

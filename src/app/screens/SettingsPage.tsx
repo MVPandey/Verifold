@@ -10,9 +10,9 @@ import type { ActOutcome } from '../api.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { Chevron } from '../components/Icons.tsx';
-import { GpuTable, LimitField, readAt } from '../components/Limits.tsx';
+import { GpuTable, LimitField } from '../components/Limits.tsx';
 import { PodNeeds, type OnPod, type PodActions } from '../components/Pods.tsx';
-import { clock, usd } from '../format.ts';
+import { clock, dayClock, usd } from '../format.ts';
 import {
   allowedNow,
   changesOf,
@@ -517,8 +517,9 @@ function Limits({
         ) : compute.gpus ? (
           <>
             <span className="setup__meta">
-              RunPod’s Secure Cloud list prices, read {readAt(compute.gpus.at)}.
-              Each rental’s price comes from RunPod when an agent asks for it.
+              RunPod’s Secure Cloud list prices, read{' '}
+              {dayClock(compute.gpus.at)}. Each rental’s price comes from RunPod
+              when an agent asks for it.
             </span>
             <GpuTable
               rows={rows}
