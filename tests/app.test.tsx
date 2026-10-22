@@ -972,8 +972,22 @@ await test('the desk serves the app build under /app/: its page with no-store, h
     desk.appUrl,
     `${origin}/app/#${new URL(desk.url).hash.slice(1)}`,
   );
+  // The app is the default page. The old desk is at /desk, and `/` leads to the app.
+  assert.match(desk.launchUrl(), /\/app\/#launch-[0-9a-f]{48}$/);
   assert.match(desk.launchUrl('/app/'), /\/app\/#launch-[0-9a-f]{48}$/);
-  assert.match(desk.launchUrl(), /:\d+\/#launch-[0-9a-f]{48}$/);
+  assert.match(desk.launchUrl('/desk'), /:\d+\/desk#launch-[0-9a-f]{48}$/);
+  assert.equal(desk.deskUrl, `${origin}/desk${new URL(desk.url).hash}`);
+  const home = await fetch(`${origin}/`, { redirect: 'manual' });
+  assert.equal(home.status, 302);
+  assert.equal(home.headers.get('location'), '/app/');
+  assert.equal(home.headers.get('cache-control'), 'no-store');
+  const oldDesk = await fetch(`${origin}/desk`);
+  assert.equal(oldDesk.status, 200);
+  assert.match(await oldDesk.text(), /desk-client\.js/);
+  assert.equal(
+    (await fetch(`${origin}/?x=1`, { redirect: 'manual' })).status,
+    404,
+  );
 
   // A file of a type that the desk does not know stops the desk, loudly.
   await assert.rejects(
@@ -986,10 +1000,14 @@ await test('the desk serves the app build under /app/: its page with no-store, h
   const bareOrigin = new URL(bare.url).origin;
   assert.equal((await fetch(`${bareOrigin}/app/`)).status, 404);
   assert.equal(bare.appUrl, null);
-  assert.match(bare.launchUrl('/app/'), /:\d+\/#launch-/);
+  assert.match(bare.launchUrl('/app/'), /:\d+\/desk#launch-/);
+  // Without the app, `/` is the old desk itself.
+  const bareHome = await fetch(`${bareOrigin}/`, { redirect: 'manual' });
+  assert.equal(bareHome.status, 200);
+  assert.match(await bareHome.text(), /desk-client\.js/);
 });
 
-await test('/app in the terminal opens the app, and --app is refused where it does nothing', async (t) => {
+await test('/app and /open in the terminal open the app, and --app is refused where it does nothing', async (t) => {
   const messages: string[] = [];
   const io = {
     interactive: true,
@@ -1001,15 +1019,20 @@ await test('/app in the terminal opens the app, and --app is refused where it do
   let opened = 0;
   const controls = {
     host: 'claude',
-    open: () => {},
     openApp: () => {
       opened++;
     },
+    openDesk: () => {},
   };
   terminalInput(sessions, '/app', io, controls);
-  assert.equal(opened, 1);
+  terminalInput(sessions, '/open', io, controls);
+  assert.equal(opened, 2);
   terminalInput(sessions, '/help', io, controls);
-  assert.match(messages.at(-1) ?? '', /`\/app`: open the new app/);
+  assert.match(
+    messages.at(-1) ?? '',
+    /`\/open` or `\/app`: open Verifold in your browser/,
+  );
+  assert.match(messages.at(-1) ?? '', /`\/desk`: open the old desk/);
   const root = await mkdtemp(join(tmpdir(), 'verifold-app-flag-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await assert.rejects(

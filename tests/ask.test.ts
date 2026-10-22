@@ -583,7 +583,7 @@ await test('the Ask page starts the project: the desk hands it to a background o
   assert.equal(run.opened.length, 1);
   await until(() =>
     Promise.resolve(
-      run.lines.includes('The app in your browser now shows the project.'),
+      run.lines.includes('The page in your browser now shows the project.'),
     ),
   );
   assert.deepEqual(run.ownerOpened, []);
@@ -614,7 +614,7 @@ await test('--no-open holds after the Ask page: when the owner gets a new port, 
   await labAt(run, moved.origin);
   await until(() =>
     Promise.resolve(
-      run.lines.includes('Open the printed app URL to use the new app.'),
+      run.lines.includes('Open the printed URL to use Verifold.'),
     ),
   );
   assert.deepEqual(run.opened, []);

@@ -72,11 +72,11 @@ export async function checkProjectDirectory(root: string): Promise<void> {
 
 /** How a lab project continues, in .verifold.md. */
 const labGuide =
-  "## Continue in the lab\n\nRun verifold in this project directory. It opens the desk, where a lab works on the question: agents each own a direction, post what they find with proof on one board, and check each other's claims. You answer their calls on money, scope, access, or more time. The lab keeps working after you close the terminal. To stop it, run verifold stop.\n\n";
+  "## Continue in the lab\n\nRun verifold in this project directory. It opens Verifold in your browser, where a lab works on the question: agents each own a direction, post what they find with proof on one board, and check each other's claims. You answer their calls on money, scope, access, or more time. The lab keeps working after you close the terminal. To stop it, run verifold stop.\n\n";
 
 /** How a research project continues, in .verifold.md. */
 function researchGuide(workspace: Workspace): string {
-  return `## Continue researching\n\nRun verifold in this project directory. It opens the desk, where you approve the research plan, choose a direction, approve the task plan of the coordinator, and follow the team. The team keeps working after you close the terminal. To stop it, run verifold stop. Harness: ${workspace.host}; model: ${workspace.model ?? 'host default'}. The harness owns its tools, permissions, and sessions.\n\nWhen the desk is closed, scripts can use verifold status, verifold research --approve, and verifold select --id with a direction ID.\n\n`;
+  return `## Continue researching\n\nRun verifold --desk in this project directory. It opens the old desk, where you approve the research plan, choose a direction, approve the task plan of the coordinator, and follow the team. The team keeps working after you close the terminal. To stop it, run verifold stop. Harness: ${workspace.host}; model: ${workspace.model ?? 'host default'}. The harness owns its tools, permissions, and sessions.\n\nWhen the old desk is closed, scripts can use verifold status, verifold research --approve, and verifold select --id with a direction ID.\n\n`;
 }
 
 /** Create a scaffold under the state-write lock; roll back only artifacts made by this call. */

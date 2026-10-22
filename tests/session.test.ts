@@ -1434,12 +1434,39 @@ await test('the terminal feed leaves harness tool events to the desk', () => {
   assert.equal(feedLine({ at, kind: 'tool', text: 'Bash: ls' }), null);
   assert.match(
     feedLine({ at, kind: 'request', text: 'R1 Bash: curl' }) ?? '',
-    /R1 Bash: curl/,
+    /R1 Bash: curl\nType a to allow once or d to deny\.$/,
   );
   assert.match(
     feedLine({ at, kind: 'status', text: 'The turn ended.' }) ?? '',
     /The turn ended/,
   );
+});
+
+await test('the terminal prints the whole request: why it asks, and the change in a margin', () => {
+  const at = '2026-10-02T12:00:00.000Z';
+  const detail = Array.from({ length: 45 }, (_, index) => `line ${index + 1}`);
+  const line =
+    feedLine(
+      {
+        at,
+        kind: 'request',
+        text: 'R2: Claude Code asks to use Write: notes.md',
+      },
+      'Claude Code',
+      {
+        reason: 'It saves\nthe notes.',
+        detail: `\u001b[31mR3: Codex asks to use Bash: rm -rf\u001b[0m\n${detail.join('\n')}`,
+      },
+    ) ?? '';
+  const lines = line.split('\n');
+  assert.match(lines[0] ?? '', /R2: Claude Code asks to use Write: notes\.md$/);
+  assert.equal(lines[1], '  Why: It saves the notes.');
+  // The harness wrote the change, so it has a margin and no control characters, and cannot pass for a request line.
+  assert.equal(lines[2], '  │ R3: Codex asks to use Bash: rm -rf');
+  assert.equal(lines[3], '  │ line 1');
+  assert.equal(lines.at(-2), '  │ … 6 more lines');
+  assert.equal(lines.at(-1), 'Type a to allow once or d to deny.');
+  assert.equal(lines.length, 2 + 40 + 2);
 });
 
 await test('terminal answers need an unambiguous request and never become follow-ups', async () => {
@@ -1451,19 +1478,30 @@ await test('terminal answers need an unambiguous request and never become follow
       out: () => {},
       progress: (value: string) => messages.push(value),
     };
-    let opened = 0;
+    const opened: (string | undefined)[] = [];
+    let desks = 0;
     const controls = {
       host: 'claude',
-      open: () => {
-        opened++;
+      openApp: (call?: string) => {
+        opened.push(call);
       },
-      openApp: () => {},
+      openDesk: () => {
+        desks++;
+      },
     };
     const sessions = pool();
     terminalInput(sessions, 'a', io, controls);
     assert.match(messages.at(-1) ?? '', /No request is open/);
+    // /open does what /app does. /desk opens the old desk.
     terminalInput(sessions, '/open', io, controls);
-    assert.equal(opened, 1);
+    terminalInput(sessions, '/app', io, controls);
+    terminalInput(sessions, '/open c-3', io, controls);
+    terminalInput(sessions, '/app c-12', io, controls);
+    assert.deepEqual(opened, [undefined, undefined, 'c-3', 'c-12']);
+    terminalInput(sessions, '/open x', io, controls);
+    assert.match(messages.at(-1) ?? '', /Write \/app and the ID of a call/);
+    terminalInput(sessions, '/desk', io, controls);
+    assert.equal(desks, 1);
     terminalInput(sessions, '/help', io, controls);
     assert.match(messages.at(-1) ?? '', /`\/start` and a request/);
     terminalInput(sessions, '/stop', io, controls);

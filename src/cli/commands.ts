@@ -59,6 +59,7 @@ import {
   reconcileSessions,
   SessionActionError,
   SessionManager,
+  type PendingRequest,
   type SessionEvent,
 } from '../core/session.ts';
 import { claimOwner, liveOwner, OwnerConflict } from '../core/owner.ts';
@@ -191,11 +192,7 @@ again.`,
 
 const help = `Verifold - private research with your existing agent harness
 
-verifold [--no-open] [--app]          Set up a project and start a lab on its question, or open its desk
-verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
-verifold init --setup-only [--profile profile.json] [--host name]
-verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
-verifold ui [--no-open] [--app]       Open the live research desk and control a harness session there
+verifold [--no-open] [--desk]         Open Verifold in your browser: set up and ask a question, or open this project's lab
 verifold stop                         Stop the team that works in the background, with its pods
 verifold status                       Print workspace JSON
 verifold profile [--setup]            Inspect or configure your global profile
@@ -206,9 +203,13 @@ verifold runpod secret set NAME [--file]
                                       Store a secret for pods, such as HF_TOKEN, from hidden input or stdin
 verifold runpod secret list|remove NAME
                                       List the secret names, or remove one
-verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when the desk does not run
+verifold pods [stop <lease|all>]      List the GPU pod leases, or stop pods when Verifold does not run
 
-Older commands:
+Older commands, for the old desk and the research flow:
+verifold ui [--no-open] [--desk]      Open this project, as a bare verifold does
+verifold init [--host claude|codex] [--topic field] [--autonomy guided|autonomous]
+verifold init --setup-only [--profile profile.json] [--host name]
+verifold research [--topic field] [--feedback text] [--approve] [--autonomy guided|autonomous]
 verifold recommend                    Print a research request for your host
 verifold ideas --from ideas.json       Import host recommendations
 verifold select [--id idea-id]         Choose an idea explicitly
@@ -216,46 +217,41 @@ verifold literature [--memory]        Print an optional paper/context request
 verifold handoff                      Print a planning request for your harness
 verifold view                         Generate a private local HTML workspace
 verifold session --prompt text [--host claude|codex] [--mode ask|auto] [--model name] [--no-open]
-                                      Run one harness session; answer its requests here or on the desk
+                                      Run one harness session; answer its requests here or in the old desk
 
 Options: --workspace path (default: the current folder), --help, --version
 
-In a project that exists, --app opens the new app, a preview of the next desk,
-instead of the desk. Type /app in the terminal to open it later. In a folder
-without a project, --app opens the app's first run: your agents, a short
-profile, and the GPU limits that new projects start with.
+In a folder without a project, verifold opens the first run in your browser:
+your agents, a short profile, skills, and the GPU limits that new projects
+start with. Then the Ask page takes your question, and a lab starts on it.
+Several agents each own a direction and post what they find, with proof, on
+one board. They check each other's claims, and they ask you only about money,
+scope, access, or more time. Runs go on this computer, or on RunPod GPU pods
+within the limits that you set. In a project, verifold opens its lab.
 
-Setup connects your harness, asks for a project folder and your question, and has
-the harness draft a research brief for you to review. Then it creates literature/,
-experiments/, results/, figures/, docs/, agents/, and .verifold.md. Use --model to
-pick the harness model, and --agency-dir to keep your preferences and USER.md in
-another folder (default: ~/.verifold/agency). --setup-only sets up without research
-and offers a research memory that other projects can reuse. Without a terminal,
-research needs --host, --topic, and --autonomy autonomous.
+With a terminal, the team works in a background process, so closing the
+terminal or Ctrl+C does not stop it. The terminal shows the lab in a few lines.
+Type /help there for its commands, and run verifold stop to stop the team.
+--no-open prints the URL instead of opening a browser. --agency-dir keeps your
+profile in another folder (default: ~/.verifold/agency).
 
-After setup, a bare verifold starts a lab on your question. Several agents each
-own a direction and post what they find, with proof, on one board in the desk.
-They check each other's claims, and they ask you only about money, scope,
-access, or more time. Runs go on this computer, or on RunPod GPU pods within the
-limits that you set.
-
-verifold init and verifold research run the research flow instead: research
-searches the web and proposes directions, and after you choose one, the
-coordinator plans tasks, and task agents run the experiments. Keeping PDFs is
-optional and comes after you choose a direction. Verifold keeps its records in
-.verifold/, and Claude Code or Codex keeps its own permissions and sessions.
-With a terminal, the team works in a background process, so closing the terminal
-or Ctrl+C does not stop it. Type /help in the terminal for its commands, and run
-verifold stop to stop the team. Session records are in .verifold/sessions/.
+--desk opens the old desk instead, for this release. In a folder without a
+project, it sets up the project in the old desk, or in the terminal with
+--no-open. verifold init and verifold research run the older research flow:
+research searches the web and proposes directions, and after you choose one,
+the coordinator plans tasks, and task agents run the experiments. That flow
+works in the old desk. Verifold keeps its records in .verifold/, and Claude
+Code or Codex keeps its own permissions and sessions. Session records are in
+.verifold/sessions/.
 `;
 
 /** The commands of the terminal. A terminal on a background owner only detaches with Ctrl+C. */
 const terminalHelp = (
   background: boolean,
 ): string => `Commands in this terminal:
-- \`/open\`: open the desk in your browser.
-- \`/app\`: open the new app, a preview of the next desk, in your browser. Add the ID of a call, for example \`/app c-3\`, to open that call.
-- Enter on an empty line, in a lab: open the call that waits for you, or else the lab, in the new app.
+- \`/open\` or \`/app\`: open Verifold in your browser. Add the ID of a call, for example \`/app c-3\`, to open that call.
+- Enter on an empty line, in a lab: open the call that waits for you, or else the lab.
+- \`/desk\`: open the old desk in your browser, for this release.
 - \`/start\` and a request: start a session with the project's harness in Ask me mode.
 - \`/resume\`: resume the latest paused or interrupted session. Without a recorded conversation, its first request runs again.
 - \`/research\`: continue research. In a project without research, add the question.
@@ -263,14 +259,38 @@ const terminalHelp = (
 - \`/feedback\` and your changes: revise the plan or the directions.
 - \`/select\` and a direction ID: choose the direction when research did not draft a plan. The coordinator then drafts it.
 - \`a\` or \`d\`: allow once or deny the open request. If several are open, add the ID, for example \`a R2\`.
-- \`/cancel\`: stop the research step or the current turn. If both run, choose in the desk.
+- \`/cancel\`: stop the research step or the current turn. If both run, choose in the old desk.
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
-When the agent of your session waits for you, other text goes to it as a follow-up. Without a session, in a lab, other text goes to the board as your message. Write @claude-2 in it to write to that agent. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop, or use Stop the team in the top bar of the desk.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
+When the agent of your session waits for you, other text goes to it as a follow-up. Without a session, in a lab, other text goes to the board as your message. Write @claude-2 in it to write to that agent. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
 
-const requestHint =
-  'Type a to allow once or d to deny. The desk shows the full request.';
+const requestHint = 'Type a to allow once or d to deny.';
+
+/** The lines of a request's change that the terminal shows, at most. */
+const requestLines = 40;
+
+/**
+ * Why a request asks, and the change that it would make, under its line. The
+ * harness wrote both, so each line has a margin that no Verifold line has,
+ * and no control characters.
+ */
+function requestText(
+  request: Pick<PendingRequest, 'reason' | 'detail'>,
+): string {
+  const reason = request.reason
+    ? [
+        `  Why: ${stripVTControlCharacters(request.reason).replace(/\s+/g, ' ')}`,
+      ]
+    : [];
+  const lines = request.detail
+    ? stripVTControlCharacters(request.detail).split('\n')
+    : [];
+  const change = lines.slice(0, requestLines).map((line) => `  │ ${line}`);
+  if (lines.length > requestLines)
+    change.push(`  │ … ${lines.length - requestLines} more lines`);
+  return [...reason, ...change].map((line) => `\n${line}`).join('');
+}
 
 const feedLabels: Record<SessionEvent['kind'], string> = {
   you: 'you',
@@ -286,7 +306,11 @@ const feedLabels: Record<SessionEvent['kind'], string> = {
  * One terminal line for a session event. Harness tool events stay in the desk,
  * so they have none. `worker` names the session when two can run.
  */
-export function feedLine(event: SessionEvent, worker?: string): string | null {
+export function feedLine(
+  event: SessionEvent,
+  worker?: string,
+  request?: Pick<PendingRequest, 'reason' | 'detail'>,
+): string | null {
   if (event.kind === 'tool') return null;
   const time = new Date(event.at).toLocaleTimeString('en-GB', {
     hour: '2-digit',
@@ -298,18 +322,19 @@ export function feedLine(event: SessionEvent, worker?: string): string | null {
     event.kind === 'agent' && line.length > 600
       ? `${line.slice(0, 600)}…`
       : line;
-  return `${time}  ${worker ? `${worker} · ` : ''}${feedLabels[event.kind]}: ${text}${event.kind === 'request' ? `\n${requestHint}` : ''}`;
+  return `${time}  ${worker ? `${worker} · ` : ''}${feedLabels[event.kind]}: ${text}${event.kind === 'request' ? `${request ? requestText(request) : ''}\n${requestHint}` : ''}`;
 }
 
 /** What the owner terminal can do besides session actions. */
 export interface TerminalControls {
-  /** Open the desk in a browser with a new one-time code. */
-  readonly open: () => void;
   /**
-   * Open the new app, a preview, in a browser with a new one-time code.
-   * `call`: the ID of a call to open there, such as c-3.
+   * Open Verifold in a browser with a new one-time code: the app, or the old
+   * desk when the package has no app build. `call`: the ID of a call to open
+   * there, such as c-3.
    */
   readonly openApp: (call?: string) => void;
+  /** Open the old desk in a browser with a new one-time code. */
+  readonly openDesk: () => void;
   /** The harness for a session that the terminal starts. */
   readonly host: string;
   /** The terminal is attached to a background owner. */
@@ -342,7 +367,7 @@ export function terminalInput(
     if (found.length === 1) return found[0]?.record.id ?? null;
     io.progress?.(
       found.length
-        ? `${found.length} sessions match. Use the desk to choose one.`
+        ? `${found.length} sessions match. Choose one in the old desk: type /desk.`
         : none,
     );
     return null;
@@ -352,7 +377,7 @@ export function terminalInput(
     io.progress?.(
       error instanceof SessionActionError
         ? error.message
-        : 'The terminal action failed. Use the desk to check the session.',
+        : 'The terminal action failed. Check the session in the old desk: type /desk.',
     );
   try {
     if (answer) {
@@ -373,22 +398,22 @@ export function terminalInput(
               ? `${id} is not open.`
               : 'No request is open. Type /help for the terminal commands.',
         );
-    } else if (value === '/open') controls.open();
-    else if (value === '/app') controls.openApp();
-    else if (/^\/app c-[1-9][0-9]{0,5}$/.test(value))
-      controls.openApp(value.slice(5));
-    else if (value.startsWith('/app '))
+    } else if (value === '/app' || value === '/open') controls.openApp();
+    else if (/^\/(?:app|open) c-[1-9][0-9]{0,5}$/.test(value))
+      controls.openApp(value.slice(value.indexOf(' ') + 1));
+    else if (value.startsWith('/app ') || value.startsWith('/open '))
       io.progress?.(
         'Write /app and the ID of a call, for example /app c-3, or /app alone.',
       );
+    else if (value === '/desk') controls.openDesk();
     else if (value === '/help')
       io.progress?.(terminalHelp(controls.background === true));
     else if (value === '/cancel') {
       const turns = live.filter((view) => view.record.status !== 'idle');
-      // Research and a turn can run together. Then the desk chooses which one stops.
+      // Research and a turn can run together. Then the old desk chooses which one stops.
       if (controls.research?.running && turns.length)
         io.progress?.(
-          `Research and ${turns.length === 1 ? 'a session' : `${turns.length} sessions`} run. Use the desk to choose what to cancel.`,
+          `Research and ${turns.length === 1 ? 'a session' : `${turns.length} sessions`} run. Choose what to cancel in the old desk: type /desk.`,
         );
       else if (controls.research?.running) controls.research.cancel();
       else {
@@ -447,7 +472,7 @@ export function terminalInput(
         .then(() => io.progress?.('Your message is on the board.'), report);
     else
       io.progress?.(
-        'No session is running, so this text went nowhere. Type /start and a request, or type /open and start a session in the desk.',
+        'No session is running, so this text went nowhere. Type /start and a request.',
       );
   } catch (error) {
     report(error);
@@ -500,8 +525,8 @@ interface DeskRun {
   readonly handoff?: boolean;
   /** `--lab` in a project that exists: start a lab on its saved question, unless it has one. */
   readonly lab?: boolean;
-  /** `--app`: open the new app (a preview) instead of the desk. */
-  readonly app?: boolean;
+  /** `--desk`: open the old desk instead of the app. */
+  readonly useDesk?: boolean;
   /** The folder of the person's profile. Default: `~/.verifold/agency`. */
   readonly agency?: string;
   /** The time budget, in hours, of a lab that starts on `research`. */
@@ -555,34 +580,32 @@ async function serveDesk(
   const deskSignal = AbortSignal.any([running, stop.signal]);
   let desk: DeskServer | undefined;
   const open = async (
-    app = run.app === true,
+    where: '/app/' | '/desk' = run.useDesk ? '/desk' : '/app/',
     call?: string,
   ): Promise<boolean> =>
     desk
       ? (io.browse ?? openDeskBrowser)(
-          desk.launchUrl(app ? '/app/' : '/', call && `/call/${call}`),
+          desk.launchUrl(where, call && `/call/${call}`),
           deskSignal,
         )
       : false;
   const announce = async (server: DeskServer, ready: string): Promise<void> => {
     io.out(
       JSON.stringify({
-        url: server.url,
-        // A background owner always passes the app's URL on: a terminal that attached with --app prints it.
-        ...((run.app || run.owner) && server.appUrl
-          ? { app: server.appUrl }
-          : {}),
+        url: run.useDesk ? server.deskUrl : server.url,
+        // A background owner passes the app's URL on too. A terminal that attached with --desk leaves it out.
+        ...(server.appUrl && !run.useDesk ? { app: server.appUrl } : {}),
         visibility: 'private',
         readOnly: false,
       }),
     );
-    // The terminal that attaches to a background owner opens the desk.
+    // The terminal that attaches to a background owner opens the page.
     if (run.owner) return;
     if (run.noOpen)
       io.progress?.(
-        run.app && server.appUrl
-          ? 'Open the printed app URL to use the new app. Keep this terminal open. Type /help for commands.'
-          : 'Open the printed URL to use the desk. Keep this terminal open. Type /help for commands.',
+        run.useDesk || !server.appUrl
+          ? 'Open the printed URL to use the old desk. Keep this terminal open. Type /help for commands.'
+          : 'Open the printed URL to use Verifold. Keep this terminal open. Type /help for commands.',
       );
     else if (await open()) io.progress?.(ready);
     else
@@ -612,7 +635,7 @@ async function serveDesk(
       );
       await announce(
         desk,
-        'Set up your project in the desk. This terminal shows each step. Ctrl+C cancels setup.',
+        'Set up your project in the old desk. This terminal shows each step. Ctrl+C cancels setup.',
       );
       const initialized = await bridge.run((setupIo) =>
         initializeProject(
@@ -711,10 +734,18 @@ async function serveDesk(
           const task = view?.record.task;
           if (event.kind === 'agent' && task)
             owned.tasks?.answered(task.id, event.text, true).catch(() => {});
-          // The events of task workers stay in the desk. A session that the person controls prints its events here.
+          // The events of task workers stay in the desk. A session that the person controls prints its events here, a request with its change.
           const line =
             io.interactive && !view?.record.task && !view?.record.agent
-              ? feedLine(event, view ? hostName(view.record.host) : undefined)
+              ? feedLine(
+                  event,
+                  view ? hostName(view.record.host) : undefined,
+                  event.kind === 'request'
+                    ? view?.record.requests.find((request) =>
+                        event.text.startsWith(`${request.id}:`),
+                      )
+                    : undefined,
+                )
               : null;
           if (line) (io.feed ?? io.progress)?.(line);
           // The session that `verifold session` started decides when this command ends.
@@ -891,7 +922,7 @@ async function serveDesk(
         lab.resumeAll();
         if (stopped)
           io.progress?.(
-            `Verifold stopped earlier while ${stopped === 1 ? 'a task was' : `${stopped} tasks were`} running. Review the saved work in the desk.`,
+            `Verifold stopped earlier while ${stopped === 1 ? 'a task was' : `${stopped} tasks were`} running. Review the saved work in the old desk: type /desk.`,
           );
         // Start the session first, so invalid input fails before a desk opens.
         if (session) owned.session = await sessions.start(session);
@@ -936,9 +967,9 @@ async function serveDesk(
           );
           await announce(
             desk,
-            run.app && desk.appUrl
-              ? 'The new app, a preview, is open in your browser. Keep this terminal open. Type /help for commands.'
-              : 'The desk is open in your browser. Keep this terminal open. Type /help for commands.',
+            run.useDesk || !desk.appUrl
+              ? 'The old desk is open in your browser. Keep this terminal open. Type /help for commands.'
+              : 'Verifold is open in your browser. Keep this terminal open. Type /help for commands.',
           );
         }
         // A view follows the lab. Without a lab, it builds nothing, after one last screen that says so.
@@ -956,12 +987,12 @@ async function serveDesk(
         const paused = sessions.paused().length;
         if (paused && !session)
           io.progress?.(
-            `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume or resume one in the desk.`,
+            `${paused === 1 ? '1 session is' : `${paused} sessions are`} paused. Type /resume, or resume one in the old desk: type /desk.`,
           );
         const lead = coordinator.view();
         if (lead?.session && !lead.session.live && !lead.state.stoppedAt)
           io.progress?.(
-            'The coordinator paused when Verifold stopped. Resume it under Coordinator in the desk.',
+            'The coordinator paused when Verifold stopped. Resume it under Coordinator in the old desk: type /desk.',
           );
         // The question of setup starts a lab: the lab is the default. --lab still starts one in a project that exists.
         if (research || run.lab)
@@ -973,29 +1004,26 @@ async function serveDesk(
               background: run.owner !== undefined,
               research: runner,
               lab,
-              open: () => {
-                void open(false).then((opened) =>
+              openApp: (call) => {
+                // Without the app's build, the launch opens the old desk.
+                void open('/app/', call).then((opened) =>
                   io.progress?.(
-                    opened
-                      ? 'The desk opened in your browser.'
-                      : 'The browser could not open. Open the printed URL.',
+                    !opened
+                      ? 'The browser could not open. Open the printed URL.'
+                      : !desk?.appUrl
+                        ? 'This Verifold has no app build, so the old desk opened in your browser.'
+                        : call
+                          ? `Call ${call} opened in your browser.`
+                          : 'Verifold opened in your browser.',
                   ),
                 );
               },
-              openApp: (call) => {
-                if (!desk?.appUrl) {
-                  io.progress?.(
-                    'The new app is not available here. Type /open for the desk.',
-                  );
-                  return;
-                }
-                void open(true, call).then((opened) =>
+              openDesk: () => {
+                void open('/desk').then((opened) =>
                   io.progress?.(
                     opened
-                      ? call
-                        ? `Call ${call} opened in the new app in your browser.`
-                        : 'The new app opened in your browser.'
-                      : 'The browser could not open. Open the printed URL, and add app/ after its port.',
+                      ? 'The old desk opened in your browser.'
+                      : 'The browser could not open. Open the printed URL with /desk after its port number.',
                   ),
                 );
               },
@@ -1057,8 +1085,8 @@ async function serveDesk(
   }
 }
 /**
- * `verifold --app` in a folder without a project: the app with no project,
- * for the first run and the Ask page. No owner starts until the person asks
+ * `verifold` in a folder without a project: the app with no project, for
+ * the first run and the Ask page. No owner starts until the person asks
  * a question. Then the desk closes, and the new project comes back with the
  * desk's port and token, so a background owner takes over and the open tab
  * keeps working. Ctrl+C stops it, and returns nothing.
@@ -1113,7 +1141,7 @@ async function serveStart(
   const app = desk.appUrl;
   if (!app) {
     throw new Error(
-      'This Verifold package has no app build. Run verifold without --app.',
+      'This Verifold package has no app build. Run verifold --desk to set up the project in the old desk.',
     );
   }
   io.out(
@@ -1142,6 +1170,10 @@ async function serveStart(
             ? 'The app opened in your browser.'
             : 'The browser could not open. Open the printed app URL.',
         ),
+      );
+    else if (value === '/desk')
+      io.progress?.(
+        'The old desk opens only in a project. To set up this project there, press Ctrl+C and run verifold --desk.',
       );
     else if (value)
       io.progress?.(
@@ -1197,7 +1229,7 @@ async function startLab(
 ): Promise<string | null> {
   if (lab.exists) {
     io.progress?.(
-      'This project has a lab already, so Verifold started nothing new. Open it on Home in the desk.',
+      'This project has a lab already, so Verifold started nothing new. Type /app to open it.',
     );
     return null;
   }
@@ -1205,7 +1237,7 @@ async function startLab(
     const asked = research.topic ?? (await loadWorkspace(root)).research?.topic;
     if (!asked) {
       io.progress?.(
-        'The project has no question yet, so Verifold started no lab. Start it from Home in the desk.',
+        'The project has no question yet, so Verifold started no lab. Type /app, then ask your question there.',
       );
       return null;
     }
@@ -1219,8 +1251,8 @@ async function startLab(
     );
     io.progress?.(
       planned
-        ? 'The lab started. Its first agent reads the question and posts a plan on the board in the desk.'
-        : 'The lab started without an agent that plans it. Open a direction in the desk: each one gets its own agent.',
+        ? 'The lab started. Its first agent reads the question and posts a plan on the board.'
+        : 'The lab started without an agent that plans it. Type /app, then open a direction there: each one gets its own agent.',
     );
     return null;
   } catch (error) {
@@ -1481,7 +1513,8 @@ async function attachTeam(
     readonly research?: ResearchOptions | undefined;
     readonly desk?: DeskPlace;
     readonly lab?: boolean;
-    readonly app?: boolean;
+    /** `--desk`: open the old desk instead of the app. */
+    readonly useDesk?: boolean;
     /** The profile folder of `--agency-dir`. */
     readonly agency?: string | undefined;
     /** The time budget, in hours, of the lab that starts on `research`. */
@@ -1499,7 +1532,7 @@ async function attachTeam(
     control = saved;
     if (start.lab)
       io.progress?.(
-        'Verifold already works in the background, so --lab started nothing. Start the lab from Home in the desk.',
+        'Verifold already works in the background, so --lab started nothing. Type /app, then start the lab there.',
       );
   } else {
     control = await newControl();
@@ -1538,10 +1571,12 @@ async function attachTeam(
           io.progress?.(
             `The running Verifold uses the profile in ${message.agency}, so stop it with verifold stop to use another.`,
           );
-        const app = start.app ? message.app : undefined;
+        const deskUrl = new URL(message.url);
+        deskUrl.pathname = '/desk';
+        const app = start.useDesk ? undefined : message.app;
         io.out(
           JSON.stringify({
-            url: message.url,
+            url: start.useDesk ? deskUrl.href : message.url,
             ...(app ? { app } : {}),
             visibility: 'private',
             readOnly: false,
@@ -1549,16 +1584,14 @@ async function attachTeam(
         );
         // After setup, the open tab moves to the background owner when it got the same port.
         if (start.desk && new URL(message.url).port === String(start.desk.port))
-          io.progress?.(
-            `The ${start.app ? 'app' : 'desk'} in your browser now shows the project.`,
-          );
+          io.progress?.('The page in your browser now shows the project.');
         else if (start.noOpen)
           io.progress?.(
-            app
-              ? 'Open the printed app URL to use the new app.'
-              : 'Open the printed URL to use the desk.',
+            start.useDesk
+              ? 'Open the printed URL to use the old desk.'
+              : 'Open the printed URL to use Verifold.',
           );
-        else client?.send({ line: start.app ? '/app' : '/open' });
+        else client?.send({ line: start.useDesk ? '/desk' : '/app' });
       }
     },
     signal,
@@ -1597,7 +1630,7 @@ async function attachTeam(
   // The owner stopped: from the desk, from verifold stop, or after an error.
   if (!shown)
     throw new Error(
-      'Verifold stopped before the desk opened. Check .verifold/owner.log in the project.',
+      'Verifold stopped before its page opened. Check .verifold/owner.log in the project.',
     );
   io.progress?.('Verifold stopped.');
 }
@@ -1863,6 +1896,7 @@ export async function runCli(
       'no-open': { type: 'boolean' },
       lab: { type: 'boolean' },
       app: { type: 'boolean' },
+      desk: { type: 'boolean' },
       file: { type: 'boolean' },
       mode: { type: 'string' },
       prompt: { type: 'string' },
@@ -1930,7 +1964,7 @@ export async function runCli(
     handoff: [],
     view: [],
     status: [],
-    ui: ['no-open', 'lab', 'app'],
+    ui: ['no-open', 'lab', 'app', 'desk'],
     owner: [],
     stop: [],
     session: ['host', 'mode', 'model', 'prompt', 'no-open'],
@@ -1948,11 +1982,16 @@ export async function runCli(
         (key === 'no-open' ||
           key === 'agency-dir' ||
           key === 'lab' ||
-          key === 'app')
+          key === 'app' ||
+          key === 'desk')
       ) &&
       !allowed[command]?.includes(key)
     )
       throw new Error(`--${key} is not valid for ${command}.`);
+  // --app is the default now. It still works, and changes nothing, for one release.
+  if (values.app && values.desk)
+    throw new Error('Choose --app or --desk, not both.');
+  const useDesk = values.desk === true;
   // The lab is the default for a new project. In a project that exists, --lab still starts one on its question.
   if (values.lab)
     io.progress?.(
@@ -2006,8 +2045,8 @@ export async function runCli(
     return;
   }
   if (command === 'ui') {
-    // The app has its own first run, so --app skips the profile setup in the terminal.
-    if (launch && !values.app) {
+    // The app has its own first run. Only the old desk asks for the profile in the terminal.
+    if (launch && useDesk) {
       const workspace = await loadWorkspace(root);
       await ensureGlobalProfile(
         agencyDirectory(cwd, values['agency-dir']),
@@ -2025,7 +2064,6 @@ export async function runCli(
     }
     const noOpen = values['no-open'] ?? false;
     const lab = values.lab ?? false;
-    const app = values.app ?? false;
     const agency =
       values['agency-dir'] === undefined
         ? undefined
@@ -2034,14 +2072,14 @@ export async function runCli(
       await attachTeam(root, io, signal, io.background, {
         noOpen,
         lab,
-        app,
+        useDesk,
         agency,
       });
     else
       await serveDesk(root, io, signal, {
         noOpen,
         lab,
-        app,
+        useDesk,
         ...(agency ? { agency } : {}),
       });
     return;
@@ -2060,8 +2098,10 @@ export async function runCli(
         'session requires --prompt with a request for the harness.',
       );
     const workspace = await loadWorkspace(root);
+    // The app shows no plain sessions, so a session opens the old desk.
     await serveDesk(root, io, signal, {
       noOpen: values['no-open'] ?? false,
+      useDesk: true,
       session: {
         host: values.host ?? workspace.host,
         mode: values.mode ?? 'ask',
@@ -2072,22 +2112,14 @@ export async function runCli(
     return;
   }
   if (command === 'init') {
-    if (values.app) {
-      // Only a bare launch reaches here with --app.
+    // A bare verifold in a new folder opens the app's first run and Ask page. --desk keeps the old setup.
+    if (launch && !useDesk) {
       const extra = (
-        [
-          'profile',
-          'host',
-          'model',
-          'topic',
-          'autonomy',
-          'setup-only',
-          'lab',
-        ] as const
+        ['profile', 'host', 'model', 'topic', 'autonomy', 'setup-only'] as const
       ).find((key) => values[key] !== undefined);
       if (extra)
         throw new Error(
-          `--app opens the first run in the app, where you choose the rest. Run it without --${extra}.`,
+          `verifold opens the first run in your browser, where you choose the rest. Run it without --${extra}, or run verifold init.`,
         );
       const agency = agencyDirectory(cwd, values['agency-dir']);
       const begun = await serveStart(root, io, signal, {
@@ -2108,7 +2140,6 @@ export async function runCli(
           noOpen: values['no-open'] ?? false,
           research,
           desk: begun.desk,
-          app: true,
           agency,
           hours: begun.hours,
         });
@@ -2118,7 +2149,6 @@ export async function runCli(
           research,
           hours: begun.hours,
           harness,
-          app: true,
           agency,
           reuse: begun.desk,
         });
@@ -2139,7 +2169,7 @@ export async function runCli(
       // A bare verifold starts a lab after setup, so setup offers no research stop.
       ...(launch ? { lab: true } : {}),
     };
-    // Bare verifold in a new folder sets up in the desk. init and --no-open stay the terminal path.
+    // verifold --desk in a new folder sets up in the old desk. init and --no-open stay the terminal path.
     // With a terminal, setup hands the project to a background owner.
     const background = io.interactive ? io.background : undefined;
     if (launch && !values['no-open']) {
@@ -2147,12 +2177,14 @@ export async function runCli(
         harness,
         setup: { cwd, options },
         handoff: background !== undefined,
+        useDesk: true,
       });
       if (handoff && background)
         await attachTeam(handoff.root, io, signal, background, {
           noOpen: false,
           research: handoff.research,
           desk: handoff.desk,
+          useDesk: true,
         });
       return;
     }
@@ -2168,6 +2200,7 @@ export async function runCli(
       const run = {
         noOpen: values['no-open'] ?? false,
         research: initialized.research ?? undefined,
+        useDesk: true,
       };
       if (background)
         await attachTeam(initialized.root, io, signal, background, run);
