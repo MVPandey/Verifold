@@ -4704,6 +4704,223 @@ await test('runs stop when the agent or the person cancels them, or the directio
   await assert.rejects(lab.lab.cancelRun('r-4'), /r-4 already ended/);
 });
 
+await test("Verifold's notes after a turn wait while the agent's run runs: a person's mention or the run's end wakes the agent", async (t) => {
+  const lab = await fixture(t);
+  // Git cannot take the folder's index once the run started, so the commit after the turn fails and the agent has a note to hear.
+  const lock = join(lab.root, '.git', 'worktrees', 'd-1-alpha', 'index.lock');
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'One.' },
+        },
+        { name: 'WRITE', arguments: { path: lock, text: '' } },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const inside = lab.lab as unknown as {
+    agents: Map<
+      string,
+      { cursor: number; events: readonly { seq: number; text: string }[] }
+    >;
+    loops: Map<
+      string,
+      { pending: boolean; serial(work: () => Promise<void>): Promise<void> }
+    >;
+  };
+  const note = (): { seq: number } | undefined =>
+    inside.agents
+      .get('a-1')
+      ?.events.find((event) => event.text.includes('could not commit'));
+  // The note waits in the agent's record, and each wakeup since the turn found the run still running.
+  await until(
+    () => note() !== undefined && inside.loops.get('a-1')?.pending === false,
+  );
+  await inside.loops.get('a-1')?.serial(async () => {});
+  assert.ok((inside.agents.get('a-1')?.cursor ?? 0) < (note()?.seq ?? 0));
+  assert.equal((await lab.inputs('d-1-alpha')).length, 1);
+  await rm(lock);
+  // The person's mention wakes the agent while its run runs, and the note comes with it.
+  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 2);
+  const mentioned = (await lab.inputs('d-1-alpha'))[1] ?? '';
+  assert.match(mentioned, /check layer 12/);
+  assert.match(mentioned, /could not commit your folder after your last turn/);
+  // The run's end wakes the agent again.
+  await lab.lab.cancelRun('r-1');
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('[run] r-1 ended'),
+    ),
+  );
+});
+
+await test('a pause that comes before the ledger records a run keeps the run from starting', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'One.' },
+        },
+      ],
+    },
+  ]);
+  // The pause takes the lab's queue after the run's last check there, and before the step that records the run.
+  const ledger = (
+    lab.lab as unknown as {
+      ledger: { start(input: unknown): Promise<unknown> };
+    }
+  ).ledger;
+  const start = ledger.start.bind(ledger);
+  let settled = false;
+  ledger.start = async (input) => {
+    void lab.lab.pause().catch(() => {});
+    try {
+      return await start(input);
+    } finally {
+      settled = true;
+    }
+  };
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => settled);
+  assert.ok(lab.lab.view()?.state.pausedAt);
+  assert.deepEqual(lab.lab.view()?.ledger, []);
+  // The agent's call got the refusal.
+  const action = (): { ok: boolean; result: string } | undefined =>
+    (
+      lab.lab as unknown as {
+        agents: Map<
+          string,
+          { actions: readonly { tool: string; ok: boolean; result: string }[] }
+        >;
+      }
+    ).agents
+      .get('a-1')
+      ?.actions.find((entry) => entry.tool === 'verifold_run');
+  await until(() => action() !== undefined);
+  assert.deepEqual(
+    { ok: action()?.ok, result: action()?.result },
+    { ok: false, result: 'The lab is paused, so no run starts now.' },
+  );
+});
+
+await test('a run that fails at once is told in its tool result only', async (t) => {
+  const lab = await fixture(t, {
+    // No such program: each run fails as it starts.
+    sandbox: () => ({
+      file: join(tmpdir(), 'verifold-no-such-program'),
+      args: [],
+    }),
+  });
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sh train.sh', why: 'Seed 1.' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The next turn comes after the short wait, with no line of its own about the run.
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 2);
+  const results = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
+    result: { content: { text: string }[] };
+  }[];
+  assert.match(
+    results[0]?.result.content[0]?.text ?? '',
+    /^r-1 ended at once: r-1 ended: .*The run did not start/,
+  );
+  assert.doesNotMatch((await lab.inputs('d-1-alpha'))[1] ?? '', /\[run\] r-1/);
+  assert.equal(lab.lab.view()?.ledger[0]?.told, true);
+});
+
+await test('a run that ends at once while Verifold stops is told after the next start', async (t) => {
+  const stop: { lab?: () => Promise<void>; done?: Promise<void> } = {};
+  const lab = await fixture(t, {
+    // Verifold stops while the run starts, and the run fails as it starts.
+    sandbox: () => {
+      if (!stop.done && stop.lab) stop.done = stop.lab();
+      throw new Error('No sandbox now.');
+    },
+  });
+  stop.lab = () => lab.lab.close();
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'verifold_run', arguments: { command: 'true', why: 'One.' } },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => stop.done !== undefined);
+  await stop.done;
+  await lab.restart();
+  await until(async () =>
+    (await lab.inputs('d-1-alpha')).some((input) =>
+      input.includes('[run] r-1 ended'),
+    ),
+  );
+});
+
+await test("while a run runs, Verifold's restart, usage window and turn notes wait, and the run's end brings the newest of each without old timing", async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_run',
+          arguments: { command: 'sleep 30', why: 'One.' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => lab.lab.view()?.ledger[0]?.status === 'running');
+  const loop = (
+    lab.lab as unknown as {
+      loops: Map<
+        string,
+        {
+          pending: boolean;
+          add(
+            events: readonly { kind: string; text: string; timing?: true }[],
+          ): void;
+          serial(work: () => Promise<void>): Promise<void>;
+        }
+      >;
+    }
+  ).loops.get('a-1');
+  assert.ok(loop);
+  loop.add([
+    { kind: 'quota', text: "Your harness's usage window reset." },
+    {
+      kind: 'restart',
+      text: 'Your harness process stopped by itself, and Verifold started it again with your conversation.',
+    },
+    { kind: 'continue', text: 'Your last turn ended.', timing: true },
+    { kind: 'continue', text: 'An older note.' },
+    { kind: 'continue', text: 'The newest note.' },
+  ]);
+  // Each wakeup finds the run still running, so nothing goes out.
+  await until(() => !loop.pending);
+  await loop.serial(async () => {});
+  assert.equal((await lab.inputs('d-1-alpha')).length, 1);
+  await lab.lab.cancelRun('r-1');
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 2);
+  const woke = (await lab.inputs('d-1-alpha'))[1] ?? '';
+  assert.match(woke, /\[run\] r-1 ended/);
+  assert.match(woke, /\[quota\] Your harness's usage window reset\./);
+  assert.match(woke, /\[restart\] Your harness process stopped by itself/);
+  assert.match(woke, /\[continue\] The newest note\./);
+  assert.doesNotMatch(woke, /An older note|Your last turn ended/);
+});
+
 await test('a direction stops also while one of its runs ends', async (t) => {
   const lab = await fixture(t);
   await lab.script('d-1-alpha', [

@@ -613,6 +613,40 @@ await test('a run starts only while its caller says it may, in the step that rec
   assert.deepEqual(ledger.list(), []);
 });
 
+await test('a run that ends before its start call returns is left to that call to tell, and a repeated call waits with the first one', async (t) => {
+  const fx = await fixture(t);
+  // No such program: the run fails as it starts.
+  const { ledger, ended } = fx.ledger({
+    sandbox: () => ({ file: join(fx.base, 'no-such-program'), args: [] }),
+  });
+  t.after(() => ledger.close());
+  const input = {
+    agent: 'a-1',
+    key: 'same',
+    direction: 'd-1',
+    harness: 'claude' as const,
+    workspace: fx.workspace,
+    commit: await fx.commit(),
+    command: 'true',
+    why: 'A test.',
+    minutes: 5,
+    want: [],
+  };
+  const [first, again] = await Promise.all([
+    ledger.start(input),
+    ledger.start(input),
+  ]);
+  // Both calls get the run as it ended, not as it was queued.
+  assert.equal(first.id, 'r-1');
+  assert.notEqual(first.status, 'queued');
+  assert.equal(again.status, first.status);
+  // The caller tells the agent, then marks the run as heard.
+  assert.equal(ended.length, 0);
+  assert.equal(ledger.get('r-1')?.told, false);
+  await ledger.told('r-1');
+  assert.equal(ledger.get('r-1')?.told, true);
+});
+
 await test(
   'a run whose denied paths hold its own folder still reads and writes its own folder, and nothing else there',
   { skip: process.platform !== 'darwin' },

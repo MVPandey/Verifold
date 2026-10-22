@@ -501,6 +501,8 @@ export interface LabEvent {
   readonly post?: string;
   /** The digest shows the text whole: the answers to the planner's questions, which `heldChars` bounds. */
   readonly whole?: true;
+  /** The text says when the agent's turn came. A run's end makes it old. */
+  readonly timing?: true;
 }
 
 export interface LabAction {
