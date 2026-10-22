@@ -12,6 +12,11 @@ import { record } from './http.ts';
 export interface LabScreen {
   /** The name of the project's folder. */
   readonly project: string;
+  /**
+   * When the lab started, which tells one lab of the project from the next.
+   * Absent from the owner of an earlier version.
+   */
+  readonly started?: string;
   /** The desk's address without its token, such as http://127.0.0.1:56933. */
   readonly origin: string;
   /** The package has the new app's build, so the terminal opens a call there. */
@@ -103,7 +108,7 @@ export function firstRanked<T extends ScreenDirection>(
 
 /** The screen of a snapshot, or null when the project has no lab. */
 export function labScreen(
-  snapshot: Snapshot,
+  snapshot: Pick<Snapshot, 'project' | 'lab'>,
   desk: { readonly origin: string; readonly app: boolean },
 ): LabScreen | null {
   const lab = snapshot.lab;
@@ -137,6 +142,7 @@ export function labScreen(
     first && first.pick !== null ? first.options[first.pick] : undefined;
   return {
     project: clip(snapshot.project, screenLimits.question),
+    started: lab.startedAt,
     origin: desk.origin,
     app: desk.app,
     money: {
@@ -246,6 +252,12 @@ function monthOf(
     : null;
 }
 
+/** A screen's start of its lab: absent, or a time. Null: not readable. */
+function startedOf(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  return text(value, 40) && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
 /**
  * A screen from the control channel, checked field by field. Null for
  * anything else: a terminal shows only what it could read.
@@ -276,14 +288,17 @@ export function parseLabScreen(value: unknown): LabScreen | null {
   const directions = value.directions.map(direction);
   const first = call(value.call);
   const month = monthOf(value.money.month);
+  const started = startedOf(value.started);
   if (
     first === undefined ||
     month === null ||
+    started === null ||
     directions.some((entry) => entry === null)
   )
     return null;
   return {
     project: value.project,
+    ...(started ? { started } : {}),
     origin: value.origin,
     app: value.app,
     money: {
