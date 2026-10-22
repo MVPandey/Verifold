@@ -124,6 +124,9 @@ export class LabTerminal {
    */
   serve(follow: FollowScreens): void {
     this.unfollow?.();
+    // The new desk's screens are not compared with the last desk's.
+    this.screen = undefined;
+    this.printed.clear();
     this.unfollow = follow((screen) => this.show(screen, false));
   }
 
@@ -135,8 +138,8 @@ export class LabTerminal {
     const before = this.screen ?? null;
     this.screen = screen;
     this.detaches = detaches;
-    // Without a lab, each direction of the next lab prints.
-    if (!screen) this.printed.clear();
+    // Without a lab, or with a new one, each direction of the lab prints.
+    if (!screen || screen.started !== before?.started) this.printed.clear();
     if (!this.line && screen && !this.fits())
       for (const line of plainLines(before, screen, this.now(), this.printed))
         this.print(line);

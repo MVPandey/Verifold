@@ -255,7 +255,7 @@ const full: Level = {
  * level keeps no list, no plan, a cut question, and of the sign-off only its
  * time and line, so it always fits.
  */
-const levels: readonly Level[] = [
+const levels: readonly [Level, ...Level[]] = [
   full,
   { ...full, turns: 5, message: 500, answered: 10, runs: 20, checks: 20 },
   {
@@ -1993,25 +1993,24 @@ export class ApiReader {
     }
     // The feed adds the version, the epoch, the rev, and the time.
     const room = apiLimits.snapshot - 256;
-    let built: SnapshotBody | undefined;
-    for (const [index, level] of levels.entries()) {
+    const shaped = (level: Level, smaller: boolean): SnapshotBody => {
       const lab = shapeLab(loaded, level);
       const data: SnapshotData = {
         project,
         lab,
         ...compute,
-        trimmed: index > 0 || Object.keys(lab.omitted).length > 0,
+        trimmed: smaller || Object.keys(lab.omitted).length > 0,
       };
-      built = { data, json: JSON.stringify(data) };
+      return { data, json: JSON.stringify(data) };
+    };
+    // The first level that fits, else the last.
+    const [first, ...smaller] = levels;
+    let built = shaped(first, false);
+    for (const level of smaller) {
       if (Buffer.byteLength(built.json) <= room) break;
+      built = shaped(level, true);
     }
-    if (!built) throw new Error('The snapshot has no levels.');
     return built;
-  }
-
-  /** The snapshot's JSON, as `build` gives it. */
-  async snapshot(): Promise<string> {
-    return (await this.build()).json;
   }
 
   /** The posts before post number `before`, or the newest posts. Null without a lab. */
@@ -2311,11 +2310,12 @@ export interface SnapshotBody {
   readonly json: string;
 }
 
-/** The newest snapshot: its rev, its JSON as the API sends it, and its data. */
+/** The newest snapshot: its rev, its JSON as the API sends it, and its project and lab. */
 interface Latest {
   readonly rev: number;
   readonly text: string;
-  readonly data: SnapshotData;
+  /** What a terminal's screen reads. The feed keeps no more of the data. */
+  readonly data: Pick<Snapshot, 'project' | 'lab'>;
 }
 
 /**
@@ -2380,18 +2380,24 @@ export class ApiFeed {
     this.latest = {
       rev: this.rev,
       text: `{"protocolVersion":${protocolVersion},"epoch":"${this.epoch}","rev":${this.rev},"at":"${new Date().toISOString()}",${json.slice(1)}`,
-      data,
+      data: { project: data.project, lab: data.lab },
     };
     return this.latest;
   }
 
-  /** Write to a stream, or drop it when it cannot keep up. */
+  /**
+   * Write to a stream. A stream that cannot keep up, or whose write fails,
+   * closes, and its close drops its watcher.
+   */
   private write(stream: ServerResponse, chunk: string): void {
-    if (stream.writableLength > apiLimits.backlog) {
-      stream.destroy();
-      return;
-    }
-    if (stream.writable) stream.write(chunk);
+    if (stream.writableLength <= apiLimits.backlog)
+      try {
+        if (stream.writable) stream.write(chunk);
+        return;
+      } catch {
+        // The stream closes, as one that cannot keep up does.
+      }
+    stream.destroy();
   }
 
   private async tick(): Promise<void> {
