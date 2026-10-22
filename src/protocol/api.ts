@@ -527,10 +527,9 @@ export interface Agent {
   /** The model that the harness reported, or else the one Verifold asked for. */
   readonly model: string | null;
   /**
-   * The model named for it: by the project, the profile, or Verifold's own
-   * pick. Null: none was named, as for a Codex agent, which gets the most
-   * capable model that Codex lists when it starts. An earlier server leaves
-   * it out.
+   * The model that Verifold asked for: the project's, the profile's, or
+   * Verifold's own pick. Null: Verifold asked for none, so the harness runs
+   * the person's own model. An earlier server leaves it out.
    */
   readonly requestedModel?: string | null;
   /** The direction that it owns. Null for a checker. */

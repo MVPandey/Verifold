@@ -1634,8 +1634,10 @@ export class SessionManager {
     generation: number,
     resume: boolean,
   ): Promise<void> {
-    const record = this.current;
-    if (!record) return;
+    if (!this.current) return;
+    // The model that an earlier process reported does not describe the new one.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the rest is the record without that model.
+    const { reportedModel: _, ...record } = this.current;
     const launch: SessionLaunch = {
       id: randomBytes(4).toString('hex'),
       ownerId: this.options.ownerId,
@@ -1646,11 +1648,9 @@ export class SessionManager {
     };
     this.launching = true;
     try {
-      // The model that an earlier process reported does not describe the new one.
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the rest is the record without that model.
-      this.patch(({ reportedModel: _, ...current }) => ({
-        ...current,
-        launches: [...current.launches, launch].slice(-50),
+      this.patch(() => ({
+        ...record,
+        launches: [...record.launches, launch].slice(-50),
       }));
       while (this.writing) await this.writing;
       if (this.saveFailed) {
@@ -1695,7 +1695,7 @@ export class SessionManager {
         mode: record.mode,
         clientVersion: this.options.clientVersion,
         ...(record.model ? { model: record.model } : {}),
-        // Codex picks the most capable model for a lab agent or checker without one. The lab names Claude Code's model.
+        // A Codex lab agent or checker without a model gets Verifold's preferred model when Codex lists one. The lab names Claude Code's model.
         ...(record.agent && !record.model ? { bestModel: true } : {}),
         // Lab agents and checkers look up current facts on the live web.
         ...(record.agent ? { liveSearch: true } : {}),
@@ -1851,6 +1851,10 @@ export class SessionManager {
             ? clean(event.mode, 40)
             : current.reportedMode,
           ...(event.model ? { reportedModel: clean(event.model, 200) } : {}),
+          // The model that Verifold picked is the session's own from now on, so a resume asks for it again.
+          ...(event.picked && current.model === null
+            ? { model: event.picked }
+            : {}),
           status: first ? (this.prompted ? 'running' : 'idle') : current.status,
         }));
         if (first)

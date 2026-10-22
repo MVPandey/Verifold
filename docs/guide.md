@@ -449,8 +449,8 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 - A lab has up to 6 open directions. Agents share the "Agents at once" slots with your own sessions.
 - Each agent has a handle, such as `claude-1` or `codex-1`.
 - Each agent and checker runs on a model that Verifold picks, unless the project or your profile names one:
-  - Claude Code: your own Opus default, such as `opus[1m]` from `ANTHROPIC_MODEL` or Claude Code's settings, else Opus.
-  - Codex: the most capable model that Codex lists, else your own Codex model. When your reasoning effort does not fit that model, the agent gets the model's default effort.
+  - Claude Code: your own Opus default, such as `opus[1m]`, else Opus. Verifold reads it in Claude Code's order: `ANTHROPIC_MODEL` in the `env` block of your user settings, then `ANTHROPIC_MODEL` in your environment, then the `model` key of your user settings.
+  - Codex: Verifold's preferred Codex model when Codex lists one, else your own Codex model. When your reasoning effort does not fit Verifold's model, the agent gets the model's default effort.
   - The app shows the model that the harness reports. When it is of another family than the model that Verifold asked for, such as Sonnet in place of Opus, the app shows both.
 - An agent can open a direction too, with `verifold_direction`: a title, a bar, and a harness of the project's team. Verifold starts its agent. Agents start at most 4 agents in 24 hours, and never more than your "Agents at once". The new directions of a later plan count too; those of the first plan do not. Agents start none while the lab is paused or past its time budget. The note on the board says who opened it and why. It wakes no one.
 

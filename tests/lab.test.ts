@@ -938,12 +938,16 @@ await test('after a restart each agent resumes its session with a digest, and no
     threads.map((entry) => entry.method),
     ['start', 'resume'],
   );
-  // The resume names the model again, so the thread keeps it whatever the person's own Codex model is.
+  // The session keeps the model that Verifold picked, so the resume asks for
+  // it again, with no second model list. The thread keeps it whatever the
+  // person's own Codex model is.
   assert.equal(threads[0]?.params.model, 'gpt-6-astra');
   assert.equal(threads[1]?.params.model, 'gpt-6-astra');
-  // The new process reported no model, so the model of the earlier one is gone.
+  assert.equal((await lab.lines('d-2-beta', 'models.jsonl')).length, 2);
   const session = lab.lab.view()?.directions[1]?.agent.session ?? '';
-  assert.equal(lab.sessions.view(session)?.record.reportedModel, undefined);
+  assert.equal(lab.sessions.view(session)?.record.model, 'gpt-6-astra');
+  // Codex's answer to the resume names no model: the session shows the one that Verifold sent.
+  assert.equal(lab.sessions.view(session)?.record.reportedModel, 'gpt-6-astra');
   assert.doesNotMatch((await restarted('d-2-beta')) ?? '', /Which layer\?/);
 });
 

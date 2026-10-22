@@ -6,7 +6,6 @@ import test from 'node:test';
 import { validateModel } from '../src/core/harness.ts';
 import {
   claudeModel,
-  codexDefault,
   codexEffort,
   codexModelPages,
   labModel,
@@ -14,9 +13,6 @@ import {
   pickCodexModel,
   type CodexCall,
 } from '../src/core/models.ts';
-
-// The person's own ANTHROPIC_MODEL would change Claude Code's default in these tests. Each test file runs in a process of its own.
-delete process.env.ANTHROPIC_MODEL;
 
 await test('Codex gets the most capable model that its list offers', () => {
   const sol = { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true };
@@ -34,15 +30,13 @@ await test('Codex gets the most capable model that its list offers', () => {
     { id: 'mini', model: 'gpt-7-mini', isDefault: true },
   ];
   assert.equal(pickCodexModel(others), undefined);
-  assert.equal(codexDefault(others), 'gpt-7-mini');
-  assert.equal(codexDefault([{ ...others[1], hidden: true }]), undefined);
   // The ID stands in for a missing model name.
   assert.equal(pickCodexModel([{ id: 'gpt-6-astra' }]), 'gpt-6-astra');
   // Nothing fits: the thread starts with the person's own model.
   assert.equal(pickCodexModel([{ id: 'x', model: 'gpt-7-nova' }]), undefined);
   assert.equal(pickCodexModel(['gpt-6-astra', null, 7]), undefined);
   assert.equal(
-    codexDefault([{ model: 'bad name; rm -rf /', isDefault: true }]),
+    pickCodexModel([{ model: 'bad name; rm -rf /', isDefault: true }]),
     undefined,
   );
 });
@@ -164,23 +158,36 @@ await test("Claude Code keeps the person's own Opus default, and gets opus other
   assert.equal(await labModel('codex', null, { host: 'claude' }), null);
 });
 
-await test("ANTHROPIC_MODEL wins over Claude Code's settings, as it does for Claude Code, and a model that no flag can carry is not kept", async (t) => {
+await test("the person's Claude Code model follows Claude Code's order: the settings' env block, then ANTHROPIC_MODEL, then the model key", async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-model-')));
   t.after(() => rm(base, { recursive: true, force: true }));
   t.after(() => {
     delete process.env.ANTHROPIC_MODEL;
   });
-  const settings = (model: string) =>
-    writeFile(join(base, 'settings.json'), JSON.stringify({ model }));
-  await settings('opus[1m]');
+  const settings = (value: Record<string, unknown>) =>
+    writeFile(join(base, 'settings.json'), JSON.stringify(value));
+  await settings({ model: 'opus[1m]' });
   process.env.ANTHROPIC_MODEL = 'claude-opus-5-5';
   assert.equal(await claudeModel(base), 'claude-opus-5-5');
-  // A model named there wins even when it is not Opus. Verifold then asks for opus.
+  // An ANTHROPIC_MODEL in the settings' env block replaces the one in the environment.
+  await settings({
+    model: 'opus[1m]',
+    env: { ANTHROPIC_MODEL: 'claude-opus-5-1[1m]' },
+  });
+  assert.equal(await claudeModel(base), 'claude-opus-5-1[1m]');
+  // An empty one there cancels the environment's, so the model key decides.
+  await settings({ model: 'opus[1m]', env: { ANTHROPIC_MODEL: '' } });
+  assert.equal(await claudeModel(base), 'opus[1m]');
+  // A model named first wins even when it is not Opus. Verifold then asks for opus.
+  await settings({ model: 'opus[1m]', env: { ANTHROPIC_MODEL: 'sonnet' } });
+  assert.equal(await claudeModel(base), 'opus');
   process.env.ANTHROPIC_MODEL = 'sonnet';
+  await settings({ model: 'opus[1m]' });
   assert.equal(await claudeModel(base), 'opus');
   delete process.env.ANTHROPIC_MODEL;
   assert.equal(await claudeModel(base), 'opus[1m]');
-  await settings(`claude-opus-${'5'.repeat(200)}`);
+  // A model that no flag can carry is not kept.
+  await settings({ model: `claude-opus-${'5'.repeat(200)}` });
   assert.equal(await claudeModel(base), 'opus');
 });
 

@@ -664,8 +664,8 @@ export interface LabOptions {
   /**
    * The model of a new agent or checker on a harness: the project's model,
    * else the profile's, else Verifold's pick for Claude Code. Null: no model
-   * is named. A Codex agent then gets the most capable model that its own
-   * app-server lists.
+   * is named. A Codex agent then gets the first of Verifold's preferred
+   * models that its own app-server lists, else the person's own Codex model.
    */
   readonly model?: (host: HarnessName) => Promise<string | null>;
   /**
