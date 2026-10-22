@@ -10,6 +10,25 @@ export function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
+/** Whether anything is at `path`. A link counts as itself: it is not followed. */
+export async function exists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `path` is a real folder. A link to a folder is not one. */
+export async function isFolder(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export async function readJson(path: string): Promise<unknown> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {

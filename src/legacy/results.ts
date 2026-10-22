@@ -2,57 +2,16 @@ import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SessionActionError } from '../core/session.ts';
+import {
+  parseResults,
+  type Answer,
+  type CheckOutcome,
+  type CheckResult,
+  type Claim,
+  type Results,
+} from '../core/team-records.ts';
 
-/** The result of one check of the chosen direction. A judgement waits for the person. */
-export type CheckOutcome = 'passed' | 'failed' | 'partial' | 'judgement';
-
-export interface CheckResult {
-  /** The check's place in the direction's list, from 1. */
-  readonly check: number;
-  readonly result: CheckOutcome;
-  /** What the evidence shows, in the coordinator's words. */
-  readonly value: string;
-  /** Accepted project files that show it. */
-  readonly evidence: readonly string[];
-  /** Why the coordinator reports this result. A model claim. */
-  readonly reason: string;
-  /** For a judgement: what the person decides. */
-  readonly question?: string;
-  readonly at: string;
-  /** The person's ruling on a judgement. It is final. */
-  readonly ruling?: {
-    readonly result: Exclude<CheckOutcome, 'judgement'>;
-    readonly reason: string;
-    readonly at: string;
-  };
-}
-
-export interface Claim {
-  readonly text: string;
-  /** Accepted project files or web sources. */
-  readonly evidence: readonly string[];
-}
-
-export interface Answer {
-  readonly statement: string;
-  readonly claims: readonly Claim[];
-  readonly at: string;
-  /** The person's sign-off, or a request for more work. */
-  readonly decision?: {
-    readonly kind: 'accepted' | 'more';
-    readonly at: string;
-    readonly note?: string;
-  };
-}
-
-/** The results of one chosen direction. */
-export interface Results {
-  readonly schemaVersion: 1;
-  /** The direction that these results belong to. */
-  readonly direction: string;
-  readonly checks: readonly CheckResult[];
-  readonly answer: Answer | null;
-}
+export type { Answer, CheckOutcome, CheckResult, Claim, Results };
 
 export const resultLimits = {
   value: 500,
@@ -105,19 +64,9 @@ export class ResultsStore {
     try {
       const stats = await lstat(this.file);
       if (!stats.isFile() || stats.size > 2_000_000) return;
-      const value: unknown = JSON.parse(await readFile(this.file, 'utf8'));
-      if (
-        value &&
-        typeof value === 'object' &&
-        'schemaVersion' in value &&
-        value.schemaVersion === 1 &&
-        'direction' in value &&
-        typeof value.direction === 'string' &&
-        'checks' in value &&
-        Array.isArray(value.checks) &&
-        'answer' in value
-      )
-        this.results = value as Results;
+      this.results = parseResults(
+        JSON.parse(await readFile(this.file, 'utf8')),
+      );
     } catch {
       /* No results yet, or an unreadable record. */
     }

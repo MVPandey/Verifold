@@ -34,6 +34,12 @@ import { AppHeader } from './components/AppHeader.tsx';
 import { PodNeeds, PodsLine } from './components/Pods.tsx';
 import { SetupPage } from './screens/Setup.tsx';
 import { SettingsPage, type ComputeActions } from './screens/SettingsPage.tsx';
+import {
+  HistoryPage,
+  HistoryRunPage,
+  StartOverPage,
+} from './screens/History.tsx';
+import { HistoryContext, historyTools } from './history.ts';
 import { setupActions, type SetupActions } from './setup.ts';
 import { PostPage } from './screens/PostPage.tsx';
 import { RunPage } from './screens/RunPage.tsx';
@@ -232,6 +238,20 @@ export function Screen({
         onPause={actions.pause}
       />
     );
+  // History, and Start over, open with or without a lab.
+  const pageProps = {
+    snapshot,
+    connection,
+    now,
+    onPause: actions.pause,
+  };
+  if (route.page === 'history') return <HistoryPage {...pageProps} />;
+  if (route.page === 'history-run')
+    return <HistoryRunPage key={route.id} {...pageProps} id={route.id} />;
+  if (route.page === 'start-over') return <StartOverPage {...pageProps} />;
+  // A project whose current run is from the earlier research flow opens it in History.
+  if (!snapshot.lab && snapshot.researchRun && route.page === 'lab')
+    return <HistoryRunPage key="current" {...pageProps} id="current" />;
   const lab = snapshot.lab;
   if (!lab)
     return (
@@ -448,6 +468,7 @@ export function App({
   const [setup] = useState(() => setupActions(token));
   const [start] = useState(() => startActions(token));
   const [app] = useState(() => appActions(token));
+  const [history] = useState(() => historyTools(token));
   const [controls] = useState(() => (token ? labControls(token) : null));
   const [compute] = useState(() => computeActions(token));
   // The search opens only over a lab that the page shows: without one, there is nothing to find.
@@ -476,18 +497,20 @@ export function App({
   return (
     <ToolsContext.Provider value={tools}>
       <ControlsContext.Provider value={controls}>
-        <Screen
-          state={state}
-          route={route}
-          now={now}
-          actions={actions}
-          agentActions={agent}
-          answers={answers}
-          setup={setup}
-          start={start}
-          startLab={app.startLab}
-          compute={compute}
-        />
+        <HistoryContext.Provider value={history}>
+          <Screen
+            state={state}
+            route={route}
+            now={now}
+            actions={actions}
+            agentActions={agent}
+            answers={answers}
+            setup={setup}
+            start={start}
+            startLab={app.startLab}
+            compute={compute}
+          />
+        </HistoryContext.Provider>
         {searching && lab && (
           <SearchDialog
             lab={lab}

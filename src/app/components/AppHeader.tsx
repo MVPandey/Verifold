@@ -7,6 +7,7 @@ import { onMac, searchKey } from '../search.ts';
 import { ToolsContext } from '../tools.ts';
 import { useAction } from '../useAction.ts';
 import { Logo, Magnifier } from './Icons.tsx';
+import { MoreMenu } from './MoreMenu.tsx';
 
 /**
  * The top bar: the project, the money line, search, pause, and links to the
@@ -67,6 +68,17 @@ export function AppHeader({
       <a className="header__link" href={href.setup('agents')}>
         Profile
       </a>
+      {/* The project menu: its earlier runs, and Start over while a lab is here. */}
+      <MoreMenu>
+        <a className="more-menu__item" href={href.history}>
+          History
+        </a>
+        {lab?.agentsHere && (
+          <a className="more-menu__item" href={href.startOver}>
+            Start over
+          </a>
+        )}
+      </MoreMenu>
     </header>
   );
 }
