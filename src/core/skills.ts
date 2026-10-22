@@ -19,6 +19,7 @@ import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
 import { SessionActionError, type SessionSkills } from './session.ts';
+import { isFolder } from './storage.ts';
 import {
   blobSha,
   contentRefusal,
@@ -273,14 +274,6 @@ async function skillsRoot(directory: string): Promise<string> {
   if (!(await lstat(root)).isDirectory())
     throw new Error('The skills folder must be a folder, not a link.');
   return root;
-}
-
-async function isFolder(path: string): Promise<boolean> {
-  try {
-    return (await lstat(path)).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 /** Each folder above a path, the nearest first: `a/b/c` gives `a/b`, then `a`. */

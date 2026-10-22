@@ -1894,7 +1894,10 @@ await test('one run has one team: research, the coordinator, tasks, and a lab ke
     coordinator: () => Promise.resolve(true),
     researchBusy: () => false,
   });
-  assert.match((await other.refusal('lab')) ?? '', /coordinator's team/);
+  assert.match(
+    (await other.refusal('lab')) ?? '',
+    /from the research flow.*Start a lab/,
+  );
   // Only a lab start reads the coordinator's records: the others need only the lab's.
   let reads = 0;
   const counted = new RunTeam({
