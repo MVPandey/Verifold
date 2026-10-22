@@ -1053,7 +1053,7 @@ function codex(options: HostOptions): HostSession {
   const emit = options.onEvent;
   // `exit` comes before `close`, which reports the end of the session, so the reason comes first.
   child.on('exit', () => {
-    if (!connection)
+    if (!connection && !unreachable)
       emit({
         type: 'notice',
         text: 'Could not start Codex. Check that it is installed and signed in.',
@@ -1062,6 +1062,8 @@ function codex(options: HostOptions): HostSession {
   /** Messages wait here until the socket connects. */
   let queue: string[] | null = [];
   let connection: UnixWebSocket | null = null;
+  /** The person heard that Codex could not be reached, so the exit that follows adds no line. */
+  let unreachable = false;
   const send = (value: unknown): void => {
     const text = JSON.stringify(value);
     if (connection) connection.send(text);
@@ -1429,6 +1431,7 @@ function codex(options: HostOptions): HostSession {
           child.once('exit', done);
         });
       if (exited()) return;
+      unreachable = true;
       emit({
         type: 'notice',
         text: 'Could not connect to Codex. Check that it is installed and signed in.',
