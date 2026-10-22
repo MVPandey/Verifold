@@ -20,6 +20,7 @@ import {
   postLine,
   proofRef,
   type Artifact,
+  type NewPost,
   type Post,
   type PostKind,
   type ReadState,
@@ -151,6 +152,7 @@ import {
 } from './lab/schema.ts';
 import {
   addSpend,
+  askerDirections,
   askers,
   barSummary,
   barText,
@@ -1329,7 +1331,7 @@ export class Lab {
     // Calls to stop it, and calls that no agent of another open direction
     // asked too, no longer make sense.
     const asked = (call: Call): boolean =>
-      [call.direction, ...call.joined.map((asker) => asker.direction)].some(
+      askerDirections(call).some(
         (id) =>
           id !== direction.id &&
           this.state?.directions.find((entry) => entry.id === id)?.state ===
@@ -3305,12 +3307,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       state.directions.find((entry) => entry.id === id)?.state === 'open';
     if (call.deadline && call.deadline !== state.budget?.deadline)
       return 'The lab got more time.';
-    if (
-      call.by !== 'verifold' &&
-      ![call.direction, ...call.joined.map((asker) => asker.direction)].some(
-        open,
-      )
-    )
+    if (call.by !== 'verifold' && !askerDirections(call).some(open))
       return `${call.direction ?? 'Its direction'} no longer works for the lab.`;
     if (effect?.type === 'stop' && !open(effect.direction))
       return `${effect.direction} is not open any more.`;
@@ -3385,44 +3382,42 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         await this.withdraw(call, stale);
         fail(`Verifold withdrew ${call.id}: ${stale}`);
       }
-      if (call.by === 'verifold') {
+      const verifold = call.by === 'verifold';
+      // Words on Verifold's call go to the whole lab. Words on an agent's
+      // call go in the call's thread, else in a status line.
+      const record: Omit<NewPost, 'mentions' | 'artifacts'> = verifold
+        ? { author: 'person', kind: 'question', text: body }
+        : call.post
+          ? {
+              author: 'person',
+              kind: 'question',
+              replyTo: call.post,
+              text: body,
+            }
+          : {
+              author: 'verifold',
+              kind: 'status',
+              ...(call.direction ? { direction: call.direction } : {}),
+              text: clip(
+                `The person answered ${call.id} in their own words: ${JSON.stringify(body)}`,
+                boardLimits.text,
+              ),
+            };
+      if (!verifold)
+        await this.changeCall(call.id, (entry) => ({
+          ...entry,
+          state: 'answered',
+          words: body,
+        }));
+      const adding = this.add({ ...record, mentions: [], artifacts: [] });
+      if (verifold) {
         // The post is what reaches the agents, so a board that refuses it refuses the words.
-        await this.add({
-          author: 'person',
-          kind: 'question',
-          text: body,
-          mentions: [],
-          artifacts: [],
-        });
+        await adding;
         await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
         return;
       }
-      await this.changeCall(call.id, (entry) => ({
-        ...entry,
-        state: 'answered',
-        words: body,
-      }));
-      // The record of the answer on the board. A full board refuses it; the call keeps the words.
-      const post = call.post
-        ? await this.add({
-            author: 'person',
-            kind: 'question',
-            replyTo: call.post,
-            text: body,
-            mentions: [],
-            artifacts: [],
-          }).catch(() => null)
-        : await this.add({
-            author: 'verifold',
-            kind: 'status',
-            ...(call.direction ? { direction: call.direction } : {}),
-            text: clip(
-              `The person answered ${call.id} in their own words: ${JSON.stringify(body)}`,
-              boardLimits.text,
-            ),
-            mentions: [],
-            artifacts: [],
-          }).catch(() => null);
+      // The record of the answer. A full board refuses it, and the call keeps the words.
+      const post = await adding.catch(() => null);
       this.unheard(call, post);
       const line = `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(body)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
       if (this.planQuestion(this.current(), call)) await this.hold(call, line);
@@ -3809,7 +3804,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
                 `${agent.handle}'s shell would reach more than ${callLimits.domains} domains. Undo an earlier access call first.`,
               );
           }
-          return { type: 'domains', agent: call.by };
+          return { type: 'domains' };
         });
     }
   }
@@ -3864,7 +3859,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         await this.serial(() => this.reopen(applied.direction, call));
         return `Verifold opened ${applied.direction} again.`;
       case 'domains':
-        // The undo took the answer out of those that stand, so its domains went with it.
+        // The undo took the answer out of those that stand, so its domains
+        // went with it. `undoCall` checks each asker's process.
         return this.serial(() => {
           const effect = chosenEffect(call);
           return askers(call)
@@ -3874,7 +3870,6 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
                 effect?.type === 'domains'
                   ? effect.domains.filter((domain) => !left.includes(domain))
                   : [];
-              this.checkProcess(id);
               return removed.length
                 ? `${this.name(id)}'s shell loses ${removed.join(', ')}.`
                 : `${this.name(id)}'s shell keeps its domains: other answers gave them too.`;

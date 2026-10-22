@@ -52,7 +52,7 @@ import { secretGuard } from '../src/core/runpod.ts';
 import { ResearchRunner } from '../src/legacy/research-runner.ts';
 import { boardLimits, clip } from '../src/core/board.ts';
 import { checkToolSpecs, planLimits } from '../src/core/lab-tools.ts';
-import { moreHeld, planFacts } from '../src/core/lab/schema.ts';
+import { moreHeld, parseState, planFacts } from '../src/core/lab/schema.ts';
 import { Coordinator } from '../src/legacy/coordinator.ts';
 import { parseFrame, renderDesk } from '../src/desk/desk-view.ts';
 import {
@@ -6771,6 +6771,21 @@ await test('a call that asks what an open call asks joins it, its answer reaches
     lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id)?.note,
     "claude-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
   );
+  // The record of what the answer changed names no asker: the domains reach every agent that asked.
+  assert.deepEqual(
+    lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id)?.applied,
+    { type: 'domains' },
+  );
+  // An earlier record also names the agent that asked first, and it still loads.
+  const saved = JSON.parse(
+    await readFile(join(lab.root, '.verifold', 'lab.json'), 'utf8'),
+  ) as Record<string, unknown> & { calls: Record<string, unknown>[] };
+  for (const call of saved.calls)
+    if (call.id === pypi?.id) call.applied = { type: 'domains', agent: 'a-1' };
+  assert.deepEqual(
+    parseState(saved)?.calls.find((call) => call.id === pypi?.id)?.applied,
+    { type: 'domains' },
+  );
   // When no asker's direction is open, the call is withdrawn.
   await lab.lab.stopDirection('d-2');
   assert.equal(
@@ -7185,6 +7200,52 @@ await test('pod requests while pods are off ask the person once for the whole la
     1,
   );
   assert.equal(count(/^Your call c-1 waits for the person already\./), 2);
+});
+
+await test('a pods call saved before calls had a need still holds its agent, and another agent asks once more', async (t) => {
+  const lab = await fixture(t, { compute: keyCompute(true) });
+  await open(lab, [
+    { title: 'Alpha', harness: 'claude' },
+    { title: 'Beta', harness: 'claude' },
+  ]);
+  const request = { gpuType: 'NVIDIA A40', hours: 1, why: 'Train.' };
+  // Each start gives an agent a new generation, so its tools are called once it started.
+  const started = (count: number): Promise<void> =>
+    until(async () =>
+      (
+        await Promise.all(
+          ['d-1-alpha', 'd-2-beta'].map((folder) =>
+            lab.lines(folder, 'launches.jsonl'),
+          ),
+        )
+      ).every((lines) => lines.length === count),
+    );
+  await started(1);
+  assert.match(
+    (await agentCall(lab.lab, 'a-1', 'verifold_request_pod', request)).text,
+    /Verifold asked the person in c-1\./,
+  );
+  // A pods call from before calls had a need loads with none.
+  await lab.restart(async () => {
+    const path = join(lab.root, '.verifold', 'lab.json');
+    const saved = JSON.parse(await readFile(path, 'utf8')) as {
+      calls: Record<string, unknown>[];
+    };
+    for (const call of saved.calls) delete call.need;
+    await writeFile(path, JSON.stringify(saved));
+  });
+  await started(2);
+  assert.equal(lab.lab.view()?.state.calls[0]?.need, null);
+  // The agent that asked still waits for its call.
+  assert.match(
+    (await agentCall(lab.lab, 'a-1', 'verifold_request_pod', request)).text,
+    /^Your call c-1 waits for the person already\./,
+  );
+  // With no need to compare, another agent's request does not join the old call: the person gets one more call.
+  assert.match(
+    (await agentCall(lab.lab, 'a-2', 'verifold_request_pod', request)).text,
+    /Verifold asked the person in c-2\./,
+  );
 });
 
 await test('a scope call opens or stops a direction, and its undo reverses it', async (t) => {

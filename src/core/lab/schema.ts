@@ -420,8 +420,8 @@ export type CallApplied =
     }
   | { readonly type: 'open'; readonly direction: string }
   | { readonly type: 'stop'; readonly direction: string }
-  /** The agent's shell reaches the option's domains while the answer stands. */
-  | { readonly type: 'domains'; readonly agent: string };
+  /** The shell of each agent that asked reaches the option's domains while the answer stands. */
+  | { readonly type: 'domains' };
 
 /**
  * A call for the person: cost, scope, access, or go. An agent asks with
@@ -1078,12 +1078,9 @@ function parseApplied(value: unknown): CallApplied | null {
     directionId.test(entry.direction)
   )
     return { type: entry.type, direction: entry.direction };
-  if (
-    entry.type === 'domains' &&
-    typeof entry.agent === 'string' &&
-    agentId.test(entry.agent)
-  )
-    return { type: 'domains', agent: entry.agent };
+  // An earlier record also names the agent that asked first. The domains
+  // reach every agent that asked, so the name is not kept.
+  if (entry.type === 'domains') return { type: 'domains' };
   return null;
 }
 
