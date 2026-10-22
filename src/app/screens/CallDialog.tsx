@@ -8,6 +8,7 @@ import {
 } from 'react';
 import type { Call, Lab } from '../../protocol/api.ts';
 import {
+  backLabel,
   callView,
   costLine,
   failureOf,
@@ -27,7 +28,7 @@ import {
 } from '../call.ts';
 import { andList } from '../../ui/call-words.ts';
 import { asked, since, usd } from '../format.ts';
-import { href } from '../route.ts';
+import { href, type Opener } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { FactSource, uniqueFacts } from '../components/FactsList.tsx';
@@ -359,8 +360,8 @@ function Settled({
 /**
  * A call, over the page that opened it, as on the v9 canvas ("9. A call").
  * The person picks an option, or answers in their own words. Escape and
- * Close leave without answering; nothing is bought then. `back`: the label
- * of the way out once the call is settled.
+ * Close leave without answering; nothing is bought then. `opener`: the page
+ * under the call, where Close goes back to. Null: the lab home.
  *
  * A modal `<dialog>` keeps focus inside. Leaving closes it first, so the
  * browser returns focus to where it was when the call opened, and then
@@ -372,13 +373,13 @@ export function CallDialog({
   id,
   now,
   actions,
-  back,
+  opener,
 }: {
   readonly lab: Lab;
   readonly id: string;
   readonly now: number;
   readonly actions: LabActions;
-  readonly back: string;
+  readonly opener: Opener | null;
 }): ReactNode {
   const ref = useRef<HTMLDialogElement>(null);
   // Set when the person leaves; what to bring into view after the dialog is gone.
@@ -432,7 +433,7 @@ export function CallDialog({
         leave();
       }}
       onClose={() => {
-        if (leaving.current) leaveCall(leaving.current.post);
+        if (leaving.current) leaveCall(opener, leaving.current.post);
       }}
     >
       {view.kind === 'open' ? (
@@ -460,7 +461,7 @@ export function CallDialog({
           now={now}
           titleId={titleId}
           actions={actions}
-          back={back}
+          back={backLabel(opener?.route ?? null, lab)}
           onClose={() => leave()}
         />
       )}

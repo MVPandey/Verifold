@@ -785,7 +785,7 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.doesNotMatch(html, /style="/);
 });
 
-await test("an agent's short answer to the person reads as one line: the name and a separator, or the name as the subject of a sentence", () => {
+await test("an agent's short answer to the person reads as one line: the name, a separator, and the answer as the agent wrote it", () => {
   const page = text(
     renderToStaticMarkup(
       <BoardThread
@@ -795,7 +795,8 @@ await test("an agent's short answer to the person reads as one line: the name an
             post('p-14', 'a-1', 'status', 'Added it to the plan.', {
               replyTo: 'p-13',
             }),
-            post('p-15', 'a-4', 'status', 'checked its license first.', {
+            // An answer can start with a command, a file name, or an ID, so case says nothing about it.
+            post('p-15', 'a-4', 'status', 'pytest passes on gemma.py.', {
               replyTo: 'p-13',
             }),
           ],
@@ -804,7 +805,7 @@ await test("an agent's short answer to the person reads as one line: the name an
     ),
   );
   assert.match(page, /claude-1 · Added it to the plan\./);
-  assert.match(page, /codex-2 checked its license first\./);
+  assert.match(page, /codex-2 · pytest passes on gemma\.py\./);
 });
 
 await test('a run chip opens the run without a direction, and a file chip without one is not a link', () => {

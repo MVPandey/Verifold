@@ -271,6 +271,7 @@ export function TurnItem({
                 steps={steps.steps}
                 total={stepTotal(turn)}
                 turnHref={turnHref}
+                live={turn.endedAt === null}
               />
               {problem && (
                 <p role="status" className="steps__problem">
