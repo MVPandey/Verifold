@@ -11,7 +11,6 @@ import {
   realpath,
   rename,
   rm,
-  writeFile,
   type FileHandle,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -67,6 +66,8 @@ export const runLimits = {
   outputBytes: 100 * 1024 * 1024,
   /** Files and folders that Verifold looks at for the outputs of one run. */
   outputEntries: 10_000,
+  /** Verifold copies a kept output in parts of this size, so its memory does not grow with the output. */
+  copyPart: 1024 * 1024,
   /** The log keeps its start up to this size. Past it, a cut line and the last `logTail` bytes. */
   logBytes: 20 * 1024 * 1024,
   logTail: 1024 * 1024,
@@ -618,15 +619,16 @@ class RunLog {
 }
 
 /**
- * Read a file of a run's folder that no sandboxed process can change any
+ * Open a file of a run's folder that no sandboxed process can change any
  * more: a regular file with one link on the folder's device, opened without
- * following a link, of at most `max` bytes. Null otherwise.
+ * following a link, of at most `max` bytes. Null otherwise. The caller
+ * closes the handle.
  */
-async function readKept(
+async function openKept(
   path: string,
   device: number,
   max: number,
-): Promise<Buffer | null> {
+): Promise<FileHandle | null> {
   let handle: FileHandle;
   try {
     handle = await open(
@@ -636,20 +638,131 @@ async function readKept(
   } catch {
     return null;
   }
+  let kept = false;
   try {
     const stats = await handle.stat();
-    if (
-      !stats.isFile() ||
-      stats.nlink !== 1 ||
-      stats.dev !== device ||
-      stats.size > max
-    )
-      return null;
-    const content = await handle.readFile();
-    return content.length > max ? null : content;
+    kept =
+      stats.isFile() &&
+      stats.nlink === 1 &&
+      stats.dev === device &&
+      stats.size <= max;
+  } finally {
+    if (!kept) await handle.close();
+  }
+  return kept ? handle : null;
+}
+
+/** A small file of a run's folder, as `openKept` opens it. Null for one that is not kept, or that grew past `max`. */
+async function readKept(
+  path: string,
+  device: number,
+  max: number,
+): Promise<Buffer | null> {
+  const handle = await openKept(path, device, max);
+  if (!handle) return null;
+  try {
+    // One byte more than `max` shows a file that grew after its check.
+    const content = Buffer.alloc(max + 1);
+    let size = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(
+        content,
+        size,
+        content.length - size,
+        null,
+      );
+      if (bytesRead === 0) return content.subarray(0, size);
+      size += bytesRead;
+      if (size > max) return null;
+    }
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Copy an open kept file to `target`, a part at a time, and hash it on the
+ * way, so that memory stays the same for any size. A part is written only
+ * after the part that follows it was checked, so no byte of a secret value
+ * that spans two parts reaches the copy. 'held': a part holds a secret
+ * value. Null: the file grew past `max` after its check. In both cases, no
+ * copy stays.
+ */
+async function copyKept(
+  handle: FileHandle,
+  target: string,
+  max: number,
+  guard: SecretGuard | undefined,
+): Promise<
+  { readonly bytes: number; readonly sha256: string } | 'held' | null
+> {
+  const out = await open(
+    target,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      constants.O_NOFOLLOW,
+    0o600,
+  );
+  const write = async (part: Buffer): Promise<void> => {
+    for (let at = 0; at < part.length; )
+      at += (await out.write(part, at)).bytesWritten;
+  };
+  let result:
+    | { readonly bytes: number; readonly sha256: string }
+    | 'held'
+    | null = null;
+  try {
+    const holds = guard?.stream();
+    const hash = createHash('sha256');
+    let bytes = 0;
+    let waiting: Buffer | null = null;
+    for (;;) {
+      const part = Buffer.alloc(runLimits.copyPart);
+      const { bytesRead } = await handle.read(part, 0, part.length, null);
+      if (bytesRead === 0) {
+        if (waiting) await write(waiting);
+        result = { bytes, sha256: hash.digest('hex') };
+        break;
+      }
+      bytes += bytesRead;
+      if (bytes > max) break;
+      const read = part.subarray(0, bytesRead);
+      if (holds?.(read)) {
+        result = 'held';
+        break;
+      }
+      hash.update(read);
+      if (waiting) await write(waiting);
+      waiting = read;
+    }
+    await out.close();
+  } catch (error) {
+    await out.close().catch(() => {});
+    await rm(target, { force: true });
+    throw error;
+  }
+  if (result === null || result === 'held') await rm(target, { force: true });
+  return result;
+}
+
+/** Plain reasons for a move of a run's folder that failed, by error code. */
+const moveErrors: Readonly<Record<string, string>> = {
+  ENOENT: 'the folder is gone',
+  EACCES: 'no permission to move it',
+  EPERM: 'no permission to move it',
+  EBUSY: 'the folder is in use',
+  EEXIST: 'a kept folder of that name is there already',
+  ENOTEMPTY: 'a kept folder of that name is there already',
+};
+
+/** Why the move of a run's folder failed, in a few words. */
+function moveError(error: unknown): string {
+  const code =
+    error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : '';
+  return moveErrors[code] ?? (code || 'unknown error');
 }
 
 /** A run's process while it runs. */
@@ -1622,8 +1735,11 @@ export class RunLedger {
     };
     try {
       await rename(paths.folder, paths.kept);
-    } catch {
-      return collected;
+    } catch (error) {
+      return {
+        ...collected,
+        note: `Verifold could not keep the run's folder (${moveError(error)}), so it took no metrics and no outputs.`,
+      };
     }
     const top = await lstat(paths.kept);
     const tree = await lstat(join(paths.kept, 'tree')).catch(() => null);
@@ -1686,6 +1802,8 @@ export class RunLedger {
           failed.push(rel);
         }
         for (const name of names) await copy(`${rel}/${name}`);
+        // A folder counts as copied once a file in it is, also by an earlier, more specific entry.
+        if (names.some((name) => copied.has(`${rel}/${name}`))) copied.add(rel);
         return;
       }
       if (!stats.isFile()) return;
@@ -1697,28 +1815,33 @@ export class RunLedger {
         return;
       }
       try {
-        const content = await readKept(
-          path,
-          top.dev,
-          runLimits.outputBytes - bytes,
-        );
-        if (!content) return;
-        if (guard?.holds(rel) || guard?.holds(content)) {
-          if (guard.holds(rel)) named++;
-          else held.push(rel);
+        const left = runLimits.outputBytes - bytes;
+        const handle = await openKept(path, top.dev, left);
+        if (!handle) return;
+        try {
+          if (guard?.holds(rel)) {
+            named++;
+            copied.add(rel);
+            return;
+          }
+          const target = join(this.record(run.id), 'outputs', rel);
+          await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+          const kept = await copyKept(handle, target, left, guard);
+          if (!kept) return;
           copied.add(rel);
-          return;
+          if (kept === 'held') {
+            held.push(rel);
+            return;
+          }
+          bytes += kept.bytes;
+          collected.outputs.push({
+            path: rel,
+            bytes: kept.bytes,
+            sha256: kept.sha256,
+          });
+        } finally {
+          await handle.close();
         }
-        const target = join(this.record(run.id), 'outputs', rel);
-        await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-        await writeFile(target, content, { flag: 'wx', mode: 0o600 });
-        copied.add(rel);
-        bytes += content.length;
-        collected.outputs.push({
-          path: rel,
-          bytes: content.length,
-          sha256: createHash('sha256').update(content).digest('hex'),
-        });
       } catch {
         failed.push(rel);
       }

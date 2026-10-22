@@ -459,6 +459,12 @@ export interface SecretGuard {
   ): string;
   /** The content or the name holds a secret value. */
   holds(content: Buffer | string): boolean;
+  /**
+   * A check of content that comes in parts, in their order: true when the
+   * parts so far hold a secret value, also one that starts in one part and
+   * ends in the next.
+   */
+  stream(): (part: Buffer) => boolean;
 }
 
 /** A guard for these secret values. It keeps them for its whole life, also after the lease closes. */
@@ -493,5 +499,21 @@ export function secretGuard(
       return hidden;
     },
     holds: (content) => values.some(([, value]) => content.includes(value)),
+    stream: () => {
+      // A value that ends in a part starts at most its length less one byte before that part.
+      const keep = Math.max(
+        0,
+        ...values.map(([, value]) => Buffer.byteLength(value) - 1),
+      );
+      let tail = Buffer.alloc(0);
+      return (part) => {
+        const joined = Buffer.concat([tail, part]);
+        if (values.some(([, value]) => joined.includes(value))) return true;
+        tail = Buffer.from(
+          joined.subarray(joined.length - Math.min(keep, joined.length)),
+        );
+        return false;
+      };
+    },
   };
 }

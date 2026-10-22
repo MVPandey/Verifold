@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   chmod,
@@ -546,6 +547,80 @@ await test('one output that cannot be copied leaves the other outputs and the me
   assert.match(run?.note ?? '', /Verifold could not copy out\/locked\./);
   // The folder without permissions goes too.
   assert.deepEqual(await runFolders(fx.root), []);
+});
+
+await test('a run whose folder Verifold cannot keep says why in its note', async (t) => {
+  const fx = await fixture(t);
+  const { ledger, ended } = fx.ledger();
+  t.after(() => ledger.close());
+  // The command runs in the folder's tree, and removes the whole folder.
+  await fx.start(
+    ledger,
+    'mkdir out; echo a > out/a.txt; rm -rf "$(dirname "$PWD")"',
+    {
+      want: ['out'],
+    },
+  );
+  await until(() => ended.length === 1);
+  const run = ledger.get('r-1');
+  assert.equal(run?.status, 'done');
+  assert.deepEqual(run?.outputs, []);
+  assert.match(
+    run?.note ?? '',
+    /Verifold could not keep the run's folder \(the folder is gone\), so it took no metrics and no outputs\./,
+  );
+});
+
+await test('an output folder whose files an earlier, more specific entry copied is not missing', async (t) => {
+  const fx = await fixture(t);
+  const { ledger, ended } = fx.ledger();
+  t.after(() => ledger.close());
+  const command =
+    'mkdir -p out/sub; echo a > out/a.txt; echo b > out/sub/b.txt';
+  // The more specific entry first, and then last.
+  await fx.start(ledger, command, { want: ['out/a.txt', 'out/sub', 'out'] });
+  await fx.start(ledger, command, { want: ['out', 'out/sub'] });
+  await until(() => ended.length === 2);
+  for (const id of ['r-1', 'r-2']) {
+    const run = ledger.get(id);
+    assert.deepEqual(
+      run?.outputs.map((output) => output.path),
+      ['out/a.txt', 'out/sub/b.txt'],
+    );
+    assert.doesNotMatch(run?.note ?? '', /No output file/);
+  }
+});
+
+await test('an output of several copy parts is kept whole, with the hash of all its bytes', async (t) => {
+  const fx = await fixture(t);
+  const { ledger, ended } = fx.ledger();
+  t.after(() => ledger.close());
+  const size = runLimits.copyPart * 2 + 1234;
+  await fx.start(
+    ledger,
+    `mkdir out; head -c ${size} /dev/zero | tr '\\0' 'x' > out/big.txt`,
+    { want: ['out'] },
+  );
+  await until(() => ended.length === 1);
+  const run = ledger.get('r-1');
+  const sha256 = createHash('sha256').update('x'.repeat(size)).digest('hex');
+  assert.deepEqual(run?.outputs, [
+    { path: 'out/big.txt', bytes: size, sha256 },
+  ]);
+  const copy = await readFile(
+    join(
+      fx.root,
+      '.verifold',
+      'lab',
+      'runs',
+      'r-1',
+      'outputs',
+      'out',
+      'big.txt',
+    ),
+  );
+  assert.equal(copy.length, size);
+  assert.equal(createHash('sha256').update(copy).digest('hex'), sha256);
 });
 
 await test('each run gets a folder that no later run gets, also after Start over', async (t) => {
