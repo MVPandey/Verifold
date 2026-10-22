@@ -258,17 +258,15 @@ function stateOf(direction: ScreenDirection): string {
  * for a new call. The live steps of the agents do not print.
  *
  * `printed` holds the state of each direction's last line, by ID, and gets
- * the states of the new lines. By default it holds the states in `before`.
- * A terminal keeps its own, because a large lab's screen leaves directions
- * out: a direction that comes back unchanged prints nothing.
+ * the states of the new lines. It is not the screen before, because a large
+ * lab's screen leaves directions out: a direction that comes back unchanged
+ * prints nothing. `before` tells a new call.
  */
 export function plainLines(
   before: LabScreen | null,
   after: LabScreen,
   now: number,
-  printed: Map<string, string> = new Map(
-    (before?.directions ?? []).map((entry) => [entry.id, stateOf(entry)]),
-  ),
+  printed: Map<string, string>,
 ): string[] {
   const lines: string[] = [];
   for (const direction of after.directions) {
