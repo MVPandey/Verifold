@@ -87,13 +87,14 @@ export const limits = {
 /**
  * The environment for Git. Variables such as GIT_DIR, GIT_INDEX_FILE, and
  * GIT_AUTHOR_NAME would point Git at another repository or another author, for
- * example when Verifold runs inside a Git hook. So none of them pass through.
+ * example when Verifold runs inside a Git hook. So none of them pass through,
+ * in any case of letters: Windows does not tell names apart by case.
  */
-function gitEnvironment(): NodeJS.ProcessEnv {
+export function gitEnvironment(): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
       Object.entries(childEnvironment()).filter(
-        ([key]) => !key.startsWith('GIT_'),
+        ([key]) => !key.toUpperCase().startsWith('GIT_'),
       ),
     ),
     GIT_TERMINAL_PROMPT: '0',
@@ -102,9 +103,22 @@ function gitEnvironment(): NodeJS.ProcessEnv {
 }
 
 /**
- * Run Git without a shell, for at most one minute. User hooks, signing, and
- * external diff tools do not run, and Verifold commits under its own name.
- * `input` goes to its standard input.
+ * The options of every `git diff` that Verifold runs: Verifold's own diffs
+ * never run text-conversion or external diff programs, also not in a
+ * submodule, whose diff Git would otherwise run as a child `git diff` that
+ * gets none of these options.
+ */
+const plainDiff = ['--no-textconv', '--no-ext-diff', '--submodule=short'];
+
+/**
+ * Run Git without a shell, for at most one minute. Verifold commits under its
+ * own name. User hooks, signing, text conversion, external diff programs, and
+ * a file monitor never run. Filters (clean, smudge, process) do run, because
+ * projects that use Git LFS need them. `input` goes to its standard input.
+ *
+ * Only `diff` prints diffs here. A new Git command that prints diff or patch
+ * output (show, log -p, format-patch, range-diff, blame, stash show) must get
+ * the same options.
  */
 function git(
   cwd: string,
@@ -129,7 +143,11 @@ function git(
         'user.email=verifold@localhost',
         '-c',
         'core.quotepath=off',
-        ...args,
+        '-c',
+        'core.fsmonitor=false',
+        ...(args[0] === 'diff'
+          ? ['diff', ...plainDiff, ...args.slice(1)]
+          : args),
       ],
       {
         cwd,
@@ -822,7 +840,6 @@ export async function changes(
       '--raw',
       '-z',
       '--no-renames',
-      '--no-ext-diff',
       from,
       to,
     ])
@@ -856,7 +873,6 @@ export async function diff(
   const output = await git(join(root, workspace.path), [
     'diff',
     '--no-color',
-    '--no-ext-diff',
     '--no-renames',
     from,
     to,
@@ -882,16 +898,7 @@ export async function diffIn(
 ): Promise<{ readonly text: string; readonly cut: boolean }> {
   const output = await git(
     root,
-    [
-      'diff',
-      '--no-color',
-      '--no-ext-diff',
-      '--no-renames',
-      from,
-      to,
-      '--',
-      `:(literal)${path}`,
-    ],
+    ['diff', '--no-color', '--no-renames', from, to, '--', `:(literal)${path}`],
     undefined,
     gitDir ? { GIT_DIR: gitDir } : {},
   );
