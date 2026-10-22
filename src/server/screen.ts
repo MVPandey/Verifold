@@ -1,6 +1,11 @@
 import { clip } from '../core/board.ts';
 import type { Live, Snapshot } from '../protocol/api.ts';
-import { shownVerdict, type ShownVerdict } from '../ui/lab-lines.ts';
+import {
+  plannerState,
+  shownVerdict,
+  type PlannerState,
+  type ShownVerdict,
+} from '../ui/lab-lines.ts';
 import { record } from './http.ts';
 
 /**
@@ -39,6 +44,12 @@ export interface LabScreen {
   readonly call: ScreenCall | null;
   /** The calls that wait, in all. */
   readonly calls: number;
+  /**
+   * Before the plan, a planner that does not make one (see `plannerState`).
+   * Absent while it works, after the plan, and from the owner of an earlier
+   * version.
+   */
+  readonly planner?: PlannerState;
 }
 
 export interface ScreenDirection {
@@ -140,6 +151,10 @@ export function labScreen(
   const [first] = lab.needsYou;
   const pick =
     first && first.pick !== null ? first.options[first.pick] : undefined;
+  const planner = plannerState(
+    lab,
+    lab.planner ? agents.get(lab.planner)?.status : undefined,
+  );
   return {
     project: clip(snapshot.project, screenLimits.question),
     started: lab.startedAt,
@@ -170,6 +185,7 @@ export function labScreen(
         }
       : null,
     calls: lab.needsYou.length + (lab.omitted.needsYou ?? 0),
+    ...(planner ? { planner } : {}),
   };
 }
 
@@ -258,6 +274,21 @@ function startedOf(value: unknown): string | undefined | null {
   return text(value, 40) && Number.isFinite(Date.parse(value)) ? value : null;
 }
 
+const plannerStates: readonly PlannerState[] = [
+  'missing',
+  'stopped',
+  'closed',
+  'crashed',
+];
+
+/** A screen's planner that does not make a plan: absent, or its state. Null: not readable. */
+function plannerOf(value: unknown): PlannerState | undefined | null {
+  if (value === undefined) return undefined;
+  return plannerStates.includes(value as PlannerState)
+    ? (value as PlannerState)
+    : null;
+}
+
 /**
  * A screen from the control channel, checked field by field. Null for
  * anything else: a terminal shows only what it could read.
@@ -289,10 +320,12 @@ export function parseLabScreen(value: unknown): LabScreen | null {
   const first = call(value.call);
   const month = monthOf(value.money.month);
   const started = startedOf(value.started);
+  const planner = plannerOf(value.planner);
   if (
     first === undefined ||
     month === null ||
     started === null ||
+    planner === null ||
     directions.some((entry) => entry === null)
   )
     return null;
@@ -313,5 +346,6 @@ export function parseLabScreen(value: unknown): LabScreen | null {
     more: value.more,
     call: first,
     calls: value.calls,
+    ...(planner ? { planner } : {}),
   };
 }
