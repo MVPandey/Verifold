@@ -2461,14 +2461,16 @@ await test('a conversation that cannot resume starts new, without the notes abou
     await until(() => holding);
     const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
     const record = join(lab.root, '.verifold', 'sessions', `${session}.json`);
-    // The process stops by itself, and its session saves the stop.
+    // The process stops by itself. Its session saves the stop, and then the
+    // event that the process exited. The record goes after that last save:
+    // a save that still runs would write the record again.
     await writeFile(join(lab.base, 'logs', 'd-1-alpha', 'stop'), '');
     await until(async () => {
       try {
-        const status = (
-          JSON.parse(await readFile(record, 'utf8')) as { status: string }
-        ).status;
-        return status === 'ended' || status === 'failed';
+        const { events } = JSON.parse(await readFile(record, 'utf8')) as {
+          events: { text: string }[];
+        };
+        return events.some((event) => event.text.includes('process exited'));
       } catch {
         return false;
       }
@@ -7080,14 +7082,18 @@ await test('pod requests while pods are off ask the person once for the whole la
     { title: 'Alpha', harness: 'codex' },
     { title: 'Beta', harness: 'codex' },
   ]);
-  // Both first turns end, so the post starts new turns instead of steering a running one.
+  // Both agents are quiet before the post: no turn runs, each waits its long
+  // backoff after two idle turns, and no wakeup is due. So the post starts new
+  // turns. A turn that runs takes the person's post as a steer, and its script
+  // never sees the post.
+  const inside = lab.lab as unknown as LabInside;
   await until(
-    async () =>
-      (await lab.inputs('d-1-alpha')).length > 0 &&
-      (await lab.inputs('d-2-beta')).length > 0 &&
-      (lab.lab.view()?.directions ?? []).every(
-        (entry) => entry.status === 'idle',
-      ),
+    () =>
+      lab.lab
+        .view()
+        ?.directions.every(
+          (entry) => entry.status === 'idle' && entry.agent.idleStreak >= 2,
+        ) === true && [...inside.loops.values()].every((loop) => !loop.pending),
   );
   on = false;
   await lab.lab.post({ text: 'Ask for a pod now.' });
