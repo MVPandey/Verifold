@@ -26,6 +26,7 @@ import {
   type StartActions,
 } from '../src/app/ask.ts';
 import { threads } from '../src/app/board.ts';
+import { ControlsContext, type LabControls } from '../src/app/controls.ts';
 import { intentFor, unansweredAfter } from '../src/app/intent.ts';
 import { href, parseRoute } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
@@ -38,7 +39,10 @@ import {
 import { dayClock } from '../src/app/format.ts';
 import { QuestionCard } from '../src/app/components/QuestionCard.tsx';
 import { AskForm } from '../src/app/screens/AskPage.tsx';
-import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
+import {
+  startAgainWith,
+  type AgentActions,
+} from '../src/app/screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from '../src/app/screens/LabHome.tsx';
 import { NoLab } from '../src/app/screens/Notice.tsx';
 import {
@@ -48,6 +52,7 @@ import {
 } from '../src/app/screens/Scoping.tsx';
 import { openingRoute, pageRoute } from '../src/app/screens/Setup.tsx';
 import type { SetupActions } from '../src/app/setup.ts';
+import { controls } from './app-controls-fixture.ts';
 
 /** A fixed "now": Tuesday 2026-10-20, 22:00 UTC. */
 const now = Date.UTC(2026, 9, 20, 22, 0);
@@ -740,6 +745,195 @@ await test("before the plan, the lab home is the planner's: its work folded, its
     ),
     /The planner waits for your answers\./,
   );
+});
+
+await test('a planner that ended before the plan leaves the usual lab home: a line that needs the person says how it ended, Open a direction shows, and Start again only after a crash', () => {
+  const [planner] = scopingLab().agents;
+  assert.ok(planner);
+  // A stop or a close ends the planner's questions; a crash leaves them open.
+  const home = (
+    status: Agent['status'],
+    live: string,
+    fields: Partial<Lab> = {},
+    given: LabControls | null = controls,
+  ): { readonly page: string; readonly html: string } => {
+    const lab = scopingLab({
+      agents: [
+        {
+          ...planner,
+          status,
+          live: {
+            state: status === 'working' ? 'working' : 'ended',
+            text: live,
+            since: ago(1),
+          },
+        },
+      ],
+      ...(status === 'stopped' || status === 'closed' ? { needsYou: [] } : {}),
+      ...fields,
+    });
+    const element = (
+      <ControlsContext.Provider value={given}>
+        <LabHome
+          snapshot={snapshot(lab)}
+          lab={lab}
+          connection="live"
+          now={now}
+          actions={actions}
+          agentActions={agentActions}
+        />
+      </ControlsContext.Provider>
+    );
+    return { page: text(element), html: renderToStaticMarkup(element) };
+  };
+  const working = home('working', 'Reading a page');
+  assert.match(
+    working.page,
+    /Planning\. The planner keeps reading while you answer\./,
+  );
+  assert.doesNotMatch(working.html, /class="open-direction"/);
+  const stopped = home('stopped', 'Stopped');
+  assert.match(
+    stopped.page,
+    /You stopped the planner before it made a plan\. Open a direction yourself to continue\./,
+  );
+  const closed = home('closed', 'Closed by its agent');
+  assert.match(
+    closed.page,
+    /The planner closed its direction before it made a plan\. Open a direction yourself to continue\./,
+  );
+  for (const ended of [stopped, closed]) {
+    // The usual home: the directions with the planner's own, Open a direction, and the box to the lab.
+    assert.match(ended.html, /class="status status--need"/);
+    assert.match(ended.page, /Directions .*Plan the lab/);
+    assert.match(ended.html, /class="open-direction"/);
+    assert.match(ended.page, /Write to the lab/);
+    assert.doesNotMatch(ended.page, /Send answers|Start again|Planning\./);
+    assert.doesNotMatch(ended.page, /Nothing needs you/);
+  }
+  const crashed = home('crashed', 'Stopped by itself too often');
+  assert.match(
+    crashed.page,
+    /The planner stopped by itself too often before it made a plan\. Open a direction yourself, or start the planner again\. Start again/,
+  );
+  assert.match(crashed.html, /class="open-direction"/);
+  // Its questions wait on the Needs-you line, not as cards.
+  assert.match(crashed.page, /Needs you/);
+  assert.doesNotMatch(crashed.page, /Send answers/);
+  // Start again starts the planner, by its ID.
+  const started: string[] = [];
+  void startAgainWith(planner.id)(
+    {
+      ...controls,
+      restartAgent: (agent, key) => {
+        started.push(`${agent} ${key}`);
+        return Promise.resolve({ ok: true });
+      },
+    },
+    null,
+    'k1',
+  );
+  assert.deepEqual(started, ['a-1 k1']);
+  // In a tab without the lab's controls, or without the lab's agents, nothing can start: the line only says what happened.
+  for (const away of [
+    home('crashed', 'Stopped by itself too often', {}, null),
+    home('crashed', 'Stopped by itself too often', { agentsHere: false }),
+  ]) {
+    assert.match(
+      away.page,
+      /The planner stopped by itself too often before it made a plan\./,
+    );
+    assert.doesNotMatch(
+      away.page,
+      /Open a direction yourself|start the planner again|Start again/,
+    );
+    assert.doesNotMatch(
+      away.html,
+      /class="open-direction"|class="start-again"/,
+    );
+  }
+});
+
+await test('a lab whose planner did not start says so, and a planner that starts or waits shows its own line, not that it reads', () => {
+  const bare = (
+    fields: Partial<Lab>,
+    given: LabControls | null = controls,
+  ): { readonly page: string; readonly html: string } => {
+    const lab = scopingLab({
+      planner: null,
+      agents: [],
+      directions: [],
+      needsYou: [],
+      board: { posts: [], more: false },
+      ...fields,
+    });
+    const element = (
+      <ControlsContext.Provider value={given}>
+        <LabHome
+          snapshot={snapshot(lab)}
+          lab={lab}
+          connection="live"
+          now={now}
+          actions={actions}
+          agentActions={agentActions}
+        />
+      </ControlsContext.Provider>
+    );
+    return { page: text(element), html: renderToStaticMarkup(element) };
+  };
+  // While the lab opens its planner, or from a server that does not say, the planner is on its way.
+  for (const fields of [{ plannerStarting: true }, {}]) {
+    assert.match(
+      bare(fields).page,
+      /The planner is reading\. Directions show here when the plan is ready\./,
+    );
+  }
+  const missing = bare({ plannerStarting: false });
+  assert.match(
+    missing.page,
+    /The planner did not start\. Open a direction yourself\./,
+  );
+  assert.match(missing.html, /class="status status--need"/);
+  assert.match(missing.html, /class="open-direction"/);
+  assert.doesNotMatch(missing.page, /Nothing needs you/);
+  assert.match(
+    bare({ plannerStarting: false }, null).page,
+    /The planner did not start\.(?! Open)/,
+  );
+  // A planner that starts, or waits for a slot or a usage window, says so with its own line.
+  const [planner] = scopingLab().agents;
+  assert.ok(planner);
+  for (const [status, live] of [
+    ['starting', 'Starting'],
+    ['slot', 'Waits for a free agent slot'],
+    ['usage', "Waits for Claude Code's usage window"],
+  ] as const) {
+    const lab = scopingLab({
+      agents: [
+        {
+          ...planner,
+          status,
+          live: {
+            state: status === 'starting' ? 'working' : 'waiting',
+            text: live,
+            since: ago(1),
+          },
+        },
+      ],
+    });
+    const page = text(
+      <LabHome
+        snapshot={snapshot(lab)}
+        lab={lab}
+        connection="live"
+        now={now}
+        actions={actions}
+        agentActions={agentActions}
+      />,
+    );
+    assert.ok(page.includes(`${live}.`), `${status}: ${page.slice(0, 200)}`);
+    assert.doesNotMatch(page, /keeps reading/);
+  }
 });
 
 await test("an answer in the person's own words replaces the options, and a call that is not the planner's waits on the Needs-you line", () => {
