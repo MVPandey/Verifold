@@ -463,6 +463,7 @@ function seededView(): LabView {
     ],
     brought: [],
     bringing: null,
+    undoneBrings: [],
     signoff: null,
   };
   const [checkRecord] = state.checks;

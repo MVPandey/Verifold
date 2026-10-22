@@ -70,6 +70,7 @@ import {
   type Direction as LabDirection,
   type FigureRead,
   type LabView,
+  type UndoneBring,
 } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
 import { runSummary, type RunLogPart, type RunRecord } from '../core/runs.ts';
@@ -103,6 +104,7 @@ import {
   type AgentStatus,
   type BoardPage,
   type BringGroup,
+  type UndoneGroup,
   type BringList,
   type BringRead,
   type Call,
@@ -782,6 +784,17 @@ function broughtByDirection(
   return counts;
 }
 
+/** Each direction's newest undo of a bring-in, by direction. */
+function undoneByDirection(
+  undone: readonly UndoneBring[],
+): Map<string, string> {
+  const newest = new Map<string, string>();
+  for (const entry of undone)
+    if (entry.undoneAt > (newest.get(entry.direction) ?? ''))
+      newest.set(entry.direction, entry.undoneAt);
+  return newest;
+}
+
 /** The lab's directions that hold up and that are ruled out, from one scan that the counts and the notify lists share. */
 interface Settled {
   readonly holdsUp: readonly LabDirection[];
@@ -810,6 +823,7 @@ function direction(
   disputed: (entry: LabDirection) => boolean,
   buildsOn: readonly LabDirection['buildsOn'][number][],
   brought: { readonly files: number; readonly lastAt: string } | undefined,
+  undoneAt: string | undefined,
 ): Direction {
   return {
     id: entry.id,
@@ -834,6 +848,7 @@ function direction(
     stoppedAt: entry.stoppedAt,
     head: entry.head,
     brought: brought ?? null,
+    undoneAt: undoneAt ?? null,
   };
 }
 
@@ -1537,6 +1552,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
   const brought = broughtByDirection(state.brought);
+  const undone = undoneByDirection(state.undoneBrings);
   const directions = keep(state.directions, level.directions, 'directions');
   const kept = new Set(directions.map((entry) => entry.id));
   return {
@@ -1584,6 +1600,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         disputed,
         keep(entry.buildsOn, level.buildsOn, 'buildsOn'),
         brought.get(entry.id),
+        undone.get(entry.id),
       ),
     ),
     directionCounts: directionCounts(state.directions, settled, disputed),
@@ -1719,18 +1736,60 @@ function bringList(list: LabBringList, branch: string): BringList {
   };
 }
 
-/** A direction's newest bring-ins, oldest first, within their bounds. */
+/**
+ * A direction's newest bring-ins, oldest first, within their bounds. A
+ * bring-in has an undo when Verifold knows the earlier version of each of
+ * its files, and the person did not undo it already.
+ */
 function bringHistory(
-  brought: readonly Brought[],
+  state: {
+    readonly brought: readonly Brought[];
+    readonly undoneBrings: readonly UndoneBring[];
+  },
   direction: string,
 ): BringGroup[] {
-  return bringGroups(brought, direction)
+  const key = (entry: { readonly at: string; readonly commit: string }) =>
+    `${entry.at}|${entry.commit}`;
+  const closed = new Set([
+    ...state.brought.flatMap((entry) =>
+      entry.direction === direction && entry.before === undefined
+        ? [key(entry)]
+        : [],
+    ),
+    ...state.undoneBrings.flatMap((entry) =>
+      entry.direction === direction ? [key(entry)] : [],
+    ),
+  ]);
+  return bringGroups(state.brought, direction)
     .slice(-apiLimits.bringGroups)
     .map((group) => ({
       at: group.at,
       commit: group.commit,
       paths: group.paths.slice(0, apiLimits.bringPaths),
       more: Math.max(0, group.paths.length - apiLimits.bringPaths),
+      undoable: !closed.has(key(group)),
+    }));
+}
+
+/** A direction's newest undone bring-ins, oldest first, within their bounds. */
+function undoneHistory(
+  undone: readonly UndoneBring[],
+  direction: string,
+): UndoneGroup[] {
+  const shown = apiLimits.bringPaths;
+  return undone
+    .filter((entry) => entry.direction === direction)
+    .slice(-apiLimits.bringGroups)
+    .map((entry) => ({
+      at: entry.at,
+      commit: entry.commit,
+      undoneAt: entry.undoneAt,
+      restored: entry.restored.slice(0, shown),
+      kept: entry.kept.slice(0, shown),
+      more:
+        entry.more +
+        Math.max(0, entry.restored.length - shown) +
+        Math.max(0, entry.kept.length - shown),
     }));
 }
 
@@ -2253,7 +2312,8 @@ export class ApiReader {
           ? bringList(read, workspaceName(entry.workspace))
           : null,
       error: typeof read === 'string' ? read : null,
-      history: bringHistory(view.state.brought, id),
+      history: bringHistory(view.state, id),
+      undone: undoneHistory(view.state.undoneBrings, id),
     };
   }
 
@@ -2548,6 +2608,7 @@ const actionNames = new Set<string>([
   'lab-signoff',
   'lab-bring-look',
   'lab-bring',
+  'lab-bring-undo',
   'lab-dismiss',
   'lab-away-dismiss',
   'lab-look',

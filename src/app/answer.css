@@ -359,6 +359,23 @@
   overflow-wrap: anywhere;
 }
 
+.bring-history__undo {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.bring-history__undo:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
 .bring-out,
 .bring-history {
   margin: 0;

@@ -93,6 +93,10 @@ export const labLimits = {
   recordText: 2_500_000,
   /** Files of one bring-in. */
   bringFiles: 1000,
+  /** Undone bring-ins in the lab's record: the newest ones stay. */
+  undoneBrings: 20,
+  /** Files in each list of an undone bring-in's record. */
+  undonePaths: 100,
   /** Directions in a sign-off. */
   signoffDirections: 500,
 };
@@ -220,8 +224,10 @@ export interface LabState {
   readonly calls: readonly Call[];
   /** The files that the person brought into the project folder, oldest first. */
   readonly brought: readonly Brought[];
-  /** A bring-in that Verifold began and did not end. */
+  /** A bring-in, or its undo, that Verifold began and did not end. */
   readonly bringing: Bringing | null;
+  /** The bring-ins that the person undid, oldest first. */
+  readonly undoneBrings: readonly UndoneBring[];
   /** The person's newest sign-off of the lab's answer. */
   readonly signoff: Signoff | null;
 }
@@ -236,6 +242,31 @@ export interface Brought {
   readonly path: string;
   readonly commit: string;
   readonly at: string;
+  /**
+   * The bring-in of this file from this direction that came before it, or
+   * null when the file had the direction's start content before. An undo
+   * puts that content back. Undefined: Verifold did not record it, so this
+   * bring-in has no undo.
+   */
+  readonly before?: { readonly commit: string; readonly at: string } | null;
+}
+
+/**
+ * A bring-in that the person undid, named by its direction, time, and
+ * commit: the files that went back, and the files that stayed because the
+ * person changed them after they came in.
+ */
+export interface UndoneBring {
+  readonly direction: string;
+  readonly commit: string;
+  readonly at: string;
+  readonly undoneAt: string;
+  /** The files that went back, at most `labLimits.undonePaths`. */
+  readonly restored: readonly string[];
+  /** The files that stayed as they are, at most `labLimits.undonePaths`. */
+  readonly kept: readonly string[];
+  /** The files that the two lists leave out. */
+  readonly more: number;
 }
 
 /**
@@ -250,6 +281,16 @@ export interface Bringing {
   readonly files: readonly string[];
   readonly at: string;
   readonly phase: 'checking' | 'copying';
+  /**
+   * An undo of the bring-in at `at` of `commit`: each file goes back from
+   * the content of `commit` to the content of its `to` commit.
+   */
+  readonly undo?: {
+    readonly at: string;
+    readonly to: readonly { readonly path: string; readonly commit: string }[];
+    /** The files of the bring-in that the person changed since: they stay as they are. */
+    readonly kept: readonly string[];
+  };
 }
 
 /** The person's sign-off of the lab's answer: each direction's verdict, its newest commit, and the check behind it. */
@@ -1396,15 +1437,95 @@ function parseBrought(value: unknown): Brought | null {
   const entry = object(value);
   const at = recordTime(entry?.at);
   const path = recordPath(entry?.path);
+  if (
+    !entry ||
+    !at ||
+    !path ||
+    typeof entry.direction !== 'string' ||
+    !directionId.test(entry.direction) ||
+    typeof entry.commit !== 'string' ||
+    !commitId.test(entry.commit)
+  )
+    return null;
+  const brought = {
+    direction: entry.direction,
+    path,
+    commit: entry.commit,
+    at,
+  };
+  // The file had the direction's start content before.
+  if (entry.before === null) return { ...brought, before: null };
+  const before = object(entry.before);
+  const beforeAt = recordTime(before?.at);
+  // Without a readable earlier bring-in, as in a record from before undo, this bring-in has no undo.
+  return before &&
+    beforeAt &&
+    typeof before.commit === 'string' &&
+    commitId.test(before.commit)
+    ? { ...brought, before: { commit: before.commit, at: beforeAt } }
+    : brought;
+}
+
+function parseUndone(value: unknown): UndoneBring | null {
+  const entry = object(value);
+  const at = recordTime(entry?.at);
+  const undoneAt = recordTime(entry?.undoneAt);
+  const paths = (list: unknown): string[] =>
+    Array.isArray(list)
+      ? list
+          .flatMap((path) => recordPath(path) ?? [])
+          .slice(0, labLimits.undonePaths)
+      : [];
   return entry &&
     at &&
-    path &&
+    undoneAt &&
     typeof entry.direction === 'string' &&
     directionId.test(entry.direction) &&
     typeof entry.commit === 'string' &&
     commitId.test(entry.commit)
-    ? { direction: entry.direction, path, commit: entry.commit, at }
+    ? {
+        direction: entry.direction,
+        commit: entry.commit,
+        at,
+        undoneAt,
+        restored: paths(entry.restored),
+        kept: paths(entry.kept),
+        more:
+          Number.isSafeInteger(entry.more) && (entry.more as number) > 0
+            ? (entry.more as number)
+            : 0,
+      }
     : null;
+}
+
+/** An undo in a bring-in record, or nothing when the record is a bring-in. */
+function parseUndo(value: unknown): Pick<Bringing, 'undo'> {
+  const entry = object(value);
+  const at = recordTime(entry?.at);
+  if (!entry || !at || !Array.isArray(entry.to)) return {};
+  const paths = (list: unknown): string[] =>
+    Array.isArray(list)
+      ? list
+          .flatMap((path) => recordPath(path) ?? [])
+          .slice(0, labLimits.bringFiles)
+      : [];
+  return {
+    undo: {
+      at,
+      to: entry.to
+        .flatMap((item) => {
+          const back = object(item);
+          const path = recordPath(back?.path);
+          return path &&
+            typeof back?.commit === 'string' &&
+            commitId.test(back.commit)
+            ? [{ path, commit: back.commit }]
+            : [];
+        })
+        .slice(0, labLimits.bringFiles),
+      kept: paths(entry.kept),
+    },
+  };
 }
 
 function parseSignoff(value: unknown): Signoff | null {
@@ -1587,9 +1708,15 @@ export function parseState(
               .slice(0, labLimits.bringFiles),
             at,
             phase: entry.phase,
+            ...parseUndo(entry.undo),
           }
         : null;
     })(),
+    undoneBrings: Array.isArray(value.undoneBrings)
+      ? value.undoneBrings
+          .flatMap((item) => parseUndone(item) ?? [])
+          .slice(-labLimits.undoneBrings)
+      : [],
     signoff: parseSignoff(value.signoff),
   };
 }

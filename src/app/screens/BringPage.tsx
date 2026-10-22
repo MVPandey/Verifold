@@ -7,6 +7,7 @@ import type {
   Direction,
   Lab,
   Snapshot,
+  UndoneGroup,
 } from '../../protocol/api.ts';
 import {
   bringKey,
@@ -226,27 +227,105 @@ export function BringFiles({
   );
 }
 
-/** The direction's bring-ins so far: when, which files, at which commit. */
+/** Files as one list: "a.md, b.md", with how many the list leaves out. */
+function fileList(paths: readonly string[], more: number): string {
+  return `${paths.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+}
+
+/** One bring-in that the person undid: which files went back, and which stayed as they are. */
+function UndoneLine({ entry }: { readonly entry: UndoneGroup }): ReactNode {
+  const { restored, kept, more } = entry;
+  return (
+    <li>
+      {clock(entry.undoneAt)}: you undid the bring-in of {clock(entry.at)}{' '}
+      <span className="muted">at {entry.commit.slice(0, 7)}</span>.
+      {restored.length > 0 && ` ${restored.join(', ')} went back.`}
+      {kept.length > 0 &&
+        ` ${kept.join(', ')} stayed as ${kept.length === 1 ? 'it is' : 'they are'}.`}
+      {more > 0 &&
+        ` ${more} more ${more === 1 ? 'file is' : 'files are'} not listed.`}
+    </li>
+  );
+}
+
+/**
+ * The direction's bring-ins so far: when, which files, at which commit, and
+ * an undo for each one that has it. Then the bring-ins that the person
+ * undid. Without `onUndo`, as when the lab's agents are not here, no undo
+ * shows.
+ */
 export function BringHistory({
   history,
+  undone = [],
+  onUndo,
+  undoBusy = false,
 }: {
   readonly history: readonly BringGroup[];
+  readonly undone?: readonly UndoneGroup[];
+  readonly onUndo?: (group: BringGroup) => void;
+  readonly undoBusy?: boolean;
 }): ReactNode {
-  if (!history.length) return null;
+  if (!history.length && !undone.length) return null;
+  const undoneAt = new Map(
+    undone.map((entry) => [`${entry.at}|${entry.commit}`, entry.undoneAt]),
+  );
+  const undoable = onUndo
+    ? history.filter((group) => group.undoable === true)
+    : [];
   return (
     <section className="section" aria-labelledby="brought-title">
       <h2 id="brought-title" className="section__title">
         Brought in
       </h2>
-      <ul className="bring-history">
-        {history.map((group) => (
-          <li key={`${group.at}|${group.commit}`}>
-            {clock(group.at)}: {group.paths.join(', ')}
-            {group.more > 0 && ` and ${group.more} more`}{' '}
-            <span className="muted">at {group.commit.slice(0, 7)}</span>
-          </li>
-        ))}
-      </ul>
+      {history.length > 0 && (
+        <ul className="bring-history">
+          {history.map((group) => {
+            const key = `${group.at}|${group.commit}`;
+            const when = undoneAt.get(key);
+            return (
+              <li key={key}>
+                {clock(group.at)}: {fileList(group.paths, group.more)}{' '}
+                <span className="muted">at {group.commit.slice(0, 7)}</span>
+                {when ? (
+                  <span className="muted"> · undone at {clock(when)}</span>
+                ) : (
+                  onUndo &&
+                  group.undoable === true && (
+                    <button
+                      type="button"
+                      className="bring-history__undo"
+                      disabled={undoBusy}
+                      aria-label={`Undo the bring-in of ${clock(group.at)}`}
+                      onClick={() => onUndo(group)}
+                    >
+                      Undo
+                    </button>
+                  )
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {undoable.length > 0 && (
+        <p className="bring-text bring-text--fine">
+          Undo puts each file of a bring-in back to the version that it had
+          before. A file that you changed since it came in stays as it is.
+        </p>
+      )}
+      {undone.length > 0 && (
+        <>
+          <p className="bring-text">Undone:</p>
+          <ul className="bring-history">
+            {undone.map((entry) => (
+              <UndoneLine
+                key={`${entry.at}|${entry.commit}|${entry.undoneAt}`}
+                entry={entry}
+              />
+            ))}
+          </ul>
+        </>
+      )}
     </section>
   );
 }
@@ -347,6 +426,32 @@ export function BringPage({
     return outcome;
   }, sameBring);
   const [done, setDone] = useState<string | null>(null);
+  // An undo names its bring-in by when it came in and its commit.
+  const undoPending = useRef(false);
+  const undo = useAction<{ readonly at: string; readonly commit: string }>(
+    async (sent, intent) => {
+      const outcome = await answerActions.undo(
+        direction.id,
+        sent.at,
+        sent.commit,
+        intent,
+      );
+      undoPending.current = 'ok' in outcome && outcome.pending === true;
+      return outcome;
+    },
+    (a, b) => a.at === b.at && a.commit === b.commit,
+  );
+  const doUndo = async (group: BringGroup): Promise<void> => {
+    if (undo.busy || bring.busy) return;
+    setDone(null);
+    if (await undo.submit({ at: group.at, commit: group.commit })) {
+      if (!undoPending.current)
+        setDone(
+          'Undone. The list below shows which files went back and which stayed as they are.',
+        );
+      reload();
+    }
+  };
   const doBring = async (): Promise<void> => {
     const files = [...chosen].sort();
     if (!commit || !files.length || bring.busy) return;
@@ -477,12 +582,26 @@ export function BringPage({
               {bring.error}
             </span>
           )}
+          {undo.error && (
+            <span role="alert" className="composer__error">
+              {undo.error}
+            </span>
+          )}
           {done && (
             <p role="status" className="bring-note bring-note--ok">
               {done}
             </p>
           )}
-          {shown && <BringHistory history={shown.history} />}
+          {shown && (
+            <BringHistory
+              history={shown.history}
+              undone={shown.undone ?? []}
+              {...(lab.agentsHere
+                ? { onUndo: (group: BringGroup) => void doUndo(group) }
+                : {})}
+              undoBusy={undo.busy || bring.busy}
+            />
+          )}
         </div>
       </main>
     </div>

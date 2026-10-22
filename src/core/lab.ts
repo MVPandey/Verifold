@@ -126,6 +126,7 @@ import {
   type LabState,
   type LabView,
   type LeftOut,
+  type UndoneBring,
   type Verdict,
   callEffect,
   callOptions,
@@ -168,6 +169,7 @@ import {
   labEnded,
   linkedNote,
   linkedText,
+  bringStoppedText,
   movingText,
   nameList,
   networkOf,
@@ -179,6 +181,8 @@ import {
   stateWord,
   stoppedText,
   todayLine,
+  undoneBrought,
+  undoStoppedText,
   untickReason,
   verdictLine,
   verdictWord,
@@ -212,6 +216,7 @@ export {
   type LabSessions,
   type LabState,
   type LabView,
+  type UndoneBring,
   type Verdict,
 };
 
@@ -553,6 +558,26 @@ export type FigureRead =
   | { readonly missing: string }
   | { readonly changed: string }
   | { readonly large: string };
+
+/** Why a bring-in, or an undo of one, cannot start while `bringing` runs. */
+function bringBusy(bringing: Bringing): string {
+  return bringing.undo
+    ? 'Verifold still puts the files of a bring-in back. Wait for it to end.'
+    : 'Verifold still brings in other files. Wait for it to end.';
+}
+
+/**
+ * What a copy gives each file (`want`) and the content that the file must
+ * have first (`base`), as commits. `want` is undefined for a file that the
+ * copy cannot give: it stays as it is.
+ */
+interface CopyPlan {
+  readonly want: (path: string) => string | undefined;
+  readonly base: (path: string) => string;
+}
+
+/** The files of a commit, as `treeAt` reads them. */
+type Tree = Awaited<ReturnType<typeof treeAt>>;
 
 export class Lab {
   private readonly root: string;
@@ -936,6 +961,7 @@ export class Lab {
           calls: [],
           brought: [],
           bringing: null,
+          undoneBrings: [],
           signoff: null,
           budget:
             budget === null
@@ -4773,9 +4799,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     );
     const looked = look.commit;
     return this.serial(async () => {
+      // Start over began while Verifold checked the files.
+      if (this.moving || this.suspended) fail(bringStoppedText);
       const state = this.current();
-      if (state.bringing)
-        fail('Verifold still brings in other files. Wait for it to end.');
+      if (state.bringing) fail(bringBusy(state.bringing));
       // The files were checked against these bring-ins and this look.
       if (
         state.brought !== brought ||
@@ -4831,10 +4858,15 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         const reason = error instanceof Error ? error.message : 'unknown error';
         if (!copying) {
           await this.endBring(record, [], null);
-          fail(`Nothing came in: ${reason}`);
+          // Start over took the lab before the copy began.
+          fail(
+            this.moving || this.suspended
+              ? bringStoppedText
+              : `Nothing came in: ${reason}`,
+          );
         }
         // A change in the project failed after others ended: each file counts by what the project has now.
-        const finished = await this.finishBring(record);
+        const finished = await this.finishCopy(record);
         await this.endBring(
           record,
           finished.done,
@@ -4860,13 +4892,162 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * Finish a bring-in whose copy began. A file with the commit's content
-   * and mode came in already. A file with its earlier content gets the
-   * commit's content now. A file that changed in another way stays as it
-   * is. A Git read that fails leaves every file that did not come in, with
-   * the error.
+   * Undo a bring-in of a direction, named by its time and commit. Each of
+   * its files goes back to the content that it had before it came in, when
+   * the project folder still has the content that came in. A file that the
+   * person changed since stays as it is. Returns the files that went back
+   * and the files that stayed.
    */
-  private async finishBring(record: Bringing): Promise<{
+  async undoBring(
+    id: unknown,
+    at: unknown,
+    commit: unknown,
+  ): Promise<{
+    readonly restored: readonly string[];
+    readonly kept: readonly string[];
+  }> {
+    return this.serial(async () => {
+      const state = this.current();
+      const direction = this.direction(
+        typeof id === 'string' && directionId.test(id)
+          ? id
+          : fail('Choose a direction of the lab.'),
+      );
+      if (typeof at !== 'string' || typeof commit !== 'string')
+        fail('Choose a bring-in of this direction.');
+      if (
+        state.undoneBrings.some(
+          (entry) =>
+            entry.direction === direction.id &&
+            entry.at === at &&
+            entry.commit === commit,
+        )
+      )
+        fail('You undid this bring-in already.');
+      const entries = state.brought.filter(
+        (entry) =>
+          entry.direction === direction.id &&
+          entry.at === at &&
+          entry.commit === commit,
+      );
+      if (!entries.length)
+        fail(
+          'This bring-in is not in the lab now. Its files came in again since, or the page is old. Reload the page.',
+        );
+      if (state.bringing) fail(bringBusy(state.bringing));
+      if (entries.some((entry) => entry.before === undefined))
+        fail(
+          'Verifold has no record of the earlier version of these files, so this bring-in has no undo.',
+        );
+      const draft: Bringing = {
+        direction: direction.id,
+        commit,
+        files: entries.map((entry) => entry.path),
+        at: new Date().toISOString(),
+        phase: 'checking',
+        undo: {
+          at,
+          to: entries.map((entry) => ({
+            path: entry.path,
+            commit: entry.before?.commit ?? direction.workspace.start,
+          })),
+          kept: [],
+        },
+      };
+      const plan = this.copyPlan(direction, draft);
+      const sorted = await this.sortFiles(direction, draft.files, plan, commit);
+      // A file with its earlier content already goes back without a copy.
+      const back = [...sorted.done, ...sorted.again];
+      const kept = sorted.left;
+      if (!back.length)
+        fail(
+          `Nothing went back. You changed ${kept.length === 1 ? 'this file' : 'these files'} after ${kept.length === 1 ? 'it' : 'they'} came in: ${nameList(kept)}.`,
+        );
+      const record: Bringing = {
+        ...draft,
+        files: back,
+        undo: {
+          at,
+          to: (draft.undo?.to ?? []).filter((entry) =>
+            back.includes(entry.path),
+          ),
+          kept,
+        },
+      };
+      // The record goes first, so a stop in the middle leaves no half copy.
+      await this.saveState({ ...state, bringing: record });
+      const copy = sorted.again;
+      let copying = false;
+      let result: Awaited<ReturnType<typeof integrate>> = { applied: [] };
+      try {
+        if (copy.length)
+          result = await integrate(
+            this.root,
+            direction.workspace,
+            commit,
+            copy,
+            {
+              bases: new Map(copy.map((path) => [path, commit])),
+              versions: new Map(
+                copy.flatMap((path) => {
+                  const want = plan.want(path);
+                  return want ? [[path, want] as const] : [];
+                }),
+              ),
+              staged: async () => {
+                await this.saveState({
+                  ...this.current(),
+                  bringing: { ...record, phase: 'copying' },
+                });
+                copying = true;
+              },
+            },
+          );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'unknown error';
+        if (!copying) {
+          await this.endUndo(record, [], null);
+          // Start over took the lab before the copy began.
+          fail(
+            this.moving || this.suspended
+              ? undoStoppedText
+              : `Nothing went back: ${reason}`,
+          );
+        }
+        // A change in the project failed after others ended: each file counts by what the project has now.
+        const finished = await this.finishCopy(record);
+        await this.endUndo(
+          record,
+          finished.done,
+          `The person undid a bring-in of ${direction.id} from ${commit.slice(0, 7)}, and ${finished.done.length} of ${back.length} files went back. The others stayed as they are.`,
+        );
+        fail(
+          `Only ${finished.done.length} of ${back.length} files went back${finished.done.length ? `: ${nameList(finished.done)}` : ''}. The copy failed: ${finished.error ?? reason} Put the others back by hand.`,
+        );
+      }
+      if ('conflicts' in result) {
+        await this.endUndo(record, [], null);
+        fail(
+          `Nothing went back. ${result.conflicts.length === 1 ? 'This file' : 'These files'} changed while Verifold checked them: ${nameList(result.conflicts)}. Undo the bring-in again.`,
+        );
+      }
+      await this.endUndo(
+        record,
+        back,
+        `The person undid a bring-in of ${direction.id} from ${commit.slice(0, 7)}: ${back.length} ${back.length === 1 ? 'file went' : 'files went'} back to ${back.length === 1 ? 'its' : 'their'} earlier version: ${nameList(back)}.${kept.length ? ` ${kept.length === 1 ? 'This file' : 'These files'} stayed as ${kept.length === 1 ? 'it is' : 'they are'}, because the person changed ${kept.length === 1 ? 'it' : 'them'}: ${nameList(kept)}.` : ''}`,
+      );
+      return { restored: back, kept };
+    });
+  }
+
+  /**
+   * Finish a bring-in, or its undo, whose copy began. A file with the
+   * content and mode that the copy gives is done. A file with the content
+   * that it must have first gets its new content now. A file that changed
+   * in another way stays as it is. A Git read that fails leaves every file
+   * that is not done, with the error.
+   */
+  private async finishCopy(record: Bringing): Promise<{
     readonly done: string[];
     readonly left: string[];
     readonly error: string | null;
@@ -4880,11 +5061,16 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     if (!direction) error = 'Its direction is gone.';
     else
       try {
-        const sorted = await this.sortBrought(direction, record);
+        const plan = this.copyPlan(direction, record);
+        const sorted = await this.sortFiles(
+          direction,
+          record.files,
+          plan,
+          record.commit,
+        );
         done = sorted.done;
         left = sorted.left;
         if (sorted.again.length) {
-          const bases = this.bringBases(direction.id);
           try {
             await integrate(
               this.root,
@@ -4893,9 +5079,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
               sorted.again,
               {
                 bases: new Map(
+                  sorted.again.map((path) => [path, plan.base(path)]),
+                ),
+                versions: new Map(
                   sorted.again.flatMap((path) => {
-                    const base = bases.get(path);
-                    return base ? [[path, base.commit] as const] : [];
+                    const want = plan.want(path);
+                    return want ? [[path, want] as const] : [];
                   }),
                 ),
               },
@@ -4905,10 +5094,12 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
               failure instanceof Error ? failure.message : 'unknown error';
           }
           // Each file of the try counts by what the project folder has now.
-          const after = await this.sortBrought(direction, {
-            ...record,
-            files: sorted.again,
-          });
+          const after = await this.sortFiles(
+            direction,
+            sorted.again,
+            plan,
+            record.commit,
+          );
           done = [...done, ...after.done];
           left = [...left, ...after.again, ...after.left];
         }
@@ -4921,36 +5112,56 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * Sort the files of a bring-in by what the project folder has, by Git
-   * blob ID and mode: the commit's file (done), its base (again), or other
-   * content (left). A file whose base commit Verifold cannot read is left.
+   * What a bring-in, or its undo, gives each file, and the content that the
+   * file must have first. A bring-in gives its commit's content over the
+   * file's base: the content that came in from this direction last time, or
+   * its start. An undo gives each file the content that it had before the
+   * bring-in, over the bring-in's own content.
    */
-  private async sortBrought(
+  private copyPlan(direction: Direction, record: Bringing): CopyPlan {
+    const undo = record.undo;
+    if (undo) {
+      const to = new Map(undo.to.map((entry) => [entry.path, entry.commit]));
+      return { want: (path) => to.get(path), base: () => record.commit };
+    }
+    const bases = this.bringBases(direction.id);
+    return {
+      want: () => record.commit,
+      base: (path) => bases.get(path)?.commit ?? direction.workspace.start,
+    };
+  }
+
+  /**
+   * Sort files by what the project folder has, by Git blob ID and mode: the
+   * content that the copy gives (done), the content that the file must have
+   * first (again), or other content (left). A file whose earlier content
+   * Verifold cannot read is left. `like` is a commit of the repository, for
+   * the length of its blob IDs.
+   */
+  private async sortFiles(
     direction: Direction,
-    record: Bringing,
+    files: readonly string[],
+    plan: CopyPlan,
+    like: string,
   ): Promise<{ done: string[]; again: string[]; left: string[] }> {
     const { workspace } = direction;
-    const bases = this.bringBases(direction.id);
-    const base = (path: string): string =>
-      bases.get(path)?.commit ?? workspace.start;
-    const target = await treeAt(
-      this.root,
-      workspace,
-      record.commit,
-      record.files,
-    );
-    const trees = new Map<string, Awaited<ReturnType<typeof treeAt>>>();
-    for (const commit of new Set(record.files.map(base)))
+    const groups = (
+      pick: (path: string) => string | undefined,
+    ): Map<string, string[]> => {
+      const found = new Map<string, string[]>();
+      for (const path of files) {
+        const commit = pick(path);
+        if (commit) found.set(commit, [...(found.get(commit) ?? []), path]);
+      }
+      return found;
+    };
+    const wanted = new Map<string, Tree>();
+    for (const [commit, paths] of groups(plan.want))
+      wanted.set(commit, await treeAt(this.root, workspace, commit, paths));
+    const bases = new Map<string, Tree>();
+    for (const [commit, paths] of groups(plan.base))
       try {
-        trees.set(
-          commit,
-          await treeAt(
-            this.root,
-            workspace,
-            commit,
-            record.files.filter((path) => base(path) === commit),
-          ),
-        );
+        bases.set(commit, await treeAt(this.root, workspace, commit, paths));
       } catch {
         // These files have no base to compare with.
       }
@@ -4959,13 +5170,13 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       again: [] as string[],
       left: [] as string[],
     };
-    for (const path of record.files) {
+    for (const path of files) {
+      const commit = plan.want(path);
+      const want = commit === undefined ? undefined : wanted.get(commit);
+      const base = bases.get(plan.base(path));
       const now = await this.projectFile(path);
-      const want = target.get(path);
-      const tree = trees.get(base(path));
-      const before = tree?.get(path);
-      if (sameFile(now, want, record.commit)) sorted.done.push(path);
-      else if (tree && sameFile(now, before, record.commit))
+      if (want && sameFile(now, want.get(path), like)) sorted.done.push(path);
+      else if (want && base && sameFile(now, base.get(path), like))
         sorted.again.push(path);
       else sorted.left.push(path);
     }
@@ -5028,28 +5239,116 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * A bring-in that an earlier owner did not end. In `checking`, nothing
-   * came in, and its temporary copies go. In `copying`, every file had
-   * passed its check, so the copy finishes now.
+   * End an undo of a bring-in. Each file that went back has the bring-in
+   * before it as its base again, or none, and the lab's record keeps the
+   * undo: the files that went back and those that stayed as they are. When
+   * no file went back, only the record of the undo in progress goes. The
+   * board says `line`, unless it is null. A save that fails is tried again
+   * with the next change, as for a bring-in.
+   */
+  private async endUndo(
+    record: Bringing,
+    restored: readonly string[],
+    line: string | null,
+  ): Promise<void> {
+    const state = this.state;
+    const undo = record.undo;
+    if (!state || !undo) return;
+    const back = new Set(restored);
+    const stayed = [
+      ...undo.kept,
+      ...record.files.filter((path) => !back.has(path)),
+    ];
+    const shown = labLimits.undonePaths;
+    this.state = {
+      ...state,
+      bringing: null,
+      ...(restored.length
+        ? {
+            brought: undoneBrought(
+              state.brought,
+              record.direction,
+              state.brought.filter(
+                (entry) =>
+                  entry.direction === record.direction &&
+                  entry.at === undo.at &&
+                  entry.commit === record.commit &&
+                  back.has(entry.path),
+              ),
+            ),
+            undoneBrings: [
+              ...state.undoneBrings,
+              {
+                direction: record.direction,
+                commit: record.commit,
+                at: undo.at,
+                undoneAt: new Date().toISOString(),
+                restored: restored.slice(0, shown),
+                kept: stayed.slice(0, shown),
+                more:
+                  Math.max(0, restored.length - shown) +
+                  Math.max(0, stayed.length - shown),
+              } satisfies UndoneBring,
+            ].slice(-labLimits.undoneBrings),
+          }
+        : {}),
+    };
+    await this.stateFile
+      .save()
+      .catch((error: unknown) =>
+        this.options.progress?.(
+          `Verifold could not save the lab after an undo of a bring-in: ${error instanceof Error ? error.message : 'unknown error'}`,
+        ),
+      );
+    if (line)
+      await this.add({
+        author: 'verifold',
+        kind: 'status',
+        direction: record.direction,
+        text: clip(line, boardLimits.text),
+        mentions: [],
+        artifacts: [],
+      }).catch(() => {});
+  }
+
+  /**
+   * A bring-in, or its undo, that an earlier owner did not end. In
+   * `checking`, no file changed, and the temporary copies go. In `copying`,
+   * every file had passed its check, so the copy finishes now.
    */
   private async recoverBring(): Promise<void> {
     const record = this.state?.bringing;
     if (!record) return;
     if (record.phase === 'checking') {
       await clearStaged(this.root).catch(() => {});
-      await this.endBring(
-        record,
-        [],
-        `Verifold stopped while it checked files of ${record.direction} to bring in, so nothing came in. Bring them in again.`,
-      );
+      if (record.undo)
+        await this.endUndo(
+          record,
+          [],
+          `Verifold stopped while it checked files of ${record.direction} to put back, so nothing went back. Undo the bring-in again.`,
+        );
+      else
+        await this.endBring(
+          record,
+          [],
+          `Verifold stopped while it checked files of ${record.direction} to bring in, so nothing came in. Bring them in again.`,
+        );
       return;
     }
-    const { done, left, error } = await this.finishBring(record);
-    await this.endBring(
-      record,
-      done,
-      `Verifold stopped while it brought files of ${record.direction} into the project folder, and finished the copy now: ${done.length} of ${record.files.length} files came in.${left.length ? ` Check these in your project folder: ${nameList(left)}.` : ''}${error ? ` ${error}` : ''}`,
-    );
+    const { done, left, error } = await this.finishCopy(record);
+    const check = `${left.length ? ` Check these in your project folder: ${nameList(left)}.` : ''}${error ? ` ${error}` : ''}`;
+    if (record.undo)
+      await this.endUndo(
+        record,
+        done,
+        `Verifold stopped while it put files of ${record.direction} back, and finished it now: ${done.length} of ${record.files.length} files went back.${check}`,
+      );
+    else
+      await this.endBring(
+        record,
+        done,
+        `Verifold stopped while it brought files of ${record.direction} into the project folder, and finished the copy now: ${done.length} of ${record.files.length} files came in.${check}`,
+      );
   }
 
   /**

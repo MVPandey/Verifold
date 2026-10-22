@@ -284,7 +284,7 @@ export function runsLine(lab: Lab): string {
 }
 
 /** Bring-in actions that run in the background. */
-const bringActions = new Set(['lab-bring-look', 'lab-bring']);
+const bringActions = new Set(['lab-bring-look', 'lab-bring', 'lab-bring-undo']);
 
 /** The bring-in actions of a direction in the background, running or failed, oldest first. */
 function bringWorks(lab: Lab, direction: string): Work[] {
@@ -299,15 +299,15 @@ export function bringWork(lab: Lab, direction: string): Work | null {
 }
 
 /**
- * When a bring-in page reads its files again: its direction's newest commit
- * or bring-ins changed, or a bring-in action of it started, ended, or
+ * When a bring-in page reads its files again: its direction's newest commit,
+ * bring-ins, or undos changed, or a bring-in action of it started, ended, or
  * failed.
  */
 export function bringKey(lab: Lab, direction: Direction): string {
   const works = bringWorks(lab, direction.id)
     .map((work) => `${work.action}:${work.at}:${work.error ?? ''}`)
     .join(',');
-  return `${direction.head}|${direction.brought?.files ?? 0}|${direction.brought?.lastAt ?? ''}|${works}`;
+  return `${direction.head}|${direction.brought?.files ?? 0}|${direction.brought?.lastAt ?? ''}|${direction.undoneAt ?? ''}|${works}`;
 }
 
 /** The files that a bring-in ticks first: those it can bring in that did not come in already. */

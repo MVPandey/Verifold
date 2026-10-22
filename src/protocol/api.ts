@@ -446,6 +446,8 @@ export interface Direction {
    * version 1.
    */
   readonly brought?: { readonly files: number; readonly lastAt: string } | null;
+  /** When the person last undid a bring-in from it, or null. Added after version 1. */
+  readonly undoneAt?: string | null;
 }
 
 /** What a turn's tool calls did, by kind. */
@@ -916,6 +918,27 @@ export interface BringGroup {
   readonly paths: readonly string[];
   /** Paths that the group leaves out past its bound. */
   readonly more: number;
+  /**
+   * The person can undo it (`lab-bring-undo`): Verifold knows the earlier
+   * version of each of its files, and it was not undone. Added after
+   * version 1.
+   */
+  readonly undoable?: boolean;
+}
+
+/**
+ * A bring-in that the person undid: when it came in and at which commit,
+ * when they undid it, the files that went back, and the files that stayed
+ * as they are. Added after version 1.
+ */
+export interface UndoneGroup {
+  readonly at: string;
+  readonly commit: string;
+  readonly undoneAt: string;
+  readonly restored: readonly string[];
+  readonly kept: readonly string[];
+  /** Paths that the two lists leave out. */
+  readonly more: number;
 }
 
 /**
@@ -928,6 +951,8 @@ export interface BringRead {
   readonly error: string | null;
   /** The direction's bring-ins so far, oldest first. */
   readonly history: readonly BringGroup[];
+  /** The direction's bring-ins that the person undid, oldest first. Added after version 1. */
+  readonly undone?: readonly UndoneGroup[];
 }
 
 /**
@@ -1267,6 +1292,17 @@ export interface ActionBodies {
     readonly direction: string;
     readonly commit: string;
     readonly files: readonly string[];
+    readonly key?: string;
+  };
+  /**
+   * Undo a bring-in of a direction, named by its `at` and `commit`: each of
+   * its files goes back to its earlier version, unless the person changed it
+   * since. Added after version 1.
+   */
+  'lab-bring-undo': {
+    readonly direction: string;
+    readonly at: string;
+    readonly commit: string;
     readonly key?: string;
   };
   /**

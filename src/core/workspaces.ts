@@ -1434,9 +1434,11 @@ export async function copyAt(
  * the place of a folder and a folder the place of a file, and each new
  * file is renamed into place. `bases` names another commit whose content a
  * file must match instead of the start, such as the version that came in
- * before. `staged` runs after every check passed and every temporary file
- * is written, before the first change in the project. When it throws,
- * nothing is copied.
+ * before. `versions` names another commit whose content a file gets instead
+ * of `version`, such as its content before a bring-in, for an undo.
+ * `staged` runs after every check passed and every temporary file is
+ * written, before the first change in the project. When it throws, nothing
+ * is copied.
  */
 export async function integrate(
   root: string,
@@ -1445,6 +1447,7 @@ export async function integrate(
   paths: readonly string[],
   options: {
     readonly bases?: ReadonlyMap<string, string>;
+    readonly versions?: ReadonlyMap<string, string>;
     readonly staged?: () => Promise<void>;
   } = {},
 ): Promise<
@@ -1452,7 +1455,20 @@ export async function integrate(
   | { readonly conflicts: readonly string[] }
 > {
   const repo = await workspaceRepo(root, workspace);
-  const tree = await treeAt(root, workspace, version, paths);
+  const versionOf = (path: string): string =>
+    options.versions?.get(path) ?? version;
+  const tree = new Map<
+    string,
+    { readonly mode: string; readonly id: string; readonly bytes: number }
+  >();
+  for (const commit of new Set(paths.map(versionOf)))
+    for (const [path, entry] of await treeAt(
+      root,
+      workspace,
+      commit,
+      paths.filter((path) => versionOf(path) === commit),
+    ))
+      tree.set(path, entry);
   const deleted = new Set(paths.filter((path) => !tree.has(path)));
   const conflicts: string[] = [];
   const plan: { path: string; content: Buffer | null }[] = [];

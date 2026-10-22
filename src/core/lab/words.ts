@@ -186,9 +186,18 @@ export const stoppedText =
 export const movingText =
   'Verifold is moving the lab to the archive. Try again in a moment.';
 
+/** A bring-in that Start over stopped before the copy: the lab moves to the archive, so a retry is no help. */
+export const bringStoppedText =
+  'Nothing came in: Start over stopped the bring-in.';
+
+/** An undo of a bring-in that Start over stopped before the copy. */
+export const undoStoppedText =
+  'Nothing went back: Start over stopped the undo.';
+
 /**
  * The bring-ins with the files of `record` that came in: each file of a
- * direction keeps only its newest base. Without files, the same list.
+ * direction keeps only its newest base, and the bring-in that it replaced,
+ * for an undo. Without files, the same list.
  */
 export function withBrought(
   list: readonly Brought[],
@@ -198,6 +207,13 @@ export function withBrought(
   if (!done.length) return list;
   const at = new Date().toISOString();
   const now = new Set(done);
+  const earlier = new Map(
+    list.flatMap((entry) =>
+      entry.direction === record.direction && now.has(entry.path)
+        ? [[entry.path, { commit: entry.commit, at: entry.at }] as const]
+        : [],
+    ),
+  );
   return [
     ...list.filter(
       (entry) => entry.direction !== record.direction || !now.has(entry.path),
@@ -207,7 +223,38 @@ export function withBrought(
       path,
       commit: record.commit,
       at,
+      before: earlier.get(path) ?? null,
     })),
+  ];
+}
+
+/**
+ * The bring-ins after an undo of a direction's files: each file that went
+ * back has its earlier bring-in as its base again, or none when it had the
+ * direction's start content. That earlier bring-in has no undo of its own.
+ */
+export function undoneBrought(
+  list: readonly Brought[],
+  direction: string,
+  restored: readonly Brought[],
+): readonly Brought[] {
+  const back = new Set(restored.map((entry) => entry.path));
+  return [
+    ...list.filter(
+      (entry) => entry.direction !== direction || !back.has(entry.path),
+    ),
+    ...restored.flatMap((entry) =>
+      entry.before
+        ? [
+            {
+              direction,
+              path: entry.path,
+              commit: entry.before.commit,
+              at: entry.before.at,
+            },
+          ]
+        : [],
+    ),
   ];
 }
 
