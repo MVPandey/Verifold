@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmod,
   link,
   mkdir,
   mkdtemp,
@@ -19,6 +20,8 @@ import {
   changes,
   commitVersion,
   diff,
+  diffIn,
+  gitEnvironment,
   inScope,
   integrate,
   leftOut,
@@ -297,6 +300,155 @@ await test('Git gets no RunPod variables', async (t) => {
   const seen = await readFile(log, 'utf8');
   assert.match(seen, /key=none/);
   assert.doesNotMatch(seen, /test-runpod-key/);
+});
+
+/** A program that a repository's settings name. It writes `ran.txt` next to itself when it runs. */
+async function settingsTool(
+  t: test.TestContext,
+): Promise<{ readonly tool: string; readonly marker: string }> {
+  const tools = await folder(t);
+  const marker = join(tools, 'ran.txt');
+  const tool = join(tools, 'tool.sh');
+  await writeFile(
+    tool,
+    `#!/bin/sh\necho "$0 $*" >> "${marker}"\necho converted\n`,
+  );
+  await chmod(tool, 0o755);
+  return { tool, marker };
+}
+
+await test("Verifold's own diffs never run text-conversion or external diff programs, and a file monitor never runs", async (t) => {
+  const { tool, marker } = await settingsTool(t);
+  const settings = (dir: string): void => {
+    run(dir, 'config', 'diff.x.textconv', tool);
+    run(dir, 'config', 'diff.external', tool);
+    run(dir, 'config', 'core.fsmonitor', tool);
+  };
+  const raw = (text: string): void => {
+    assert.match(text, /^-one$/m);
+    assert.match(text, /^\+two$/m);
+    assert.doesNotMatch(text, /converted/);
+  };
+
+  // A Git project: the direction and task diffs read its worktrees, and History reads the project repository.
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, '.gitattributes', '*.txt diff=x\n');
+  await write(root, 'results/a.txt', 'one\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  // After the fixture's own commits: from here on, only Verifold runs Git.
+  settings(root);
+  const workspace = await allocate(root, {
+    name: 'task-7-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  await write(join(root, workspace.path), 'results/a.txt', 'two\n');
+  const version = await commitVersion(root, workspace, ['results'], 'V1');
+  await write(join(root, workspace.path), 'results/b.txt', 'b\n');
+  await snapshot(root, workspace, 'S1');
+  assert.deepEqual(
+    (await changes(root, workspace, workspace.start, version.commit)).map(
+      (file) => file.path,
+    ),
+    ['results/a.txt'],
+  );
+  raw(
+    (
+      await diff(
+        root,
+        workspace,
+        workspace.start,
+        version.commit,
+        'results/a.txt',
+      )
+    ).text,
+  );
+  raw(
+    (await diffIn(root, null, workspace.start, version.commit, 'results/a.txt'))
+      .text,
+  );
+
+  // A folder project: History reads a task folder's own Git directory.
+  const plain = await folder(t);
+  await write(plain, 'out/a.txt', 'one\n');
+  const task = await allocate(plain, {
+    name: 'task-8-r1-a1',
+    writable: ['out'],
+    inputs: [],
+  });
+  assert.equal(task.kind, 'folder');
+  const gitDir = join(plain, '.verifold/tasks/git/task-8-r1-a1');
+  run(plain, '--git-dir', gitDir, 'config', 'diff.x.textconv', tool);
+  run(plain, '--git-dir', gitDir, 'config', 'diff.external', tool);
+  run(plain, '--git-dir', gitDir, 'config', 'core.fsmonitor', tool);
+  await write(join(plain, task.path), '.gitattributes', '*.txt diff=x\n');
+  await write(join(plain, task.path), 'out/a.txt', 'two\n');
+  const saved = await commitVersion(plain, task, ['out'], 'V1');
+  raw(
+    (await diffIn(plain, gitDir, task.start, saved.commit, 'out/a.txt')).text,
+  );
+
+  assert.equal(existsSync(marker), false);
+});
+
+await test("a submodule's diff shows its commits and runs no program from the submodule's settings", async (t) => {
+  const { tool, marker } = await settingsTool(t);
+  const sub = await folder(t);
+  run(sub, 'init', '-q');
+  await write(sub, '.gitattributes', '*.txt diff=x\n');
+  await write(sub, 'a.txt', 'one\n');
+  run(sub, 'add', '.');
+  run(sub, 'commit', '-qm', 'one');
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'README.md', 'project\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  run(
+    root,
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    sub,
+    'sub',
+  );
+  run(root, 'commit', '-qm', 'add the submodule');
+  const from = run(root, 'rev-parse', 'HEAD').trim();
+  await write(join(root, 'sub'), 'a.txt', 'two\n');
+  run(join(root, 'sub'), 'commit', '-qam', 'two');
+  run(root, 'add', 'sub');
+  run(root, 'commit', '-qm', 'move the submodule');
+  const to = run(root, 'rev-parse', 'HEAD').trim();
+  // A person's own settings can ask for a submodule's full diff, which Git runs as a child `git diff` inside it.
+  run(root, 'config', 'diff.submodule', 'diff');
+  const own = join(root, '.git/modules/sub');
+  run(root, '--git-dir', own, 'config', 'diff.x.textconv', tool);
+  run(root, '--git-dir', own, 'config', 'diff.external', tool);
+
+  const shown = (await diffIn(root, null, from, to, 'sub')).text;
+  assert.match(shown, /^-Subproject commit [0-9a-f]{40}$/m);
+  assert.match(shown, /^\+Subproject commit [0-9a-f]{40}$/m);
+  assert.equal(existsSync(marker), false);
+});
+
+await test('Git gets no Git variables, in any case of letters', (t) => {
+  const saved = { ...process.env };
+  t.after(() => {
+    for (const key of Object.keys(process.env))
+      if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  });
+  process.env.Git_External_Diff = '/elsewhere/tool';
+  process.env.git_dir = '/elsewhere/.git';
+  const env = gitEnvironment();
+  assert.deepEqual(
+    Object.keys(env).filter((key) => key.toUpperCase().startsWith('GIT_')),
+    ['GIT_TERMINAL_PROMPT'],
+  );
 });
 
 await test('Git variables from the environment cannot redirect a workspace to another repository', async (t) => {
