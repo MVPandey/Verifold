@@ -80,6 +80,41 @@ button {
   font-weight: 700;
 }
 
+/* Settings and Profile in the ⋯ menu, for a narrow window only. */
+.header__in-menu {
+  display: none;
+}
+
+/*
+ * A window too narrow for the app's bar on one row: Settings and Profile go
+ * into the ⋯ menu, the project's name gets the room that is left, and the
+ * money line goes on its own row under the bar.
+ */
+@media (max-width: 1023px) {
+  .header--app > .header__spacer,
+  .header--app > .header__link {
+    display: none;
+  }
+
+  .header__in-menu {
+    display: block;
+  }
+
+  .header--app > .header__project {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header--app > .header__money,
+  .header--app > [role='alert'] {
+    order: 1;
+    flex-basis: 100%;
+  }
+}
+
 .muted {
   color: var(--muted);
 }
@@ -583,6 +618,10 @@ button {
 @media (max-width: 600px) {
   .header {
     padding: 8px 16px;
+  }
+
+  .header--app {
+    gap: 10px;
   }
 
   .row {
