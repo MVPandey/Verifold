@@ -5944,8 +5944,9 @@ await test('a check that ran when Verifold stopped starts again with a fresh ses
   };
   await started(1);
   const before = lab.lab.view()?.checks[0]?.session;
-  // A close stops the check, not its checker: the new owner starts it again with a fresh session, and no stop counts.
+  // A close stops the check, not its checker: it ends the checker's session, the new owner starts the check again with a fresh one, and no stop counts.
   await lab.restart();
+  assert.equal((await readRecord(lab.root, before ?? ''))?.status, 'ended');
   await started(2);
   assert.notEqual(lab.lab.view()?.checks[0]?.session, before);
   assert.equal(lab.lab.view()?.checks[0]?.restarts, 0);
@@ -5972,6 +5973,48 @@ await test('a check that ran when Verifold stopped starts again with a fresh ses
   );
 });
 
+await test('a stop of Verifold keeps the minutes and turns that a check used, so restarts give it no more of either', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude'] });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  await lab.script('k-1', [
+    { calls: [{ name: 'WAIT' }] },
+    { calls: [{ name: 'WAIT' }] },
+    { calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  const checker = (): { endsAt: number; turns: number } | undefined =>
+    (
+      lab.lab as unknown as {
+        checkers: Map<string, { endsAt: number; turns: number }>;
+      }
+    ).checkers.get('k-1');
+  const started = (sessions: number): Promise<void> =>
+    until(
+      async () =>
+        lab.lab.view()?.checks[0]?.state === 'running' &&
+        Boolean(lab.lab.view()?.checks[0]?.session) &&
+        (await lab.inputs('k-1')).length === sessions,
+    );
+  await started(1);
+  // The check used 50 of its 60 minutes and 2 of its turns.
+  const first = checker();
+  assert.ok(first);
+  first.endsAt = Date.now() + 10 * 60_000;
+  first.turns = 2;
+  for (const sessions of [2, 3]) {
+    await lab.restart();
+    await started(sessions);
+    const next = checker();
+    assert.ok(next);
+    const left = next.endsAt - Date.now();
+    assert.ok(left > 9 * 60_000 && left <= 10 * 60_000, `${left} ms left`);
+    assert.equal(next.turns, 2);
+    assert.equal(lab.lab.view()?.checks[0]?.restarts, 0);
+  }
+});
+
 await test('a checker whose session cannot be saved ends, and the check starts again after its wait', async (t) => {
   const lab = await fixture(t, { harnesses: ['claude'] });
   await claimWithRun(lab, [], 'd-2-alpha');
@@ -5980,12 +6023,16 @@ await test('a checker whose session cannot be saved ends, and the check starts a
     { calls: [{ name: 'WAIT' }] },
   ]);
   // The save of the first checker's session fails once.
-  const file = (lab.lab as unknown as { stateFile: { save(): Promise<void> } })
-    .stateFile;
+  const inside = lab.lab as unknown as {
+    stateFile: { save(): Promise<void> };
+    state: LabState | null;
+  };
+  const file = inside.stateFile;
   const save = file.save.bind(file);
   let failing = false;
   file.save = () => {
-    if (!failing) return save();
+    const check = inside.state?.checks.find((entry) => entry.id === 'k-1');
+    if (!failing || !check?.session) return save();
     failing = false;
     return Promise.reject(new Error('The disk is full.'));
   };
