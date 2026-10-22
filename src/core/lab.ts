@@ -4293,6 +4293,41 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     };
   }
 
+  /**
+   * For the desk: the figure that a post cites, such as p-12.0, as the post
+   * pinned it: its path, and its bytes at that commit. Null for a proof that
+   * is not a figure of the lab, and for bytes that do not match the post's
+   * record. It refuses a figure larger than `bytes`.
+   */
+  async figure(
+    proof: string,
+    bytes: number,
+  ): Promise<{ readonly path: string; readonly content: Buffer } | null> {
+    const place = proofRef(proof);
+    const post = place ? this.board.get(place.post) : undefined;
+    const cited = place ? post?.artifacts[place.index] : undefined;
+    if (cited?.type !== 'figure') return null;
+    const id = cited.direction ?? post?.direction;
+    const direction = this.state?.directions.find((entry) => entry.id === id);
+    if (!direction) return null;
+    if (cited.bytes > bytes)
+      fail(
+        `This figure is larger than ${bytes / 1024 / 1024} MB, so Verifold does not show it.`,
+      );
+    // Only a regular file at the pinned commit, never a link or what the folder holds now.
+    const content = await readFileAt(
+      this.root,
+      direction.workspace,
+      cited.commit,
+      cited.path,
+    );
+    return content &&
+      content.length === cited.bytes &&
+      createHash('sha256').update(content).digest('hex') === cited.sha256
+      ? { path: cited.path, content }
+      : null;
+  }
+
   /** For the desk: the commit of a direction that the person looks at to bring in, or null before `lookToBring`. */
   bringCommit(id: string): string | null {
     return this.bringAt.get(id)?.commit ?? null;

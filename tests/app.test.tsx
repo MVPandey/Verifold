@@ -766,10 +766,10 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.match(page, /Searching the web · 1 min/);
   assert.match(html, /class="row row--disputed" href="#\/d\/d-2"/);
   assert.match(html, /role="img" aria-label="Codex, codex-1"/);
-  // The board: a run chip opens the run's page, and a figure its direction's page.
+  // The board: a run chip opens the run's page, and a figure its own view.
   assert.match(page, /claude-2 Claim After the filter/);
   assert.match(html, /<a class="proof" href="#\/run\/r-3">Run r-3<\/a>/);
-  assert.match(html, /<a class="proof" href="#\/d\/d-2">Figure<\/a>/);
+  assert.match(html, /<a class="proof" href="#\/figure\/p-9\.1">Figure<\/a>/);
   assert.match(page, /codex-2 Objection One seed can be luck/);
   assert.match(page, /You If budget is left, try Gemma/);
   assert.doesNotMatch(page, /You Question/);

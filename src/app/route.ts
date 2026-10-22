@@ -14,9 +14,10 @@ import type { SetupPage } from './setup.ts';
  * without one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's
  * page, such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`,
  * and `#/d/<id>/diff` what a direction changed, or with a proof such as
- * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/settings` is the
- * project's settings, with its pods. Any other fragment is a page that does
- * not exist.
+ * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/figure/p-12.0` is a
+ * figure that a post cites, with its post. `#/settings` is the project's
+ * settings, with its pods. Any other fragment is a page that does not
+ * exist.
  */
 export type Route =
   | {
@@ -42,6 +43,8 @@ export type Route =
       readonly opener?: Opener;
     }
   | { readonly page: 'post'; readonly id: string }
+  /** The proof that a post cites, such as p-12.0. */
+  | { readonly page: 'figure'; readonly proof: string }
   | { readonly page: 'answer' }
   | { readonly page: 'bring'; readonly direction: string }
   | {
@@ -102,6 +105,8 @@ export function parseRoute(hash: string): Route {
   if (board?.[1]) return { page: 'lab', post: board[1] };
   const post = /^\/post\/(p-[1-9][0-9]{0,5})$/.exec(path);
   if (post?.[1]) return { page: 'post', id: post[1] };
+  const figure = /^\/figure\/(p-[1-9][0-9]{0,5}\.[0-9])$/.exec(path);
+  if (figure?.[1]) return { page: 'figure', proof: figure[1] };
   const direction = new RegExp(`^/d/(${id})$`).exec(path);
   if (direction?.[1]) return { page: 'direction', direction: direction[1] };
   const bring = new RegExp(`^/d/(${id})/bring$`).exec(path);
@@ -161,6 +166,8 @@ export const href = {
   bring: (direction: string): string => `#/d/${direction}/bring`,
   board: (post: string): string => `#/board/${post}`,
   post: (id: string): string => `#/post/${id}`,
+  /** A figure that a post cites, such as p-12.0. */
+  figure: (proof: string): string => `#/figure/${proof}`,
   run: (direction: string, run: string): string =>
     `#/d/${direction}/run/${run}`,
   /** A run's own page. */

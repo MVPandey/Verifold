@@ -116,6 +116,9 @@ export const paths = {
     `/api/v1/directions/${encodeURIComponent(direction)}/bring/diff?${new URLSearchParams({ file, commit }).toString()}`,
   /** A post and the replies below it. */
   thread: (post: string): string => `/api/v1/posts/${encodeURIComponent(post)}`,
+  /** The figure that a post cites, such as p-12.0, as the post pinned it. */
+  figure: (proof: string): string =>
+    `/api/v1/figures/${encodeURIComponent(proof)}`,
   /** A run in full, with its kept files and the end of its log. */
   run: (id: string): string => `/api/v1/runs/${encodeURIComponent(id)}`,
   /** A direction's diff since its start, or the diff that a post cites, with one file's diff. */
@@ -280,6 +283,34 @@ export async function load<T>(
   is: (value: unknown) => value is T,
   signal?: AbortSignal,
 ): Promise<Loaded<T>> {
+  const reached = await reach(token, path, signal);
+  if ('error' in reached) return reached;
+  const value: unknown = await reached.response.json().catch(() => null);
+  return is(value)
+    ? { value }
+    : { error: 'Verifold sent something this page cannot read. Reload it.' };
+}
+
+/** Read a file that Verifold sends as it is, such as a figure, as `load` reads JSON. */
+export async function loadBlob(
+  token: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<Loaded<Blob>> {
+  const reached = await reach(token, path, signal);
+  if ('error' in reached) return reached;
+  const value = await reached.response.blob().catch(() => null);
+  return value
+    ? { value }
+    : { error: 'Verifold could not send this. Try again.' };
+}
+
+/** A read of the API with the tab's token: the answer, or a reason in plain words. */
+async function reach(
+  token: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ readonly response: Response } | { readonly error: string }> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -301,10 +332,7 @@ export async function load<T>(
       ? { error: 'Verifold no longer has this. The lab may have moved on.' }
       : { error: 'Verifold could not send this. Try again.' };
   }
-  const value: unknown = await response.json().catch(() => null);
-  return is(value)
-    ? { value }
-    : { error: 'Verifold sent something this page cannot read. Reload it.' };
+  return { response };
 }
 
 /**

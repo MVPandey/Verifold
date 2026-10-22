@@ -2588,6 +2588,7 @@ await test('a run read holds the run, its kept files within the bound, the end o
       });
     },
     diff: () => Promise.resolve(null),
+    figure: () => Promise.resolve(null),
   };
   // A run read needs no lab view: it reads the run's record alone.
   const reader = new ApiReader(
@@ -2678,6 +2679,7 @@ await test("a diff read lists a direction's changed files within the bound, give
         diff: file ? { text: '@@ -1 +1 @@\n-old\n+new\n', cut: false } : null,
       });
     },
+    figure: () => Promise.resolve(null),
   };
   const reader = new ApiReader(sources(root, () => seededView(), { reads }));
   const list = await reader.directionDiff('d-1');
@@ -2707,8 +2709,11 @@ await test("a diff read lists a direction's changed files within the bound, give
   );
 });
 
-await test('the run and diff reads answer over HTTP with the token, and refuse a bad ID, an unknown query, and a file outside the diff', async (t) => {
+await test('the run, diff, and figure reads answer over HTTP with the token, and refuse a bad ID, an unknown query, a file outside the diff, and a path for a figure', async (t) => {
   const root = await project();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]);
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
   const lab = {
     runs: true,
     view: () => seededView(),
@@ -2732,6 +2737,24 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
         files: [{ path: 'probe.py', change: 'added', regular: true }],
         diff: path === undefined ? null : { text: '+x\n', cut: false },
       });
+    },
+    // p-3.0 is a pinned PNG, p-3.1 a pinned SVG, and p-4.0 a figure larger than the bound.
+    figure: (proof: unknown, bytes: unknown) => {
+      if (bytes !== apiLimits.figure) return Promise.resolve(null);
+      if (proof === 'p-3.0')
+        return Promise.resolve({ path: 'results/fig.png', content: png });
+      if (proof === 'p-3.1')
+        return Promise.resolve({
+          path: 'results/fig.SVG',
+          content: Buffer.from(svg),
+        });
+      if (proof === 'p-4.0')
+        return Promise.reject(
+          new SessionActionError(
+            'This figure is larger than 20 MB, so Verifold does not show it.',
+          ),
+        );
+      return Promise.resolve(null);
     },
   } as unknown as Lab;
   const sessions = {
@@ -2812,6 +2835,39 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
       400,
       query,
     );
+
+  // A pinned figure comes as it is, with its exact type, and as a page of its own it gets no script and no origin.
+  const sandbox = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+  assert.equal((await get('/figures/p-3.0', false)).status, 401);
+  const image = await get('/figures/p-3.0');
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/png');
+  assert.equal(image.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(image.headers.get('cache-control'), 'no-store');
+  assert.equal(image.headers.get('content-security-policy'), sandbox);
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+  const vector = await get('/figures/p-3.1');
+  assert.equal(vector.headers.get('content-type'), 'image/svg+xml');
+  assert.equal(vector.headers.get('content-security-policy'), sandbox);
+  assert.equal(await vector.text(), svg);
+  // A proof that is not a pinned figure is not found, and a figure over the bound says why.
+  assert.equal((await get('/figures/p-9.0')).status, 404);
+  const large = await get('/figures/p-4.0');
+  assert.equal(large.status, 404);
+  assert.match(
+    ((await large.json()) as { error: string }).error,
+    /larger than 20 MB/,
+  );
+  // A path or a bad proof never reaches the read, and a query or a longer path finds no figure.
+  for (const path of [
+    '/figures/results%2Ffig.png',
+    '/figures/..%2F..%2Fetc%2Fhosts',
+    '/figures/p-3',
+    '/figures/p-3.x',
+  ])
+    assert.equal((await get(path)).status, 400, path);
+  assert.equal((await get('/figures/p-3.0?path=results/fig.png')).status, 404);
+  assert.equal((await get('/figures/p-3.0/fig.png')).status, 404);
 });
 
 await test('a dismiss clears only the background failures that the page names, and every failure without names', async (t) => {

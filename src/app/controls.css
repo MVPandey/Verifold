@@ -187,6 +187,23 @@
   margin: 8px 0;
 }
 
+/* A figure. A white ground keeps a transparent figure readable in any theme. */
+.figure-view {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 0 16px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+/* An SVG without its own size fills the column, not a small default box. */
+.figure-view--svg {
+  width: 100%;
+}
+
 /* A diff */
 .diff-files {
   margin: 0;

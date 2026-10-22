@@ -2157,6 +2157,19 @@ await test('proof in a folder that the project ignores is pinned, and a turn tha
     beta?.workspace.start,
   );
   assert.equal(beta?.head, beta?.workspace.start);
+  // The figure reads as the post pinned it, never as the folder holds it now, and only within the bound.
+  const claim = lab.lab.view()?.posts.find((post) => post.kind === 'claim');
+  const circles = lab.lab.view()?.directions[0]?.direction;
+  const live = join(lab.root, circles?.workspace.path ?? '', 'results/fig.png');
+  await rm(live);
+  await symlink('/etc/hosts', live);
+  const shown = await lab.lab.figure(`${claim?.id}.0`, 1024);
+  assert.equal(shown?.path, 'results/fig.png');
+  assert.equal(shown?.content.toString('utf8'), 'PNG');
+  await assert.rejects(lab.lab.figure(`${claim?.id}.0`, 2), /larger than/);
+  // A proof that is not a figure of the lab reads as nothing.
+  assert.equal(await lab.lab.figure(`${claim?.id}.1`, 1024), null);
+  assert.equal(await lab.lab.figure('p-99.0', 1024), null);
 });
 
 await test('a post whose turn ran into a used-up usage window comes again after the reset', async (t) => {
