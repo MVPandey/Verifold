@@ -124,6 +124,7 @@ import {
   type RunDetail,
   type SearchHit,
   type SearchResult,
+  type Snapshot,
   type StartView,
   type Step,
   type Text,
@@ -1948,11 +1949,11 @@ export class ApiReader {
   }
 
   /**
-   * The snapshot without its version, epoch, rev, and time, as JSON, within
-   * the size bound. The string is all that the feed measures, compares, and
-   * sends, so the snapshot is serialized once.
+   * The snapshot without its version, epoch, rev, and time: its data, and
+   * the data's JSON within the size bound. The JSON is all that the feed
+   * measures, compares, and sends, so the snapshot is serialized once.
    */
-  async snapshot(): Promise<string> {
+  async build(): Promise<SnapshotBody> {
     const sources = this.sources();
     const root = sources.root;
     const project = root ? basename(root) : '';
@@ -1975,7 +1976,7 @@ export class ApiReader {
         ? ((await loadWorkspace(root).catch(() => null))?.research?.topic ??
           null)
         : null;
-      return JSON.stringify({
+      const data: SnapshotData = {
         project,
         lab: null,
         trimmed: false,
@@ -1987,22 +1988,30 @@ export class ApiReader {
             }
           : {}),
         ...compute,
-      });
+      };
+      return { data, json: JSON.stringify(data) };
     }
     // The feed adds the version, the epoch, the rev, and the time.
     const room = apiLimits.snapshot - 256;
-    let json = '';
+    let built: SnapshotBody | undefined;
     for (const [index, level] of levels.entries()) {
       const lab = shapeLab(loaded, level);
-      json = JSON.stringify({
+      const data: SnapshotData = {
         project,
         lab,
         ...compute,
         trimmed: index > 0 || Object.keys(lab.omitted).length > 0,
-      });
-      if (Buffer.byteLength(json) <= room) break;
+      };
+      built = { data, json: JSON.stringify(data) };
+      if (Buffer.byteLength(built.json) <= room) break;
     }
-    return json;
+    if (!built) throw new Error('The snapshot has no levels.');
+    return built;
+  }
+
+  /** The snapshot's JSON, as `build` gives it. */
+  async snapshot(): Promise<string> {
+    return (await this.build()).json;
   }
 
   /** The posts before post number `before`, or the newest posts. Null without a lab. */
@@ -2293,10 +2302,26 @@ export class ApiReader {
   }
 }
 
+/** A snapshot without the fields that the feed sets. */
+type SnapshotData = Omit<Snapshot, 'protocolVersion' | 'epoch' | 'rev' | 'at'>;
+
+/** A snapshot's data, and the data's JSON. */
+export interface SnapshotBody {
+  readonly data: SnapshotData;
+  readonly json: string;
+}
+
+/** The newest snapshot: its rev, its JSON as the API sends it, and its data. */
+interface Latest {
+  readonly rev: number;
+  readonly text: string;
+  readonly data: SnapshotData;
+}
+
 /**
  * The snapshot and its stream. At each tick the feed reads cheap signals of
  * the lab. Only when one moved does it build the snapshot, and only when the
- * data changed does the rev grow and the stream send it. An idle lab costs a
+ * data changed does the rev grow and the watchers get it. An idle lab costs a
  * signal read per tick and no build.
  */
 export class ApiFeed {
@@ -2309,16 +2334,13 @@ export class ApiFeed {
   /** The JSON of the data of the newest snapshot. */
   private body: string | null = null;
   private signal: readonly unknown[] | null = null;
-  private latest: { readonly rev: number; readonly text: string } | null = null;
-  private building: Promise<{
-    readonly rev: number;
-    readonly text: string;
-  }> | null = null;
+  private latest: Latest | null = null;
+  private building: Promise<Latest> | null = null;
   private built = 0;
-  /** Each open stream, with the rev that it got last. */
-  private readonly streams = new Map<ServerResponse, number>();
-  /** Each watcher, such as a terminal's view, with the rev that it got last. */
+  /** Each watcher, such as an event stream or a terminal's view, with the rev that it got last. */
   private readonly watchers = new Map<Watcher, number>();
+  /** The open event streams, for their limit and their heartbeat. */
+  private readonly streams = new Set<ServerResponse>();
   private poll: NodeJS.Timeout | undefined;
   private beat: NodeJS.Timeout | undefined;
 
@@ -2336,31 +2358,29 @@ export class ApiFeed {
     return this.built;
   }
 
-  /** The newest snapshot as JSON, with its rev. Calls at the same time share one read. */
-  current(): Promise<{ readonly rev: number; readonly text: string }> {
+  /** The newest snapshot, with its rev. Calls at the same time share one read. */
+  current(): Promise<Latest> {
     this.building ??= this.refresh().finally(() => {
       this.building = null;
     });
     return this.building;
   }
 
-  private async refresh(): Promise<{
-    readonly rev: number;
-    readonly text: string;
-  }> {
+  private async refresh(): Promise<Latest> {
     const signal = await this.reader.signal();
     if (this.latest && this.signal && same(signal, this.signal))
       return this.latest;
-    const body = await this.reader.snapshot();
+    const { data, json } = await this.reader.build();
     this.built += 1;
     this.signal = signal;
-    if (this.latest && body === this.body) return this.latest;
-    this.body = body;
+    if (this.latest && json === this.body) return this.latest;
+    this.body = json;
     this.rev += 1;
     // The data's JSON goes in as it is, after the fields that the feed sets.
     this.latest = {
       rev: this.rev,
-      text: `{"protocolVersion":${protocolVersion},"epoch":"${this.epoch}","rev":${this.rev},"at":"${new Date().toISOString()}",${body.slice(1)}`,
+      text: `{"protocolVersion":${protocolVersion},"epoch":"${this.epoch}","rev":${this.rev},"at":"${new Date().toISOString()}",${json.slice(1)}`,
+      data,
     };
     return this.latest;
   }
@@ -2374,29 +2394,14 @@ export class ApiFeed {
     if (stream.writable) stream.write(chunk);
   }
 
-  /** Send the snapshot to a stream that has an older one. */
-  private send(
-    stream: ServerResponse,
-    latest: { readonly rev: number; readonly text: string },
-  ): void {
-    const last = this.streams.get(stream);
-    if (last === undefined || last >= latest.rev) return;
-    this.streams.set(stream, latest.rev);
-    this.write(
-      stream,
-      `id: ${this.epoch}.${latest.rev}\nevent: snapshot\ndata: ${latest.text}\n\n`,
-    );
-  }
-
   private async tick(): Promise<void> {
     const watchers = [...this.watchers.keys()].filter((watcher) =>
       watcher.wanted(),
     );
-    // Without a stream or a watcher that wants it, the feed builds nothing.
-    if (!this.streams.size && !watchers.length) return;
+    // Without a watcher that wants it, the feed builds nothing.
+    if (!watchers.length) return;
     try {
       const latest = await this.current();
-      for (const stream of this.streams.keys()) this.send(stream, latest);
       for (const watcher of watchers) {
         // A watcher that stopped meanwhile, or that has this rev, gets nothing.
         if ((this.watchers.get(watcher) ?? latest.rev) >= latest.rev) continue;
@@ -2413,12 +2418,12 @@ export class ApiFeed {
   }
 
   /**
-   * Give `show` the snapshot at the next tick, then each change, as a
-   * stream gets them. `wanted`: while it is false, the feed builds no
-   * snapshot for this watcher. Returns the function that stops it.
+   * Give `show` the snapshot at once, then each change. `wanted`: while it
+   * is false, the feed builds no snapshot for this watcher. Returns the
+   * function that stops it.
    */
   watch(
-    show: (latest: { readonly rev: number; readonly text: string }) => void,
+    show: (latest: Latest) => void,
     wanted: () => boolean = () => true,
   ): () => void {
     const watcher: Watcher = { show, wanted };
@@ -2427,20 +2432,22 @@ export class ApiFeed {
     void this.tick();
     return () => {
       this.watchers.delete(watcher);
-      if (!this.streams.size && !this.watchers.size) this.stop();
+      if (!this.watchers.size) this.stop();
     };
   }
 
-  /** Tick while a stream or a watcher is open. */
+  /** Tick while a watcher is open. */
   private start(): void {
     this.poll ??= setInterval(() => void this.tick(), this.pollMs).unref();
     this.beat ??= setInterval(() => {
-      for (const stream of this.streams.keys())
-        this.write(stream, ': ping\n\n');
+      for (const stream of this.streams) this.write(stream, ': ping\n\n');
     }, this.heartbeatMs).unref();
   }
 
-  /** Open a stream: the current snapshot at once, then each change. False: too many streams are open. */
+  /**
+   * Open a stream: a watcher that writes the current snapshot at once, then
+   * each change. False: too many streams are open.
+   */
   async open(
     request: IncomingMessage,
     response: ServerResponse,
@@ -2452,17 +2459,19 @@ export class ApiFeed {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'X-Accel-Buffering': 'no',
     });
-    this.streams.set(response, 0);
+    this.streams.add(response);
+    const unwatch = this.watch((latest) =>
+      this.write(
+        response,
+        `id: ${this.epoch}.${latest.rev}\nevent: snapshot\ndata: ${latest.text}\n\n`,
+      ),
+    );
     response.on('close', () => {
       this.streams.delete(response);
-      if (!this.streams.size && !this.watchers.size) this.stop();
+      unwatch();
     });
-    this.start();
-    try {
-      this.send(response, await this.current());
-    } catch {
-      response.destroy();
-    }
+    // The watch's first read. A stream that cannot get a snapshot closes.
+    await this.current().catch(() => response.destroy());
     return true;
   }
 
@@ -2475,18 +2484,15 @@ export class ApiFeed {
 
   close(): void {
     this.stop();
-    for (const stream of this.streams.keys()) stream.end();
+    for (const stream of this.streams) stream.end();
     this.streams.clear();
     this.watchers.clear();
   }
 }
 
-/** A watcher of the feed. */
+/** A watcher of the feed, such as an event stream or a terminal's view. */
 interface Watcher {
-  readonly show: (latest: {
-    readonly rev: number;
-    readonly text: string;
-  }) => void;
+  readonly show: (latest: Latest) => void;
   readonly wanted: () => boolean;
 }
 
