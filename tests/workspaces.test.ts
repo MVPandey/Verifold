@@ -611,49 +611,46 @@ await test('a folder with its own Git data stays out of the commit, and its conf
   await rm(marker, { force: true });
   await write(target, 'exp/b.py', 'b\n');
   const version = await commitVersion(root, workspace, ['exp'], 'Version 1');
-  // The nested folder is left out of the commit, and nothing of it is recorded as a link.
-  assert.ok(version.skipped.includes('exp/inner'));
+  // The nested folder is listed on its own, apart from the large files, and nothing of it is recorded as a link.
+  assert.deepEqual(version.nested, ['exp/inner']);
+  assert.ok(!version.skipped.includes('exp/inner'));
   const files = await changes(root, workspace, workspace.start, version.commit);
   assert.ok(files.every((file) => !file.path.startsWith('exp/inner')));
   // The nested folder's content filter never ran.
   assert.equal(existsSync(marker), false);
 });
 
-await test("a worktree's repository is found again after a restart, and a wrong name is refused", async (t) => {
+await test('an older worktree record finds its repository by the folder it names', async (t) => {
   const root = await folder(t);
   run(root, 'init', '-q');
   await write(root, 'results/a.md', 'a\n');
   run(root, 'add', '.');
   run(root, 'commit', '-qm', 'base');
   const start = run(root, 'rev-parse', 'HEAD').trim();
-  // A worktree that Verifold did not make in this run, so nothing of it is held in memory.
-  const path = join('.verifold', 'workspaces', 'w2');
+  // Another worktree of the project already takes the name `w`, so Git gives Verifold's worktree the name `w1`.
+  const elsewhere = await folder(t);
+  run(root, 'worktree', 'add', '--quiet', join(elsewhere, 'w'), 'HEAD');
+  const path = join('.verifold', 'workspaces', 'w');
   run(
     root,
     'worktree',
     'add',
     '--quiet',
     '-b',
-    'verifold/w2',
+    'verifold/w',
     join(root, path),
     'HEAD',
   );
-  const loaded = { kind: 'git', path, branch: 'verifold/w2', start } as const;
-  // A record that names the wrong administrative folder is refused before the folder is read.
-  await assert.rejects(
-    readFileAt(
-      root,
-      { ...loaded, admin: 'not-the-one' },
-      start,
-      'results/a.md',
-    ),
-    /does not match/,
-  );
-  // With the right name, the file reads from the worktree's own repository.
+  assert.ok(existsSync(join(root, '.git', 'worktrees', 'w1')));
+  // A record from before the name was kept: Verifold derives `w`, which names the other worktree, and finds `w1`.
+  const older = { kind: 'git', path, branch: 'verifold/w', start } as const;
   assert.equal(
-    (await readFileAt(root, loaded, start, 'results/a.md'))?.toString('utf8'),
+    (await readFileAt(root, older, start, 'results/a.md'))?.toString('utf8'),
     'a\n',
   );
+  // With no record of it left in the project, the read gives nothing.
+  run(root, 'worktree', 'remove', '--force', join(root, path));
+  assert.equal(await readFileAt(root, older, start, 'results/a.md'), null);
 });
 
 await test('a worktree is removed without reading its own Git data again', async (t) => {
@@ -670,6 +667,120 @@ await test('a worktree is removed without reading its own Git data again', async
   assert.equal(workspace.kind, 'git');
   assert.equal(await release(root, workspace), true);
   assert.equal(existsSync(join(root, workspace.path)), false);
+});
+
+await test('a worktree with an untracked or ignored file, or a folder with its own Git data, stays when released', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, '.gitignore', 'build/\n');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const cases: readonly (readonly [string, (target: string) => unknown])[] = [
+    ['task-10-r1-a1', (target) => write(target, 'results/new.md', 'n\n')],
+    ['task-11-r1-a1', (target) => write(target, 'build/out.bin', 'x')],
+    [
+      'task-12-r1-a1',
+      (target) => run(root, 'init', '-q', join(target, 'inner')),
+    ],
+  ];
+  for (const [name, add] of cases) {
+    const workspace = await allocate(root, {
+      name,
+      writable: ['results'],
+      inputs: [],
+    });
+    const target = join(root, workspace.path);
+    await add(target);
+    assert.equal(await release(root, workspace), false, name);
+    assert.ok(existsSync(target), name);
+  }
+});
+
+await test("a project's own submodules stay through a workspace and its snapshots", async (t) => {
+  const sub = await folder(t);
+  run(sub, 'init', '-q');
+  await write(sub, 's.txt', 's\n');
+  run(sub, 'add', '.');
+  run(sub, 'commit', '-qm', 's');
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(
+    root,
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    sub,
+    'lib',
+  );
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-13-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  assert.match(run(root, 'ls-tree', workspace.start, 'lib'), /^160000 commit /);
+  await write(join(root, workspace.path), 'results/b.md', 'b\n');
+  const { commit } = await snapshot(root, workspace, 'Snapshot 1');
+  assert.match(run(root, 'ls-tree', commit, 'lib'), /^160000 commit /);
+});
+
+await test('a worktree whose links Git wrote as relative paths reads the same way', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const start = run(root, 'rev-parse', 'HEAD').trim();
+  const path = join('.verifold', 'workspaces', 'rel');
+  run(
+    root,
+    '-c',
+    'worktree.useRelativePaths=true',
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'verifold/rel',
+    join(root, path),
+    'HEAD',
+  );
+  const loaded = { kind: 'git', path, branch: 'verifold/rel', start } as const;
+  assert.equal(
+    (await readFileAt(root, loaded, start, 'results/a.md'))?.toString('utf8'),
+    'a\n',
+  );
+});
+
+await test('a workspace that does not start leaves no folder, branch or worktree record', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  await assert.rejects(
+    allocate(root, {
+      name: 'task-14-r1-a1',
+      writable: ['results'],
+      inputs: [{ path: 'results/in.md', copy: join(root, 'missing') }],
+    }),
+  );
+  assert.equal(
+    existsSync(join(root, '.verifold', 'workspaces', 'task-14-r1-a1')),
+    false,
+  );
+  assert.equal(
+    run(root, 'branch', '--list', 'verifold/task-14-r1-a1').trim(),
+    '',
+  );
+  assert.equal(
+    existsSync(join(root, '.git', 'worktrees', 'task-14-r1-a1')),
+    false,
+  );
 });
 
 await test('a version leaves out environments, caches, and what the task ignores', async (t) => {
