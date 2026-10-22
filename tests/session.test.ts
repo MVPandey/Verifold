@@ -36,6 +36,7 @@ import { readDeskSnapshot } from '../src/server/desk-records.ts';
 import { renderDesk } from '../src/desk/desk-view.ts';
 import { feedLine, runCli, terminalInput } from '../src/cli/commands.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
+import { jsonLines } from './wait.ts';
 
 /** A fake Claude Code that speaks the stream-json control protocol. */
 const claudeHost = `const fs = require('node:fs');
@@ -275,7 +276,11 @@ async function project(
   }
 }
 
-/** Wait for the session of a manager, or the first worker of a pool. */
+/**
+ * Wait for the session of a manager, or the first worker of a pool. A fake
+ * harness is a new Node process, and a busy computer can take seconds to
+ * start one, so the limit only ends a test that is stuck.
+ */
 async function until(
   sessions: SessionManager | SessionPool,
   check: (record: SessionRecord) => boolean,
@@ -283,7 +288,8 @@ async function until(
   const current = (): SessionRecord | undefined =>
     (sessions instanceof SessionPool ? sessions.views()[0] : sessions.view())
       ?.record;
-  for (let tries = 0; tries < 200; tries++) {
+  const end = Date.now() + 15_000;
+  while (Date.now() <= end) {
     const record = current();
     if (record && check(record)) return record;
     await delay(20);
@@ -484,10 +490,9 @@ await test('Claude Code requests reach the person, and the answer returns to the
     assert.ok(second);
     assert.equal(second.outcome, 'denied');
     assert.equal(decisionLabel(second, 'claude'), 'You denied');
-    const answers = (await readFile(join(root, 'answers.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as { response: Record<string, unknown> });
+    const answers = await jsonLines<{ response: Record<string, unknown> }>(
+      join(root, 'answers.jsonl'),
+    );
     assert.deepEqual(answers[0]?.response, {
       behavior: 'allow',
       updatedInput: {
@@ -1236,13 +1241,10 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     assert.ok(
       stopped.events.some((event) => event.text.includes('was cancelled')),
     );
-    const sent = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as { method?: string; params?: { model?: string } },
-      );
+    const sent = await jsonLines<{
+      method?: string;
+      params?: { model?: string };
+    }>(join(root, 'rpc.jsonl'));
     const slowThread = sent.findIndex(
       (message) => message.params?.model === 'slow-thread',
     );
@@ -1264,6 +1266,34 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
     assert.equal(open.status, 'running');
     other.answer(open.requests[0]?.id, true);
     await until(other, (current) => current.status === 'idle');
+  });
+});
+
+await test('a Codex that runs but cannot be reached gets one line for the failure', async () => {
+  await project(async (root, _executables, create) => {
+    // This Codex listens but refuses each handshake, a failure that a wait cannot mend.
+    const codex = join(root, 'refusing-codex');
+    await writeFile(
+      codex,
+      `#!${process.execPath}
+const listen = process.argv[process.argv.indexOf('--listen') + 1].replace('unix://', '');
+require('node:net').createServer((socket) => socket.end('HTTP/1.1 400 Bad Request\\r\\n\\r\\n')).listen(listen);`,
+      { mode: 0o700 },
+    );
+    const sessions = create({ executables: { codex } });
+    await sessions.start({ host: 'codex', mode: 'ask', prompt: 'x' });
+    const failed = await until(
+      sessions,
+      (current) => current.status === 'failed',
+    );
+    // Its exit after the stop does not add "Could not start Codex".
+    assert.deepEqual(
+      failed.events
+        .filter((event) => event.text.startsWith('Could not'))
+        .map((event) => event.text),
+      ['Could not connect to Codex. Check that it is installed and signed in.'],
+    );
+    await sessions.close();
   });
 });
 
@@ -1558,16 +1588,10 @@ await test('a resumed Codex thread ignores events from the paused process', asyn
     await delay(300);
     assert.equal(sessions.view()?.live, true);
     assert.equal(sessions.view()?.record.status, 'idle');
-    const sent = (await readFile(join(root, 'rpc.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as {
-            method?: string;
-            params?: { threadId?: string; approvalsReviewer?: string };
-          },
-      );
+    const sent = await jsonLines<{
+      method?: string;
+      params?: { threadId?: string; approvalsReviewer?: string };
+    }>(join(root, 'rpc.jsonl'));
     const resumed = sent.find((message) => message.method === 'thread/resume');
     assert.equal(resumed?.params?.threadId, 'thread-1');
     assert.equal(resumed?.params?.approvalsReviewer, 'auto_review');

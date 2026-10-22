@@ -155,6 +155,8 @@ const call = () => {
   if (entry.name === 'WAIT') return;
   if (entry.name === 'COST') { cost = entry.arguments.usd; next++; return call(); }
   if (entry.name === 'EXIT') process.exit(1);
+  // Stop when the test writes the file, so the test chooses the moment.
+  if (entry.name === 'EXIT_WHEN') return setInterval(() => { if (fs.existsSync(path.join(log, entry.arguments.file))) process.exit(1); }, 10);
   if (entry.name === 'FAIL') { running = false; return out({ type: 'result', subtype: 'error_during_execution', is_error: true }); }
   out({ type: 'control_request', request_id: 'mcp-' + turn + '-' + next, request: { subtype: 'mcp_message', server_name: 'verifold', message: { jsonrpc: '2.0', id: 100 + next, method: 'tools/call', params: { name: entry.name, arguments: entry.arguments, _meta: { 'claudecode/toolUseId': entry.id ?? ('toolu-' + process.pid + '-' + turn + '-' + next) } } } } });
 };
@@ -901,7 +903,18 @@ await test('after a restart each agent resumes its session with a digest, and no
     ),
   );
   await until(async () => (await lab.inputs('d-2-beta')).length >= 2);
-  await delay(200);
+  // Both agents are quiet before the restart: no turn runs, each waits its long
+  // backoff after two idle turns, and no wakeup is due. A turn that a restart
+  // stops brings its digest again.
+  const inside = lab.lab as unknown as LabInside;
+  await until(
+    () =>
+      lab.lab
+        .view()
+        ?.directions.every(
+          (entry) => entry.status === 'idle' && entry.agent.idleStreak >= 2,
+        ) === true && [...inside.loops.values()].every((loop) => !loop.pending),
+  );
   await lab.restart();
   const restarted = async (folder: string): Promise<string | undefined> =>
     (await lab.inputs(folder)).find((input) =>
@@ -2323,6 +2336,8 @@ await test('the lab view puts the newest activity first, and a crashed agent can
 
 /** The lab's tool calls and its newest-commit rule, which these tests reach past `private`. */
 interface LabInside {
+  serial<T>(work: () => T | Promise<T>): Promise<T>;
+  readonly loops: ReadonlyMap<string, { readonly pending: boolean }>;
   call(
     id: string,
     generation: string,
@@ -2424,22 +2439,45 @@ await test('a turn whose process stops brings its posts again, and the resumed c
 
 await test('a conversation that cannot resume starts new, without the notes about the earlier one', async (t) => {
   const lab = await fixture(t);
-  await lab.script('d-1-alpha', [{ calls: [{ name: 'EXIT' }] }]);
+  await lab.script('d-1-alpha', [
+    { calls: [{ name: 'EXIT_WHEN', arguments: { file: 'stop' } }] },
+  ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
-  // The process stops. Before the lab starts it again, its session record goes, so nothing can resume.
-  await until(
-    () => (lab.lab.view()?.directions[0]?.agent.restarts.length ?? 0) === 1,
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 1);
+  // The lab handles the stop, and starts the agent again, in its queue. The
+  // test holds the queue, so the record goes before the lab can start the
+  // agent again, and nothing can resume.
+  const inside = lab.lab as unknown as LabInside;
+  let release = (): void => {};
+  let holding = false;
+  void inside.serial(
+    () =>
+      new Promise<void>((resolve) => {
+        holding = true;
+        release = resolve;
+      }),
   );
-  await delay(50);
-  await rm(
-    join(
-      lab.root,
-      '.verifold',
-      'sessions',
-      `${lab.lab.view()?.directions[0]?.agent.session}.json`,
-    ),
-  );
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 8000);
+  try {
+    await until(() => holding);
+    const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
+    const record = join(lab.root, '.verifold', 'sessions', `${session}.json`);
+    // The process stops by itself, and its session saves the stop.
+    await writeFile(join(lab.base, 'logs', 'd-1-alpha', 'stop'), '');
+    await until(async () => {
+      try {
+        const status = (
+          JSON.parse(await readFile(record, 'utf8')) as { status: string }
+        ).status;
+        return status === 'ended' || status === 'failed';
+      } catch {
+        return false;
+      }
+    });
+    await rm(record);
+  } finally {
+    release();
+  }
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
   const inputs = await lab.inputs('d-1-alpha');
   assert.match(inputs[1] ?? '', /The question:/);
   assert.doesNotMatch(inputs.join('\n'), /started it again/);
@@ -3756,6 +3794,8 @@ await test('a later plan records its version, the plan before it, and what chang
   assert.equal(first?.post, 'p-1');
   assert.equal(first?.version, 1);
   assert.equal(first?.changed, undefined);
+  // The reply comes after the planner's turn: the fake harness runs its scripts only in a new turn.
+  await until(() => lab.lab.view()?.directions[0]?.status === 'idle');
   await lab.lab.post({ text: 'Give Helix 4 runs.', replyTo: 'p-1' });
   await until(() => lab.lab.view()?.state.plan?.version === 2, 20_000);
   const second = lab.lab.view()?.state.plan;
@@ -6395,8 +6435,11 @@ await test("an access answer gives the agent's shell its domains while it stands
     const before = await launches();
     await change();
     await until(async () => (await launches()) > before);
+    // A new process can be in the middle of writing args.json.
     await until(
-      async () => JSON.stringify(await domains()) === JSON.stringify(expected),
+      async () =>
+        JSON.stringify(await domains().catch(() => null)) ===
+        JSON.stringify(expected),
     );
   };
   assert.deepEqual(await domains(), []);

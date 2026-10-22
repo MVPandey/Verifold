@@ -20,6 +20,7 @@ import { saveAgencyFile } from '../src/core/agency.ts';
 import { skillLoader } from '../src/core/skills.ts';
 import { SessionManager, type SessionSkills } from '../src/core/session.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
+import { jsonLines, until } from './wait.ts';
 
 const codexSocket = fileURLToPath(
   new URL('./fixtures/codex-socket.cjs', import.meta.url),
@@ -173,14 +174,6 @@ async function project(t: test.TestContext): Promise<{
   };
 }
 
-async function until(check: () => boolean | Promise<boolean>): Promise<void> {
-  for (let tries = 0; tries < 250; tries++) {
-    if (await check()) return;
-    await delay(20);
-  }
-  throw new Error('The session did not get there.');
-}
-
 function loader(folder: string | null): SessionSkills & {
   readonly problems: (readonly [HarnessName, string])[];
   readonly uses: string[];
@@ -215,23 +208,27 @@ await test('Claude Code gets --plugin-dir only with added skills, and a plugin t
   const folder = await plugin(root, 'plugins-1a2b3c4d5e6f7a8b');
   const ok = loader(folder);
   await start('claude', ok);
-  await until(() => existsSync(join(work, 'args.json')));
+  // The fake writes args.json after it makes it, so the wait is for the whole JSON.
+  await until(
+    async () => (await args(work, 'args.json').catch(() => null)) !== null,
+  );
   const given = await args(work, 'args.json');
   assert.equal(given[given.indexOf('--plugin-dir') + 1], folder);
-  // The start event lists the plugin, so nothing is reported.
-  await delay(200);
-  assert.deepEqual(ok.problems, []);
-  // Each later turn marks the set as used, so it is not pruned under the session.
   const first = managers.at(-1);
   assert.ok(first);
   await until(() => first.view()?.record.status === 'idle');
+  // The start event listed the plugin before the turn ended, so nothing is reported.
+  assert.deepEqual(ok.problems, []);
+  // Each later turn marks the set as used, so it is not pruned under the session.
   first.continueTask('Again.');
   assert.deepEqual(ok.uses, [folder]);
 
   await rm(join(work, 'args.json'));
   const none = loader(null);
   await start('claude', none);
-  await until(() => existsSync(join(work, 'args.json')));
+  await until(
+    async () => (await args(work, 'args.json').catch(() => null)) !== null,
+  );
   assert.ok(!(await args(work, 'args.json')).includes('--plugin-dir'));
 
   const broken = loader(await plugin(root, 'broken-plugin'));
@@ -256,10 +253,7 @@ await test('Claude Code gets --plugin-dir only with added skills, and a plugin t
     ],
   ]);
   await until(() => manager.view()?.record.status === 'idle');
-  const runs = (await readFile(join(work, 'runs.jsonl'), 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as string[]);
+  const runs = await jsonLines<string[]>(join(work, 'runs.jsonl'));
   assert.equal(runs.length, 2);
   assert.ok(runs[0]?.includes('--plugin-dir'));
   assert.ok(!runs[1]?.includes('--plugin-dir'));
@@ -308,9 +302,11 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
   const ok = loader(folder);
   await start('codex', ok);
   await until(async () =>
-    (await readFile(join(work, 'rpc.jsonl'), 'utf8').catch(() => '')).includes(
-      'thread/start',
-    ),
+    (
+      await jsonLines<{ method?: string }>(join(work, 'rpc.jsonl')).catch(
+        () => [],
+      )
+    ).some((message) => message.method === 'thread/start'),
   );
   const given = await args(work, 'codex-args.json');
   assert.equal(
@@ -321,10 +317,9 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
     given.indexOf('features.skill_mcp_dependency_install=false') <
       given.indexOf('app-server'),
   );
-  const methods = (await readFile(join(work, 'rpc.jsonl'), 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => (JSON.parse(line) as { method?: string }).method);
+  const methods = (
+    await jsonLines<{ method?: string }>(join(work, 'rpc.jsonl'))
+  ).map((message) => message.method);
   assert.ok(
     methods.indexOf('skills/extraRoots/set') < methods.indexOf('skills/list') &&
       methods.indexOf('skills/list') < methods.indexOf('thread/start'),
@@ -345,15 +340,17 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
   const unlisted = loader(folder);
   await start('codex', unlisted);
   await until(async () =>
-    (await readFile(join(work, 'rpc.jsonl'), 'utf8').catch(() => '')).includes(
-      'thread/start',
-    ),
+    (
+      await jsonLines<{ method?: string }>(join(work, 'rpc.jsonl')).catch(
+        () => [],
+      )
+    ).some((message) => message.method === 'thread/start'),
   );
-  const sets = (await readFile(join(work, 'rpc.jsonl'), 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
-    .filter((message) => message.method === 'skills/extraRoots/set');
+  const sets = (
+    await jsonLines<{ method?: string; params?: unknown }>(
+      join(work, 'rpc.jsonl'),
+    )
+  ).filter((message) => message.method === 'skills/extraRoots/set');
   assert.deepEqual(sets.at(-1)?.params, { extraRoots: [] });
   assert.deepEqual(unlisted.problems, [
     [
@@ -369,9 +366,11 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
   const old = loader(folder);
   await start('codex', old);
   await until(async () =>
-    (await readFile(join(work, 'rpc.jsonl'), 'utf8').catch(() => '')).includes(
-      'thread/start',
-    ),
+    (
+      await jsonLines<{ method?: string }>(join(work, 'rpc.jsonl')).catch(
+        () => [],
+      )
+    ).some((message) => message.method === 'thread/start'),
   );
   assert.deepEqual(old.problems, [
     [
@@ -385,9 +384,11 @@ await test('Codex sets the skill root before the thread starts, with MCP depende
   await rm(join(work, 'old-codex'));
   await start('codex', loader(null));
   await until(async () =>
-    (await readFile(join(work, 'rpc.jsonl'), 'utf8').catch(() => '')).includes(
-      'thread/start',
-    ),
+    (
+      await jsonLines<{ method?: string }>(join(work, 'rpc.jsonl')).catch(
+        () => [],
+      )
+    ).some((message) => message.method === 'thread/start'),
   );
   assert.ok(
     !(await args(work, 'codex-args.json')).some((arg) =>
@@ -448,13 +449,22 @@ await test('with the profile folder unreadable, both harnesses read the added sk
   await chmod(join(agency, 'skills'), 0o000);
   try {
     await start('claude', skills);
-    await until(() => existsSync(join(work, 'read.txt')));
+    // A fake writes the file after it makes it, so the wait is for its text.
+    await until(async () =>
+      (await readFile(join(work, 'read.txt'), 'utf8').catch(() => '')).includes(
+        'Activation patching',
+      ),
+    );
     assert.match(
       await readFile(join(work, 'read.txt'), 'utf8'),
       /Activation patching/,
     );
     await start('codex', skills);
-    await until(() => existsSync(join(work, 'codex-read.txt')));
+    await until(async () =>
+      (
+        await readFile(join(work, 'codex-read.txt'), 'utf8').catch(() => '')
+      ).includes('Activation patching'),
+    );
     assert.match(
       await readFile(join(work, 'codex-read.txt'), 'utf8'),
       /Activation patching/,

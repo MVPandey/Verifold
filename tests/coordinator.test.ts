@@ -727,12 +727,13 @@ await test('events come once more after a read failed, and a resumed coordinator
 });
 
 await test('a used-up usage window holds the coordinator until the reset, and the events of the failed turn come again', async (t) => {
+  let quota: Quota | undefined;
   const { root, tasks, coordinator, script, inputs, turns } = await team(
     t,
     30,
     undefined,
     undefined,
-    (folder) => new Quota(folder, { graceMs: 0 }),
+    (folder) => (quota = new Quota(folder, { graceMs: 0 })),
   );
   const resetsAt = Math.ceil(Date.now() / 1000) + 2;
   await script([[], [{ name: 'LIMIT', arguments: { resetsAt } }], []]);
@@ -750,6 +751,8 @@ await test('a used-up usage window holds the coordinator until the reset, and th
     coordinator.view()?.limitedUntil,
     new Date(resetsAt * 1000).toISOString(),
   );
+  // The view comes from memory. The file follows when the write ends.
+  await quota?.settled();
   const saved = JSON.parse(
     await readFile(join(root, '.verifold', 'quota.json'), 'utf8'),
   ) as { claude: { exhausted: boolean; until: string } };

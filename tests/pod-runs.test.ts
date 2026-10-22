@@ -26,6 +26,7 @@ import {
 import { secretGuard } from '../src/core/runpod.ts';
 import { allocate, snapshot, type Workspace } from '../src/core/workspaces.ts';
 import { fakePod, type FakePod } from './fake-pod.ts';
+import { labQueue } from './wait.ts';
 
 const secret = 'hf_SECRETVALUE0123456789';
 
@@ -48,6 +49,12 @@ function git(cwd: string, ...args: string[]): string {
 
 interface Fixture extends FakePod {
   readonly workspace: Workspace;
+  /**
+   * Wait for the work in the lab's queue, such as the saves after a run
+   * ends. Its agent hears the end before the last save, so a test waits for
+   * this before another ledger reads the records.
+   */
+  settled(): Promise<void>;
   /** The ledger that the lease's stop asks to end its runs. */
   ledger(minuteMs?: number): { ledger: RunLedger; ended: RunRecord[] };
   /** A ready lease of d-1, whose pod has the secret HF_TOKEN. */
@@ -80,11 +87,12 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
     light: true,
   });
   await fake.compute.setSecret('HF_TOKEN', secret, true);
-  let queue: Promise<unknown> = Promise.resolve();
+  const queue = labQueue();
   let calls = 0;
   const made: Fixture = {
     ...fake,
     workspace,
+    settled: queue.settled,
     ledger: (minuteMs) => {
       const ended: RunRecord[] = [];
       const ledger = new RunLedger(root, {
@@ -92,11 +100,7 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
         pods: fake.compute.podRuns(),
         pollMs: 50,
         ...(minuteMs ? { minuteMs } : {}),
-        serial: <T>(work: () => T | Promise<T>): Promise<T> => {
-          const next = queue.then(work, work);
-          queue = next.catch(() => {});
-          return next;
-        },
+        serial: queue.serial,
         ended: (run) => {
           ended.push(run);
           return true;
@@ -253,7 +257,8 @@ await test('a pod run that is cancelled or past its time stops with its process 
     ['part.txt'],
   );
   assert.ok(run && (await gone(fx, run)));
-  // A run past its time limit stops the same way.
+  // A run past its time limit stops the same way. Its ledger reads r-1 as it ended.
+  await fx.settled();
   const timed = fx.ledger(500);
   await timed.ledger.load(true);
   await fx.start(timed.ledger, 'sleep 30', { minutes: 1 });
