@@ -10,13 +10,14 @@ import type {
 } from '../src/protocol/api.ts';
 import { agentActions, labActions } from '../src/app/actions.ts';
 import {
+  callOpener,
   callView,
-  closeHow,
   costLine,
   decideId,
   failureOf,
-  fromLab,
+  leaveCall,
   needsTick,
+  openedFrom,
   onBoard,
   optionForKey,
   optionLines,
@@ -26,7 +27,7 @@ import {
   undoLeft,
 } from '../src/app/call.ts';
 import { costWords, undoWords } from '../src/ui/call-words.ts';
-import { parseRoute } from '../src/app/route.ts';
+import { parseRoute, type Route } from '../src/app/route.ts';
 import { Screen } from '../src/app/App.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 
@@ -216,11 +217,12 @@ const actions: LabActions = {
   questions: ok,
 };
 
-function render(state: Snapshot, hash = '#/call/c-4'): string {
+function render(state: Snapshot, hash = '#/call/c-4', under?: Route): string {
+  const route = parseRoute(hash);
   return renderToStaticMarkup(
     <Screen
       state={{ snapshot: state, connection: 'live', retrying: false }}
-      route={parseRoute(hash)}
+      route={route.page === 'call' && under ? { ...route, under } : route}
       now={now}
       actions={actions}
       agentActions={agentActions(null)}
@@ -740,12 +742,78 @@ await test("the call words: costs, each effect, and the article, the same as the
   );
 });
 
-await test('closing leaves the call without a new history entry, and an old thread is said, not jumped to', () => {
-  // Opened from the lab home: back. From a link or a reload: replace.
-  assert.equal(closeHow(fromLab), 'back');
-  assert.equal(closeHow(null), 'replace');
-  assert.equal(closeHow({ from: 'elsewhere' }), 'replace');
-  assert.equal(closeHow('lab'), 'replace');
+await test('a call shows over the page that opened it, and its Close goes back there with no new history entry', (t) => {
+  // The history state names the page that opened the call, and a reload keeps it.
+  assert.deepEqual(openedFrom('#/d/d-2'), { from: '#/d/d-2' });
+  assert.deepEqual(openedFrom(''), { from: '#/' });
+  assert.deepEqual(callOpener(openedFrom('#/d/d-2')), {
+    page: 'direction',
+    direction: 'd-2',
+  });
+  assert.deepEqual(callOpener(openedFrom('')), { page: 'lab' });
+  // A call from a link, a notification, or a state that names no page shows over the lab home.
+  for (const state of [
+    null,
+    'lab',
+    { from: 'lab' },
+    { from: 3 },
+    { from: '#/call/c-3' },
+    { from: '#/setup/agents' },
+    { from: '#/no-such-page' },
+  ])
+    assert.equal(callOpener(state), null, JSON.stringify(state));
+  // The page under the call is the one that opened it, and the dialog's way out says so.
+  const settled = snapshot({
+    needsYou: [],
+    answered: [call({ state: 'answered', answer: { option: 0, at: ago(5) } })],
+  });
+  const over = render(settled, '#/call/c-4', {
+    page: 'direction',
+    direction: 'd-2',
+  });
+  assert.match(over, /class="direction-head"/);
+  assert.doesNotMatch(over, new RegExp(`id="${decideId}"`));
+  assert.match(text(dialog(over)), /Back(?! to the lab)/);
+  assert.match(text(dialog(render(settled))), /Back to the lab/);
+  // Close: back, to the page that opened the call. "See the thread" goes to its post on the lab home.
+  const done: string[] = [];
+  const stand = (name: string, value: unknown): void => {
+    const had = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      writable: true,
+      value,
+    });
+    t.after(() => {
+      if (had) Object.defineProperty(globalThis, name, had);
+      else Reflect.deleteProperty(globalThis, name);
+    });
+  };
+  const history = {
+    state: null as unknown,
+    back: () => done.push('back'),
+    replaceState: (_state: unknown, _title: string, url: string) =>
+      done.push(`replace ${url}`),
+  };
+  stand('history', history);
+  stand('location', { pathname: '/app/', search: '' });
+  stand('HashChangeEvent', Event);
+  stand('dispatchEvent', () => true);
+  const leave = (state: unknown, post: string | null): string | undefined => {
+    history.state = state;
+    leaveCall(post);
+    return done.pop();
+  };
+  assert.equal(leave(openedFrom('#/d/d-2'), null), 'back');
+  assert.equal(leave(openedFrom('#/'), null), 'back');
+  assert.equal(leave(openedFrom('#/'), 'p-12'), 'back');
+  assert.equal(
+    leave(openedFrom('#/d/d-2'), 'p-12'),
+    'replace /app/#/board/p-12',
+  );
+  // A call from anywhere else: its entry becomes the lab's.
+  assert.equal(leave(null, null), 'replace /app/#/');
+  assert.equal(leave(null, 'p-12'), 'replace /app/#/board/p-12');
   // "See the thread" closes only when the thread is on the board page.
   const shown = lab({
     board: {

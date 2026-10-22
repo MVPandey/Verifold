@@ -17,6 +17,7 @@ import {
   counted,
   foldQuery,
   refreshKey,
+  stepLines,
   stepTotal,
   stepVerb,
   stepWhat,
@@ -36,7 +37,11 @@ import {
 import { agentActions } from '../src/app/actions.ts';
 import { Screen } from '../src/app/App.tsx';
 import { runLabel } from '../src/app/components/RunChip.tsx';
-import { StepList, StepRow } from '../src/app/components/StepList.tsx';
+import {
+  StepGroup,
+  StepList,
+  StepRow,
+} from '../src/app/components/StepList.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import type { LabState } from '../src/app/store.ts';
@@ -413,6 +418,9 @@ await test('a turn folds into one line of its work, counted the way the harness 
     counted({ ...none, search: 1, read: 2, command: 9, run: 1 }),
     ['1 search', '2 files read', '9 commands', '1 run'],
   );
+  // A tool call of no known kind counts as what it is.
+  assert.deepEqual(counted({ ...none, other: 1 }), ['1 other tool call']);
+  assert.deepEqual(counted({ ...none, other: 2 }), ['2 other tool calls']);
   const [first, second] = turns;
   assert.ok(first && second);
   assert.equal(
@@ -796,6 +804,94 @@ await test('an open fold lists the newest tool calls, counts the earlier ones fr
   );
   assert.match(empty, /2 earlier steps/);
   assert.doesNotMatch(empty, /No tool calls/);
+});
+
+/** A command that ended well after 2 seconds. */
+function quick(index: number, title: string, fields: Partial<Step> = {}): Step {
+  const at = ago(10);
+  return step(index, {
+    title,
+    at,
+    endedAt: new Date(Date.parse(at) + 2_000).toISOString(),
+    ...fields,
+  });
+}
+
+await test('short commands in a row fold into one line, with the thoughts between them, and anything else ends the row', () => {
+  const thought = (index: number): Step =>
+    step(index, { type: 'thinking', kind: null, endedAt: null });
+  const shape = (steps: readonly Step[]): string[] =>
+    stepLines(steps).map((line) =>
+      'step' in line
+        ? String(line.step.index)
+        : `${line.commands}:${line.steps.map((entry) => entry.index).join(',')}`,
+    );
+  assert.deepEqual(
+    shape([
+      thought(0),
+      step(1, {}),
+      quick(2, 'ls'),
+      thought(3),
+      quick(4, 'cat gap.json'),
+      quick(5, 'head train.log'),
+      thought(6),
+      step(7, { type: 'text', kind: null, endedAt: null }),
+      quick(8, 'ls'),
+      quick(9, 'wc -l out.csv'),
+    ]),
+    // A thought before the row and after it stays out of it; two commands do not fold.
+    ['0', '1', '3:2,3,4,5', '6', '7', '8', '9'],
+  );
+  // A command that failed, still runs, or took 10 seconds or more ends the row.
+  for (const breaker of [
+    quick(3, 'pytest', { status: 'failed' }),
+    quick(3, 'sleep 1', { status: 'running', endedAt: null }),
+    quick(3, 'sleep 10', {
+      endedAt: new Date(Date.parse(ago(10)) + 10_000).toISOString(),
+    }),
+    step(3, { kind: 'read', title: 'gap.json' }),
+  ])
+    assert.deepEqual(
+      shape([quick(1, 'ls'), quick(2, 'ls'), breaker, quick(4, 'ls')]),
+      ['1', '2', '3', '4'],
+      breaker.title ?? '',
+    );
+  // The fold's list folds them too, and names the long command apart.
+  const fold = text(
+    renderToStaticMarkup(
+      <StepList
+        id="s"
+        steps={[
+          quick(1, 'ls'),
+          quick(2, 'cat gap.json'),
+          quick(3, 'head train.log'),
+          quick(4, 'wc -l out.csv'),
+          step(5, { title: 'python filter.py --keep 0.3' }),
+        ]}
+        total={5}
+        turnHref="#/"
+      />,
+    ),
+  );
+  assert.match(
+    fold,
+    /Ran 4 short commands Ran python filter\.py --keep 0\.3 Open every step/,
+  );
+  // On the turn's page the line opens its rows on Show.
+  const row = renderToStaticMarkup(
+    <ol>
+      <StepGroup
+        steps={[quick(1, 'ls'), quick(2, 'cat gap.json'), quick(3, 'ls')]}
+        commands={3}
+      />
+    </ol>,
+  );
+  assert.match(
+    text(row),
+    new RegExp(`Ran 3 short commands Show ${clock(ago(10))}`),
+  );
+  assert.match(row, /aria-expanded="false"/);
+  assert.doesNotMatch(row, /cat gap\.json/);
 });
 
 await test('a step on the turn page: a command shows the end of its output, other steps open on a button', () => {
