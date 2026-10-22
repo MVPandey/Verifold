@@ -22,6 +22,8 @@ const environment = {
   PATH: `${join(directory, 'bin')}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
   npm_config_cache: join(directory, 'cache'),
 };
+// The person's own Claude Code model does not reach the processes that the check starts.
+delete environment.ANTHROPIC_MODEL;
 const run = (command, args, cwd) => {
   const result = spawnSync(command, args, {
     cwd,

@@ -737,7 +737,8 @@ function tool(status: HarnessStatus, agency: Agency | null): AgentTool {
     use: agency
       ? agency.host === status.harness || agency.helper === status.harness
       : status.installed && status.signedIn !== false,
-    model: saved ?? models[0]?.id ?? null,
+    // A first choice without an ID is the harness's own model.
+    model: saved ?? (models[0]?.id || null),
     models,
   };
 }

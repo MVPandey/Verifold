@@ -183,6 +183,8 @@ export type HostEvent =
       readonly type: 'session';
       readonly id: string;
       readonly model?: string;
+      /** Codex: the model that Verifold picked from the app-server's list for a session without a model. */
+      readonly picked?: string;
       readonly mode?: string;
     }
   | { readonly type: 'mode'; readonly mode: string }
@@ -275,8 +277,9 @@ export interface HostOptions {
   readonly mode: SessionMode;
   readonly model?: string;
   /**
-   * Codex only, without `model`: Verifold picks the most capable model that
-   * the app-server's `model/list` offers before the thread starts.
+   * Codex only, without `model`: before the thread starts, Verifold picks the
+   * first of its preferred models that the app-server's `model/list` offers,
+   * else none, so the thread runs the person's own Codex model.
    */
   readonly bestModel?: boolean;
   /**
@@ -1626,10 +1629,11 @@ function codex(options: HostOptions): HostSession {
   }
 
   /**
-   * Read every page of `model/list`, then start the thread with the most
-   * capable model. A refused list starts it with the person's own model.
-   * When the person's reasoning effort, `effort`, is one that the model does
-   * not support, the thread gets the model's default effort.
+   * Read every page of `model/list`, then start the thread with the first of
+   * Verifold's preferred models that it offers. A refused list, or one
+   * without them, starts it with the person's own model. When the person's
+   * reasoning effort, `effort`, is one that the model does not support, the
+   * thread gets the model's default effort.
    */
   function chooseModel(config: Record<string, unknown>, effort: unknown): void {
     listCodexModels(call, (models) => {
@@ -1639,14 +1643,19 @@ function codex(options: HostOptions): HostSession {
       startThread(
         fitted ? { ...config, model_reasoning_effort: fitted } : config,
         model,
+        true,
       );
     });
   }
 
-  /** Start or resume the thread with the configuration that turns off the user's MCP servers. */
+  /**
+   * Start or resume the thread with the configuration that turns off the
+   * user's MCP servers. `picked`: Verifold picked `model` from Codex's list.
+   */
   function startThread(
     config: Record<string, unknown>,
     model: string | undefined,
+    picked = false,
   ): void {
     const unsupervised =
       options.mode === 'strict' || options.mode === 'coordinator'
@@ -1695,12 +1704,14 @@ function codex(options: HostOptions): HostSession {
           stop(child);
           return;
         }
-        const model = str(result.model);
+        // A resume's answer can leave the model out. The thread then runs the model that Verifold sent.
+        const reported = str(result.model) ?? model;
         const reviewer = str(result.approvalsReviewer);
         emit({
           type: 'session',
           id: thread,
-          ...(model ? { model } : {}),
+          ...(reported ? { model: reported } : {}),
+          ...(picked && model ? { picked: model } : {}),
           ...(reviewer ? { mode: reviewer } : {}),
         });
         // A cancel can arrive before the thread exists. Then the first turn never starts.
