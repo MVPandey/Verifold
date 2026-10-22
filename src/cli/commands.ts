@@ -797,14 +797,15 @@ async function serveDesk(
             );
         },
       });
-      // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it.
+      // A lease change shows in the terminal and wakes the coordinator, unless the coordinator made it or the change wakes no one.
       // A lease of lab directions wakes their agents instead.
       // Before a pod stops, its tasks' results and its lab runs' outputs come back.
       const compute = computeFor(
         root,
         io,
-        (lease, line) => {
+        (lease, line, wake) => {
           io.progress?.(`Pod ${line}`);
+          if (!wake) return;
           if (lease.directions?.length) owned.lab?.leaseChanged(lease, line);
           else if (lease.history.at(-1)?.by !== 'coordinator')
             owned.coordinator?.notify({ kind: 'pod', text: line });
@@ -1752,7 +1753,7 @@ async function recover(
 function computeFor(
   root: string,
   io: CliIO,
-  onChange?: (lease: Lease, line: string) => void,
+  onChange?: (lease: Lease, line: string, wake: boolean) => void,
   taskFolder?: (task: string) => Promise<TaskPlace | null>,
   runsStop?: (lease: string) => Promise<void>,
   agency: string = agencyDirectory(root),
