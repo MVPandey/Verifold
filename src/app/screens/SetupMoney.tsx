@@ -1,14 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { MoneyLimits, SetupView } from '../../protocol/api.ts';
 import { Check } from '../components/Icons.tsx';
-import {
-  GpuTable,
-  LimitField,
-  numberOf,
-  readAt,
-} from '../components/Limits.tsx';
+import { GpuTable, LimitField, numberOf } from '../components/Limits.tsx';
 import { StepHeader } from '../components/StepHeader.tsx';
-import { usd } from '../format.ts';
+import { dayClock, usd } from '../format.ts';
 import { newKey } from '../intent.ts';
 import { allowedGpus, type SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
@@ -226,8 +221,9 @@ export function MoneyStep({
           </h2>
           {money.prices && (
             <span className="setup__meta">
-              RunPod’s Secure Cloud list prices, read {readAt(money.prices.at)}.
-              Each rental’s price comes from RunPod when an agent asks for it.
+              RunPod’s Secure Cloud list prices, read{' '}
+              {dayClock(money.prices.at)}. Each rental’s price comes from RunPod
+              when an agent asks for it.
             </span>
           )}
         </div>

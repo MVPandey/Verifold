@@ -17,6 +17,7 @@ import {
   type Direction,
   type Evidence,
   type LabState,
+  type PlanFact,
   type Spend,
   type Verdict,
   chosenEffect,
@@ -253,6 +254,63 @@ export function localDay(date: Date): string {
   const two = (value: number): string => String(value).padStart(2, '0');
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
 }
+
+/** A plan's facts as prompt lines. Their texts come from an agent, so they are quoted. */
+export function factLines(facts: readonly PlanFact[]): string[] {
+  return facts.map(
+    (fact) =>
+      `- ${JSON.stringify(fact.claim)}: ${fact.source ? `source ${JSON.stringify(fact.source)}${fact.sourceDate ? ` of ${JSON.stringify(fact.sourceDate)}` : ''}, listed ${localDay(new Date(fact.checkedAt))}` : 'unverified (no source)'}.`,
+  );
+}
+
+/**
+ * The GPU pods of a lab. `none`: this Verifold has no pods, so no setting
+ * turns them on. `on`: a RunPod key is saved and the person set a spend
+ * limit. Otherwise pods are off, without a spend limit or without a key.
+ */
+export type PodsState = 'none' | 'on' | 'no-limit' | 'no-key';
+
+/**
+ * What an agent reads of each pods state: the line of its prompts, why a pod
+ * request starts no pod, and the access call that turns pods on, where the
+ * person can turn them on.
+ */
+export const podsWords = {
+  none: {
+    line: 'GPU pods: this Verifold has none.',
+    off: 'GPUs are not available here: this Verifold has no GPU pods, and the person cannot turn them on. Do the work without a GPU, or post on the board why it needs one.',
+    call: null,
+  },
+  on: {
+    line: 'GPU pods: on. A RunPod key is saved, and the person set a spend limit.',
+    off: null,
+    call: null,
+  },
+  'no-limit': {
+    line: "GPU pods: off. A RunPod key is saved, but the person set no spend limit in the project's settings yet.",
+    off: "Pods are off: a RunPod key is saved, but the person set no spend limit in the project's settings.",
+    call: {
+      question:
+        "Set a spend limit in the project's settings, so agents can rent GPUs?",
+      done: 'I set a limit',
+    },
+  },
+  'no-key': {
+    line: 'GPU pods: off. No RunPod key is saved yet.',
+    off: 'Pods are off: no RunPod key is saved, and no spend limit is set.',
+    call: {
+      question: 'Add a RunPod key and a spend limit, so agents can rent GPUs?',
+      done: 'I added them',
+    },
+  },
+} as const satisfies Record<
+  PodsState,
+  {
+    readonly line: string;
+    readonly off: string | null;
+    readonly call: { readonly question: string; readonly done: string } | null;
+  }
+>;
 
 /** The words of each verdict. */
 export const verdictWords: Record<Verdict, string> = {

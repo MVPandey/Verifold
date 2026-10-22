@@ -1,18 +1,10 @@
 import { useId, type ReactNode } from 'react';
-import { clock, usd } from '../format.ts';
+import { usd } from '../format.ts';
 
 /** A number that the person typed, or null when it is not one. */
 export function numberOf(text: string): number | null {
   const value = Number(text.trim());
   return text.trim() && Number.isFinite(value) ? value : null;
-}
-
-/** When Verifold read the prices: "at 19:41 today", or with the date. */
-export function readAt(at: string): string {
-  const date = new Date(at);
-  return date.toDateString() === new Date().toDateString()
-    ? `at ${clock(at)} today`
-    : `on ${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} at ${clock(at)}`;
 }
 
 /** One number field with its unit, as in the artboard's "Limits". `note`: a line under it. */

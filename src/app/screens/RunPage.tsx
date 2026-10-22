@@ -163,7 +163,7 @@ function RunFacts({
   const handle = detail?.handle ?? agent?.handle ?? run.agent;
   const harness = detail?.harness ?? agent?.harness;
   return (
-    <dl className="facts">
+    <dl className="run-facts">
       <dt>Command</dt>
       <dd>
         <code className="mono">{run.command}</code>

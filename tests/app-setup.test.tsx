@@ -393,7 +393,7 @@ await test('step 4 asks for a key without one, and with one shows the prices wit
     shown,
     /H200 141 GB \$4\.39 H100 SXM 80 GB \$3\.99 L40S 48 GB \$1\.09/,
   );
-  assert.match(shown, /read at \d{2}:\d{2} today/);
+  assert.match(shown, /read today at \d{2}:\d{2}/);
   // At or under the $4 cap: allowed. Above it: not.
   assert.match(priced, /aria-label="Allow H200"\/>/);
   assert.match(priced, /aria-label="Allow H100 SXM" checked=""/);
@@ -557,7 +557,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
   assert.match(shown, /Skills that fit your work/);
   assert.match(
     shown,
-    /Verifold read 1 skill catalog at \d\d:\d\d today and matched them to your profile\. Claude Code picked these/,
+    /Verifold read 1 skill catalog today at \d\d:\d\d and matched them to your profile\. Claude Code picked these/,
   );
   assert.match(
     shown,
@@ -661,7 +661,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
   assert.match(updates, /@ aaaaaaa · updated: not read/);
   assert.match(
     updates,
-    /Verifold read 1 skill catalog at \d\d:\d\d today to check your added skills for updates\./,
+    /Verifold read 1 skill catalog today at \d\d:\d\d to check your added skills for updates\./,
   );
   assert.match(updates, /this step needs About you first/);
   assert.match(updates, /Update/);
