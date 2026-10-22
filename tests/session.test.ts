@@ -1448,6 +1448,18 @@ await test('the terminal feed leaves harness tool events to the desk', () => {
   assert.equal(status?.log, status?.text);
 });
 
+await test('the terminal feed cuts a long agent line without splitting a character', () => {
+  const at = '2026-10-02T12:00:00.000Z';
+  const line = feedLine({
+    at,
+    kind: 'agent',
+    text: `${'a'.repeat(599)}😀${'b'.repeat(50)}`,
+  });
+  const text = line?.text ?? '';
+  assert.ok(text.endsWith('…'));
+  assert.doesNotMatch(text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+});
+
 await test('the terminal prints the whole request: why it asks, and the change in a margin', () => {
   const at = '2026-10-02T12:00:00.000Z';
   const detail = Array.from({ length: 45 }, (_, index) => `line ${index + 1}`);

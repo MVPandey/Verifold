@@ -542,7 +542,7 @@ export interface AgentRecord {
   readonly cursor: number;
   readonly wakeups: readonly string[];
   readonly events: readonly QueuedEvent<LabEvent>[];
-  /** Turns in a row that changed nothing: no post and no file change. */
+  /** Turns in a row that gave the other agents nothing new: no post, and no file change or a commit that failed. */
   readonly idleStreak: number;
   /** Turns in a row without a post of the agent. */
   readonly quietTurns: number;
@@ -557,6 +557,12 @@ export interface AgentRecord {
   readonly finished: boolean;
   /** The fingerprint of the direction's folder after the last turn, ignored files too. */
   readonly folder: string | null;
+  /**
+   * The fingerprint of the files with more than one link that the last commit
+   * after a turn left out. The agent hears of them when the set changes.
+   * Absent: no commit after a turn yet.
+   */
+  readonly linked?: string;
   /** When its process stopped by itself, recently. */
   readonly restarts: readonly string[];
   readonly actions: readonly LabAction[];
@@ -1822,6 +1828,9 @@ export function parseAgent(
       typeof value.folder === 'string' && /^[0-9a-f]{64}$/.test(value.folder)
         ? value.folder
         : null,
+    ...(typeof value.linked === 'string' && /^[0-9a-f]{64}$/.test(value.linked)
+      ? { linked: value.linked }
+      : {}),
     restarts: times(value.restarts),
     actions: value.actions.flatMap((entry) => {
       const action = object(entry);

@@ -389,6 +389,8 @@ async function fixture(
     readonly hourMs?: number;
     /** One minute of a run's or a check's time limit, short in a test. */
     readonly minuteMs?: number;
+    /** The waits after turns that gave nothing new, short in a test. */
+    readonly backoffMs?: readonly number[];
     /** The project folder's name. */
     readonly folder?: string;
     /** The sandbox of runs. Default: none at all, so a run's command runs as it is. Null: no runs. */
@@ -467,6 +469,7 @@ async function fixture(
         ...timing,
         ...(options.hourMs ? { hourMs: options.hourMs } : {}),
         ...(options.minuteMs ? { minuteMs: options.minuteMs } : {}),
+        ...(options.backoffMs ? { backoffMs: options.backoffMs } : {}),
       },
       ...(options.compute ? { compute: options.compute } : {}),
       ...(options.model ? { model: options.model } : {}),
@@ -2937,8 +2940,8 @@ await test('an agent whose first prompt fails waits, and the agent after it star
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
 });
 
-await test('a commit that fails is not a turn without change: the agent hears why, and its turns go on', async (t) => {
-  const lab = await fixture(t);
+await test('a commit that fails after each turn waits longer, as turns without change do: the agent hears why', async (t) => {
+  const lab = await fixture(t, { backoffMs: [300, 300, 300] });
   await lab.lab.start('Do LLMs store months on circles?');
   await lab.lab.pause();
   await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
@@ -2946,14 +2949,48 @@ await test('a commit that fails is not a turn without change: the agent hears wh
   const lock = join(lab.root, '.git', 'worktrees', 'd-1-alpha', 'index.lock');
   await writeFile(lock, '');
   await lab.lab.resume();
-  // Turns that change nothing would wait a minute after the second one. These do not count.
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 8000);
+  const inputs = await lab.inputs('d-1-alpha');
   assert.match(
-    (await lab.inputs('d-1-alpha'))[1] ?? '',
-    /could not commit your folder after your last turn/,
+    inputs[1] ?? '',
+    /could not commit your folder after your last turn[^]*Your last turn ended\./,
   );
-  assert.equal(lab.lab.view()?.directions[0]?.agent.idleStreak, 0);
+  // The second failed turn counts as a turn without change, so the next one waits.
+  assert.match(
+    inputs[2] ?? '',
+    /could not commit your folder after your last turn[^]*Your last 2 turns gave the other agents no new commit and no post, so this turn came after/,
+  );
   await rm(lock);
+});
+
+await test('the note about linked files comes once for each set of such files', async (t) => {
+  const lab = await fixture(t, { backoffMs: [200, 200, 200] });
+  await lab.lab.start('Do LLMs store months on circles?');
+  await lab.lab.pause();
+  await lab.lab.addDirection({ title: 'Alpha', harness: 'claude' });
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'shared.md'), 'twice\n');
+  await link(join(folder, 'shared.md'), join(folder, 'shared-copy.md'));
+  const noted = async (): Promise<number> =>
+    (await lab.inputs('d-1-alpha')).filter((input) =>
+      input.includes('Verifold left files with more than one hard link'),
+    ).length;
+  await lab.lab.resume();
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
+  assert.equal(await noted(), 1);
+  // Two more such files change the set, so the agent hears of them once more.
+  // They come while no owner runs, so no commit is under way. The set that the
+  // agent heard of stays across the restart.
+  const before = (await lab.inputs('d-1-alpha')).length;
+  await lab.restart(async () => {
+    await writeFile(join(folder, 'other.md'), 'twice\n');
+    await link(join(folder, 'other.md'), join(folder, 'other-copy.md'));
+  });
+  await until(
+    async () => (await lab.inputs('d-1-alpha')).length >= before + 3,
+    8000,
+  );
+  assert.equal(await noted(), 2);
 });
 
 await test('a digest of long posts stays within what a turn takes: long posts are cut and say where the rest is', async (t) => {
