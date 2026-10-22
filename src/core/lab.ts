@@ -4483,6 +4483,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
             path,
             why: "It is a file that Verifold can't copy safely. Ask the agent to write a separate copy.",
           })),
+          ...made.nested.map((path) => ({
+            path,
+            why: 'It is a folder with its own Git data, so Verifold does not commit it.',
+          })),
         ],
       });
     });
@@ -7291,6 +7295,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     readonly order: number;
     readonly linked: readonly string[];
     readonly skipped: readonly string[];
+    readonly nested: readonly string[];
   }> {
     return this.inDirection(direction.id, async () => {
       const made = await snapshot(
