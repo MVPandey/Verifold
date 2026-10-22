@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import type { Call } from '../../protocol/api.ts';
-import { decideId, fromLab } from '../call.ts';
+import { decideId } from '../call.ts';
 import { asked, since, usd } from '../format.ts';
-import { href } from '../route.ts';
+import { DecideLink } from './DecideLink.tsx';
 
 /**
  * The oldest call that waits for the person: the question, the price of the
@@ -41,26 +41,11 @@ export function NeedsYouLine({
           </span>
         )}
       </span>
-      <a
+      <DecideLink
+        call={call.id}
         id={decideId}
         className="button button--dark"
-        href={href.call(call.id)}
-        onClick={(event) => {
-          // A plain click opens the call over the lab, marked so that its Close goes back.
-          if (
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey
-          )
-            return;
-          event.preventDefault();
-          history.pushState(fromLab, '', href.call(call.id));
-          dispatchEvent(new HashChangeEvent('hashchange'));
-        }}
-      >
-        Decide
-      </a>
+      />
     </div>
   );
 }

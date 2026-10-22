@@ -604,10 +604,8 @@ await test('every hit opens from what this snapshot holds: a post on the board o
     type: 'go',
     route: '#/run/r-3',
   });
-  assert.deepEqual(hitAction(hits.call, lab), {
-    type: 'go',
-    route: '#/call/c-4',
-  });
+  // A call opens over this page, as Decide opens it.
+  assert.deepEqual(hitAction(hits.call, lab), { type: 'call', id: 'c-4' });
   // A call that the snapshot does not hold never opens the dialog, which could not show it.
   assert.deepEqual(hitAction(hits.answered, lab), { type: 'read' });
 

@@ -21,6 +21,7 @@ import { afterSend, intentFor, unansweredAfter } from '../src/app/intent.ts';
 import { parseRoute } from '../src/app/route.ts';
 import { LabStore, newer, type LabState } from '../src/app/store.ts';
 import { Screen } from '../src/app/App.tsx';
+import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import { runCli, terminalInput } from '../src/cli/commands.ts';
@@ -773,7 +774,7 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.match(page, /You If budget is left, try Gemma/);
   assert.doesNotMatch(page, /You Question/);
   // An agent's reply to the person's post is a quiet line under it, with no rail.
-  assert.match(page, /claude-1 Added it to the plan/);
+  assert.match(page, /claude-1 · Added it to the plan/);
   assert.match(
     html,
     /class="ack"><span class="avatar avatar--xs avatar--claude" aria-hidden="true">Cl<\/span>/,
@@ -782,6 +783,29 @@ await test('the lab home shows the call, the directions with live lines, and the
   assert.match(html, /placeholder="Reply, or @mention an agent"/);
   // No inline styles, so the desk's CSP holds.
   assert.doesNotMatch(html, /style="/);
+});
+
+await test("an agent's short answer to the person reads as one line: the name, a separator, and the answer as the agent wrote it", () => {
+  const page = text(
+    renderToStaticMarkup(
+      <BoardThread
+        thread={{
+          root: post('p-13', 'person', 'question', 'Try Gemma too.'),
+          replies: [
+            post('p-14', 'a-1', 'status', 'Added it to the plan.', {
+              replyTo: 'p-13',
+            }),
+            // An answer can start with a command, a file name, or an ID, so case says nothing about it.
+            post('p-15', 'a-4', 'status', 'pytest passes on gemma.py.', {
+              replyTo: 'p-13',
+            }),
+          ],
+        }}
+      />,
+    ),
+  );
+  assert.match(page, /claude-1 · Added it to the plan\./);
+  assert.match(page, /codex-2 · pytest passes on gemma\.py\./);
 });
 
 await test('a run chip opens the run without a direction, and a file chip without one is not a link', () => {

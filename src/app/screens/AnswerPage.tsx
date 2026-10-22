@@ -26,6 +26,7 @@ import type { Connection } from '../store.ts';
 import { useAction } from '../useAction.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
+import { DecideLink } from '../components/DecideLink.tsx';
 import { Chevron } from '../components/Icons.tsx';
 import { RunChip } from '../components/RunChip.tsx';
 import { Verdict } from '../components/Verdict.tsx';
@@ -189,7 +190,7 @@ function StillOpen({ lab }: { readonly lab: Lab }): ReactNode {
         })}
         {lab.needsYou.map((call) => (
           <li key={call.id}>
-            {call.question} <a href={href.call(call.id)}>Decide</a>
+            {call.question} <DecideLink call={call.id} />
           </li>
         ))}
       </ul>

@@ -31,6 +31,7 @@ import { Avatar } from '../components/Avatar.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
+import { DecideLink } from '../components/DecideLink.tsx';
 import { Chevron } from '../components/Icons.tsx';
 import { MoreMenu } from '../components/MoreMenu.tsx';
 import { RunChip } from '../components/RunChip.tsx';
@@ -270,6 +271,7 @@ export function TurnItem({
                 steps={steps.steps}
                 total={stepTotal(turn)}
                 turnHref={turnHref}
+                live={turn.endedAt === null}
               />
               {problem && (
                 <p role="status" className="steps__problem">
@@ -326,9 +328,7 @@ function LiveLine({
           <span className="live__text">
             Waiting for your answer · {since(call.at, now)}
           </span>
-          <a className="button button--dark" href={href.call(call.id)}>
-            Decide
-          </a>
+          <DecideLink call={call.id} className="button button--dark" />
         </div>
       )}
       {live.state !== 'working' && !call && (
