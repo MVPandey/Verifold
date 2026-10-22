@@ -462,6 +462,7 @@ function seededView(): LabView {
       }),
     ],
     brought: [],
+    brings: [],
     bringing: null,
     signoff: null,
   };

@@ -62,6 +62,7 @@ import {
   askers,
   bringGroups,
   labLimits,
+  type Bring,
   type BringList as LabBringList,
   type Brought,
   type Call as LabCall,
@@ -782,6 +783,15 @@ function broughtByDirection(
   return counts;
 }
 
+/** When the person last undid a bring-in of each direction, by direction. */
+function undoneByDirection(brings: readonly Bring[]): Map<string, string> {
+  const newest = new Map<string, string>();
+  for (const entry of brings)
+    if (entry.undoneAt && entry.undoneAt > (newest.get(entry.direction) ?? ''))
+      newest.set(entry.direction, entry.undoneAt);
+  return newest;
+}
+
 /** The lab's directions that hold up and that are ruled out, from one scan that the counts and the notify lists share. */
 interface Settled {
   readonly holdsUp: readonly LabDirection[];
@@ -810,6 +820,7 @@ function direction(
   disputed: (entry: LabDirection) => boolean,
   buildsOn: readonly LabDirection['buildsOn'][number][],
   brought: { readonly files: number; readonly lastAt: string } | undefined,
+  undoneAt: string | undefined,
 ): Direction {
   return {
     id: entry.id,
@@ -834,6 +845,7 @@ function direction(
     stoppedAt: entry.stoppedAt,
     head: entry.head,
     brought: brought ?? null,
+    undoneAt: undoneAt ?? null,
   };
 }
 
@@ -1537,6 +1549,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
   const brought = broughtByDirection(state.brought);
+  const undone = undoneByDirection(state.brings);
   const directions = keep(state.directions, level.directions, 'directions');
   const kept = new Set(directions.map((entry) => entry.id));
   return {
@@ -1584,6 +1597,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         disputed,
         keep(entry.buildsOn, level.buildsOn, 'buildsOn'),
         brought.get(entry.id),
+        undone.get(entry.id),
       ),
     ),
     directionCounts: directionCounts(state.directions, settled, disputed),
@@ -1719,18 +1733,54 @@ function bringList(list: LabBringList, branch: string): BringList {
   };
 }
 
-/** A direction's newest bring-ins, oldest first, within their bounds. */
+/**
+ * A direction's newest bring-ins, oldest first, within their bounds. A
+ * bring-in with a record has an undo until the person undoes it, unless a
+ * file and a folder traded places in it. A bring-in without one, from
+ * before undo, shows the files that keep it as their base, and has none.
+ */
 function bringHistory(
-  brought: readonly Brought[],
+  state: {
+    readonly brought: readonly Brought[];
+    readonly brings: readonly Bring[];
+  },
   direction: string,
 ): BringGroup[] {
-  return bringGroups(brought, direction)
+  const key = (entry: { readonly at: string; readonly commit: string }) =>
+    `${entry.at}|${entry.commit}`;
+  const recorded = state.brings.filter(
+    (entry) => entry.direction === direction,
+  );
+  const known = new Set(recorded.map(key));
+  return [
+    ...bringGroups(
+      state.brought.filter((entry) => !known.has(key(entry))),
+      direction,
+    ).map((group) => ({
+      ...group,
+      undoable: false,
+      undoneAt: null,
+      swapped: false,
+    })),
+    ...recorded.map((entry) => ({
+      at: entry.at,
+      commit: entry.commit,
+      paths: entry.files.map((file) => file.path),
+      undoable: !entry.swapped && entry.undoneAt === null,
+      undoneAt: entry.undoneAt,
+      swapped: entry.swapped,
+    })),
+  ]
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
     .slice(-apiLimits.bringGroups)
     .map((group) => ({
       at: group.at,
       commit: group.commit,
       paths: group.paths.slice(0, apiLimits.bringPaths),
       more: Math.max(0, group.paths.length - apiLimits.bringPaths),
+      undoable: group.undoable,
+      undoneAt: group.undoneAt,
+      swapped: group.swapped,
     }));
 }
 
@@ -2253,7 +2303,7 @@ export class ApiReader {
           ? bringList(read, workspaceName(entry.workspace))
           : null,
       error: typeof read === 'string' ? read : null,
-      history: bringHistory(view.state.brought, id),
+      history: bringHistory(view.state, id),
     };
   }
 
@@ -2548,6 +2598,7 @@ const actionNames = new Set<string>([
   'lab-signoff',
   'lab-bring-look',
   'lab-bring',
+  'lab-bring-undo',
   'lab-dismiss',
   'lab-away-dismiss',
   'lab-look',

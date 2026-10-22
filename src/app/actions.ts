@@ -88,6 +88,7 @@ export function answerActions(token: string | null): AnswerActions {
       signOff: signedOut,
       look: signedOut,
       bring: signedOut,
+      undo: signedOut,
       read: unread,
       diff: unread,
     };
@@ -97,6 +98,8 @@ export function answerActions(token: string | null): AnswerActions {
     look: (direction, key) => act(token, 'lab-bring-look', { direction }, key),
     bring: (direction, commit, files, key) =>
       act(token, 'lab-bring', { direction, commit, files }, key),
+    undo: (direction, at, commit, key) =>
+      act(token, 'lab-bring-undo', { direction, at, commit }, key),
     read: (direction, signal) =>
       load(token, paths.bring(direction), isBringRead, signal),
     diff: (direction, file, commit, signal) =>

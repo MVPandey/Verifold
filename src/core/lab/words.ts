@@ -5,13 +5,19 @@
  */
 import { createHash } from 'node:crypto';
 import { boardLimits, clip, safePath, type NewPost } from '../board.ts';
-import { type SessionRecord, usdValue } from '../session.ts';
+import {
+  SessionActionError,
+  type SessionRecord,
+  usdValue,
+} from '../session.ts';
 import {
   type ChangedFile,
   scratch,
+  WorkspaceError,
   limits as workspaceLimits,
 } from '../workspaces.ts';
 import {
+  type Bring,
   type Brought,
   type Call,
   type Direction,
@@ -186,17 +192,73 @@ export const stoppedText =
 export const movingText =
   'Verifold is moving the lab to the archive. Try again in a moment.';
 
+export const bringStoppedText =
+  'Nothing came in: Start over stopped the bring-in.';
+
+export const undoStoppedText =
+  'Nothing went back: Start over stopped the undo.';
+
+/** Why an undo puts nothing back: files that changed after they came in. */
+export function undoChangedText(files: readonly string[]): string {
+  return files.length === 1
+    ? `This file changed after it came in, so nothing went back: ${nameList(files)}.`
+    : `These files changed after they came in, so nothing went back: ${nameList(files)}.`;
+}
+
+/** Plain reasons for a copy into the project folder that failed, by error code. */
+const copyErrors: Readonly<Record<string, string>> = {
+  EACCES: 'Verifold may not read or write there.',
+  EPERM: 'Verifold may not read or write there.',
+  EROFS: 'The project folder is read-only.',
+  ENOSPC: 'The disk is full.',
+  EDQUOT: 'The disk is full.',
+  EEXIST: 'A file or folder is in the way.',
+  ENOTDIR: 'A file is in the place of a folder.',
+  EISDIR: 'A folder is in the place of a file.',
+  ENOTEMPTY: 'A folder is in the way.',
+  EBUSY: 'A file is in use.',
+};
+
 /**
- * The bring-ins with the files of `record` that came in: each file of a
- * direction keeps only its newest base. Without files, the same list.
+ * Why a copy into the project folder failed, in plain words: Verifold's own
+ * message, or a reason by the error's code. The text of Git and of the
+ * system stays out.
+ */
+export function copyReason(error: unknown): string {
+  if (error instanceof SessionActionError) return error.message;
+  // Verifold's own checks have no cause. A Git command that failed has one.
+  if (error instanceof WorkspaceError)
+    return error.cause === undefined
+      ? error.message
+      : 'Verifold could not read the files in Git.';
+  const code =
+    error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : '';
+  return copyErrors[code] ?? 'Verifold could not copy the files.';
+}
+
+/** A file and a folder trade places among these paths: one of them is a folder above another. */
+export function tradesPlaces(paths: readonly string[]): boolean {
+  const all = new Set(paths);
+  return paths.some((path) => {
+    for (let at = path.indexOf('/'); at !== -1; at = path.indexOf('/', at + 1))
+      if (all.has(path.slice(0, at))) return true;
+    return false;
+  });
+}
+
+/**
+ * The bring-ins with the files of `record` that came in at `at`: each file
+ * of a direction keeps only its newest base. Without files, the same list.
  */
 export function withBrought(
   list: readonly Brought[],
   record: { readonly direction: string; readonly commit: string },
   done: readonly string[],
+  at: string,
 ): readonly Brought[] {
   if (!done.length) return list;
-  const at = new Date().toISOString();
   const now = new Set(done);
   return [
     ...list.filter(
@@ -208,6 +270,27 @@ export function withBrought(
       commit: record.commit,
       at,
     })),
+  ];
+}
+
+/**
+ * The bring-ins after an undo of these files of a direction: each file has
+ * its base from before the bring-in again, or none for the direction's
+ * start.
+ */
+export function undoneBrought(
+  list: readonly Brought[],
+  direction: string,
+  files: Bring['files'],
+): readonly Brought[] {
+  const back = new Set(files.map((file) => file.path));
+  return [
+    ...list.filter(
+      (entry) => entry.direction !== direction || !back.has(entry.path),
+    ),
+    ...files.flatMap((file) =>
+      file.base ? [{ direction, path: file.path, ...file.base }] : [],
+    ),
   ];
 }
 
@@ -501,16 +584,16 @@ function blobId(content: Buffer, like: string): string {
 
 /**
  * A project file is this file of a commit: both missing, or the same Git
- * mode and blob ID. A project path that is no file matches nothing.
+ * mode and blob ID. A project path that is no file matches nothing. The
+ * entry's own ID says which hash the repository uses.
  */
 export function sameFile(
   now: { readonly content: Buffer; readonly mode: string } | null | undefined,
   entry: { readonly mode: string; readonly id: string } | undefined,
-  like: string,
 ): boolean {
   if (now === undefined) return false;
   if (now === null || !entry) return now === null && !entry;
-  return now.mode === entry.mode && blobId(now.content, like) === entry.id;
+  return now.mode === entry.mode && blobId(now.content, entry.id) === entry.id;
 }
 
 /** File names for a message: the first 10, then how many more. */

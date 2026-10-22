@@ -446,6 +446,8 @@ export interface Direction {
    * version 1.
    */
   readonly brought?: { readonly files: number; readonly lastAt: string } | null;
+  /** When the person last undid a bring-in from it, or null. Added after version 1. */
+  readonly undoneAt?: string | null;
 }
 
 /** What a turn's tool calls did, by kind. */
@@ -909,13 +911,22 @@ export interface BringList {
   readonly omitted: number;
 }
 
-/** One bring-in of a direction: when, at which commit, and the files that keep it as their base. */
+/**
+ * One bring-in of a direction: when, at which commit, and its files. A
+ * bring-in from before undo lists the files that keep it as their base.
+ */
 export interface BringGroup {
   readonly at: string;
   readonly commit: string;
   readonly paths: readonly string[];
   /** Paths that the group leaves out past its bound. */
   readonly more: number;
+  /** The person can undo it with `lab-bring-undo`. Added after version 1. */
+  readonly undoable?: boolean;
+  /** When the person undid it, or null. Added after version 1. */
+  readonly undoneAt?: string | null;
+  /** A file and a folder traded places in it, so it has no undo. Added after version 1. */
+  readonly swapped?: boolean;
 }
 
 /**
@@ -1267,6 +1278,17 @@ export interface ActionBodies {
     readonly direction: string;
     readonly commit: string;
     readonly files: readonly string[];
+    readonly key?: string;
+  };
+  /**
+   * Undo a bring-in of a direction, named by its `at` and `commit`: each of
+   * its files gets back what it had before, all of them or none. Added
+   * after version 1.
+   */
+  'lab-bring-undo': {
+    readonly direction: string;
+    readonly at: string;
+    readonly commit: string;
     readonly key?: string;
   };
   /**

@@ -45,6 +45,13 @@ export interface AnswerActions {
     files: readonly string[],
     key: string,
   ) => Promise<ActOutcome>;
+  /** Undo a bring-in of a direction, named by when it came in and its commit. */
+  readonly undo: (
+    direction: string,
+    at: string,
+    commit: string,
+    key: string,
+  ) => Promise<ActOutcome>;
   /** What a bring-in of a direction can copy, and its bring-ins so far. */
   readonly read: (
     direction: string,

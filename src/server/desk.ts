@@ -580,6 +580,7 @@ const slowLabActions: Readonly<Record<string, string>> = {
   'lab-call-undo': 'Undoing your answer',
   'lab-bring-look': 'Taking the newest work',
   'lab-bring': 'Bringing in the files',
+  'lab-bring-undo': 'Putting the files back',
 };
 const labWaitMs = 2_000;
 
@@ -657,6 +658,9 @@ async function labAction(
       return 200;
     case 'lab-bring':
       await lab.bring(body.direction, body.commit, body.files);
+      return 200;
+    case 'lab-bring-undo':
+      await lab.undoBring(body.direction, body.at, body.commit);
       return 200;
     case 'lab-signoff':
       await lab.signOff(body.note);

@@ -226,13 +226,22 @@ export function BringFiles({
   );
 }
 
-/** The direction's bring-ins so far: when, which files, at which commit. */
+/**
+ * The direction's bring-ins so far: when, which files, at which commit, and
+ * whether it was undone. With `onUndo`, a bring-in that has an undo shows
+ * Undo. A field that an older server leaves out shows nothing.
+ */
 export function BringHistory({
   history,
+  onUndo,
+  undoBusy = false,
 }: {
   readonly history: readonly BringGroup[];
+  readonly onUndo?: (group: BringGroup) => void;
+  readonly undoBusy?: boolean;
 }): ReactNode {
   if (!history.length) return null;
+  const undoable = Boolean(onUndo) && history.some((group) => group.undoable);
   return (
     <section className="section" aria-labelledby="brought-title">
       <h2 id="brought-title" className="section__title">
@@ -244,9 +253,40 @@ export function BringHistory({
             {clock(group.at)}: {group.paths.join(', ')}
             {group.more > 0 && ` and ${group.more} more`}{' '}
             <span className="muted">at {group.commit.slice(0, 7)}</span>
+            {group.undoneAt ? (
+              <span className="muted">
+                {' '}
+                · undone at {clock(group.undoneAt)}
+              </span>
+            ) : group.swapped ? (
+              <span className="muted">
+                {' '}
+                · no undo: a file and a folder traded places
+              </span>
+            ) : (
+              onUndo &&
+              group.undoable === true && (
+                <button
+                  type="button"
+                  className="answer__undo bring-history__undo"
+                  disabled={undoBusy}
+                  aria-label={`Undo the bring-in of ${clock(group.at)}`}
+                  onClick={() => onUndo(group)}
+                >
+                  Undo
+                </button>
+              )
+            )}
           </li>
         ))}
       </ul>
+      {undoable && (
+        <p className="bring-text bring-text--fine">
+          Undo puts each file of a bring-in back as it was before it came in.
+          When a file changed since, nothing goes back, and Verifold names the
+          file.
+        </p>
+      )}
     </section>
   );
 }
@@ -347,9 +387,37 @@ export function BringPage({
     return outcome;
   }, sameBring);
   const [done, setDone] = useState<string | null>(null);
+  // An undo names its bring-in by when it came in and its commit.
+  const undoPending = useRef(false);
+  const undo = useAction<{ readonly at: string; readonly commit: string }>(
+    async (sent, intent) => {
+      const outcome = await answerActions.undo(
+        direction.id,
+        sent.at,
+        sent.commit,
+        intent,
+      );
+      undoPending.current = 'ok' in outcome && outcome.pending === true;
+      return outcome;
+    },
+    (a, b) => a.at === b.at && a.commit === b.commit,
+  );
+  const work = bringWork(lab, direction.id);
+  // A bring-in or an undo runs, also in the background: nothing else starts meanwhile.
+  const running =
+    bring.busy || undo.busy || (work !== null && work.error === null);
+  const doUndo = async (group: BringGroup): Promise<void> => {
+    if (running) return;
+    setDone(null);
+    if (await undo.submit({ at: group.at, commit: group.commit })) {
+      if (!undoPending.current)
+        setDone('Undone. Each file is back as it was before the bring-in.');
+      reload();
+    }
+  };
   const doBring = async (): Promise<void> => {
     const files = [...chosen].sort();
-    if (!commit || !files.length || bring.busy) return;
+    if (!commit || !files.length || running) return;
     setDone(null);
     if (await bring.submit({ commit, files })) {
       // The files were sent: nothing stays ticked, so a second click sends nothing.
@@ -362,7 +430,6 @@ export function BringPage({
     }
   };
 
-  const work = bringWork(lab, direction.id);
   const can = list ? list.files.filter((file) => file.out === null) : [];
   return (
     <div className="page">
@@ -459,7 +526,7 @@ export function BringPage({
                 <button
                   type="button"
                   className="button button--primary"
-                  disabled={bring.busy || chosen.size === 0}
+                  disabled={running || chosen.size === 0}
                   onClick={() => void doBring()}
                 >
                   Bring in the ticked files
@@ -477,12 +544,25 @@ export function BringPage({
               {bring.error}
             </span>
           )}
+          {undo.error && (
+            <span role="alert" className="composer__error">
+              {undo.error}
+            </span>
+          )}
           {done && (
             <p role="status" className="bring-note bring-note--ok">
               {done}
             </p>
           )}
-          {shown && <BringHistory history={shown.history} />}
+          {shown && (
+            <BringHistory
+              history={shown.history}
+              {...(lab.agentsHere
+                ? { onUndo: (group: BringGroup) => void doUndo(group) }
+                : {})}
+              undoBusy={running}
+            />
+          )}
         </div>
       </main>
     </div>

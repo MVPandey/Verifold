@@ -716,6 +716,78 @@ await test('a bring-in shows its files: code files start unticked with the warni
     text(history),
     /Brought in .*a\.md, b\.md and 3 more at ddddddd/,
   );
+  // A server without undo leaves its fields out: no undo, no mark, no line about undo.
+  assert.doesNotMatch(
+    renderToStaticMarkup(
+      <BringHistory
+        history={[
+          { at: ago(20), commit: 'd'.repeat(40), paths: ['a.md'], more: 0 },
+        ]}
+        onUndo={() => {}}
+      />,
+    ),
+    /<button|undone|no undo|Undo puts/,
+  );
+
+  // A bring-in with an undo, one that the person undid, and one in which a file and a folder traded places.
+  const group = {
+    at: ago(20),
+    commit: 'd'.repeat(40),
+    paths: ['a.md'],
+    more: 0,
+    undoable: true,
+    undoneAt: null,
+    swapped: false,
+  };
+  const lines = renderToStaticMarkup(
+    <BringHistory
+      history={[
+        group,
+        {
+          ...group,
+          at: ago(15),
+          paths: ['b.md'],
+          undoable: false,
+          undoneAt: ago(5),
+        },
+        {
+          ...group,
+          at: ago(10),
+          paths: ['data', 'data/part.csv'],
+          undoable: false,
+          swapped: true,
+        },
+      ]}
+      onUndo={() => {}}
+    />,
+  );
+  // The button's name holds its text and the bring-in's time.
+  assert.match(
+    lines,
+    new RegExp(
+      `<button type="button" class="answer__undo bring-history__undo" aria-label="Undo the bring-in of ${clock(ago(20))}">Undo</button>`,
+    ),
+  );
+  assert.equal(lines.match(/<button/g)?.length, 1);
+  assert.match(
+    text(lines),
+    new RegExp(`b\\.md at ddddddd · undone at ${clock(ago(5))}`),
+  );
+  assert.match(
+    text(lines),
+    /data, data\/part\.csv at ddddddd · no undo: a file and a folder traded places/,
+  );
+  assert.match(
+    text(lines),
+    /Undo puts each file of a bring-in back as it was before it came in\./,
+  );
+  // While a bring-in or an undo runs, the undo waits.
+  assert.match(
+    renderToStaticMarkup(
+      <BringHistory history={[group]} onUndo={() => {}} undoBusy />,
+    ),
+    /<button[^>]*disabled=""[^>]*>Undo<\/button>/,
+  );
 });
 
 await test('the bring-in page opens from the answer, and reads its files when it opens', () => {

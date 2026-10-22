@@ -266,6 +266,12 @@
   min-height: 0;
 }
 
+/* setup.css, which loads later, gives .link-button 44 px. A link in a line of the
+   bring-in page has the line's height instead. Settings keeps the 44 px. */
+.bring-text .link-button--inline {
+  min-height: 0;
+}
+
 .bring-files {
   margin: 0;
   padding: 0;
@@ -357,6 +363,11 @@
   font: 500 12.5px/1.5 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* An undo after a bring-in's line, in the style of an answer's undo. */
+.bring-history__undo {
+  margin-left: 8px;
 }
 
 .bring-out,
