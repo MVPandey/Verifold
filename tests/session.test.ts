@@ -1269,6 +1269,34 @@ await test('Codex failures and cancels cannot leave a session stuck', async () =
   });
 });
 
+await test('a Codex that runs but cannot be reached gets one line for the failure', async () => {
+  await project(async (root, _executables, create) => {
+    // This Codex listens but refuses each handshake, a failure that a wait cannot mend.
+    const codex = join(root, 'refusing-codex');
+    await writeFile(
+      codex,
+      `#!${process.execPath}
+const listen = process.argv[process.argv.indexOf('--listen') + 1].replace('unix://', '');
+require('node:net').createServer((socket) => socket.end('HTTP/1.1 400 Bad Request\\r\\n\\r\\n')).listen(listen);`,
+      { mode: 0o700 },
+    );
+    const sessions = create({ executables: { codex } });
+    await sessions.start({ host: 'codex', mode: 'ask', prompt: 'x' });
+    const failed = await until(
+      sessions,
+      (current) => current.status === 'failed',
+    );
+    // Its exit after the stop does not add "Could not start Codex".
+    assert.deepEqual(
+      failed.events
+        .filter((event) => event.text.startsWith('Could not'))
+        .map((event) => event.text),
+      ['Could not connect to Codex. Check that it is installed and signed in.'],
+    );
+    await sessions.close();
+  });
+});
+
 await test('Codex subagent threads nest in the transcript and stay out of the session records', async () => {
   await project(async (root, _executables, create) => {
     const sessions = create();
