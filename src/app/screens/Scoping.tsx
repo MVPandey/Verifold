@@ -32,29 +32,14 @@ export function planQuestions(lab: Lab): Call[] {
   );
 }
 
-/** How a planner that ended before the plan ended, in the words of the lab home. */
-const plannerEnds: Partial<Record<Agent['status'], string>> = {
-  stopped: 'You stopped the planner before it made a plan.',
-  closed: 'The planner closed its direction before it made a plan.',
-  crashed: 'The planner stopped by itself too often before it made a plan.',
-};
-
-/**
- * What the lab home says about a planner that ended before the plan, and
- * what the person can do next when the lab's agents are here. Null: the
- * planner still works. Only a crashed agent can start again.
- */
-export function plannerEnded(
-  planner: Agent,
-  agentsHere: boolean,
-): string | null {
-  const ended = plannerEnds[planner.status];
-  if (!ended) return null;
-  if (!agentsHere) return ended;
-  return planner.status === 'crashed'
-    ? `${ended} Start it again, or open a direction yourself.`
-    : `${ended} Open a direction yourself to go on.`;
-}
+/** A planner that does not read now: it starts, it waits for a slot, a usage window or its next turn, or the lab is paused. */
+const notReading: ReadonlySet<Agent['status']> = new Set([
+  'starting',
+  'slot',
+  'usage',
+  'turns',
+  'paused',
+]);
 
 /** The answer that a card sends: the person's own words, else the option. */
 export function answerOf(choice: Choice): {
@@ -140,9 +125,11 @@ export function Scoping({
   return (
     <>
       <StatusBar tone="plan">
-        {working || !questions.length
-          ? 'Planning. The planner keeps reading while you answer.'
-          : 'The planner waits for your answers.'}
+        {notReading.has(planner.status)
+          ? `${planner.live.text}.`
+          : working || !questions.length
+            ? 'Planning. The planner keeps reading while you answer.'
+            : 'The planner waits for your answers.'}
       </StatusBar>
       <article className="post">
         <Avatar who="person" size="lg" />

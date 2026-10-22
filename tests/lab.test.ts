@@ -383,8 +383,10 @@ async function fixture(
       digest(): Promise<string>;
     };
     readonly gitignore?: string;
-    /** The project's team, the main harness first: the lab's first agent plans it. */
-    readonly harnesses?: readonly ('claude' | 'codex')[];
+    /** The project's team, the main harness first: the lab's first agent plans it. A function answers when the test lets it. */
+    readonly harnesses?:
+      | readonly ('claude' | 'codex')[]
+      | (() => Promise<readonly ('claude' | 'codex')[]>);
     /** One hour of a time budget, short in a test. */
     readonly hourMs?: number;
     /** One minute of a run's or a check's time limit, short in a test. */
@@ -473,7 +475,12 @@ async function fixture(
       ...(options.person ? { person: options.person } : {}),
       ...(options.denyRead ? { denyRead: options.denyRead } : {}),
       ...(options.memory ? { memory: options.memory(sessions) } : {}),
-      ...(team ? { harnesses: () => Promise.resolve(team) } : {}),
+      ...(team
+        ? {
+            harnesses:
+              typeof team === 'function' ? team : () => Promise.resolve(team),
+          }
+        : {}),
     });
     owned.lab = lab;
     return { sessions, lab };
@@ -3719,6 +3726,75 @@ await test('the planner hears the answers to three questions once, after the las
   );
   assert.ok(lab.lab.view()?.state.calls.every((call) => !call.held));
   await until(() => lab.lab.view()?.state.plan !== null, 20_000);
+});
+
+await test("a crashed planner's answers wait for it, and Start again brings them all in one wake", async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    // It asks its two questions, and then its process keeps stopping by itself.
+    {
+      when: 'You also open the lab',
+      calls: [...plannerQuestions, { name: 'EXIT' }],
+    },
+    ...Array.from({ length: 4 }, () => ({ calls: [{ name: 'EXIT' }] })),
+    {
+      when: 'The person chose',
+      calls: [{ name: 'verifold_plan', arguments: firstPlan }],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 8 });
+  await until(
+    () => lab.lab.view()?.directions[0]?.status === 'crashed',
+    20_000,
+  );
+  assert.equal(lab.lab.view()?.state.calls.length, 2);
+  // The person answers both questions while it is down: the answers wait on the calls.
+  await lab.lab.answerCall('c-1', 1);
+  await lab.lab.answerCallInWords('c-2', 'Works with RL.');
+  await delay(300);
+  assert.deepEqual(await answerInputs(lab), []);
+  assert.ok(lab.lab.view()?.state.calls.every((call) => call.held));
+  await lab.lab.restartAgent('a-1');
+  await until(async () => (await answerInputs(lab)).length >= 1);
+  await delay(300);
+  const heard = await answerInputs(lab);
+  assert.equal(heard.length, 1);
+  assert.match(heard[0] ?? '', /The person chose "Qwen3\.8-27B" on c-1\./);
+  assert.match(
+    heard[0] ?? '',
+    /The person answered c-2 in their own words, so no option applies: "Works with RL\."/,
+  );
+  assert.ok(lab.lab.view()?.state.calls.every((call) => !call.held));
+});
+
+await test('a lab says that it opens its planner until the planner opens, and that it opens none once that failed', async (t) => {
+  let answer: (team: readonly ('claude' | 'codex')[]) => void = () => {};
+  const lab = await fixture(t, {
+    harnesses: () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+  });
+  const started = lab.lab.start('Do LLMs store months on circles?', {
+    hours: 8,
+  });
+  // From the first view of the lab on, until the planner opens or fails.
+  await until(() => lab.lab.view() !== null);
+  assert.equal(lab.lab.view()?.openingPlanner, true);
+  assert.equal(lab.lab.view()?.state.opener, null);
+  // The project has no harness, so the planner does not start.
+  answer([]);
+  assert.equal(await started, false);
+  assert.equal(lab.lab.view()?.openingPlanner, false);
+  assert.ok(
+    lab.lab
+      .view()
+      ?.posts.some((post) =>
+        post.text.startsWith(
+          'Verifold could not start the agent that plans the lab',
+        ),
+      ),
+  );
 });
 
 await test("words on a planner's question without a thread go on the board as Verifold's line, not as a post of the person, and long words reach the planner whole", async (t) => {

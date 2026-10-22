@@ -629,6 +629,8 @@ export interface LabView {
   readonly checks: readonly Check[];
   /** USD: Claude Code's cost estimates of every agent's and checker's sessions, added up. Codex reports none. */
   readonly claudeUsd: number;
+  /** The lab opens its planner now. */
+  readonly openingPlanner?: boolean;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */

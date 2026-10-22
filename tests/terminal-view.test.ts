@@ -581,6 +581,73 @@ await test('a screen is a small part of the snapshot, and a terminal reads only 
     assert.equal(parseLabScreen(bad), null);
 });
 
+await test('before the plan, a planner that ended or did not start gets one line in the terminal, and a screen carries it', () => {
+  const planner: Agent = {
+    ...agent('a-1', 'claude-1', 'claude', {
+      state: 'ended',
+      text: 'Stopped by itself too often',
+      since: ago(2),
+    }),
+    direction: 'd-1',
+    status: 'crashed',
+  };
+  const many = Array.from({ length: 30 }, (_, index) =>
+    direction(`d-${index + 1}`, `Direction ${index + 1}`, 'a-1'),
+  );
+  const crashed = screenOf(
+    story({ planner: 'a-1', agents: [planner], directions: many }),
+  );
+  assert.equal(crashed.planner, 'crashed');
+  const ended =
+    'The planner stopped by itself too often before it made a plan. Open a direction yourself, or start the planner again.';
+  const lines = viewLines(crashed, {
+    columns: 160,
+    rows: 20,
+    color: false,
+    now,
+    detaches: true,
+  });
+  assert.ok(lines.includes(`  ${ended}`));
+  // The line takes the place of a direction row, so the view still fits.
+  assert.ok(lines.length <= 20 - 2, `${lines.length} lines`);
+  // A planner that works has no line.
+  assert.equal(
+    screenOf(
+      story({ planner: 'a-1', agents: [{ ...planner, status: 'idle' }] }),
+    ).planner,
+    undefined,
+  );
+  // A lab without a planner that opens none says so; while it opens one, the terminal says what it said before.
+  const empty = { agents: [], directions: [], needsYou: [] };
+  const missing = screenOf(
+    story({ ...empty, planner: null, plannerStarting: false }),
+  );
+  assert.equal(missing.planner, 'missing');
+  assert.ok(
+    viewLines(missing, {
+      columns: 80,
+      rows: 24,
+      color: false,
+      now,
+      detaches: true,
+    }).includes('  The planner did not start. Open a direction yourself.'),
+  );
+  assert.equal(
+    screenOf(story({ ...empty, planner: null, plannerStarting: true })).planner,
+    undefined,
+  );
+  // Plain lines print the line once.
+  const printed = new Map<string, string>();
+  assert.ok(plainLines(null, crashed, now, printed).includes(ended));
+  assert.ok(!plainLines(crashed, crashed, now, printed).includes(ended));
+  // A terminal reads the line, and refuses a screen with a planner line that it does not know.
+  assert.deepEqual(
+    parseLabScreen(JSON.parse(JSON.stringify(crashed))),
+    crashed,
+  );
+  assert.equal(parseLabScreen({ ...crashed, planner: 'gone' }), null);
+});
+
 await test('the control channel carries screens to terminals and counts them', async (t) => {
   const control = await newControl();
   t.after(() => removeSocket(control));
