@@ -48,8 +48,12 @@ export interface HistoryTools {
     file: string,
     signal?: AbortSignal,
   ) => Promise<Loaded<FileDiff>>;
-  /** Archive the current run. Nothing starts after it: the person starts a lab on the question. */
-  readonly startOver: (key: string) => Promise<ActOutcome>;
+  /**
+   * Archive the current run. Nothing starts after it: the person starts a
+   * lab on the question. `expect`: the run that the page showed, so a page
+   * from before a lab started cannot archive the lab.
+   */
+  readonly startOver: (key: string, expect?: 'research') => Promise<ActOutcome>;
 }
 
 export const HistoryContext = createContext<HistoryTools | null>(null);
@@ -71,7 +75,13 @@ export function historyTools(token: string | null): HistoryTools | null {
         isFileDiff,
         signal,
       ),
-    startOver: (key) => act(token, 'start-over', { lab: true }, key),
+    startOver: (key, expect) =>
+      act(
+        token,
+        'start-over',
+        { lab: true, ...(expect ? { expect } : {}) },
+        key,
+      ),
   };
 }
 

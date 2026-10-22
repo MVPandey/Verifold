@@ -112,6 +112,26 @@ function Shown({ value }: { readonly value: Text }): ReactNode {
   );
 }
 
+/** A line under a list that leaves items out, such as "and 3 more checks". */
+function More({
+  count,
+  one,
+  many,
+}: {
+  readonly count: number;
+  readonly one: string;
+  readonly many: string;
+}): ReactNode {
+  return count > 0 ? (
+    <p className="more">and {counted(count, `more ${one}`, `more ${many}`)}</p>
+  ) : null;
+}
+
+/** An entry of a record that Verifold could not read. */
+function Unreadable({ what }: { readonly what: string }): ReactNode {
+  return <span className="muted">This {what} could not be read.</span>;
+}
+
 function Problem({ error }: { readonly error: string | null }): ReactNode {
   return error ? (
     <p role="alert" className="composer__error">
@@ -267,15 +287,24 @@ export function LabRun({ run }: { readonly run: HistoryLabRun }): ReactNode {
   return (
     <>
       <p className="muted">
-        {kindName(run.entry)}, started {archivedAt(run.startedAt)}
+        {kindName(run.entry)}
+        {run.startedAt ? `, started ${archivedAt(run.startedAt)}` : ''}
         {run.entry.at ? `, archived ${archivedAt(run.entry.at)}` : ''}
       </p>
-      <section className="section" aria-labelledby="history-question">
-        <h2 id="history-question" className="section__title">
-          The question
-        </h2>
-        <p className="history-post">{run.question}</p>
-      </section>
+      {!run.readable && (
+        <p className="more">
+          The lab's own record could not be read, so only its runs and its board
+          show here.
+        </p>
+      )}
+      {run.question !== null && (
+        <section className="section" aria-labelledby="history-question">
+          <h2 id="history-question" className="section__title">
+            The question
+          </h2>
+          <p className="history-post">{run.question}</p>
+        </section>
+      )}
       {run.plan && (
         <section className="section" aria-labelledby="history-plan">
           <h2 id="history-plan" className="section__title">
@@ -302,33 +331,35 @@ export function LabRun({ run }: { readonly run: HistoryLabRun }): ReactNode {
           )}
         </section>
       )}
-      <section className="section" aria-labelledby="history-directions">
-        <h2 id="history-directions" className="section__title">
-          Directions
-        </h2>
-        <ul className="history-list">
-          {run.directions.map((direction) => {
-            const shown = shownVerdict({ ...direction, disputed: false });
-            return (
-              <li key={direction.id}>
-                <span className={`verdict verdict--${shown}`}>
-                  {verdictLabels[shown]}
-                </span>{' '}
-                <b>{direction.title}</b>
-                {direction.handle && (
-                  <span className="muted"> · {direction.handle}</span>
-                )}
-                {direction.bar && (
-                  <div className="muted">Holds up if: {direction.bar}</div>
-                )}
-                {direction.evidence && (
-                  <div className="history-post">{direction.evidence}</div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+      {run.directions.length > 0 && (
+        <section className="section" aria-labelledby="history-directions">
+          <h2 id="history-directions" className="section__title">
+            Directions
+          </h2>
+          <ul className="history-list">
+            {run.directions.map((direction) => {
+              const shown = shownVerdict({ ...direction, disputed: false });
+              return (
+                <li key={direction.id}>
+                  <span className={`verdict verdict--${shown}`}>
+                    {verdictLabels[shown]}
+                  </span>{' '}
+                  <b>{direction.title}</b>
+                  {direction.handle && (
+                    <span className="muted"> · {direction.handle}</span>
+                  )}
+                  {direction.bar && (
+                    <div className="muted">Holds up if: {direction.bar}</div>
+                  )}
+                  {direction.evidence && (
+                    <div className="history-post">{direction.evidence}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       {run.runs.length > 0 && (
         <section className="section" aria-labelledby="history-runs">
           <h2 id="history-runs" className="section__title">
@@ -408,7 +439,7 @@ function VersionFile({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <span className="muted">{file.change}</span>{' '}
+        {file.change && <span className="muted">{file.change} </span>}
         <code className="history-code">{file.path}</code>
         {!file.inScope && <span className="muted"> · outside its scope</span>}
       </summary>
@@ -425,6 +456,20 @@ function VersionFile({
       )}
     </details>
   );
+}
+
+/** A task's line in a run: from its record, or why the record does not show. */
+function taskLine(task: HistoryTaskSummary): string {
+  if (task.record === 'unreadable') return 'Its record could not be read.';
+  if (task.record === 'large')
+    return 'Its record is long, so it shows when you open it.';
+  return [
+    task.state,
+    task.outcome ? `its last attempt: ${task.outcome}` : null,
+    task.harness ? harnessName(task.harness) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function TaskItem({
@@ -450,12 +495,8 @@ function TaskItem({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <b>{task.id}</b> {task.title}{' '}
-        <span className="muted">
-          · {task.state}
-          {task.outcome ? ` · its last attempt: ${task.outcome}` : ''} ·{' '}
-          {harnessName(task.harness)}
-        </span>
+        <b>{task.id}</b> {task.title ?? ''}{' '}
+        <span className="muted">· {taskLine(task)}</span>
       </summary>
       <Problem error={read.error} />
       {open && tools && !detail && !read.error && (
@@ -468,20 +509,31 @@ function TaskItem({
           </p>
           {detail.olderAttempts > 0 && (
             <p className="more">
-              {detail.olderAttempts} older attempts are not shown.
+              {detail.olderAttempts} older{' '}
+              {detail.olderAttempts === 1 ? 'attempt is' : 'attempts are'} not
+              shown.
             </p>
           )}
           {detail.attempts.map((attempt) => (
             <div key={attempt.number} className="history-attempt">
               <p className="muted">
-                Attempt {attempt.number}, {archivedAt(attempt.startedAt)}
+                Attempt {attempt.number}
+                {attempt.startedAt ? `, ${archivedAt(attempt.startedAt)}` : ''}
                 {attempt.outcome ? ` · ${attempt.outcome}` : ''}
               </p>
               {attempt.note && <p>{attempt.note}</p>}
+              {attempt.olderVersions > 0 && (
+                <p className="more">
+                  {attempt.olderVersions} older{' '}
+                  {attempt.olderVersions === 1 ? 'version is' : 'versions are'}{' '}
+                  not shown.
+                </p>
+              )}
               {attempt.versions.map((version) => (
                 <div key={version.number}>
                   <p>
-                    Version {version.number} · {version.turn}
+                    Version {version.number}
+                    {version.turn ? ` · ${version.turn}` : ''}
                     {version.decision
                       ? ` · ${version.decision.kind} by ${version.decision.by === 'person' ? 'you' : 'the coordinator'}`
                       : ''}
@@ -506,9 +558,7 @@ function TaskItem({
                       </li>
                     ))}
                   </ul>
-                  {version.moreFiles > 0 && (
-                    <p className="more">and {version.moreFiles} more files</p>
-                  )}
+                  <More count={version.moreFiles} one="file" many="files" />
                 </div>
               ))}
               {attempt.session && (
@@ -562,6 +612,7 @@ export function ResearchRun({
                 </li>
               ))}
             </ul>
+            <More count={run.plan.morePersonas} one="persona" many="personas" />
           </details>
         )}
       </section>
@@ -570,6 +621,12 @@ export function ResearchRun({
           <h2 id="history-attempts" className="section__title">
             Research
           </h2>
+          {run.moreAttempts > 0 && (
+            <p className="more">
+              {run.moreAttempts} older research{' '}
+              {run.moreAttempts === 1 ? 'step is' : 'steps are'} not shown.
+            </p>
+          )}
           <ul className="history-list">
             {run.attempts.map((attempt) => (
               <li key={attempt.id}>
@@ -595,7 +652,11 @@ export function ResearchRun({
                 {attempt.sources.length > 0 && (
                   <details className="history-fold">
                     <summary>
-                      {counted(attempt.sources.length, 'source', 'sources')}
+                      {counted(
+                        attempt.sources.length + attempt.moreSources,
+                        'source',
+                        'sources',
+                      )}
                     </summary>
                     <ul className="history-list">
                       {attempt.sources.map((source) => (
@@ -606,6 +667,11 @@ export function ResearchRun({
                         </li>
                       ))}
                     </ul>
+                    <More
+                      count={attempt.moreSources}
+                      one="source"
+                      many="sources"
+                    />
                   </details>
                 )}
                 {attempt.transcript && (
@@ -638,9 +704,11 @@ export function ResearchRun({
                     ))}
                   </ul>
                 )}
+                <More count={candidate.moreChecks} one="check" many="checks" />
               </li>
             ))}
           </ul>
+          <More count={run.moreCandidates} one="direction" many="directions" />
         </section>
       )}
       {run.coordinator && (
@@ -653,8 +721,10 @@ export function ResearchRun({
           </p>
           <p className="muted">
             {harnessName(run.coordinator.harness)}
-            {run.coordinator.model ? ` · ${run.coordinator.model}` : ''} ·
-            started {archivedAt(run.coordinator.startedAt)}
+            {run.coordinator.model ? ` · ${run.coordinator.model}` : ''}
+            {run.coordinator.startedAt
+              ? ` · started ${archivedAt(run.coordinator.startedAt)}`
+              : ''}
             {run.coordinator.stoppedAt
               ? ` · stopped ${archivedAt(run.coordinator.stoppedAt)}`
               : ''}
@@ -677,15 +747,21 @@ export function ResearchRun({
               <ol className="history-list">
                 {run.coordinator.actions.map((action, index) => (
                   <li key={index}>
-                    <code className="history-code">{action.tool}</code>{' '}
-                    <span className="muted">
-                      · {clock(action.at)}
-                      {action.ok ? '' : ' · refused'}
-                    </span>
-                    {action.reason && <div>{action.reason}</div>}
-                    <div className="muted">
-                      <Shown value={action.result} />
-                    </div>
+                    {action ? (
+                      <>
+                        <code className="history-code">{action.tool}</code>{' '}
+                        <span className="muted">
+                          · {clock(action.at)}
+                          {action.ok ? '' : ' · refused'}
+                        </span>
+                        {action.reason && <div>{action.reason}</div>}
+                        <div className="muted">
+                          <Shown value={action.result} />
+                        </div>
+                      </>
+                    ) : (
+                      <Unreadable what="action" />
+                    )}
                   </li>
                 ))}
               </ol>
@@ -708,45 +784,77 @@ export function ResearchRun({
           {run.tasks.map((task) => (
             <TaskItem key={task.id} run={id} task={task} now={now} />
           ))}
+          <More count={run.moreTasks} one="task" many="tasks" />
         </section>
       )}
-      {run.results.map((results) => (
+      {run.results.map((results, at) => (
         <section
-          key={results.direction}
+          key={at}
           className="section"
-          aria-labelledby={`history-results-${results.direction}`}
+          aria-labelledby={`history-results-${at}`}
         >
-          <h2
-            id={`history-results-${results.direction}`}
-            className="section__title"
-          >
+          <h2 id={`history-results-${at}`} className="section__title">
             Results
           </h2>
           <ul className="history-list">
-            {results.checks.map((check) => (
-              <li key={check.check}>
-                Check {check.check}: <b>{check.result}</b> · {check.value}
-                <div className="muted">
-                  <Shown value={check.reason} />
-                </div>
-                {check.ruling && (
-                  <div>
-                    Your ruling: {check.ruling.result}. {check.ruling.reason}
-                  </div>
+            {results.checks.map((check, index) => (
+              <li key={index}>
+                {check ? (
+                  <>
+                    Check {check.check}: <b>{check.result}</b> · {check.value}
+                    <div className="muted">
+                      <Shown value={check.reason} />
+                    </div>
+                    {check.ruling && (
+                      <div>
+                        Your ruling: {check.ruling.result}.{' '}
+                        {check.ruling.reason}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <Unreadable what="check" />
                 )}
               </li>
             ))}
           </ul>
+          <More count={results.moreChecks} one="check" many="checks" />
           {results.answer && (
             <div className="history-answer">
               <p className="history-post">
-                <Shown value={results.answer.statement} />
+                {results.answer.statement ? (
+                  <Shown value={results.answer.statement} />
+                ) : (
+                  <Unreadable what="answer" />
+                )}
               </p>
               <ul className="history-list">
                 {results.answer.claims.map((claim, index) => (
-                  <li key={index}>{claim.text}</li>
+                  <li key={index}>
+                    {claim ? (
+                      <>
+                        {claim.text}
+                        {claim.evidence.length > 0 && (
+                          <span className="muted">
+                            {' '}
+                            · {claim.evidence.join(', ')}
+                            {claim.moreEvidence > 0
+                              ? `, and ${claim.moreEvidence} more`
+                              : ''}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <Unreadable what="claim" />
+                    )}
+                  </li>
                 ))}
               </ul>
+              <More
+                count={results.answer.moreClaims}
+                one="claim"
+                many="claims"
+              />
               {results.answer.decision && (
                 <p className="muted">
                   {results.answer.decision.kind === 'accepted'
@@ -761,6 +869,12 @@ export function ResearchRun({
           )}
         </section>
       ))}
+      {run.moreResults > 0 && (
+        <p className="more">
+          {run.moreResults} more results{' '}
+          {run.moreResults === 1 ? 'file is' : 'files are'} not shown.
+        </p>
+      )}
       {run.messages.length > 0 && (
         <section className="section" aria-labelledby="history-messages">
           <h2 id="history-messages" className="section__title">
@@ -861,12 +975,20 @@ export function ResearchRun({
               <li key={pod.lease}>
                 <b>{pod.lease}</b>{' '}
                 <span className="muted">
-                  · {pod.gpu} · {pod.state} · ${pod.costUsd.toFixed(2)} ·{' '}
-                  {pod.tasks.join(', ')}
+                  ·{' '}
+                  {[
+                    pod.gpu,
+                    pod.state,
+                    pod.costUsd === null ? null : `$${pod.costUsd.toFixed(2)}`,
+                    pod.tasks.join(', '),
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </span>
               </li>
             ))}
           </ul>
+          <More count={run.morePods} one="pod" many="pods" />
         </section>
       )}
     </>
@@ -874,24 +996,28 @@ export function ResearchRun({
 }
 
 /**
- * Start a lab on a run of the earlier research flow: Start over archives
- * the run first, then the project's page asks for the question of the lab.
+ * Start over's button: it moves the current run into History, and then the
+ * project's page asks for the question of a new lab. `expect`: the run that
+ * the page showed, so a page from before a lab started cannot archive the lab.
  */
-function StartLab(): ReactNode {
+function StartOverButton({
+  label,
+  expect,
+  children,
+}: {
+  readonly label: string;
+  readonly expect?: 'research';
+  readonly children?: ReactNode;
+}): ReactNode {
   const tools = useContext(HistoryContext);
   const action = useAction<null>((_, key) =>
     tools
-      ? tools.startOver(key)
+      ? tools.startOver(key, expect)
       : Promise.resolve({ refused: 'Open Verifold from your terminal.' }),
   );
   return (
-    <div className="status status--plan history-start">
-      <p>
-        This run is from Verifold's earlier research flow. It shows here read
-        only. Start a lab moves it into History first, and then you start a lab
-        on its question, or on a new one.
-      </p>
-      <p>
+    <>
+      <p className="history-actions">
         <button
           type="button"
           className="button button--primary"
@@ -902,11 +1028,45 @@ function StartLab(): ReactNode {
             })
           }
         >
-          Start a lab
+          {label}
         </button>
+        {children}
       </p>
       <Problem error={action.error} />
-    </div>
+    </>
+  );
+}
+
+/**
+ * A run that History read. The current run, when the read says that it is
+ * from the earlier research flow, offers Start a lab: Start over archives
+ * the run first, then the project's page asks for the question of the lab.
+ */
+export function HistoryRunView({
+  id,
+  run,
+  now,
+}: {
+  readonly id: string;
+  readonly run: HistoryRun;
+  readonly now: number;
+}): ReactNode {
+  return run.kind === 'lab' ? (
+    <LabRun run={run} />
+  ) : (
+    <>
+      {id === 'current' && (
+        <div className="status status--plan history-start">
+          <p>
+            This run is from Verifold's earlier research flow. It shows here
+            read only. Start a lab moves it into History first, and then you
+            start a lab on its question, or on a new one.
+          </p>
+          <StartOverButton label="Start a lab" expect="research" />
+        </div>
+      )}
+      <ResearchRun run={run} now={now} />
+    </>
   );
 }
 
@@ -922,31 +1082,22 @@ export function HistoryRunPage({
       tools ? tools.run(id, signal) : Promise.resolve({ error: '' }),
   );
   const run = read.value;
-  const current = id === 'current';
   return (
     <Page {...props} back={{ href: href.history, label: 'History' }}>
       <h1 className="page-title">
-        {current ? 'The current run' : 'An earlier run'}
+        {id === 'current' ? 'The current run' : 'An earlier run'}
       </h1>
-      {current && <StartLab />}
       <Problem error={read.error} />
       {tools && !run && !read.error && (
         <p className="muted">Reading the run…</p>
       )}
-      {run?.kind === 'lab' && <LabRun run={run} />}
-      {run?.kind === 'research' && <ResearchRun run={run} now={props.now} />}
+      {run && <HistoryRunView id={id} run={run} now={props.now} />}
     </Page>
   );
 }
 
 /** Start over: what it keeps, what it moves into History, and the button. */
 export function StartOverPage(props: PageProps): ReactNode {
-  const tools = useContext(HistoryContext);
-  const action = useAction<null>((_, key) =>
-    tools
-      ? tools.startOver(key)
-      : Promise.resolve({ refused: 'Open Verifold from your terminal.' }),
-  );
   return (
     <Page {...props} back={{ href: href.lab, label: 'The project' }}>
       <h1 className="page-title">Start over</h1>
@@ -975,22 +1126,9 @@ export function StartOverPage(props: PageProps): ReactNode {
           ))}
         </ul>
       </section>
-      <p className="history-actions">
-        <button
-          type="button"
-          className="button button--primary"
-          disabled={!tools || action.busy}
-          onClick={() =>
-            void action.submit(null).then((ran) => {
-              if (ran) replaceRoute(href.lab);
-            })
-          }
-        >
-          Start over
-        </button>
+      <StartOverButton label="Start over">
         <a href={href.lab}>Keep this run</a>
-      </p>
-      <Problem error={action.error} />
+      </StartOverButton>
     </Page>
   );
 }

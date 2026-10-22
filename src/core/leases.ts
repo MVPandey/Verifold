@@ -358,12 +358,6 @@ export interface LeaseHooks {
   readonly month?: MonthHooks;
 }
 
-/**
- * The leases of one project, in `.verifold/compute/leases/`. Every change goes
- * through one queue and is saved before and after each RunPod call, so a crash
- * leaves a record that recovery can finish: the pod name finds a pod whose
- * create reply was lost.
- */
 /** The saved leases in `folder`, oldest first. An unreadable record is left out. */
 export async function readLeases(folder: string): Promise<Lease[]> {
   const names = await readdir(folder).catch(() => []);
@@ -384,6 +378,12 @@ export async function readLeases(folder: string): Promise<Lease[]> {
   return leases.sort((a, b) => number(a.id) - number(b.id));
 }
 
+/**
+ * The leases of one project, in `.verifold/compute/leases/`. Every change goes
+ * through one queue and is saved before and after each RunPod call, so a crash
+ * leaves a record that recovery can finish: the pod name finds a pod whose
+ * create reply was lost.
+ */
 export class Leases {
   private readonly root: string;
   private readonly hooks: LeaseHooks;

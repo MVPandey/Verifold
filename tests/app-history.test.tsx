@@ -10,7 +10,11 @@ import { Screen } from '../src/app/App.tsx';
 import { HistoryContext, historyTools, kindName } from '../src/app/history.ts';
 import { parseRoute } from '../src/app/route.ts';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
-import { LabRun, ResearchRun } from '../src/app/screens/History.tsx';
+import {
+  HistoryRunView,
+  LabRun,
+  ResearchRun,
+} from '../src/app/screens/History.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 
 const now = Date.UTC(2026, 9, 21, 14, 0);
@@ -90,6 +94,7 @@ const research: HistoryResearchRun = {
       { name: 'Reader', task: 'Read the papers.' },
       { name: 'Coder', task: 'Time the code.' },
     ],
+    morePersonas: 0,
   },
   attempts: [
     {
@@ -103,19 +108,24 @@ const research: HistoryResearchRun = {
       summary: { text: 'A heap wins on large graphs.', trimmed: false },
       delegation: { text: 'Two helpers read papers.', trimmed: false },
       sources: [{ title: 'Heap paper', url: 'https://example.org/heap' }],
+      moreSources: 0,
       transcript: true,
     },
   ],
+  moreAttempts: 0,
   candidates: [
     {
       id: 'heap',
       title: 'Heap Dijkstra',
       recommendation: { text: 'Use a binary heap.', trimmed: false },
       checks: ['It beats the scan above 10,000 nodes.'],
+      moreChecks: 0,
       sources: ['https://example.org/heap'],
+      moreSources: 0,
       kind: 'main',
     },
   ],
+  moreCandidates: 0,
   chosen: 'heap',
   coordinator: {
     objective: { text: 'Show that the heap wins.', trimmed: false },
@@ -131,6 +141,7 @@ const research: HistoryResearchRun = {
   tasks: [
     {
       id: 'task-1',
+      record: 'read',
       title: 'Time the heap',
       state: 'done',
       harness: 'claude',
@@ -140,6 +151,7 @@ const research: HistoryResearchRun = {
       outcome: 'accepted',
     },
   ],
+  moreTasks: 0,
   messages: [
     {
       id: 'm-1',
@@ -165,9 +177,11 @@ const research: HistoryResearchRun = {
           ruling: null,
         },
       ],
+      moreChecks: 0,
       answer: null,
     },
   ],
+  moreResults: 0,
   sessions: [],
   pods: [
     {
@@ -179,6 +193,7 @@ const research: HistoryResearchRun = {
       costUsd: 0.55,
     },
   ],
+  morePods: 0,
 };
 
 const lab: HistoryLabRun = {
@@ -192,6 +207,7 @@ const lab: HistoryLabRun = {
     bytes: 1024,
     tasks: 0,
   },
+  readable: true,
   question: 'Can probes find the CoT gap?',
   startedAt: at(600),
   plan: {
@@ -237,11 +253,31 @@ await test('History, a run of it, and Start over have their own pages', () => {
   assert.equal(kindName({ kind: 'lab' }), "A lab's run");
 });
 
-await test('a project whose current run is from the earlier research flow opens it in History, with Start a lab', () => {
+await test('a project whose current run is from the earlier research flow opens it in History, and Start a lab shows once the read says so', () => {
   const page = text(render(snapshot({ researchRun: true }), '#/'));
   assert.match(page, /The current run/);
-  assert.match(page, /earlier research flow\. It shows here read only/);
-  assert.match(page, /Start a lab/);
+  assert.match(page, /Reading the run/);
+  // Before the read, nothing offers to archive the run.
+  assert.doesNotMatch(page, /Start a lab/);
+  const current = { ...research, entry: { ...research.entry, id: 'current' } };
+  const shown = text(
+    renderToStaticMarkup(
+      <HistoryRunView id="current" run={current} now={now} />,
+    ),
+  );
+  assert.match(shown, /earlier research flow\. It shows here read only/);
+  assert.match(shown, /Start a lab/);
+  // An archived run, and a lab's run, offer no Start a lab.
+  for (const [id, run] of [
+    [research.entry.id, research],
+    ['current', lab],
+  ] as const)
+    assert.doesNotMatch(
+      text(
+        renderToStaticMarkup(<HistoryRunView id={id} run={run} now={now} />),
+      ),
+      /Start a lab/,
+    );
   // Without a research-flow run, the project without a lab asks for its question.
   assert.match(text(render(snapshot(), '#/')), /has no lab yet/);
 });
@@ -283,4 +319,96 @@ await test("a research-flow run and a lab's run show their records, read only", 
   assert.match(labShown, /Holds up The probe gap · claude-1/);
   assert.match(labShown, /unverified \(no source\)/);
   assert.match(labShown, /3 older posts are not shown/);
+});
+
+await test('History marks what it could not read, says how many items a list leaves out, and shows a lab without its record', () => {
+  const broken: HistoryResearchRun = {
+    ...research,
+    attempts: [],
+    moreAttempts: 0,
+    coordinator: research.coordinator && {
+      ...research.coordinator,
+      startedAt: null,
+      actions: [null],
+      olderActions: 0,
+    },
+    tasks: [
+      {
+        id: 'task-3',
+        record: 'large',
+        title: 'Time it again',
+        state: null,
+        harness: null,
+        model: null,
+        attempts: null,
+        versions: null,
+        outcome: null,
+      },
+      {
+        id: 'task-4',
+        record: 'unreadable',
+        title: null,
+        state: null,
+        harness: null,
+        model: null,
+        attempts: null,
+        versions: null,
+        outcome: null,
+      },
+    ],
+    moreTasks: 2,
+    results: [
+      {
+        direction: 'heap',
+        checks: [null],
+        moreChecks: 3,
+        answer: {
+          statement: null,
+          claims: [
+            null,
+            { text: 'A heap wins.', evidence: ['a.txt'], moreEvidence: 4 },
+          ],
+          moreClaims: 1,
+          decision: null,
+        },
+      },
+    ],
+    moreResults: 1,
+    pods: [{ ...research.pods[0]!, costUsd: null }],
+    morePods: 0,
+  };
+  const shown = text(
+    renderToStaticMarkup(<ResearchRun run={broken} now={now} />),
+  );
+  for (const words of [
+    'This action could not be read.',
+    'Its record is long, so it shows when you open it.',
+    'Its record could not be read.',
+    'and 2 more tasks',
+    'This check could not be read.',
+    'and 3 more checks',
+    'This answer could not be read.',
+    'This claim could not be read.',
+    'A heap wins. · a.txt, and 4 more',
+    'and 1 more claim',
+    '1 more results file is not shown.',
+  ])
+    assert.ok(shown.includes(words), words);
+  assert.doesNotMatch(shown, /\$0\.55/);
+  const unreadable = text(
+    renderToStaticMarkup(
+      <LabRun
+        run={{
+          ...lab,
+          readable: false,
+          question: null,
+          startedAt: null,
+          plan: null,
+          directions: [],
+        }}
+      />,
+    ),
+  );
+  assert.match(unreadable, /own record could not be read/);
+  assert.doesNotMatch(unreadable, /The question|Directions|started/);
 });
