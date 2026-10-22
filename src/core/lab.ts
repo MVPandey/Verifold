@@ -766,7 +766,7 @@ export class Lab {
   resumeAll(): void {
     if (!this.state || this.options.runs === false) return;
     void this.serial(() => this.tellRuns()).catch(() => {});
-    // A check that ran when the earlier owner stopped counts as stopped.
+    // A check that still runs ran when the earlier owner ended without closing the lab: it counts as stopped.
     void this.serial(() => this.recoverChecks()).catch((error: unknown) =>
       this.options.progress?.(
         `Verifold could not recover the lab's checks: ${error instanceof Error ? error.message : 'unknown error'}`,
@@ -1496,13 +1496,7 @@ export class Lab {
       };
       await this.stateFile.save();
       // A check that runs ends its session and waits for the resume, when a fresh one starts.
-      for (const check of this.state.checks)
-        if (check.state === 'running')
-          await this.requeue(check, false).catch((error: unknown) =>
-            this.options.progress?.(
-              `Verifold could not queue ${check.id} again: ${error instanceof Error ? error.message : 'unknown error'}`,
-            ),
-          );
+      await this.requeueChecks();
       const ids: string[] = [];
       for (const agent of this.agents.values()) {
         this.loops.get(agent.id)?.cancel();
@@ -2110,7 +2104,8 @@ export class Lab {
     this.closing = true;
     clearInterval(this.ticker);
     this.ticker = undefined;
-    // A check that runs starts again with the next owner. Its session pauses with the others.
+    // A check that runs ends its session and waits for the next owner, as for a pause. Verifold stopped it, not its checker, so the stop does not count.
+    await this.serial(() => this.requeueChecks());
     for (const run of this.checkers.values()) clearTimeout(run.timer);
     // A turn that closed its direction ends now, and its work is committed before Verifold stops.
     for (const agent of this.agents.values()) this.finishClosed(agent.id);
@@ -5674,8 +5669,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       model: entry.model ?? model,
       startedAt: entry.startedAt ?? new Date().toISOString(),
     }));
+    let session: string | null = null;
     try {
-      const session = await sessions.startAgent({
+      session = await sessions.startAgent({
         host: check.harness,
         ...(model ? { model } : {}),
         prompt,
@@ -5705,6 +5701,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       run.turning = false;
       run.denied = new Set();
       const latest = this.checkById(id) ?? check;
+      // A session that started but could not be saved: no record names it, so it ends here.
+      if (session !== null && latest.session !== session)
+        this.endCheckSession({ ...latest, session });
       // Another start took the last slot first. The check waits for the next tick.
       if (error instanceof PoolFullError)
         await this.changeCheck(id, (entry) => ({ ...entry, state: 'queued' }));
@@ -5724,9 +5723,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * A check that Verifold, its process, or its start stopped, in the lab's
-   * queue: it starts again once with a fresh session, and after that it
-   * fails, with a note, its session ended, and its runs stopped.
+   * A check whose checker process stopped by itself, whose start failed, or
+   * whose earlier owner ended without closing the lab, in the lab's queue:
+   * it starts again once with a fresh session, and after that it fails,
+   * with a note, its session ended, and its runs stopped.
    */
   private async stopped(check: Check, reason?: string): Promise<void> {
     if (check.restarts >= checkLimits.restarts)
@@ -5739,8 +5739,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * After a load, in the lab's queue: a check that ran when the earlier
-   * owner stopped counts as stopped.
+   * After a load, in the lab's queue: a check that still runs ran when the
+   * earlier owner ended without closing the lab, so it counts as stopped. A
+   * close queues every check again first.
    */
   private async recoverChecks(): Promise<void> {
     for (const check of this.state?.checks ?? [])
@@ -5863,9 +5864,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
 
   /**
    * A check that ran waits again, in the lab's queue: a pause, the deadline,
-   * Start over, or a used-up usage window stopped it, or (`crashed`, from
-   * `stopped`) Verifold, its process, or its start did. Its session ends,
-   * and a fresh one starts later with a list of its earlier runs.
+   * Start over, a close of the lab, or a used-up usage window stopped it, or
+   * (`crashed`, from `stopped`) its process, its start, or an owner that
+   * ended without closing the lab did. Its session ends, and a fresh one
+   * starts later with a list of its earlier runs.
    */
   private async requeue(check: Check, crashed: boolean): Promise<void> {
     const run = this.ck(check.id);
@@ -5880,6 +5882,17 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       restarts: entry.restarts + (crashed ? 1 : 0),
     }));
     this.endCheckSession(check);
+  }
+
+  /** Every check that runs waits again, in the lab's queue: a pause or Verifold's own stop. No stop counts. */
+  private async requeueChecks(): Promise<void> {
+    for (const check of this.state?.checks ?? [])
+      if (check.state === 'running')
+        await this.requeue(check, false).catch((error: unknown) =>
+          this.options.progress?.(
+            `Verifold could not queue ${check.id} again: ${error instanceof Error ? error.message : 'unknown error'}`,
+          ),
+        );
   }
 
   /** End a checker's session if it runs. */
