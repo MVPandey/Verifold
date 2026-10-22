@@ -103,7 +103,7 @@ export function firstRanked<T extends ScreenDirection>(
 
 /** The screen of a snapshot, or null when the project has no lab. */
 export function labScreen(
-  snapshot: Snapshot,
+  snapshot: Pick<Snapshot, 'project' | 'lab'>,
   desk: { readonly origin: string; readonly app: boolean },
 ): LabScreen | null {
   const lab = snapshot.lab;

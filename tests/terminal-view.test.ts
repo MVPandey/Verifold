@@ -37,7 +37,11 @@ import {
   serveControl,
   type FromOwner,
 } from '../src/server/control.ts';
-import { ApiFeed, type ApiReader } from '../src/server/api.ts';
+import {
+  ApiFeed,
+  type ApiReader,
+  type SnapshotBody,
+} from '../src/server/api.ts';
 import { startDesk } from '../src/server/desk.ts';
 
 const wait = (ms: number): Promise<void> =>
@@ -428,6 +432,64 @@ await test('plain lines print one line per change, and no live step of an agent'
   ]);
 });
 
+await test('in a lab of more than 24 directions, a direction that comes back to the screen unchanged prints no line again', () => {
+  // 30 directions that hold up, each with its own agent. The screen keeps 24.
+  const directions = Array.from({ length: 30 }, (_, index) =>
+    direction(`d-${index + 1}`, `Direction ${index + 1}`, `a-${index + 1}`, {
+      verdict: 'holds-up',
+      evidence: { text: `Result ${index + 1}`, post: 'p-1', run: null },
+    }),
+  );
+  const screen = (
+    working: string | null,
+    verdict: Direction['verdict'] = 'holds-up',
+  ): LabScreen =>
+    screenOf(
+      story({
+        needsYou: [],
+        directions: directions.map((entry) =>
+          entry.id === 'd-24' ? { ...entry, verdict } : entry,
+        ),
+        agents: directions.map((entry, index) =>
+          agent(
+            entry.agent,
+            `claude-${index + 1}`,
+            'claude',
+            entry.agent === working
+              ? { state: 'working', text: 'Running eval.py', since: ago(1) }
+              : { state: 'idle', text: 'Between turns', since: ago(20) },
+          ),
+        ),
+      }),
+    );
+  const printed: string[] = [];
+  const view = new LabTerminal({
+    streams: fakeTerminal(),
+    color: false,
+    draws: false,
+    cancel: () => {},
+    print: (text) => printed.push(text),
+    now: () => now,
+  });
+  view.show(screen(null), true);
+  assert.equal(printed.length, 24);
+  assert.equal(printed[23], 'Direction 24 (claude-24): Holds up · Result 24');
+  // The agent of d-30 works, so d-30 ranks first and d-24 leaves the screen.
+  const busy = screen('a-30');
+  assert.ok(!busy.directions.some((entry) => entry.id === 'd-24'));
+  view.show(busy, true);
+  assert.deepEqual(printed.slice(24), ['Direction 30 (claude-30): Holds up']);
+  // The turn ends. d-24 comes back with the same verdict.
+  view.show(screen(null), true);
+  assert.equal(printed.length, 25);
+  // A verdict that changed while the direction was off the screen prints when it comes back.
+  view.show(screen('a-30', 'ruled-out'), true);
+  view.show(screen(null, 'ruled-out'), true);
+  assert.deepEqual(printed.slice(25), [
+    'Direction 24 (claude-24): Ruled out · Result 24',
+  ]);
+});
+
 await test('a screen is a small part of the snapshot, and a terminal reads only a valid one', () => {
   assert.equal(labScreen({ ...story(), lab: null }, desk), null);
   const long = 'x'.repeat(5000);
@@ -491,15 +553,18 @@ await test('the control channel carries screens to terminals and counts them', a
   assert.deepEqual(shown, [{ screen }, { screen: null }]);
 });
 
+/** What a reader builds for a project without a lab. */
+function body(project: string): Promise<SnapshotBody> {
+  const data = { project, lab: null, trimmed: false };
+  return Promise.resolve({ data, json: JSON.stringify(data) });
+}
+
 await test('the feed gives a watcher each new snapshot, and builds none while nobody wants one', async () => {
   let version = 1;
   let wanted = false;
   const reader = {
     signal: () => Promise.resolve([version]),
-    snapshot: () =>
-      Promise.resolve(
-        JSON.stringify({ project: `v${version}`, lab: null, trimmed: false }),
-      ),
+    build: () => body(`v${version}`),
   } as unknown as ApiReader;
   const feed = new ApiFeed(reader, { pollMs: 10, heartbeatMs: 1000 });
   const seen: number[] = [];
@@ -953,10 +1018,7 @@ await test('a terminal that its own desk serves stops its watch when it closes, 
       reads++;
       return Promise.resolve([reads]);
     },
-    snapshot: () =>
-      Promise.resolve(
-        JSON.stringify({ project: 'p', lab: null, trimmed: false }),
-      ),
+    build: () => body('p'),
   } as unknown as ApiReader;
   const feed = new ApiFeed(reader, { pollMs: 10, heartbeatMs: 1000 });
   const { input, output } = fakeTerminal();

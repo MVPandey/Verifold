@@ -146,6 +146,10 @@ export function viewLines(screen: LabScreen, options: ViewOptions): string[] {
   );
   // Indent, mark, and the gaps around the title and the agent.
   const both = width - 7 - (agentWidth ? agentWidth + 2 : 0);
+  const shown = rows.map((direction) => ({
+    direction,
+    text: rowText(direction, now),
+  }));
   // A title gets the room that the lines do not need, and at least half.
   const widest = (texts: readonly string[]): number =>
     Math.max(0, ...texts.map((text) => visibleWidth(fitText(text, 400))));
@@ -154,17 +158,17 @@ export function viewLines(screen: LabScreen, options: ViewOptions): string[] {
     Math.max(
       12,
       Math.floor(both / 2),
-      both - widest(rows.map((entry) => rowText(entry, now))),
+      both - widest(shown.map((entry) => entry.text)),
     ),
   );
-  for (const direction of rows) {
+  for (const { direction, text } of shown) {
     const { mark, tone, line } = markOf(direction);
     const agent = agentWidth
       ? `${paint(pad(fitText(direction.agent ?? '', agentWidth), agentWidth), 'lavender', color)}  `
       : '';
     lines.push(
       `  ${paint(mark, tone, color)}  ${pad(fitText(direction.title, titleWidth), titleWidth)}  ${agent}${paint(
-        fitText(rowText(direction, now), Math.max(1, both - titleWidth)),
+        fitText(text, Math.max(1, both - titleWidth)),
         line,
         color,
       )}`,
@@ -250,20 +254,27 @@ function stateOf(direction: ScreenDirection): string {
 
 /**
  * Plain lines for a terminal without the view: one line for each direction
- * whose verdict, or wait for the person, changed since `before`, and one for
- * a new call. The live steps of the agents do not print.
+ * whose verdict, or wait for the person, differs from its last line, and one
+ * for a new call. The live steps of the agents do not print.
+ *
+ * `printed` holds the state of each direction's last line, by ID, and gets
+ * the states of the new lines. By default it holds the states in `before`.
+ * A terminal keeps its own, because a large lab's screen leaves directions
+ * out: a direction that comes back unchanged prints nothing.
  */
 export function plainLines(
   before: LabScreen | null,
   after: LabScreen,
   now: number,
-): string[] {
-  const known = new Map(
+  printed: Map<string, string> = new Map(
     (before?.directions ?? []).map((entry) => [entry.id, stateOf(entry)]),
-  );
+  ),
+): string[] {
   const lines: string[] = [];
   for (const direction of after.directions) {
-    if (known.get(direction.id) === stateOf(direction)) continue;
+    const state = stateOf(direction);
+    if (printed.get(direction.id) === state) continue;
+    printed.set(direction.id, state);
     const line = directionLine(direction.evidence, direction.live, now);
     lines.push(
       `${fitText(direction.title, 200)}${direction.agent ? ` (${direction.agent})` : ''}: ${[
