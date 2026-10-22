@@ -592,6 +592,7 @@ export class Lab {
       ended: (run) => this.runEnded(run),
       minuteMs: this.timing.minuteMs,
       pollMs: this.timing.podPollMs,
+      ...(options.progress ? { progress: options.progress } : {}),
     });
     this.stateFile = new RecordFile(join(root, '.verifold', 'lab.json'), () =>
       this.suspended ? null : this.state,

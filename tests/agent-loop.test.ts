@@ -7,6 +7,7 @@ import {
   type WakeEvent,
   type WakeRecord,
 } from '../src/core/agent-loop.ts';
+import { until } from './wait.ts';
 
 type Record = WakeRecord<WakeEvent> & { readonly stopped: boolean };
 
@@ -57,19 +58,6 @@ function agent(start: Partial<Record> = {}): {
     },
     attempts: () => attempts,
   };
-}
-
-/**
- * Wait until `check` holds. A wakeup runs on a timer, and `close()` cancels
- * a timer that has not fired, so a test waits for the wakeup itself, not for
- * a fixed time that a busy computer can exceed.
- */
-async function until(check: () => boolean, ms = 10_000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error('The wakeup did not come in time.');
-    await delay(5);
-  }
 }
 
 await test('the wake loop joins close events, caps a digest, and keeps its record bounded', async () => {

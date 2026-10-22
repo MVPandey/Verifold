@@ -1415,7 +1415,19 @@ function codex(options: HostOptions): HostSession {
       for (const text of queue ?? []) connection.send(text);
       queue = null;
     } catch {
-      // A Codex that exited reports its exit itself.
+      // A Codex that exited reports its exit itself. It can stop just before
+      // the last try, with its exit not handled yet, so the line waits for
+      // that briefly: the person gets one line for one failure.
+      if (!exited())
+        await new Promise<void>((resolve) => {
+          const done = (): void => {
+            clearTimeout(grace);
+            child.off('exit', done);
+            resolve();
+          };
+          const grace = setTimeout(done, 200);
+          child.once('exit', done);
+        });
       if (exited()) return;
       emit({
         type: 'notice',
