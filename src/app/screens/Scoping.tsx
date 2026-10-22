@@ -32,6 +32,15 @@ export function planQuestions(lab: Lab): Call[] {
   );
 }
 
+/** A planner that does not read now: it starts, it waits for a slot, a usage window or its next turn, or the lab is paused. */
+const notReading: ReadonlySet<Agent['status']> = new Set([
+  'starting',
+  'slot',
+  'usage',
+  'turns',
+  'paused',
+]);
+
 /** The answer that a card sends: the person's own words, else the option. */
 export function answerOf(choice: Choice): {
   readonly words: string | null;
@@ -116,9 +125,11 @@ export function Scoping({
   return (
     <>
       <StatusBar tone="plan">
-        {working || !questions.length
-          ? 'Planning. The planner keeps reading while you answer.'
-          : 'The planner waits for your answers.'}
+        {notReading.has(planner.status)
+          ? `${planner.live.text}.`
+          : working || !questions.length
+            ? 'Planning. The planner keeps reading while you answer.'
+            : 'The planner waits for your answers.'}
       </StatusBar>
       <article className="post">
         <Avatar who="person" size="lg" />

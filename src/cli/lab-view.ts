@@ -7,7 +7,10 @@ import { usd } from '../ui/call-words.ts';
 import {
   directionLine,
   moneyLine,
+  noDirectionsLine,
+  plannerEndLine,
   verdictLabels,
+  type PlannerState,
   type ShownVerdict,
 } from '../ui/lab-lines.ts';
 import { muted, strong, tint, type Tone } from './terminal.ts';
@@ -95,8 +98,9 @@ export function rowText(direction: ScreenDirection, now: number): string {
 
 /**
  * The live view of a lab, line by line, as in the "14 The terminal"
- * artboard: the project, the money line, one row per direction, the call
- * that waits, Verifold's newest message, and the keys. The message line
+ * artboard: the project, the money line, a planner that ended before the
+ * plan, one row per direction, the call that waits, Verifold's newest
+ * message, and the keys. The message line
  * comes after these. Each line fits in `columns - 1` cells, and the view
  * leaves a free row on a screen of `rows`, so it never scrolls itself away.
  */
@@ -128,8 +132,18 @@ export function viewLines(screen: LabScreen, options: ViewOptions): string[] {
     )}`,
     '',
   ];
+  // A planner that ended before the plan gets its line above the directions.
+  const ended =
+    screen.planner && screen.planner !== 'missing' ? screen.planner : null;
+  if (ended)
+    lines.push(
+      `  ${paint(fitText(plannerLine(ended), width - 2), 'amber', color)}`,
+    );
   // The rows that fit. "and N more" takes one of them when some do not.
-  const room = Math.max(1, options.rows - 1 - fixedRows - notice);
+  const room = Math.max(
+    1,
+    options.rows - 1 - fixedRows - notice - (ended ? 1 : 0),
+  );
   let rows = screen.directions;
   let more = screen.more;
   if (rows.length + (more ? 1 : 0) > room) {
@@ -138,7 +152,9 @@ export function viewLines(screen: LabScreen, options: ViewOptions): string[] {
   }
   if (!screen.directions.length && !more)
     lines.push(
-      `  ${muted(fitText('The planner is reading. Directions show here when the plan is ready.', width - 2), color)}`,
+      screen.planner === 'missing'
+        ? `  ${paint(fitText(plannerLine('missing'), width - 2), 'amber', color)}`
+        : `  ${muted(fitText(noDirectionsLine(false, true), width - 2), color)}`,
     );
   const agentWidth = Math.min(
     12,
@@ -182,6 +198,13 @@ export function viewLines(screen: LabScreen, options: ViewOptions): string[] {
     `  ${muted(fitText(keysLine(options.detaches), width - 2), color)}`,
   );
   return lines;
+}
+
+/** The line about a planner that does not make the plan. The person acts on it in the app. */
+function plannerLine(state: PlannerState): string {
+  return state === 'missing'
+    ? noDirectionsLine(true, true)
+    : plannerEndLine(state, true);
 }
 
 /** A styled line, or its plain text cut to `width` when the styled one does not fit. */
@@ -254,8 +277,9 @@ function stateOf(direction: ScreenDirection): string {
 
 /**
  * Plain lines for a terminal without the view: one line for each direction
- * whose verdict, or wait for the person, differs from its last line, and one
- * for a new call. The live steps of the agents do not print.
+ * whose verdict, or wait for the person, differs from its last line, one
+ * when the planner did not make the plan, and one for a new call. The live
+ * steps of the agents do not print.
  *
  * `printed` holds the state of each direction's last line, by ID, and gets
  * the states of the new lines. It is not the screen before, because a large
@@ -283,6 +307,8 @@ export function plainLines(
         .join(' · ')}`,
     );
   }
+  if (after.planner && after.planner !== before?.planner)
+    lines.push(plannerLine(after.planner));
   const call = after.call;
   if (call && call.id !== before?.call?.id)
     lines.push(

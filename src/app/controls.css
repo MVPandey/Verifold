@@ -430,7 +430,8 @@ textarea.field__input {
   gap: 12px;
 }
 
-.more-time {
+.more-time,
+.start-again {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
