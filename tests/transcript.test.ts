@@ -204,7 +204,9 @@ await test('Codex items from exec and app-server merge by ID and keep failures',
   );
   assert.equal(list[1]?.status, 'done');
   assert.equal(list[1]?.output, 'hello\n');
-  assert.equal(list[1]?.title, "/bin/zsh -lc 'echo hello'");
+  // The step shows the command, not the shell wrapper that Codex adds.
+  assert.equal(list[1]?.title, 'echo hello');
+  assert.equal(list[1]?.input, 'echo hello');
 
   const app = new TranscriptLog();
   const next = app.run();
@@ -244,6 +246,30 @@ await test('Codex items from exec and app-server merge by ID and keep failures',
   assert.match(items[1]?.parent ?? '', /\.parent-call$/);
   assert.equal(items[2]?.text, 'Plan the search.');
   assert.equal(items.length, 3);
+});
+
+await test("Codex's shell wrapper stays out of a command step only when its quoting is clear", () => {
+  const steps = new TranscriptLog();
+  const apply = steps.run();
+  for (const [id, command] of [
+    ['wrapped', "/bin/zsh -lc 'ls results/r-3'"],
+    ['quoted', "/bin/bash -lc 'echo '\\''quoted'\\'''"],
+    ['unclear', "/bin/zsh -lc 'a' ; rm -rf /tmp/x"],
+  ] as const)
+    for (const update of codexAppUpdates(
+      'item/completed',
+      { id, type: 'commandExecution', command, exitCode: 0 },
+      null,
+    ))
+      apply(update);
+  assert.deepEqual(
+    ordered(steps).map((entry) => [entry.title, entry.input]),
+    [
+      ['ls results/r-3', 'ls results/r-3'],
+      ["echo 'quoted'", "echo 'quoted'"],
+      ["/bin/zsh -lc 'a' ; rm -rf /tmp/x", "/bin/zsh -lc 'a' ; rm -rf /tmp/x"],
+    ],
+  );
 });
 
 await test('runs get their own ID prefix, and long fields are cut visibly', () => {
