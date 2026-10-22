@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   cp,
   mkdir,
@@ -12,7 +12,14 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  writeSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -25,7 +32,7 @@ import {
   type PodRuns,
   type RunRecord,
 } from '../src/core/runs.ts';
-import { secretGuard } from '../src/core/runpod.ts';
+import { secretGuard, type SecretGuard } from '../src/core/runpod.ts';
 import { allocate, snapshot, type Workspace } from '../src/core/workspaces.ts';
 import { fakePod, type FakePod } from './fake-pod.ts';
 import { labQueue } from './wait.ts';
@@ -426,7 +433,16 @@ await test('a pod run needs a ready lease of its direction', async (t) => {
 async function fakeRuns(
   t: test.TestContext,
   files: Record<string, string>,
-  options: { readonly failOn?: string; readonly closeDuring?: boolean } = {},
+  options: {
+    readonly failOn?: string;
+    readonly closeDuring?: boolean;
+    /** The lease's secrets. By default, HF_TOKEN. */
+    readonly secrets?: Readonly<Record<string, string>>;
+    /** Changes the guard that the run gets, to watch or act during the copy. */
+    readonly wrap?: (guard: SecretGuard) => SecretGuard;
+    /** Called after each copy back, with the folder that it went to. */
+    readonly fetched?: (folder: string) => void;
+  } = {},
 ): Promise<{
   root: string;
   ledger: RunLedger;
@@ -463,7 +479,10 @@ async function fakeRuns(
     // A closed lease has no secrets left to read.
     guard: () => {
       calls.guard++;
-      return Promise.resolve(secretGuard(closed ? {} : { HF_TOKEN: secret }));
+      const guard = secretGuard(
+        closed ? {} : (options.secrets ?? { HF_TOKEN: secret }),
+      );
+      return Promise.resolve(options.wrap ? options.wrap(guard) : guard);
     },
     send: () => Promise.resolve(),
     start: () => Promise.resolve(),
@@ -482,6 +501,7 @@ async function fakeRuns(
         await cp(join(pod, path), join(folder, path), { recursive: true });
         if (path === options.failOn) throw new Error('The copy broke off.');
       }
+      options.fetched?.(folder);
     },
   };
   let queue: Promise<unknown> = Promise.resolve();
@@ -575,16 +595,26 @@ await test('a lease that closes during the copy back still keeps the secrets out
   assert.equal(fx.calls.remove, 1);
 });
 
-await test('a guard finds a secret value that starts in one part and ends in the next', () => {
+await test('a guard finds a secret value that starts in one part and ends in a later one, and stays sure', () => {
   const guard = secretGuard({ HF_TOKEN: secret });
   const split = guard.stream();
-  assert.equal(split(Buffer.from(`head ${secret.slice(0, 7)}`)), false);
-  assert.equal(split(Buffer.from(`${secret.slice(7)} tail`)), true);
+  assert.equal(split.longest, Buffer.byteLength(secret));
+  assert.equal(split.holds(Buffer.from(`head ${secret.slice(0, 7)}`)), false);
+  assert.equal(split.holds(Buffer.from(`${secret.slice(7)} tail`)), true);
+  // Once it found a value, it stays true.
+  assert.equal(split.holds(Buffer.from('clean')), true);
   const clean = guard.stream();
-  assert.equal(clean(Buffer.from(`head ${secret.slice(0, 7)}`)), false);
-  assert.equal(clean(Buffer.from(`not ${secret.slice(7)}`)), false);
-  assert.equal(guard.stream()(Buffer.from(`a ${secret} b`)), true);
-  assert.equal(secretGuard({}).stream()(Buffer.from(secret)), false);
+  assert.equal(clean.holds(Buffer.from(`head ${secret.slice(0, 7)}`)), false);
+  assert.equal(clean.holds(Buffer.from(`not ${secret.slice(7)}`)), false);
+  // A value across three small parts.
+  const three = guard.stream();
+  assert.equal(three.holds(Buffer.from(secret.slice(0, 5))), false);
+  assert.equal(three.holds(Buffer.from(secret.slice(5, 12))), false);
+  assert.equal(three.holds(Buffer.from(secret.slice(12))), true);
+  assert.equal(guard.stream().holds(Buffer.from(`a ${secret} b`)), true);
+  const none = secretGuard({}).stream();
+  assert.equal(none.longest, 0);
+  assert.equal(none.holds(Buffer.from(secret)), false);
 });
 
 await test('an output with a secret value across two copy parts keeps no copy, and a long output keeps its hash', async (t) => {
@@ -612,6 +642,135 @@ await test('an output with a secret value across two copy parts keeps no copy, a
   assert.equal(
     (await readFile(join(outputs, 'out', 'long.txt'), 'utf8')) === long,
     true,
+  );
+});
+
+await test('a held copy leaves no temporary file and no empty folder', async (t) => {
+  const fx = await fakeRuns(t, {
+    'out/sub/leak.txt': `token ${secret}\n`,
+    'out/a.txt': 'fine\n',
+  });
+  await fx.start(['out']);
+  await until(() => fx.ended.length === 1);
+  const run = fx.ledger.get('r-1');
+  assert.deepEqual(
+    run?.outputs.map((output) => output.path),
+    ['out/a.txt'],
+  );
+  const record = join(fx.root, '.verifold', 'lab', 'runs', 'r-1');
+  assert.deepEqual(
+    (await readdir(join(record, 'outputs'), { recursive: true })).sort(),
+    ['out', join('out', 'a.txt')],
+  );
+  assert.deepEqual(
+    (await readdir(record)).filter((name) => name.endsWith('.part')),
+    [],
+  );
+});
+
+await test('a secret value longer than one copy part never reaches the disk', async (t) => {
+  const value = randomBytes(runLimits.copyPart / 2 + 600).toString('hex');
+  let root = '';
+  let looked = 0;
+  const fx = await fakeRuns(
+    t,
+    { 'out/big.txt': `${'y'.repeat(100)}${value}${'z'.repeat(100)}` },
+    {
+      secrets: { BIG: value },
+      // At each part, what reached the disk so far holds no byte of the value.
+      wrap: (guard) => ({
+        ...guard,
+        stream: () => {
+          const scan = guard.stream();
+          return {
+            longest: scan.longest,
+            holds: (part) => {
+              const record = join(root, '.verifold', 'lab', 'runs', 'r-1');
+              for (const name of readdirSync(record))
+                if (name.endsWith('.part')) {
+                  looked++;
+                  assert.match(
+                    readFileSync(join(record, name), 'latin1'),
+                    /^y*$/,
+                  );
+                }
+              return scan.holds(part);
+            },
+          };
+        },
+      }),
+    },
+  );
+  root = fx.root;
+  await fx.start(['out']);
+  await until(() => fx.ended.length === 1);
+  const run = fx.ledger.get('r-1');
+  assert.ok(looked > 0);
+  assert.deepEqual(run?.outputs, []);
+  assert.match(
+    run?.note ?? '',
+    /Verifold kept no copy of out\/big\.txt, because it holds the value of a pod secret\./,
+  );
+  const record = join(fx.root, '.verifold', 'lab', 'runs', 'r-1');
+  assert.equal(existsSync(join(record, 'outputs', 'out', 'big.txt')), false);
+  assert.deepEqual(
+    (await readdir(record)).filter((name) => name.endsWith('.part')),
+    [],
+  );
+});
+
+await test('an output that grows past the limit while Verifold copies it stops the outputs, with a note', async (t) => {
+  const limit = runLimits.outputBytes;
+  runLimits.outputBytes = 3 * runLimits.copyPart;
+  t.after(() => {
+    runLimits.outputBytes = limit;
+  });
+  let grow: number | null = null;
+  const fx = await fakeRuns(
+    t,
+    { 'out/grow.txt': 'g'.repeat(runLimits.copyPart + 10) },
+    {
+      fetched: (folder) => {
+        const path = join(folder, 'out', 'grow.txt');
+        if (grow === null && existsSync(path)) grow = openSync(path, 'a');
+      },
+      // After its checks, during the copy, the file grows past the limit.
+      wrap: (guard) => ({
+        ...guard,
+        stream: () => {
+          const scan = guard.stream();
+          return {
+            longest: scan.longest,
+            holds: (part) => {
+              if (grow !== null) {
+                writeSync(grow, Buffer.alloc(3 * runLimits.copyPart, 'g'));
+                closeSync(grow);
+                grow = null;
+              }
+              return scan.holds(part);
+            },
+          };
+        },
+      }),
+    },
+  );
+  t.after(() => {
+    if (grow !== null) closeSync(grow);
+  });
+  await fx.start(['out']);
+  await until(() => fx.ended.length === 1);
+  const run = fx.ledger.get('r-1');
+  assert.deepEqual(run?.outputs, []);
+  assert.match(
+    run?.note ?? '',
+    new RegExp(`The outputs stop at ${runLimits.outputFiles} files, 3 MB,`),
+  );
+  assert.doesNotMatch(run?.note ?? '', /No output file at/);
+  const record = join(fx.root, '.verifold', 'lab', 'runs', 'r-1');
+  assert.equal(existsSync(join(record, 'outputs', 'out', 'grow.txt')), false);
+  assert.deepEqual(
+    (await readdir(record)).filter((name) => name.endsWith('.part')),
+    [],
   );
 });
 

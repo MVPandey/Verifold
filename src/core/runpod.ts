@@ -460,11 +460,12 @@ export interface SecretGuard {
   /** The content or the name holds a secret value. */
   holds(content: Buffer | string): boolean;
   /**
-   * A check of content that comes in parts, in their order: true when the
-   * parts so far hold a secret value, also one that starts in one part and
-   * ends in the next.
+   * A check of content that comes in parts, in their order. `holds` is true
+   * when the parts so far hold a secret value, also one that starts in one
+   * part and ends in a later one. After that, it stays true. `longest`: the
+   * size in bytes of the longest secret value.
    */
-  stream(): (part: Buffer) => boolean;
+  stream(): { holds(part: Buffer): boolean; readonly longest: number };
 }
 
 /** A guard for these secret values. It keeps them for its whole life, also after the lease closes. */
@@ -500,19 +501,31 @@ export function secretGuard(
     },
     holds: (content) => values.some(([, value]) => content.includes(value)),
     stream: () => {
-      // A value that ends in a part starts at most its length less one byte before that part.
-      const keep = Math.max(
+      const longest = Math.max(
         0,
-        ...values.map(([, value]) => Buffer.byteLength(value) - 1),
+        ...values.map(([, value]) => Buffer.byteLength(value)),
       );
+      // A value that ends in a part starts at most `keep` bytes before that part.
+      const keep = Math.max(0, longest - 1);
       let tail = Buffer.alloc(0);
-      return (part) => {
-        const joined = Buffer.concat([tail, part]);
-        if (values.some(([, value]) => joined.includes(value))) return true;
-        tail = Buffer.from(
-          joined.subarray(joined.length - Math.min(keep, joined.length)),
-        );
-        return false;
+      let found = false;
+      return {
+        longest,
+        holds: (part) => {
+          if (found) return true;
+          // The values inside the part, and the values across its start.
+          const edge = Buffer.concat([tail, part.subarray(0, keep)]);
+          found = values.some(
+            ([, value]) => part.includes(value) || edge.includes(value),
+          );
+          tail =
+            part.length >= keep
+              ? Buffer.from(part.subarray(part.length - keep))
+              : Buffer.concat([tail, part]).subarray(
+                  Math.max(0, tail.length + part.length - keep),
+                );
+          return found;
+        },
       };
     },
   };
