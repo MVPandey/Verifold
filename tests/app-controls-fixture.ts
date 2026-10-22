@@ -16,4 +16,5 @@ export const controls: LabControls = {
   run: unread,
   diff: unread,
   board: unread,
+  figure: unread,
 };

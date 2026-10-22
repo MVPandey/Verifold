@@ -210,10 +210,10 @@ await test('desk restricts private reads, serves escaped records, and stops with
     shell.headers.get('content-security-policy') ?? '',
     /frame-ancestors 'none'/,
   );
-  // The page draws its tab icon as a blob image. Other images come from the desk.
+  // The page draws its tab icon as a blob image, and shows a figure as a data image. Other images come from the desk.
   assert.match(
     shell.headers.get('content-security-policy') ?? '',
-    /img-src 'self' blob:;/,
+    /img-src 'self' blob: data:;/,
   );
   assert.doesNotMatch(await shell.text(), /alert|Researcher/);
   assert.equal((await fetch(api)).status, 401);

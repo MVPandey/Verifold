@@ -15,6 +15,7 @@ import type {
 } from '../src/protocol/api.ts';
 import { checkWords } from '../src/app/answer.ts';
 import {
+  dispositionName,
   isDirectionDiff,
   isRunDetail,
   load,
@@ -53,6 +54,7 @@ import {
   size,
 } from '../src/app/runs.ts';
 import { lineKinds } from '../src/app/screens/DiffPage.tsx';
+import { savedName } from '../src/app/screens/FigurePage.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import { labHours, validHours } from '../src/app/screens/Notice.tsx';
@@ -288,7 +290,7 @@ function text(html: string): string {
     .replace(/\s+/g, ' ');
 }
 
-await test('routes: a run, an agent and its turns, and a diff with or without a proof', () => {
+await test('routes: a run, an agent and its turns, a diff with or without a proof, and a figure', () => {
   assert.deepEqual(parseRoute(href.runPage('r-12')), {
     page: 'run',
     id: 'r-12',
@@ -308,6 +310,10 @@ await test('routes: a run, an agent and its turns, and a diff with or without a 
     direction: 'd-2',
     proof: 'p-9.1',
   });
+  assert.deepEqual(parseRoute(href.figure('p-9.0')), {
+    page: 'figure',
+    proof: 'p-9.0',
+  });
   for (const hash of [
     '#/run/r-0',
     '#/run/x-1',
@@ -316,6 +322,10 @@ await test('routes: a run, an agent and its turns, and a diff with or without a 
     '#/d/d-2/diff/p-9',
     '#/d/d-2/diff/p-9.10',
     '#/d/../diff',
+    '#/figure/p-9',
+    '#/figure/p-9.10',
+    '#/figure/results/fig.png',
+    '#/figure/..',
   ])
     assert.deepEqual(parseRoute(hash), { page: 'unknown' }, hash);
 });
@@ -541,7 +551,7 @@ await test('the lab home: open a direction, open disputes pinned, how a check we
   assert.doesNotMatch(bare, /Open a direction yourself|Show older posts|Reply/);
 });
 
-await test('a proof chip leads to its run, its diff, or its direction, and is no link without one', () => {
+await test('a proof chip leads to its run, its figure, its diff, or its direction, and a file is no link without one', () => {
   const lone = post('p-1', 'a-2', 'claim', 'x', { direction: null });
   assert.equal(proofHref(lone, { type: 'run', run: 'r-9' }, 0), '#/run/r-9');
   assert.equal(
@@ -559,9 +569,10 @@ await test('a proof chip leads to its run, its diff, or its direction, and is no
     null,
   );
   const placed = post('p-2', 'a-2', 'claim', 'x');
+  // A figure opens its own view, which Verifold finds by the post and the place.
   assert.equal(
     proofHref(
-      placed,
+      lone,
       {
         type: 'figure',
         direction: null,
@@ -571,7 +582,58 @@ await test('a proof chip leads to its run, its diff, or its direction, and is no
       },
       0,
     ),
+    '#/figure/p-1.0',
+  );
+  // A file leads to the direction that holds it.
+  assert.equal(
+    proofHref(
+      placed,
+      {
+        type: 'file',
+        direction: null,
+        path: 'probe.py',
+        commit: 'a3f9c2e',
+        bytes: 9,
+      },
+      1,
+    ),
     '#/d/d-2',
+  );
+});
+
+await test('the figure page reads the figure with the lab controls, leads back to its post, and asks for Verifold without them', () => {
+  const html = render(story(), href.figure('p-9.0'));
+  const page = text(html);
+  assert.match(page, /A figure/);
+  assert.match(page, /Reading the figure…/);
+  assert.match(html, /<a class="back" href="#\/post\/p-9">/);
+  assert.match(page, /The post/);
+  // A tab without a token reads nothing.
+  const bare = text(render(story(), href.figure('p-9.0'), null));
+  assert.match(bare, /Open this page from Verifold to see the figure\./);
+  assert.doesNotMatch(bare, /Reading the figure/);
+});
+
+await test("a figure is saved under the name that Verifold sends, else as figure with its type's extension", () => {
+  assert.equal(
+    dispositionName('attachment; filename="report_v2.pdf"'),
+    'report_v2.pdf',
+  );
+  // A name with other characters is not Verifold's, so the page does not take it.
+  assert.equal(dispositionName('attachment; filename="../x.pdf"'), null);
+  assert.equal(dispositionName(null), null);
+  const pdf = new Blob(['%PDF'], { type: 'application/pdf' });
+  assert.equal(
+    savedName({ blob: pdf, name: 'report_v2.pdf' }),
+    'report_v2.pdf',
+  );
+  assert.equal(savedName({ blob: pdf, name: null }), 'figure.pdf');
+  assert.equal(
+    savedName({
+      blob: new Blob(['<svg/>'], { type: 'image/svg+xml' }),
+      name: null,
+    }),
+    'figure.svg',
   );
 });
 

@@ -13,9 +13,11 @@ import {
   isDirectionDiff,
   isRunDetail,
   load,
+  loadFile,
   paths,
   type ActOutcome,
   type Loaded,
+  type SentFile,
 } from './api.ts';
 import { useAction, type Action } from './useAction.ts';
 
@@ -72,6 +74,11 @@ export interface LabControls {
     before: string,
     signal?: AbortSignal,
   ) => Promise<Loaded<BoardPage>>;
+  /** The figure that a post cites, such as p-12.0: its bytes, as the post pinned them, and its name. */
+  readonly figure: (
+    proof: string,
+    signal?: AbortSignal,
+  ) => Promise<Loaded<SentFile>>;
 }
 
 export const ControlsContext = createContext<LabControls | null>(null);
@@ -123,5 +130,6 @@ export function labControls(token: string): LabControls {
       load(token, paths.diff(direction, query), isDirectionDiff, signal),
     board: (before, signal) =>
       load(token, paths.board(before), isBoardPage, signal),
+    figure: (proof, signal) => loadFile(token, paths.figure(proof), signal),
   };
 }

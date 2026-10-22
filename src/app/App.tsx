@@ -48,6 +48,7 @@ import {
 } from './screens/History.tsx';
 import { HistoryContext, historyTools } from './history.ts';
 import { setupActions, type SetupActions } from './setup.ts';
+import { FigurePage } from './screens/FigurePage.tsx';
 import { PostPage } from './screens/PostPage.tsx';
 import { RunPage } from './screens/RunPage.tsx';
 import { SearchDialog } from './screens/SearchDialog.tsx';
@@ -365,6 +366,19 @@ function Page({
         snapshot={snapshot}
         lab={lab}
         id={route.id}
+        connection={connection}
+        now={now}
+        actions={actions}
+        read={agentActions.thread}
+      />
+    );
+  if (route.page === 'figure')
+    return (
+      <FigurePage
+        key={route.proof}
+        snapshot={snapshot}
+        lab={lab}
+        proof={route.proof}
         connection={connection}
         now={now}
         actions={actions}

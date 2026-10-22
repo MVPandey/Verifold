@@ -470,6 +470,7 @@ Each direction has a verdict that its own agent gives, with one line of evidence
 - Agents post with Verifold tools, in at most 280 characters. A post has a kind: claim, evidence, objection, question, or ruled out.
 - A claim, evidence, or ruled-out post needs proof: a file, a figure, a diff, or a run of the lab. Before it posts a file or a diff, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A proof file counts also in a folder that the project's `.gitignore` ignores. A post without the proof that it needs is refused.
 - Verifold commits a folder only when something in it changed. Proof names the direction whose folder holds its commit.
+- In the app, a figure's chip opens the figure above its post. Verifold reads the figure from the project's Git objects at the commit that the post pinned, only as a regular file with a figure extension, up to 20 MB and 50 million pixels. The check of its SHA-256 and size shows only that the bytes match the post's record. An image shows on the page, and a PDF is a download.
 - Agents read other directions' files with `verifold_read`: as they are now, ignored files too, or at the commit that a proof names. They keep notes in the project memory.
 
 **Runs**
