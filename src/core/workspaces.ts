@@ -14,7 +14,7 @@ import {
 } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { childEnvironment } from './harness.ts';
 
 /**
@@ -89,6 +89,9 @@ export const limits = {
  * GIT_AUTHOR_NAME would point Git at another repository or another author, for
  * example when Verifold runs inside a Git hook. So none of them pass through,
  * in any case of letters: Windows does not tell names apart by case.
+ *
+ * GIT_NO_LAZY_FETCH stops a read of a missing object from fetching it, so a
+ * command such as `ls-tree` or `cat-file` only ever reads the local store.
  */
 export function gitEnvironment(): NodeJS.ProcessEnv {
   return {
@@ -98,8 +101,77 @@ export function gitEnvironment(): NodeJS.ProcessEnv {
       ),
     ),
     GIT_TERMINAL_PROMPT: '0',
+    GIT_NO_LAZY_FETCH: '1',
     LC_ALL: 'C',
   };
+}
+
+/** The real Git directory of each folder that Verifold made, so a command names it instead of finding it through the folder's `.git`. Keyed by the folder. */
+const repoDirs = new Map<string, string>();
+
+/** The Git directory that a project worktree uses, built once from the project itself. */
+const commonGitDir = new Map<string, Promise<string>>();
+
+/**
+ * Name the repository and work tree of a folder that Verifold made, so a Git
+ * command reads the repository that Verifold set up and never one that the
+ * `.git` file in the folder points to. The project root itself finds its own
+ * repository as usual. A folder with no recorded Git directory, such as the
+ * project root, gets no extra options.
+ */
+function namedRepo(cwd: string): readonly string[] {
+  const dir = repoDirs.get(cwd);
+  return dir ? ['--git-dir', dir, '--work-tree', cwd] : [];
+}
+
+/**
+ * Make sure a workspace's folder names its repository in later commands. A
+ * folder workspace keeps its repository under `.verifold/tasks/git/`; a
+ * worktree keeps it beside the project's own, which the project itself
+ * reports once. Idempotent, so an owner that loads a workspace from a record
+ * records it on first use.
+ */
+async function ensureWorkspaceRepo(
+  root: string,
+  workspace: Pick<Workspace, 'kind' | 'path'>,
+): Promise<void> {
+  const folder = join(root, workspace.path);
+  if (repoDirs.has(folder)) return;
+  const name = basename(workspace.path);
+  if (workspace.kind === 'folder') {
+    repoDirs.set(folder, join(root, '.verifold', 'tasks', 'git', name));
+    return;
+  }
+  repoDirs.set(folder, join(await commonDir(root), 'worktrees', name));
+}
+
+/** The Git directory that every worktree of a project shares, asked of the project once. A failed answer is not kept. */
+function commonDir(root: string): Promise<string> {
+  let pending = commonGitDir.get(root);
+  if (!pending) {
+    pending = git(root, [
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-common-dir',
+    ])
+      .then((out) => out.toString('utf8').trim())
+      .catch((error: unknown) => {
+        commonGitDir.delete(root);
+        throw error;
+      });
+    commonGitDir.set(root, pending);
+  }
+  return pending;
+}
+
+/** Record a check folder's own Git directory, so its commands name the repository. */
+function rememberCheckRepo(root: string, folder: string, name: string): void {
+  repoDirs.set(folder, join(root, '.verifold', 'tasks', 'git', name));
+}
+
+/** Forget a folder's repository once Verifold removes the folder. */
+function forgetRepo(folder: string): void {
+  repoDirs.delete(folder);
 }
 
 /**
@@ -130,6 +202,9 @@ function git(
     const child = execFile(
       'git',
       [
+        // Verifold never reaches a remote, so no command may use a transport.
+        '-c',
+        'protocol.allow=never',
         '-c',
         'core.hooksPath=/dev/null',
         // Several agents commit in worktrees of one repository. An automatic gc in one would race the others.
@@ -145,6 +220,8 @@ function git(
         'core.quotepath=off',
         '-c',
         'core.fsmonitor=false',
+        // In a folder that Verifold made, name the repository instead of finding it through the folder's `.git`.
+        ...namedRepo(cwd),
         ...(args[0] === 'diff'
           ? ['diff', ...plainDiff, ...args.slice(1)]
           : args),
@@ -661,6 +738,8 @@ export async function allocate(
     await mkdir(dirname(join(target, input.path)), { recursive: true });
     await copyFile(input.copy, join(target, input.path));
   }
+  // The repository exists now, so the start commit, and every later command, names it.
+  await ensureWorkspaceRepo(root, { kind, path });
   const { commit } = await commitAll(
     target,
     options.writable,
@@ -708,6 +787,8 @@ export async function checkFolder(
   try {
     await checkoutAt(root, options.from, options.commit, target);
     await git(target, ['init', '--quiet', `--separate-git-dir=${gitDir}`]);
+    // The repository exists now, so the commit, and every later command, names it.
+    rememberCheckRepo(root, target, options.name);
     // Git wrote each file new, so none has a second hard link.
     await git(target, ['add', '--all', '--force', '--', '.']);
     await git(target, [
@@ -720,6 +801,7 @@ export async function checkFolder(
     ]);
     return await head(target);
   } catch (error) {
+    forgetRepo(target);
     await rm(target, { recursive: true, force: true });
     await rm(gitDir, { recursive: true, force: true });
     throw error;
@@ -753,12 +835,13 @@ export async function gitDirs(root: string): Promise<string[]> {
 }
 
 /** Commit the workspace as one version. */
-export function commitVersion(
+export async function commitVersion(
   root: string,
   workspace: Workspace,
   writable: readonly string[],
   message: string,
 ): Promise<{ readonly commit: string; readonly skipped: readonly string[] }> {
+  await ensureWorkspaceRepo(root, workspace);
   return commitAll(join(root, workspace.path), writable, message);
 }
 
@@ -779,6 +862,7 @@ export async function snapshot(
   readonly linked: readonly string[];
   readonly skipped: readonly string[];
 }> {
+  await ensureWorkspaceRepo(root, workspace);
   const { commit, linked, skipped } = await commitAll(
     join(root, workspace.path),
     ['.'],
@@ -834,6 +918,7 @@ export async function changes(
   from: string,
   to: string,
 ): Promise<ChangedFile[]> {
+  await ensureWorkspaceRepo(root, workspace);
   const fields = (
     await git(join(root, workspace.path), [
       'diff',
@@ -870,6 +955,7 @@ export async function diff(
   to: string,
   path: string,
 ): Promise<{ readonly text: string; readonly cut: boolean }> {
+  await ensureWorkspaceRepo(root, workspace);
   const output = await git(join(root, workspace.path), [
     'diff',
     '--no-color',
@@ -908,12 +994,13 @@ export async function diffIn(
 }
 
 /** The content of a file in a version, or null when it or its task folder is gone. */
-export function readAt(
+export async function readAt(
   root: string,
   workspace: Workspace,
   commit: string,
   path: string,
 ): Promise<Buffer | null> {
+  await ensureWorkspaceRepo(root, workspace);
   return fileAt(join(root, workspace.path), commit, path);
 }
 
@@ -926,6 +1013,7 @@ export async function folderState(
   root: string,
   workspace: Workspace,
 ): Promise<string> {
+  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
   const hash = createHash('sha256').update(await head(target));
   const entries = (
@@ -963,6 +1051,7 @@ export async function readCurrent(
   workspace: Workspace,
   path: string,
 ): Promise<Buffer | null> {
+  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
   // A size and link check only: the content comes from Git, never from this path.
   const stats = await lstat(join(target, path)).catch(() => null);
@@ -1018,6 +1107,7 @@ export async function readFileAt(
   path: string,
   maxBytes = Infinity,
 ): Promise<Buffer | null> {
+  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
   try {
     const entry = (
@@ -1068,6 +1158,7 @@ export async function checkoutAt(
   commit: string,
   target: string,
 ): Promise<void> {
+  await ensureWorkspaceRepo(root, workspace);
   const index = join(
     tmpdir(),
     `verifold-index-${randomBytes(8).toString('hex')}`,
@@ -1098,6 +1189,7 @@ export async function copyAt(
   paths: readonly string[],
   folder: string,
 ): Promise<{ path: string; bytes: number; sha256: string }[]> {
+  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
   const copied = [];
   for (const path of paths) {
@@ -1140,6 +1232,7 @@ export async function integrate(
   | { readonly applied: readonly string[] }
   | { readonly conflicts: readonly string[] }
 > {
+  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
   const tree = await treeAt(root, workspace, version, paths);
   const deleted = new Set(paths.filter((path) => !tree.has(path)));
@@ -1281,6 +1374,7 @@ export async function treeAt(
     string,
     { readonly mode: string; readonly id: string; readonly bytes: number }
   >();
+  await ensureWorkspaceRepo(root, workspace);
   // A few hundred paths at a time keep the command line short.
   for (let at = 0; at < paths.length; at += 200)
     for (const line of await list(join(root, workspace.path), [
@@ -1312,6 +1406,7 @@ export async function sameTree(
   b: string,
 ): Promise<boolean> {
   if (a === b) return true;
+  await ensureWorkspaceRepo(root, workspace);
   const [left, right] = (
     await git(join(root, workspace.path), [
       'rev-parse',
@@ -1334,8 +1429,12 @@ export async function release(
   root: string,
   workspace: Workspace,
 ): Promise<boolean> {
+  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
-  if ((await lstat(target).catch(() => null)) === null) return true;
+  if ((await lstat(target).catch(() => null)) === null) {
+    forgetRepo(target);
+    return true;
+  }
   try {
     if (
       (
@@ -1353,6 +1452,7 @@ export async function release(
     if (workspace.kind === 'git')
       await git(root, ['worktree', 'remove', target]);
     else await rm(target, { recursive: true, force: true });
+    forgetRepo(target);
     return true;
   } catch {
     return false;
