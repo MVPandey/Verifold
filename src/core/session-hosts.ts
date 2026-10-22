@@ -1046,7 +1046,7 @@ child.on('error', () => process.exit(127));
 child.on('exit', (code) => process.exit(code ?? 1));`;
 
 /** Codex's app-server under the watchdog, on a socket in a private folder. */
-export interface CodexServer {
+interface CodexServer {
   /** The watchdog. It leads one process group with Codex on POSIX. */
   readonly child: ChildProcessWithoutNullStreams;
   /** The app-server socket, which a terminal can also attach to. */
@@ -1058,7 +1058,7 @@ export interface CodexServer {
     onMessage: (text: string) => void,
     onClose: () => void,
   ): Promise<UnixWebSocket>;
-  /** Stop the server and remove its folder now. */
+  /** Stop the server's process group, as a session stops it. The folder goes when the server closes. */
   stop(): void;
 }
 
@@ -1071,8 +1071,12 @@ export interface CodexServer {
 export function startCodexServer(options: {
   readonly executable: string;
   readonly config: readonly string[];
-  /** Without it, the server runs in Verifold's own folder. */
-  readonly cwd?: string;
+  /**
+   * A session: the server runs in its folder, and the session hears when the
+   * server cannot start and when it ends, before the folder is removed.
+   * Without one, the server runs in Verifold's own folder.
+   */
+  readonly session?: HostOptions;
 }): CodexServer {
   // Unix socket paths are short (about 104 bytes on macOS), so the folder is under the temporary folder.
   const folder = mkdtempSync(join(tmpdir(), 'vf-'));
@@ -1088,11 +1092,20 @@ export function startCodexServer(options: {
       '--listen',
       `unix://${socket}`,
     ],
-    options.cwd,
+    options.session?.cwd,
   );
+  child.on('error', () => {
+    /* The exit, the close and the connection report the outcome. */
+  });
+  if (options.session) reportEnd(child, options.session);
   child.stdout.resume();
-  const remove = (): void => rmSync(folder, { recursive: true, force: true });
-  child.on('close', remove);
+  child.on('close', () => {
+    try {
+      rmSync(folder, { recursive: true, force: true });
+    } catch {
+      /* A folder that cannot be removed stays in the temporary folder. */
+    }
+  });
   const exited = (): boolean =>
     child.exitCode !== null || child.signalCode !== null;
   return {
@@ -1106,10 +1119,7 @@ export function startCodexServer(options: {
         onMessage,
         onClose,
       ),
-    stop: () => {
-      stop(child);
-      remove();
-    },
+    stop: () => stop(child),
   };
 }
 
@@ -1138,10 +1148,9 @@ function codex(options: HostOptions): HostSession {
         ? ['-c', 'features.skill_mcp_dependency_install=false']
         : []),
     ],
-    cwd: options.cwd,
+    session: options,
   });
   const { child, socket, exited } = server;
-  reportEnd(child, options);
   const emit = options.onEvent;
   // `exit` comes before `close`, which reports the end of the session, so the reason comes first.
   child.on('exit', () => {

@@ -151,9 +151,6 @@ export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
  */
 async function codexModelList(executable: string): Promise<unknown[] | null> {
   const server = startCodexServer({ executable, config: [] });
-  server.child.on('error', () => {
-    /* No socket comes, so the wait ends at the deadline. */
-  });
   let finish: (value: unknown[] | null) => void = () => {};
   const answer = new Promise<unknown[] | null>((resolve) => {
     finish = resolve;
