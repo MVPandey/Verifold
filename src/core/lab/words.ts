@@ -4,7 +4,7 @@
  * Nothing here holds state.
  */
 import { createHash } from 'node:crypto';
-import { safePath } from '../board.ts';
+import { boardLimits, clip, safePath, type NewPost } from '../board.ts';
 import { type SessionRecord, usdValue } from '../session.ts';
 import {
   type ChangedFile,
@@ -54,9 +54,46 @@ export function askers(call: Call): string[] {
   ];
 }
 
-/** The directions of the agents that asked a call: the first asker's, then those of the agents that joined. */
+/** The directions of the agents that asked a call, in the order of `askers`. Verifold's own call has none. */
 export function askerDirections(call: Call): (string | null)[] {
-  return [call.direction, ...call.joined.map((asker) => asker.direction)];
+  return [
+    ...(call.by === 'verifold' ? [] : [call.direction]),
+    ...call.joined.map((asker) => asker.direction),
+  ];
+}
+
+/** A status line from Verifold on a call, in the call's direction. */
+export function callStatus(call: Call, text: string): NewPost {
+  return {
+    author: 'verifold',
+    kind: 'status',
+    ...(call.direction ? { direction: call.direction } : {}),
+    text: clip(text, boardLimits.text),
+    mentions: [],
+    artifacts: [],
+  };
+}
+
+/** The board's record of an answer in the person's words: a reply in the call's thread, else a status line. */
+export function wordsPost(call: Call, words: string): NewPost {
+  return call.post
+    ? {
+        author: 'person',
+        kind: 'question',
+        replyTo: call.post,
+        text: words,
+        mentions: [],
+        artifacts: [],
+      }
+    : callStatus(
+        call,
+        `The person answered ${call.id} in their own words: ${JSON.stringify(words)}`,
+      );
+}
+
+/** What the agents that asked hear about an answer in the person's words. */
+export function wordsLine(call: Call, words: string): string {
+  return `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(words)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
 }
 
 /**
