@@ -1723,14 +1723,17 @@ export class SessionManager {
     }
   }
 
-  /** Record the process of a launch, while that launch is still current. */
+  /**
+   * Record the process of a launch, while that launch is still current and
+   * has not ended. A process that is gone needs no start time.
+   */
   private identify(
     launch: string,
     process: { readonly pid?: number; readonly processStart?: string | null },
   ): void {
     this.patch((current) => {
       const last = current.launches.at(-1);
-      return last?.id === launch
+      return last?.id === launch && last.endedAt === null
         ? {
             ...current,
             launches: current.launches.with(-1, { ...last, ...process }),
@@ -1745,9 +1748,12 @@ export class SessionManager {
     return value.trim();
   }
 
+  /** Change the record and save it. A change that returns the same record saves nothing. */
   private patch(change: (record: SessionRecord) => SessionRecord): void {
     if (!this.current) return;
-    this.current = change(this.current);
+    const next = change(this.current);
+    if (next === this.current) return;
+    this.current = next;
     this.save();
   }
 
