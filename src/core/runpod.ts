@@ -447,16 +447,21 @@ export function hideSecrets(
   return hidden;
 }
 
+/** Which edges of a text were cut from a longer one. */
+interface Cut {
+  readonly start?: boolean;
+  readonly end?: boolean;
+}
+
 /** The secrets of a lease, held for one run: they hide in its texts and keep its outputs clean. */
 export interface SecretGuard {
   /**
    * The text with each secret value replaced by its name. At an edge where
    * the text was cut from a longer one, a part of a value is replaced too.
    */
-  hide(
-    text: string,
-    cut?: { readonly start?: boolean; readonly end?: boolean },
-  ): string;
+  hide(text: string, cut?: Cut): string;
+  /** `hide` for bytes, such as a pod's log. Bytes that are not text stay as they are. */
+  hideBytes(bytes: Buffer, cut?: Cut): Buffer;
   /** The content or the name holds a secret value. */
   holds(content: Buffer | string): boolean;
   /**
@@ -468,37 +473,42 @@ export interface SecretGuard {
   stream(): { holds(part: Buffer): boolean; readonly longest: number };
 }
 
+/** `text` with each value replaced by its name, and at a cut edge, a part of a value too. */
+function hideValues(
+  text: string,
+  values: readonly (readonly [string, string])[],
+  cut: Cut,
+): string {
+  let hidden = hideSecrets(text, Object.fromEntries(values));
+  for (const [name, value] of values) {
+    // The longest end of a value at the start, and the longest start of a value at the end.
+    for (let size = Math.min(value.length - 1, hidden.length); size > 0; size--)
+      if (cut.start && hidden.startsWith(value.slice(-size))) {
+        hidden = `[${name}]${hidden.slice(size)}`;
+        break;
+      }
+    for (let size = Math.min(value.length - 1, hidden.length); size > 0; size--)
+      if (cut.end && hidden.endsWith(value.slice(0, size))) {
+        hidden = `${hidden.slice(0, hidden.length - size)}[${name}]`;
+        break;
+      }
+  }
+  return hidden;
+}
+
 /** A guard for these secret values. It keeps them for its whole life, also after the lease closes. */
 export function secretGuard(
   secrets: Readonly<Record<string, string>>,
 ): SecretGuard {
   const values = Object.entries({ ...secrets }).filter(([, value]) => value);
+  // Latin-1 gives one character for each byte, so a value matches the bytes of its UTF-8 form, and other bytes stay.
+  const bytes = values.map(
+    ([name, value]) => [name, Buffer.from(value).toString('latin1')] as const,
+  );
   return {
-    hide: (text, cut = {}) => {
-      let hidden = hideSecrets(text, Object.fromEntries(values));
-      for (const [name, value] of values) {
-        // The longest end of a value at the start, and the longest start of a value at the end.
-        for (
-          let size = Math.min(value.length - 1, hidden.length);
-          size > 0;
-          size--
-        )
-          if (cut.start && hidden.startsWith(value.slice(-size))) {
-            hidden = `[${name}]${hidden.slice(size)}`;
-            break;
-          }
-        for (
-          let size = Math.min(value.length - 1, hidden.length);
-          size > 0;
-          size--
-        )
-          if (cut.end && hidden.endsWith(value.slice(0, size))) {
-            hidden = `${hidden.slice(0, hidden.length - size)}[${name}]`;
-            break;
-          }
-      }
-      return hidden;
-    },
+    hide: (text, cut = {}) => hideValues(text, values, cut),
+    hideBytes: (content, cut = {}) =>
+      Buffer.from(hideValues(content.toString('latin1'), bytes, cut), 'latin1'),
     holds: (content) => values.some(([, value]) => content.includes(value)),
     stream: () => {
       const longest = Math.max(

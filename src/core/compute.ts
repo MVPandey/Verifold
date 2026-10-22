@@ -820,14 +820,7 @@ export class Compute {
       stop: (id, run, signal) =>
         hidden(id, (target) => this.shell.stopRun(target, run, signal)),
       log: (id, run, head, tail) =>
-        hidden(id, async (target) => {
-          const log = await this.shell.runLog(target, run, head, tail);
-          return {
-            bytes: log.bytes,
-            head: log.head.toString('utf8'),
-            tail: log.tail ? log.tail.toString('utf8') : null,
-          };
-        }),
+        hidden(id, (target) => this.shell.runLog(target, run, head, tail)),
       metrics: (id, run) =>
         hidden(id, (target) => this.shell.runMetrics(target, run)),
       fetch: (id, run, paths, folder) =>

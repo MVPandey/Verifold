@@ -137,7 +137,7 @@ export async function changeWorkspace(
  */
 export async function writePrivateFile(
   path: string,
-  body: string,
+  body: string | Uint8Array,
   options: { readonly sync?: boolean } = {},
 ): Promise<void> {
   const temporary = join(dirname(path), `.${randomUUID()}.tmp`);
