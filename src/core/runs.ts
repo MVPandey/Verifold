@@ -697,6 +697,8 @@ export interface RunLedgerOptions {
   readonly home?: string;
   /** More paths that a run cannot read: absolute, or under `~/`. */
   readonly denyRead?: readonly string[];
+  /** A line for the person, such as a record that could not be saved. */
+  readonly progress?: (line: string) => void;
 }
 
 export class RunLedger {
@@ -1539,7 +1541,15 @@ export class RunLedger {
     };
   }
 
-  /** Record a run's end in the lab's queue, and tell its agent. */
+  /**
+   * Record a run's end in the lab's queue, then tell its agent. Two writes:
+   * the end first, then that the agent heard it. So no reader of the
+   * records, and no owner after a restart, finds a run running that its
+   * agent knows ended. A crash between the two writes tells the agent once
+   * more after the restart, and never loses the end: the agent hears it at
+   * least once, not at most once. A write that fails says so in the
+   * progress line.
+   */
   private end(
     run: RunRecord,
     outcome: Parameters<RunLedger['result']>[1],
@@ -1549,10 +1559,27 @@ export class RunLedger {
       this.cancelled.delete(run.id);
       this.reasons.delete(run.id);
       this.records.set(run.id, next);
-      const saved = this.options.ended(next) ? { ...next, told: true } : next;
-      this.records.set(run.id, saved);
-      await this.save(saved).catch(() => {});
-      return saved;
+      await this.saveOrSay(
+        next,
+        `Verifold could not save the end of ${next.id}`,
+      );
+      if (!this.options.ended(next)) return next;
+      const told = { ...next, told: true };
+      this.records.set(run.id, told);
+      await this.saveOrSay(
+        told,
+        `Verifold could not save that the agent heard the end of ${next.id}, so it can hear it once more after a restart`,
+      );
+      return told;
+    });
+  }
+
+  /** Save a record. A failure goes to the progress line, after `what`. */
+  private async saveOrSay(run: RunRecord, what: string): Promise<void> {
+    await this.save(run).catch((error: unknown) => {
+      this.options.progress?.(
+        `${what}: ${error instanceof Error ? error.message : 'unknown error'}.`,
+      );
     });
   }
 

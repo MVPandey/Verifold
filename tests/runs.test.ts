@@ -13,7 +13,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -27,6 +27,7 @@ import {
   type Sandbox,
 } from '../src/core/runs.ts';
 import { allocate, snapshot, type Workspace } from '../src/core/workspaces.ts';
+import { labQueue } from './wait.ts';
 
 /** No sandbox: the command runs as it is. Tests of the ledger use it on every platform. */
 const open: Sandbox = (spec) => ({
@@ -57,6 +58,12 @@ interface Fixture {
   readonly workspace: Workspace;
   /** Commit the direction's folder, as the lab does before a run. */
   commit(): Promise<string>;
+  /**
+   * Wait for the work in the lab's queue, such as the saves after a run
+   * ends. Its agent hears the end before the last save, so a test waits for
+   * this before another ledger reads the records.
+   */
+  settled(): Promise<void>;
   ledger(options?: {
     readonly sandbox?: Sandbox | null;
     readonly minuteMs?: number;
@@ -82,7 +89,7 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
     inputs: [],
     light: true,
   });
-  let queue: Promise<unknown> = Promise.resolve();
+  const queue = labQueue();
   let calls = 0;
   const made: Fixture = {
     base,
@@ -90,15 +97,12 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
     workspace,
     commit: async () =>
       (await snapshot(root, workspace, 'Verifold: test')).commit,
+    settled: queue.settled,
     ledger: (options = {}) => {
       const ended: RunRecord[] = [];
       const ledger = new RunLedger(root, {
         sandbox: options.sandbox === undefined ? open : options.sandbox,
-        serial: <T>(work: () => T | Promise<T>): Promise<T> => {
-          const next = queue.then(work, work);
-          queue = next.catch(() => {});
-          return next;
-        },
+        serial: queue.serial,
         ended: (run) => {
           ended.push(run);
           return true;
@@ -230,6 +234,7 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
     '600',
   );
   // The record on disk is the same, and a new ledger reads it.
+  await fx.settled();
   const again = fx.ledger().ledger;
   await again.load(true);
   assert.deepEqual(again.get('r-1'), run);
@@ -244,6 +249,41 @@ await test('a run records its commit, exit code, log, metrics, and outputs, and 
     bytes: log.length,
     partial: true,
   });
+});
+
+await test('a run end that its agent heard but that cannot be saved as heard says so, and a new ledger still reads the end', async (t) => {
+  const fx = await fixture(t);
+  const record = join(fx.root, '.verifold', 'lab', 'runs', 'r-1');
+  const lines: string[] = [];
+  const queue = labQueue();
+  const ledger = new RunLedger(fx.root, {
+    sandbox: open,
+    serial: queue.serial,
+    // The agent hears the end after it is saved. From then on, the run's folder takes no writes.
+    ended: () => {
+      chmodSync(record, 0o500);
+      return true;
+    },
+    progress: (line) => lines.push(line),
+    home: join(fx.base, 'home'),
+  });
+  t.after(() => ledger.close());
+  try {
+    await fx.start(ledger, 'true');
+    await until(() => lines.length === 1);
+    await queue.settled();
+    assert.match(
+      lines[0] ?? '',
+      /^Verifold could not save that the agent heard the end of r-1, so it can hear it once more after a restart: /,
+    );
+    // The end is on disk, so the run is not lost. Its agent hears it once more after a restart.
+    const again = fx.ledger().ledger;
+    await again.load(false);
+    assert.equal(again.get('r-1')?.status, 'done');
+    assert.equal(again.get('r-1')?.told, false);
+  } finally {
+    chmodSync(record, 0o700);
+  }
 });
 
 await test('an edit after the start does not change the run, and a failing command fails', async (t) => {
@@ -514,6 +554,7 @@ await test('each run gets a folder that no later run gets, also after Start over
   t.after(() => first.ledger.close());
   await fx.start(first.ledger, 'true');
   await until(() => first.ended.length === 1);
+  await fx.settled();
   const before = first.ledger.get('r-1')?.folder ?? '';
   assert.match(before, /^run-1-[0-9a-f]{8}$/);
   // Start over moves the records away, so the next lab starts at r-1 again.

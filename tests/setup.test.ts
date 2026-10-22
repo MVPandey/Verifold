@@ -10,6 +10,7 @@ import { renderSetup } from '../src/desk/desk-view.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
 import { loadWorkspace } from '../src/core/storage.ts';
 import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
+import { until } from './wait.ts';
 
 // After setup, the project starts a lab, whose first agent starts a harness
 // process from PATH. Fake claude and codex commands that stop at once come
@@ -364,14 +365,20 @@ for (const background of [false, true])
       html,
       /<h1 id="view-title" tabindex="-1">Fast graph search on CPUs<\/h1>/,
     );
-    assert.equal(
-      (
-        JSON.parse(
-          await readFile(join(project, '.verifold', 'lab.json'), 'utf8'),
-        ) as { question: string }
-      ).question,
-      'Fast graph search on CPUs',
-    );
+    // The page shows the lab from memory. Its state file can follow a moment later.
+    await until(async () => {
+      try {
+        return (
+          (
+            JSON.parse(
+              await readFile(join(project, '.verifold', 'lab.json'), 'utf8'),
+            ) as { question?: string }
+          ).question === 'Fast graph search on CPUs'
+        );
+      } catch {
+        return false;
+      }
+    });
     assert.equal(asked.length, 0);
     // After setup, the setup transcript is gone with the setup desk.
     assert.equal(

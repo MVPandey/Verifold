@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createServer, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { connectUnixWebSocket } from '../src/core/unix-websocket.ts';
+import {
+  connectUnixWebSocket,
+  connectWhenListening,
+} from '../src/core/unix-websocket.ts';
 
 /** A server frame: never masked. `fin` false starts or continues a fragmented message. */
 function frame(opcode: number, payload: Buffer, fin = true): Buffer {
@@ -48,14 +52,12 @@ function frames(data: Buffer): { opcode: number; text: string }[] {
   return found;
 }
 
-async function server(
-  t: test.TestContext,
+/** The server side of the handshake: accept (or refuse) the upgrade, then hand the socket over. */
+function upgrade(
   onOpen: (socket: Socket, received: () => Buffer) => void,
   accept = true,
-): Promise<string> {
-  const folder = await mkdtemp(join(tmpdir(), 'vf-ws-'));
-  const path = join(folder, 'test.sock');
-  const listener = createServer((socket) => {
+): (socket: Socket) => void {
+  return (socket) => {
     let data = Buffer.alloc(0);
     let open = false;
     socket.on('data', (chunk: Buffer) => {
@@ -77,13 +79,36 @@ async function server(
       data = data.subarray(end + 4);
       onOpen(socket, () => data);
     });
-  });
+  };
+}
+
+async function server(
+  t: test.TestContext,
+  onOpen: (socket: Socket, received: () => Buffer) => void,
+  accept = true,
+): Promise<string> {
+  const folder = await mkdtemp(join(tmpdir(), 'vf-ws-'));
+  const path = join(folder, 'test.sock');
+  const listener = createServer(upgrade(onOpen, accept));
   await new Promise<void>((resolve) => listener.listen(path, resolve));
   t.after(async () => {
     listener.close();
     await rm(folder, { recursive: true, force: true });
   });
   return path;
+}
+
+/**
+ * A socket file that nothing accepts at: a process listened at `path` and
+ * stopped without closing, as a server that is still starting looks for a
+ * moment. A connection to it is refused (ECONNREFUSED).
+ */
+function leftSocket(path: string): void {
+  execFileSync(process.execPath, [
+    '-e',
+    "require('node:net').createServer().listen(process.argv[1], () => process.exit(0))",
+    path,
+  ]);
 }
 
 await test('the client answers pings, joins fragments, and sends masked text', async (t) => {
@@ -164,4 +189,116 @@ await test('a wrong handshake or a missing socket fails the connection', async (
     ),
     /ENOENT|ECONNREFUSED/,
   );
+});
+
+// A starting server's socket file can appear before the server accepts (#247).
+await test('a client waits for a server that is still starting, while its process lives', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'vf-ws-'));
+  const path = join(folder, 'test.sock');
+  const listener = createServer(
+    upgrade((socket) => socket.write(frame(0x1, Buffer.from('ready')))),
+  );
+  t.after(async () => {
+    listener.close();
+    await rm(folder, { recursive: true, force: true });
+  });
+  // The socket file exists, but nothing accepts at it yet: one try is refused.
+  leftSocket(path);
+  await assert.rejects(
+    connectUnixWebSocket(
+      path,
+      () => {},
+      () => {},
+    ),
+    { code: 'ECONNREFUSED' },
+  );
+  const messages: string[] = [];
+  const waiting = connectWhenListening(
+    path,
+    { alive: () => true, deadline: Date.now() + 10_000 },
+    (text) => messages.push(text),
+    () => {},
+  );
+  await delay(300);
+  await rm(path);
+  await new Promise<void>((resolve) => listener.listen(path, resolve));
+  const client = await waiting;
+  for (let tries = 0; tries < 100 && !messages.length; tries++) await delay(10);
+  assert.deepEqual(messages, ['ready']);
+  client.close();
+});
+
+await test('a client stops waiting when the process ends or the deadline passes', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'vf-ws-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const path = join(folder, 'test.sock');
+  let alive = true;
+  const ended = connectWhenListening(
+    path,
+    { alive: () => alive, deadline: Date.now() + 60_000 },
+    () => {},
+    () => {},
+  );
+  await delay(100);
+  alive = false;
+  await assert.rejects(ended, /No socket at/);
+  // A socket that nothing accepts at fails after the deadline with the last error.
+  leftSocket(path);
+  const started = Date.now();
+  await assert.rejects(
+    connectWhenListening(
+      path,
+      { alive: () => true, deadline: Date.now() + 300 },
+      () => {},
+      () => {},
+    ),
+    { code: 'ECONNREFUSED' },
+  );
+  assert.ok(Date.now() - started >= 250);
+});
+
+await test('a server that takes the connection and never answers ends the wait at the deadline, and its socket goes', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'vf-ws-'));
+  const path = join(folder, 'test.sock');
+  let closed = false;
+  // It accepts, reads, and never sends the upgrade.
+  const listener = createServer((socket) => {
+    socket.resume();
+    socket.on('close', () => {
+      closed = true;
+    });
+  });
+  await new Promise<void>((resolve) => listener.listen(path, resolve));
+  t.after(async () => {
+    listener.close();
+    await rm(folder, { recursive: true, force: true });
+  });
+  const started = Date.now();
+  await assert.rejects(
+    connectWhenListening(
+      path,
+      { alive: () => true, deadline: Date.now() + 300 },
+      () => {},
+      () => {},
+    ),
+    /handshake timed out/,
+  );
+  assert.ok(Date.now() - started >= 250);
+  for (let tries = 0; tries < 100 && !closed; tries++) await delay(10);
+  assert.equal(closed, true);
+});
+
+await test('a failure that a wait cannot mend, such as a refused handshake, ends the wait at once', async (t) => {
+  const path = await server(t, () => {}, false);
+  const started = Date.now();
+  await assert.rejects(
+    connectWhenListening(
+      path,
+      { alive: () => true, deadline: Date.now() + 10_000 },
+      () => {},
+      () => {},
+    ),
+    /handshake failed/,
+  );
+  assert.ok(Date.now() - started < 5000);
 });

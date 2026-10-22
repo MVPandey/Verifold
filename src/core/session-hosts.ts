@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { connectUnixWebSocket, type UnixWebSocket } from './unix-websocket.ts';
+import { connectWhenListening, type UnixWebSocket } from './unix-websocket.ts';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import {
@@ -1053,7 +1053,7 @@ function codex(options: HostOptions): HostSession {
   const emit = options.onEvent;
   // `exit` comes before `close`, which reports the end of the session, so the reason comes first.
   child.on('exit', () => {
-    if (!connection)
+    if (!connection && !unreachable)
       emit({
         type: 'notice',
         text: 'Could not start Codex. Check that it is installed and signed in.',
@@ -1062,6 +1062,8 @@ function codex(options: HostOptions): HostSession {
   /** Messages wait here until the socket connects. */
   let queue: string[] | null = [];
   let connection: UnixWebSocket | null = null;
+  /** The person heard that Codex could not be reached, so the exit that follows adds no line. */
+  let unreachable = false;
   const send = (value: unknown): void => {
     const text = JSON.stringify(value);
     if (connection) connection.send(text);
@@ -1389,15 +1391,14 @@ function codex(options: HostOptions): HostSession {
         emit({ type: 'limit', ...usedUp });
     }
   };
-  // Connect when the socket appears. A server that never listens counts as a failed start.
+  // Connect when the server listens. A server that never listens in 15 seconds counts as a failed start.
+  const exited = (): boolean =>
+    child.exitCode !== null || child.signalCode !== null;
   void (async () => {
-    for (let tries = 0; tries < 300 && !existsSync(socket); tries++) {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
     try {
-      connection = await connectUnixWebSocket(
+      connection = await connectWhenListening(
         socket,
+        { alive: () => !exited(), deadline: Date.now() + 15_000 },
         (text) => {
           let message: unknown;
           try {
@@ -1416,6 +1417,21 @@ function codex(options: HostOptions): HostSession {
       for (const text of queue ?? []) connection.send(text);
       queue = null;
     } catch {
+      // A Codex that exited reports its exit itself. It can stop just before
+      // the last try, with its exit not handled yet, so the line waits for
+      // that briefly: the person gets one line for one failure.
+      if (!exited())
+        await new Promise<void>((resolve) => {
+          const done = (): void => {
+            clearTimeout(grace);
+            child.off('exit', done);
+            resolve();
+          };
+          const grace = setTimeout(done, 200);
+          child.once('exit', done);
+        });
+      if (exited()) return;
+      unreachable = true;
       emit({
         type: 'notice',
         text: 'Could not connect to Codex. Check that it is installed and signed in.',

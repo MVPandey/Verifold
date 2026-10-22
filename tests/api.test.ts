@@ -1635,7 +1635,6 @@ async function deskAssets(root: string): Promise<URL> {
 
 await test('an answer that Verifold accepts and then fails shows why on the call, which is open again', async (t) => {
   const root = await project();
-  t.after(() => rm(root, { recursive: true, force: true }));
   let current = seededView();
   const change = (fields: Partial<Call>): void => {
     current = {
@@ -1688,6 +1687,8 @@ await test('an answer that Verifold accepts and then fails shows why on the call
     owner.abort();
     await desk.closed;
   });
+  // Hooks run in order: the folder goes after the desk stops writing to it.
+  t.after(() => rm(root, { recursive: true, force: true }));
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
@@ -1710,11 +1711,10 @@ await test('an answer that Verifold accepts and then fails shows why on the call
 
   release();
   let failed: Snapshot | undefined;
-  await until(() => {
-    void snapshot().then((value) => {
-      failed = value;
-    });
-    return Boolean(failed?.lab?.works.some((work) => work.error));
+  // Each poll waits for its snapshot, so no request is still open when the test closes the desk.
+  await until(async () => {
+    failed = await snapshot();
+    return Boolean(failed.lab?.works.some((work) => work.error));
   });
   const lab2 = failed?.lab;
   assert.ok(lab2);
@@ -1737,7 +1737,6 @@ await test('an answer that Verifold accepts and then fails shows why on the call
 
 await test("a bring-in that fails after Verifold accepted it names its direction, and a new try replaces only that direction's failure", async (t) => {
   const root = await project();
-  t.after(() => rm(root, { recursive: true, force: true }));
   const current = seededView();
   // Each look or bring-in waits until the test lets it fail.
   const waiting: (() => void)[] = [];
@@ -1773,6 +1772,8 @@ await test("a bring-in that fails after Verifold accepted it names its direction
     owner.abort();
     await desk.closed;
   });
+  // Hooks run in order: the folder goes after the desk stops writing to it.
+  t.after(() => rm(root, { recursive: true, force: true }));
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
@@ -1849,7 +1850,6 @@ await test("a bring-in that fails after Verifold accepted it names its direction
 await test('the API needs the token, pushes one snapshot for a burst of changes, pages the board and turns, and runs desk actions', async (t) => {
   // A long command output: a step sends only its last 4 KB.
   const root = await project('x'.repeat(10_000));
-  t.after(() => rm(root, { recursive: true, force: true }));
   let current = seededView();
   const words: unknown[] = [];
   const lab = {
@@ -1892,6 +1892,8 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
     owner.abort();
     await desk.closed;
   });
+  // Hooks run in order: the folder goes after the desk stops writing to it.
+  t.after(() => rm(root, { recursive: true, force: true }));
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
@@ -2349,7 +2351,6 @@ await test("a post's thread: the post and the replies below it at any depth, old
 
 await test("a look after a time away starts the digest, a dismiss ends it, and search and a post's thread answer over HTTP with the token", async (t) => {
   const root = await project();
-  t.after(() => rm(root, { recursive: true, force: true }));
   const view = seededView();
   const lab = { runs: true, view: () => view } as unknown as Lab;
   const sessions = {
@@ -2388,6 +2389,8 @@ await test("a look after a time away starts the digest, a dismiss ends it, and s
     owner.abort();
     await desk.closed;
   });
+  // Hooks run in order: the folder goes after the desk stops writing to it.
+  t.after(() => rm(root, { recursive: true, force: true }));
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
@@ -2618,7 +2621,6 @@ await test("a diff read lists a direction's changed files within the bound, give
 
 await test('the run and diff reads answer over HTTP with the token, and refuse a bad ID, an unknown query, and a file outside the diff', async (t) => {
   const root = await project();
-  t.after(() => rm(root, { recursive: true, force: true }));
   const lab = {
     runs: true,
     view: () => seededView(),
@@ -2666,6 +2668,8 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
     owner.abort();
     await desk.closed;
   });
+  // Hooks run in order: the folder goes after the desk stops writing to it.
+  t.after(() => rm(root, { recursive: true, force: true }));
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
@@ -2724,7 +2728,6 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
 
 await test('a dismiss clears only the background failures that the page names, and every failure without names', async (t) => {
   const root = await project();
-  t.after(() => rm(root, { recursive: true, force: true }));
   const releases: (() => void)[] = [];
   // Each action waits longer than the desk does, then fails after the desk accepted it (202).
   const slow = (reason: string) => async (): Promise<void> => {
@@ -2759,6 +2762,8 @@ await test('a dismiss clears only the background failures that the page names, a
     owner.abort();
     await desk.closed;
   });
+  // Hooks run in order: the folder goes after the desk stops writing to it.
+  t.after(() => rm(root, { recursive: true, force: true }));
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
@@ -2808,6 +2813,13 @@ await test('a dismiss clears only the background failures that the page names, a
 });
 
 await test("the settings page reads the project's pods and settings, and changes them through API v1", async (t) => {
+  // Hooks run in order: this one, which closes the desk, comes before fakePod's removal of its folder.
+  const owner = new AbortController();
+  let closed: Promise<unknown> = Promise.resolve();
+  t.after(async () => {
+    owner.abort();
+    await closed;
+  });
   const fake = await fakePod(t);
   const root = await realpath(fake.root);
   await changeWorkspace(root, () => ({
@@ -2829,7 +2841,6 @@ await test("the settings page reads the project's pods and settings, and changes
     view: () => null,
     views: () => [],
   } as unknown as SessionPool;
-  const owner = new AbortController();
   const desk = await startDesk(
     root,
     owner.signal,
@@ -2843,10 +2854,7 @@ await test("the settings page reads the project's pods and settings, and changes
     undefined,
     { api: { pollMs: 40, heartbeatMs: 100 } },
   );
-  t.after(async () => {
-    owner.abort();
-    await desk.closed;
-  });
+  closed = desk.closed;
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
