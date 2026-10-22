@@ -7,6 +7,10 @@ import {
   type BringRead,
   type DirectionDiff,
   type FileDiff,
+  type HistoryList,
+  type HistoryRun,
+  type HistoryTask,
+  type HistoryTurns,
   type PostThread,
   type RunDetail,
   type Snapshot,
@@ -128,10 +132,64 @@ export const paths = {
   /** The page of the board before a post. */
   board: (before: string): string =>
     `/api/v1/board?before=${encodeURIComponent(before)}`,
+  /** History: the project's runs and its memory files. */
+  history: '/api/v1/history',
+  /** One run of History: `current` or an archive ID. */
+  historyRun: (id: string): string =>
+    `/api/v1/history/${encodeURIComponent(id)}`,
+  /** One task of a research-flow run, in full. */
+  historyTask: (id: string, task: string): string =>
+    `/api/v1/history/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}`,
+  /** The turns of a research attempt (`attempt:<id>`) or a session (`session:<id>`) in a run. */
+  historyTurns: (id: string, source: string): string =>
+    `/api/v1/history/${encodeURIComponent(id)}/turns?${new URLSearchParams({ source }).toString()}`,
+  /** One file's diff of a task version in a run. */
+  historyDiff: (
+    id: string,
+    task: string,
+    version: number,
+    file: string,
+  ): string =>
+    `/api/v1/history/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/diff?${new URLSearchParams({ version: String(version), file }).toString()}`,
 } as const;
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+export function isHistoryList(value: unknown): value is HistoryList {
+  return (
+    object(value) &&
+    (value.current === null || object(value.current)) &&
+    Array.isArray(value.runs) &&
+    typeof value.more === 'boolean' &&
+    Array.isArray(value.memory)
+  );
+}
+
+export function isHistoryRun(value: unknown): value is HistoryRun {
+  return (
+    object(value) &&
+    (value.kind === 'lab' || value.kind === 'research') &&
+    object(value.entry) &&
+    typeof value.entry.id === 'string'
+  );
+}
+
+export function isHistoryTask(value: unknown): value is HistoryTask {
+  return (
+    object(value) &&
+    typeof value.id === 'string' &&
+    Array.isArray(value.attempts)
+  );
+}
+
+export function isHistoryTurns(value: unknown): value is HistoryTurns {
+  return (
+    object(value) &&
+    Array.isArray(value.turns) &&
+    typeof value.more === 'boolean'
+  );
 }
 
 export function isTurnPage(value: unknown): value is TurnPage {

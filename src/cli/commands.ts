@@ -671,6 +671,7 @@ async function serveDesk(
               (await owned.tasks?.list())?.length,
           ),
         researchBusy: () => owned.runner?.busy ?? false,
+        root,
       });
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);

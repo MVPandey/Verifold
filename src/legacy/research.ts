@@ -14,7 +14,6 @@ import { randomUUID } from 'node:crypto';
 import type { CliIO } from '../cli/commands.ts';
 // eslint-disable-next-line no-restricted-imports -- legacy edge, removed in A6 (#282)
 import { withActivity } from '../cli/choices.ts';
-import { parseCandidates } from '../core/contracts.ts';
 import type { Candidate, Workspace } from '../core/contracts.ts';
 import {
   activityProgress,
@@ -28,60 +27,19 @@ import { processStart, stopRecordedProcess } from '../core/owner.ts';
 import {
   object,
   text,
-  sourceUrl,
   parseHostJson,
   parseResearchPlan,
 } from '../core/research-contracts.ts';
 import type { ResearchState } from '../core/research-contracts.ts';
+import { parseReport } from '../core/research-records.ts';
+
+export { parseReport, type ResearchReport } from '../core/research-records.ts';
 
 export interface ResearchOptions {
   readonly topic?: string;
   readonly autonomy?: 'guided' | 'autonomous';
   readonly feedback?: string;
   readonly approve?: boolean;
-}
-
-export interface ResearchReport {
-  readonly summary: string;
-  readonly delegation: string;
-  readonly sources: readonly { readonly title: string; readonly url: string }[];
-  readonly candidates: readonly Candidate[];
-}
-
-export function parseReport(value: unknown): ResearchReport {
-  const data = object(value);
-  if (
-    !Array.isArray(data.sources) ||
-    data.sources.length < 2 ||
-    data.sources.length > 50
-  ) {
-    throw new Error('Research needs 2 to 50 web sources.');
-  }
-  const sources = data.sources.map((value: unknown) => {
-    const source = object(value);
-    return {
-      title: text(source.title, 'source title', 500),
-      url: sourceUrl(source.url),
-    };
-  });
-  const candidates = parseCandidates(data.candidates);
-  const urls = new Set(sources.map(({ url }) => url));
-  for (const candidate of candidates) {
-    if (
-      !candidate.sources?.length ||
-      candidate.sources.some((url) => !urls.has(url))
-    ) {
-      throw new Error(
-        'Each direction must reference sources in the research report.',
-      );
-    }
-  }
-  return {
-    summary: text(data.summary, 'research summary'),
-    delegation: text(data.delegation, 'delegation report'),
-    sources,
-    candidates,
-  };
 }
 
 /**

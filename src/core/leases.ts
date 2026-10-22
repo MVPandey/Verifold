@@ -358,6 +358,26 @@ export interface LeaseHooks {
   readonly month?: MonthHooks;
 }
 
+/** The saved leases in `folder`, oldest first. An unreadable record is left out. */
+export async function readLeases(folder: string): Promise<Lease[]> {
+  const names = await readdir(folder).catch(() => []);
+  const leases: Lease[] = [];
+  for (const name of names) {
+    if (!/^lease-\d{1,6}\.json$/.test(name)) continue;
+    try {
+      const path = join(folder, name);
+      const stats = await lstat(path);
+      if (!stats.isFile() || stats.size > 1_000_000) continue;
+      const value = JSON.parse(await readFile(path, 'utf8')) as Lease;
+      if (value.schemaVersion === 1 && `${value.id}.json` === name)
+        leases.push(value);
+    } catch {
+      /* An unreadable record. */
+    }
+  }
+  return leases.sort((a, b) => number(a.id) - number(b.id));
+}
+
 /**
  * The leases of one project, in `.verifold/compute/leases/`. Every change goes
  * through one queue and is saved before and after each RunPod call, so a crash
@@ -547,22 +567,7 @@ export class Leases {
    */
   load(): Promise<void> {
     return this.serial(async () => {
-      const names = await readdir(this.folder).catch(() => []);
-      const leases: Lease[] = [];
-      for (const name of names) {
-        if (!/^lease-\d{1,6}\.json$/.test(name)) continue;
-        try {
-          const path = join(this.folder, name);
-          const stats = await lstat(path);
-          if (!stats.isFile() || stats.size > 1_000_000) continue;
-          const value = JSON.parse(await readFile(path, 'utf8')) as Lease;
-          if (value.schemaVersion === 1 && `${value.id}.json` === name)
-            leases.push(value);
-        } catch {
-          /* An unreadable record. */
-        }
-      }
-      this.leases = leases.sort((a, b) => number(a.id) - number(b.id));
+      this.leases = await readLeases(this.folder);
       if (!this.hooks.month) return;
       await this.recordMonth();
       await this.readMonth();

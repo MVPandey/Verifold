@@ -868,6 +868,38 @@ export async function diff(
     : { text: output.toString('utf8'), cut: false };
 }
 
+/**
+ * The text diff of one file between two commits, with no workspace: in the
+ * project repository, or with `gitDir`, a task folder's own Git directory,
+ * such as one in an archived run. Cut at the same limit as `diff`.
+ */
+export async function diffIn(
+  root: string,
+  gitDir: string | null,
+  from: string,
+  to: string,
+  path: string,
+): Promise<{ readonly text: string; readonly cut: boolean }> {
+  const output = await git(
+    root,
+    [
+      'diff',
+      '--no-color',
+      '--no-ext-diff',
+      '--no-renames',
+      from,
+      to,
+      '--',
+      `:(literal)${path}`,
+    ],
+    undefined,
+    gitDir ? { GIT_DIR: gitDir } : {},
+  );
+  return output.length > limits.diffBytes
+    ? { text: output.subarray(0, limits.diffBytes).toString('utf8'), cut: true }
+    : { text: output.toString('utf8'), cut: false };
+}
+
 /** The content of a file in a version, or null when it or its task folder is gone. */
 export function readAt(
   root: string,

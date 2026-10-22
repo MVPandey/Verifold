@@ -358,8 +358,9 @@ export class Board {
   /** The highest post number in the folder at load, valid or not, so a new post never replaces a file. */
   private last = 0;
 
-  constructor(root: string) {
-    this.directory = join(root, '.verifold', 'board');
+  /** `directory`: another board folder, such as an archived run's, which History reads. */
+  constructor(root: string, directory = join(root, '.verifold', 'board')) {
+    this.directory = directory;
   }
 
   /**
