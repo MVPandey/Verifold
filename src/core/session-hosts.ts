@@ -14,6 +14,7 @@ import { listCodexModels, pickCodexModel } from './models.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
+  codexCommand,
   type TranscriptUpdate,
 } from './transcript.ts';
 import type { LimitSignal } from './quota.ts';
@@ -1013,19 +1014,6 @@ function claude(options: HostOptions): HostSession {
       stop(child);
     },
   };
-}
-
-/**
- * The exact command that Codex runs. The shell wrapper that Codex adds is
- * removed only when its quoting is unambiguous. The parsed `commandActions`
- * are not used, because they can list only part of a compound command.
- */
-export function codexCommand(item: Record<string, unknown>): string {
-  const command = str(item.command) ?? '';
-  const inner = /^\S*\/(?:ba|z)?sh -l?c '((?:[^']|'\\'')*)'$/.exec(
-    command,
-  )?.[1];
-  return inner === undefined ? command : inner.replaceAll("'\\''", "'");
 }
 
 /**
