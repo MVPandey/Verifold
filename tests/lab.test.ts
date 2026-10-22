@@ -5911,34 +5911,48 @@ await test('one check runs at a time, a second objection joins the open check, a
   assert.doesNotMatch(pinned, new RegExp(`href="#post-${claim}"`));
 });
 
-await test('a check that ran when Verifold stopped starts again once with a fresh session, and fails after a second stop', async (t) => {
+await test('a check that ran when Verifold stopped starts again with a fresh session and counts no stop; an owner that ended without closing counts one, and a second fails the check', async (t) => {
   const lab = await fixture(t, { harnesses: ['claude'] });
   await claimWithRun(lab, [], 'd-2-alpha');
   await lab.script('k-1', [
+    { calls: [{ name: 'WAIT' }] },
     { calls: [{ name: 'WAIT' }] },
     { calls: [{ name: 'WAIT' }] },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   const claim = await claimPost(lab);
   await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
-  await until(
-    () =>
-      lab.lab.view()?.checks[0]?.session !== null &&
-      lab.lab.view()?.checks[0]?.state === 'running',
-  );
-  await until(async () => (await lab.inputs('k-1')).length === 1);
+  // The check runs in its nth session, which got its first prompt.
+  const started = (sessions: number): Promise<void> =>
+    until(
+      async () =>
+        lab.lab.view()?.checks[0]?.state === 'running' &&
+        Boolean(lab.lab.view()?.checks[0]?.session) &&
+        (await lab.inputs('k-1')).length === sessions,
+    );
+  // An owner that ends without closing the lab leaves the check running in lab.json.
+  const crash = async (): Promise<void> => {
+    const session = lab.lab.view()?.checks[0]?.session;
+    await lab.restart(async () => {
+      const file = join(lab.root, '.verifold', 'lab.json');
+      const saved = JSON.parse(await readFile(file, 'utf8')) as {
+        checks: Record<string, unknown>[];
+      };
+      saved.checks[0] = { ...saved.checks[0], state: 'running', session };
+      await writeFile(file, JSON.stringify(saved));
+    });
+  };
+  await started(1);
   const before = lab.lab.view()?.checks[0]?.session;
+  // A close stops the check, not its checker: the new owner starts it again with a fresh session, and no stop counts.
   await lab.restart();
-  // The new owner starts it again with a fresh session.
-  await until(
-    () =>
-      lab.lab.view()?.checks[0]?.state === 'running' &&
-      Boolean(lab.lab.view()?.checks[0]?.session) &&
-      lab.lab.view()?.checks[0]?.session !== before,
-  );
+  await started(2);
+  assert.notEqual(lab.lab.view()?.checks[0]?.session, before);
+  assert.equal(lab.lab.view()?.checks[0]?.restarts, 0);
+  await crash();
+  await started(3);
   assert.equal(lab.lab.view()?.checks[0]?.restarts, 1);
-  await until(async () => (await lab.inputs('k-1')).length === 2);
-  await lab.restart();
+  await crash();
   await until(() => lab.lab.view()?.checks[0]?.state === 'failed');
   assert.match(
     lab.lab.view()?.checks[0]?.note ?? '',
@@ -5956,6 +5970,121 @@ await test('a check that ran when Verifold stopped starts again once with a fres
         ),
     ),
   );
+});
+
+await test('a checker whose session cannot be saved ends, and the check starts again after its wait', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude'] });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  await lab.script('k-1', [
+    { calls: [{ name: 'WAIT' }] },
+    { calls: [{ name: 'WAIT' }] },
+  ]);
+  // The save of the first checker's session fails once.
+  const file = (lab.lab as unknown as { stateFile: { save(): Promise<void> } })
+    .stateFile;
+  const save = file.save.bind(file);
+  let failing = false;
+  file.save = () => {
+    if (!failing) return save();
+    failing = false;
+    return Promise.reject(new Error('The disk is full.'));
+  };
+  const pool = lab.sessions;
+  const start = pool.startAgent.bind(pool);
+  let first: string | null = null;
+  pool.startAgent = async (input) => {
+    const session = await start(input);
+    if (first === null && input.cwd.endsWith('k-1')) {
+      first = session;
+      failing = true;
+    }
+    return session;
+  };
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  // No record names the first session, so the lab ends it.
+  await until(() => first !== null && lab.sessions.view(first)?.live === false);
+  // After the wait, a fresh session runs the check, and the failed start counts as a stop.
+  await until(
+    () =>
+      lab.lab.view()?.checks[0]?.state === 'running' &&
+      Boolean(lab.lab.view()?.checks[0]?.session) &&
+      lab.lab.view()?.checks[0]?.session !== first,
+  );
+  assert.equal(lab.lab.view()?.checks[0]?.restarts, 1);
+});
+
+await test('a checker whose start fails waits before the next start, and a second failure fails the check with the reason', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude'] });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  const pool = lab.sessions;
+  const start = pool.startAgent.bind(pool);
+  const starts: number[] = [];
+  pool.startAgent = (input) => {
+    if (!input.cwd.endsWith('k-1')) return start(input);
+    starts.push(Date.now());
+    return Promise.reject(new Error('The harness is busy.'));
+  };
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  await until(() => lab.lab.view()?.checks[0]?.state === 'failed');
+  assert.equal(starts.length, 2);
+  // The second start waits for the retry time (300 ms here) after the first failed.
+  assert.ok((starts[1] ?? 0) - (starts[0] ?? 0) >= 300);
+  assert.equal(
+    lab.lab.view()?.checks[0]?.note,
+    'Verifold could not start the checker: The harness is busy.',
+  );
+});
+
+await test("a checker's run gets at most the minutes that its check has left, and none in its last minute", async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude'] });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  const run = { command: 'echo 1', why: 'Rerun the claim.' };
+  await lab.script('k-1', [
+    {
+      calls: [
+        { name: 'WAIT' },
+        { name: 'verifold_run', arguments: { ...run, minutes: 3 } },
+        { name: 'WAIT' },
+        { name: 'verifold_run', arguments: run },
+        { name: 'WAIT' },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  await until(
+    () =>
+      lab.lab.view()?.checks[0]?.state === 'running' &&
+      Boolean(lab.lab.view()?.checks[0]?.session),
+  );
+  const session = lab.lab.view()?.checks[0]?.session ?? '';
+  const checker = (
+    lab.lab as unknown as { checkers: Map<string, { endsAt: number }> }
+  ).checkers.get('k-1');
+  assert.ok(checker);
+  // Two and a half minutes left: a run gets two at most. A steer goes into the turn once it runs.
+  checker.endsAt = Date.now() + 2.5 * 60_000;
+  await until(() => lab.sessions.steer(session, 'Go on.', () => {}));
+  await until(async () => (await answers(lab, 'k-1')).length === 1);
+  assert.deepEqual((await answers(lab, 'k-1'))[0], {
+    call: 'verifold_run',
+    ok: false,
+    text: 'Give the minutes as a whole number from 1 to 2.',
+  });
+  // Less than a minute left: no run starts.
+  checker.endsAt = Date.now() + 30_000;
+  await until(() => lab.sessions.steer(session, 'Go on.', () => {}));
+  await until(async () => (await answers(lab, 'k-1')).length === 2);
+  assert.deepEqual((await answers(lab, 'k-1'))[1], {
+    call: 'verifold_run',
+    ok: false,
+    text: 'Your check has no time left for a run.',
+  });
 });
 
 await test('a check without a model, as one queued before Verifold chose models, asks for the model when it starts', async (t) => {
