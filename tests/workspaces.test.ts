@@ -445,9 +445,12 @@ await test('Git gets no Git variables, in any case of letters', (t) => {
   process.env.Git_External_Diff = '/elsewhere/tool';
   process.env.git_dir = '/elsewhere/.git';
   const env = gitEnvironment();
+  // The inherited Git variables are gone. Only the two that Verifold sets stay.
   assert.deepEqual(
-    Object.keys(env).filter((key) => key.toUpperCase().startsWith('GIT_')),
-    ['GIT_TERMINAL_PROMPT'],
+    Object.keys(env)
+      .filter((key) => key.toUpperCase().startsWith('GIT_'))
+      .sort(),
+    ['GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT'],
   );
 });
 
@@ -505,6 +508,303 @@ await test('Git variables from the environment cannot redirect a workspace to an
   assert.equal(
     run(root, 'log', '-1', '--format=%an', version.commit).trim(),
     'Verifold',
+  );
+});
+
+await test('workspace commands use the repository Verifold set up, not one a .git link names', async (t) => {
+  const other = await folder(t);
+  run(other, 'init', '-q');
+  await write(other, 'a.txt', 'a\n');
+  run(other, 'add', '.');
+  run(other, 'commit', '-qm', 'other');
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-6-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // The folder's own .git link now names the other repository.
+  await writeFile(join(target, '.git'), `gitdir: ${join(other, '.git')}\n`);
+  await write(target, 'results/b.md', 'b\n');
+  const version = await commitVersion(
+    root,
+    workspace,
+    ['results'],
+    'Version 1',
+  );
+  // The commit, the reads, and the diff all use the repository Verifold made.
+  assert.equal(
+    run(root, 'log', '-1', '--format=%an', version.commit).trim(),
+    'Verifold',
+  );
+  assert.equal(
+    (
+      await readFileAt(root, workspace, version.commit, 'results/b.md')
+    )?.toString('utf8'),
+    'b\n',
+  );
+  assert.match(
+    (
+      await diff(
+        root,
+        workspace,
+        workspace.start,
+        version.commit,
+        'results/b.md',
+      )
+    ).text,
+    /^\+b$/m,
+  );
+  // The other repository keeps its one commit and gains no branch.
+  assert.equal(run(other, 'log', '--format=%s').trim(), 'other');
+  assert.equal(run(other, 'branch', '--list', 'verifold/*').trim(), '');
+});
+
+await test('workspace commands use the recorded repository and its config', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-7-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // A second repository has a content filter; the folder's link names it.
+  const other = await folder(t);
+  run(other, 'init', '-q');
+  const marker = join(other, 'ran');
+  run(other, 'config', 'filter.mark.clean', `sh -c 'touch ${marker}; cat'`);
+  await write(target, '.gitattributes', '* filter=mark\n');
+  await writeFile(join(target, '.git'), `gitdir: ${join(other, '.git')}\n`);
+  await write(target, 'results/b.md', 'b\n');
+  await commitVersion(root, workspace, ['results'], 'Version 1');
+  assert.equal(existsSync(marker), false);
+});
+
+await test('a folder with its own Git data stays out of the commit, and its config never runs', async (t) => {
+  const root = await folder(t);
+  await write(root, 'exp/a.py', 'a\n');
+  const workspace = await allocate(root, {
+    name: 'task-8-r1-a1',
+    writable: ['exp'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // A folder with its own Git data, and a commit, appears inside a writable path.
+  const inner = join(target, 'exp', 'inner');
+  run(root, 'init', '-q', inner);
+  const marker = join(root, 'ran');
+  run(inner, 'config', 'filter.mark.clean', `sh -c 'touch ${marker}; cat'`);
+  await write(inner, '.gitattributes', '* filter=mark\n');
+  await write(inner, 'secret.txt', 's\n');
+  run(inner, 'add', '.');
+  run(inner, 'commit', '-qm', 'inner');
+  // The filter ran for the nested repository's own commit above. Clear its mark, so the test sees only what Verifold does next.
+  await rm(marker, { force: true });
+  await write(target, 'exp/b.py', 'b\n');
+  const version = await commitVersion(root, workspace, ['exp'], 'Version 1');
+  // The nested folder is listed on its own, apart from the large files, and nothing of it is recorded as a link.
+  assert.deepEqual(version.nested, ['exp/inner']);
+  assert.ok(!version.skipped.includes('exp/inner'));
+  const files = await changes(root, workspace, workspace.start, version.commit);
+  assert.ok(files.every((file) => !file.path.startsWith('exp/inner')));
+  // The nested folder's content filter never ran.
+  assert.equal(existsSync(marker), false);
+});
+
+await test('an older worktree record finds its repository by the folder it names', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const start = run(root, 'rev-parse', 'HEAD').trim();
+  // Another worktree of the project already takes the name `w`, so Git gives Verifold's worktree the name `w1`.
+  const elsewhere = await folder(t);
+  run(root, 'worktree', 'add', '--quiet', join(elsewhere, 'w'), 'HEAD');
+  const path = join('.verifold', 'workspaces', 'w');
+  run(
+    root,
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'verifold/w',
+    join(root, path),
+    'HEAD',
+  );
+  assert.ok(existsSync(join(root, '.git', 'worktrees', 'w1')));
+  // A record from before the name was kept: Verifold derives `w`, which names the other worktree, and finds `w1`.
+  const older = { kind: 'git', path, branch: 'verifold/w', start } as const;
+  assert.equal(
+    (await readFileAt(root, older, start, 'results/a.md'))?.toString('utf8'),
+    'a\n',
+  );
+  // With no record of it left in the project, the read gives nothing.
+  run(root, 'worktree', 'remove', '--force', join(root, path));
+  assert.equal(await readFileAt(root, older, start, 'results/a.md'), null);
+});
+
+await test('a worktree is removed without reading its own Git data again', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-9-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  assert.equal(workspace.kind, 'git');
+  assert.equal(await release(root, workspace), true);
+  assert.equal(existsSync(join(root, workspace.path)), false);
+});
+
+await test('a worktree that holds only ignored files is released', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, '.gitignore', 'build/\n__pycache__/\n');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-10-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  await write(target, 'build/out.bin', 'x');
+  await write(target, 'results/__pycache__/m.cpython-312.pyc', 'cache');
+  assert.equal(await release(root, workspace), true);
+  assert.equal(existsSync(target), false);
+});
+
+await test('a worktree with a change, a new file that is not ignored, or a folder with its own Git data stays', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, '.gitignore', 'build/\n');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const cases: readonly (readonly [string, (target: string) => unknown])[] = [
+    ['task-11-r1-a1', (target) => write(target, 'results/new.md', 'n\n')],
+    [
+      'task-12-r1-a1',
+      (target) => run(root, 'init', '-q', join(target, 'inner')),
+    ],
+    [
+      'task-13-r1-a1',
+      async (target) => {
+        await write(target, 'results/a.md', 'a, staged\n');
+        run(target, 'add', 'results/a.md');
+      },
+    ],
+  ];
+  for (const [name, add] of cases) {
+    const workspace = await allocate(root, {
+      name,
+      writable: ['results'],
+      inputs: [],
+    });
+    const target = join(root, workspace.path);
+    await add(target);
+    assert.equal(await release(root, workspace), false, name);
+    assert.ok(existsSync(target), name);
+  }
+});
+
+await test("a project's own submodules stay through a workspace and its snapshots", async (t) => {
+  const sub = await folder(t);
+  run(sub, 'init', '-q');
+  await write(sub, 's.txt', 's\n');
+  run(sub, 'add', '.');
+  run(sub, 'commit', '-qm', 's');
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(
+    root,
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    sub,
+    'lib',
+  );
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-13-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  assert.match(run(root, 'ls-tree', workspace.start, 'lib'), /^160000 commit /);
+  await write(join(root, workspace.path), 'results/b.md', 'b\n');
+  const { commit } = await snapshot(root, workspace, 'Snapshot 1');
+  assert.match(run(root, 'ls-tree', commit, 'lib'), /^160000 commit /);
+});
+
+await test('a worktree whose links Git wrote as relative paths reads the same way', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const start = run(root, 'rev-parse', 'HEAD').trim();
+  const path = join('.verifold', 'workspaces', 'rel');
+  run(
+    root,
+    '-c',
+    'worktree.useRelativePaths=true',
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'verifold/rel',
+    join(root, path),
+    'HEAD',
+  );
+  const loaded = { kind: 'git', path, branch: 'verifold/rel', start } as const;
+  assert.equal(
+    (await readFileAt(root, loaded, start, 'results/a.md'))?.toString('utf8'),
+    'a\n',
+  );
+});
+
+await test('a workspace that does not start leaves no folder, branch or worktree record', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  await assert.rejects(
+    allocate(root, {
+      name: 'task-14-r1-a1',
+      writable: ['results'],
+      inputs: [{ path: 'results/in.md', copy: join(root, 'missing') }],
+    }),
+  );
+  assert.equal(
+    existsSync(join(root, '.verifold', 'workspaces', 'task-14-r1-a1')),
+    false,
+  );
+  assert.equal(
+    run(root, 'branch', '--list', 'verifold/task-14-r1-a1').trim(),
+    '',
+  );
+  assert.equal(
+    existsSync(join(root, '.git', 'worktrees', 'task-14-r1-a1')),
+    false,
   );
 });
 
