@@ -72,7 +72,6 @@ import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi, type ProjectStart } from './api.ts';
 import { researchRunOnDisk } from '../core/history.ts';
 import { labScreen, type LabScreen } from './screen.ts';
-import type { Snapshot } from '../protocol/api.ts';
 import type { FirstRun } from './setup.ts';
 import { contentType, readJsonBody, record } from './http.ts';
 
@@ -2129,7 +2128,7 @@ export async function startDesk(
       const place = { origin, app: app.size > 0 };
       let last = '';
       return apiFeed.watch((latest) => {
-        const screen = labScreen(JSON.parse(latest.text) as Snapshot, place);
+        const screen = labScreen(latest.data, place);
         // A snapshot changes more often than its screen does.
         const shown = JSON.stringify(screen);
         if (shown === last) return;

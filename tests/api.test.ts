@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -734,7 +738,7 @@ await test('the snapshot holds what the screens show, and no internal field, key
         Promise.resolve({ since: at(50), spent: { claude: 1.25, gpu: 0 } }),
     }),
   );
-  const json = await reader.snapshot();
+  const json = (await reader.build()).json;
   const data = parse(json);
   const lab = data.lab;
   assert.ok(lab);
@@ -903,7 +907,7 @@ await test('the snapshot names the planner, the facts and option details of a ca
     },
   };
   const lab = parse(
-    await new ApiReader(sources(root, () => view)).snapshot(),
+    (await new ApiReader(sources(root, () => view)).build()).json,
   ).lab;
   assert.ok(lab);
   assert.equal(lab.planner, 'a-1');
@@ -931,7 +935,7 @@ await test('the snapshot names the planner, the facts and option details of a ca
   );
   // A call without facts and a plan from before versions say nothing of them.
   const older = parse(
-    await new ApiReader(sources(root, seededView)).snapshot(),
+    (await new ApiReader(sources(root, seededView)).build()).json,
   ).lab;
   assert.equal(older?.needsYou[0]?.facts, undefined);
   assert.equal(older?.plan?.version, undefined);
@@ -948,7 +952,7 @@ await test('a project without a lab: the snapshot holds its question and why its
     sources(root, () => null, { startProblem: () => problem }),
   );
   // A project without a question has none to start a lab on.
-  assert.equal(parse(await reader.snapshot()).question, null);
+  assert.equal(parse((await reader.build()).json).question, null);
   await changeWorkspace(root, (state) => ({
     ...state!,
     research: {
@@ -957,7 +961,7 @@ await test('a project without a lab: the snapshot holds its question and why its
       phase: 'needs-plan',
     },
   }));
-  const data = parse(await reader.snapshot());
+  const data = parse((await reader.build()).json);
   assert.equal(data.lab, null);
   assert.equal(data.question, 'Do probes see faithfulness?');
   assert.equal(
@@ -967,9 +971,11 @@ await test('a project without a lab: the snapshot holds its question and why its
   const before = await reader.signal();
   problem = null;
   assert.notDeepEqual(await reader.signal(), before);
-  assert.equal(parse(await reader.snapshot()).startProblem, null);
+  assert.equal(parse((await reader.build()).json).startProblem, null);
   // Without a project, there is neither.
-  const none = parse(await new ApiReader(sources('', () => null)).snapshot());
+  const none = parse(
+    (await new ApiReader(sources('', () => null)).build()).json,
+  );
   assert.equal(none.project, '');
   assert.equal('question' in none, false);
   assert.equal('startProblem' in none, false);
@@ -979,8 +985,8 @@ await test('a pod option names the secrets that this computer lacks, and storing
   const root = await project();
   t.after(() => rm(root, { recursive: true, force: true }));
   const missing = async (reader: ApiReader): Promise<unknown> => {
-    const effect = parse(await reader.snapshot()).lab?.needsYou[0]?.options[0]
-      ?.effect;
+    const effect = parse((await reader.build()).json).lab?.needsYou[0]
+      ?.options[0]?.effect;
     return effect?.type === 'pod'
       ? { count: effect.missing, names: effect.missingNames }
       : 'no pod';
@@ -1022,7 +1028,7 @@ await test("the snapshot's pod actions in the background are the newest 20, and 
       computeWorks: () => works,
     }),
   );
-  assert.deepEqual(parse(await reader.snapshot()).compute?.works, []);
+  assert.deepEqual(parse((await reader.build()).json).compute?.works, []);
   const before = await reader.signal();
   works = Array.from({ length: 25 }, (_, index) => ({
     action: 'compute-lease-end',
@@ -1032,7 +1038,7 @@ await test("the snapshot's pod actions in the background are the newest 20, and 
     lease: `lease-${index + 1}`,
   }));
   assert.notDeepEqual(await reader.signal(), before);
-  const shown = parse(await reader.snapshot()).compute?.works ?? [];
+  const shown = parse((await reader.build()).json).compute?.works ?? [];
   assert.deepEqual(
     [shown.length, shown[0]?.lease, shown.at(-1)],
     [20, 'lease-6', works.at(-1)],
@@ -1076,7 +1082,7 @@ await test('a large lab stays inside the snapshot bound and says that it is trim
       }),
     );
   const view: LabView = { ...base, directions, posts };
-  const json = await new ApiReader(sources(root, () => view)).snapshot();
+  const json = (await new ApiReader(sources(root, () => view)).build()).json;
   const data = parse(json);
   assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
   assert.equal(data.trimmed, true);
@@ -1114,7 +1120,9 @@ await test('a cold read takes a transcript past 4 MB to its end before it answer
   assert.equal(page.turns[0]?.counts.command, 90);
   assert.equal(page.turns[1]?.message?.text, 'The last turn.');
   // So does a snapshot.
-  const data = parse(await new ApiReader(sources(root, () => view)).snapshot());
+  const data = parse(
+    (await new ApiReader(sources(root, () => view)).build()).json,
+  );
   assert.equal(
     data.lab?.agents[0]?.turns.turns[1]?.message?.text,
     'The last turn.',
@@ -1313,7 +1321,7 @@ await test('a lab huge in every list stays in bound, counts what it left out, an
     posts,
     checks,
   };
-  const json = await new ApiReader(sources(root, () => view)).snapshot();
+  const json = (await new ApiReader(sources(root, () => view)).build()).json;
   assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
   const data = parse(json);
   assert.equal(data.trimmed, true);
@@ -1351,7 +1359,7 @@ await test('a lab huge in every list stays in bound, counts what it left out, an
       ),
     },
   };
-  const last = await new ApiReader(sources(root, () => heavy)).snapshot();
+  const last = (await new ApiReader(sources(root, () => heavy)).build()).json;
   assert.ok(Buffer.byteLength(last) <= apiLimits.snapshot);
   const lab = parse(last).lab;
   assert.ok(lab);
@@ -1416,7 +1424,9 @@ await test('a snapshot counts every direction, also those it leaves out, and kee
     })),
   };
   const counts = { total: 302, holdsUp: 1, ruledOut: 150, open: 151 };
-  const data = parse(await new ApiReader(sources(root, () => view)).snapshot());
+  const data = parse(
+    (await new ApiReader(sources(root, () => view)).build()).json,
+  );
   const lab = data.lab;
   assert.ok(lab);
   assert.equal(data.trimmed, true);
@@ -1446,7 +1456,7 @@ await test('a snapshot counts every direction, also those it leaves out, and kee
       ),
     },
   };
-  const json = await new ApiReader(sources(root, () => heavy)).snapshot();
+  const json = (await new ApiReader(sources(root, () => heavy)).build()).json;
   assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
   const last = parse(json).lab;
   assert.ok(last);
@@ -1544,7 +1554,7 @@ await test('every checker that the snapshot names has turns to fetch, an old one
   }
   const view: LabView = { ...base, state: { ...base.state, checks }, checks };
   const reader = new ApiReader(sources(root, () => view));
-  const data = parse(await reader.snapshot());
+  const data = parse((await reader.build()).json);
   // The agents list shows the five newest ended checkers. The checks list names all eight.
   assert.deepEqual(
     data.lab?.agents
@@ -1600,6 +1610,48 @@ await test('an idle lab with an open stream builds no snapshot after the first, 
   assert.equal((await feed.current()).rev, 2);
   assert.equal(feed.builds, 2);
   await stop();
+});
+
+await test('a stream whose write fails closes, and the feed drops it', async (t) => {
+  let version = 1;
+  const reader = {
+    signal: () => Promise.resolve([version]),
+    build: () => {
+      const data = { project: 'p', lab: null, trimmed: false };
+      return Promise.resolve({ data, json: JSON.stringify(data) });
+    },
+  } as unknown as ApiReader;
+  const feed = new ApiFeed(reader, { pollMs: 10, heartbeatMs: 60_000 });
+  t.after(() => feed.close());
+  let closed = 0;
+  // The connection is gone: each write throws.
+  const response = Object.assign(new EventEmitter(), {
+    writable: true,
+    writableLength: 0,
+    writeHead: () => {},
+    write: () => {
+      throw new Error('The connection is gone.');
+    },
+    destroy: () => {
+      closed++;
+      response.emit('close');
+    },
+  });
+  const request = { socket: { setTimeout: () => {} } };
+  assert.equal(
+    await feed.open(
+      request as unknown as IncomingMessage,
+      response as unknown as ServerResponse,
+    ),
+    true,
+  );
+  await until(() => closed === 1);
+  // Without the stream, the feed reads and builds nothing more.
+  const builds = feed.builds;
+  version = 2;
+  await delay(80);
+  assert.equal(feed.builds, builds);
+  assert.equal(closed, 1);
 });
 
 /** Fixture assets for a desk server. Returns their folder URL. */
@@ -2207,7 +2259,7 @@ await test('the time away names the first five directions with news, how many mo
         Promise.resolve({ since: at(50), spent: { claude: 2, gpu: 0 } }),
     }),
   );
-  const news = parse(await reader.snapshot()).lab?.away?.news;
+  const news = parse((await reader.build()).json).lab?.away?.news;
   assert.ok(news);
   assert.equal(news.lines.length, 5);
   assert.equal(news.moreLines, 2);
@@ -2471,7 +2523,7 @@ await test("with a monthly limit, the snapshot's money holds all projects' month
       compute: { view: () => ({ ...computeView(), month }) },
     }),
   );
-  assert.deepEqual(parse(await reader.snapshot()).lab?.money, {
+  assert.deepEqual(parse((await reader.build()).json).lab?.money, {
     plansUsd: 2.5,
     gpuUsd: 4.2,
     gpuLimitUsd: 25,

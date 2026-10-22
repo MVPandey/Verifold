@@ -77,6 +77,9 @@ export function agencyDirectory(cwd: string, path?: string): string {
   return resolve(cwd, path ?? join(homedir(), '.verifold', 'agency'));
 }
 
+/** The text of the profile folder's marker, without its line end. */
+const markerText = 'Verifold agency v1';
+
 /** Create only Verifold-owned private storage. Refuse redirected directories. */
 export async function prepareAgency(directory: string): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -85,23 +88,26 @@ export async function prepareAgency(directory: string): Promise<void> {
       'Agency directory must be a directory, not a symbolic link.',
     );
   const marker = join(directory, '.verifold-agency');
-  if ((await readdir(directory)).length > 0) {
+  // EEXIST: another call made the marker at the same moment, so it is checked like an existing one.
+  const owner =
+    (await readdir(directory)).length > 0
+      ? null
+      : await open(marker, 'wx', 0o600).catch((error: unknown) => {
+          if (
+            error instanceof Error &&
+            'code' in error &&
+            error.code === 'EEXIST'
+          )
+            return null;
+          throw error;
+        });
+  if (owner)
     try {
-      if ((await readMemory(marker, 100)) !== 'Verifold agency v1')
-        throw new Error('Invalid marker.');
-    } catch {
-      throw new Error(
-        'Choose an empty agency directory or an existing Verifold agency.',
-      );
-    }
-  } else {
-    const owner = await open(marker, 'wx', 0o600);
-    try {
-      await owner.writeFile('Verifold agency v1\n');
+      await owner.writeFile(`${markerText}\n`);
     } finally {
       await owner.close();
     }
-  }
+  else await checkMarker(marker);
   const ignore = await open(
     join(directory, '.gitignore'),
     constants.O_WRONLY |
@@ -120,8 +126,26 @@ export async function prepareAgency(directory: string): Promise<void> {
   }
 }
 
+/** Refuse a folder whose marker is not Verifold's. */
+async function checkMarker(marker: string): Promise<void> {
+  try {
+    // A start of the text, or none, is a marker that another call made and still writes.
+    if (!markerText.startsWith((await readFileText(marker, 100)).trim()))
+      throw new Error('Invalid marker.');
+  } catch {
+    throw new Error(
+      'Choose an empty agency directory or an existing Verifold agency.',
+    );
+  }
+}
+
 /** Read a selected text file without following a final symlink or blocking on a pipe. */
 export async function readMemory(path: string, limit = 12000): Promise<string> {
+  return text(await readFileText(path, limit), 'research memory', limit);
+}
+
+/** A regular file's text, which can be empty. A final symlink is not followed, and a pipe does not block. */
+async function readFileText(path: string, limit: number): Promise<string> {
   const file = await open(
     path,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -135,7 +159,7 @@ export async function readMemory(path: string, limit = 12000): Promise<string> {
     const content = await file.readFile('utf8');
     if (content.includes('\0') || Buffer.byteLength(content) > limit)
       throw new Error('Memory must contain bounded plain text.');
-    return text(content, 'research memory', limit);
+    return content;
   } finally {
     await file.close();
   }
