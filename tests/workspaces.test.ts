@@ -445,9 +445,12 @@ await test('Git gets no Git variables, in any case of letters', (t) => {
   process.env.Git_External_Diff = '/elsewhere/tool';
   process.env.git_dir = '/elsewhere/.git';
   const env = gitEnvironment();
+  // The inherited Git variables are gone. Only the two that Verifold sets stay.
   assert.deepEqual(
-    Object.keys(env).filter((key) => key.toUpperCase().startsWith('GIT_')),
-    ['GIT_TERMINAL_PROMPT'],
+    Object.keys(env)
+      .filter((key) => key.toUpperCase().startsWith('GIT_'))
+      .sort(),
+    ['GIT_NO_LAZY_FETCH', 'GIT_TERMINAL_PROMPT'],
   );
 });
 
@@ -506,6 +509,84 @@ await test('Git variables from the environment cannot redirect a workspace to an
     run(root, 'log', '-1', '--format=%an', version.commit).trim(),
     'Verifold',
   );
+});
+
+await test("a workspace folder's own .git link cannot redirect Verifold to another repository", async (t) => {
+  const decoy = await folder(t);
+  run(decoy, 'init', '-q');
+  await write(decoy, 'a.txt', 'a\n');
+  run(decoy, 'add', '.');
+  run(decoy, 'commit', '-qm', 'decoy');
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-6-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // The folder's own .git link now points at the decoy repository.
+  await writeFile(join(target, '.git'), `gitdir: ${join(decoy, '.git')}\n`);
+  await write(target, 'results/b.md', 'b\n');
+  const version = await commitVersion(
+    root,
+    workspace,
+    ['results'],
+    'Version 1',
+  );
+  // The commit, the reads, and the diff all use the repository Verifold made.
+  assert.equal(
+    run(root, 'log', '-1', '--format=%an', version.commit).trim(),
+    'Verifold',
+  );
+  assert.equal(
+    (
+      await readFileAt(root, workspace, version.commit, 'results/b.md')
+    )?.toString('utf8'),
+    'b\n',
+  );
+  assert.match(
+    (
+      await diff(
+        root,
+        workspace,
+        workspace.start,
+        version.commit,
+        'results/b.md',
+      )
+    ).text,
+    /^\+b$/m,
+  );
+  // The decoy keeps its one commit and gains no branch.
+  assert.equal(run(decoy, 'log', '--format=%s').trim(), 'decoy');
+  assert.equal(run(decoy, 'branch', '--list', 'verifold/*').trim(), '');
+});
+
+await test('a filter in a repository that a .git link points at never runs', async (t) => {
+  const root = await folder(t);
+  run(root, 'init', '-q');
+  await write(root, 'results/a.md', 'a\n');
+  run(root, 'add', '.');
+  run(root, 'commit', '-qm', 'base');
+  const workspace = await allocate(root, {
+    name: 'task-7-r1-a1',
+    writable: ['results'],
+    inputs: [],
+  });
+  const target = join(root, workspace.path);
+  // Build a repository whose filter writes a marker, and aim the folder's .git link at it.
+  const decoy = await folder(t);
+  run(decoy, 'init', '-q');
+  const marker = join(decoy, 'ran');
+  run(decoy, 'config', 'filter.mark.clean', `sh -c 'touch ${marker}; cat'`);
+  await write(target, '.gitattributes', '* filter=mark\n');
+  await writeFile(join(target, '.git'), `gitdir: ${join(decoy, '.git')}\n`);
+  await write(target, 'results/b.md', 'b\n');
+  await commitVersion(root, workspace, ['results'], 'Version 1');
+  assert.equal(existsSync(marker), false);
 });
 
 await test('a version leaves out environments, caches, and what the task ignores', async (t) => {
