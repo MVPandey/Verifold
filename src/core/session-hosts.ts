@@ -1020,10 +1020,13 @@ function claude(options: HostOptions): HostSession {
  * Runs the Codex app-server and stops it when its stdin closes. With a socket,
  * the app-server itself ignores stdin, so it would outlive a Verifold that
  * crashed. The watchdog and Codex share one process group, so a later owner
- * can stop both. A missing Codex exits with code 127.
+ * can stop both. A missing Codex exits with code 127. When the watchdog
+ * exits, it removes the socket's folder, its first argument, so the folder
+ * goes even when Verifold was killed first.
  */
 const watchdog = `const { spawn } = require('node:child_process');
-const [command, ...args] = process.argv.slice(1);
+const [folder, command, ...args] = process.argv.slice(1);
+process.on('exit', () => { try { require('node:fs').rmSync(folder, { recursive: true, force: true }); } catch {} });
 const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
 const stop = () => { try { child.kill('SIGTERM'); } catch {} setTimeout(() => process.exit(0), 2000).unref(); };
 process.stdin.on('end', stop);
@@ -1052,9 +1055,10 @@ interface CodexServer {
 
 /**
  * Start Codex's app-server under the watchdog, for a session or for
- * detection. It listens on a socket in a new private folder, which is
- * removed when the server closes. `config` holds top-level `-c` options,
- * which reach the app-server.
+ * detection. It listens on a socket in a new private folder. The watchdog
+ * removes the folder when it exits, and Verifold removes it when the server
+ * closes, for a watchdog that was killed. `config` holds top-level `-c`
+ * options, which reach the app-server.
  */
 export function startCodexServer(options: {
   readonly executable: string;
@@ -1074,6 +1078,7 @@ export function startCodexServer(options: {
     [
       '-e',
       watchdog,
+      folder,
       options.executable,
       ...options.config,
       'app-server',
