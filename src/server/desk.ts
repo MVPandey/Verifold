@@ -77,16 +77,21 @@ import type { FirstRun } from './setup.ts';
 import { contentType, readJsonBody, record } from './http.ts';
 
 export interface DeskServer {
-  /** The desk URL with its access token. Print it, but do not pass it to another process. */
+  /**
+   * The URL with the access token. It opens the app, or the old desk when the
+   * package has no app build. Print it, but do not pass it to another process.
+   */
   readonly url: string;
-  /** The new app's URL with the same token, or null when the package has no app build. */
+  /** The app's URL with the same token, or null when the package has no app build. */
   readonly appUrl: string | null;
+  /** The old desk's URL with the same token. */
+  readonly deskUrl: string;
   /**
    * A URL with a one-time code for a browser launch. Each code works once, for
-   * two minutes. `/app/` opens the new app instead of the desk. `route`: a
-   * page of the app to open, such as /call/c-3.
+   * two minutes. It opens the app, or the old desk for `/desk` or without an
+   * app build. `route`: a page of the app to open, such as /call/c-3.
    */
-  launchUrl(path?: '/' | '/app/', route?: string): string;
+  launchUrl(path?: '/app/' | '/desk', route?: string): string;
   /**
    * Give `show` the lab's screen for a terminal's live view, at the next tick
    * and after each change of it. While `wanted` is false, the desk builds
@@ -1297,7 +1302,7 @@ export async function startDesk(
   // A browser launch command line can be visible to other local users, so it carries a one-time code.
   const launchCodes = new Map<string, number>();
   const assets = new Map<string, { type: string; body: Buffer | string }>([
-    ['/', { type: 'text/html; charset=utf-8', body: deskPage }],
+    ['/desk', { type: 'text/html; charset=utf-8', body: deskPage }],
     ['/terminal', { type: 'text/html; charset=utf-8', body: terminalPage }],
   ]);
   for (const [path, file] of [
@@ -1324,10 +1329,11 @@ export async function startDesk(
       body: await readFile(new URL(file, assetsRoot)),
     });
   }
-  const app = await readAppBuild(
-    options.appRoot ?? new URL('../app/', import.meta.url),
-  );
+  const app = await readAppBuild(options.appRoot ?? appBuild);
   for (const [path, asset] of app) assets.set(path, asset);
+  // Without the app's build, `/` is the old desk. With it, `/` leads to the app.
+  if (!app.size)
+    assets.set('/', { type: 'text/html; charset=utf-8', body: deskPage });
   let origin = '';
   // Agents' pages run on their own origin. The desk may frame only that one.
   let pages: PageServer | undefined;
@@ -1636,6 +1642,11 @@ export async function startDesk(
       } finally {
         terminalReads--;
       }
+      return;
+    }
+    // The browser keeps the fragment, with its token or launch code, on the way to the app.
+    if (url.pathname === '/' && app.size && !url.search) {
+      response.writeHead(302, { Location: '/app/' }).end();
       return;
     }
     const asset = assets.get(url.pathname);
@@ -2103,7 +2114,8 @@ export async function startDesk(
   return {
     url: `${origin}/#${token}`,
     appUrl: app.size ? `${origin}/app/#${token}` : null,
-    launchUrl: (path = '/', route = '') => {
+    deskUrl: `${origin}/desk#${token}`,
+    launchUrl: (path = '/app/', route = '') => {
       for (const [code, expires] of launchCodes)
         if (expires <= Date.now()) launchCodes.delete(code);
       const code = randomBytes(24).toString('hex');
@@ -2111,7 +2123,7 @@ export async function startDesk(
       const toApp = path === '/app/' && app.size > 0;
       // The page reads the route after the code, once it has the token.
       const page = toApp && /^\/[\w/.-]{1,200}$/.test(route) ? route : '';
-      return `${origin}${toApp ? path : '/'}#launch-${code}${page}`;
+      return `${origin}${toApp ? '/app/' : '/desk'}#launch-${code}${page}`;
     },
     screens: (show, wanted) => {
       const place = { origin, app: app.size > 0 };
@@ -2149,6 +2161,23 @@ export async function startDesk(
     pages: pages.origin,
     closed,
   };
+}
+
+/** The folder of the app's build in the installed package. */
+const appBuild = new URL('../app/', import.meta.url);
+
+/**
+ * Whether the package has the app's build, as `readAppBuild` finds it: its
+ * page and its assets folder. `root`: a test's build instead.
+ */
+export async function hasAppBuild(root: URL = appBuild): Promise<boolean> {
+  try {
+    await readFile(new URL('index.html', root));
+    await readdir(new URL('assets/', root));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

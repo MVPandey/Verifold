@@ -151,17 +151,22 @@ await test('the control channel refuses a wrong or late key, and carries message
   terminal.send({ stop: true });
   await until(() => received.length === 2);
   server.send({ url: 'http://127.0.0.1:1/#abc' });
-  // An owner with the app's build passes its URL on, for a terminal that attached with --app.
+  // An owner with the app's build passes its URL on, and the old desk's URL, for a terminal that attached with --desk.
   server.send({
     url: 'http://127.0.0.1:1/#abc',
     app: 'http://127.0.0.1:1/app/#abc',
+    desk: 'http://127.0.0.1:1/desk#abc',
   });
   await until(() => shown.length === 3);
   assert.deepEqual(received, [{ line: '/help' }, { stop: true }]);
   assert.deepEqual(shown, [
     { progress: 'Welcome.' },
     { url: 'http://127.0.0.1:1/#abc' },
-    { url: 'http://127.0.0.1:1/#abc', app: 'http://127.0.0.1:1/app/#abc' },
+    {
+      url: 'http://127.0.0.1:1/#abc',
+      app: 'http://127.0.0.1:1/app/#abc',
+      desk: 'http://127.0.0.1:1/desk#abc',
+    },
   ]);
   terminal.close();
   await terminal.closed;
@@ -229,6 +234,13 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   await until(() => urls.length === 1 && opened.length === 1);
   const url = new URL((JSON.parse(urls[0] ?? '{}') as { url: string }).url);
   const token = url.hash.slice(1);
+  // The terminal asked for the app. This test package has no app build, so the owner opened the old desk and said so.
+  assert.match(opened[0] ?? '', /\/desk#launch-[0-9a-f]+$/);
+  await until(() =>
+    lines.includes(
+      'This Verifold has no app build, so the old desk opened in your browser.',
+    ),
+  );
   // The terminal asked the owner to open the desk, and the owner used a one-time code.
   assert.match(opened[0] ?? '', /#launch-[0-9a-f]+$/);
   assert.ok(
@@ -294,7 +306,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   );
   assert.ok(
     again.includes(
-      'Verifold already works in the background, so --lab started nothing. Start the lab from Home in the desk.',
+      'Verifold already works in the background, so --lab started nothing. Type /app, then start the lab there.',
     ),
   );
   assert.equal(existsSync(join(root, '.verifold', 'lab.json')), false);
@@ -316,6 +328,25 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.ok(
     !again.some((line) => line.startsWith('The running Verifold uses')),
   );
+  // --desk prints the old desk's URL, without the app's.
+  const deskLines: string[] = [];
+  const deskUrls: string[] = [];
+  const fourth = runCli(
+    ['ui', '--desk', '--no-open'],
+    root,
+    terminal(deskLines, deskUrls, []),
+  );
+  await until(() => deskUrls.length === 1);
+  const printed = JSON.parse(deskUrls[0] ?? '{}') as {
+    url: string;
+    app?: string;
+  };
+  assert.equal(new URL(printed.url).pathname, '/desk');
+  assert.equal(new URL(printed.url).hash, url.hash);
+  assert.equal(printed.app, undefined);
+  await until(() =>
+    deskLines.includes('Open the printed URL to use the old desk.'),
+  );
   // verifold stop stops the owner. The attached terminal says so and ends.
   const said: string[] = [];
   await runCli(['stop'], root, {
@@ -327,6 +358,7 @@ await test('a terminal starts the team in the background, detaches, attaches aga
   assert.deepEqual(said, ['Verifold stopped.']);
   await second;
   await third;
+  await fourth;
   assert.equal(again.at(-1), 'Verifold stopped.');
   await ownerDone;
   assert.equal(await liveOwner(root), null);
@@ -336,6 +368,125 @@ await test('a terminal starts the team in the background, detaches, attaches aga
     false,
   );
   assert.equal(existsSync(join(root, '.verifold', 'owner.json')), false);
+});
+
+await test("a request's change shows in the terminal that started with --desk, and the owner's log keeps only its ID and reason", async (t) => {
+  const { root, keys, assets } = await project(t);
+  // A Claude Code for this test alone: it asks to write a file, with the content of the change.
+  const bin = await mkdtemp(join(tmpdir(), 'verifold-request-bin-'));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(
+    join(bin, 'claude'),
+    `#!${process.execPath}
+const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+const input = { file_path: 'notes.md', content: 'first change line\\nsecond change line' };
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request' && message.request.subtype === 'initialize')
+    return out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } });
+  if (message.type === 'user') {
+    out({ type: 'system', subtype: 'init', session_id: 'native-1', model: 'fake-model', permissionMode: 'default' });
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Write', input }] } });
+    return out({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Write', tool_use_id: 'tool-1', input, description: 'It saves the notes.' } });
+  }
+  if (message.type === 'control_response') {
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', is_error: true }] } });
+    out({ type: 'result', subtype: 'success' });
+  }
+});
+`,
+    { mode: 0o700 },
+  );
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ''}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  const owner = new AbortController();
+  t.after(() => owner.abort());
+  const opened: string[] = [];
+  let ownerDone: Promise<void> | undefined;
+  const background = {
+    keys,
+    start: (folder: string, line: string): Promise<void> => {
+      ownerDone = runCli(
+        ['owner', '--workspace', folder],
+        folder,
+        {
+          interactive: false,
+          ask: () => Promise.reject(new Error('No prompts')),
+          out: () => assert.fail('The owner prints nothing.'),
+          browse: (url) => {
+            opened.push(url);
+            return Promise.resolve(true);
+          },
+          deskAssets: assets,
+          background: {
+            keys,
+            start: () =>
+              Promise.reject(new Error('The owner starts no owner.')),
+            input: () => Promise.resolve(line),
+          },
+        },
+        owner.signal,
+      );
+      return Promise.resolve();
+    },
+    input: () => Promise.reject(new Error('A terminal has no owner input.')),
+  };
+  const lines: string[] = [];
+  const fed: string[] = [];
+  const urls: string[] = [];
+  const typed: ((line: string) => void)[] = [];
+  const attached = runCli(['ui', '--desk', '--no-open'], root, {
+    interactive: true,
+    ask: () => Promise.reject(new Error('No prompts')),
+    out: (value) => urls.push(value),
+    progress: (line) => lines.push(line),
+    feed: (line) => fed.push(line),
+    listen: (onLine) => typed.push(onLine),
+    background,
+  });
+  await until(() => urls.length === 1 && typed.length === 1);
+  // The owner sends the old desk's URL, and the terminal prints it.
+  const printed = JSON.parse(urls[0] ?? '{}') as { url: string; app?: string };
+  assert.equal(new URL(printed.url).pathname, '/desk');
+  assert.equal(printed.app, undefined);
+  typed[0]?.('/start Save the notes');
+  await until(() => fed.some((line) => line.includes('│ second change line')));
+  const request = fed.find((line) => line.includes('needs you'));
+  assert.match(
+    request ?? '',
+    /needs you: R1: Claude Code asks to use Write: notes\.md Read the change before you answer\.\n {2}Why: It saves the notes\.\n {2}│ first change line\n {2}│ second change line\nType a to allow once or d to deny\.$/,
+  );
+  // The log gets one line for the request: its ID and why it asks. The change and the file stay in the terminal.
+  const log = join(root, '.verifold', 'owner.log');
+  const requestLog = async (): Promise<string[]> =>
+    (await readFile(log, 'utf8').catch(() => ''))
+      .split('\n')
+      .filter((line) => line.includes('needs you'));
+  await until(async () => (await requestLog()).length > 0);
+  const [logged, ...more] = await requestLog();
+  assert.match(
+    logged ?? '',
+    /Z {2}\d\d:\d\d {2}Claude Code · needs you: R1\. Why: It saves the notes\.$/,
+  );
+  assert.deepEqual(more, []);
+  typed[0]?.('d');
+  await until(() => fed.some((line) => line.includes('decision: You denied')));
+  // In this terminal, /open opens the old desk, as Enter on an empty line does.
+  typed[0]?.('/open');
+  await until(() => lines.includes('The old desk opened in your browser.'));
+  assert.match(opened.at(-1) ?? '', /\/desk#launch-[0-9a-f]+$/);
+  await runCli(['stop'], root, {
+    interactive: false,
+    ask: () => Promise.reject(new Error('No prompts')),
+    out: () => {},
+    background,
+  });
+  await attached;
+  await ownerDone;
+  assert.ok(!(await readFile(log, 'utf8')).includes('change line'));
 });
 
 await test('verifold stop says when nothing runs, and points to an older owner in a terminal', async (t) => {
@@ -362,8 +513,15 @@ await test('verifold stop says when nothing runs, and points to an older owner i
   const help = out.pop() ?? '';
   assert.match(
     help,
-    /verifold pods \[stop <lease\|all>\][^\n]*\n\nOlder commands:\nverifold recommend[\s\S]*verifold session --prompt/,
+    /verifold pods \[stop <lease\|all>\][^\n]*\n\nOlder commands, for the old desk and the research flow:\nverifold ui [\s\S]*verifold session --prompt/,
   );
+  // A bare verifold opens the app. --desk opens the old desk, for this release.
+  assert.match(
+    help,
+    /^verifold \[--no-open\] \[--desk\] +Open Verifold in your browser/m,
+  );
+  assert.match(help, /--desk opens the old desk instead, for this release\./);
+  assert.doesNotMatch(help, /--app\b/);
   assert.doesNotMatch(help, /runs no experiments|older flow/);
   assert.match(help, /task agents run the experiments/);
   await runCli(['stop'], root, io(out));
@@ -761,6 +919,7 @@ await test('a terminal without a background owner gets the same live view of its
   const lines: string[] = [];
   const screens: (LabScreen | null)[] = [];
   const typed: ((line: string) => void)[] = [];
+  const browsed: string[] = [];
   let unfollow: (() => void) | undefined;
   const stop = new AbortController();
   const done = runCli(
@@ -771,6 +930,10 @@ await test('a terminal without a background owner gets the same live view of its
       ask: () => Promise.reject(new Error('No prompts')),
       out: () => {},
       progress: (line) => lines.push(line),
+      browse: (url) => {
+        browsed.push(url);
+        return Promise.resolve(true);
+      },
       listen: (onLine) => typed.push(onLine),
       // The terminal of an in-process desk owns its watch of the lab.
       screens: {
@@ -790,12 +953,16 @@ await test('a terminal without a background owner gets the same live view of its
   assert.equal(screens.find((entry) => entry !== null)?.project, 'project');
   await until(() => typed.length === 1);
   typed[0]?.('/app c-1');
-  // This package build in the tests has no app, so the terminal says so.
+  // This package build in the tests has no app, so the old desk opens, and the terminal says so.
   await until(() =>
     lines.includes(
-      'The new app is not available here. Type /open for the desk.',
+      'This Verifold has no app build, so the old desk opened in your browser.',
     ),
   );
+  assert.match(browsed[0] ?? '', /\/desk#launch-[0-9a-f]+$/);
+  typed[0]?.('/desk');
+  await until(() => lines.includes('The old desk opened in your browser.'));
+  assert.match(browsed[1] ?? '', /\/desk#launch-[0-9a-f]+$/);
   typed[0]?.('A note for the lab');
   await until(() => lines.includes('Your message is on the board.'));
   unfollow?.();

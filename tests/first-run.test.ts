@@ -1227,7 +1227,7 @@ await test('a new project keeps the compute settings of its folder, and a failed
   assert.equal(existsSync(join(failed, '.verifold', 'compute')), false);
 });
 
-await test('verifold --app in a folder without a project starts the first run without a project or an owner', async (t) => {
+await test('verifold in a folder without a project starts the first run without a project or an owner', async (t) => {
   const base = await folder(t, 'start');
   const root = join(base, 'new-folder');
   await mkdir(root);
@@ -1259,8 +1259,9 @@ await test('verifold --app in a folder without a project starts the first run wi
       },
     },
   };
+  // A bare verifold in a new folder opens the app's first run. --app is the default.
   const running = runCli(
-    ['--app', '--agency-dir', join(base, 'agency')],
+    ['--agency-dir', join(base, 'agency')],
     root,
     io,
     owner.signal,
@@ -1291,11 +1292,218 @@ await test('verifold --app in a folder without a project starts the first run wi
   await assert.rejects(stat(join(root, '.verifold')), { code: 'ENOENT' });
   owner.abort();
   await running;
-  // Flags of project setup do not go with --app.
+  // Flags of project setup do not go with the app's first run, with or without --app.
+  await assert.rejects(
+    runCli(['--host', 'claude'], root, io),
+    /Run it without --host, or run verifold init\./,
+  );
   await assert.rejects(
     runCli(['--app', '--host', 'claude'], root, io),
     /Run it without --host/,
   );
+  await assert.rejects(
+    runCli(['--app', '--desk'], root, io),
+    /Choose --app or --desk, not both\./,
+  );
+  // Without the app's build, a bare verifold sets up in the old desk, as --desk does.
+  const urls: string[] = [];
+  const lines: string[] = [];
+  const stopSetup = new AbortController();
+  const setup = runCli(
+    ['--agency-dir', join(base, 'agency')],
+    root,
+    {
+      ...io,
+      out: (value: string) => {
+        urls.push(value);
+      },
+      progress: (value: string) => {
+        lines.push(value);
+      },
+      appAssets: pathToFileURL(`${join(base, 'no-app-build')}/`),
+    },
+    stopSetup.signal,
+  );
+  t.after(async () => {
+    stopSetup.abort();
+    await setup.catch(() => {});
+  });
+  await until(() => Promise.resolve(urls.length > 0));
+  assert.equal(
+    lines[0],
+    'This Verifold has no app build, so setup opens in the old desk.',
+  );
+  const printed = JSON.parse(urls[0] ?? '{}') as { url: string; app?: string };
+  assert.equal(new URL(printed.url).pathname, '/desk');
+  assert.equal(printed.app, undefined);
+  assert.match(opened.at(-1) ?? '', /\/desk#launch-[0-9a-f]{48}$/);
+  stopSetup.abort();
+  await setup.catch(() => {});
+  await assert.rejects(stat(join(root, '.verifold')), { code: 'ENOENT' });
+});
+
+await test('verifold in a project opens the app, --desk opens the old desk, and /open and /desk open each', async (t) => {
+  const base = await folder(t, 'launch');
+  const root = join(base, 'project');
+  await mkdir(root);
+  await createProject(
+    root,
+    {
+      schemaVersion: 1,
+      visibility: 'private',
+      profile: {
+        name: 'Researcher',
+        interests: ['Probes'],
+        scholar: '',
+        github: '',
+        session: '',
+      },
+      host: 'claude',
+      candidates: [],
+      selectedId: null,
+    },
+    'Do probes see it?',
+    undefined,
+    new AbortController().signal,
+    true,
+  );
+  const files = await assets(base);
+  const agency = join(base, 'agency');
+  // A setup that was done before: --desk then asks nothing in the terminal.
+  await saveAgencyFile(
+    agency,
+    'profile-state.json',
+    JSON.stringify({ schemaVersion: 1, status: 'skipped' }),
+  );
+  const launch = async (args: readonly string[]) => {
+    const stop = new AbortController();
+    const out: string[] = [];
+    const progress: string[] = [];
+    const opened: string[] = [];
+    const typed: ((line: string) => void)[] = [];
+    const running = runCli(
+      [...args, '--no-open', '--agency-dir', agency],
+      root,
+      {
+        interactive: true,
+        ask: () => Promise.reject(new Error('No prompts')),
+        out: (value: string) => {
+          out.push(value);
+        },
+        progress: (value: string) => {
+          progress.push(value);
+        },
+        browse: (url: string) => {
+          opened.push(url);
+          return Promise.resolve(true);
+        },
+        listen: (onLine: (line: string) => void) => {
+          typed.push(onLine);
+        },
+        deskAssets: files.desk,
+        appAssets: files.app,
+        compute: {
+          store: {
+            home: join(base, 'home'),
+            platform: 'linux' as const,
+            secretTool: join(base, 'no-secret-tool'),
+          },
+        },
+      },
+      stop.signal,
+    );
+    t.after(async () => {
+      stop.abort();
+      await running.catch(() => {});
+    });
+    await until(() => Promise.resolve(out.length > 0 && typed.length > 0));
+    return {
+      shown: JSON.parse(out[0] ?? '{}') as { url: string; app?: string },
+      progress,
+      opened,
+      type: (line: string) => typed[0]?.(line),
+      stop: async () => {
+        stop.abort();
+        await running;
+      },
+    };
+  };
+  const app = await launch([]);
+  const origin = new URL(app.shown.url).origin;
+  assert.equal(app.shown.app, `${origin}/app/${new URL(app.shown.url).hash}`);
+  assert.ok(
+    app.progress.includes(
+      'Open the printed URL to use Verifold. Keep this terminal open. Type /help for commands.',
+    ),
+  );
+  // The printed URL leads to the app.
+  const home = await fetch(`${origin}/`, { redirect: 'manual' });
+  assert.equal(home.headers.get('location'), '/app/');
+  app.type('/open');
+  await until(() => Promise.resolve(app.opened.length === 1));
+  assert.match(app.opened[0] ?? '', /\/app\/#launch-[0-9a-f]{48}$/);
+  app.type('/desk');
+  await until(() => Promise.resolve(app.opened.length === 2));
+  assert.match(app.opened[1] ?? '', /\/desk#launch-[0-9a-f]{48}$/);
+  await until(() =>
+    Promise.resolve(
+      app.progress.includes('The old desk opened in your browser.'),
+    ),
+  );
+  await app.stop();
+  const desk = await launch(['--desk']);
+  assert.equal(new URL(desk.shown.url).pathname, '/desk');
+  assert.equal(desk.shown.app, undefined);
+  assert.ok(
+    desk.progress.includes(
+      'Open the printed URL to use the old desk. Keep this terminal open. Type /help for commands.',
+    ),
+  );
+  // In this terminal, /open opens the old desk, as Enter on an empty line does. /app still opens the app.
+  desk.type('/open');
+  await until(() => Promise.resolve(desk.opened.length === 1));
+  assert.match(desk.opened[0] ?? '', /\/desk#launch-[0-9a-f]{48}$/);
+  desk.type('/app');
+  await until(() => Promise.resolve(desk.opened.length === 2));
+  assert.match(desk.opened[1] ?? '', /\/app\/#launch-[0-9a-f]{48}$/);
+  await desk.stop();
+  // A run of the earlier research flow opens in the old desk, and the terminal says why.
+  const flow =
+    "This project uses the earlier research flow, so it opens in the old desk. Its records also show read-only in the app's History.";
+  await mkdir(join(root, '.verifold', 'coordinator'));
+  await writeFile(join(root, '.verifold', 'coordinator', 'state.json'), '{}');
+  const research = await launch([]);
+  assert.equal(new URL(research.shown.url).pathname, '/desk');
+  assert.equal(research.shown.app, undefined);
+  assert.ok(research.progress.includes(flow));
+  // The app shows that run in History.
+  const place = new URL(research.shown.url);
+  const shot = (await (
+    await fetch(`${place.origin}/api/v1/snapshot`, {
+      headers: { Authorization: `Bearer ${place.hash.slice(1)}` },
+    })
+  ).json()) as { researchRun?: boolean };
+  assert.equal(shot.researchRun, true);
+  await research.stop();
+  // --app still opens the app there.
+  const asked = await launch(['--app']);
+  assert.ok(asked.shown.app);
+  assert.ok(!asked.progress.includes(flow));
+  await asked.stop();
+  // A lab owns the project's run, so the project opens in the app again.
+  await writeFile(
+    join(root, '.verifold', 'lab.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      question: 'Do probes see it?',
+      startedAt: new Date().toISOString(),
+      directions: [],
+    }),
+  );
+  const lab = await launch([]);
+  assert.ok(lab.shown.app);
+  assert.ok(!lab.progress.includes(flow));
+  await lab.stop();
 });
 
 await test('the price list shows the common GPUs that RunPod lists, else the cheapest that fit research', () => {

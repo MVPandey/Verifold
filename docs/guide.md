@@ -25,14 +25,14 @@ Verifold starts your harness with its own configuration and permissions. The age
 
 Run `verifold` in your terminal.
 
-- In a folder that is already a Verifold project, Verifold first checks for global setup that is not finished, then opens the project's desk. This does not change the harness or the research that the project saved.
-- In a folder without a project, setup starts with your question. After you review the research brief, Verifold creates the project, opens the desk, and starts a lab on your question (see The lab).
+- In a folder that is already a Verifold project, Verifold opens the project's lab in your browser. This does not change the harness or the research that the project saved. A project whose current run is from the earlier research flow opens in the old desk instead, and the terminal says so. The app shows that run read-only in History, and `verifold --app` opens the app there.
+- In a folder without a project, Verifold opens the first run in your browser (see The first run in the app), then the Ask page. Start on the Ask page creates the project and starts a lab on your question (see The lab).
 
-The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in the top bar of the desk does the same.
+The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in the top bar of the old desk does the same.
 
-In a folder without a project, `verifold` opens setup in the browser. The desk asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal shows each step as one line. Ctrl+C during setup cancels it and saves nothing. When setup ends, a background process takes over the project, and the same browser tab shows the lab while its first agent reads the question.
+`verifold --desk` opens the old desk instead of the app, for this release. In that terminal, `/open` and Enter on an empty line open the old desk too. In a folder without a project, `verifold --desk` opens setup in the old desk. A Verifold without the app's build, such as a checkout that was not built, does the same for a bare `verifold`. It asks one thing at a time: your question, up to three quick questions, and the brief. The earlier steps go into the setup log. The terminal shows each step as one line. Ctrl+C during setup cancels it and saves nothing. When setup ends, a background process takes over the project, and the same browser tab shows the lab while its first agent reads the question.
 
-`verifold init`, `--no-open`, and runs without a terminal do setup in the terminal instead. Both paths run the same setup, with the same consent steps, file limits, and retries. After setup in the terminal, a bare `verifold --no-open` starts a lab too. Use `verifold init` to do setup and research entirely in the CLI, without a lab. A bare `verifold` needs an interactive terminal. `verifold --no-open` prints the desk URL and does not open a browser.
+`verifold init`, `verifold --desk --no-open`, and runs without a terminal do setup in the terminal instead. Both paths run the same setup, with the same consent steps, file limits, and retries. After setup in the terminal, `verifold --desk --no-open` starts a lab too. Use `verifold init` to do setup and research entirely in the CLI, without a lab. A bare `verifold` needs an interactive terminal. `verifold --no-open` prints the URL and does not open a browser.
 
 Run later commands from the project folder, or add `--workspace <path>`:
 
@@ -152,7 +152,7 @@ Profile setup and initialization share a lock on the global settings, so only on
 
 ### The first run in the app
 
-`verifold --app` in a folder without a project opens the first run of the new app, a preview. No project starts, and Ctrl+C in the terminal stops it. There are four steps, and you can skip each one:
+`verifold` in a folder without a project opens the first run in the app. No project starts until you ask a question on the Ask page, and Ctrl+C in the terminal stops it. There are four steps, and you can skip each one:
 
 1. **Agents.** Claude Code and Codex, each with its version, its sign-in, and a model. Verifold reads only the sign-in state and the plan from `claude auth status` and `codex login status`, never the account's email. It offers Fable only on a plan that includes it.
 2. **About you.** Verifold asks what you work on. Your agent, with the model that you picked, asks up to two more questions in an empty private folder, then drafts a card: "You work on", "To explore", and "Talk to me". Edit the card, or add a note and the agent changes it. Verifold saves the card as `USER.md`. Without a signed-in agent, Verifold asks the questions and fills the card from your answers.
@@ -171,13 +171,13 @@ Run `npm run build:cli` to copy the prompts into the matching `dist-cli/<layer>/
 
 ### Local research desk
 
-Run `verifold` in a project, or `verifold ui --workspace <path>`, to open its desk in the browser. With a terminal, the project owner runs in a background process, and the terminal attaches to it: it prints the desk URL and status lines, and takes the terminal commands. Ctrl+C or a closed window only detaches. The team keeps working. Run `verifold` again to attach, and `verifold stop` to stop the owner: sessions pause, and pods stop after their results come back. Use `--no-open` to print the URL without opening a browser.
+Run `verifold --desk` in a project, or `verifold ui --desk --workspace <path>`, to open its old desk in the browser. Without `--desk`, the same commands open the app. With a terminal, the project owner runs in a background process, and the terminal attaches to it: it prints the URL and status lines, and takes the terminal commands. Ctrl+C or a closed window only detaches. The team keeps working. Run `verifold` again to attach, and `verifold stop` to stop the owner: sessions pause, and pods stop after their results come back. Use `--no-open` to print the URL without opening a browser.
 
-The terminal and the background owner talk over a Unix socket in a private temporary folder. A terminal must give the owner's key first. The key is in `~/.verifold/credentials/owners/<owner ID>.json` (`0600`), which task agents and the coordinator cannot read. It is never in a command line, an environment variable, a project file, or a log. The owner writes its status lines to `.verifold/owner.log`, without the desk URL. Over about 1 MB, the log moves to `owner.log.1`. Nothing starts at login: after a restart, run `verifold` to continue.
+The terminal and the background owner talk over a Unix socket in a private temporary folder. A terminal must give the owner's key first. The key is in `~/.verifold/credentials/owners/<owner ID>.json` (`0600`), which task agents and the coordinator cannot read. It is never in a command line, an environment variable, a project file, or a log. The owner writes its status lines to `.verifold/owner.log`, without the desk URL. A request for approval in your own session shows the change that it would make in the terminal only. The log keeps the request's ID and why it asks. Over about 1 MB, the log moves to `owner.log.1`. Nothing starts at login: after a restart, run `verifold` to continue.
 
-Without a terminal, for example in a script, `verifold ui` runs the desk in the foreground as before, and Ctrl+C stops it.
+Without a terminal, for example in a script, `verifold ui` runs the project in the foreground as before, and Ctrl+C stops it.
 
-The URL includes a private access token. Keep it private, and use the complete URL if the desk asks you to connect again. Type `/open` in the terminal to open the desk again with a new one-time link.
+The URL includes a private access token. Keep it private, and use the complete URL if the page asks you to connect again. Type `/open` or `/app` in the terminal to open the app again with a new one-time link, and `/desk` for the old desk. The page at `/desk` is the old desk. `/` leads to the app.
 
 On a Mac, Verifold keeps the computer from idle sleep while an agent works or a pod runs (`caffeinate -i`). Closing the lid still puts it to sleep.
 
@@ -418,7 +418,7 @@ The lab is how a new project works on its question. Several agents work on it at
 The lab starts in one of two ways:
 
 - After setup, a new project starts a lab on its question. No research step starts.
-- In a run that no team owns yet, such as an older project or a run after Start over, Home offers **Start the lab**, with your question, while no research step runs.
+- In a run that no team owns yet, such as an older project or a run after Start over, the app's lab page offers **Start the lab**, with your question and the hours, while no research step runs.
 
 A new project needs no `--lab`. In a project that has no lab, `verifold --lab` or `verifold ui --lab` still starts one on the project's saved question, with a note that a new project needs no flag. While Verifold already works in the background, `--lab` starts nothing and says so.
 

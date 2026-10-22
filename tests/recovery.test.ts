@@ -311,6 +311,14 @@ await test('research attempts of a stopped owner become interrupted and stop blo
     new AbortController().signal,
     harness,
   );
-  assert.ok(progress.some((line) => line.includes('stopped earlier')));
+  assert.ok(
+    progress.some(
+      (line) =>
+        line.includes('stopped earlier') &&
+        line.includes(
+          'Resume a session with /resume, or in the old desk: type /desk.',
+        ),
+    ),
+  );
   assert.equal(existsSync(lock), false);
 });

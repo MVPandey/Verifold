@@ -108,9 +108,14 @@ await test('private CLI workflow preserves explicit selection and host ownership
       /Link each Markdown file to its local PDF/,
     );
     await runCli(['view'], root, io);
+    const page = await readFile(
+      join(root, '.verifold', 'workspace.html'),
+      'utf8',
+    );
+    assert.match(page, /Proof search/);
     assert.match(
-      await readFile(join(root, '.verifold', 'workspace.html'), 'utf8'),
-      /Proof search/,
+      page,
+      /Run <code>verifold --desk<\/code> in this project directory to open the old desk/,
     );
     await assert.rejects(
       runCli(['ideas', '--from', 'ideas.json'], root, io),

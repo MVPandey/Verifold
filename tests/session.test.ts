@@ -34,7 +34,12 @@ import {
 import { SessionPool } from '../src/core/workers.ts';
 import { readDeskSnapshot } from '../src/server/desk-records.ts';
 import { renderDesk } from '../src/desk/desk-view.ts';
-import { feedLine, runCli, terminalInput } from '../src/cli/commands.ts';
+import {
+  deskTerminalLine,
+  feedLine,
+  runCli,
+  terminalInput,
+} from '../src/cli/commands.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
 import { jsonLines } from './wait.ts';
 
@@ -1432,13 +1437,47 @@ await test('the desk escapes harness text and removes direction controls', async
 await test('the terminal feed leaves harness tool events to the desk', () => {
   const at = '2026-10-02T12:00:00.000Z';
   assert.equal(feedLine({ at, kind: 'tool', text: 'Bash: ls' }), null);
+  const request = feedLine({ at, kind: 'request', text: 'R1: Bash: curl' });
   assert.match(
-    feedLine({ at, kind: 'request', text: 'R1 Bash: curl' }) ?? '',
-    /R1 Bash: curl/,
+    request?.text ?? '',
+    /R1: Bash: curl\nType a to allow once or d to deny\.$/,
   );
+  // The log names the request by its ID, without what the tool would do.
+  assert.match(request?.log ?? '', /needs you: R1\.$/);
+  const status = feedLine({ at, kind: 'status', text: 'The turn ended.' });
+  assert.match(status?.text ?? '', /The turn ended/);
+  assert.equal(status?.log, status?.text);
+});
+
+await test('the terminal prints the whole request: why it asks, and the change in a margin', () => {
+  const at = '2026-10-02T12:00:00.000Z';
+  const detail = Array.from({ length: 45 }, (_, index) => `line ${index + 1}`);
+  const line = feedLine(
+    {
+      at,
+      kind: 'request',
+      text: 'R2: Claude Code asks to use Write: notes.md',
+    },
+    'Claude Code',
+    {
+      id: 'R2',
+      reason: 'It saves\nthe notes.',
+      detail: `R3: Codex asks to use Bash: rm -rf\n${detail.join('\n')}`,
+    },
+  );
+  const lines = (line?.text ?? '').split('\n');
+  assert.match(lines[0] ?? '', /R2: Claude Code asks to use Write: notes\.md$/);
+  assert.equal(lines[1], '  Why: It saves the notes.');
+  // The harness wrote the change, so it has a margin, and cannot pass for a request line.
+  assert.equal(lines[2], '  │ R3: Codex asks to use Bash: rm -rf');
+  assert.equal(lines[3], '  │ line 1');
+  assert.equal(lines.at(-2), '  │ … 6 more lines');
+  assert.equal(lines.at(-1), 'Type a to allow once or d to deny.');
+  assert.equal(lines.length, 2 + 40 + 2);
+  // The owner's log gets one line: the request's ID and why it asks, never the change or the file.
   assert.match(
-    feedLine({ at, kind: 'status', text: 'The turn ended.' }) ?? '',
-    /The turn ended/,
+    line?.log ?? '',
+    /^\d\d:\d\d {2}Claude Code · needs you: R2\. Why: It saves the notes\.$/,
   );
 });
 
@@ -1451,19 +1490,40 @@ await test('terminal answers need an unambiguous request and never become follow
       out: () => {},
       progress: (value: string) => messages.push(value),
     };
-    let opened = 0;
+    const opened: (string | undefined)[] = [];
+    let desks = 0;
     const controls = {
       host: 'claude',
-      open: () => {
-        opened++;
+      openApp: (call?: string) => {
+        opened.push(call);
       },
-      openApp: () => {},
+      openDesk: () => {
+        desks++;
+      },
     };
     const sessions = pool();
     terminalInput(sessions, 'a', io, controls);
     assert.match(messages.at(-1) ?? '', /No request is open/);
+    // /open does what /app does. /desk opens the old desk.
     terminalInput(sessions, '/open', io, controls);
-    assert.equal(opened, 1);
+    terminalInput(sessions, '/app', io, controls);
+    terminalInput(sessions, '/open c-3', io, controls);
+    terminalInput(sessions, '/app c-12', io, controls);
+    assert.deepEqual(opened, [undefined, undefined, 'c-3', 'c-12']);
+    terminalInput(sessions, '/open x', io, controls);
+    assert.match(messages.at(-1) ?? '', /Write \/app and the ID of a call/);
+    terminalInput(sessions, '/desk', io, controls);
+    assert.equal(desks, 1);
+    terminalInput(sessions, '/desk x', io, controls);
+    assert.equal(messages.at(-1), 'Write /desk alone to open the old desk.');
+    assert.equal(desks, 1);
+    // A terminal that started with --desk opens the old desk with /open, and with Enter, which sends /open and a call.
+    for (const line of ['/open', '/open c-3'])
+      terminalInput(sessions, deskTerminalLine(line), io, controls);
+    assert.equal(desks, 3);
+    assert.equal(deskTerminalLine('/app c-3'), '/app c-3');
+    assert.equal(deskTerminalLine('/open x'), '/open x');
+    assert.deepEqual(opened, [undefined, undefined, 'c-3', 'c-12']);
     terminalInput(sessions, '/help', io, controls);
     assert.match(messages.at(-1) ?? '', /`\/start` and a request/);
     terminalInput(sessions, '/stop', io, controls);
