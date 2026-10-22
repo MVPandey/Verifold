@@ -12,9 +12,18 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { childEnvironment } from './harness.ts';
 
 /**
@@ -31,7 +40,17 @@ export interface Workspace {
   readonly branch: string | null;
   /** The start state: the commit that each version is compared with. */
   readonly start: string;
+  /**
+   * For a worktree, the name of its administrative folder under the
+   * project's `worktrees/`. Git picks it when the worktree is made, and it
+   * can differ from the folder's own name. A record from before this field
+   * leaves it out, and Verifold derives and checks it once.
+   */
+  readonly admin?: string;
 }
+
+/** A safe single path segment: a worktree's administrative folder name. */
+const adminName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
 /** What the person calls a workspace: its branch, or its folder when it has none. */
 export function workspaceName(workspace: Workspace): string {
@@ -59,6 +78,9 @@ export function parseWorkspace(value: unknown): Workspace | undefined {
         path: entry.path,
         branch: entry.branch,
         start: entry.start,
+        ...(typeof entry.admin === 'string' && adminName.test(entry.admin)
+          ? { admin: entry.admin }
+          : {}),
       }
     : undefined;
 }
@@ -106,55 +128,28 @@ export function gitEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-/** The real Git directory of each folder that Verifold made, so a command names it instead of finding it through the folder's `.git`. Keyed by the folder. */
-const repoDirs = new Map<string, string>();
-
-/** The Git directory that a project worktree uses, built once from the project itself. */
-const commonGitDir = new Map<string, Promise<string>>();
-
-/**
- * Name the repository and work tree of a folder that Verifold made, so a Git
- * command reads the repository that Verifold set up and never one that the
- * `.git` file in the folder points to. The project root itself finds its own
- * repository as usual. A folder with no recorded Git directory, such as the
- * project root, gets no extra options.
- */
-function namedRepo(cwd: string): readonly string[] {
-  const dir = repoDirs.get(cwd);
-  return dir ? ['--git-dir', dir, '--work-tree', cwd] : [];
+/** The one place the Git directory of a task or check folder is built, from the folder's name. */
+function taskGitDir(root: string, name: string): string {
+  return join(root, '.verifold', 'tasks', 'git', name);
 }
 
 /**
- * Make sure a workspace's folder names its repository in later commands. A
- * folder workspace keeps its repository under `.verifold/tasks/git/`; a
- * worktree keeps it beside the project's own, which the project itself
- * reports once. Idempotent, so an owner that loads a workspace from a record
- * records it on first use.
+ * The Git directory of each live worktree that Verifold made, so a command
+ * names it instead of finding it through the worktree's `.git` file. A folder
+ * workspace and a check folder keep their Git directory at a fixed place
+ * under `.verifold/tasks/git/`, so they are not kept here. The map holds one
+ * entry per live worktree and loses it when the worktree goes.
  */
-async function ensureWorkspaceRepo(
-  root: string,
-  workspace: Pick<Workspace, 'kind' | 'path'>,
-): Promise<void> {
-  const folder = join(root, workspace.path);
-  if (repoDirs.has(folder)) return;
-  const name = basename(workspace.path);
-  if (workspace.kind === 'folder') {
-    repoDirs.set(folder, join(root, '.verifold', 'tasks', 'git', name));
-    return;
-  }
-  repoDirs.set(folder, join(await commonDir(root), 'worktrees', name));
-}
+const worktreeDirs = new Map<string, string>();
 
 /** The Git directory that every worktree of a project shares, asked of the project once. A failed answer is not kept. */
+const commonGitDir = new Map<string, Promise<string>>();
 function commonDir(root: string): Promise<string> {
   let pending = commonGitDir.get(root);
   if (!pending) {
-    pending = git(root, [
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-common-dir',
-    ])
-      .then((out) => out.toString('utf8').trim())
+    // Older Git has no `--path-format=absolute`, so the path is resolved against the project.
+    pending = git(root, ['rev-parse', '--git-common-dir'])
+      .then((out) => resolve(root, out.toString('utf8').trim()))
       .catch((error: unknown) => {
         commonGitDir.delete(root);
         throw error;
@@ -164,14 +159,91 @@ function commonDir(root: string): Promise<string> {
   return pending;
 }
 
-/** Record a check folder's own Git directory, so its commands name the repository. */
-function rememberCheckRepo(root: string, folder: string, name: string): void {
-  repoDirs.set(folder, join(root, '.verifold', 'tasks', 'git', name));
+/** A folder that Verifold made for an agent: a workspace or a check. The name is its last segment. */
+function agentFolder(cwd: string): {
+  readonly root: string;
+  readonly kind: string;
+  readonly name: string;
+} | null {
+  const match =
+    /^(.*)[/\\]\.verifold[/\\](workspaces|checks)[/\\]([^/\\]+)$/.exec(cwd);
+  return match ? { root: match[1]!, kind: match[2]!, name: match[3]! } : null;
 }
 
-/** Forget a folder's repository once Verifold removes the folder. */
+/**
+ * Name the repository and work tree of a folder that Verifold made, so a Git
+ * command reads the repository that Verifold set up and never one that the
+ * folder's `.git` file points to. The project root, and any other folder,
+ * finds its own repository as usual. A command in a folder that Verifold
+ * made, other than the one that first builds its repository, that has no
+ * recorded or fixed Git directory stops rather than fall back to the folder.
+ */
+function namedRepo(cwd: string, sub: string | undefined): readonly string[] {
+  const made = agentFolder(cwd);
+  if (!made) return [];
+  // The command that builds the repository runs before the repository exists.
+  if (sub === 'init') return [];
+  const fixed = worktreeDirs.get(cwd);
+  const dir =
+    fixed ??
+    // A check folder, and a folder workspace, keep a fixed Git directory.
+    (made.kind === 'checks' || existsSync(taskGitDir(made.root, made.name))
+      ? taskGitDir(made.root, made.name)
+      : null);
+  if (dir) return ['--git-dir', dir, '--work-tree', cwd];
+  // A folder that is gone lets the command fail on its own, which the reader turns into an empty result.
+  if (!existsSync(cwd)) return [];
+  throw new WorkspaceError(
+    'Verifold has not set up this folder, so it ran no Git command there.',
+  );
+}
+
+/**
+ * Make sure a worktree names its repository in later commands. A folder
+ * workspace and a check keep a fixed Git directory, so they need nothing
+ * here. For a worktree, Verifold reads the Git directory that the project
+ * holds for it, checks that it points back at the folder, and keeps it.
+ * Idempotent, so an owner that loads a workspace from a record checks it
+ * once. Returns the worktree's administrative folder name, when it reads one.
+ */
+async function ensureWorkspaceRepo(
+  root: string,
+  workspace: Pick<Workspace, 'kind' | 'path' | 'admin'>,
+): Promise<string | undefined> {
+  if (workspace.kind !== 'git') return undefined;
+  const folder = join(root, workspace.path);
+  const known = worktreeDirs.get(folder);
+  if (known) return basename(known);
+  // A folder that is gone needs no repository: the command that follows fails and the reader returns nothing.
+  if (!existsSync(folder)) return undefined;
+  const name = workspace.admin ?? basename(workspace.path);
+  if (!adminName.test(name))
+    throw new WorkspaceError('A worktree name is not valid.');
+  const dir = join(await commonDir(root), 'worktrees', name);
+  await checkWorktreeDir(folder, dir);
+  worktreeDirs.set(folder, dir);
+  return name;
+}
+
+/**
+ * The project's administrative folder for a worktree holds a `gitdir` file
+ * that names the worktree's `.git`. That folder is Verifold's own, not the
+ * agent's, so the file tells the two apart. The check fails when they do not
+ * match, so a stale or shared administrative folder is never used.
+ */
+async function checkWorktreeDir(folder: string, dir: string): Promise<void> {
+  const points = await readFile(join(dir, 'gitdir'), 'utf8').catch(() => null);
+  const real = points ? await realpath(points.trim()).catch(() => null) : null;
+  const own = await realpath(join(folder, '.git')).catch(() => null);
+  if (!real || real !== own)
+    throw new WorkspaceError(
+      'A worktree does not match the repository that Verifold set up for it.',
+    );
+}
+
+/** Forget a worktree's repository once Verifold removes the worktree. */
 function forgetRepo(folder: string): void {
-  repoDirs.delete(folder);
+  worktreeDirs.delete(folder);
 }
 
 /**
@@ -202,7 +274,7 @@ function git(
     const child = execFile(
       'git',
       [
-        // Verifold never reaches a remote, so no command may use a transport.
+        // Verifold never reaches a remote, so no command may use a transport. This also stops a read of a missing object from fetching it, on the Git that ignores GIT_NO_LAZY_FETCH.
         '-c',
         'protocol.allow=never',
         '-c',
@@ -220,8 +292,13 @@ function git(
         'core.quotepath=off',
         '-c',
         'core.fsmonitor=false',
+        // A nested repository is never entered: no recursion, and no summary of its state.
+        '-c',
+        'submodule.recurse=false',
+        '-c',
+        'status.submoduleSummary=false',
         // In a folder that Verifold made, name the repository instead of finding it through the folder's `.git`.
-        ...namedRepo(cwd),
+        ...namedRepo(cwd, args[0]),
         ...(args[0] === 'diff'
           ? ['diff', ...plainDiff, ...args.slice(1)]
           : args),
@@ -235,14 +312,21 @@ function git(
       },
       (error, stdout, stderr) => {
         // check-ignore exits with 1 when no path matches.
-        if (error && !(args[0] === 'check-ignore' && error.code === 1))
+        if (error && !(args[0] === 'check-ignore' && error.code === 1)) {
+          const first =
+            stderr.toString('utf8').trim().split('\n')[0]?.slice(0, 300) ||
+            error.message;
+          // A project that keeps some data only in a remote: Verifold reads the local store and does not fetch.
+          const remote = /protocol|promisor|lazy|unable to read/i.test(first);
           reject(
             new WorkspaceError(
-              `Git failed: ${stderr.toString('utf8').trim().split('\n')[0]?.slice(0, 300) || error.message}`,
+              remote
+                ? 'Verifold reads only the Git data in the project folder and does not reach a remote. A file that lives only in a remote is not available here.'
+                : `Git failed: ${first}`,
               { cause: error },
             ),
           );
-        else resolve(stdout);
+        } else resolve(stdout);
       },
     );
     if (input !== undefined) child.stdin?.end(input);
@@ -406,6 +490,7 @@ async function startFiles(
     ).flat();
   const changed = await list(root, [
     'status',
+    '--ignore-submodules=all',
     '--porcelain=v1',
     '-z',
     '--no-renames',
@@ -579,6 +664,7 @@ async function commitAll(
   const all = [
     ...(await list(target, [
       'status',
+      '--ignore-submodules=all',
       '--porcelain=v1',
       '-z',
       '--no-renames',
@@ -590,6 +676,7 @@ async function commitAll(
     ...(forced.length
       ? await list(target, [
           'status',
+          '--ignore-submodules=all',
           '--porcelain=v1',
           '-z',
           '--no-renames',
@@ -610,9 +697,12 @@ async function commitAll(
   const skipped: string[] = [];
   const linked: string[] = [];
   for (const entry of pending) {
-    const file = entry.slice(3);
+    const file = entry.slice(3).replace(/\/$/, '');
     const stats = await lstat(join(target, file)).catch(() => null);
-    if (lab && stats?.isFile() && stats.nlink > 1) linked.push(file);
+    // A folder with its own Git data stays out of the add, so Git never enters it and its config never runs.
+    if (stats?.isDirectory() && existsSync(join(target, file, '.git')))
+      skipped.push(file);
+    else if (lab && stats?.isFile() && stats.nlink > 1) linked.push(file);
     else if (stats?.isFile() && stats.size > limits.fileBytes)
       skipped.push(file);
   }
@@ -648,6 +738,24 @@ async function commitAll(
       '--',
       ...named.map((path) => `:(literal)${path}`),
     ]);
+  // A nested repository is never committed as a link to another repository.
+  // Verifold commits files, so a folder with its own Git data stays out, and
+  // the agent reads it as it is. `git add` can stage it as a gitlink, so any
+  // that reached the index comes out again.
+  const nested = (await list(target, ['ls-files', '--stage', '-z']))
+    .filter((entry) => entry.startsWith('160000 '))
+    .map((entry) => entry.slice(entry.indexOf('\t') + 1));
+  if (nested.length) {
+    await git(target, [
+      'rm',
+      '--cached',
+      '--quiet',
+      '--force',
+      '--',
+      ...nested.map((path) => `:(literal)${path}`),
+    ]);
+    for (const path of nested) if (!skipped.includes(path)) skipped.push(path);
+  }
   // An ignored folder is one pending entry, so count again what Git holds now.
   const staged = await list(target, ['diff', '--cached', '--name-only', '-z']);
   if (staged.length > limits.files) {
@@ -710,6 +818,7 @@ export async function allocate(
     options.light ?? false,
   );
   let branch: string | null = null;
+  let admin: string | undefined;
   if (kind === 'git') {
     branch = `verifold/${options.name}`;
     await git(root, [
@@ -721,11 +830,22 @@ export async function allocate(
       target,
       'HEAD',
     ]);
+    // The worktree is new, so its `.git` link is the one Git wrote. It names the folder that the project keeps for the worktree.
+    const link = await readFile(join(target, '.git'), 'utf8');
+    admin = basename(link.replace(/^gitdir:\s*/, '').trim());
+    // The repository exists now, so the start commit, and every later command, names it.
+    await ensureWorkspaceRepo(root, { kind, path, admin });
   } else {
-    const gitDir = join(root, '.verifold', 'tasks', 'git', options.name);
-    await mkdir(dirname(gitDir), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(taskGitDir(root, options.name)), {
+      recursive: true,
+      mode: 0o700,
+    });
     await mkdir(target, { mode: 0o700 });
-    await git(target, ['init', '--quiet', `--separate-git-dir=${gitDir}`]);
+    await git(target, [
+      'init',
+      '--quiet',
+      `--separate-git-dir=${taskGitDir(root, options.name)}`,
+    ]);
   }
   for (const file of copies) {
     const stats = await lstat(join(root, file)).catch(() => null);
@@ -738,14 +858,12 @@ export async function allocate(
     await mkdir(dirname(join(target, input.path)), { recursive: true });
     await copyFile(input.copy, join(target, input.path));
   }
-  // The repository exists now, so the start commit, and every later command, names it.
-  await ensureWorkspaceRepo(root, { kind, path });
   const { commit } = await commitAll(
     target,
     options.writable,
     'Verifold: task start',
   );
-  return { kind, path, branch, start: commit };
+  return { kind, path, branch, start: commit, ...(admin ? { admin } : {}) };
 }
 
 /** The folder of a lab check under the project, from its ID. */
@@ -773,7 +891,7 @@ export async function checkFolder(
   if (!/^k-[1-9]\d{0,5}$/.test(options.name))
     throw new WorkspaceError('Invalid check name.');
   const target = join(root, checkPath(options.name));
-  const gitDir = join(root, '.verifold', 'tasks', 'git', options.name);
+  const gitDir = taskGitDir(root, options.name);
   await mkdir(dirname(target), { recursive: true, mode: 0o700 });
   if (
     (await lstat(target).catch(() => null)) !== null ||
@@ -786,9 +904,8 @@ export async function checkFolder(
   await mkdir(target, { mode: 0o700 });
   try {
     await checkoutAt(root, options.from, options.commit, target);
+    // After init the check folder has its fixed Git directory, which every command there names.
     await git(target, ['init', '--quiet', `--separate-git-dir=${gitDir}`]);
-    // The repository exists now, so the commit, and every later command, names it.
-    rememberCheckRepo(root, target, options.name);
     // Git wrote each file new, so none has a second hard link.
     await git(target, ['add', '--all', '--force', '--', '.']);
     await git(target, [
@@ -801,7 +918,6 @@ export async function checkFolder(
     ]);
     return await head(target);
   } catch (error) {
-    forgetRepo(target);
     await rm(target, { recursive: true, force: true });
     await rm(gitDir, { recursive: true, force: true });
     throw error;
@@ -1019,6 +1135,7 @@ export async function folderState(
   const entries = (
     await list(target, [
       'status',
+      '--ignore-submodules=all',
       '--porcelain=v1',
       '-z',
       '--no-renames',
@@ -1429,17 +1546,18 @@ export async function release(
   root: string,
   workspace: Workspace,
 ): Promise<boolean> {
-  await ensureWorkspaceRepo(root, workspace);
   const target = join(root, workspace.path);
   if ((await lstat(target).catch(() => null)) === null) {
     forgetRepo(target);
     return true;
   }
+  await ensureWorkspaceRepo(root, workspace);
   try {
     if (
       (
         await list(target, [
           'status',
+          '--ignore-submodules=all',
           '--porcelain',
           '-z',
           '--',
@@ -1449,8 +1567,9 @@ export async function release(
       ).length
     )
       return false;
+    // Verifold checked above that no change stays, so the removal does not read the folder's own Git data again.
     if (workspace.kind === 'git')
-      await git(root, ['worktree', 'remove', target]);
+      await git(root, ['worktree', 'remove', '--force', target]);
     else await rm(target, { recursive: true, force: true });
     forgetRepo(target);
     return true;
