@@ -1429,16 +1429,17 @@ export async function copyAt(
  * Copy the selected files of a version into the project. Each file in the
  * project must still match its start content, or nothing is copied. A
  * folder that the version replaces with a file counts as missing when the
- * copy deletes every file in it. New content goes to temporary files in
- * `.verifold/staging` first. Then the deletions come, so a file can take
- * the place of a folder and a folder the place of a file, and each new
- * file is renamed into place. `bases` names another commit whose content a
- * file must match instead of the start, such as the version that came in
- * before. `versions` names another commit whose content a file gets instead
- * of `version`, such as its content before a bring-in, for an undo.
- * `staged` runs after every check passed and every temporary file is
- * written, before the first change in the project. When it throws, nothing
- * is copied.
+ * copy deletes every file in it, and a folder of the version counts as no
+ * file. New content goes to temporary files in `.verifold/staging` first,
+ * one file at a time. Then the deletions come, so a file can take the place
+ * of a folder and a folder the place of a file, and each new file is renamed
+ * into place. `bases` names another commit whose content a file must match
+ * instead of the start, such as the version that came in before. `versions`
+ * names another commit whose content a file gets instead of `version`, and
+ * `modes` another mode than its commit's, such as its content and the
+ * person's mode before a bring-in, for an undo. `staged` runs after every
+ * check passed and every temporary file is written, before the first change
+ * in the project. When it throws, nothing is copied.
  */
 export async function integrate(
   root: string,
@@ -1448,6 +1449,7 @@ export async function integrate(
   options: {
     readonly bases?: ReadonlyMap<string, string>;
     readonly versions?: ReadonlyMap<string, string>;
+    readonly modes?: ReadonlyMap<string, string>;
     readonly staged?: () => Promise<void>;
   } = {},
 ): Promise<
@@ -1461,6 +1463,7 @@ export async function integrate(
     string,
     { readonly mode: string; readonly id: string; readonly bytes: number }
   >();
+  // A folder of the version is no file: its own files come in under it.
   for (const commit of new Set(paths.map(versionOf)))
     for (const [path, entry] of await treeAt(
       root,
@@ -1468,10 +1471,9 @@ export async function integrate(
       commit,
       paths.filter((path) => versionOf(path) === commit),
     ))
-      tree.set(path, entry);
+      if (entry.mode !== '040000') tree.set(path, entry);
   const deleted = new Set(paths.filter((path) => !tree.has(path)));
   const conflicts: string[] = [];
-  const plan: { path: string; content: Buffer | null }[] = [];
   for (const path of paths) {
     const destination = join(root, path);
     await contained(root, destination);
@@ -1493,17 +1495,6 @@ export async function integrate(
         ? start === null
         : current !== undefined && start !== null && current.equals(start);
     if (!unchanged) conflicts.push(path);
-    else
-      plan.push({
-        path,
-        content: deleted.has(path)
-          ? null
-          : await git(
-              repo.workTree,
-              ['cat-file', 'blob', tree.get(path)?.id ?? ''],
-              { repo },
-            ),
-      });
   }
   if (conflicts.length) return { conflicts };
   const staging = join(
@@ -1515,16 +1506,23 @@ export async function integrate(
   const written: { temporary: string; destination: string }[] = [];
   try {
     await mkdir(staging, { recursive: true, mode: 0o700 });
-    for (const [index, { path, content }] of plan.entries()) {
-      if (content === null) continue;
+    for (const [index, path] of paths.entries()) {
+      const entry = tree.get(path);
+      if (!entry) continue;
       const temporary = join(staging, String(index));
-      await writeFile(temporary, content, { flag: 'wx', mode: 0o644 });
-      if (tree.get(path)?.mode === '100755') await chmod(temporary, 0o755);
+      // One file at a time: the copy never holds every file in memory.
+      await writeFile(
+        temporary,
+        await git(repo.workTree, ['cat-file', 'blob', entry.id], { repo }),
+        { flag: 'wx', mode: 0o644 },
+      );
+      if ((options.modes?.get(path) ?? entry.mode) === '100755')
+        await chmod(temporary, 0o755);
       written.push({ temporary, destination: join(root, path) });
     }
     await options.staged?.();
-    for (const { path, content } of plan)
-      if (content === null) {
+    for (const path of paths)
+      if (deleted.has(path)) {
         await rm(join(root, path), { force: true });
         await removeEmpty(root, dirname(join(root, path)));
       }
@@ -1536,14 +1534,14 @@ export async function integrate(
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
-  return { applied: plan.map(({ path }) => path) };
+  return { applied: [...paths] };
 }
 
 /**
  * The folder at `path` holds only files that this copy deletes, so a file
  * can take its place.
  */
-async function emptied(
+export async function emptied(
   root: string,
   path: string,
   deleted: ReadonlySet<string>,

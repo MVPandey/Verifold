@@ -232,16 +232,24 @@ function fileList(paths: readonly string[], more: number): string {
   return `${paths.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
 }
 
-/** One bring-in that the person undid: which files went back, and which stayed as they are. */
+/**
+ * One undo of a bring-in: which files went back, which stayed because the
+ * person or a later bring-in changed them, and which could not go back.
+ */
 function UndoneLine({ entry }: { readonly entry: UndoneGroup }): ReactNode {
-  const { restored, kept, more } = entry;
+  const { restored, kept, newer, failed, more } = entry;
+  const one = (files: readonly string[]): boolean => files.length === 1;
   return (
     <li>
       {clock(entry.undoneAt)}: you undid the bring-in of {clock(entry.at)}{' '}
       <span className="muted">at {entry.commit.slice(0, 7)}</span>.
       {restored.length > 0 && ` ${restored.join(', ')} went back.`}
       {kept.length > 0 &&
-        ` ${kept.join(', ')} stayed as ${kept.length === 1 ? 'it is' : 'they are'}.`}
+        ` ${kept.join(', ')} stayed as ${one(kept) ? 'it is' : 'they are'}, because you changed ${one(kept) ? 'it' : 'them'}.`}
+      {newer.length > 0 &&
+        ` ${newer.join(', ')} stayed as ${one(newer) ? 'it is' : 'they are'}, because a later bring-in changed ${one(newer) ? 'it' : 'them'}. Undo that bring-in first to put ${one(newer) ? 'it' : 'them'} back too.`}
+      {failed.length > 0 &&
+        ` ${failed.join(', ')} could not go back. Undo again to try ${one(failed) ? 'it' : 'them'} once more.`}
       {more > 0 &&
         ` ${more} more ${more === 1 ? 'file is' : 'files are'} not listed.`}
     </li>
@@ -266,9 +274,6 @@ export function BringHistory({
   readonly undoBusy?: boolean;
 }): ReactNode {
   if (!history.length && !undone.length) return null;
-  const undoneAt = new Map(
-    undone.map((entry) => [`${entry.at}|${entry.commit}`, entry.undoneAt]),
-  );
   const undoable = onUndo
     ? history.filter((group) => group.undoable === true)
     : [];
@@ -281,26 +286,26 @@ export function BringHistory({
         <ul className="bring-history">
           {history.map((group) => {
             const key = `${group.at}|${group.commit}`;
-            const when = undoneAt.get(key);
             return (
               <li key={key}>
                 {clock(group.at)}: {fileList(group.paths, group.more)}{' '}
                 <span className="muted">at {group.commit.slice(0, 7)}</span>
-                {when ? (
-                  <span className="muted"> · undone at {clock(when)}</span>
-                ) : (
-                  onUndo &&
-                  group.undoable === true && (
-                    <button
-                      type="button"
-                      className="bring-history__undo"
-                      disabled={undoBusy}
-                      aria-label={`Undo the bring-in of ${clock(group.at)}`}
-                      onClick={() => onUndo(group)}
-                    >
-                      Undo
-                    </button>
-                  )
+                {group.undoneAt && (
+                  <span className="muted">
+                    {' '}
+                    · undone at {clock(group.undoneAt)}
+                  </span>
+                )}
+                {onUndo && group.undoable === true && (
+                  <button
+                    type="button"
+                    className="answer__undo bring-history__undo"
+                    disabled={undoBusy}
+                    aria-label={`Undo the bring-in of ${clock(group.at)}`}
+                    onClick={() => onUndo(group)}
+                  >
+                    {group.undoneAt ? 'Undo again' : 'Undo'}
+                  </button>
                 )}
               </li>
             );
@@ -441,20 +446,24 @@ export function BringPage({
     },
     (a, b) => a.at === b.at && a.commit === b.commit,
   );
+  const work = bringWork(lab, direction.id);
+  // A bring-in or an undo runs, also in the background: nothing else starts meanwhile.
+  const running =
+    bring.busy || undo.busy || (work !== null && work.error === null);
   const doUndo = async (group: BringGroup): Promise<void> => {
-    if (undo.busy || bring.busy) return;
+    if (running) return;
     setDone(null);
     if (await undo.submit({ at: group.at, commit: group.commit })) {
       if (!undoPending.current)
         setDone(
-          'Undone. The list below shows which files went back and which stayed as they are.',
+          'The list below shows which files went back, and which stayed as they are and why.',
         );
       reload();
     }
   };
   const doBring = async (): Promise<void> => {
     const files = [...chosen].sort();
-    if (!commit || !files.length || bring.busy) return;
+    if (!commit || !files.length || running) return;
     setDone(null);
     if (await bring.submit({ commit, files })) {
       // The files were sent: nothing stays ticked, so a second click sends nothing.
@@ -467,7 +476,6 @@ export function BringPage({
     }
   };
 
-  const work = bringWork(lab, direction.id);
   const can = list ? list.files.filter((file) => file.out === null) : [];
   return (
     <div className="page">
@@ -564,7 +572,7 @@ export function BringPage({
                 <button
                   type="button"
                   className="button button--primary"
-                  disabled={bring.busy || chosen.size === 0}
+                  disabled={running || chosen.size === 0}
                   onClick={() => void doBring()}
                 >
                   Bring in the ticked files
@@ -599,7 +607,7 @@ export function BringPage({
               {...(lab.agentsHere
                 ? { onUndo: (group: BringGroup) => void doUndo(group) }
                 : {})}
-              undoBusy={undo.busy || bring.busy}
+              undoBusy={running}
             />
           )}
         </div>

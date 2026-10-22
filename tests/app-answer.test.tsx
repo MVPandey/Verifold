@@ -752,10 +752,12 @@ await test('a bring-in shows its files: code files start unticked with the warni
     /<button[^>]*disabled=""[^>]*>Undo<\/button>/,
   );
 
-  // An undone bring-in says when, which files went back, and which stayed as they are.
+  // An undone bring-in says when, which files went back, which stayed because the person or a later bring-in changed them, and which could not go back.
   const undone = renderToStaticMarkup(
     <BringHistory
-      history={[{ ...group, paths: ['c.md'], undoable: false }]}
+      history={[
+        { ...group, paths: ['c.md'], undoable: false, undoneAt: ago(5) },
+      ]}
       undone={[
         {
           at: group.at,
@@ -763,6 +765,8 @@ await test('a bring-in shows its files: code files start unticked with the warni
           undoneAt: ago(5),
           restored: ['a.md', 'b.md'],
           kept: ['c.md'],
+          newer: ['e.md'],
+          failed: ['d.md'],
           more: 2,
         },
       ]}
@@ -774,8 +778,18 @@ await test('a bring-in shows its files: code files start unticked with the warni
   assert.match(
     text(undone),
     new RegExp(
-      `${clock(ago(5))}: you undid the bring-in of ${clock(group.at)} at ddddddd ?\\. a\\.md, b\\.md went back\\. c\\.md stayed as it is\\. 2 more files are not listed\\.`,
+      `${clock(ago(5))}: you undid the bring-in of ${clock(group.at)} at ddddddd ?\\. a\\.md, b\\.md went back\\. c\\.md stayed as it is, because you changed it\\. e\\.md stayed as it is, because a later bring-in changed it\\. Undo that bring-in first to put it back too\\. d\\.md could not go back\\. Undo again to try it once more\\. 2 more files are not listed\\.`,
     ),
+  );
+  // A bring-in with files that could not go back has its undo again.
+  assert.match(
+    renderToStaticMarkup(
+      <BringHistory
+        history={[{ ...group, undoneAt: ago(5) }]}
+        onUndo={() => {}}
+      />,
+    ),
+    /class="answer__undo bring-history__undo"[^>]*>Undo again<\/button>/,
   );
 });
 

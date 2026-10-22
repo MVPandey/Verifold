@@ -1738,8 +1738,8 @@ function bringList(list: LabBringList, branch: string): BringList {
 
 /**
  * A direction's newest bring-ins, oldest first, within their bounds. A
- * bring-in has an undo when Verifold knows the earlier version of each of
- * its files, and the person did not undo it already.
+ * bring-in has an undo while it has files that no undo left as they are,
+ * and Verifold knows the earlier version of each of them.
  */
 function bringHistory(
   state: {
@@ -1750,25 +1750,46 @@ function bringHistory(
 ): BringGroup[] {
   const key = (entry: { readonly at: string; readonly commit: string }) =>
     `${entry.at}|${entry.commit}`;
-  const closed = new Set([
-    ...state.brought.flatMap((entry) =>
-      entry.direction === direction && entry.before === undefined
-        ? [key(entry)]
-        : [],
-    ),
-    ...state.undoneBrings.flatMap((entry) =>
-      entry.direction === direction ? [key(entry)] : [],
-    ),
-  ]);
+  const groups = new Map<
+    string,
+    { open: number; known: boolean; undoneAt: string | null }
+  >();
+  for (const entry of state.brought) {
+    if (entry.direction !== direction) continue;
+    const group = groups.get(key(entry)) ?? {
+      open: 0,
+      known: true,
+      undoneAt: null,
+    };
+    if (entry.keptAt === undefined) {
+      group.open++;
+      if (entry.before === undefined) group.known = false;
+    } else if (entry.keptAt > (group.undoneAt ?? ''))
+      group.undoneAt = entry.keptAt;
+    groups.set(key(entry), group);
+  }
+  for (const entry of state.undoneBrings) {
+    const group = groups.get(key(entry));
+    if (
+      entry.direction === direction &&
+      group &&
+      entry.undoneAt > (group.undoneAt ?? '')
+    )
+      group.undoneAt = entry.undoneAt;
+  }
   return bringGroups(state.brought, direction)
     .slice(-apiLimits.bringGroups)
-    .map((group) => ({
-      at: group.at,
-      commit: group.commit,
-      paths: group.paths.slice(0, apiLimits.bringPaths),
-      more: Math.max(0, group.paths.length - apiLimits.bringPaths),
-      undoable: !closed.has(key(group)),
-    }));
+    .map((group) => {
+      const seen = groups.get(key(group));
+      return {
+        at: group.at,
+        commit: group.commit,
+        paths: group.paths.slice(0, apiLimits.bringPaths),
+        more: Math.max(0, group.paths.length - apiLimits.bringPaths),
+        undoable: seen !== undefined && seen.open > 0 && seen.known,
+        undoneAt: seen?.undoneAt ?? null,
+      };
+    });
 }
 
 /** A direction's newest undone bring-ins, oldest first, within their bounds. */
@@ -1786,10 +1807,14 @@ function undoneHistory(
       undoneAt: entry.undoneAt,
       restored: entry.restored.slice(0, shown),
       kept: entry.kept.slice(0, shown),
+      newer: entry.newer.slice(0, shown),
+      failed: entry.failed.slice(0, shown),
       more:
         entry.more +
         Math.max(0, entry.restored.length - shown) +
-        Math.max(0, entry.kept.length - shown),
+        Math.max(0, entry.kept.length - shown) +
+        Math.max(0, entry.newer.length - shown) +
+        Math.max(0, entry.failed.length - shown),
     }));
 }
 

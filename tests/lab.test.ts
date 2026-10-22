@@ -10023,6 +10023,32 @@ function broughtWith(
   return { at: entry.at, commit: entry.commit };
 }
 
+/** Undo the bring-in that `path` of d-1 came in with. */
+function undoWith(
+  lab: Fixture,
+  path: string,
+): ReturnType<Fixture['lab']['undoBring']> {
+  const { at, commit } = broughtWith(lab, path);
+  return lab.lab.undoBring('d-1', at, commit);
+}
+
+/** An undo result with nothing that stayed, unless the test says so. */
+function undid(
+  restored: readonly string[],
+  stayed: {
+    readonly kept?: readonly string[];
+    readonly newer?: readonly string[];
+    readonly unread?: readonly string[];
+  } = {},
+): object {
+  return {
+    restored,
+    kept: stayed.kept ?? [],
+    newer: stayed.newer ?? [],
+    unread: stayed.unread ?? [],
+  };
+}
+
 await test('an undo puts each file of a bring-in back, removes a file that it added, and keeps a file that the person changed since', async (t) => {
   const lab = await bringLab(t, ['Alpha'], async (root) => {
     await writeFile(join(root, 'README.md'), '# Before\n');
@@ -10037,18 +10063,27 @@ await test('an undo puts each file of a bring-in back, removes a file that it ad
   const files = ['README.md', 'gone.md', 'mine.md', 'new.md'];
   assert.deepEqual(await lab.lab.bring('d-1', commit, files), files);
   assert.equal(existsSync(join(lab.root, 'gone.md')), false);
-  // Each file records the content that it had before: the direction's start.
+  // Each file records the content that it had before (the direction's start) and its mode then.
   assert.deepEqual(
-    (lab.lab.view()?.state.brought ?? []).map((entry) => entry.before),
-    [null, null, null, null],
+    (lab.lab.view()?.state.brought ?? []).map((entry) => [
+      entry.path,
+      entry.before,
+      entry.beforeMode,
+    ]),
+    [
+      ['README.md', null, '100644'],
+      ['gone.md', null, '100644'],
+      ['mine.md', null, null],
+      ['new.md', null, null],
+    ],
   );
   // The person changes one file after it came in.
   await writeFile(join(lab.root, 'mine.md'), 'person\n');
   const { at } = broughtWith(lab, 'mine.md');
-  assert.deepEqual(await lab.lab.undoBring('d-1', at, commit), {
-    restored: ['README.md', 'gone.md', 'new.md'],
-    kept: ['mine.md'],
-  });
+  assert.deepEqual(
+    await lab.lab.undoBring('d-1', at, commit),
+    undid(['README.md', 'gone.md', 'new.md'], { kept: ['mine.md'] }),
+  );
   assert.equal(
     await readFile(join(lab.root, 'README.md'), 'utf8'),
     '# Before\n',
@@ -10056,8 +10091,9 @@ await test('an undo puts each file of a bring-in back, removes a file that it ad
   assert.equal(await readFile(join(lab.root, 'gone.md'), 'utf8'), 'old\n');
   assert.equal(existsSync(join(lab.root, 'new.md')), false);
   assert.equal(await readFile(join(lab.root, 'mine.md'), 'utf8'), 'person\n');
-  // The files that went back have the direction's start as their base again. The one that stayed keeps its bring-in.
+  // The files that went back have the direction's start as their base again. The one that stayed keeps its bring-in, with a mark.
   assert.deepEqual(bases(lab), [`d-1:mine.md@${commit}`]);
+  assert.match(lab.lab.view()?.state.brought[0]?.keptAt ?? '', /^\d{4}-/);
   assert.deepEqual(
     (lab.lab.view()?.state.undoneBrings ?? []).map((entry) => [
       entry.direction,
@@ -10065,13 +10101,24 @@ await test('an undo puts each file of a bring-in back, removes a file that it ad
       entry.at,
       entry.restored,
       entry.kept,
+      entry.failed,
       entry.more,
     ]),
-    [['d-1', commit, at, ['README.md', 'gone.md', 'new.md'], ['mine.md'], 0]],
+    [
+      [
+        'd-1',
+        commit,
+        at,
+        ['README.md', 'gone.md', 'new.md'],
+        ['mine.md'],
+        [],
+        0,
+      ],
+    ],
   );
   assert.match(
     lab.lab.view()?.posts.at(-1)?.text ?? '',
-    /^The person undid a bring-in of d-1 from [0-9a-f]{7}: 3 files went back to their earlier version: README\.md, gone\.md, new\.md\. This file stayed as it is, because the person changed it: mine\.md\.$/,
+    /^The person undid a bring-in of d-1 from [0-9a-f]{7}: 3 files went back to their earlier version: README\.md, gone\.md, new\.md\. The person changed this file after it came in, so it stays as it is: mine\.md\.$/,
   );
   // A second undo is refused, also after a restart.
   await assert.rejects(
@@ -10094,37 +10141,84 @@ await test('an undo puts each file of a bring-in back, removes a file that it ad
   );
 });
 
-await test('an undo of a later bring-in puts back the version of the earlier one, which has no undo of its own', async (t) => {
+await test('an undo goes back one bring-in at a time: a later one first, then the earlier one, each with its own files', async (t) => {
   const lab = await bringLab(t);
   const folder = folderOf(lab, 'd-1');
   await writeFile(join(folder, 'a.md'), 'one\n');
+  await writeFile(join(folder, 'b.md'), 'b\n');
   const first = await look(lab, 'd-1');
-  await lab.lab.bring('d-1', first, ['a.md']);
+  await lab.lab.bring('d-1', first, ['a.md', 'b.md']);
   const earlier = broughtWith(lab, 'a.md');
   await writeFile(join(folder, 'a.md'), 'two\n');
   const second = await look(lab, 'd-1');
   await lab.lab.bring('d-1', second, ['a.md']);
   const later = broughtWith(lab, 'a.md');
-  assert.deepEqual(lab.lab.view()?.state.brought[0]?.before, earlier);
-  assert.deepEqual(await lab.lab.undoBring('d-1', later.at, second), {
-    restored: ['a.md'],
-    kept: [],
-  });
-  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'one\n');
-  // The earlier bring-in is the file's base again, without a record of what it replaced.
-  const back = lab.lab.view()?.state.brought ?? [];
+  // The later bring-in keeps the earlier one, with its own step before it.
   assert.deepEqual(
-    back.map((entry) => [entry.path, entry.commit, entry.at, entry.before]),
-    [['a.md', first, earlier.at, undefined]],
+    lab.lab.view()?.state.brought.find((entry) => entry.path === 'a.md')
+      ?.before,
+    { ...earlier, before: null, beforeMode: null },
   );
+  assert.deepEqual(
+    await lab.lab.undoBring('d-1', later.at, second),
+    undid(['a.md']),
+  );
+  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'one\n');
+  // The earlier bring-in is the file's base again, with its own record, so it still has an undo for both files.
+  assert.deepEqual(
+    (lab.lab.view()?.state.brought ?? [])
+      .map((entry) => [entry.path, entry.commit, entry.at, entry.before])
+      .sort(),
+    [
+      ['a.md', first, earlier.at, null],
+      ['b.md', first, earlier.at, null],
+    ],
+  );
+  // a.md's entry came back after b.md's, so it goes back second.
+  assert.deepEqual(
+    await lab.lab.undoBring('d-1', earlier.at, first),
+    undid(['b.md', 'a.md']),
+  );
+  assert.equal(existsSync(join(lab.root, 'a.md')), false);
+  assert.equal(existsSync(join(lab.root, 'b.md')), false);
+  assert.deepEqual(bases(lab), []);
+});
+
+await test('an undo names the files that later bring-ins changed, and puts back the others', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a.md'), 'one\n');
+  await writeFile(join(folder, 'b.md'), 'b\n');
+  const first = await look(lab, 'd-1');
+  await lab.lab.bring('d-1', first, ['a.md', 'b.md']);
+  const earlier = broughtWith(lab, 'b.md');
+  // Two later bring-ins change a.md.
+  for (const text of ['two\n', 'three\n']) {
+    await writeFile(join(folder, 'a.md'), text);
+    await lab.lab.bring('d-1', await look(lab, 'd-1'), ['a.md']);
+  }
+  assert.deepEqual(
+    await lab.lab.undoBring('d-1', earlier.at, first),
+    undid(['b.md'], { newer: ['a.md'] }),
+  );
+  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'three\n');
+  assert.equal(existsSync(join(lab.root, 'b.md')), false);
+  assert.match(
+    lab.lab.view()?.posts.at(-1)?.text ?? '',
+    /: 1 file went back to its earlier version: b\.md\. A later bring-in from this direction changed this file, so it stays as it is: a\.md\.$/,
+  );
+  assert.deepEqual(
+    (lab.lab.view()?.state.undoneBrings ?? []).map((entry) => [
+      entry.restored,
+      entry.newer,
+    ]),
+    [[['b.md'], ['a.md']]],
+  );
+  // With only that file left, the undo names it, says what to do, and changes nothing.
   await assert.rejects(
     lab.lab.undoBring('d-1', earlier.at, first),
-    /no record of the earlier version of these files, so this bring-in has no undo/,
+    /^Error: Nothing went back\. A later bring-in from this direction changed this file, so it stays as it is: a\.md\. Undo that bring-in first to put it back too\.$/,
   );
-  // The second version can come in again over the first.
-  const third = await look(lab, 'd-1');
-  assert.deepEqual(await lab.lab.bring('d-1', third, ['a.md']), ['a.md']);
-  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'two\n');
 });
 
 await test('an undo puts nothing back when the person changed every file, and records nothing', async (t) => {
@@ -10137,7 +10231,7 @@ await test('an undo puts nothing back when the person changed every file, and re
   const { at } = broughtWith(lab, 'x.md');
   await assert.rejects(
     lab.lab.undoBring('d-1', at, commit),
-    /^Error: Nothing went back\. You changed this file after it came in: x\.md\.$/,
+    /^Error: Nothing went back\. You changed this file after it came in, so it stays as it is: x\.md\.$/,
   );
   assert.equal(await readFile(join(lab.root, 'x.md'), 'utf8'), 'person\n');
   assert.deepEqual(lab.lab.view()?.state.undoneBrings, []);
@@ -10153,15 +10247,185 @@ await test('an undo puts nothing back when the person changed every file, and re
   );
 });
 
-await test('Start over while a bring-in checks its files ends it with a plain message, and nothing comes in', async (t) => {
+await test('a second undo of a bring-in stays refused after many other undos', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a.md'), 'a\n');
+  await writeFile(join(folder, 'b.md'), 'b\n');
+  const commit = await look(lab, 'd-1');
+  await lab.lab.bring('d-1', commit, ['a.md', 'b.md']);
+  await writeFile(join(lab.root, 'b.md'), 'person\n');
+  const { at } = broughtWith(lab, 'b.md');
+  const first = await lab.lab.undoBring('d-1', at, commit);
+  assert.deepEqual([first.restored, first.kept], [['a.md'], ['b.md']]);
+  // 25 later undos push this one out of the lab's list of undos.
+  const path = join(lab.root, '.verifold', 'lab.json');
+  await lab.restart(async () => {
+    const value = JSON.parse(await readFile(path, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    const others = Array.from({ length: 25 }, (_, index) => ({
+      direction: 'd-1',
+      commit: 'c'.repeat(40),
+      at: new Date(Date.parse(at) + (index + 1) * 1000).toISOString(),
+      undoneAt: new Date().toISOString(),
+      restored: [`other-${index}.md`],
+      kept: [],
+      failed: [],
+      more: 0,
+    }));
+    await writeFile(
+      path,
+      `${JSON.stringify(
+        {
+          ...value,
+          undoneBrings: [
+            ...((value.undoneBrings as unknown[] | undefined) ?? []),
+            ...others,
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  });
+  assert.equal(
+    (lab.lab.view()?.state.undoneBrings ?? []).some((entry) => entry.at === at),
+    false,
+  );
+  await assert.rejects(
+    lab.lab.undoBring('d-1', at, commit),
+    /^Error: You undid this bring-in already\.$/,
+  );
+  assert.equal(await readFile(join(lab.root, 'b.md'), 'utf8'), 'person\n');
+});
+
+await test('an undo gives a file back its mode, and a file and a folder trade places back', async (t) => {
+  const lab = await bringLab(t, ['Alpha'], async (root) => {
+    await writeFile(join(root, 'run.sh'), 'echo start\n');
+    await writeFile(join(root, 'docs'), 'a file\n');
+    await mkdir(join(root, 'lib'));
+    await writeFile(join(root, 'lib', 'x.md'), 'x\n');
+  });
+  // The person made run.sh executable without a commit.
+  await chmod(join(lab.root, 'run.sh'), 0o755);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'run.sh'), 'echo agent\n');
+  await chmod(join(folder, 'run.sh'), 0o644);
+  // docs turns from a file into a folder, and lib from a folder into a file.
+  await rm(join(folder, 'docs'));
+  await mkdir(join(folder, 'docs'));
+  await writeFile(join(folder, 'docs', 'a.md'), 'a\n');
+  await rm(join(folder, 'lib'), { recursive: true });
+  await writeFile(join(folder, 'lib'), 'now a file\n');
+  const commit = await look(lab, 'd-1');
+  const files = ['docs', 'docs/a.md', 'lib', 'lib/x.md', 'run.sh'];
+  assert.deepEqual(await lab.lab.bring('d-1', commit, files), files);
+  assert.equal(await readFile(join(lab.root, 'docs', 'a.md'), 'utf8'), 'a\n');
+  assert.equal(await readFile(join(lab.root, 'lib'), 'utf8'), 'now a file\n');
+  assert.equal((await stat(join(lab.root, 'run.sh'))).mode & 0o111, 0);
+  const result = await undoWith(lab, 'run.sh');
+  assert.deepEqual(
+    { ...result, restored: [...result.restored].sort() },
+    undid(files),
+  );
+  assert.equal(await readFile(join(lab.root, 'docs'), 'utf8'), 'a file\n');
+  assert.equal(await readFile(join(lab.root, 'lib', 'x.md'), 'utf8'), 'x\n');
+  assert.equal(
+    await readFile(join(lab.root, 'run.sh'), 'utf8'),
+    'echo start\n',
+  );
+  assert.notEqual((await stat(join(lab.root, 'run.sh'))).mode & 0o100, 0);
+});
+
+await test('an undo names a file that Verifold cannot read, puts back the others, and a second undo tries it again', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await writeFile(join(folder, 'a.md'), 'a\n');
+  await writeFile(join(folder, 'b.md'), 'b\n');
+  const commit = await look(lab, 'd-1');
+  await lab.lab.bring('d-1', commit, ['a.md', 'b.md']);
+  const locked = join(lab.root, 'a.md');
+  await chmod(locked, 0o000);
+  t.after(() => chmod(locked, 0o644).catch(() => {}));
+  const { at } = broughtWith(lab, 'a.md');
+  assert.deepEqual(
+    await lab.lab.undoBring('d-1', at, commit),
+    undid(['b.md'], { unread: ['a.md'] }),
+  );
+  assert.match(
+    lab.lab.view()?.posts.at(-1)?.text ?? '',
+    /Verifold could not read this file, so it stays as it is: a\.md\.$/,
+  );
+  assert.deepEqual(
+    (lab.lab.view()?.state.undoneBrings ?? []).map((entry) => entry.failed),
+    [['a.md']],
+  );
+  await chmod(locked, 0o644);
+  assert.deepEqual(await lab.lab.undoBring('d-1', at, commit), undid(['a.md']));
+  assert.equal(existsSync(locked), false);
+});
+
+await test('an undo whose copy fails in part records the files that failed, and another undo puts them back', async (t) => {
+  const lab = await bringLab(t);
+  const folder = folderOf(lab, 'd-1');
+  await mkdir(join(folder, 'a'));
+  await mkdir(join(folder, 'b'));
+  await writeFile(join(folder, 'a', 'x.md'), 'x\n');
+  await writeFile(join(folder, 'b', 'y.md'), 'y\n');
+  const commit = await look(lab, 'd-1');
+  await lab.lab.bring('d-1', commit, ['a/x.md', 'b/y.md']);
+  // Nothing can leave the folder b, so its file stays.
+  const closed = join(lab.root, 'b');
+  await chmod(closed, 0o555);
+  t.after(() => chmod(closed, 0o755).catch(() => {}));
+  const { at } = broughtWith(lab, 'b/y.md');
+  await assert.rejects(
+    lab.lab.undoBring('d-1', at, commit),
+    /^Error: Only 1 of 2 files went back: a\/x\.md\. The copy failed: .+ Undo the bring-in again to try the others\.$/,
+  );
+  assert.equal(existsSync(join(lab.root, 'a', 'x.md')), false);
+  assert.equal(await readFile(join(closed, 'y.md'), 'utf8'), 'y\n');
+  assert.deepEqual(
+    (lab.lab.view()?.state.undoneBrings ?? []).map((entry) => [
+      entry.restored,
+      entry.kept,
+      entry.failed,
+    ]),
+    [[['a/x.md'], [], ['b/y.md']]],
+  );
+  assert.equal(lab.lab.view()?.state.bringing, null);
+  await chmod(closed, 0o755);
+  assert.deepEqual(
+    await lab.lab.undoBring('d-1', at, commit),
+    undid(['b/y.md']),
+  );
+  assert.equal(existsSync(join(closed, 'y.md')), false);
+});
+
+await test('Start over while a bring-in or an undo waits or checks its files ends it with a plain message, and nothing changes', async (t) => {
   const lab = await bringLab(t);
   const folder = folderOf(lab, 'd-1');
   await writeFile(join(folder, 'a.md'), 'a\n');
   const commit = await look(lab, 'd-1');
-  const bringing = lab.lab.bring('d-1', commit, ['a.md']);
-  // The bring-in reads its files outside the lab's queue now, and Start over begins meanwhile.
+  // A bring-in in the lab's queue when Start over begins.
+  const waiting = lab.lab.bring('d-1', commit, ['a.md']);
+  const first = lab.lab.suspend();
+  await assert.rejects(waiting, (error: Error) => {
+    assert.equal(
+      error.message,
+      'Nothing came in: Start over stopped the bring-in.',
+    );
+    return true;
+  });
+  await first;
+  await lab.lab.reload();
+  // A bring-in that reads its files outside the lab's queue when Start over begins.
+  const again = await look(lab, 'd-1');
+  const bringing = lab.lab.bring('d-1', again, ['a.md']);
   await new Promise((resolve) => setImmediate(resolve));
-  const suspending = lab.lab.suspend();
+  const second = lab.lab.suspend();
   await assert.rejects(bringing, (error: Error) => {
     assert.equal(
       error.message,
@@ -10169,11 +10433,27 @@ await test('Start over while a bring-in checks its files ends it with a plain me
     );
     return true;
   });
-  await suspending;
+  await second;
   await lab.lab.reload();
   assert.equal(existsSync(join(lab.root, 'a.md')), false);
   assert.equal(lab.lab.view()?.state.bringing, null);
   assert.deepEqual(bases(lab), []);
+  // An undo in the lab's queue when Start over begins.
+  const third = await look(lab, 'd-1');
+  await lab.lab.bring('d-1', third, ['a.md']);
+  const undoing = undoWith(lab, 'a.md');
+  const suspending = lab.lab.suspend();
+  await assert.rejects(undoing, (error: Error) => {
+    assert.equal(
+      error.message,
+      'Nothing went back: Start over stopped the undo.',
+    );
+    return true;
+  });
+  await suspending;
+  await lab.lab.reload();
+  assert.equal(await readFile(join(lab.root, 'a.md'), 'utf8'), 'a\n');
+  assert.deepEqual(lab.lab.view()?.state.undoneBrings, []);
 });
 
 await test('an undo that Verifold stopped in the middle finishes at the next start', async (t) => {
@@ -10204,7 +10484,12 @@ await test('an undo that Verifold stopped in the middle finishes at the next sta
             files: ['a.md'],
             at: new Date().toISOString(),
             phase: 'copying',
-            undo: { at, to: [{ path: 'a.md', commit: start }], kept: [] },
+            undo: {
+              at,
+              to: [{ path: 'a.md', commit: start }],
+              kept: [],
+              unread: [],
+            },
           },
         },
         null,
@@ -10866,9 +11151,11 @@ await test("the app's API brings files in and signs off with the desk's checks, 
       entry.commit,
       entry.restored,
       entry.kept,
+      entry.newer,
+      entry.failed,
       entry.more,
     ]),
-    [[group?.at, commit, ['a.md'], [], 0]],
+    [[group?.at, commit, ['a.md'], [], [], [], 0]],
   );
   const withUndo = await json<Snapshot>(get('/snapshot'));
   const d1 = withUndo.lab?.directions.find((entry) => entry.id === 'd-1');

@@ -920,16 +920,19 @@ export interface BringGroup {
   readonly more: number;
   /**
    * The person can undo it (`lab-bring-undo`): Verifold knows the earlier
-   * version of each of its files, and it was not undone. Added after
-   * version 1.
+   * version of each of its files that an undo did not leave as it is.
+   * Added after version 1.
    */
   readonly undoable?: boolean;
+  /** When the person last undid it, or null. Added after version 1. */
+  readonly undoneAt?: string | null;
 }
 
 /**
- * A bring-in that the person undid: when it came in and at which commit,
- * when they undid it, the files that went back, and the files that stayed
- * as they are. Added after version 1.
+ * An undo of a bring-in: when the bring-in came in and at which commit,
+ * when the person undid it, the files that went back, the files that stayed
+ * because the person changed them or a later bring-in changed them, and the
+ * files that Verifold could not put back. Added after version 1.
  */
 export interface UndoneGroup {
   readonly at: string;
@@ -937,7 +940,11 @@ export interface UndoneGroup {
   readonly undoneAt: string;
   readonly restored: readonly string[];
   readonly kept: readonly string[];
-  /** Paths that the two lists leave out. */
+  /** An undo of the later bring-in first lets these go back too. */
+  readonly newer: readonly string[];
+  /** Another undo of the bring-in tries these again. */
+  readonly failed: readonly string[];
+  /** Paths that the lists leave out. */
   readonly more: number;
 }
 

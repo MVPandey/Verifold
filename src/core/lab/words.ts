@@ -12,7 +12,9 @@ import {
   limits as workspaceLimits,
 } from '../workspaces.ts';
 import {
+  type Bringing,
   type Brought,
+  type BroughtStep,
   type Call,
   type Direction,
   type Evidence,
@@ -195,13 +197,33 @@ export const undoStoppedText =
   'Nothing went back: Start over stopped the undo.';
 
 /**
+ * A bring-in as the step before a newer one: without its direction, path,
+ * and mark, and with at most `depth` steps before it. Past that depth a step
+ * has no record before it, so it has no undo.
+ */
+function stepOf(entry: BroughtStep, depth: number): BroughtStep {
+  const { commit, at, before, beforeMode } = entry;
+  return {
+    commit,
+    at,
+    ...(before === null
+      ? { before: null }
+      : before && depth > 0
+        ? { before: stepOf(before, depth - 1) }
+        : {}),
+    ...(beforeMode === undefined ? {} : { beforeMode }),
+  };
+}
+
+/**
  * The bring-ins with the files of `record` that came in: each file of a
- * direction keeps only its newest base, and the bring-in that it replaced,
- * for an undo. Without files, the same list.
+ * direction keeps only its newest bring-in, with the bring-ins before it for
+ * an undo, and the mode that the project file had before the copy. Without
+ * files, the same list.
  */
 export function withBrought(
   list: readonly Brought[],
-  record: { readonly direction: string; readonly commit: string },
+  record: Pick<Bringing, 'direction' | 'commit' | 'modes'>,
   done: readonly string[],
 ): readonly Brought[] {
   if (!done.length) return list;
@@ -210,28 +232,35 @@ export function withBrought(
   const earlier = new Map(
     list.flatMap((entry) =>
       entry.direction === record.direction && now.has(entry.path)
-        ? [[entry.path, { commit: entry.commit, at: entry.at }] as const]
+        ? [[entry.path, stepOf(entry, labLimits.bringSteps - 1)] as const]
         : [],
     ),
+  );
+  const modes = new Map(
+    (record.modes ?? []).map((entry) => [entry.path, entry.mode] as const),
   );
   return [
     ...list.filter(
       (entry) => entry.direction !== record.direction || !now.has(entry.path),
     ),
-    ...done.map((path) => ({
-      direction: record.direction,
-      path,
-      commit: record.commit,
-      at,
-      before: earlier.get(path) ?? null,
-    })),
+    ...done.map((path) => {
+      const mode = modes.get(path);
+      return {
+        direction: record.direction,
+        path,
+        commit: record.commit,
+        at,
+        before: earlier.get(path) ?? null,
+        ...(mode === undefined ? {} : { beforeMode: mode }),
+      };
+    }),
   ];
 }
 
 /**
  * The bring-ins after an undo of a direction's files: each file that went
- * back has its earlier bring-in as its base again, or none when it had the
- * direction's start content. That earlier bring-in has no undo of its own.
+ * back has the bring-in before it again, with that bring-in's own steps and
+ * mode, or none when it had the direction's start content.
  */
 export function undoneBrought(
   list: readonly Brought[],
@@ -244,16 +273,7 @@ export function undoneBrought(
       (entry) => entry.direction !== direction || !back.has(entry.path),
     ),
     ...restored.flatMap((entry) =>
-      entry.before
-        ? [
-            {
-              direction,
-              path: entry.path,
-              commit: entry.before.commit,
-              at: entry.before.at,
-            },
-          ]
-        : [],
+      entry.before ? [{ direction, path: entry.path, ...entry.before }] : [],
     ),
   ];
 }
@@ -548,16 +568,16 @@ function blobId(content: Buffer, like: string): string {
 
 /**
  * A project file is this file of a commit: both missing, or the same Git
- * mode and blob ID. A project path that is no file matches nothing.
+ * mode and blob ID. A project path that is no file matches nothing. The
+ * entry's own ID says which hash the repository uses.
  */
 export function sameFile(
   now: { readonly content: Buffer; readonly mode: string } | null | undefined,
   entry: { readonly mode: string; readonly id: string } | undefined,
-  like: string,
 ): boolean {
   if (now === undefined) return false;
   if (now === null || !entry) return now === null && !entry;
-  return now.mode === entry.mode && blobId(now.content, like) === entry.id;
+  return now.mode === entry.mode && blobId(now.content, entry.id) === entry.id;
 }
 
 /** File names for a message: the first 10, then how many more. */
