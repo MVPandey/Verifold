@@ -1450,14 +1450,17 @@ await test('the terminal feed leaves harness tool events to the desk', () => {
 
 await test('the terminal feed cuts a long agent line without splitting a character', () => {
   const at = '2026-10-02T12:00:00.000Z';
-  const line = feedLine({
-    at,
-    kind: 'agent',
-    text: `${'a'.repeat(599)}😀${'b'.repeat(50)}`,
-  });
-  const text = line?.text ?? '';
-  assert.ok(text.endsWith('…'));
-  assert.doesNotMatch(text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  // An emoji at 599 spans a cut after 600 characters. At 598, the first half of the emoji ends the 599 kept characters, so the cut drops that half.
+  for (const before of [599, 598]) {
+    const line = feedLine({
+      at,
+      kind: 'agent',
+      text: `${'a'.repeat(before)}😀${'b'.repeat(50)}`,
+    });
+    const text = line?.text ?? '';
+    assert.ok(text.endsWith('…'));
+    assert.doesNotMatch(text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  }
 });
 
 await test('the terminal prints the whole request: why it asks, and the change in a margin', () => {
