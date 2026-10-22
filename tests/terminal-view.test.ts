@@ -37,7 +37,11 @@ import {
   serveControl,
   type FromOwner,
 } from '../src/server/control.ts';
-import { ApiFeed, type ApiReader } from '../src/server/api.ts';
+import {
+  ApiFeed,
+  type ApiReader,
+  type SnapshotBody,
+} from '../src/server/api.ts';
 import { startDesk } from '../src/server/desk.ts';
 
 const wait = (ms: number): Promise<void> =>
@@ -390,8 +394,10 @@ await test('the needs-you line, a lab without a call, and Enter on an empty line
 });
 
 await test('plain lines print one line per change, and no live step of an agent', () => {
+  // The states of the lines so far, as a terminal keeps them.
+  const printed = new Map<string, string>();
   const first = screenOf();
-  assert.deepEqual(plainLines(null, first, now), [
+  assert.deepEqual(plainLines(null, first, now, printed), [
     'The CoT names what drives the answer (claude-1): Holds up · Cue named 64% vs 41% · Codex reran it',
     'The CoT matches what probes read inside (claude-2): Disputed · Gap 34% smaller · waiting for you',
     'The answer follows what the CoT says (codex-1): Not settled',
@@ -408,7 +414,7 @@ await test('plain lines print one line per change, and no live step of an agent'
       ),
     }),
   );
-  assert.deepEqual(plainLines(first, busy, now), []);
+  assert.deepEqual(plainLines(first, busy, now, printed), []);
   const settled = screenOf(
     story({
       needsYou: [],
@@ -423,9 +429,111 @@ await test('plain lines print one line per change, and no live step of an agent'
       ),
     }),
   );
-  assert.deepEqual(plainLines(busy, settled, now), [
+  assert.deepEqual(plainLines(busy, settled, now, printed), [
     'The answer follows what the CoT says (codex-1): Ruled out',
   ]);
+});
+
+await test('in a lab of more than 24 directions, a direction that comes back to the screen unchanged prints no line again', () => {
+  // 30 directions that hold up, each with its own agent. The screen keeps 24.
+  const directions = Array.from({ length: 30 }, (_, index) =>
+    direction(`d-${index + 1}`, `Direction ${index + 1}`, `a-${index + 1}`, {
+      verdict: 'holds-up',
+      evidence: { text: `Result ${index + 1}`, post: 'p-1', run: null },
+    }),
+  );
+  const screen = (
+    working: string | null,
+    verdict: Direction['verdict'] = 'holds-up',
+  ): LabScreen =>
+    screenOf(
+      story({
+        needsYou: [],
+        directions: directions.map((entry) =>
+          entry.id === 'd-24' ? { ...entry, verdict } : entry,
+        ),
+        agents: directions.map((entry, index) =>
+          agent(
+            entry.agent,
+            `claude-${index + 1}`,
+            'claude',
+            entry.agent === working
+              ? { state: 'working', text: 'Running eval.py', since: ago(1) }
+              : { state: 'idle', text: 'Between turns', since: ago(20) },
+          ),
+        ),
+      }),
+    );
+  const printed: string[] = [];
+  const view = new LabTerminal({
+    streams: fakeTerminal(),
+    color: false,
+    draws: false,
+    cancel: () => {},
+    print: (text) => printed.push(text),
+    now: () => now,
+  });
+  view.show(screen(null), true);
+  assert.equal(printed.length, 24);
+  assert.equal(printed[23], 'Direction 24 (claude-24): Holds up · Result 24');
+  // The agent of d-30 works, so d-30 ranks first and d-24 leaves the screen.
+  const busy = screen('a-30');
+  assert.ok(!busy.directions.some((entry) => entry.id === 'd-24'));
+  view.show(busy, true);
+  assert.deepEqual(printed.slice(24), ['Direction 30 (claude-30): Holds up']);
+  // The turn ends. d-24 comes back with the same verdict.
+  view.show(screen(null), true);
+  assert.equal(printed.length, 25);
+  // A verdict that changed while the direction was off the screen prints when it comes back.
+  view.show(screen('a-30', 'ruled-out'), true);
+  view.show(screen(null, 'ruled-out'), true);
+  assert.deepEqual(printed.slice(25), [
+    'Direction 24 (claude-24): Ruled out · Result 24',
+  ]);
+});
+
+await test("a new lab prints its directions, though they have the last lab's IDs and verdicts, and so does a new desk", () => {
+  // Each lab starts again at d-1.
+  const lab = (startedAt: string, title: string): LabScreen =>
+    screenOf(
+      story({
+        startedAt,
+        needsYou: [],
+        directions: [direction('d-1', title, 'a-1')],
+        agents: [
+          agent('a-1', 'claude-1', 'claude', {
+            state: 'idle',
+            text: 'Between turns',
+            since: ago(20),
+          }),
+        ],
+      }),
+    );
+  const printed: string[] = [];
+  const view = new LabTerminal({
+    streams: fakeTerminal(),
+    color: false,
+    draws: false,
+    cancel: () => {},
+    print: (text) => printed.push(text),
+    now: () => now,
+  });
+  view.show(lab(ago(600), 'Lab A asks this'), true);
+  // Lab B starts within one poll, so no screen without a lab comes between.
+  const second = lab(ago(1), 'Lab B asks that');
+  view.show(second, true);
+  view.show(second, true);
+  const line = 'Lab B asks that (claude-1): Not settled · Between turns';
+  assert.deepEqual(printed, [
+    'Lab A asks this (claude-1): Not settled · Between turns',
+    line,
+  ]);
+  // The screens of a new desk are not compared with the last desk's.
+  view.serve((show) => {
+    show(second);
+    return () => {};
+  });
+  assert.deepEqual(printed.slice(2), [line]);
 });
 
 await test('a screen is a small part of the snapshot, and a terminal reads only a valid one', () => {
@@ -446,8 +554,15 @@ await test('a screen is a small part of the snapshot, and a terminal reads only 
   assert.equal(screen.more, 100 - screenLimits.directions);
   assert.deepEqual(parseLabScreen(JSON.parse(JSON.stringify(screen))), screen);
   const good = screenOf();
+  assert.equal(good.started, story().lab?.startedAt);
+  // The owner of an earlier version sends no start of the lab. Its screen still reads.
+  const earlier: unknown = JSON.parse(
+    JSON.stringify({ ...good, started: undefined }),
+  );
+  assert.deepEqual(parseLabScreen(earlier), earlier);
   for (const bad of [
     { ...good, origin: 'http://evil.example' },
+    { ...good, started: 'not a time' },
     { ...good, directions: Array(25).fill(good.directions[0]) },
     { ...good, call: { id: 'x', question: 'q', usd: 1 } },
     { ...good, money: { ...good.money, gpuUsd: -1 } },
@@ -491,15 +606,18 @@ await test('the control channel carries screens to terminals and counts them', a
   assert.deepEqual(shown, [{ screen }, { screen: null }]);
 });
 
+/** What a reader builds for a project without a lab. */
+function body(project: string): Promise<SnapshotBody> {
+  const data = { project, lab: null, trimmed: false };
+  return Promise.resolve({ data, json: JSON.stringify(data) });
+}
+
 await test('the feed gives a watcher each new snapshot, and builds none while nobody wants one', async () => {
   let version = 1;
   let wanted = false;
   const reader = {
     signal: () => Promise.resolve([version]),
-    snapshot: () =>
-      Promise.resolve(
-        JSON.stringify({ project: `v${version}`, lab: null, trimmed: false }),
-      ),
+    build: () => body(`v${version}`),
   } as unknown as ApiReader;
   const feed = new ApiFeed(reader, { pollMs: 10, heartbeatMs: 1000 });
   const seen: number[] = [];
@@ -659,7 +777,10 @@ await test('a narrow terminal, NO_COLOR, and a project without a lab get plain l
   assert.equal(view.viewing, false);
   // The lab as it is, line by line, then a line for each change.
   assert.match(printed[0] ?? '', /too small for the live view/);
-  assert.deepEqual(printed.slice(1), plainLines(null, screenOf(), now));
+  assert.deepEqual(
+    printed.slice(1),
+    plainLines(null, screenOf(), now, new Map()),
+  );
   // Enter on an empty line still opens the call.
   input.write('\n');
   await until(() => lines.length === 2);
@@ -871,13 +992,16 @@ await test('calls that the smallest snapshot only counts still show, and Enter o
   );
   assert.equal(enterLine(hidden), '/open');
   const shown = screenOf();
-  assert.deepEqual(plainLines(shown, hidden, now), [
+  // The terminal printed the lab with its call before.
+  const printed = new Map<string, string>();
+  plainLines(null, shown, now, printed);
+  assert.deepEqual(plainLines(shown, hidden, now, printed), [
     '3 calls need you. Press Enter on an empty line to open the lab.',
   ]);
   // The same count says nothing again. A new count says it.
-  assert.deepEqual(plainLines(hidden, hidden, now), []);
+  assert.deepEqual(plainLines(hidden, hidden, now, printed), []);
   const one = screenOf(story({ needsYou: [], omitted: { needsYou: 1 } }));
-  assert.deepEqual(plainLines(hidden, one, now), [
+  assert.deepEqual(plainLines(hidden, one, now, printed), [
     '1 call needs you. Press Enter on an empty line to open the lab.',
   ]);
 });
@@ -953,10 +1077,7 @@ await test('a terminal that its own desk serves stops its watch when it closes, 
       reads++;
       return Promise.resolve([reads]);
     },
-    snapshot: () =>
-      Promise.resolve(
-        JSON.stringify({ project: 'p', lab: null, trimmed: false }),
-      ),
+    build: () => body('p'),
   } as unknown as ApiReader;
   const feed = new ApiFeed(reader, { pollMs: 10, heartbeatMs: 1000 });
   const { input, output } = fakeTerminal();
