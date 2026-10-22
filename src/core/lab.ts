@@ -2104,14 +2104,15 @@ export class Lab {
     this.closing = true;
     clearInterval(this.ticker);
     this.ticker = undefined;
-    // A check that runs ends its session and waits for the next owner, as for a pause. Verifold stopped it, not its checker, so the stop does not count.
-    await this.serial(() => this.requeueChecks());
+    // No check ends at its time limit while Verifold stops.
     for (const run of this.checkers.values()) clearTimeout(run.timer);
     // A turn that closed its direction ends now, and its work is committed before Verifold stops.
     for (const agent of this.agents.values()) this.finishClosed(agent.id);
     for (const run of this.runtimes.values()) clearTimeout(run.next);
     await Promise.all([...this.loops.values()].map((loop) => loop.close()));
     await this.settle();
+    // A check that this process runs ends its session and waits for the next owner, as for a pause. Verifold stopped it, not its checker, so the stop does not count.
+    await this.serial(() => this.requeueChecks());
     // Runs stop as interrupted. Their agents hear it after the next start.
     await this.ledger.close();
     await this.queue;
@@ -5654,11 +5655,15 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     run.turning = true;
     run.usedUp = false;
     run.note = null;
-    run.turns = 0;
+    // A check that Verifold stopped before gets only the minutes and turns that it has left.
+    run.turns = check.used?.turns ?? 0;
     run.answers.clear();
     run.denied = denied.checks;
     run.runDeny = denied.run;
-    run.endsAt = Date.now() + checkLimits.minutes * this.timing.minuteMs;
+    run.endsAt =
+      Date.now() +
+      Math.max(0, checkLimits.minutes - (check.used?.minutes ?? 0)) *
+        this.timing.minuteMs;
     clearTimeout(run.timer);
     await this.changeCheck(id, (entry) => ({
       ...entry,
@@ -5741,7 +5746,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   /**
    * After a load, in the lab's queue: a check that still runs ran when the
    * earlier owner ended without closing the lab, so it counts as stopped. A
-   * close queues every check again first.
+   * close queues the checks of its own process again first.
    */
   private async recoverChecks(): Promise<void> {
     for (const check of this.state?.checks ?? [])
@@ -5867,7 +5872,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
    * Start over, a close of the lab, or a used-up usage window stopped it, or
    * (`crashed`, from `stopped`) its process, its start, or an owner that
    * ended without closing the lab did. Its session ends, and a fresh one
-   * starts later with a list of its earlier runs.
+   * starts later with a list of its earlier runs. After a stop that does not
+   * count, the fresh one gets only the minutes and turns that are left.
    */
   private async requeue(check: Check, crashed: boolean): Promise<void> {
     const run = this.ck(check.id);
@@ -5875,19 +5881,46 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     run.turning = false;
     run.note = null;
     run.denied = new Set();
-    await this.changeCheck(check.id, (entry) => ({
-      ...entry,
-      state: 'queued',
-      session: null,
-      restarts: entry.restarts + (crashed ? 1 : 0),
-    }));
-    this.endCheckSession(check);
+    try {
+      await this.changeCheck(check.id, ({ used, ...entry }) => {
+        // A stop that does not count keeps what the check used, so its next session gets no more time or turns.
+        const kept = crashed
+          ? null
+          : run.endsAt
+            ? {
+                minutes:
+                  checkLimits.minutes -
+                  Math.max(0, run.endsAt - Date.now()) / this.timing.minuteMs,
+                turns: run.turns,
+              }
+            : (used ?? null);
+        return {
+          ...entry,
+          state: 'queued',
+          session: null,
+          restarts: entry.restarts + (crashed ? 1 : 0),
+          ...(kept ? { used: kept } : {}),
+        };
+      });
+    } finally {
+      // The session ends also when the save fails, so no checker runs on for a check that waits.
+      this.endCheckSession(check);
+    }
   }
 
-  /** Every check that runs waits again, in the lab's queue: a pause or Verifold's own stop. No stop counts. */
+  /**
+   * The checks whose sessions run in this process wait again, in the lab's
+   * queue: a pause or Verifold's own stop. No stop counts. A check that an
+   * owner left running when it ended without closing the lab stays as it
+   * is, so that `recoverChecks` counts it.
+   */
   private async requeueChecks(): Promise<void> {
     for (const check of this.state?.checks ?? [])
-      if (check.state === 'running')
+      if (
+        check.state === 'running' &&
+        check.session &&
+        this.options.sessions.view(check.session)?.live
+      )
         await this.requeue(check, false).catch((error: unknown) =>
           this.options.progress?.(
             `Verifold could not queue ${check.id} again: ${error instanceof Error ? error.message : 'unknown error'}`,

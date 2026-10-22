@@ -343,8 +343,17 @@ export interface Check {
   readonly queuedAt: string;
   readonly startedAt: string | null;
   readonly endedAt: string | null;
-  /** Starts after Verifold or the checker's process stopped. After one, the next stop fails it. */
+  /**
+   * Starts after the checker's process stopped by itself, a start failed, or
+   * an owner ended without closing the lab. After one, the next stop fails it.
+   */
   readonly restarts: number;
+  /**
+   * The minutes and turns that it used before Verifold last stopped it, as a
+   * pause or a close does. Its next session gets only the rest. A restart
+   * after a stop that counts starts afresh.
+   */
+  readonly used?: { readonly minutes: number; readonly turns: number };
   readonly session: string | null;
   /** Each start gets a new one. A tool call of an older start changes nothing. */
   readonly generation: string;
@@ -777,6 +786,7 @@ function parseCheck(value: unknown): Check | null {
   }
   const count = (item: unknown): number =>
     Number.isSafeInteger(item) && (item as number) >= 0 ? (item as number) : 0;
+  const used = object(entry.used);
   return {
     id: entry.id,
     claim: entry.claim,
@@ -809,6 +819,12 @@ function parseCheck(value: unknown): Check | null {
     startedAt: recordTime(entry.startedAt),
     endedAt: recordTime(entry.endedAt),
     restarts: count(entry.restarts),
+    ...(used &&
+    typeof used.minutes === 'number' &&
+    Number.isFinite(used.minutes) &&
+    used.minutes >= 0
+      ? { used: { minutes: used.minutes, turns: count(used.turns) } }
+      : {}),
     session:
       typeof entry.session === 'string' &&
       /^\d{8}T\d{9}Z-[a-f0-9]{8}$/.test(entry.session)

@@ -296,7 +296,7 @@ export const checkLimits = {
   atOnce: 1,
   wider: 2,
   widerAt: 5,
-  /** A check that Verifold or its process stopped starts again once, then fails. */
+  /** A check whose checker process stopped by itself, whose start or folder failed, or whose owner ended without closing the lab starts again once, then fails. */
   restarts: 1,
   /**
    * Check numbers after the newest that a checker's harness denies before
