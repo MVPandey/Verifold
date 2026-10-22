@@ -42,11 +42,14 @@ function frame(opcode: number, payload: Buffer): Buffer {
 /**
  * Connect and finish the WebSocket handshake. `onMessage` gets each text
  * message. `onClose` runs once, when either side closes or the socket fails.
+ * A failed connection keeps the socket error, with its code. With
+ * `timeoutMs`, a handshake that takes longer fails and its socket goes.
  */
 export function connectUnixWebSocket(
   path: string,
   onMessage: (text: string) => void,
   onClose: (reason: string) => void,
+  timeoutMs?: number,
 ): Promise<UnixWebSocket> {
   return new Promise((resolve, reject) => {
     const socket: Socket = createConnection(path);
@@ -56,13 +59,18 @@ export function connectUnixWebSocket(
     let buffer = Buffer.alloc(0);
     let parts: Buffer[] = [];
     let partSize = 0;
-    const finish = (reason: string): void => {
+    const finish = (reason: string, error?: Error): void => {
       if (closed) return;
       closed = true;
+      clearTimeout(late);
       socket.destroy();
       if (open) onClose(reason);
-      else reject(new Error(reason));
+      else reject(error ?? new Error(reason));
     };
+    const late =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => finish('handshake timed out'), timeoutMs);
     const client: UnixWebSocket = {
       send(text) {
         if (!closed) socket.write(frame(0x1, Buffer.from(text, 'utf8')));
@@ -142,12 +150,13 @@ export function connectUnixWebSocket(
         )
           return finish(`handshake failed: ${head.split('\r\n')[0] ?? ''}`);
         open = true;
+        clearTimeout(late);
         buffer = buffer.subarray(end + 4);
         resolve(client);
       }
       read();
     });
-    socket.on('error', (error) => finish(error.message));
+    socket.on('error', (error) => finish(error.message, error));
     socket.on('close', () => finish('socket closed'));
   });
 }
@@ -156,9 +165,11 @@ export function connectUnixWebSocket(
  * Connect to a server that is still starting, such as a new Codex
  * app-server. Its socket file can appear a moment before the server accepts
  * connections, and on a busy computer that moment is longer. So a missing
- * file or a failed connection is tried again every 50 ms while `alive()`
- * holds, until `deadline` (a `Date.now()` time). Then the last failure ends
- * the wait.
+ * file, a missing socket (ENOENT) or a refused connection (ECONNREFUSED) is
+ * tried again every 50 ms while `alive()` holds, until `deadline` (a
+ * `Date.now()` time). Any other failure, such as a refused handshake or a
+ * file that is no socket, ends the wait at once. Each try has the time left,
+ * so a server that never answers cannot hold the wait past the deadline.
  */
 export async function connectWhenListening(
   path: string,
@@ -170,8 +181,15 @@ export async function connectWhenListening(
     let failure: unknown = new Error(`No socket at ${path}.`);
     if (existsSync(path))
       try {
-        return await connectUnixWebSocket(path, onMessage, onClose);
+        return await connectUnixWebSocket(
+          path,
+          onMessage,
+          onClose,
+          Math.max(1, options.deadline - Date.now()),
+        );
       } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT' && code !== 'ECONNREFUSED') throw error;
         failure = error;
       }
     if (!options.alive() || Date.now() + 50 > options.deadline) throw failure;

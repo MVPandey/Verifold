@@ -2813,6 +2813,13 @@ await test('a dismiss clears only the background failures that the page names, a
 });
 
 await test("the settings page reads the project's pods and settings, and changes them through API v1", async (t) => {
+  // Hooks run in order: this one, which closes the desk, comes before fakePod's removal of its folder.
+  const owner = new AbortController();
+  let closed: Promise<unknown> = Promise.resolve();
+  t.after(async () => {
+    owner.abort();
+    await closed;
+  });
   const fake = await fakePod(t);
   const root = await realpath(fake.root);
   await changeWorkspace(root, () => ({
@@ -2834,7 +2841,6 @@ await test("the settings page reads the project's pods and settings, and changes
     view: () => null,
     views: () => [],
   } as unknown as SessionPool;
-  const owner = new AbortController();
   const desk = await startDesk(
     root,
     owner.signal,
@@ -2848,10 +2854,7 @@ await test("the settings page reads the project's pods and settings, and changes
     undefined,
     { api: { pollMs: 40, heartbeatMs: 100 } },
   );
-  t.after(async () => {
-    owner.abort();
-    await desk.closed;
-  });
+  closed = desk.closed;
   const url = new URL(desk.url);
   const api = `${url.origin}/api/v1`;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };

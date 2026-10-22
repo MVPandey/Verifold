@@ -20,6 +20,7 @@ import { saveAgencyFile } from '../src/core/agency.ts';
 import { skillLoader } from '../src/core/skills.ts';
 import { SessionManager, type SessionSkills } from '../src/core/session.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
+import { jsonLines, until } from './wait.ts';
 
 const codexSocket = fileURLToPath(
   new URL('./fixtures/codex-socket.cjs', import.meta.url),
@@ -173,20 +174,6 @@ async function project(t: test.TestContext): Promise<{
   };
 }
 
-/**
- * Wait until `check` holds. A fake harness is a new Node process, and a busy
- * computer can take seconds to start one, so the limit only ends a test that
- * is stuck.
- */
-async function until(check: () => boolean | Promise<boolean>): Promise<void> {
-  const end = Date.now() + 15_000;
-  while (Date.now() <= end) {
-    if (await check()) return;
-    await delay(20);
-  }
-  throw new Error('The session did not get there.');
-}
-
 function loader(folder: string | null): SessionSkills & {
   readonly problems: (readonly [HarnessName, string])[];
   readonly uses: string[];
@@ -211,17 +198,6 @@ async function plugin(root: string, name: string): Promise<string> {
     '---\nname: transformer-lens\ndescription: x\n---\n',
   );
   return path;
-}
-
-/**
- * The JSON lines of a fake harness's log. A fake can be in the middle of
- * writing a line, so only lines that end with a newline count.
- */
-async function jsonLines<T>(path: string): Promise<T[]> {
-  return (await readFile(path, 'utf8'))
-    .split('\n')
-    .slice(0, -1)
-    .map((line) => JSON.parse(line) as T);
 }
 
 const args = async (work: string, file: string): Promise<string[]> =>

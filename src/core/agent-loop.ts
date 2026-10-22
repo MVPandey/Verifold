@@ -177,6 +177,11 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     this.timer.unref();
   }
 
+  /** A wakeup waits for its timer. Read-only, for a test that waits for a quiet agent. */
+  get pending(): boolean {
+    return this.timer !== undefined;
+  }
+
   /** Cancel a wakeup that waits. With `reset`, forget the wakeup limit too. */
   cancel(reset = false): void {
     clearTimeout(this.timer);

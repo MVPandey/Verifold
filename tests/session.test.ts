@@ -36,6 +36,7 @@ import { readDeskSnapshot } from '../src/server/desk-records.ts';
 import { renderDesk } from '../src/desk/desk-view.ts';
 import { feedLine, runCli, terminalInput } from '../src/cli/commands.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
+import { jsonLines } from './wait.ts';
 
 /** A fake Claude Code that speaks the stream-json control protocol. */
 const claudeHost = `const fs = require('node:fs');
@@ -93,17 +94,6 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
     out(answer.interrupt ? { type: 'result', subtype: 'error_during_execution', is_error: true } : { type: 'result', subtype: 'success', total_cost_usd: 0.02 });
   }
 });`;
-
-/**
- * The JSON lines of a fake harness's log. A fake can be in the middle of
- * writing a line, so only lines that end with a newline count.
- */
-async function jsonLines<T>(path: string): Promise<T[]> {
-  return (await readFile(path, 'utf8'))
-    .split('\n')
-    .slice(0, -1)
-    .map((line) => JSON.parse(line) as T);
-}
 
 /** The fake Codex app-servers listen on a Unix socket, like Codex. */
 const codexSocket = fileURLToPath(

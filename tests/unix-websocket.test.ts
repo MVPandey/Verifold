@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createServer, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -97,6 +98,19 @@ async function server(
   return path;
 }
 
+/**
+ * A socket file that nothing accepts at: a process listened at `path` and
+ * stopped without closing, as a server that is still starting looks for a
+ * moment. A connection to it is refused (ECONNREFUSED).
+ */
+function leftSocket(path: string): void {
+  execFileSync(process.execPath, [
+    '-e',
+    "require('node:net').createServer().listen(process.argv[1], () => process.exit(0))",
+    path,
+  ]);
+}
+
 await test('the client answers pings, joins fragments, and sends masked text', async (t) => {
   let peer: { socket: Socket; received: () => Buffer } | undefined;
   const path = await server(t, (socket, received) => {
@@ -188,14 +202,15 @@ await test('a client waits for a server that is still starting, while its proces
     listener.close();
     await rm(folder, { recursive: true, force: true });
   });
-  // The path exists, but nothing listens at it yet: one try fails.
-  await writeFile(path, '');
+  // The socket file exists, but nothing accepts at it yet: one try is refused.
+  leftSocket(path);
   await assert.rejects(
     connectUnixWebSocket(
       path,
       () => {},
       () => {},
     ),
+    { code: 'ECONNREFUSED' },
   );
   const messages: string[] = [];
   const waiting = connectWhenListening(
@@ -227,8 +242,8 @@ await test('a client stops waiting when the process ends or the deadline passes'
   await delay(100);
   alive = false;
   await assert.rejects(ended, /No socket at/);
-  // A path that holds no server fails after the deadline with the last error.
-  await writeFile(path, '');
+  // A socket that nothing accepts at fails after the deadline with the last error.
+  leftSocket(path);
   const started = Date.now();
   await assert.rejects(
     connectWhenListening(
@@ -237,7 +252,53 @@ await test('a client stops waiting when the process ends or the deadline passes'
       () => {},
       () => {},
     ),
-    /ENOENT|ECONNREFUSED|ENOTSOCK/,
+    { code: 'ECONNREFUSED' },
   );
   assert.ok(Date.now() - started >= 250);
+});
+
+await test('a server that takes the connection and never answers ends the wait at the deadline, and its socket goes', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'vf-ws-'));
+  const path = join(folder, 'test.sock');
+  let closed = false;
+  // It accepts, reads, and never sends the upgrade.
+  const listener = createServer((socket) => {
+    socket.resume();
+    socket.on('close', () => {
+      closed = true;
+    });
+  });
+  await new Promise<void>((resolve) => listener.listen(path, resolve));
+  t.after(async () => {
+    listener.close();
+    await rm(folder, { recursive: true, force: true });
+  });
+  const started = Date.now();
+  await assert.rejects(
+    connectWhenListening(
+      path,
+      { alive: () => true, deadline: Date.now() + 300 },
+      () => {},
+      () => {},
+    ),
+    /handshake timed out/,
+  );
+  assert.ok(Date.now() - started >= 250);
+  for (let tries = 0; tries < 100 && !closed; tries++) await delay(10);
+  assert.equal(closed, true);
+});
+
+await test('a failure that a wait cannot mend, such as a refused handshake, ends the wait at once', async (t) => {
+  const path = await server(t, () => {}, false);
+  const started = Date.now();
+  await assert.rejects(
+    connectWhenListening(
+      path,
+      { alive: () => true, deadline: Date.now() + 10_000 },
+      () => {},
+      () => {},
+    ),
+    /handshake failed/,
+  );
+  assert.ok(Date.now() - started < 5000);
 });

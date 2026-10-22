@@ -26,6 +26,7 @@ import {
 import { secretGuard } from '../src/core/runpod.ts';
 import { allocate, snapshot, type Workspace } from '../src/core/workspaces.ts';
 import { fakePod, type FakePod } from './fake-pod.ts';
+import { labQueue } from './wait.ts';
 
 const secret = 'hf_SECRETVALUE0123456789';
 
@@ -86,14 +87,12 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
     light: true,
   });
   await fake.compute.setSecret('HF_TOKEN', secret, true);
-  let queue: Promise<unknown> = Promise.resolve();
+  const queue = labQueue();
   let calls = 0;
   const made: Fixture = {
     ...fake,
     workspace,
-    settled: async () => {
-      await queue;
-    },
+    settled: queue.settled,
     ledger: (minuteMs) => {
       const ended: RunRecord[] = [];
       const ledger = new RunLedger(root, {
@@ -101,11 +100,7 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
         pods: fake.compute.podRuns(),
         pollMs: 50,
         ...(minuteMs ? { minuteMs } : {}),
-        serial: <T>(work: () => T | Promise<T>): Promise<T> => {
-          const next = queue.then(work, work);
-          queue = next.catch(() => {});
-          return next;
-        },
+        serial: queue.serial,
         ended: (run) => {
           ended.push(run);
           return true;
