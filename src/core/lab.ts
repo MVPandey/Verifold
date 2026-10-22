@@ -7272,8 +7272,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    * folder: then this one commits nothing and sets no timer. A turn that ran
    * into a used-up usage window (`count` false) commits its work but neither
    * counts nor sets a timer: the reset wakes the agent. A commit that fails
-   * is not a turn without change: the agent hears why, its count stays, and
-   * its next turn comes after the usual wait. An agent that works for a while
+   * counts as a turn without change, because the other agents get nothing
+   * new: the agent hears why, and a failure that repeats waits longer, as
+   * turns without change do. An agent that works for a while
    * without a post gets asked once, with its next turn, to post what it found
    * or what blocks it. That costs no turn of its own.
    */
@@ -7316,8 +7317,17 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       if (after) {
         await this.serial(() => this.setHead(direction, after.made));
         changed = agent.folder !== after.folder;
-        await this.update(id, (entry) => ({ ...entry, folder: after.folder }));
-        if (after.linked.length)
+        // The agent hears of these files once for each set, not after each turn.
+        const linked = createHash('sha256')
+          .update([...after.linked].sort().join('\0'))
+          .digest('hex');
+        const told = this.agents.get(id)?.linked;
+        await this.update(id, (entry) => ({
+          ...entry,
+          folder: after.folder,
+          linked,
+        }));
+        if (after.linked.length && linked !== told)
           notes.push(
             `Verifold left files with more than one hard link out of your commit, so other agents cannot read them: ${after.linked.slice(0, 5).join(', ')}${after.linked.length > 5 ? ', and more' : ''}. Write separate copies instead.`,
           );
@@ -7366,12 +7376,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         !current()
       )
         return;
-      const idleStreak =
-        changed || did.posted
-          ? 0
-          : failed
-            ? latest.idleStreak
-            : latest.idleStreak + 1;
+      const idleStreak = changed || did.posted ? 0 : latest.idleStreak + 1;
       // A post ends the quiet stretch, so the next stretch can get its own ask.
       await this.update(id, (entry) => ({
         ...entry,
@@ -7388,28 +7393,19 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         return;
       }
       const backoff =
-        !failed && idleStreak >= 2
+        idleStreak >= 2
           ? this.timing.backoffMs[
               Math.min(idleStreak - 2, this.timing.backoffMs.length - 1)
             ]
           : undefined;
+      const waited = backoff
+        ? `${failed ? `Your last ${idleStreak} turns gave the other agents no new commit and no post` : `Your last ${idleStreak} turns changed no file and posted nothing`}, so this turn came after ${Math.round(backoff / 60_000)} minutes.`
+        : 'Your last turn ended.';
       // A timer of its own: the wake loop runs a waiting event after its short debounce.
       clearTimeout(run.next);
       run.next = setTimeout(() => {
         run.next = undefined;
-        this.loop(id).add(
-          [
-            {
-              kind: 'continue',
-              text: note(
-                backoff
-                  ? `Your last ${idleStreak} turns changed no file and posted nothing, so this turn came after ${Math.round(backoff / 60_000)} minutes.`
-                  : 'Your last turn ended.',
-              ),
-            },
-          ],
-          0,
-        );
+        this.loop(id).add([{ kind: 'continue', text: note(waited) }], 0);
       }, backoff ?? this.timing.continueMs);
       run.next.unref();
     });
