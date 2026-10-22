@@ -27,6 +27,7 @@ import {
   type ResearchOptions,
 } from '../legacy/research.ts';
 import { ResearchRunner } from '../legacy/research-runner.ts';
+import { clip } from '../core/board.ts';
 import { researchRunOnDisk } from '../core/history.ts';
 import { ProjectMemory } from '../core/memory.ts';
 import { object, text } from '../core/research-contracts.ts';
@@ -342,10 +343,7 @@ export function feedLine(
   }
   // One line for each event, so harness text cannot print a line that looks like a request.
   const line = event.text.replace(/\s*\n\s*/g, ' ⏎ ');
-  const text =
-    event.kind === 'agent' && line.length > 600
-      ? `${line.slice(0, 600)}…`
-      : line;
+  const text = event.kind === 'agent' ? clip(line, 600) : line;
   return { text: `${head}${text}`, log: `${head}${text}` };
 }
 

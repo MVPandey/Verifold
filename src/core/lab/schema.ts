@@ -104,7 +104,7 @@ export const labTiming = {
   continueMs: 20_000,
   /** How often the lab starts or resumes an agent that waits. One agent starts each time. */
   tickMs: 5_000,
-  /** The waits after 2, 3, and 4 or more turns in a row that changed nothing. */
+  /** The waits after 2, 3, and 4 or more turns in a row that gave the other agents no new commit and no post. */
   backoffMs: [10 * 60_000, 30 * 60_000, 2 * 3_600_000] as readonly number[],
   /** The wait after a start that failed. It doubles with each failure in the last hour. */
   retryMs: 30_000,
@@ -542,7 +542,7 @@ export interface AgentRecord {
   readonly cursor: number;
   readonly wakeups: readonly string[];
   readonly events: readonly QueuedEvent<LabEvent>[];
-  /** Turns in a row that changed nothing: no post and no file change. */
+  /** Turns in a row that gave the other agents nothing new: no post, and no file change or a commit that failed. */
   readonly idleStreak: number;
   /** Turns in a row without a post of the agent. */
   readonly quietTurns: number;
@@ -557,6 +557,18 @@ export interface AgentRecord {
   readonly finished: boolean;
   /** The fingerprint of the direction's folder after the last turn, ignored files too. */
   readonly folder: string | null;
+  /**
+   * The files with more than one link that the last commit after a turn left
+   * out: a fingerprint of the set, up to 5 of their paths, how many there
+   * are, and whether a prompt or digest told the agent of this set. Absent:
+   * no commit after a turn yet.
+   */
+  readonly linked?: {
+    readonly print: string;
+    readonly paths: readonly string[];
+    readonly count: number;
+    readonly told: boolean;
+  };
   /** When its process stopped by itself, recently. */
   readonly restarts: readonly string[];
   readonly actions: readonly LabAction[];
@@ -1755,6 +1767,7 @@ export function parseAgent(
     typeof value.factsPost === 'string' && postId.test(value.factsPost)
       ? value.factsPost
       : null;
+  const linked = object(value.linked);
   return {
     schemaVersion: 1,
     id: value.id,
@@ -1824,6 +1837,23 @@ export function parseAgent(
       typeof value.folder === 'string' && /^[0-9a-f]{64}$/.test(value.folder)
         ? value.folder
         : null,
+    ...(linked &&
+    typeof linked.print === 'string' &&
+    /^[0-9a-f]{64}$/.test(linked.print) &&
+    Array.isArray(linked.paths) &&
+    linked.paths.every((path): path is string => typeof path === 'string') &&
+    Number.isSafeInteger(linked.count) &&
+    (linked.count as number) >= 0 &&
+    typeof linked.told === 'boolean'
+      ? {
+          linked: {
+            print: linked.print,
+            paths: linked.paths.slice(0, 5),
+            count: linked.count as number,
+            told: linked.told,
+          },
+        }
+      : {}),
     restarts: times(value.restarts),
     actions: value.actions.flatMap((entry) => {
       const action = object(entry);

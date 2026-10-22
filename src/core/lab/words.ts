@@ -175,6 +175,11 @@ export function linkedText(linked: readonly string[]): string {
     : '';
 }
 
+/** What an agent hears of the files with more than one link that the commit after its turn left out. */
+export function linkedNote(paths: readonly string[], count: number): string {
+  return `Verifold left files with more than one hard link out of your commit, so other agents cannot read them: ${paths.join(', ')}${count > paths.length ? ', and more' : ''}. Write separate copies instead.`;
+}
+
 export const stoppedText =
   'This session no longer works for the lab, so Verifold did nothing.';
 
