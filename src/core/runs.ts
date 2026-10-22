@@ -689,7 +689,11 @@ export interface RunLedgerOptions {
   readonly podStopMs?: number;
   /** The lab's queue. Every change of a record runs in it. */
   readonly serial: <T>(work: () => T | Promise<T>) => Promise<T>;
-  /** A run ended. In the lab's queue. Returns true when its agent heard it. */
+  /**
+   * A run ended. In the lab's queue. Returns true when its agent heard it.
+   * Not called for a run that ended before its `start` call returned: that
+   * call's result tells the agent.
+   */
   readonly ended: (run: RunRecord) => boolean;
   /** One minute of a run's time limit. */
   readonly minuteMs?: number;
@@ -710,6 +714,8 @@ export class RunLedger {
   private readonly starting = new Map<string, Live['stop']>();
   /** The work of each run from its start to its end, by run ID. Close waits for it. */
   private readonly work = new Map<string, Promise<void>>();
+  /** Runs whose `start` call has no record back yet. The call's result tells the agent how such a run ended. */
+  private readonly waiting = new Set<string>();
   /** The leases whose pods stop now. No run starts on them. */
   private readonly stopping = new Set<string>();
   /** The background work that ends the pod runs of an earlier owner. */
@@ -1023,9 +1029,13 @@ export class RunLedger {
       return { run, known: false, lease: place?.lease ?? null };
     });
     if (made.known) return made.run;
+    this.waiting.add(made.run.id);
     let started!: (run: RunRecord) => void;
     const ready = new Promise<RunRecord>((resolve) => {
-      started = resolve;
+      started = (run) => {
+        this.waiting.delete(made.run.id);
+        resolve(run);
+      };
     });
     const work = (
       'pods' in runner
@@ -1563,7 +1573,8 @@ export class RunLedger {
         next,
         `Verifold could not save the end of ${next.id}`,
       );
-      if (!this.options.ended(next)) return next;
+      // A run that ended before its start call returned: the call's result tells the agent, so it needs no wake.
+      if (!this.waiting.has(run.id) && !this.options.ended(next)) return next;
       const told = { ...next, told: true };
       this.records.set(run.id, told);
       await this.saveOrSay(

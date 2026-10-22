@@ -2341,7 +2341,12 @@ export class Lab {
           agent.session !== null &&
           !this.runtimes.get(agent.id)?.parking &&
           !this.holdsTerminal(agent.id) &&
-          this.options.sessions.idle(agent.session),
+          this.options.sessions.idle(agent.session) &&
+          // While a run of the agent runs, its end wakes the agent: Verifold's own notes wait for that turn.
+          (!this.ledger.running(agent.id) ||
+            agent.events.some(
+              (event) => event.seq > agent.cursor && event.kind !== 'continue',
+            )),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         // The profile as it is now, so a changed "Talk to me" comes with this digest.
         prepare: async () => {
@@ -4138,15 +4143,19 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       draft.direction,
       `Verifold: commit for a run of ${draft.agent.handle}`,
     );
-    await this.serial(async () => {
+    // A pause, the deadline, or Start over that comes before the run's record wins. In the lab's queue.
+    const may = (): void => {
       if (!this.usable(id, generation)) fail(stoppedText);
-      // A pause, the deadline, or Start over that came during the commit wins.
       const state = this.current();
       if (state.pausedAt || this.ended(state))
         fail('The lab is paused, so no run starts now.');
+    };
+    await this.serial(async () => {
+      may();
       await this.setHead(draft.direction, made);
     });
     const run = await this.ledger.start({
+      may,
       agent: id,
       key,
       direction: draft.direction.id,
@@ -7517,7 +7526,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         quietWork: did.spoke ? 0 : entry.quietWork + Math.max(0, did.worked),
         nudged: !did.spoke && entry.nudged,
       }));
-      // While a run of the agent runs, the run's end wakes it instead.
+      // While a run of the agent runs, the run's end wakes it instead. The notes wait for that turn: the loop holds them.
       const state = this.state;
       if (!state || state.pausedAt || this.ledger.running(id)) {
         if (notes.length)
