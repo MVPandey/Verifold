@@ -66,8 +66,8 @@ export interface PodRunState {
   /** `gone`: its process ended without an exit code, such as when the pod restarted. */
   readonly state: 'running' | 'done' | 'gone';
   readonly exit: number | null;
-  /** The end of its log, up to the output limit. */
-  readonly tail: string;
+  /** The end of its log, up to the output limit, as the pod wrote it. */
+  readonly tail: Buffer;
 }
 
 interface Run {
@@ -435,24 +435,27 @@ echo watching
       fail(
         `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
       );
-    const text = result.stdout.toString('utf8');
-    const [first = '', ...rest] = text.split('\n');
-    const exit = /^exit (-?\d+)$/.exec(first.trim());
+    // The log's bytes stay as they are. Only the status line is text.
+    const end = result.stdout.indexOf(10);
+    const first = (end < 0 ? result.stdout : result.stdout.subarray(0, end))
+      .toString('utf8')
+      .trim();
+    const exit = /^exit (-?\d+)$/.exec(first);
     return {
-      state: exit ? 'done' : first.trim() === 'running' ? 'running' : 'gone',
+      state: exit ? 'done' : first === 'running' ? 'running' : 'gone',
       exit: exit ? Number(exit[1]) : null,
-      tail: rest.join('\n'),
+      tail: end < 0 ? Buffer.alloc(0) : result.stdout.subarray(end + 1),
     };
   }
 
-  /** Send a signal to the process group of a lab run's job. */
+  /** Send a signal to the process group of a lab run's job. Fails when the pod does not answer. */
   async stopRun(
     target: PodTarget,
     run: string,
     signal: 'TERM' | 'KILL',
   ): Promise<void> {
     const at = runFiles(run);
-    await program(
+    const result = await program(
       this.ssh,
       [
         ...this.args(target),
@@ -460,6 +463,10 @@ echo watching
       ],
       { timeoutMs: 60_000, keep: 1024 },
     );
+    if (result.code !== 0)
+      fail(
+        `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
+      );
   }
 
   /**
@@ -514,11 +521,15 @@ echo watching
     return result.code === 0 ? result.stdout.toString('utf8') : '';
   }
 
-  /** Remove a lab run's folder on the pod, after its outputs came back. Its job files stay. */
+  /** Remove a lab run's folder and its job files on the pod, once its outputs and log came back or are not wanted. */
   async removeRun(target: PodTarget, run: string): Promise<void> {
+    const at = runFiles(run);
     await program(
       this.ssh,
-      [...this.args(target), `rm -rf ${remoteFolder(run)}; true`],
+      [
+        ...this.args(target),
+        `rm -rf ${remoteFolder(run)} ${at}.sh ${at}.log ${at}.pid ${at}.wrap ${at}.exit ${at}.exit.tmp; true`,
+      ],
       { timeoutMs: 120_000, keep: 1024 },
     );
   }
