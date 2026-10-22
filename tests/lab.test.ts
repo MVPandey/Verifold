@@ -275,7 +275,8 @@ onLine((line) => {
     return call();
   }
   if (message.method === 'initialize') out({ id: message.id, result: {} });
-  if (message.method === 'config/read') out({ id: message.id, result: { config: {} } });
+  // The person's own reasoning effort, when a test sets one.
+  if (message.method === 'config/read') out({ id: message.id, result: { config: fs.existsSync(path.join(base, 'effort')) ? { model_reasoning_effort: fs.readFileSync(path.join(base, 'effort'), 'utf8') } : {} } });
   // Two pages of models, as Codex lists them. The most capable model is on the second page.
   if (message.method === 'model/list') {
     fs.appendFileSync(path.join(log, 'models.jsonl'), JSON.stringify(message.params) + '\\n');
@@ -284,7 +285,7 @@ onLine((line) => {
       { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true, hidden: false },
       { id: 'gpt-6-astra-preview', model: 'gpt-6-astra-preview', hidden: true },
     ], nextCursor: 'page-2' } });
-    return out({ id: message.id, result: { data: [{ id: 'gpt-6-astra', model: 'gpt-6-astra', isDefault: false }], nextCursor: null } });
+    return out({ id: message.id, result: { data: [{ id: 'gpt-6-astra', model: 'gpt-6-astra', isDefault: false, supportedReasoningEfforts: [{ reasoningEffort: 'medium' }, { reasoningEffort: 'high' }, { reasoningEffort: 'xhigh' }], defaultReasoningEffort: 'high' }], nextCursor: null } });
   }
   if (message.method === 'thread/start') {
     fs.appendFileSync(path.join(log, 'threads.jsonl'), JSON.stringify({ method: 'start', params: message.params }) + '\\n');
@@ -293,7 +294,7 @@ onLine((line) => {
     out({ id: message.id, result: { thread: { id: thread }, model: message.params.model || 'codex-default' } });
   }
   if (message.method === 'thread/resume') {
-    fs.appendFileSync(path.join(log, 'threads.jsonl'), JSON.stringify({ method: 'resume' }) + '\\n');
+    fs.appendFileSync(path.join(log, 'threads.jsonl'), JSON.stringify({ method: 'resume', params: message.params }) + '\\n');
     thread = message.params.threadId;
     out({ id: message.id, result: { thread: { id: thread } } });
   }
@@ -929,12 +930,24 @@ await test('after a restart each agent resumes its session with a digest, and no
       'resume',
     ),
   );
+  const threads = (await lab.lines('d-2-beta', 'threads.jsonl')) as {
+    method: string;
+    params: { model?: string };
+  }[];
   assert.deepEqual(
-    (
-      (await lab.lines('d-2-beta', 'threads.jsonl')) as { method: string }[]
-    ).map((entry) => entry.method),
+    threads.map((entry) => entry.method),
     ['start', 'resume'],
   );
+  // The session keeps the model that Verifold picked, so the resume asks for
+  // it again, with no second model list. The thread keeps it whatever the
+  // person's own Codex model is.
+  assert.equal(threads[0]?.params.model, 'gpt-6-astra');
+  assert.equal(threads[1]?.params.model, 'gpt-6-astra');
+  assert.equal((await lab.lines('d-2-beta', 'models.jsonl')).length, 2);
+  const session = lab.lab.view()?.directions[1]?.agent.session ?? '';
+  assert.equal(lab.sessions.view(session)?.record.model, 'gpt-6-astra');
+  // Codex's answer to the resume names no model: the session shows the one that Verifold sent.
+  assert.equal(lab.sessions.view(session)?.record.reportedModel, 'gpt-6-astra');
   assert.doesNotMatch((await restarted('d-2-beta')) ?? '', /Which layer\?/);
 });
 
@@ -1186,18 +1199,36 @@ await test('lab agents run Opus in Claude Code and the most capable Codex model'
     await readFile(join(lab.base, 'logs', 'd-1-alpha', 'args.json'), 'utf8'),
   ) as string[];
   assert.equal(args[args.indexOf('--model') + 1], 'opus[1m]');
+  // The agent keeps the model that its new conversation asked for.
+  await until(() => lab.lab.view()?.directions[0]?.agent.model === 'opus[1m]');
   assert.equal((await lab.lines('d-2-beta', 'models.jsonl')).length, 2);
   const thread = (
     (await lab.lines('d-2-beta', 'threads.jsonl')) as {
-      params: { model?: string };
+      params: { model?: string; config: Record<string, unknown> };
     }[]
   )[0]?.params;
   assert.equal(thread?.model, 'gpt-6-astra');
+  // Without an effort of the person's own, the thread gets none from Verifold.
+  assert.equal(thread?.config.model_reasoning_effort, undefined);
   // The session keeps the model that Codex reports, and the panel shows it.
   const session = lab.lab.view()?.directions[1]?.agent.session ?? '';
   await until(
     () => lab.sessions.view(session)?.record.reportedModel === 'gpt-6-astra',
   );
+});
+
+await test("a Codex model that Verifold picks gets its default effort when the person's effort does not fit it", async (t) => {
+  const lab = await fixture(t);
+  await writeFile(join(lab.base, 'effort'), 'ultra');
+  await open(lab, [{ title: 'Beta', harness: 'codex' }]);
+  await until(async () => (await lab.inputs('d-1-beta')).length >= 1);
+  const thread = (
+    (await lab.lines('d-1-beta', 'threads.jsonl')) as {
+      params: { model?: string; config: Record<string, unknown> };
+    }[]
+  )[0]?.params;
+  assert.equal(thread?.model, 'gpt-6-astra');
+  assert.equal(thread?.config.model_reasoning_effort, 'high');
 });
 
 await test("a project model wins, and a refused model list keeps the person's own Codex model", async (t) => {
@@ -5924,6 +5955,33 @@ await test('a check that ran when Verifold stopped starts again once with a fres
         ),
     ),
   );
+});
+
+await test('a check without a model, as one queued before Verifold chose models, asks for the model when it starts', async (t) => {
+  let model: string | null = null;
+  const lab = await fixture(t, {
+    harnesses: ['claude'],
+    model: () => Promise.resolve(model),
+  });
+  await claimWithRun(lab, [], 'd-2-alpha');
+  await lab.script('k-1', [
+    { calls: [{ name: 'WAIT' }] },
+    { calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  const claim = await claimPost(lab);
+  await lab.lab.post({ kind: 'objection', replyTo: claim, text: 'Doubt.' });
+  await until(async () => (await lab.inputs('k-1')).length === 1);
+  assert.equal(lab.lab.view()?.checks[0]?.model, null);
+  // A model is known only by the time the check starts again.
+  model = 'opus[1m]';
+  await lab.restart();
+  await until(async () => (await lab.inputs('k-1')).length === 2);
+  const args = JSON.parse(
+    await readFile(join(lab.base, 'logs', 'k-1', 'args.json'), 'utf8'),
+  ) as string[];
+  assert.equal(args[args.indexOf('--model') + 1], 'opus[1m]');
+  assert.equal(lab.lab.view()?.checks[0]?.model, 'opus[1m]');
 });
 
 await test('an ask for holds-up that no longer stands drops its check: its runs stop, its agent ID stays its own, and it does not count toward the cap', async (t) => {

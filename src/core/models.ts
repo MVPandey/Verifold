@@ -28,7 +28,8 @@ export type CodexCall = (
 
 /**
  * Read every page of Codex's `model/list`, at most `codexModelPages`, and
- * give the entries to `done`. A page that Codex refuses gives null.
+ * give the entries to `done`. A refused first page gives null. A refused
+ * later page gives the entries of the pages before it.
  */
 export function listCodexModels(
   call: CodexCall,
@@ -49,7 +50,7 @@ export function listCodexModels(
         if (next && pages < codexModelPages) page(next, pages + 1);
         else done(models);
       },
-      () => done(null),
+      () => done(pages > 1 ? models : null),
     );
   page(undefined, 1);
 }
@@ -61,8 +62,8 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** The name to send as `model`: the model's own name, else its ID. */
-function slug(model: Record<string, unknown>): string | undefined {
+/** The name to send as `model`: the model's own name, else its ID. Undefined: not a valid model ID. */
+export function slug(model: Record<string, unknown>): string | undefined {
   const name =
     typeof model.model === 'string' && model.model ? model.model : model.id;
   try {
@@ -73,45 +74,104 @@ function slug(model: Record<string, unknown>): string | undefined {
   }
 }
 
-/**
- * The most capable model in the entries of Codex's `model/list`: the first of
- * `codexModels` that it offers, else the model that it marks as the default.
- * Hidden models do not count. Undefined when no entry fits: the thread then
- * starts with the person's own Codex model.
- */
-export function pickCodexModel(models: readonly unknown[]): string | undefined {
-  const offered = models.filter(
+/** The entries of Codex's `model/list` that it does not hide. */
+export function offered(models: readonly unknown[]): Record<string, unknown>[] {
+  return models.filter(
     (model): model is Record<string, unknown> =>
       record(model) && model.hidden !== true,
   );
-  const names = offered.map(slug);
-  const best = codexModels.find((name) => names.includes(name));
-  if (best) return best;
-  const fallback = offered.find((model) => model.isDefault === true);
-  return fallback ? slug(fallback) : undefined;
 }
 
 /**
- * The person's own Claude Code model when it is an Opus model, exactly as
- * written (so `opus[1m]` keeps its 1M context), else null. Verifold reads
- * only the `model` key of Claude Code's user settings.
+ * Verifold's pick in the entries of Codex's `model/list`: the first of
+ * `codexModels` that it offers. Hidden models do not count. Undefined when it
+ * offers none of them: the thread then starts with the person's own Codex
+ * model, which can differ from the model that the list marks as the default.
  */
-export async function claudeOpus(
-  folder = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
-): Promise<string | null> {
+export function pickCodexModel(models: readonly unknown[]): string | undefined {
+  const names = offered(models).map(slug);
+  return codexModels.find((name) => names.includes(name));
+}
+
+/** A reasoning effort as Codex names one, such as `high`. */
+const effortName = /^[a-z]{1,20}$/;
+
+/**
+ * The reasoning effort for a thread on `model` when `effort`, the person's
+ * own, is one that the model does not support: the model's default effort.
+ * Undefined when the effort fits, or when the list does not say what fits.
+ */
+export function codexEffort(
+  models: readonly unknown[],
+  model: string,
+  effort: unknown,
+): string | undefined {
+  const entry = offered(models).find((candidate) => slug(candidate) === model);
+  if (!entry || typeof effort !== 'string' || !effort) return undefined;
+  const supported = Array.isArray(entry.supportedReasoningEfforts)
+    ? entry.supportedReasoningEfforts.flatMap((option: unknown) =>
+        record(option) &&
+        typeof option.reasoningEffort === 'string' &&
+        effortName.test(option.reasoningEffort)
+          ? [option.reasoningEffort]
+          : [],
+      )
+    : [];
+  const fallback = entry.defaultReasoningEffort;
+  return supported.length &&
+    !supported.includes(effort) &&
+    typeof fallback === 'string' &&
+    supported.includes(fallback)
+    ? fallback
+    : undefined;
+}
+
+/** `model` when it is a valid Opus model ID, else null. */
+function opusModel(model: unknown): string | null {
+  if (typeof model !== 'string' || !opus.test(model)) return null;
+  try {
+    validateModel(model);
+    return model;
+  } catch {
+    return null;
+  }
+}
+
+/** Claude Code's user settings. Null: the file is missing, too large, or not a JSON object. */
+async function userSettings(
+  folder: string,
+): Promise<Record<string, unknown> | null> {
   const path = join(folder, 'settings.json');
   try {
     // A settings file is small. Anything else, such as a pipe, is not read.
     const info = await stat(path);
-    if (info.isFile() && info.size <= 1024 * 1024) {
-      const settings: unknown = JSON.parse(await readFile(path, 'utf8'));
-      const model = record(settings) ? settings.model : undefined;
-      if (typeof model === 'string' && opus.test(model)) return model;
-    }
+    if (!info.isFile() || info.size > 1024 * 1024) return null;
+    const settings: unknown = JSON.parse(await readFile(path, 'utf8'));
+    return record(settings) ? settings : null;
   } catch {
-    /* A missing or broken file leaves the default. */
+    return null;
   }
-  return null;
+}
+
+/**
+ * The person's own Claude Code model when it is an Opus model, exactly as
+ * written (so `opus[1m]` keeps its 1M context), else null. Verifold follows
+ * Claude Code's order (https://code.claude.com/docs/en/env-vars#precedence)
+ * within the user settings: an `ANTHROPIC_MODEL` in their `env` block
+ * replaces the one in the environment, and an empty one cancels it. Then
+ * `ANTHROPIC_MODEL` wins over the `model` key. Verifold reads no project or
+ * managed settings.
+ */
+export async function claudeOpus(
+  folder = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
+): Promise<string | null> {
+  const settings = await userSettings(folder);
+  const block = settings && record(settings.env) ? settings.env : {};
+  const named =
+    typeof block.ANTHROPIC_MODEL === 'string'
+      ? block.ANTHROPIC_MODEL
+      : process.env.ANTHROPIC_MODEL;
+  return opusModel(named || settings?.model);
 }
 
 /** The Claude Code model for lab agents: the person's own Opus model, else `opus`. */
@@ -134,8 +194,9 @@ export function profileModel(
 /**
  * The model of a lab agent, planner, or checker. A project model for the
  * harness wins, then the model that the person's profile picked for the
- * harness. Otherwise Claude Code gets `claudeModel`, and Codex gets null: it
- * picks its most capable model on its own app-server.
+ * harness. Otherwise Claude Code gets `claudeModel`, and Codex gets null:
+ * the agent's own app-server then gives it the first of Verifold's preferred
+ * models that it lists, else the person's own Codex model.
  */
 export async function labModel(
   host: HarnessName,

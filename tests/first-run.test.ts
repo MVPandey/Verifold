@@ -38,6 +38,7 @@ import {
 import { KeyStore } from '../src/core/credentials.ts';
 import {
   claudeChoices,
+  codexChoices,
   detectHarnesses,
   type HarnessStatus,
 } from '../src/core/detect.ts';
@@ -728,6 +729,86 @@ async function until(check: () => Promise<boolean>): Promise<void> {
     await delay(25);
   }
 }
+
+await test("without one of Verifold's Codex models, the person's own Codex model comes first: setup shows it, the setup chat runs it, and it saves as no choice", async (t) => {
+  // A model ID longer than 100 characters counts, up to the limit of any model ID.
+  const long = `gpt-7-${'x'.repeat(140)}`;
+  const choices = codexChoices([
+    {
+      id: 'gpt-7-mini',
+      model: 'gpt-7-mini',
+      displayName: 'GPT-7 Mini',
+      isDefault: true,
+    },
+    { id: long, model: long },
+    { id: 'gpt-6-astra', model: 'gpt-6-astra', hidden: true },
+  ]);
+  assert.deepEqual(choices, [
+    { id: '', label: 'Your Codex default' },
+    { id: 'gpt-7-mini', label: 'GPT-7 Mini, the Codex default' },
+    { id: long, label: long },
+  ]);
+  const base = await folder(t, 'first-run-codex-own');
+  const agency = join(base, 'agency');
+  const compute = new Compute(join(base, 'here'), {
+    store: new KeyStore({
+      home: join(base, 'home'),
+      platform: 'linux',
+      secretTool: join(base, 'none'),
+    }),
+  });
+  await compute.load();
+  const requests: HarnessRequest[] = [];
+  const setup = new FirstRun({
+    directory: agency,
+    compute,
+    signal,
+    harness: (request) => {
+      requests.push(request);
+      return Promise.resolve({ text: 'not a question' });
+    },
+    detect: () =>
+      Promise.resolve([
+        { ...claudeFound, signedIn: false },
+        {
+          harness: 'codex',
+          installed: true,
+          version: '0.160.0',
+          signedIn: true,
+          plan: null,
+          models: choices,
+        },
+      ]),
+    installed: () => Promise.resolve(['codex']),
+  });
+  await until(async () => !(await setup.view()).agents.checking);
+  const codex = (await setup.view()).agents.tools.find(
+    (tool) => tool.harness === 'codex',
+  );
+  assert.equal(codex?.model, null);
+  assert.equal(codex?.models[0]?.id, '');
+  // The setup chat runs the person's own Codex model: it names none.
+  await setup.act({ action: 'setup-say', text: 'Interpretability.' });
+  await until(() => Promise.resolve(requests.length === 1));
+  assert.equal(requests[0]?.host, 'codex');
+  assert.equal(requests[0]?.model, undefined);
+  // The first choice saves as no choice, and any listed model as itself.
+  await setup.act({
+    action: 'setup-agents',
+    claude: { use: false },
+    codex: { use: true },
+  });
+  assert.deepEqual((await loadSettings(agency)).agency, { host: 'codex' });
+  await setup.act({
+    action: 'setup-agents',
+    claude: { use: false },
+    codex: { use: true, model: 'gpt-7-mini' },
+  });
+  assert.deepEqual((await loadSettings(agency)).agency, {
+    host: 'codex',
+    model: 'gpt-7-mini',
+  });
+});
 
 await test('the first run through the API: agents, a conversation that ends in a card, a key that no answer holds, and limits that new projects copy', async (t) => {
   const base = await folder(t, 'first-run');

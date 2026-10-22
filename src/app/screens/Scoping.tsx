@@ -6,7 +6,7 @@ import type {
   Lab,
   QuestionAnswer,
 } from '../../protocol/api.ts';
-import { harnessName, modelName } from '../format.ts';
+import { agentModelName, harnessName } from '../format.ts';
 import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { Avatar } from '../components/Avatar.tsx';
@@ -136,7 +136,8 @@ export function Scoping({
           <b>Planner</b>
           <span className="muted">
             {planner.handle} · {harnessName(planner.harness)}
-            {planner.model && ` ${modelName(planner.model)}`}
+            {planner.model &&
+              ` ${agentModelName(planner.model, planner.requestedModel)}`}
           </span>
         </div>
         {turns.length === 0 && (

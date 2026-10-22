@@ -24,7 +24,7 @@ import {
   turnSummary,
 } from '../src/app/activity.ts';
 import { isTurnDetail, isTurnPage, load, paths } from '../src/app/api.ts';
-import { clock, modelName } from '../src/app/format.ts';
+import { agentModelName, clock, modelName } from '../src/app/format.ts';
 import { href, parseRoute } from '../src/app/route.ts';
 import {
   byIndex,
@@ -576,6 +576,48 @@ await test('a model shows by name, with its version only when the ID names one',
   assert.equal(modelName('gpt-6-astra'), 'GPT-6 Astra');
   assert.equal(modelName('gpt-6.1-sol'), 'GPT-6.1 Sol');
   assert.equal(modelName('o3-mini'), 'o3-mini');
+  // The family counts anywhere in a Claude ID: Bedrock, Vertex, and older IDs.
+  assert.equal(
+    modelName('us.anthropic.claude-opus-5-5-20261001-v1:0'),
+    'Opus 5.5',
+  );
+  assert.equal(modelName('claude-opus-4-5@20251101'), 'Opus 4.5');
+  assert.equal(modelName('claude-opus-4-20250514'), 'Opus 4');
+  assert.equal(modelName('claude-3-opus-20240229'), 'Opus 3');
+  assert.equal(
+    modelName('anthropic.claude-3-5-sonnet-20241022-v2:0'),
+    'Sonnet 3.5',
+  );
+});
+
+await test('an agent shows the model that Verifold asked for only when its harness reports another family', () => {
+  // An alias and the model it stands for are one family.
+  assert.equal(
+    agentModelName('claude-opus-5-5[1m]', 'opus[1m]'),
+    'Opus 5.5 (1M)',
+  );
+  assert.equal(agentModelName('claude-opus-5-5', 'opus[1m]'), 'Opus 5.5');
+  assert.equal(
+    agentModelName('claude-sonnet-5-5', 'opus[1m]'),
+    'Sonnet 5.5, asked for Opus (1M)',
+  );
+  assert.equal(
+    agentModelName('gpt-6.1-sol', 'gpt-6-astra'),
+    'GPT-6.1 Sol, asked for GPT-6 Astra',
+  );
+  // Codex picked on its own, or an earlier server sent no request.
+  assert.equal(agentModelName('gpt-6-astra', null), 'GPT-6 Astra');
+  assert.equal(agentModelName('gpt-6-astra', undefined), 'GPT-6 Astra');
+  // A Bedrock or an older ID of the same family is no other model.
+  assert.equal(
+    agentModelName('us.anthropic.claude-opus-5-5-20261001-v1:0', 'opus'),
+    'Opus 5.5',
+  );
+  assert.equal(agentModelName('claude-3-opus-20240229', 'opus'), 'Opus 3');
+  assert.equal(
+    agentModelName('claude-3-5-sonnet-20241022', 'opus'),
+    'Sonnet 3.5, asked for Opus',
+  );
 });
 
 await test('a run chip says how the run ended, and never "exit null"', () => {

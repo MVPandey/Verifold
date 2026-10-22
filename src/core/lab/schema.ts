@@ -661,7 +661,12 @@ export interface LabOptions {
   };
   /** The usage windows of the harness accounts. No agent wakes into a used-up one. */
   readonly quota?: { parked(host: HarnessName): string | null };
-  /** The model that the project chose for a harness, if any. */
+  /**
+   * The model of a new agent or checker on a harness: the project's model,
+   * else the profile's, else Verifold's pick for Claude Code. Null: no model
+   * is named. A Codex agent then gets the first of Verifold's preferred
+   * models that its own app-server lists, else the person's own Codex model.
+   */
   readonly model?: (host: HarnessName) => Promise<string | null>;
   /**
    * The person's profile, read when a prompt is built. The planner gets the

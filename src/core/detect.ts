@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process';
 import { childEnvironment, type HarnessName } from './harness.ts';
 import {
   claudeOpus,
-  codexModels,
   listCodexModels,
+  offered,
   pickCodexModel,
+  slug,
   type CodexCall,
 } from './models.ts';
 import { codexInitialize, startCodexServer } from './session-hosts.ts';
@@ -108,31 +109,25 @@ export function claudeChoices(
 }
 
 /**
- * Codex's models from `model/list`, the one for lab agents first: the
- * first of Verifold's list that Codex offers, else its default.
+ * Codex's models from `model/list`, Verifold's pick first: the first of
+ * Verifold's list that Codex offers. When Codex offers none of them, the
+ * first choice is the person's own Codex model. It has no ID, because a lab
+ * agent then sends Codex no model.
  */
 export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
   const pick = pickCodexModel(entries);
-  const choices: ModelChoice[] = [];
-  for (const entry of entries) {
-    if (!record(entry) || entry.hidden === true) continue;
-    const id =
-      typeof entry.model === 'string' && entry.model
-        ? entry.model
-        : typeof entry.id === 'string'
-          ? entry.id
-          : '';
-    if (
-      !/^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,99}$/.test(id) ||
-      choices.some((choice) => choice.id === id)
-    )
-      continue;
+  const choices: ModelChoice[] = pick
+    ? []
+    : [{ id: '', label: 'Your Codex default' }];
+  for (const entry of offered(entries)) {
+    const id = slug(entry);
+    if (!id || choices.some((choice) => choice.id === id)) continue;
     const name =
       typeof entry.displayName === 'string' && entry.displayName.trim()
         ? entry.displayName.trim().slice(0, 60)
         : id;
     const notes = [
-      id === pick && codexModels.includes(id) ? 'the most capable' : '',
+      id === pick ? 'the most capable' : '',
       entry.isDefault === true ? 'the Codex default' : '',
     ].filter(Boolean);
     choices.push({
