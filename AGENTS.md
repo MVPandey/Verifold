@@ -8,7 +8,8 @@ User instructions take precedence over repository guidelines.
 
 Verifold coordinates computational research through the user's existing coding harnesses.
 It preserves questions, decisions, evidence, and deliverables across research tasks.
-The selected harness owns its models, credentials, tools, and permissions.
+Verifold picks the model of lab agents and checkers unless the project or the person's profile names one.
+The selected harness owns its credentials, tools, and permissions.
 
 Read the relevant implementation and tests before changing behavior.
 Use README.md for current capabilities.

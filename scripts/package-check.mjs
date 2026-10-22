@@ -681,10 +681,12 @@ onLine((line) => {
     const before = {
       PATH: process.env.PATH,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
     };
-    // Detection runs in this process, so it finds the fake harnesses first, and no Claude Code settings.
+    // Detection runs in this process, so it finds the fake harnesses first, and no Claude Code settings or model.
     process.env.PATH = environment.PATH;
     process.env.CLAUDE_CONFIG_DIR = join(directory, 'no-claude-config');
+    delete process.env.ANTHROPIC_MODEL;
     const stopStart = new AbortController();
     let shown;
     let typed;
@@ -785,6 +787,8 @@ onLine((line) => {
       if (before.CLAUDE_CONFIG_DIR === undefined)
         delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = before.CLAUDE_CONFIG_DIR;
+      if (before.ANTHROPIC_MODEL !== undefined)
+        process.env.ANTHROPIC_MODEL = before.ANTHROPIC_MODEL;
     }
   }
   // The background owner: its key arrives on stdin only, a hangup does not stop it, and verifold stop does.

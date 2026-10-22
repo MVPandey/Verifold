@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
-import { harnessName, modelName } from '../format.ts';
+import { agentModelName, harnessName } from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -74,7 +74,9 @@ export function AgentPage({
                     {who.model && (
                       <>
                         {' '}
-                        <span title={who.model}>{modelName(who.model)}</span>
+                        <span title={who.model}>
+                          {agentModelName(who.model, who.requestedModel)}
+                        </span>
                       </>
                     )}
                     {owned && (

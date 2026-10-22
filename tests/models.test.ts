@@ -6,12 +6,17 @@ import test from 'node:test';
 import { validateModel } from '../src/core/harness.ts';
 import {
   claudeModel,
+  codexDefault,
+  codexEffort,
   codexModelPages,
   labModel,
   listCodexModels,
   pickCodexModel,
   type CodexCall,
 } from '../src/core/models.ts';
+
+// The person's own ANTHROPIC_MODEL would change Claude Code's default in these tests. Each test file runs in a process of its own.
+delete process.env.ANTHROPIC_MODEL;
 
 await test('Codex gets the most capable model that its list offers', () => {
   const sol = { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', isDefault: true };
@@ -22,23 +27,52 @@ await test('Codex gets the most capable model that its list offers', () => {
     pickCodexModel([{ ...astra, hidden: true }, sol]),
     'gpt-6.1-sol',
   );
-  // Without a known model, the one that Codex marks as its default.
-  assert.equal(
-    pickCodexModel([
-      { id: 'other', model: 'gpt-7-nova' },
-      { id: 'mini', model: 'gpt-7-mini', isDefault: true },
-    ]),
-    'gpt-7-mini',
-  );
+  // Without one of Verifold's models, the thread starts with the person's
+  // own model, not with the one that Codex marks as its default.
+  const others = [
+    { id: 'other', model: 'gpt-7-nova' },
+    { id: 'mini', model: 'gpt-7-mini', isDefault: true },
+  ];
+  assert.equal(pickCodexModel(others), undefined);
+  assert.equal(codexDefault(others), 'gpt-7-mini');
+  assert.equal(codexDefault([{ ...others[1], hidden: true }]), undefined);
   // The ID stands in for a missing model name.
   assert.equal(pickCodexModel([{ id: 'gpt-6-astra' }]), 'gpt-6-astra');
   // Nothing fits: the thread starts with the person's own model.
   assert.equal(pickCodexModel([{ id: 'x', model: 'gpt-7-nova' }]), undefined);
   assert.equal(pickCodexModel(['gpt-6-astra', null, 7]), undefined);
   assert.equal(
-    pickCodexModel([{ model: 'bad name; rm -rf /', isDefault: true }]),
+    codexDefault([{ model: 'bad name; rm -rf /', isDefault: true }]),
     undefined,
   );
+});
+
+await test("a model that Verifold picks gets its default effort when the person's effort does not fit it", () => {
+  const astra = {
+    id: 'gpt-6-astra',
+    model: 'gpt-6-astra',
+    supportedReasoningEfforts: [
+      { reasoningEffort: 'medium', description: 'Balanced' },
+      { reasoningEffort: 'high', description: 'Deeper' },
+    ],
+    defaultReasoningEffort: 'medium',
+  };
+  assert.equal(codexEffort([astra], 'gpt-6-astra', 'ultra'), 'medium');
+  // An effort that fits, or none, stays the person's own.
+  assert.equal(codexEffort([astra], 'gpt-6-astra', 'high'), undefined);
+  assert.equal(codexEffort([astra], 'gpt-6-astra', undefined), undefined);
+  // Without a list of efforts, or a default in it, nothing changes.
+  const silent = { id: 'gpt-6-astra', defaultReasoningEffort: 'medium' };
+  assert.equal(codexEffort([silent], 'gpt-6-astra', 'ultra'), undefined);
+  assert.equal(
+    codexEffort(
+      [{ ...astra, defaultReasoningEffort: 'low' }],
+      'gpt-6-astra',
+      'ultra',
+    ),
+    undefined,
+  );
+  assert.equal(codexEffort([astra], 'gpt-6-sol', 'ultra'), undefined);
 });
 
 await test("Claude Code keeps the person's own Opus default, and gets opus otherwise", async (t) => {
@@ -130,7 +164,27 @@ await test("Claude Code keeps the person's own Opus default, and gets opus other
   assert.equal(await labModel('codex', null, { host: 'claude' }), null);
 });
 
-await test("Codex's model list is read page by page, up to the same limit everywhere, and a refusal gives none", () => {
+await test("ANTHROPIC_MODEL wins over Claude Code's settings, as it does for Claude Code, and a model that no flag can carry is not kept", async (t) => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'verifold-model-')));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => {
+    delete process.env.ANTHROPIC_MODEL;
+  });
+  const settings = (model: string) =>
+    writeFile(join(base, 'settings.json'), JSON.stringify({ model }));
+  await settings('opus[1m]');
+  process.env.ANTHROPIC_MODEL = 'claude-opus-5-5';
+  assert.equal(await claudeModel(base), 'claude-opus-5-5');
+  // A model named there wins even when it is not Opus. Verifold then asks for opus.
+  process.env.ANTHROPIC_MODEL = 'sonnet';
+  assert.equal(await claudeModel(base), 'opus');
+  delete process.env.ANTHROPIC_MODEL;
+  assert.equal(await claudeModel(base), 'opus[1m]');
+  await settings(`claude-opus-${'5'.repeat(200)}`);
+  assert.equal(await claudeModel(base), 'opus');
+});
+
+await test("Codex's model list is read page by page, up to the same limit everywhere, and a refused first page gives none", () => {
   const asked: unknown[] = [];
   // A list that never ends still ends.
   const endless: CodexCall = (method, params, onResult) => {
@@ -149,11 +203,25 @@ await test("Codex's model list is read page by page, up to the same limit everyw
     got.models = found;
   });
   assert.equal(got.models, null);
+  // A refused later page keeps the models of the pages before it.
+  let pages = 0;
+  const halfway: CodexCall = (method, params, onResult, onError) => {
+    pages += 1;
+    if (pages === 1)
+      onResult({ data: [{ id: 'gpt-6-astra' }], nextCursor: 'more' });
+    else onError?.();
+  };
+  listCodexModels(halfway, (found) => {
+    got.models = found;
+  });
+  assert.deepEqual(got.models, [{ id: 'gpt-6-astra' }]);
 });
 
-await test('a model ID may end in a short suffix in brackets', () => {
+await test('a model ID may end in a short suffix in brackets, and has at most 200 characters either way', () => {
   validateModel('opus[1m]');
   validateModel('claude-opus-5-5[1m]');
+  validateModel('m'.repeat(200));
+  validateModel(`${'m'.repeat(196)}[1m]`);
   for (const bad of [
     'opus[1m',
     'opus[]',
@@ -161,6 +229,8 @@ await test('a model ID may end in a short suffix in brackets', () => {
     '[1m]',
     'opus[1m] x',
     'opus[1m][1m]',
+    'm'.repeat(201),
+    `${'m'.repeat(197)}[1m]`,
   ])
     assert.throws(() => validateModel(bad), /valid identifier/, bad);
 });

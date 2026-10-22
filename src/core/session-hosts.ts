@@ -10,7 +10,7 @@ import {
   codexOffOptions,
   type HarnessName,
 } from './harness.ts';
-import { listCodexModels, pickCodexModel } from './models.ts';
+import { codexEffort, listCodexModels, pickCodexModel } from './models.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
@@ -1544,7 +1544,13 @@ function codex(options: HostOptions): HostSession {
         return;
       }
       const begin = (): void => {
-        if (options.bestModel && !options.model) chooseModel(config);
+        if (options.bestModel && !options.model)
+          chooseModel(
+            config,
+            record(result) && record(result.config)
+              ? result.config.model_reasoning_effort
+              : undefined,
+          );
         else startThread(config, options.model);
       };
       if (options.skills) addSkills(options.skills, begin);
@@ -1617,11 +1623,19 @@ function codex(options: HostOptions): HostSession {
   /**
    * Read every page of `model/list`, then start the thread with the most
    * capable model. A refused list starts it with the person's own model.
+   * When the person's reasoning effort, `effort`, is one that the model does
+   * not support, the thread gets the model's default effort.
    */
-  function chooseModel(config: Record<string, unknown>): void {
-    listCodexModels(call, (models) =>
-      startThread(config, models ? pickCodexModel(models) : undefined),
-    );
+  function chooseModel(config: Record<string, unknown>, effort: unknown): void {
+    listCodexModels(call, (models) => {
+      const model = models ? pickCodexModel(models) : undefined;
+      const fitted =
+        model && models ? codexEffort(models, model, effort) : undefined;
+      startThread(
+        fitted ? { ...config, model_reasoning_effort: fitted } : config,
+        model,
+      );
+    });
   }
 
   /** Start or resume the thread with the configuration that turns off the user's MCP servers. */

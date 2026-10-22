@@ -1646,7 +1646,9 @@ export class SessionManager {
     };
     this.launching = true;
     try {
-      this.patch((current) => ({
+      // The model that an earlier process reported does not describe the new one.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the rest is the record without that model.
+      this.patch(({ reportedModel: _, ...current }) => ({
         ...current,
         launches: [...current.launches, launch].slice(-50),
       }));
