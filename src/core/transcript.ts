@@ -189,6 +189,19 @@ export function claudeUpdates(event: unknown): TranscriptUpdate[] {
   });
 }
 
+/**
+ * The exact command that Codex runs. The shell wrapper that Codex adds is
+ * removed only when its quoting is unambiguous. The parsed `commandActions`
+ * are not used, because they can list only part of a compound command.
+ */
+export function codexCommand(item: Record<string, unknown>): string {
+  const command = typeof item.command === 'string' ? item.command : '';
+  const inner = /^\S*\/(?:ba|z)?sh -l?c '((?:[^']|'\\'')*)'$/.exec(
+    command,
+  )?.[1];
+  return inner === undefined ? command : inner.replaceAll("'\\''", "'");
+}
+
 /** A transcript update for one Codex item, from either protocol. */
 function codexItem(
   item: Record<string, unknown>,
@@ -244,7 +257,7 @@ function codexItem(
       const exit = item.exit_code ?? item.exitCode;
       return tool(
         'Command',
-        item.command,
+        typeof item.command === 'string' ? codexCommand(item) : item.command,
         item.aggregated_output ?? item.aggregatedOutput,
         (typeof exit === 'number' && exit !== 0) ||
           item.status === 'failed' ||
