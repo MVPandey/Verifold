@@ -480,6 +480,7 @@ function hideValues(
   cut: Cut,
 ): string {
   let hidden = hideSecrets(text, Object.fromEntries(values));
+  if (!cut.start && !cut.end) return hidden;
   for (const [name, value] of values) {
     // The longest end of a value at the start, and the longest start of a value at the end.
     for (let size = Math.min(value.length - 1, hidden.length); size > 0; size--)

@@ -4109,13 +4109,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
 
   /**
    * A lease of lab directions changed: the agents of its directions wake
-   * with its line, unless an agent made the change. An approval wakes them
-   * once: when RunPod created the pod, or when the create failed.
+   * with its line, unless an agent made the change.
    */
   leaseChanged(lease: Lease, line: string): void {
     if (lease.history.at(-1)?.by === 'agent') return;
-    // A lease that starts without a pod yet waits for RunPod's answer, which comes in the next change.
-    if (lease.state === 'starting' && !lease.podId) return;
     void this.serial(() => {
       for (const direction of lease.directions ?? []) {
         const agent = this.agents.get(this.direction(direction).agent);

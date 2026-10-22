@@ -1426,29 +1426,6 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
       input.includes('[pod] lease-1: The pod is ready.'),
     ),
   );
-  // An approval wakes the agent once: when RunPod created the pod, not while Verifold still waits for it.
-  const starting = {
-    ...(leases.get('lease-1') as Lease),
-    state: 'starting',
-  } as Lease;
-  lab.lab.leaseChanged(
-    { ...starting, podId: null },
-    'lease-1: The lease fits your limits, so Verifold started it without asking. Verifold asks RunPod for the pod.',
-  );
-  lab.lab.leaseChanged(
-    { ...starting, podId: 'pod1' },
-    'lease-1: RunPod created pod pod1. It starts now.',
-  );
-  await until(async () =>
-    (await lab.inputs('d-1-alpha')).some((input) =>
-      input.includes('[pod] lease-1: RunPod created pod pod1.'),
-    ),
-  );
-  assert.ok(
-    !(await lab.inputs('d-1-alpha')).some((input) =>
-      input.includes('Verifold asks RunPod for the pod'),
-    ),
-  );
   // A stopped direction's leases end, so its pod bills no more, and its request is withdrawn. Another direction's lease stays.
   await lab.lab.stopDirection('d-1');
   await until(() => ended.length === 2);

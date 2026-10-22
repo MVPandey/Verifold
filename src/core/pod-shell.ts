@@ -63,8 +63,11 @@ function runFiles(run: string): string {
 
 /** What a lab run's job on the pod does now. */
 export interface PodRunState {
-  /** `gone`: its process ended without an exit code, such as when the pod restarted. */
-  readonly state: 'running' | 'done' | 'gone';
+  /**
+   * `gone`: its process ended without an exit code, such as when the pod
+   * restarted. `none`: the pod has no file of the job, so it did not start.
+   */
+  readonly state: 'running' | 'done' | 'gone' | 'none';
   readonly exit: number | null;
   /** The end of its log, up to the output limit, as the pod wrote it. */
   readonly tail: Buffer;
@@ -139,6 +142,15 @@ function program(
       child.stdin.end(options.input ?? '');
     else options.input.pipe(child.stdin);
   });
+}
+
+/** The result of an SSH command whose remote part always exits with 0. Another code means that the pod did not answer. */
+function answered(result: Run): Run {
+  if (result.code !== 0)
+    fail(
+      `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
+    );
+  return result;
 }
 
 /**
@@ -421,20 +433,18 @@ echo watching
   /** The state, the exit code, and the end of the log of a lab run's job. */
   async runState(target: PodTarget, run: string): Promise<PodRunState> {
     const at = runFiles(run);
-    // The wrapper writes the exit code before it ends, so a wrapper that is gone without one ended another way.
-    const result = await program(
-      this.ssh,
-      [
-        ...this.args(target),
-        `if [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif kill -0 "$(cat ${at}.wrap 2>/dev/null)" 2>/dev/null; then echo running; elif [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; else echo gone; fi; tail -c ${podLimits.output} ${at}.log 2>/dev/null; true`,
-      ],
-      // The status line comes first: the tail of stdout keeps it.
-      { timeoutMs: 60_000, keep: podLimits.output + 64 },
+    // The wrapper writes the exit code before it ends, so a wrapper that is gone without one ended another way. A job with no file did not start.
+    const result = answered(
+      await program(
+        this.ssh,
+        [
+          ...this.args(target),
+          `if [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif kill -0 "$(cat ${at}.wrap 2>/dev/null)" 2>/dev/null; then echo running; elif [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif [ -e ${at}.log ] || [ -e ${at}.pid ] || [ -e ${at}.wrap ]; then echo gone; else echo none; fi; tail -c ${podLimits.output} ${at}.log 2>/dev/null; true`,
+        ],
+        // The status line comes first: the tail of stdout keeps it.
+        { timeoutMs: 60_000, keep: podLimits.output + 64 },
+      ),
     );
-    if (result.code !== 0)
-      fail(
-        `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
-      );
     // The log's bytes stay as they are. Only the status line is text.
     const end = result.stdout.indexOf(10);
     const first = (end < 0 ? result.stdout : result.stdout.subarray(0, end))
@@ -442,7 +452,11 @@ echo watching
       .trim();
     const exit = /^exit (-?\d+)$/.exec(first);
     return {
-      state: exit ? 'done' : first === 'running' ? 'running' : 'gone',
+      state: exit
+        ? 'done'
+        : first === 'running' || first === 'none'
+          ? first
+          : 'gone',
       exit: exit ? Number(exit[1]) : null,
       tail: end < 0 ? Buffer.alloc(0) : result.stdout.subarray(end + 1),
     };
@@ -455,18 +469,16 @@ echo watching
     signal: 'TERM' | 'KILL',
   ): Promise<void> {
     const at = runFiles(run);
-    const result = await program(
-      this.ssh,
-      [
-        ...this.args(target),
-        `pid=$(cat ${at}.pid 2>/dev/null) && [ -n "$pid" ] && kill -${signal} -- -"$pid" 2>/dev/null; true`,
-      ],
-      { timeoutMs: 60_000, keep: 1024 },
+    answered(
+      await program(
+        this.ssh,
+        [
+          ...this.args(target),
+          `pid=$(cat ${at}.pid 2>/dev/null) && [ -n "$pid" ] && kill -${signal} -- -"$pid" 2>/dev/null; true`,
+        ],
+        { timeoutMs: 60_000, keep: 1024 },
+      ),
     );
-    if (result.code !== 0)
-      fail(
-        `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
-      );
   }
 
   /**
@@ -541,18 +553,16 @@ echo watching
     paths: readonly string[],
   ): Promise<string[]> {
     const chosen = this.paths(paths);
-    const result = await program(
-      this.ssh,
-      [
-        ...this.args(target),
-        `cd ${remoteFolder(run)} 2>/dev/null || exit 0; for path in ${chosen.map(quote).join(' ')}; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\\n' "$path"; fi; done`,
-      ],
-      { timeoutMs: 60_000 },
+    const result = answered(
+      await program(
+        this.ssh,
+        [
+          ...this.args(target),
+          `cd ${remoteFolder(run)} 2>/dev/null || exit 0; for path in ${chosen.map(quote).join(' ')}; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\\n' "$path"; fi; done`,
+        ],
+        { timeoutMs: 60_000 },
+      ),
     );
-    if (result.code !== 0)
-      fail(
-        `Verifold could not reach the pod over SSH. ${result.stderr.trim().slice(0, 300)}`,
-      );
     const found = new Set(result.stdout.toString('utf8').split('\n'));
     return chosen.filter((path) => found.has(path));
   }

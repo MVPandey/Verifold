@@ -460,6 +460,11 @@ async function fakeRuns(
     readonly startJob?: () => Promise<void>;
     readonly state?: () => Promise<PodRunState>;
     readonly stop?: (signal: 'TERM' | 'KILL') => Promise<void>;
+    readonly log?: () => Promise<{
+      readonly bytes: number;
+      readonly head: Buffer;
+      readonly tail: Buffer | null;
+    }>;
     /** One minute of the ledger, and the run's time limit in minutes. */
     readonly minuteMs?: number;
     readonly minutes?: number;
@@ -515,7 +520,9 @@ async function fakeRuns(
       calls.stops.push(signal);
       return options.stop ? options.stop(signal) : Promise.resolve();
     },
-    log: () => Promise.resolve({ bytes: 0, head: Buffer.alloc(0), tail: null }),
+    log:
+      options.log ??
+      (() => Promise.resolve({ bytes: 0, head: Buffer.alloc(0), tail: null })),
     metrics: () => Promise.resolve(''),
     remove: () => {
       calls.remove++;
@@ -599,7 +606,7 @@ await test('a copy that breaks off keeps no file with a secret, and the files of
   );
   assert.match(
     run?.note ?? '',
-    /The run's files stay on the pod in \/root\/verifold\/run-1-[0-9a-f]{8} until its lease ends\./,
+    /The run's files stay on the pod in \/root\/verifold\/run-1-[0-9a-f]{8} and \/root\/verifold\/\.runs until its lease ends\./,
   );
   assert.doesNotMatch(run?.note ?? '', /No output file at out\b/);
   assert.equal(fx.calls.remove, 0);
@@ -838,23 +845,82 @@ await test('a secret that a cut splits does not reach the log', async (t) => {
   await until(() => ended.length === 1);
 });
 
-await test('a pod run whose job cannot be read for 10 minutes gets a stop, and a stop that cannot reach the pod says so', async (t) => {
-  const unreachable = (): Promise<never> =>
-    Promise.reject(
-      new Error('ssh: connect to host 10.0.0.1 port 22: timed out'),
-    );
+/** The record of a pod run that an earlier owner left, as r-1 in the project. */
+async function leftRun(
+  root: string,
+  run: {
+    readonly folder: string;
+    readonly lease: string;
+    readonly status: 'queued' | 'running';
+    readonly want: readonly string[];
+  },
+): Promise<void> {
+  const record = join(root, '.verifold', 'lab', 'runs', 'r-1');
+  await mkdir(record, { recursive: true });
+  const now = new Date().toISOString();
+  await writeFile(
+    join(record, 'run.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      id: 'r-1',
+      agent: 'a-1',
+      key: 'r-1',
+      direction: 'd-1',
+      harness: 'claude',
+      commit: git(root, 'rev-parse', 'HEAD').trim(),
+      command: 'sh job.sh',
+      why: 'A test.',
+      status: run.status,
+      exitCode: null,
+      queuedAt: now,
+      startedAt: run.status === 'running' ? now : null,
+      endedAt: null,
+      minutes: 5,
+      want: run.want,
+      metrics: {},
+      outputs: [],
+      config: 'x',
+      output: null,
+      log: { bytes: 0, cut: false },
+      process: null,
+      cancelledBy: null,
+      note: null,
+      told: false,
+      folder: run.folder,
+      where: { pod: run.lease, gpu: 'NVIDIA RTX A5000' },
+    }),
+  );
+}
+
+/** A pod that does not answer over SSH. */
+function unreachable(): Promise<never> {
+  return Promise.reject(
+    new Error('ssh: connect to host 10.0.0.1 port 22: timed out'),
+  );
+}
+
+await test('a pod run whose job cannot be read for 10 minutes gets one stop, and a stop that cannot reach the pod says so', async (t) => {
   for (const answers of [false, true]) {
+    const box: { stops?: readonly string[] } = {};
     const fx = await fakeRuns(
       t,
       { 'out/a.txt': 'fine\n' },
       {
         minuteMs: 20,
         minutes: 60,
-        state: unreachable,
-        // The pod answers no read. It answers the stop only when `answers`.
+        // No read works. When `answers`, a stop reaches the pod, and the reads after it show that the job ended.
+        state: () =>
+          answers && box.stops?.includes('KILL')
+            ? Promise.resolve({
+                state: 'done' as const,
+                exit: 137,
+                tail: Buffer.alloc(0),
+              })
+            : unreachable(),
         stop: () => (answers ? Promise.resolve() : unreachable()),
       },
     );
+    box.stops = fx.calls.stops;
     const run = await fx.start(['out']);
     await until(() => fx.ledger.get(run.id)?.status === 'interrupted');
     const ended = fx.ledger.get(run.id);
@@ -862,28 +928,28 @@ await test('a pod run whose job cannot be read for 10 minutes gets a stop, and a
       ended?.note ?? '',
       /Verifold could not reach the pod for 10 minutes/,
     );
-    // The job got a stop, although no read of it worked.
-    assert.ok(fx.calls.stops.includes('KILL'));
+    // One SIGKILL: the copy back sends no second one.
+    assert.deepEqual(fx.calls.stops, ['KILL']);
     if (answers) {
-      // The pod answered the stop, so the outputs came back and its copy went.
       assert.deepEqual(
         ended?.outputs.map((output) => output.path),
         ['out/a.txt'],
       );
       assert.equal(fx.calls.remove, 1);
-      assert.doesNotMatch(ended?.note ?? '', /to stop the job/);
+      assert.doesNotMatch(ended?.note ?? '', /to stop the job|files stay/);
     } else {
       assert.match(
         ended?.note ?? '',
         /Verifold could not reach the pod to stop the job\. The job can continue to run until the pod stops\./,
       );
       assert.deepEqual(ended?.outputs, []);
+      assert.equal(fx.calls.remove, 0);
     }
   }
 });
 
-await test('a pod run that stops after the upload, or whose start fails, leaves no copy on the pod', async (t) => {
-  // A cancel that comes during the upload.
+await test('a pod run that stops after the upload, or whose upload or start fails, keeps the pod clean and the log of its start', async (t) => {
+  // A cancel during the upload: the job did not start, so the copy goes, with no stop.
   const owner: { ledger?: RunLedger } = {};
   const cancelled = await fakeRuns(
     t,
@@ -898,77 +964,240 @@ await test('a pod run that stops after the upload, or whose start fails, leaves 
   owner.ledger = cancelled.ledger;
   assert.equal((await cancelled.start([])).status, 'cancelled');
   assert.equal(cancelled.calls.remove, 1);
-  // A start that fails: the job gets a stop, then its copy goes.
-  const failed = await fakeRuns(
+  assert.deepEqual(cancelled.calls.stops, []);
+  // An upload that breaks off leaves a part, which goes too.
+  const broken = await fakeRuns(
     t,
     {},
+    { send: () => Promise.reject(new Error('The copy to the pod broke off.')) },
+  );
+  assert.equal((await broken.start([])).status, 'failed');
+  assert.equal(broken.calls.remove, 1);
+  // A start that fails: one stop, a read that shows the end, the log that says why, and then the files go.
+  const failed = await fakeRuns(
+    t,
+    { 'out/a.txt': 'from the commit\n' },
     {
       startJob: () =>
         Promise.reject(new Error('The pod did not start the run.')),
+      log: () =>
+        Promise.resolve({
+          bytes: 29,
+          head: Buffer.from('bash: train.sh: No such file\n'),
+          tail: null,
+        }),
     },
   );
-  const run = await failed.start([]);
+  const run = await failed.start(['out']);
   assert.equal(run.status, 'failed');
   assert.match(
     run.note ?? '',
     /The run did not start: The pod did not start the run\./,
   );
-  assert.ok(failed.calls.stops.includes('KILL'));
+  assert.deepEqual(failed.calls.stops, ['KILL']);
+  // The copy of the commit is no output.
+  assert.deepEqual(run.outputs, []);
+  assert.equal(
+    await readFile(
+      join(failed.root, '.verifold', 'lab', 'runs', 'r-1', 'log.txt'),
+      'utf8',
+    ),
+    'bash: train.sh: No such file\n',
+  );
   assert.equal(failed.calls.remove, 1);
+  // A start that fails on a pod that does not answer the stop: the files stay, and the note says that the job can still run.
+  const lost = await fakeRuns(
+    t,
+    {},
+    { startJob: unreachable, stop: unreachable },
+  );
+  const kept = await lost.start([]);
+  assert.match(
+    kept.note ?? '',
+    /The job can continue to run until the pod stops\./,
+  );
+  assert.equal(lost.calls.remove, 0);
+});
+
+await test('a pod run whose log does not come back keeps its files on the pod, and says so', async (t) => {
+  const fx = await fakeRuns(
+    t,
+    { 'out/a.txt': 'fine\n' },
+    { log: () => Promise.reject(new Error('ssh: connection reset')) },
+  );
+  const run = await fx.start(['out']);
+  await until(() => fx.ended.length === 1);
+  const ended = fx.ledger.get(run.id);
+  assert.equal(ended?.status, 'done');
+  assert.match(
+    ended?.note ?? '',
+    /Verifold could not copy the log back: ssh: connection reset/,
+  );
+  assert.match(
+    ended?.note ?? '',
+    /The run's files stay on the pod in \/root\/verifold\/run-1-[0-9a-f]{8} and \/root\/verifold\/\.runs until its lease ends\./,
+  );
+  assert.equal(fx.calls.remove, 0);
+  // The outputs came back all the same.
+  assert.deepEqual(
+    ended?.outputs.map((output) => output.path),
+    ['out/a.txt'],
+  );
+});
+
+await test('a pod run whose job does not end after its stop keeps its files on the pod', async (t) => {
+  const grace = runLimits.graceMs;
+  runLimits.graceMs = 0;
+  t.after(() => {
+    runLimits.graceMs = grace;
+  });
+  const fx = await fakeRuns(
+    t,
+    { 'out/a.txt': 'fine\n' },
+    {
+      minuteMs: 100,
+      minutes: 60,
+      // The job runs on, whatever stop it gets.
+      state: () =>
+        Promise.resolve({
+          state: 'running' as const,
+          exit: null,
+          tail: Buffer.alloc(0),
+        }),
+    },
+  );
+  const run = await fx.start(['out']);
+  fx.ledger.cancel(run.id, 'person');
+  await until(() => fx.ledger.get(run.id)?.status === 'cancelled');
+  const ended = fx.ledger.get(run.id);
+  assert.match(
+    ended?.note ?? '',
+    /The job on the pod did not end after SIGKILL\./,
+  );
+  assert.match(ended?.note ?? '', /The run's files stay on the pod/);
+  assert.ok(fx.calls.stops.includes('KILL'));
+  assert.equal(fx.calls.remove, 0);
+});
+
+await test('a stop that cannot reach the pod ends the run after a minute, and says that the job can still run', async (t) => {
+  const grace = runLimits.graceMs;
+  runLimits.graceMs = 0;
+  t.after(() => {
+    runLimits.graceMs = grace;
+  });
+  const fx = await fakeRuns(
+    t,
+    {},
+    { minuteMs: 100, minutes: 60, state: unreachable, stop: unreachable },
+  );
+  const run = await fx.start([]);
+  fx.ledger.cancel(run.id, 'person');
+  await until(() => fx.ledger.get(run.id)?.status === 'cancelled');
+  const ended = fx.ledger.get(run.id);
+  assert.match(
+    ended?.note ?? '',
+    /Verifold could not reach the pod to stop the job\. The job can continue to run until the pod stops\./,
+  );
+  assert.doesNotMatch(
+    ended?.note ?? '',
+    /did not end after SIGKILL|for 10 minutes/,
+  );
+  assert.equal(fx.calls.remove, 0);
 });
 
 await test('a new owner takes no outputs from a pod run that did not start, and its copy leaves the pod', async (t) => {
   const fx = await fixture(t);
   const lease = await fx.lease();
-  const pods = fx.compute.podRuns();
   // As if an earlier owner copied the commit to the pod, then stopped before the job started.
   const folder = 'run-1-0000cccc';
   const tree = await mkdtemp(join(fx.dir, 'tree-'));
   await writeFile(join(tree, 'results.txt'), 'committed\n');
-  await pods.send(lease, folder, tree);
-  const record = join(fx.root, '.verifold', 'lab', 'runs', 'r-1');
-  await mkdir(record, { recursive: true });
-  await writeFile(
-    join(record, 'run.json'),
-    JSON.stringify({
-      schemaVersion: 1,
-      id: 'r-1',
-      agent: 'a-1',
-      key: 'r-1',
-      direction: 'd-1',
-      harness: 'claude',
-      commit: git(fx.root, 'rev-parse', 'HEAD').trim(),
-      command: 'echo new > results.txt',
-      why: 'A test.',
-      status: 'queued',
-      exitCode: null,
-      queuedAt: new Date().toISOString(),
-      startedAt: null,
-      endedAt: null,
-      minutes: 5,
-      want: ['results.txt'],
-      metrics: {},
-      outputs: [],
-      config: 'x',
-      output: null,
-      log: { bytes: 0, cut: false },
-      process: null,
-      cancelledBy: null,
-      note: null,
-      told: false,
-      folder,
-      where: { pod: lease, gpu: 'NVIDIA RTX A5000' },
-    }),
-  );
+  await fx.compute.podRuns().send(lease, folder, tree);
+  await leftRun(fx.root, {
+    folder,
+    lease,
+    status: 'queued',
+    want: ['results.txt'],
+  });
   const { ledger } = fx.ledger();
   await ledger.load(true);
   await ledger.pending;
   const run = ledger.get('r-1');
   assert.equal(run?.status, 'interrupted');
-  // The committed file on the pod is no output of a job that never ran.
+  // The committed file on the pod is no output of a job that did not run.
   assert.deepEqual(run?.outputs, []);
   assert.match(run?.note ?? '', /Verifold stopped before the run started\./);
   assert.ok(!(await readdir(join(fx.pod, 'verifold'))).includes(folder));
+});
+
+await test('a new owner takes no outputs from a queued pod run whose job it cannot read, also when its stop reaches the pod', async (t) => {
+  const fx = await fakeRuns(
+    t,
+    { 'out.txt': 'from the commit\n' },
+    { state: () => Promise.reject(new Error('ssh: connection reset')) },
+  );
+  await leftRun(fx.root, {
+    folder: 'run-1-0000dddd',
+    lease: 'lease-1',
+    status: 'queued',
+    want: ['out.txt'],
+  });
+  await fx.ledger.load(true);
+  await fx.ledger.pending;
+  const run = fx.ledger.get('r-1');
+  assert.equal(run?.status, 'interrupted');
+  assert.deepEqual(run?.outputs, []);
+  assert.deepEqual(fx.calls.stops, ['KILL']);
+  // No read showed the end of the job, so its files stay.
+  assert.equal(fx.calls.remove, 0);
+});
+
+await test('a new owner takes the outputs and the log of a queued pod run whose job ran, and says that its end is not known', async (t) => {
+  const fx = await fixture(t);
+  const lease = await fx.lease();
+  // As if an earlier owner started the job and stopped before it saved that, and the pod then started again: the job's files stay, with no exit code.
+  const folder = 'run-1-0000eeee';
+  const tree = await mkdtemp(join(fx.dir, 'tree-'));
+  await writeFile(join(tree, 'README.md'), 'x\n');
+  await fx.compute.podRuns().send(lease, folder, tree);
+  await writeFile(join(fx.pod, 'verifold', folder, 'out.txt'), 'result\n');
+  const runs = join(fx.pod, 'verifold', '.runs');
+  await mkdir(runs, { recursive: true });
+  await writeFile(join(runs, `${folder}.log`), 'epoch 1 done\n');
+  // A process number that no process has.
+  await writeFile(join(runs, `${folder}.wrap`), '999999\n');
+  await leftRun(fx.root, {
+    folder,
+    lease,
+    status: 'queued',
+    want: ['out.txt'],
+  });
+  const { ledger } = fx.ledger();
+  await ledger.load(true);
+  await ledger.pending;
+  const run = ledger.get('r-1');
+  assert.equal(run?.status, 'interrupted');
+  assert.deepEqual(
+    run?.outputs.map((output) => output.path),
+    ['out.txt'],
+  );
+  assert.match(
+    run?.note ?? '',
+    /The job on the pod ended without an exit code, so how it ended is not known\./,
+  );
+  assert.equal(
+    await readFile(
+      join(fx.root, '.verifold', 'lab', 'runs', 'r-1', 'log.txt'),
+      'utf8',
+    ),
+    'epoch 1 done\n',
+  );
+  // The job ended, and every copy worked, so its files left the pod.
+  assert.ok(!existsSync(join(fx.pod, 'verifold', folder)));
+  assert.deepEqual(
+    readdirSync(runs).filter((name) => name.startsWith(`${folder}.`)),
+    [],
+  );
 });
 
 await test('a pod log keeps the bytes that the job wrote, and its cut line counts them', async (t) => {
@@ -998,7 +1227,7 @@ await test('a pod log keeps the bytes that the job wrote, and its cut line count
   );
   assert.ok(
     log.includes(
-      '\n[Verifold cut 2040 bytes of the log here. The last 1000 bytes follow.]\n',
+      '\n[Verifold cut 2040 bytes of the log here. The end of the log follows.]\n',
     ),
   );
   const last = Buffer.from('\nend [HF_TOKEN] \xfd\n', 'latin1');
