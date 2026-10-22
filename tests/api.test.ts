@@ -875,6 +875,8 @@ await test('the snapshot names the planner, the facts and option details of a ca
       ...seeded.state,
       plan: {
         ...plan,
+        // The facts last changed in an earlier plan post.
+        factsPost: 'p-0',
         version: 2,
         previous: 'p-0',
         changed: 'Qwen3-4B → Qwen3.5-9B, as the person chose.',
@@ -928,6 +930,8 @@ await test('the snapshot names the planner, the facts and option details of a ca
     },
   ]);
   assert.equal(lab.plan?.version, 2);
+  // The plan listed no facts, so they come from an earlier plan.
+  assert.equal(lab.plan?.factsCarried, true);
   assert.equal(lab.plan?.previous, 'p-0');
   assert.equal(
     lab.plan?.changed,
@@ -939,6 +943,7 @@ await test('the snapshot names the planner, the facts and option details of a ca
   ).lab;
   assert.equal(older?.needsYou[0]?.facts, undefined);
   assert.equal(older?.plan?.version, undefined);
+  assert.equal(older?.plan?.factsCarried, undefined);
   assert.equal(older?.plan?.previous, null);
   assert.equal(older?.plan?.changed, null);
 });

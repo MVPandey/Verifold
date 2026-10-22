@@ -158,7 +158,7 @@ export function Scoping({
           {facts.length > 0 && (
             <section className="scoping__facts" aria-label="Facts I checked">
               <h2 className="scoping__label">Facts I checked</h2>
-              <FactsList facts={facts} />
+              <FactsList facts={facts} now={now} />
             </section>
           )}
           {questions.map((call, index) => (
