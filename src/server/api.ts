@@ -14,6 +14,7 @@ import {
   clip,
   commitId,
   directionId,
+  figureType,
   number,
   postId,
   proofRef,
@@ -67,6 +68,7 @@ import {
   type CallEffect,
   type Check as LabCheck,
   type Direction as LabDirection,
+  type FigureRead,
   type LabView,
 } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
@@ -140,6 +142,7 @@ import {
   type HistoryTask,
   type HistoryTurns,
 } from '../protocol/api.ts';
+import { figureHeaders, figurePixels, imageSize } from './figure.ts';
 import { readJsonBody, record } from './http.ts';
 import type { FirstRun } from './setup.ts';
 
@@ -205,6 +208,8 @@ export const apiLimits = {
   runOutputs: 200,
   /** Files in a direction's diff read. */
   diffFiles: 2000,
+  /** Bytes of a figure that a post cites. */
+  figure: 20 * 1024 * 1024,
   /** Pods in the snapshot that are open, wait for the person, or carry a notice. */
   pods: 50,
   /** Earlier pods in the snapshot, the newest kept. */
@@ -361,6 +366,8 @@ export interface LabReadSource {
     readonly files: readonly ChangedFile[];
     readonly diff: { readonly text: string; readonly cut: boolean } | null;
   } | null>;
+  /** The figure that a post cites, such as p-12.0, as the post pinned it, up to `bytes`, or why there is none. */
+  readonly figure: (proof: string, bytes: number) => Promise<FigureRead>;
 }
 
 /** The desk's own bring-in reads, which its bring-in panel uses too. */
@@ -2314,6 +2321,13 @@ export class ApiReader {
           : null,
     };
   }
+
+  /** The figure that a post cites, such as p-12.0, or why there is none. Null without a lab. */
+  async figure(proof: string): Promise<FigureRead | null> {
+    return (
+      (await this.sources().reads?.figure(proof, apiLimits.figure)) ?? null
+    );
+  }
 }
 
 /** A snapshot without the fields that the feed sets. */
@@ -2793,6 +2807,54 @@ export async function answerApi(
     const thread = reader.thread(second);
     if (thread) json(response, 200, thread);
     else response.writeHead(404).end();
+    return;
+  }
+  if (first === 'figures' && parts.length === 2 && !keys.length) {
+    if (!second || !proofRef(second)) {
+      json(response, 400, {
+        error: 'Name a figure by its post and place, such as p-12.0.',
+      });
+      return;
+    }
+    const read = await reader.figure(second);
+    if (!read) {
+      json(response, 404, { error: 'Verifold runs no lab here.' });
+      return;
+    }
+    if ('missing' in read) {
+      json(response, 404, { error: read.missing });
+      return;
+    }
+    if ('changed' in read) {
+      json(response, 409, { error: read.changed });
+      return;
+    }
+    if ('large' in read) {
+      json(response, 413, { error: read.large });
+      return;
+    }
+    // The lab reads only a figure extension.
+    const type = figureType(read.path) ?? 'application/octet-stream';
+    // The browser decodes every pixel that an image declares, so a huge one never reaches it.
+    if (type.startsWith('image/') && type !== 'image/svg+xml') {
+      const size = imageSize(type, read.content);
+      if (
+        !size ||
+        size.width > figurePixels.side ||
+        size.height > figurePixels.side ||
+        size.width * size.height > figurePixels.total
+      ) {
+        json(response, 413, {
+          error: size
+            ? `This image is ${size.width} × ${size.height} pixels. Verifold shows images up to ${figurePixels.side} pixels on a side and ${figurePixels.total / 1_000_000} million pixels in all.`
+            : 'Verifold cannot read the size of this image, so it does not show it.',
+        });
+        return;
+      }
+    }
+    response
+      .writeHead(200, figureHeaders(read.path, type, read.content.length))
+      .end(read.content);
     return;
   }
   if (first === 'board' && parts.length === 1 && onlyBefore) {

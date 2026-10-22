@@ -34,15 +34,16 @@ function who(post: Post): Who {
 
 function proofLabel(proof: Proof): string {
   if (proof.type === 'run') return `Run ${proof.run}`;
-  if (proof.type === 'figure') return 'Figure';
   if (proof.type === 'diff') return 'Diff';
-  return proof.path.split('/').at(-1) ?? proof.path;
+  const name = proof.path.split('/').at(-1) ?? proof.path;
+  // A figure's chip reads as its page's heading.
+  return proof.type === 'figure' ? `Figure ${name}` : name;
 }
 
 /**
- * Where a proof chip leads: a run to its page, a diff to the diff that the
- * post cites, and a file or a figure to the page of the direction that holds
- * it. Null when the post names no direction for it.
+ * Where a proof chip leads: a run to its page, a figure to its view, a diff
+ * to the diff that the post cites, and a file to the page of the direction
+ * that holds it. Null when the post names no direction for it.
  */
 export function proofHref(
   post: Post,
@@ -50,6 +51,7 @@ export function proofHref(
   index: number,
 ): string | null {
   if (proof.type === 'run') return href.runPage(proof.run);
+  if (proof.type === 'figure') return href.figure(`${post.id}.${index}`);
   const direction = proof.direction ?? post.direction;
   if (!direction) return null;
   return proof.type === 'diff'

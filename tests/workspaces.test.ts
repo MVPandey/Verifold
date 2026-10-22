@@ -625,6 +625,14 @@ await test('a lab folder reads through Git: a link to a file outside, or a path 
     (await readFileAt(root, workspace, commit, 'notes.md'))?.toString('utf8'),
     'notes\n',
   );
+  // A file over a bound reads as nothing, and one within it reads as it is.
+  assert.equal(await readFileAt(root, workspace, commit, 'notes.md', 5), null);
+  assert.equal(
+    (await readFileAt(root, workspace, commit, 'notes.md', 6))?.toString(
+      'utf8',
+    ),
+    'notes\n',
+  );
 });
 
 await test('a lab folder leaves a file with a second hard link out of its commits and reads, and its message speaks of the folder', async (t) => {

@@ -1292,6 +1292,10 @@ export async function startDesk(
         (await labDesk.lab?.runLog(run, bytes)) ?? null,
       diff: async (direction, file, proof) =>
         (await labDesk.lab?.directionDiff(direction, file, proof)) ?? null,
+      figure: async (proof, bytes) =>
+        (await labDesk.lab?.figure(proof, bytes)) ?? {
+          missing: 'Verifold runs no lab here.',
+        },
     },
   }));
   const apiFeed = new ApiFeed(apiReader, options.api);
@@ -1396,9 +1400,10 @@ export async function startDesk(
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
     // blob: images: the page draws its tab icon. Only a script of the page can make a blob URL.
+    // data: images: a figure that an agent made, as a URL that never opens as a page of this origin.
     response.setHeader(
       'Content-Security-Policy',
-      `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-src 'self'${pages ? ` ${pages.origin}` : ''}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+      `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; frame-src 'self'${pages ? ` ${pages.origin}` : ''}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
     );
     if (
       request.headers.host !== origin.slice(7) ||

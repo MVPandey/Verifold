@@ -332,6 +332,8 @@ export function backLabel(under: PageRoute | null, lab: Lab): string {
       return 'Back to the answer';
     case 'post':
       return 'Back to the post';
+    case 'figure':
+      return 'Back to the figure';
     case 'run':
       return `Back to run ${under.id}`;
     case 'settings':

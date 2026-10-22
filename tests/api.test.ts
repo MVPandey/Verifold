@@ -40,10 +40,12 @@ import {
   type Check,
   type Direction,
   type Lab,
+  type FigureRead,
   type LabState,
   type LabView,
 } from '../src/core/lab.ts';
 import { boardLimits, type Post } from '../src/core/board.ts';
+import { figureHeaders, figureName, imageSize } from '../src/server/figure.ts';
 import type { RunRecord } from '../src/core/runs.ts';
 import type { Lease } from '../src/core/leases.ts';
 import type { SessionPool } from '../src/core/workers.ts';
@@ -61,6 +63,17 @@ import {
   type TurnPage,
   type Work,
 } from '../src/protocol/api.ts';
+
+/** The start of a PNG that declares `width` x `height` pixels: its signature and its header chunk. */
+const pngHead = (width: number, height: number): Buffer => {
+  const head = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(head);
+  head.writeUInt32BE(13, 8);
+  head.write('IHDR', 12, 'latin1');
+  head.writeUInt32BE(width, 16);
+  head.writeUInt32BE(height, 20);
+  return head;
+};
 
 const at = (minute: number): string =>
   new Date(Date.UTC(2026, 9, 20, 9, minute)).toISOString();
@@ -2588,6 +2601,7 @@ await test('a run read holds the run, its kept files within the bound, the end o
       });
     },
     diff: () => Promise.resolve(null),
+    figure: () => Promise.resolve({ missing: 'Not in this test.' }),
   };
   // A run read needs no lab view: it reads the run's record alone.
   const reader = new ApiReader(
@@ -2678,6 +2692,7 @@ await test("a diff read lists a direction's changed files within the bound, give
         diff: file ? { text: '@@ -1 +1 @@\n-old\n+new\n', cut: false } : null,
       });
     },
+    figure: () => Promise.resolve({ missing: 'Not in this test.' }),
   };
   const reader = new ApiReader(sources(root, () => seededView(), { reads }));
   const list = await reader.directionDiff('d-1');
@@ -2707,8 +2722,11 @@ await test("a diff read lists a direction's changed files within the bound, give
   );
 });
 
-await test('the run and diff reads answer over HTTP with the token, and refuse a bad ID, an unknown query, and a file outside the diff', async (t) => {
+await test('the run, diff, and figure reads answer over HTTP with the token, and refuse a bad ID, an unknown query, a file outside the diff, and a path for a figure', async (t) => {
   const root = await project();
+  const png = pngHead(640, 480);
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
   const lab = {
     runs: true,
     view: () => seededView(),
@@ -2732,6 +2750,28 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
         files: [{ path: 'probe.py', change: 'added', regular: true }],
         diff: path === undefined ? null : { text: '+x\n', cut: false },
       });
+    },
+    // Pinned figures: p-3.0 a PNG, p-3.1 an SVG, p-3.2 a PDF with a space in its name. p-4.0 is
+    // larger than the bound, p-5.0 does not match its record, and p-6.0 and p-6.1 declare too many
+    // pixels or none that Verifold can read.
+    figure: (proof: unknown, bytes: unknown) => {
+      const figures: Record<string, FigureRead> = {
+        'p-3.0': { path: 'results/fig.png', content: png },
+        'p-3.1': { path: 'results/fig.SVG', content: Buffer.from(svg) },
+        'p-3.2': {
+          path: 'results/report v2.pdf',
+          content: Buffer.from('%PDF-1.4\n'),
+        },
+        'p-4.0': { large: 'This figure has 30000000 bytes.' },
+        'p-5.0': { changed: 'fig.png at a3f9c2e does not match p-5.' },
+        'p-6.0': { path: 'results/huge.png', content: pngHead(60_000, 60_000) },
+        'p-6.1': { path: 'results/broken.png', content: Buffer.from('PNG') },
+      };
+      return Promise.resolve(
+        (bytes === apiLimits.figure &&
+          typeof proof === 'string' &&
+          figures[proof]) || { missing: `p-9 cites no figure at place 0.` },
+      );
     },
   } as unknown as Lab;
   const sessions = {
@@ -2812,6 +2852,137 @@ await test('the run and diff reads answer over HTTP with the token, and refuse a
       400,
       query,
     );
+
+  // A pinned figure comes as it is, with its exact type. As a page of its own it gets no
+  // script and no origin, and an SVG or a PDF is a download.
+  const sandbox =
+    "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  assert.equal((await get('/figures/p-3.0', false)).status, 401);
+  const image = await get('/figures/p-3.0');
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/png');
+  assert.equal(image.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(image.headers.get('cache-control'), 'no-store');
+  assert.equal(image.headers.get('content-security-policy'), sandbox);
+  assert.equal(
+    image.headers.get('content-disposition'),
+    'inline; filename="fig.png"',
+  );
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+  const vector = await get('/figures/p-3.1');
+  assert.equal(vector.headers.get('content-type'), 'image/svg+xml');
+  assert.equal(vector.headers.get('content-security-policy'), sandbox);
+  assert.equal(
+    vector.headers.get('content-disposition'),
+    'attachment; filename="fig.SVG"',
+  );
+  assert.equal(await vector.text(), svg);
+  const pdf = await get('/figures/p-3.2');
+  assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  assert.equal(
+    pdf.headers.get('content-disposition'),
+    'attachment; filename="report_v2.pdf"',
+  );
+  // Each refusal says why: no such figure (404), bytes that do not match the record (409),
+  // and a figure or an image over the bound (413).
+  const reason = async (path: string, status: number): Promise<string> => {
+    const answer = await get(path);
+    assert.equal(answer.status, status, path);
+    return ((await answer.json()) as { error: string }).error;
+  };
+  assert.match(await reason('/figures/p-9.0', 404), /cites no figure/);
+  assert.match(await reason('/figures/p-5.0', 409), /does not match/);
+  assert.match(await reason('/figures/p-4.0', 413), /30000000 bytes/);
+  assert.match(
+    await reason('/figures/p-6.0', 413),
+    /60000 × 60000 pixels\. Verifold shows images up to 20000 pixels/,
+  );
+  assert.match(
+    await reason('/figures/p-6.1', 413),
+    /cannot read the size of this image/,
+  );
+  // A path or a bad proof never reaches the read, and a query or a longer path finds no figure.
+  for (const path of [
+    '/figures/results%2Ffig.png',
+    '/figures/..%2F..%2Fetc%2Fhosts',
+    '/figures/p-3',
+    '/figures/p-3.x',
+  ])
+    assert.equal((await get(path)).status, 400, path);
+  assert.equal((await get('/figures/p-3.0?path=results/fig.png')).status, 404);
+  assert.equal((await get('/figures/p-3.0/fig.png')).status, 404);
+});
+
+await test('an image declares its pixels in its header, a figure gets a name that is safe in a header, and an SVG or a PDF is a download', () => {
+  assert.deepEqual(imageSize('image/png', pngHead(640, 480)), {
+    width: 640,
+    height: 480,
+  });
+  // A GIF's logical screen.
+  const gif = Buffer.alloc(13);
+  gif.write('GIF89a', 0, 'latin1');
+  gif.writeUInt16LE(320, 6);
+  gif.writeUInt16LE(200, 8);
+  assert.deepEqual(imageSize('image/gif', gif), { width: 320, height: 200 });
+  // A JPEG: an APP0 segment, then a frame that gives its height and width.
+  const jpeg = Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x4a, 0x46, 0xff, 0xc0, 0x00, 0x11,
+    0x08, 0x01, 0xe0, 0x02, 0x80, 0x03,
+  ]);
+  assert.deepEqual(imageSize('image/jpeg', jpeg), { width: 640, height: 480 });
+  // Image data before any frame: no size to read.
+  assert.equal(
+    imageSize(
+      'image/jpeg',
+      Buffer.from([0xff, 0xd8, 0xff, 0xda, 0, 4, 0, 0, 0, 0, 0, 0]),
+    ),
+    null,
+  );
+  // WebP: an extended, a lossless, and a lossy header.
+  const webp = (chunk: string, body: readonly number[]): Buffer => {
+    const bytes = Buffer.alloc(30);
+    bytes.write('RIFF', 0, 'latin1');
+    bytes.write('WEBP', 8, 'latin1');
+    bytes.write(chunk, 12, 'latin1');
+    Buffer.from(body).copy(bytes, 20);
+    return bytes;
+  };
+  const lossless = 639 | (479 << 14);
+  for (const [chunk, body] of [
+    ['VP8X', [0, 0, 0, 0, 0x7f, 0x02, 0x00, 0xdf, 0x01, 0x00]],
+    [
+      'VP8L',
+      [
+        0x2f,
+        lossless & 0xff,
+        (lossless >> 8) & 0xff,
+        (lossless >> 16) & 0xff,
+        (lossless >> 24) & 0xff,
+      ],
+    ],
+    ['VP8 ', [0, 0, 0, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0xe0, 0x01]],
+  ] as const)
+    assert.deepEqual(
+      imageSize('image/webp', webp(chunk, body)),
+      { width: 640, height: 480 },
+      chunk,
+    );
+  // A header that Verifold cannot read, and a type without a pixel size.
+  assert.equal(imageSize('image/png', Buffer.from('PNG')), null);
+  assert.equal(imageSize('image/svg+xml', Buffer.from('<svg/>')), null);
+
+  // A file name keeps only safe characters, and a hidden name becomes `figure`.
+  assert.equal(figureName('results/report v2.pdf', 'pdf'), 'report_v2.pdf');
+  assert.equal(figureName('results/.hidden.png', 'png'), 'figure.png');
+  assert.match(figureName('a/"x";\r\n.svg', 'svg'), /^[A-Za-z0-9._-]+$/);
+  const raster = figureHeaders('results/gap.png', 'image/png', 9);
+  assert.equal(raster['Content-Disposition'], 'inline; filename="gap.png"');
+  const vector = figureHeaders('results/gap.svg', 'image/svg+xml', 9);
+  assert.equal(vector['Content-Disposition'], 'attachment; filename="gap.svg"');
+  assert.match(
+    String(vector['Content-Security-Policy']),
+    /^sandbox; default-src 'none'.*frame-ancestors 'none'; base-uri 'none'; form-action 'none'$/,
+  );
 });
 
 await test('a dismiss clears only the background failures that the page names, and every failure without names', async (t) => {
