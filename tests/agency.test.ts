@@ -354,33 +354,38 @@ await test('two first writes at once share one new agency directory', async () =
       await readFile(join(directory, '.verifold-agency'), 'utf8'),
       'Verifold agency v1\n',
     );
-    assert.deepEqual(await readdir(directory), [
+    assert.deepEqual((await readdir(directory)).sort(), [
       '.gitignore',
       '.verifold-agency',
     ]);
   });
 });
 
-/** A draft marker: a call writes it before it puts the marker in place. */
-const draft = '.verifold-agency.00000000-0000-4000-8000-000000000000.tmp';
-
-await test("a directory with only another call's draft marker is still new", async () => {
-  await temporary(async (_root, directory) => {
-    await mkdir(directory);
-    await writeFile(join(directory, draft), 'Verifold agency v1\n');
-    await prepareAgency(directory);
-    assert.equal(
-      await readFile(join(directory, '.verifold-agency'), 'utf8'),
-      'Verifold agency v1\n',
-    );
+for (const [written, content] of [
+  ['empty', ''],
+  ['a start of the text', 'Verifold ag'],
+] as const) {
+  await test(`a marker that another call still writes is accepted: ${written}`, async () => {
+    await temporary(async (_root, directory) => {
+      await mkdir(directory);
+      await writeFile(join(directory, '.verifold-agency'), content);
+      await prepareAgency(directory);
+      assert.equal(
+        await readFile(join(directory, '.gitignore'), 'utf8'),
+        '*\n',
+      );
+      assert.deepEqual((await readdir(directory)).sort(), [
+        '.gitignore',
+        '.verifold-agency',
+      ]);
+    });
   });
-});
+}
 
 for (const marker of ['link', 'folder', 'other text'] as const) {
-  await test(`a marker that is not Verifold's is refused next to a draft marker: ${marker}`, async () => {
+  await test(`a marker that is not Verifold's is refused: ${marker}`, async () => {
     await temporary(async (root, directory) => {
       await mkdir(directory);
-      await writeFile(join(directory, draft), 'Verifold agency v1\n');
       const path = join(directory, '.verifold-agency');
       const source = join(root, 'marker.txt');
       await writeFile(source, 'Verifold agency v1\n');
@@ -388,7 +393,7 @@ for (const marker of ['link', 'folder', 'other text'] as const) {
       else if (marker === 'folder') await mkdir(path);
       else await writeFile(path, 'Another application');
       await assert.rejects(prepareAgency(directory), /empty agency directory/);
-      assert.deepEqual(await readdir(directory), ['.verifold-agency', draft]);
+      assert.deepEqual((await readdir(directory)).sort(), ['.verifold-agency']);
     });
   });
 }
