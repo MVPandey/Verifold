@@ -511,6 +511,28 @@ function readLines(
   });
 }
 
+/** A harness process. It leads its own process group on POSIX. */
+function spawnHarness(
+  command: string,
+  args: readonly string[],
+  cwd: string | undefined,
+  environment: NodeJS.ProcessEnv = {},
+): ChildProcessWithoutNullStreams {
+  const child = spawn(command, args, {
+    ...(cwd === undefined ? {} : { cwd }),
+    env: { ...childEnvironment(), ...environment },
+    shell: false,
+    detached: process.platform !== 'win32',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  // Harness diagnostics can contain private session data, so they are not retained.
+  child.stderr.resume();
+  child.stdin.on('error', () => {
+    /* The exit event reports a harness that closed its input. */
+  });
+  return child;
+}
+
 function launch(
   command: string,
   args: readonly string[],
@@ -521,23 +543,26 @@ function launch(
    */
   closing?: (code: number | null) => boolean,
 ): ChildProcessWithoutNullStreams {
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    env: {
-      ...childEnvironment(),
-      ...(options.host === 'claude' && options.mode === 'strict'
+  return reportEnd(
+    spawnHarness(
+      command,
+      args,
+      options.cwd,
+      options.host === 'claude' && options.mode === 'strict'
         ? strictClaudeEnvironment
-        : {}),
-    },
-    shell: false,
-    detached: process.platform !== 'win32',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  // Harness diagnostics can contain private session data, so they are not retained.
-  child.stderr.resume();
-  child.stdin.on('error', () => {
-    /* The exit event reports a harness that closed its input. */
-  });
+        : {},
+    ),
+    options,
+    closing,
+  );
+}
+
+/** Tell the session when its harness cannot start, and when it ends. */
+function reportEnd(
+  child: ChildProcessWithoutNullStreams,
+  options: HostOptions,
+  closing?: (code: number | null) => boolean,
+): ChildProcessWithoutNullStreams {
   child.on('error', () =>
     options.onEvent({
       type: 'notice',
@@ -1009,7 +1034,7 @@ export function codexCommand(item: Record<string, unknown>): string {
  * crashed. The watchdog and Codex share one process group, so a later owner
  * can stop both. A missing Codex exits with code 127.
  */
-export const watchdog = `const { spawn } = require('node:child_process');
+const watchdog = `const { spawn } = require('node:child_process');
 const [command, ...args] = process.argv.slice(1);
 const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
 const stop = () => { try { child.kill('SIGTERM'); } catch {} setTimeout(() => process.exit(0), 2000).unref(); };
@@ -1020,36 +1045,103 @@ process.on('SIGTERM', stop);
 child.on('error', () => process.exit(127));
 child.on('exit', (code) => process.exit(code ?? 1));`;
 
+/** Codex's app-server under the watchdog, on a socket in a private folder. */
+export interface CodexServer {
+  /** The watchdog. It leads one process group with Codex on POSIX. */
+  readonly child: ChildProcessWithoutNullStreams;
+  /** The app-server socket, which a terminal can also attach to. */
+  readonly socket: string;
+  readonly exited: () => boolean;
+  /** Connect once the server listens. It fails at `deadline` (a `Date.now()` time), or when the server exits first. */
+  connect(
+    deadline: number,
+    onMessage: (text: string) => void,
+    onClose: () => void,
+  ): Promise<UnixWebSocket>;
+  /** Stop the server and remove its folder now. */
+  stop(): void;
+}
+
+/**
+ * Start Codex's app-server under the watchdog, for a session or for
+ * detection. It listens on a socket in a new private folder, which is
+ * removed when the server closes. `config` holds top-level `-c` options,
+ * which reach the app-server.
+ */
+export function startCodexServer(options: {
+  readonly executable: string;
+  readonly config: readonly string[];
+  /** Without it, the server runs in Verifold's own folder. */
+  readonly cwd?: string;
+}): CodexServer {
+  // Unix socket paths are short (about 104 bytes on macOS), so the folder is under the temporary folder.
+  const folder = mkdtempSync(join(tmpdir(), 'vf-'));
+  const socket = join(folder, 'codex.sock');
+  const child = spawnHarness(
+    process.execPath,
+    [
+      '-e',
+      watchdog,
+      options.executable,
+      ...options.config,
+      'app-server',
+      '--listen',
+      `unix://${socket}`,
+    ],
+    options.cwd,
+  );
+  child.stdout.resume();
+  const remove = (): void => rmSync(folder, { recursive: true, force: true });
+  child.on('close', remove);
+  const exited = (): boolean =>
+    child.exitCode !== null || child.signalCode !== null;
+  return {
+    child,
+    socket,
+    exited,
+    connect: (deadline, onMessage, onClose) =>
+      connectWhenListening(
+        socket,
+        { alive: () => !exited(), deadline },
+        onMessage,
+        onClose,
+      ),
+    stop: () => {
+      stop(child);
+      remove();
+    },
+  };
+}
+
+/** The parameters of Codex's `initialize` request. */
+export function codexInitialize(version: string): Record<string, unknown> {
+  return {
+    clientInfo: { name: 'verifold', title: 'Verifold', version },
+    capabilities: { experimentalApi: true },
+  };
+}
+
 /**
  * Codex through `codex app-server` (JSON-RPC over stdio). Ask me routes
  * approvals to this client. Auto routes them to the Codex reviewer agent.
  */
 function codex(options: HostOptions): HostSession {
-  // The app-server listens on a socket in a private folder, so a terminal can attach later.
-  // Unix socket paths are short (about 104 bytes on macOS), so the folder is under the temporary folder.
-  const folder = mkdtempSync(join(tmpdir(), 'vf-'));
-  const socket = join(folder, 'codex.sock');
-  const child = launch(
-    process.execPath,
-    [
-      '-e',
-      watchdog,
-      options.executable ?? 'codex',
-      // A top-level -c reaches the app-server. Search does not use the sandbox's network.
+  // The app-server listens on a socket, so a terminal can attach later.
+  const server = startCodexServer({
+    executable: options.executable ?? 'codex',
+    config: [
+      // Search does not use the sandbox's network.
       ...(options.liveSearch ? ['-c', 'web_search="live"'] : []),
       // A skill's MCP dependencies would go into the person's own Codex settings.
       // The same as `--disable`, which an older app-server may refuse.
       ...(options.skills
         ? ['-c', 'features.skill_mcp_dependency_install=false']
         : []),
-      'app-server',
-      '--listen',
-      `unix://${socket}`,
     ],
-    options,
-  );
-  child.stdout.resume();
-  child.on('close', () => rmSync(folder, { recursive: true, force: true }));
+    cwd: options.cwd,
+  });
+  const { child, socket, exited } = server;
+  reportEnd(child, options);
   const emit = options.onEvent;
   // `exit` comes before `close`, which reports the end of the session, so the reason comes first.
   child.on('exit', () => {
@@ -1392,13 +1484,10 @@ function codex(options: HostOptions): HostSession {
     }
   };
   // Connect when the server listens. A server that never listens in 15 seconds counts as a failed start.
-  const exited = (): boolean =>
-    child.exitCode !== null || child.signalCode !== null;
   void (async () => {
     try {
-      connection = await connectWhenListening(
-        socket,
-        { alive: () => !exited(), deadline: Date.now() + 15_000 },
+      connection = await server.connect(
+        Date.now() + 15_000,
         (text) => {
           let message: unknown;
           try {
@@ -1440,42 +1529,31 @@ function codex(options: HostOptions): HostSession {
     }
   })();
 
-  call(
-    'initialize',
-    {
-      clientInfo: {
-        name: 'verifold',
-        title: 'Verifold',
-        version: options.clientVersion,
-      },
-      capabilities: { experimentalApi: true },
-    },
-    () => {
-      send({ method: 'initialized', params: {} });
-      call('config/read', { cwd: options.cwd }, (result) => {
-        const config = codexIsolation(result);
-        // The thread's configuration turns off any server. A terminal's `-c` options can name only some.
-        if (config)
-          overrides = codexOffOptions(
-            Object.keys(config.mcp_servers as Record<string, unknown>),
-          );
-        if (!config) {
-          emit({
-            type: 'notice',
-            text: 'Codex did not report its configuration, so Verifold cannot turn off its MCP servers. The session stopped.',
-          });
-          stop(child);
-          return;
-        }
-        const begin = (): void => {
-          if (options.bestModel && !options.model) chooseModel(config);
-          else startThread(config, options.model);
-        };
-        if (options.skills) addSkills(options.skills, begin);
-        else begin();
-      });
-    },
-  );
+  call('initialize', codexInitialize(options.clientVersion), () => {
+    send({ method: 'initialized', params: {} });
+    call('config/read', { cwd: options.cwd }, (result) => {
+      const config = codexIsolation(result);
+      // The thread's configuration turns off any server. A terminal's `-c` options can name only some.
+      if (config)
+        overrides = codexOffOptions(
+          Object.keys(config.mcp_servers as Record<string, unknown>),
+        );
+      if (!config) {
+        emit({
+          type: 'notice',
+          text: 'Codex did not report its configuration, so Verifold cannot turn off its MCP servers. The session stopped.',
+        });
+        stop(child);
+        return;
+      }
+      const begin = (): void => {
+        if (options.bestModel && !options.model) chooseModel(config);
+        else startThread(config, options.model);
+      };
+      if (options.skills) addSkills(options.skills, begin);
+      else begin();
+    });
+  });
 
   /**
    * Add the skills folder of Verifold's plugin as a skill root of this
