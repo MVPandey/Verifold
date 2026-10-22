@@ -549,25 +549,25 @@ await test('one output that cannot be copied leaves the other outputs and the me
   assert.deepEqual(await runFolders(fx.root), []);
 });
 
-await test('a run whose folder Verifold cannot keep says why in its note', async (t) => {
+await test('a run whose folder Verifold cannot keep says why, and keeps the metrics of its log', async (t) => {
   const fx = await fixture(t);
   const { ledger, ended } = fx.ledger();
   t.after(() => ledger.close());
   // The command runs in the folder's tree, and removes the whole folder.
   await fx.start(
     ledger,
-    'mkdir out; echo a > out/a.txt; rm -rf "$(dirname "$PWD")"',
-    {
-      want: ['out'],
-    },
+    'echo "METRIC acc=0.5"; printf \'{"f1": 1}\' > metrics.json; mkdir out; echo a > out/a.txt; rm -rf "$(dirname "$PWD")"',
+    { want: ['out'] },
   );
   await until(() => ended.length === 1);
   const run = ledger.get('r-1');
   assert.equal(run?.status, 'done');
   assert.deepEqual(run?.outputs, []);
+  // The log's metrics stay. metrics.json went with the folder.
+  assert.deepEqual(run?.metrics, { acc: 0.5 });
   assert.match(
     run?.note ?? '',
-    /Verifold could not keep the run's folder \(the folder is gone\), so it took no metrics and no outputs\./,
+    /Verifold could not keep the run's folder \(the folder is not there\), so it read no metrics\.json and kept no outputs\./,
   );
 });
 
