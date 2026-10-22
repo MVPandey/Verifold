@@ -1315,9 +1315,15 @@ export interface ActionBodies {
    * Start over: move the current run into an archive, keeping the question,
    * the project's settings, the memory, and the project's files. With `lab`,
    * nothing starts after it: the person starts a lab on the question. The
-   * old desk's Start over starts research instead. Added after version 1.
+   * old desk's Start over starts research instead. With `expect`, only a run
+   * of the research flow moves: a page that showed one sends it, so a page
+   * from before a lab started cannot archive the lab. Added after version 1.
    */
-  'start-over': { readonly lab?: true; readonly key?: string };
+  'start-over': {
+    readonly lab?: true;
+    readonly expect?: 'research';
+    readonly key?: string;
+  };
   /** The first run's actions, added after version 1. Save the agents step. */
   'setup-agents': {
     readonly claude: { readonly use: boolean; readonly model?: string };
@@ -1468,7 +1474,8 @@ export interface HistoryEntry {
   readonly question: string | null;
   /** The direction that a research-flow run chose. */
   readonly direction: string | null;
-  readonly bytes: number;
+  /** The size of an archived run. Only the list sizes runs: null for the current run and in a run's own read. */
+  readonly bytes: number | null;
   readonly tasks: number;
 }
 
@@ -1478,7 +1485,7 @@ export interface HistoryList {
   readonly runs: readonly HistoryEntry[];
   /** More archived runs exist than `runs` holds. */
   readonly more: boolean;
-  /** The project's memory files, as plain text. */
+  /** The project's memory files, as plain text. A long one shows its start. */
   readonly memory: readonly { readonly name: string; readonly text: Text }[];
 }
 
@@ -1498,8 +1505,10 @@ export interface HistoryDirection {
 export interface HistoryLabRun {
   readonly kind: 'lab';
   readonly entry: HistoryEntry;
-  readonly question: string;
-  readonly startedAt: string;
+  /** False: the lab's record cannot be read, so only its runs and board show. */
+  readonly readable: boolean;
+  readonly question: string | null;
+  readonly startedAt: string | null;
   readonly plan: {
     readonly reading: Text;
     readonly cost: Text;
@@ -1526,6 +1535,7 @@ export interface HistoryAttempt {
   readonly summary: Text | null;
   readonly delegation: Text | null;
   readonly sources: readonly { readonly title: string; readonly url: string }[];
+  readonly moreSources: number;
   /** It has a transcript: `GET /api/v1/history/:id/turns?source=attempt:<id>`. */
   readonly transcript: boolean;
 }
@@ -1535,7 +1545,10 @@ export interface HistoryCandidate {
   readonly title: string;
   readonly recommendation: Text;
   readonly checks: readonly string[];
+  /** Checks that `checks` does not hold. */
+  readonly moreChecks: number;
   readonly sources: readonly string[];
+  readonly moreSources: number;
   readonly kind: 'main' | 'extra' | 'alternative' | null;
 }
 
@@ -1543,31 +1556,31 @@ export interface HistoryCoordinator {
   readonly objective: Text;
   readonly harness: Harness;
   readonly model: string | null;
-  readonly startedAt: string;
+  readonly startedAt: string | null;
   readonly stoppedAt: string | null;
   readonly planApproved: boolean;
   /** Its session, whose transcript `GET /api/v1/history/:id/turns?source=session:<id>` sends. */
   readonly session: string | null;
-  /** The newest actions, oldest first. */
-  readonly actions: readonly {
+  /** The newest actions, oldest first. Null: an action that cannot be read. */
+  readonly actions: readonly ({
     readonly at: string;
     readonly tool: string;
     readonly reason: string | null;
     readonly ok: boolean;
     readonly result: Text;
-  }[];
+  } | null)[];
   readonly olderActions: number;
 }
 
 export interface HistoryTaskVersion {
   readonly number: number;
-  readonly at: string;
+  readonly at: string | null;
   /** How the harness turn ended. */
-  readonly turn: string;
+  readonly turn: string | null;
   /** The files of the version. `GET /api/v1/history/:id/tasks/:task/diff?version=&file=` sends one file's diff. */
   readonly files: readonly {
     readonly path: string;
-    readonly change: string;
+    readonly change: string | null;
     readonly inScope: boolean;
   }[];
   /** More files than `files` holds. */
@@ -1580,15 +1593,22 @@ export interface HistoryTaskVersion {
   } | null;
 }
 
-/** A task of a research-flow run, in the run's read. `GET /api/v1/history/:id/tasks/:task` sends it in full. */
+/**
+ * A task of a research-flow run, in the run's read. `GET
+ * /api/v1/history/:id/tasks/:task` sends it in full. `record`: `read` when the
+ * summary comes from its record; `large` when the record is larger than a
+ * summary reads, so only its newest assignment shows; `unreadable` when the
+ * record cannot be read.
+ */
 export interface HistoryTaskSummary {
   readonly id: string;
-  readonly title: string;
-  readonly state: string;
-  readonly harness: Harness;
+  readonly record: 'read' | 'large' | 'unreadable';
+  readonly title: string | null;
+  readonly state: string | null;
+  readonly harness: Harness | null;
   readonly model: string | null;
-  readonly attempts: number;
-  readonly versions: number;
+  readonly attempts: number | null;
+  readonly versions: number | null;
   /** How its newest attempt ended. */
   readonly outcome: string | null;
 }
@@ -1606,13 +1626,15 @@ export interface HistoryTask {
   readonly olderAttempts: number;
   readonly attempts: readonly {
     readonly number: number;
-    readonly startedAt: string;
+    readonly startedAt: string | null;
     readonly endedAt: string | null;
     readonly outcome: string | null;
     readonly note: string | null;
     /** Its session, whose transcript the turns read sends. */
     readonly session: string | null;
+    /** The newest versions, oldest first. */
     readonly versions: readonly HistoryTaskVersion[];
+    readonly olderVersions: number;
   }[];
 }
 
@@ -1630,7 +1652,8 @@ export interface HistoryMessage {
 
 export interface HistoryResults {
   readonly direction: string;
-  readonly checks: readonly {
+  /** Null: a check that cannot be read. */
+  readonly checks: readonly ({
     readonly check: number;
     readonly result: string;
     readonly value: string;
@@ -1639,13 +1662,18 @@ export interface HistoryResults {
       readonly result: string;
       readonly reason: string;
     } | null;
-  }[];
+  } | null)[];
+  readonly moreChecks: number;
   readonly answer: {
-    readonly statement: Text;
-    readonly claims: readonly {
+    /** Null: the answer cannot be read. */
+    readonly statement: Text | null;
+    /** Null: a claim that cannot be read. */
+    readonly claims: readonly ({
       readonly text: string;
       readonly evidence: readonly string[];
-    }[];
+      readonly moreEvidence: number;
+    } | null)[];
+    readonly moreClaims: number;
     readonly decision: {
       readonly kind: 'accepted' | 'more';
       readonly note: string | null;
@@ -1679,7 +1707,8 @@ export interface HistoryPod {
   readonly state: string;
   readonly tasks: readonly string[];
   readonly requestedAt: string;
-  readonly costUsd: number;
+  /** Null: its record does not say what it cost. */
+  readonly costUsd: number | null;
 }
 
 /** `GET /api/v1/history/:id` for a research-flow run. */
@@ -1695,21 +1724,27 @@ export interface HistoryResearchRun {
       readonly name: string;
       readonly task: string;
     }[];
+    readonly morePersonas: number;
   } | null;
-  /** Newest first. */
+  /** The newest attempts, newest first. */
   readonly attempts: readonly HistoryAttempt[];
+  readonly moreAttempts: number;
   readonly candidates: readonly HistoryCandidate[];
+  readonly moreCandidates: number;
   /** The ID of the direction that the person chose. */
   readonly chosen: string | null;
   readonly coordinator: HistoryCoordinator | null;
   readonly tasks: readonly HistoryTaskSummary[];
+  readonly moreTasks: number;
   /** The newest messages, oldest first. */
   readonly messages: readonly HistoryMessage[];
   readonly olderMessages: number;
   readonly results: readonly HistoryResults[];
+  readonly moreResults: number;
   /** The person's own sessions, newest first. */
   readonly sessions: readonly HistorySession[];
   readonly pods: readonly HistoryPod[];
+  readonly morePods: number;
 }
 
 export type HistoryRun = HistoryLabRun | HistoryResearchRun;

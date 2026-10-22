@@ -15,7 +15,7 @@ export type TeamKind = 'lab' | 'coordinator';
 
 /** Why research, the coordinator, or a task cannot work: a lab works on the run. */
 export const labWorks =
-  'A lab works on this run. Start over in the app to use research and the coordinator on a new run.';
+  "A lab works on this run, so research and the coordinator are not available. Start over in the old desk's Records moves this run into the archive. Then research and the coordinator can work on a new run.";
 
 /** Why a lab cannot start: the run is from the research flow that came before the lab. */
 export const researchRunWorks =
@@ -48,13 +48,13 @@ export class RunTeam {
   async refusal(kind: TeamKind | 'research'): Promise<string | null> {
     if (kind !== 'lab') return this.owners.lab() ? labWorks : null;
     if (this.owners.lab()) return 'The lab already runs.';
-    if (
-      (await this.owners.coordinator()) ||
+    // A research step that runs has its run on disk too, and Start a lab waits for the step as well.
+    if (this.owners.researchBusy()) return researchRuns;
+    return (await this.owners.coordinator()) ||
       (this.owners.root !== undefined &&
         (await researchRunOnDisk(this.owners.root)))
-    )
-      return researchRunWorks;
-    return this.owners.researchBusy() ? researchRuns : null;
+      ? researchRunWorks
+      : null;
   }
 
   /**

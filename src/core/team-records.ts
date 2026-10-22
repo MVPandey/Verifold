@@ -102,13 +102,16 @@ const deliveries: readonly Delivery[] = [
   'board',
 ];
 
+export function validMessageId(id: unknown): id is string {
+  return typeof id === 'string' && /^m-[1-9]\d{0,5}$/.test(id);
+}
+
 export function parseMessage(value: unknown): Message | null {
   const entry = object(value);
   if (
     !entry ||
     entry.schemaVersion !== 1 ||
-    typeof entry.id !== 'string' ||
-    !/^m-[1-9]\d{0,5}$/.test(entry.id) ||
+    !validMessageId(entry.id) ||
     typeof entry.at !== 'string' ||
     typeof entry.from !== 'string' ||
     typeof entry.to !== 'string' ||

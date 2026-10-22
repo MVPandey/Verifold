@@ -36,12 +36,14 @@ import {
   historyTaskDiff,
   historyTranscript,
   memoryFiles,
-  researchRunOnDisk,
+  ResearchRunWatch,
   type HistoryRunInfo,
   type LabHistory,
   type ResearchHistory,
+  type ResultsView,
+  type TaskView,
 } from '../core/history.ts';
-import type { TaskRecord } from '../core/team-records.ts';
+import { validTaskId } from '../core/team-records.ts';
 import {
   isOpen,
   leaseLimits,
@@ -132,6 +134,7 @@ import {
   type HistoryLabRun,
   type HistoryList,
   type HistoryResearchRun,
+  type HistoryResults,
   type HistoryRun,
   type HistoryTask,
   type HistoryTurns,
@@ -952,7 +955,20 @@ const historyBounds = {
   files: 200,
   brief: 16_000,
   memory: 64 * 1024,
+  /** A title, a name, a direction, or a piece of evidence. */
+  name: 300,
+  personas: 10,
+  candidates: 20,
+  checks: 50,
+  claims: 50,
+  evidence: 20,
+  risk: 10,
 } as const;
+
+/** How many items of `items` a list of at most `max` leaves out. */
+function over(items: readonly unknown[], max: number): number {
+  return Math.max(0, items.length - max);
+}
 
 function historyEntry(info: HistoryRunInfo): HistoryEntry {
   return {
@@ -960,22 +976,27 @@ function historyEntry(info: HistoryRunInfo): HistoryEntry {
     kind: info.kind,
     at: info.at,
     question: info.question && clip(info.question, apiLimits.question),
-    direction: info.direction,
+    direction: info.direction && clip(info.direction, historyBounds.name),
     bytes: info.bytes,
     tasks: info.tasks,
   };
 }
 
-/** A lab's archived run: its plan, directions, runs, and newest posts. */
+/**
+ * A lab's archived run: its plan, directions, runs, and newest posts. Without
+ * a readable record of the lab, its runs and posts only.
+ */
 function historyLab(found: LabHistory): HistoryLabRun {
   const handle = (agent: string): string =>
     found.agents.get(agent)?.handle ?? agent;
-  const plan = found.state.plan;
+  const state = found.state;
+  const plan = state?.plan ?? null;
   return {
     kind: 'lab',
     entry: historyEntry(found.info),
-    question: found.state.question,
-    startedAt: found.state.startedAt,
+    readable: state !== null,
+    question: state?.question ?? null,
+    startedAt: state?.startedAt ?? null,
     plan: plan
       ? {
           reading: text(plan.reading, historyBounds.long),
@@ -983,7 +1004,7 @@ function historyLab(found: LabHistory): HistoryLabRun {
           facts: plan.facts.map(fact),
         }
       : null,
-    directions: found.state.directions.map((entry) => ({
+    directions: (state?.directions ?? []).map((entry) => ({
       id: entry.id,
       title: entry.title,
       bar: entry.bar,
@@ -1000,19 +1021,71 @@ function historyLab(found: LabHistory): HistoryLabRun {
   };
 }
 
+/** A direction's results: each list within its bound, and a check or claim that cannot be read as null. */
+function historyResults(results: ResultsView): HistoryResults {
+  const answer = results.answer;
+  return {
+    direction: clip(results.direction, historyBounds.name),
+    checks: results.checks.slice(0, historyBounds.checks).map((check) =>
+      check === null
+        ? null
+        : {
+            check: check.check,
+            result: check.result,
+            value: clip(check.value, historyBounds.short),
+            reason: text(check.reason, historyBounds.short),
+            ruling: check.ruling
+              ? {
+                  result: check.ruling.result,
+                  reason: clip(check.ruling.reason, historyBounds.short),
+                }
+              : null,
+          },
+    ),
+    moreChecks: over(results.checks, historyBounds.checks),
+    answer: answer
+      ? {
+          statement:
+            answer.statement === null
+              ? null
+              : text(answer.statement, historyBounds.long),
+          claims: answer.claims.slice(0, historyBounds.claims).map((claim) =>
+            claim === null
+              ? null
+              : {
+                  text: clip(claim.text, historyBounds.short),
+                  evidence: claim.evidence
+                    .slice(0, historyBounds.evidence)
+                    .map((item) => clip(item, historyBounds.name)),
+                  moreEvidence: over(claim.evidence, historyBounds.evidence),
+                },
+          ),
+          moreClaims: over(answer.claims, historyBounds.claims),
+          decision: answer.decision
+            ? {
+                kind: answer.decision.kind,
+                note:
+                  answer.decision.note === null
+                    ? null
+                    : clip(answer.decision.note, historyBounds.short),
+              }
+            : null,
+        }
+      : null,
+  };
+}
+
 /**
  * A research-flow run: its question and brief, research, directions, the
  * coordinator, task summaries, messages, results, the person's sessions,
- * and pods.
+ * and pods. Each list keeps its bound and says how many it leaves out.
  */
-function historyResearch(
-  found: ResearchHistory,
-  now: number,
-): HistoryResearchRun {
+function historyResearch(found: ResearchHistory): HistoryResearchRun {
   const workspace = found.workspace;
   const research = workspace?.research;
   const coordinator = found.coordinator;
   const actions = coordinator?.actions.slice(-historyBounds.actions) ?? [];
+  const candidates = workspace?.candidates ?? [];
   return {
     kind: 'research',
     entry: historyEntry(found.info),
@@ -1023,15 +1096,18 @@ function historyResearch(
     plan: research?.plan
       ? {
           scope: clip(research.plan.scope, historyBounds.long),
-          personas: research.plan.personas.map((persona) => ({
-            name: persona.name,
-            task: clip(persona.task, historyBounds.short),
-          })),
+          personas: research.plan.personas
+            .slice(0, historyBounds.personas)
+            .map((persona) => ({
+              name: clip(persona.name, historyBounds.name),
+              task: clip(persona.task, historyBounds.short),
+            })),
+          morePersonas: over(research.plan.personas, historyBounds.personas),
         }
       : null,
-    attempts: found.attempts
-      .slice(0, historyBounds.attempts)
-      .map((attempt) => ({
+    attempts: found.attempts.slice(0, historyBounds.attempts).map((attempt) => {
+      const sources = attempt.report?.sources ?? [];
+      return {
         id: attempt.id,
         phase: attempt.record?.phase ?? null,
         status: attempt.record?.status ?? null,
@@ -1045,22 +1121,34 @@ function historyResearch(
         delegation: attempt.report
           ? text(attempt.report.delegation, historyBounds.short)
           : null,
-        sources: (attempt.report?.sources ?? [])
-          .slice(0, historyBounds.sources)
-          .map((source) => ({
-            title: clip(source.title, 300),
-            url: source.url,
-          })),
+        sources: sources.slice(0, historyBounds.sources).map((source) => ({
+          title: clip(source.title, historyBounds.name),
+          url: source.url,
+        })),
+        moreSources: over(sources, historyBounds.sources),
         transcript: attempt.transcript,
-      })),
-    candidates: (workspace?.candidates ?? []).map((candidate) => ({
-      id: candidate.id,
-      title: candidate.title,
-      recommendation: text(candidate.recommendation, historyBounds.short),
-      checks: candidate.gates.map((check) => clip(check, historyBounds.short)),
-      sources: [...(candidate.sources ?? [])],
-      kind: candidate.kind ?? null,
-    })),
+      };
+    }),
+    moreAttempts:
+      found.moreAttempts + over(found.attempts, historyBounds.attempts),
+    candidates: candidates
+      .slice(0, historyBounds.candidates)
+      .map((candidate) => {
+        const sources = candidate.sources ?? [];
+        return {
+          id: candidate.id,
+          title: clip(candidate.title, historyBounds.name),
+          recommendation: text(candidate.recommendation, historyBounds.short),
+          checks: candidate.gates
+            .slice(0, historyBounds.checks)
+            .map((check) => clip(check, historyBounds.short)),
+          moreChecks: over(candidate.gates, historyBounds.checks),
+          sources: sources.slice(0, historyBounds.sources),
+          moreSources: over(sources, historyBounds.sources),
+          kind: candidate.kind ?? null,
+        };
+      }),
+    moreCandidates: over(candidates, historyBounds.candidates),
     chosen: workspace?.selectedId ?? null,
     coordinator: coordinator
       ? {
@@ -1071,76 +1159,51 @@ function historyResearch(
           stoppedAt: coordinator.stoppedAt,
           planApproved: coordinator.planApproved,
           session: coordinator.session,
-          actions: actions.map((action) => ({
-            at: action.at,
-            tool: action.tool,
-            reason: action.reason
-              ? clip(action.reason, historyBounds.short)
-              : null,
-            ok: action.ok,
-            result: text(action.result, historyBounds.result),
-          })),
+          actions: actions.map((action) =>
+            action === null
+              ? null
+              : {
+                  at: action.at,
+                  tool: clip(action.tool, historyBounds.name),
+                  reason:
+                    action.reason === null
+                      ? null
+                      : clip(action.reason, historyBounds.short),
+                  ok: action.ok,
+                  result: text(action.result, historyBounds.result),
+                },
+          ),
           olderActions: coordinator.actions.length - actions.length,
         }
       : null,
     tasks: found.tasks.map((task) => ({
       id: task.id,
-      title: task.assignment.title,
+      record: task.record,
+      title: task.title === null ? null : clip(task.title, historyBounds.name),
       state: task.state,
-      harness: task.assignment.host,
-      model: task.assignment.model,
-      attempts: task.attempts.length,
-      versions: task.attempts.reduce(
-        (sum, attempt) => sum + attempt.versions.length,
-        0,
-      ),
-      outcome: task.attempts.at(-1)?.outcome ?? null,
+      harness: task.host,
+      model: task.model,
+      attempts: task.attempts,
+      versions: task.versions,
+      outcome: task.outcome,
     })),
+    moreTasks: found.moreTasks,
     messages: found.messages.map((message) => ({
       id: message.id,
       at: message.at,
-      from: message.from,
-      to: message.to,
+      from: clip(message.from, historyBounds.name),
+      to: clip(message.to, historyBounds.name),
       kind: message.kind,
       text: text(message.text, historyBounds.message),
-      status: message.status ?? null,
-      answer: message.answer
-        ? text(message.answer.text, historyBounds.answer)
-        : null,
+      status: message.status,
+      answer:
+        message.answer === null
+          ? null
+          : text(message.answer, historyBounds.answer),
     })),
     olderMessages: found.messageCount - found.messages.length,
-    results: found.results.map((results) => ({
-      direction: results.direction,
-      checks: results.checks.map((check) => ({
-        check: check.check,
-        result: check.result,
-        value: clip(check.value, historyBounds.short),
-        reason: text(check.reason, historyBounds.short),
-        ruling: check.ruling
-          ? {
-              result: check.ruling.result,
-              reason: clip(check.ruling.reason, historyBounds.short),
-            }
-          : null,
-      })),
-      answer: results.answer
-        ? {
-            statement: text(results.answer.statement, historyBounds.long),
-            claims: results.answer.claims.map((claim) => ({
-              text: clip(claim.text, historyBounds.short),
-              evidence: [...claim.evidence],
-            })),
-            decision: results.answer.decision
-              ? {
-                  kind: results.answer.decision.kind,
-                  note: results.answer.decision.note
-                    ? clip(results.answer.decision.note, historyBounds.short)
-                    : null,
-                }
-              : null,
-          }
-        : null,
-    })),
+    results: found.results.map(historyResults),
+    moreResults: found.moreResults,
     sessions: found.sessions.map(({ record, transcript }) => {
       const commands = record.commands.slice(-historyBounds.commands);
       return {
@@ -1156,71 +1219,72 @@ function historyResearch(
           at: command.at,
           tool: command.tool,
           action: text(command.action, historyBounds.command),
-          risk: [...command.risk],
+          risk: command.risk.slice(0, historyBounds.risk),
         })),
         olderCommands: record.commands.length - commands.length,
         transcript,
       };
     }),
-    pods: found.pods.map((lease) => ({
-      lease: lease.id,
-      gpu: lease.gpu,
-      state: lease.state,
-      tasks: [...lease.tasks],
-      requestedAt: lease.requestedAt,
-      costUsd: cents(spent(lease, now)),
+    pods: found.pods.map((pod) => ({
+      lease: pod.lease,
+      gpu: clip(pod.gpu, historyBounds.name),
+      state: clip(pod.state, historyBounds.name),
+      tasks: pod.tasks.slice(0, historyBounds.evidence),
+      requestedAt: pod.requestedAt,
+      costUsd: pod.costUsd === null ? null : cents(pod.costUsd),
     })),
+    morePods: found.morePods,
   };
 }
 
-/** A task of a research-flow run in full: its newest attempts, with their versions and files. */
-function historyTaskOf(task: TaskRecord): HistoryTask {
+/** A task of a research-flow run in full: its newest attempts, with their newest versions and files. */
+function historyTaskOf(task: TaskView): HistoryTask {
   const attempts = task.attempts.slice(-historyBounds.attempts);
   return {
     id: task.id,
-    title: task.assignment.title,
-    objective: text(task.assignment.objective, historyBounds.long),
+    title: clip(task.title, historyBounds.name),
+    objective: text(task.objective, historyBounds.long),
     state: task.state,
-    harness: task.assignment.host,
-    model: task.assignment.model,
+    harness: task.host,
+    model: task.model,
     revision: task.revision,
     olderAttempts: task.attempts.length - attempts.length,
-    attempts: attempts.map((attempt) => ({
-      number: attempt.number,
-      startedAt: attempt.startedAt,
-      endedAt: attempt.endedAt,
-      outcome: attempt.outcome,
-      note: attempt.note ? clip(attempt.note, historyBounds.short) : null,
-      session: attempt.session,
-      versions: attempt.versions
-        .slice(-historyBounds.versions)
-        .map((version) => ({
+    attempts: attempts.map((attempt) => {
+      const versions = attempt.versions.slice(-historyBounds.versions);
+      return {
+        number: attempt.number,
+        startedAt: attempt.startedAt,
+        endedAt: attempt.endedAt,
+        outcome: attempt.outcome,
+        note:
+          attempt.note === null
+            ? null
+            : clip(attempt.note, historyBounds.short),
+        session: attempt.session,
+        versions: versions.map((version) => ({
           number: version.number,
           at: version.at,
           turn: version.turn,
-          files: version.files.slice(0, historyBounds.files).map((file) => ({
-            path: file.path,
-            change: file.change,
-            inScope: file.inScope,
-          })),
-          moreFiles: Math.max(0, version.files.length - historyBounds.files),
-          reply: version.reply
-            ? text(version.reply, historyBounds.answer)
-            : null,
+          files: version.files.slice(0, historyBounds.files),
+          moreFiles: over(version.files, historyBounds.files),
+          reply:
+            version.reply === null
+              ? null
+              : text(version.reply, historyBounds.answer),
           decision: version.decision
             ? {
                 kind: version.decision.kind,
-                note: version.decision.note
-                  ? clip(version.decision.note, historyBounds.short)
-                  : null,
-                by:
-                  version.decision.by === 'coordinator'
-                    ? ('coordinator' as const)
-                    : ('person' as const),
+                note:
+                  version.decision.note === null
+                    ? null
+                    : clip(version.decision.note, historyBounds.short),
+                by: version.decision.by,
               }
             : null,
         })),
-    })),
+        olderVersions: attempt.versions.length - versions.length,
+      };
+    }),
   };
 }
 
@@ -1664,6 +1728,8 @@ export class ApiReader {
   private readonly files = new Map<string, Followed>();
   /** Transcripts that page reads asked for, the newest last. */
   private readonly extra: string[] = [];
+  /** Whether the current run is from the research flow, read again only after its records change. */
+  private readonly researchRun = new ResearchRunWatch();
 
   constructor(sources: () => ApiSources) {
     this.sources = sources;
@@ -1726,8 +1792,9 @@ export class ApiReader {
       sources.works,
     ];
     const root = sources.root;
-    // A project without a lab shows its question and why its lab did not start.
-    if (!view && root) parts.push(sources.startProblem?.());
+    // A project without a lab shows its question, why its lab did not start, and a run of the research flow.
+    if (!view && root)
+      parts.push(sources.startProblem?.(), await this.researchRun.read(root));
     // The pods and their settings show with or without a lab. A stored pod secret changes what a pod lacks.
     const compute = root ? sources.compute?.view() : undefined;
     if (compute)
@@ -1805,11 +1872,6 @@ export class ApiReader {
     };
   }
 
-  /**
-   * The snapshot without its version, epoch, rev, and time, as JSON, within
-   * the size bound. The string is all that the feed measures, compares, and
-   * sends, so the snapshot is serialized once.
-   */
   /** `GET /api/v1/history`: the project's runs and its memory files. Null without a project. */
   async history(): Promise<HistoryList | null> {
     const root = this.sources().root;
@@ -1819,10 +1881,13 @@ export class ApiReader {
       current: index.current ? historyEntry(index.current) : null,
       runs: index.runs.map(historyEntry),
       more: index.more,
-      memory: (await memoryFiles(root)).map((file) => ({
-        name: file.name,
-        text: head(file.text, historyBounds.memory),
-      })),
+      memory: (await memoryFiles(root)).map((file) => {
+        const shown = head(file.text, historyBounds.memory);
+        return {
+          name: file.name,
+          text: { text: shown.text, trimmed: file.cut || shown.trimmed },
+        };
+      }),
     };
   }
 
@@ -1831,9 +1896,7 @@ export class ApiReader {
     const root = this.sources().root;
     const found = root ? await readHistoryRun(root, id) : null;
     if (!found) return null;
-    return found.kind === 'lab'
-      ? historyLab(found)
-      : historyResearch(found, Date.now());
+    return found.kind === 'lab' ? historyLab(found) : historyResearch(found);
   }
 
   /** `GET /api/v1/history/:id/tasks/:task`: one task of a run in full, or null. */
@@ -1884,6 +1947,11 @@ export class ApiReader {
       : null;
   }
 
+  /**
+   * The snapshot without its version, epoch, rev, and time, as JSON, within
+   * the size bound. The string is all that the feed measures, compares, and
+   * sends, so the snapshot is serialized once.
+   */
   async snapshot(): Promise<string> {
     const sources = this.sources();
     const root = sources.root;
@@ -1915,7 +1983,7 @@ export class ApiReader {
           ? {
               question: question && clip(question, apiLimits.question),
               startProblem: sources.startProblem?.() ?? null,
-              researchRun: await researchRunOnDisk(root),
+              researchRun: await this.researchRun.read(root),
             }
           : {}),
         ...compute,
@@ -2537,7 +2605,7 @@ async function answerHistory(
     send(await reader.historyTurns(run, source));
     return;
   }
-  if (third === 'tasks' && fourth && /^task-[1-9]\d{0,5}$/.test(fourth)) {
+  if (third === 'tasks' && validTaskId(fourth)) {
     if (parts.length === 4 && !keys.length) {
       send(await reader.historyTask(run, fourth));
       return;

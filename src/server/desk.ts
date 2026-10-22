@@ -59,6 +59,7 @@ import {
 } from './compute-actions.ts';
 import { commitId, directionId, proofRef, runId } from '../core/board.ts';
 import {
+  labOnDisk,
   startLabOn,
   type BringList,
   type Lab,
@@ -69,6 +70,7 @@ import type { LabDiff, LabWork } from '../desk/desk-lab.ts';
 import { loadWorkspace, readJson, writePrivateFile } from '../core/storage.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
 import { ApiFeed, ApiReader, answerApi, type ProjectStart } from './api.ts';
+import { researchRunOnDisk } from '../core/history.ts';
 import { labScreen, type LabScreen } from './screen.ts';
 import type { Snapshot } from '../protocol/api.ts';
 import type { FirstRun } from './setup.ts';
@@ -274,6 +276,18 @@ async function startCoordinator(
 const changing = new Set<string>();
 
 /**
+ * How a run changes. `restore`: the archive that comes back, else Start over.
+ * `startResearch`: a new run starts its research from the question; the
+ * app's Start over leaves the start to the person. `expect`: the run must be
+ * from the research flow, as the page that asked showed it.
+ */
+interface RunChange {
+  readonly restore?: unknown;
+  readonly startResearch: boolean;
+  readonly expect?: 'research';
+}
+
+/**
  * Start over, or bring back an archived run. Nothing may run: no research
  * step, no task turn, and no session of the person. The coordinator stops,
  * and the tasks that wait (open or in review) are cancelled, so their
@@ -289,9 +303,9 @@ async function changeRun(
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
   labRun: Lab | undefined,
-  restore?: unknown,
-  startResearch = true,
+  change: RunChange,
 ): Promise<void> {
+  const restore = change.restore;
   if (restore !== undefined && !validArchiveId(restore))
     throw new SessionActionError('Choose an archive from Records.');
   // One Start over or restore at a time: a second one would move the records while the first moves them.
@@ -309,8 +323,7 @@ async function changeRun(
       coordinator,
       memory,
       labRun,
-      restore,
-      startResearch,
+      change,
     );
   } finally {
     changing.delete(root);
@@ -325,9 +338,17 @@ async function changeRunNow(
   coordinator: Coordinator | undefined,
   memory: ProjectMemory | undefined,
   labRun: Lab | undefined,
-  restore: unknown,
-  startResearch: boolean,
+  change: RunChange,
 ): Promise<void> {
+  const { restore, startResearch } = change;
+  const lab = labRun?.exists ?? false;
+  // A page that showed a run of the research flow moves only that run, never a lab that started since.
+  if (change.expect === 'research' && !(await researchRunOnDisk(root)))
+    throw new SessionActionError(
+      lab || (await labOnDisk(root))
+        ? "This project's run is a lab now. Reload History."
+        : "This project's run is not from the research flow now. Reload History.",
+    );
   // A step that checks its input, or chooses a direction for the coordinator, counts as running too.
   if (research?.busy)
     throw new SessionActionError(
@@ -345,7 +366,6 @@ async function changeRunNow(
   )
     throw new SessionActionError('Your session is running. End it first.');
   // The lab's agents park and its records reach the disk before they move. A restored lab comes back paused.
-  const lab = labRun?.exists ?? false;
   const paused = (await labRun?.suspend()) ?? false;
   try {
     const state = coordinator?.view()?.state;
@@ -391,6 +411,11 @@ interface LabDesk {
   lab: Lab | undefined;
   /** Each lab request by its key, for a minute: a request that arrives twice runs once. */
   readonly requests: Map<
+    string,
+    { readonly status: Promise<number>; readonly at: number }
+  >;
+  /** Each Start over or restore by its key, the same way, apart from the lab's requests. */
+  readonly runChanges: Map<
     string,
     { readonly status: Promise<number>; readonly at: number }
   >;
@@ -965,7 +990,10 @@ async function act(
       typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
         ? body.key
         : null;
-    const known = key ? labDesk.requests.get(key) : undefined;
+    const now = Date.now();
+    for (const [old, entry] of labDesk.runChanges)
+      if (entry.at < now - labAnswerMs) labDesk.runChanges.delete(old);
+    const known = key ? labDesk.runChanges.get(key) : undefined;
     if (known) return known.status;
     const status = (async (): Promise<number> => {
       // A save of the last look ends before the lab moves, so no look lands in the next run.
@@ -978,9 +1006,12 @@ async function act(
         coordinator,
         memory,
         labDesk.lab,
-        body.action === 'restore' ? body.archive : undefined,
-        // The app starts a lab on the question itself. The desk's own Start over starts research.
-        body.lab !== true,
+        {
+          ...(body.action === 'restore' ? { restore: body.archive } : {}),
+          // The app starts a lab on the question itself. The desk's own Start over starts research.
+          startResearch: body.lab !== true,
+          ...(body.expect === 'research' ? { expect: 'research' } : {}),
+        },
       );
       // The lab actions of the earlier run, and their answers, do not belong to this one.
       labDesk.works = [];
@@ -989,11 +1020,11 @@ async function act(
       return 200;
     })();
     if (key) {
-      labDesk.requests.set(key, { status, at: Date.now() });
-      // The answers of the earlier run go above, and this one stays for its retry.
+      labDesk.runChanges.set(key, { status, at: now });
+      // The answer stays for a retry within the window from its end. A refusal keeps none: the same request tries again.
       status.then(
-        () => labDesk.requests.set(key, { status, at: Date.now() }),
-        () => labDesk.requests.delete(key),
+        () => labDesk.runChanges.set(key, { status, at: Date.now() }),
+        () => labDesk.runChanges.delete(key),
       );
     }
     return status;
@@ -1202,6 +1233,7 @@ export async function startDesk(
   const labDesk: LabDesk = {
     lab: options.lab,
     requests: new Map(),
+    runChanges: new Map(),
     works: [],
     saving: Promise.resolve(),
   };

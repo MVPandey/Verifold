@@ -7,15 +7,22 @@ import {
   readdir,
   realpath,
   rm,
+  symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { historyIndex, researchRunOnDisk } from '../src/core/history.ts';
+import {
+  historyIndex,
+  ResearchRunWatch,
+  researchRunOnDisk,
+} from '../src/core/history.ts';
+import type { Lab } from '../src/core/lab.ts';
 import type { ResearchRunner } from '../src/legacy/research-runner.ts';
 import type { TaskManager } from '../src/legacy/tasks.ts';
-import { RunTeam, researchRunWorks } from '../src/core/team.ts';
+import { labWorks, RunTeam, researchRunWorks } from '../src/core/team.ts';
 import {
   claudeUpdates,
   requestUpdate,
@@ -433,23 +440,33 @@ function reader(root: string): ApiReader {
   return new ApiReader(() => sources);
 }
 
-await test('a research-flow run shows on disk, and a lab project with only its question does not', async (t) => {
+await test('a research-flow run shows on disk, and a lab project with only its question, or a stale research lock, does not', async (t) => {
   const root = await folder(t);
   await json(join(root, '.verifold', 'workspace.json'), workspace());
   // Every lab project keeps its question as research that needs a plan, with no directions.
   assert.equal(await researchRunOnDisk(root), false);
-  const signals: [string, unknown][] = [
-    [join('runs', attempt, 'attempt.json'), {}],
-    [join('tasks', 'task-1', 'task.json'), {}],
-    [join('coordinator', 'state.json'), {}],
-    [join('messages', 'm-1.json'), {}],
-    ['results-heap.json', {}],
-    ['research.lock', {}],
+  // A research step's lock stands only while the step runs, so one left behind keeps no project flagged.
+  await writeFile(join(root, '.verifold', 'research.lock'), '');
+  assert.equal(await researchRunOnDisk(root), false);
+  // A lab's own check folders keep their Git folders in tasks/git: no sign either.
+  await mkdir(join(root, '.verifold', 'tasks', 'git', 'k-1'), {
+    recursive: true,
+  });
+  assert.equal(await researchRunOnDisk(root), false);
+  const signals = [
+    join('runs', attempt, 'attempt.json'),
+    join('tasks', 'task-1', 'task.json'),
+    join('coordinator', 'state.json'),
+    join('messages', 'm-1.json'),
+    'results-heap.json',
   ];
-  for (const [path, value] of signals) {
-    await json(join(root, '.verifold', path), value);
+  for (const path of signals) {
+    await json(join(root, '.verifold', path), {});
     assert.equal(await researchRunOnDisk(root), true, path);
-    await rm(join(root, '.verifold', path));
+    await rm(join(root, '.verifold', path), { recursive: true });
+    if (path.includes('/'))
+      await rm(join(root, '.verifold', path, '..'), { recursive: true });
+    assert.equal(await researchRunOnDisk(root), false, path);
   }
   await json(
     join(root, '.verifold', 'workspace.json'),
@@ -486,6 +503,22 @@ await test('a lab does not start on top of a research-flow run, and says where t
   });
   assert.equal(await team.refusal('lab'), researchRunWorks);
   assert.match(researchRunWorks, /History in the app.*Start a lab/);
+  // While research runs, the person waits for its step first: Start a lab would wait for it too.
+  const busy = new RunTeam({
+    lab: () => false,
+    coordinator: () => Promise.resolve(true),
+    researchBusy: () => true,
+    root,
+  });
+  assert.match((await busy.refusal('lab')) ?? '', /^Research is running/);
+  // Research and the coordinator do not work with a lab, and the refusal says where they still do.
+  const withLab = new RunTeam({
+    lab: () => true,
+    coordinator: () => Promise.resolve(false),
+    researchBusy: () => false,
+  });
+  assert.equal(await withLab.refusal('research'), labWorks);
+  assert.match(labWorks, /not available.*old desk's Records/);
   await rm(join(root, '.verifold'), { recursive: true, force: true });
   await json(join(root, '.verifold', 'workspace.json'), workspace());
   assert.equal(await team.refusal('lab'), null);
@@ -506,14 +539,27 @@ await test('History lists the current research-flow run and the archived runs, w
     [[labArchive, 'lab', 'Does a heap beat a scan?']],
   );
   assert.equal(index.more, false);
+  // Only the list sizes the runs. The current run has no size.
+  assert.ok((index.runs[0]?.bytes ?? 0) > 0);
+  assert.equal(index.current?.bytes, null);
   await mkdir(join(root, 'memory'));
   await writeFile(join(root, 'memory', 'README.md'), '# Project memory\n');
   await writeFile(join(root, 'memory', 'findings.md'), 'The heap wins.\n');
+  // A long memory file shows its start, cut between characters.
+  await writeFile(join(root, 'memory', 'notes.md'), 'é'.repeat(40_000));
+  await writeFile(join(root, 'memory', 'tool.md'), 'a\0b');
   const list = (await reader(root).history()) as HistoryList;
   assert.deepEqual(
-    list.memory.map((file) => file.name),
-    ['README.md', 'findings.md'],
+    list.memory.map((file) => [file.name, file.text.trimmed]),
+    [
+      ['README.md', false],
+      ['findings.md', false],
+      ['notes.md', true],
+    ],
   );
+  const notes = list.memory[2]?.text.text ?? '';
+  assert.ok(notes.length > 30_000 && Buffer.byteLength(notes) <= 64 * 1024);
+  assert.doesNotMatch(notes, /\uFFFD/);
 });
 
 await test("a lab's archived run reads its plan, directions, runs, and posts, with handles", async (t) => {
@@ -522,6 +568,9 @@ await test("a lab's archived run reads its plan, directions, runs, and posts, wi
   await archiveLab(root);
   const run = (await reader(root).historyRun(labArchive)) as HistoryLabRun;
   assert.equal(run.kind, 'lab');
+  assert.equal(run.readable, true);
+  // A run's own read does not size it.
+  assert.equal(run.entry.bytes, null);
   assert.equal(run.question, 'Can probes find the CoT gap?');
   assert.equal(run.plan?.reading.text, 'Read the gap with probes.');
   assert.equal(run.plan?.facts[0]?.source, 'huggingface.co/Qwen');
@@ -576,12 +625,13 @@ await test('a research-flow run reads its research, directions, coordinator, tas
   assert.equal(run.chosen, 'heap');
   assert.equal(run.coordinator?.objective.text, 'Show that the heap wins.');
   assert.deepEqual(
-    run.coordinator?.actions.map((action) => action.tool),
+    run.coordinator?.actions.map((action) => action?.tool),
     ['verifold_task_create'],
   );
   assert.deepEqual(run.tasks, [
     {
       id: 'task-1',
+      record: 'read',
       title: 'Time the heap',
       state: 'done',
       harness: 'claude',
@@ -731,6 +781,11 @@ await test('History reads need the token and a run of this project, and Start ov
   assert.equal(archives.length, 1);
   assert.equal(researchStarts, 0);
   assert.equal(await researchRunOnDisk(root), false);
+  // The snapshot sees the change: the project opens on its question again.
+  const after = (await (
+    await fetch(`${api}/snapshot`, { headers })
+  ).json()) as Snapshot;
+  assert.equal(after.researchRun, false);
   const list = (await (
     await fetch(`${api}/history`, { headers })
   ).json()) as HistoryList;
@@ -751,4 +806,516 @@ await test('History reads need the token and a run of this project, and Start ov
     })
   ).json()) as { text: string };
   assert.match(diff.text, /\+two/);
+});
+
+await test('the research-flow flag is read again only after the records that it reads change', async (t) => {
+  const root = await folder(t);
+  await json(join(root, '.verifold', 'workspace.json'), workspace());
+  let reads = 0;
+  const watch = new ResearchRunWatch((path) => {
+    reads++;
+    return researchRunOnDisk(path);
+  });
+  assert.equal(await watch.read(root), false);
+  assert.equal(await watch.read(root), false);
+  assert.equal(reads, 1);
+  await json(join(root, '.verifold', 'messages', 'm-1.json'), {});
+  assert.equal(await watch.read(root), true);
+  assert.equal(await watch.read(root), true);
+  assert.equal(reads, 2);
+  await rm(join(root, '.verifold', 'messages', 'm-1.json'));
+  assert.equal(await watch.read(root), false);
+  assert.equal(reads, 3);
+});
+
+/** A valid research attempt record. */
+function attemptRecord(id: string, minute: number): unknown {
+  return {
+    schemaVersion: 1,
+    attemptId: id,
+    host: 'claude',
+    model: null,
+    phase: 'needs-research',
+    status: 'succeeded',
+    requestedSessionId: null,
+    nativeSessionId: null,
+    startedAt: at(minute),
+    finishedAt: at(minute + 1),
+  };
+}
+
+await test('a run reads only its newest research attempts, by the times of their folders', async (t) => {
+  const root = await folder(t);
+  await researchProject(root);
+  const runs = join(root, '.verifold', 'runs');
+  const ids: string[] = [];
+  for (let index = 0; index < 22; index++) {
+    const id = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    ids.push(id);
+    await json(join(runs, id, 'attempt.json'), attemptRecord(id, 10 + index));
+    const when = new Date(Date.UTC(2020, 0, 1, 0, index));
+    await utimes(join(runs, id), when, when);
+  }
+  const run = (await reader(root).historyRun('current')) as HistoryResearchRun;
+  assert.equal(run.attempts.length, 20);
+  assert.equal(run.moreAttempts, 3);
+  // The three oldest folders are left out, and the newest step shows first.
+  const shown = new Set(run.attempts.map((entry) => entry.id));
+  assert.deepEqual(
+    ids.filter((id) => !shown.has(id)),
+    ids.slice(0, 3),
+  );
+  assert.equal(run.attempts[0]?.id, ids[21]);
+});
+
+await test('a research-flow run with broken records still reads: each bad entry shows as unreadable, and nothing throws', async (t) => {
+  const root = await folder(t);
+  await researchProject(root);
+  const state = join(root, '.verifold');
+  const results = {
+    schemaVersion: 1,
+    direction: 'heap',
+    checks: [
+      // A value, a reason, and a whole check of the wrong types.
+      { check: 1, result: 'passed', value: 7, evidence: [], reason: 'Ok.' },
+      { check: 2, result: 'passed', value: 'fast', reason: { not: 'text' } },
+      'not a check',
+      // A ruling whose reason is not text.
+      {
+        check: 4,
+        result: 'judgement',
+        value: 'close',
+        evidence: [],
+        reason: 'Close.',
+        at: at(9),
+        ruling: { result: 'passed', reason: 5, at: at(9) },
+      },
+      ...Array.from({ length: 60 }, (_, index) => ({
+        check: index + 5,
+        result: 'passed',
+        value: 'v',
+        evidence: [],
+        reason: 'r',
+        at: at(9),
+      })),
+    ],
+    answer: {
+      statement: 42,
+      claims: [
+        { text: 9, evidence: [] },
+        {
+          text: 'A heap wins.',
+          evidence: ['a.txt', 3, ...Array.from({ length: 24 }, () => 'b.txt')],
+        },
+      ],
+      at: at(9),
+      decision: { kind: 'accepted', at: at(9), note: { x: 1 } },
+    },
+  };
+  await json(join(state, 'results.json'), results);
+  // An answer that is not an object.
+  await json(join(state, 'results-scan.json'), {
+    schemaVersion: 1,
+    direction: 'scan',
+    checks: [],
+    answer: 'yes',
+  });
+  await writeFile(join(state, 'results-x.json'), '{ not json');
+  await json(join(state, 'coordinator', 'state.json'), {
+    schemaVersion: 1,
+    objective: 'Show that the heap wins.',
+    host: 'claude',
+    model: 5,
+    startedAt: 7,
+    stoppedAt: null,
+    session: '../x',
+    created: 1,
+    planApproved: true,
+    cursor: 0,
+    wakeups: [],
+    events: [],
+    actions: [
+      {
+        key: 'k1',
+        at: at(5),
+        tool: 'verifold_task_create',
+        reason: { bad: true },
+        ok: true,
+        result: 'Created task-1.',
+      },
+      { key: 'k2', at: at(5), tool: 'x', ok: true, result: 12 },
+      { key: 'k3', tool: 'x', ok: true, result: 'r' },
+      null,
+    ],
+  });
+  // A message whose status is not text, and one that does not read: only the ones that read count.
+  await json(join(state, 'messages', 'm-2.json'), {
+    schemaVersion: 1,
+    id: 'm-2',
+    at: at(8),
+    from: 'person',
+    to: 'coordinator',
+    kind: 'note',
+    text: 'Go on.',
+    delivery: 'sent',
+    status: { open: true },
+  });
+  await writeFile(join(state, 'messages', 'm-3.json'), '{ not json');
+  // A task whose attempt and version hold fields of the wrong types.
+  const task = {
+    schemaVersion: 1,
+    id: 'task-2',
+    revision: 1,
+    state: 'done',
+    createdAt: 5,
+    updatedAt: at(8),
+    assignment: {
+      revision: 1,
+      at: at(5),
+      reason: 'R.',
+      title: 'Time the scan',
+      objective: 'Time the scan.',
+      inputs: [],
+      writable: ['a.txt'],
+      output: 'a.txt',
+      host: 'codex',
+      model: null,
+      minutes: 30,
+      dependencies: [],
+    },
+    claim: null,
+    attempts: [
+      {
+        number: 1,
+        revision: 1,
+        claim: 'c1',
+        startedAt: 6,
+        endedAt: { x: 1 },
+        workspace: null,
+        session: '../x',
+        restrictions: [],
+        outcome: { x: 1 },
+        note: 3,
+        versions: [
+          {
+            number: 1,
+            commit: 'a'.repeat(40),
+            at: 5,
+            turn: 9,
+            files: [{ path: 'a.txt', change: 7, inScope: 'yes' }],
+            skipped: [],
+            reply: 4,
+            decision: { kind: 'accepted', at: at(8), note: 5 },
+          },
+        ],
+      },
+    ],
+  };
+  await json(join(state, 'tasks', 'task-2', 'task.json'), task);
+  // A task too long for a summary: its newest assignment names it. And a task whose record does not read.
+  await json(join(state, 'tasks', 'task-3', 'task.json'), {
+    ...task,
+    id: 'task-3',
+    assignment: { ...task.assignment, objective: 'x'.repeat(300_000) },
+    attempts: [],
+  });
+  await json(join(state, 'tasks', 'task-3', 'r2', 'assignment.json'), {
+    ...task.assignment,
+    revision: 2,
+    title: 'Time it again',
+  });
+  await mkdir(join(state, 'tasks', 'task-4'));
+  await writeFile(join(state, 'tasks', 'task-4', 'task.json'), '[');
+  // A lease without its intervals, and one whose tasks are not a list.
+  const lease = {
+    schemaVersion: 1,
+    id: 'lease-2',
+    state: 'ended',
+    tasks: ['task-2'],
+    gpu: 'NVIDIA A40',
+    requestedAt: at(7),
+    intervals: 'none',
+  };
+  await json(join(state, 'compute', 'leases', 'lease-2.json'), lease);
+  await json(join(state, 'compute', 'leases', 'lease-3.json'), {
+    ...lease,
+    id: 'lease-3',
+    tasks: 'task-2',
+  });
+  // A research step whose record does not read.
+  const broken = '00000000-0000-4000-8000-000000000001';
+  await json(join(state, 'runs', broken, 'attempt.json'), { status: 5 });
+  // The coordinator's own session shows with the coordinator, not under the person's sessions.
+  const session = (id: string, mode: string): unknown => ({
+    schemaVersion: 2,
+    id,
+    host: 'claude',
+    model: null,
+    mode,
+    status: 'ended',
+    startedAt: at(4),
+  });
+  await json(
+    join(state, 'sessions', '20261020T090400000Z-aaaaaaaa.json'),
+    session('20261020T090400000Z-aaaaaaaa', 'coordinator'),
+  );
+  await json(
+    join(state, 'sessions', '20261020T090500000Z-bbbbbbbb.json'),
+    session('20261020T090500000Z-bbbbbbbb', 'ask'),
+  );
+
+  const api = reader(root);
+  const run = (await api.historyRun('current')) as HistoryResearchRun;
+  // Results: bad checks and claims are null, a bad ruling or note is left out, and long lists say how many more.
+  // The file that does not read is left out.
+  assert.deepEqual(
+    run.results.map((entry) => entry.direction),
+    ['scan', 'heap'],
+  );
+  const heap = run.results[1];
+  assert.deepEqual(heap?.checks.slice(0, 3), [null, null, null]);
+  assert.equal(heap?.checks[3]?.ruling, null);
+  assert.equal(heap?.checks[3]?.reason.text, 'Close.');
+  assert.equal(heap?.checks.length, 50);
+  assert.equal(heap?.moreChecks, 14);
+  assert.equal(heap?.answer?.statement, null);
+  assert.equal(heap?.answer?.claims[0], null);
+  assert.equal(heap?.answer?.claims[1]?.evidence.length, 20);
+  assert.equal(heap?.answer?.claims[1]?.moreEvidence, 5);
+  assert.deepEqual(heap?.answer?.decision, { kind: 'accepted', note: null });
+  assert.deepEqual(run.results[0]?.answer, {
+    statement: null,
+    claims: [],
+    moreClaims: 0,
+    decision: null,
+  });
+  // The coordinator: bad fields read as null, and bad actions as null entries.
+  assert.equal(run.coordinator?.model, null);
+  assert.equal(run.coordinator?.startedAt, null);
+  assert.equal(run.coordinator?.session, null);
+  assert.equal(run.coordinator?.actions[0]?.reason, null);
+  assert.deepEqual(run.coordinator?.actions.slice(1), [null, null, null]);
+  // Messages: a bad status is none, and a file that does not read is not counted.
+  assert.deepEqual(
+    run.messages.map((message) => [message.id, message.status]),
+    [
+      ['m-1', null],
+      ['m-2', null],
+    ],
+  );
+  assert.equal(run.olderMessages, 0);
+  // Tasks: a bad outcome is none, a long record shows its newest assignment, and an unreadable one says so.
+  assert.deepEqual(
+    run.tasks.map((entry) => [entry.id, entry.record, entry.title]),
+    [
+      ['task-1', 'read', 'Time the heap'],
+      ['task-2', 'read', 'Time the scan'],
+      ['task-3', 'large', 'Time it again'],
+      ['task-4', 'unreadable', null],
+    ],
+  );
+  assert.equal(run.tasks[1]?.outcome, null);
+  // Pods: a lease without intervals has no cost, and a lease that does not read is left out.
+  assert.deepEqual(
+    run.pods.map((pod) => [pod.lease, pod.costUsd]),
+    [
+      ['lease-1', 0.55],
+      ['lease-2', null],
+    ],
+  );
+  // Research: a step whose record does not read shows without its details.
+  const unread = run.attempts.find((entry) => entry.id === broken);
+  assert.equal(unread?.status, null);
+  // Sessions: only the person's.
+  assert.deepEqual(
+    run.sessions.map((entry) => [entry.id, entry.mode]),
+    [['20261020T090500000Z-bbbbbbbb', 'ask']],
+  );
+  // The task in full: each bad field reads as null.
+  const full = (await api.historyTask('current', 'task-2')) as HistoryTask;
+  assert.deepEqual(full.attempts[0], {
+    number: 1,
+    startedAt: null,
+    endedAt: null,
+    outcome: null,
+    note: null,
+    session: null,
+    versions: [
+      {
+        number: 1,
+        at: null,
+        turn: null,
+        files: [{ path: 'a.txt', change: null, inScope: false }],
+        moreFiles: 0,
+        reply: null,
+        decision: { kind: 'accepted', note: null, by: 'person' },
+      },
+    ],
+    olderVersions: 0,
+  });
+  // A long task reads in full when it opens. One that does not read is not there.
+  assert.equal(
+    ((await api.historyTask('current', 'task-3')) as HistoryTask).title,
+    'Time the scan',
+  );
+  assert.equal(await api.historyTask('current', 'task-4'), null);
+});
+
+await test("a lab's archive whose record does not read is still a lab's run, and History follows no link out of a run", async (t) => {
+  const root = await folder(t);
+  await json(join(root, '.verifold', 'workspace.json'), workspace());
+  await archiveLab(root);
+  const base = join(root, '.verifold', 'archive', labArchive);
+  await writeFile(join(base, 'lab.json'), '{ broken');
+  // The board is a link to posts outside the archive.
+  const outside = join(root, 'outside');
+  await json(join(outside, 'board', 'p-1.json'), {
+    schemaVersion: 1,
+    id: 'p-1',
+    at: at(2),
+    author: 'person',
+    kind: 'status',
+    text: 'Outside the archive.',
+    mentions: [],
+    artifacts: [],
+  });
+  await rm(join(base, 'board'), { recursive: true });
+  await symlink(join(outside, 'board'), join(base, 'board'));
+  // One run lives behind a link as well.
+  await json(join(outside, 'r-2', 'run.json'), { id: 'r-2' });
+  await symlink(join(outside, 'r-2'), join(base, 'lab', 'runs', 'r-2'));
+  const index = await historyIndex(root);
+  assert.equal(index.runs[0]?.kind, 'lab');
+  const run = (await reader(root).historyRun(labArchive)) as HistoryLabRun;
+  assert.equal(run.kind, 'lab');
+  assert.equal(run.readable, false);
+  assert.equal(run.question, null);
+  assert.equal(run.plan, null);
+  assert.deepEqual(run.directions, []);
+  assert.deepEqual(run.posts, []);
+  assert.deepEqual(
+    run.runs.map((entry) => entry.id),
+    ['r-1'],
+  );
+  assert.doesNotMatch(JSON.stringify(run), /Outside the archive/);
+  // A task folder of the current run that is a link reads as unreadable, and opens as nothing.
+  await researchProject(root);
+  await json(join(outside, 'task-9', 'task.json'), { id: 'task-9' });
+  await symlink(
+    join(outside, 'task-9'),
+    join(root, '.verifold', 'tasks', 'task-9'),
+  );
+  const current = (await reader(root).historyRun(
+    'current',
+  )) as HistoryResearchRun;
+  assert.deepEqual(current.tasks.at(-1), {
+    id: 'task-9',
+    record: 'unreadable',
+    title: null,
+    state: null,
+    harness: null,
+    model: null,
+    attempts: null,
+    versions: null,
+    outcome: null,
+  });
+  assert.equal(await reader(root).historyTask('current', 'task-9'), null);
+});
+
+await test('Start a lab moves only a run of the research flow, and its key is its own', async (t) => {
+  const root = await folder(t);
+  await researchProject(root);
+  let posts = 0;
+  const lab = {
+    runs: true,
+    exists: false,
+    view: () => null,
+    post: () => {
+      posts++;
+      return Promise.resolve();
+    },
+    suspend: () => Promise.resolve(false),
+    reload: () => Promise.resolve(),
+    resume: () => Promise.resolve(),
+  };
+  const research = {
+    busy: false,
+    clear: () => {},
+    start: () => Promise.resolve(),
+  } as unknown as ResearchRunner;
+  const tasks = {
+    list: () => Promise.resolve([]),
+    cancel: () => Promise.resolve(),
+  } as unknown as TaskManager;
+  const sessions = {
+    view: () => null,
+    views: () => [],
+    forget: () => Promise.resolve(),
+  } as unknown as SessionPool;
+  const owner = new AbortController();
+  const desk = await startDesk(
+    root,
+    owner.signal,
+    await deskAssets(root),
+    sessions,
+    research,
+    undefined,
+    tasks,
+    undefined,
+    undefined,
+    undefined,
+    { lab: lab as unknown as Lab, api: { pollMs: 40, heartbeatMs: 100 } },
+  );
+  t.after(async () => {
+    owner.abort();
+    await desk.closed;
+  });
+  const url = new URL(desk.url);
+  const api = `${url.origin}/api/v1`;
+  const headers = {
+    Authorization: `Bearer ${url.hash.slice(1)}`,
+    'Content-Type': 'application/json',
+  };
+  const act = (name: string, body: unknown): Promise<Response> =>
+    fetch(`${api}/actions/${name}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  const archived = async (): Promise<number> =>
+    (await readdir(join(root, '.verifold', 'archive')).catch(() => [])).length;
+  // A lab action and Start a lab with the same key: each one runs.
+  const key = 'b'.repeat(32);
+  assert.equal((await act('lab-post', { text: 'Hello.', key })).status, 200);
+  assert.equal(posts, 1);
+  assert.equal(
+    (await act('start-over', { lab: true, expect: 'research', key })).status,
+    200,
+  );
+  assert.equal(await archived(), 1);
+  // A lab started since the page read History: Start a lab refuses, and moves nothing.
+  await json(join(root, '.verifold', 'lab.json'), {
+    schemaVersion: 1,
+    question: 'Q',
+    startedAt: at(1),
+    directions: [],
+  });
+  lab.exists = true;
+  const refused = await act('start-over', {
+    lab: true,
+    expect: 'research',
+    key: 'c'.repeat(32),
+  });
+  assert.equal(refused.status, 409);
+  assert.match(
+    JSON.stringify(await refused.json()),
+    /This project's run is a lab now\. Reload History\./,
+  );
+  assert.equal(await archived(), 1);
+  // The lab's own Start over, from the answer page, sends no expectation and still works.
+  assert.equal(
+    (await act('start-over', { lab: true, key: 'd'.repeat(32) })).status,
+    200,
+  );
+  assert.equal(await archived(), 2);
 });
