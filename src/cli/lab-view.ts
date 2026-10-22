@@ -236,12 +236,11 @@ function needsLine(screen: LabScreen, width: number, color: boolean): string {
 
 /**
  * The line that Enter on an empty message line sends: open the oldest call
- * that waits in the app, or the lab, or the desk when the package has no
- * app.
+ * that waits in the app, or the lab, or the old desk when the package has no
+ * app. /open opens the old desk in a terminal that started with --desk.
  */
 export function enterLine(screen: LabScreen): string {
-  if (!screen.app) return '/open';
-  return screen.call ? `/app ${screen.call.id}` : '/app';
+  return screen.app && screen.call ? `/open ${screen.call.id}` : '/open';
 }
 
 /** A direction's state for plain lines: its verdict, and whether it waits for the person. */

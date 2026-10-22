@@ -151,17 +151,22 @@ await test('the control channel refuses a wrong or late key, and carries message
   terminal.send({ stop: true });
   await until(() => received.length === 2);
   server.send({ url: 'http://127.0.0.1:1/#abc' });
-  // An owner with the app's build passes its URL on, for a terminal that attached with --app.
+  // An owner with the app's build passes its URL on, and the old desk's URL, for a terminal that attached with --desk.
   server.send({
     url: 'http://127.0.0.1:1/#abc',
     app: 'http://127.0.0.1:1/app/#abc',
+    desk: 'http://127.0.0.1:1/desk#abc',
   });
   await until(() => shown.length === 3);
   assert.deepEqual(received, [{ line: '/help' }, { stop: true }]);
   assert.deepEqual(shown, [
     { progress: 'Welcome.' },
     { url: 'http://127.0.0.1:1/#abc' },
-    { url: 'http://127.0.0.1:1/#abc', app: 'http://127.0.0.1:1/app/#abc' },
+    {
+      url: 'http://127.0.0.1:1/#abc',
+      app: 'http://127.0.0.1:1/app/#abc',
+      desk: 'http://127.0.0.1:1/desk#abc',
+    },
   ]);
   terminal.close();
   await terminal.closed;
@@ -363,6 +368,125 @@ await test('a terminal starts the team in the background, detaches, attaches aga
     false,
   );
   assert.equal(existsSync(join(root, '.verifold', 'owner.json')), false);
+});
+
+await test("a request's change shows in the terminal that started with --desk, and the owner's log keeps only its ID and reason", async (t) => {
+  const { root, keys, assets } = await project(t);
+  // A Claude Code for this test alone: it asks to write a file, with the content of the change.
+  const bin = await mkdtemp(join(tmpdir(), 'verifold-request-bin-'));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(
+    join(bin, 'claude'),
+    `#!${process.execPath}
+const out = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+const input = { file_path: 'notes.md', content: 'first change line\\nsecond change line' };
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request' && message.request.subtype === 'initialize')
+    return out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } });
+  if (message.type === 'user') {
+    out({ type: 'system', subtype: 'init', session_id: 'native-1', model: 'fake-model', permissionMode: 'default' });
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Write', input }] } });
+    return out({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Write', tool_use_id: 'tool-1', input, description: 'It saves the notes.' } });
+  }
+  if (message.type === 'control_response') {
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', is_error: true }] } });
+    out({ type: 'result', subtype: 'success' });
+  }
+});
+`,
+    { mode: 0o700 },
+  );
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ''}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  const owner = new AbortController();
+  t.after(() => owner.abort());
+  const opened: string[] = [];
+  let ownerDone: Promise<void> | undefined;
+  const background = {
+    keys,
+    start: (folder: string, line: string): Promise<void> => {
+      ownerDone = runCli(
+        ['owner', '--workspace', folder],
+        folder,
+        {
+          interactive: false,
+          ask: () => Promise.reject(new Error('No prompts')),
+          out: () => assert.fail('The owner prints nothing.'),
+          browse: (url) => {
+            opened.push(url);
+            return Promise.resolve(true);
+          },
+          deskAssets: assets,
+          background: {
+            keys,
+            start: () =>
+              Promise.reject(new Error('The owner starts no owner.')),
+            input: () => Promise.resolve(line),
+          },
+        },
+        owner.signal,
+      );
+      return Promise.resolve();
+    },
+    input: () => Promise.reject(new Error('A terminal has no owner input.')),
+  };
+  const lines: string[] = [];
+  const fed: string[] = [];
+  const urls: string[] = [];
+  const typed: ((line: string) => void)[] = [];
+  const attached = runCli(['ui', '--desk', '--no-open'], root, {
+    interactive: true,
+    ask: () => Promise.reject(new Error('No prompts')),
+    out: (value) => urls.push(value),
+    progress: (line) => lines.push(line),
+    feed: (line) => fed.push(line),
+    listen: (onLine) => typed.push(onLine),
+    background,
+  });
+  await until(() => urls.length === 1 && typed.length === 1);
+  // The owner sends the old desk's URL, and the terminal prints it.
+  const printed = JSON.parse(urls[0] ?? '{}') as { url: string; app?: string };
+  assert.equal(new URL(printed.url).pathname, '/desk');
+  assert.equal(printed.app, undefined);
+  typed[0]?.('/start Save the notes');
+  await until(() => fed.some((line) => line.includes('│ second change line')));
+  const request = fed.find((line) => line.includes('needs you'));
+  assert.match(
+    request ?? '',
+    /needs you: R1: Claude Code asks to use Write: notes\.md Read the change before you answer\.\n {2}Why: It saves the notes\.\n {2}│ first change line\n {2}│ second change line\nType a to allow once or d to deny\.$/,
+  );
+  // The log gets one line for the request: its ID and why it asks. The change and the file stay in the terminal.
+  const log = join(root, '.verifold', 'owner.log');
+  const requestLog = async (): Promise<string[]> =>
+    (await readFile(log, 'utf8').catch(() => ''))
+      .split('\n')
+      .filter((line) => line.includes('needs you'));
+  await until(async () => (await requestLog()).length > 0);
+  const [logged, ...more] = await requestLog();
+  assert.match(
+    logged ?? '',
+    /Z {2}\d\d:\d\d {2}Claude Code · needs you: R1\. Why: It saves the notes\.$/,
+  );
+  assert.deepEqual(more, []);
+  typed[0]?.('d');
+  await until(() => fed.some((line) => line.includes('decision: You denied')));
+  // In this terminal, /open opens the old desk, as Enter on an empty line does.
+  typed[0]?.('/open');
+  await until(() => lines.includes('The old desk opened in your browser.'));
+  assert.match(opened.at(-1) ?? '', /\/desk#launch-[0-9a-f]+$/);
+  await runCli(['stop'], root, {
+    interactive: false,
+    ask: () => Promise.reject(new Error('No prompts')),
+    out: () => {},
+    background,
+  });
+  await attached;
+  await ownerDone;
+  assert.ok(!(await readFile(log, 'utf8')).includes('change line'));
 });
 
 await test('verifold stop says when nothing runs, and points to an older owner in a terminal', async (t) => {

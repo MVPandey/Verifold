@@ -1,6 +1,7 @@
 // Node strips TypeScript types but does not compile JSX. These loader hooks
 // compile the app's .tsx files for the tests, with the compiler the repository
-// already uses. Other files load as before.
+// already uses. An image that the app imports is its file URL, where the
+// build gives its URL on the page. Other files load as before.
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +9,12 @@ import { fileURLToPath } from 'node:url';
 let typescript;
 
 export async function load(url, context, nextLoad) {
+  if (url.startsWith('file:') && url.endsWith('.webp'))
+    return {
+      format: 'module',
+      source: `export default ${JSON.stringify(url)};`,
+      shortCircuit: true,
+    };
   if (!url.startsWith('file:') || !url.endsWith('.tsx'))
     return nextLoad(url, context);
   typescript ??= (await import('typescript')).default;
