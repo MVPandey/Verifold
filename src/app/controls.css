@@ -199,9 +199,11 @@
   border-radius: 14px;
 }
 
-/* An SVG without its own size fills the column, not a small default box. */
+/* An SVG gets a fixed box, whatever size it declares, and fits inside it. */
 .figure-view--svg {
   width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
 }
 
 /* A diff */

@@ -291,17 +291,37 @@ export async function load<T>(
     : { error: 'Verifold sent something this page cannot read. Reload it.' };
 }
 
+/** A file that Verifold sends as it is: its bytes, and its name when Verifold gives one. */
+export interface SentFile {
+  readonly blob: Blob;
+  readonly name: string | null;
+}
+
+/** The file name in a Content-Disposition header, which Verifold limits to letters, digits, dots, dashes, and underscores. */
+export function dispositionName(header: string | null): string | null {
+  return (
+    /;\s*filename="([A-Za-z0-9._-]{1,100})"/.exec(header ?? '')?.[1] ?? null
+  );
+}
+
 /** Read a file that Verifold sends as it is, such as a figure, as `load` reads JSON. */
-export async function loadBlob(
+export async function loadFile(
   token: string,
   path: string,
   signal?: AbortSignal,
-): Promise<Loaded<Blob>> {
+): Promise<Loaded<SentFile>> {
   const reached = await reach(token, path, signal);
   if ('error' in reached) return reached;
-  const value = await reached.response.blob().catch(() => null);
-  return value
-    ? { value }
+  const blob = await reached.response.blob().catch(() => null);
+  return blob
+    ? {
+        value: {
+          blob,
+          name: dispositionName(
+            reached.response.headers.get('content-disposition'),
+          ),
+        },
+      }
     : { error: 'Verifold could not send this. Try again.' };
 }
 

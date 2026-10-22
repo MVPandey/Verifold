@@ -1008,23 +1008,30 @@ export async function readCurrent(
 
 /**
  * The content of a file at a commit when it is a regular file there, or
- * null. A symbolic link at that path reads as null, not as its target.
+ * null. A symbolic link at that path reads as null, not as its target. A
+ * file larger than `maxBytes` reads as null, and Git does not read it.
  */
 export async function readFileAt(
   root: string,
   workspace: Workspace,
   commit: string,
   path: string,
+  maxBytes = Infinity,
 ): Promise<Buffer | null> {
   const target = join(root, workspace.path);
   try {
-    const entry = (await git(target, ['ls-tree', '-z', commit, '--', path]))
+    const entry = (
+      await git(target, ['ls-tree', '-l', '-z', commit, '--', path])
+    )
       .toString('utf8')
       .split('\0')
       .find((line) => line.endsWith(`\t${path}`));
-    // A tree entry is `<mode> <type> <id>\t<path>`.
-    const [mode, , id] = entry?.split('\t')[0]?.split(' ') ?? [];
-    return (mode === '100644' || mode === '100755') && id
+    // A tree entry is `<mode> <type> <id> <size>\t<path>`, with spaces before the size.
+    const [, mode, id, size] =
+      /^(\d{6}) blob ([0-9a-f]+) +(\d+)\t/.exec(entry ?? '') ?? [];
+    return (mode === '100644' || mode === '100755') &&
+      id &&
+      Number(size) <= maxBytes
       ? await git(target, ['cat-file', 'blob', id])
       : null;
   } catch {

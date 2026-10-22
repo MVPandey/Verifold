@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, webcrypto } from 'node:crypto';
 import {
   lstat,
   mkdir,
@@ -15,6 +15,7 @@ import {
   boardLimits,
   clip,
   directionId,
+  figureType,
   number,
   object,
   postLine,
@@ -531,6 +532,21 @@ export async function startLabOn(
 /** How many lists of changed files a lab keeps, by their commits. */
 const changeListLimit = 20;
 
+/** The checked figures that a lab keeps in memory: at most this many, and this many bytes. */
+const figureCache = { count: 8, bytes: 64 * 1024 * 1024 };
+
+/**
+ * A figure that a post cites, as the post pinned it, or why there is none:
+ * `missing`, no such post, figure, or folder; `changed`, the bytes at its
+ * commit do not match the post's record; `large`, it is larger than the
+ * bound.
+ */
+export type FigureRead =
+  | { readonly path: string; readonly content: Buffer }
+  | { readonly missing: string }
+  | { readonly changed: string }
+  | { readonly large: string };
+
 export class Lab {
   private readonly root: string;
   private readonly options: LabOptions;
@@ -574,6 +590,8 @@ export class Lab {
   private openingPlanner = false;
   /** Closed directions whose close runs now. */
   private readonly finishing = new Set<string>();
+  /** Figures that a read checked, by commit, SHA-256, and path, oldest first. Pinned bytes never change. */
+  private readonly figures = new Map<string, Buffer>();
   /** The calls whose answer Verifold applies now. Each one still answers its deadline. */
   private readonly applying = new Set<string>();
   /** The directions that agents opened in the last minute, by call. A repeated call gets the first one's answer. */
@@ -4328,37 +4346,71 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
 
   /**
    * For the desk: the figure that a post cites, such as p-12.0, as the post
-   * pinned it: its path, and its bytes at that commit. Null for a proof that
-   * is not a figure of the lab, and for bytes that do not match the post's
-   * record. It refuses a figure larger than `bytes`.
+   * pinned it. The read stays in the project's Git objects and takes only a
+   * regular file with a figure extension, at the pinned commit, up to
+   * `bytes`. Its SHA-256 and size check shows only that the bytes match the
+   * board's record.
    */
-  async figure(
-    proof: string,
-    bytes: number,
-  ): Promise<{ readonly path: string; readonly content: Buffer } | null> {
+  async figure(proof: string, bytes: number): Promise<FigureRead> {
     const place = proofRef(proof);
     const post = place ? this.board.get(place.post) : undefined;
-    const cited = place ? post?.artifacts[place.index] : undefined;
-    if (cited?.type !== 'figure') return null;
-    const id = cited.direction ?? post?.direction;
-    const direction = this.state?.directions.find((entry) => entry.id === id);
-    if (!direction) return null;
+    if (!place || !post)
+      return { missing: `The lab has no post ${place?.post ?? proof}.` };
+    const cited = post.artifacts[place.index];
+    if (cited?.type !== 'figure' || !figureType(cited.path))
+      return {
+        missing: `${post.id} cites no figure at place ${place.index}.`,
+      };
     if (cited.bytes > bytes)
-      fail(
-        `This figure is larger than ${bytes / 1024 / 1024} MB, so Verifold does not show it.`,
+      return {
+        large: `This figure has ${cited.bytes} bytes. Verifold shows figures up to ${bytes / 1024 / 1024} MB.`,
+      };
+    const key = `${cited.commit}:${cited.sha256}:${cited.path}`;
+    let content = this.figures.get(key);
+    if (content) this.figures.delete(key);
+    else {
+      // A checker's figure is in its check's folder, as `source` finds a run's folder.
+      const checker = this.state?.checks.find(
+        (entry) => entry.agent === post.author,
       );
-    // Only a regular file at the pinned commit, never a link or what the folder holds now.
-    const content = await readFileAt(
-      this.root,
-      direction.workspace,
-      cited.commit,
-      cited.path,
-    );
-    return content &&
-      content.length === cited.bytes &&
-      createHash('sha256').update(content).digest('hex') === cited.sha256
-      ? { path: cited.path, content }
-      : null;
+      const workspace =
+        (checker ? this.checkWorkspace(checker) : null) ??
+        this.state?.directions.find(
+          (entry) => entry.id === (cited.direction ?? post.direction),
+        )?.workspace;
+      if (!workspace)
+        return {
+          missing: `The folder that holds the figure of ${post.id} is not in the lab.`,
+        };
+      const read = await readFileAt(
+        this.root,
+        workspace,
+        cited.commit,
+        cited.path,
+        bytes,
+      );
+      if (
+        !read ||
+        read.length !== cited.bytes ||
+        Buffer.from(await webcrypto.subtle.digest('SHA-256', read)).toString(
+          'hex',
+        ) !== cited.sha256
+      )
+        return {
+          changed: `${cited.path} at ${cited.commit.slice(0, 7)} does not match the record of ${post.id}.`,
+        };
+      content = read;
+    }
+    this.figures.set(key, content);
+    let kept = 0;
+    for (const value of this.figures.values()) kept += value.length;
+    for (const [old, value] of this.figures) {
+      if (this.figures.size <= figureCache.count && kept <= figureCache.bytes)
+        break;
+      this.figures.delete(old);
+      kept -= value.length;
+    }
+    return { path: cited.path, content };
   }
 
   /** For the desk: the commit of a direction that the person looks at to bring in, or null before `lookToBring`. */
@@ -7128,10 +7180,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       const item = object(entry) ?? fail('An artifact is not valid.');
       if (item.type === 'file' || item.type === 'figure') {
         const path = projectPath(item.path);
-        if (
-          item.type === 'figure' &&
-          !/\.(png|jpe?g|gif|svg|webp|pdf)$/i.test(path)
-        )
+        if (item.type === 'figure' && !figureType(path))
           fail('A figure is an image or a PDF file.');
         return { type: item.type, path };
       }

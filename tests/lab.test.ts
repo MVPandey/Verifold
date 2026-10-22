@@ -2170,12 +2170,24 @@ await test('proof in a folder that the project ignores is pinned, and a turn tha
   await rm(live);
   await symlink('/etc/hosts', live);
   const shown = await lab.lab.figure(`${claim?.id}.0`, 1024);
-  assert.equal(shown?.path, 'results/fig.png');
-  assert.equal(shown?.content.toString('utf8'), 'PNG');
-  await assert.rejects(lab.lab.figure(`${claim?.id}.0`, 2), /larger than/);
-  // A proof that is not a figure of the lab reads as nothing.
-  assert.equal(await lab.lab.figure(`${claim?.id}.1`, 1024), null);
-  assert.equal(await lab.lab.figure('p-99.0', 1024), null);
+  assert.ok('content' in shown);
+  assert.equal(shown.path, 'results/fig.png');
+  assert.equal(shown.content.toString('utf8'), 'PNG');
+  // A second read gives the same checked bytes.
+  const again = await lab.lab.figure(`${claim?.id}.0`, 1024);
+  assert.ok('content' in again);
+  assert.equal(again.content.toString('utf8'), 'PNG');
+  // Over the bound, and a proof that is not a figure of the lab, each say why.
+  assert.match(
+    JSON.stringify(await lab.lab.figure(`${claim?.id}.0`, 2)),
+    /^\{"large":"This figure has 3 bytes\./,
+  );
+  assert.deepEqual(await lab.lab.figure(`${claim?.id}.1`, 1024), {
+    missing: `${claim?.id} cites no figure at place 1.`,
+  });
+  assert.deepEqual(await lab.lab.figure('p-99.0', 1024), {
+    missing: 'The lab has no post p-99.',
+  });
 });
 
 await test('a post whose turn ran into a used-up usage window comes again after the reset', async (t) => {

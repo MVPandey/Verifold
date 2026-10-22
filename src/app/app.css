@@ -546,6 +546,8 @@ button {
   font-weight: 700;
   color: var(--ink);
   text-decoration: none;
+  /* A long file name breaks inside its chip, not past the page. */
+  overflow-wrap: anywhere;
 }
 
 .proof:hover {
