@@ -1361,10 +1361,19 @@ await test('a pod that Verifold stops takes no new run until its state changes, 
   assert.equal(atChange.at(-1), undefined);
 });
 
-await test('ending a stopped lease shows as ending, and a poll ends it when the answer of RunPod does not come back', async (t) => {
+await test('ending a stopped lease shows as ending until a poll reads the pod: a pod that RunPod still has can end again, and a pod that is gone ends the lease', async (t) => {
   const fake = await fakePod(t);
   const lease = await readyLease(fake);
   await fake.compute.leases.stop(lease, 'person', 'a test.');
+  // RunPod refuses the delete: the poll finds the pod, so the person can end the lease again.
+  process.env.FAKE_ACTION_REFUSES = '1';
+  await assert.rejects(fake.compute.leases.end(lease, 'person', 'a test.'));
+  delete process.env.FAKE_ACTION_REFUSES;
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'ending' });
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'stopped');
+  assert.deepEqual(fake.compute.view().closing, {});
+  // RunPod deletes the pod, but its answer does not come back.
   process.env.FAKE_ACTION_FAILS = '1';
   await assert.rejects(fake.compute.leases.end(lease, 'person', 'a test.'));
   delete process.env.FAKE_ACTION_FAILS;
