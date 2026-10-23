@@ -20,9 +20,13 @@ const podStates: Readonly<Record<PodState, string>> = {
   failed: 'Failed',
 };
 
-/** A pod's state as the settings page shows it: "Stopping" while Verifold stops or ends its pod. */
+/** A pod's state as the settings page shows it, with what Verifold does to it now. */
 export function podState(pod: PodLease): string {
-  return pod.stopping ? 'Stopping' : podStates[pod.state];
+  return pod.closing === 'ending'
+    ? 'Ending'
+    : pod.closing === 'stopping'
+      ? 'Stopping'
+      : podStates[pod.state];
 }
 
 /** The pod runs, or starts, and bills. */

@@ -1235,24 +1235,8 @@ await test('a pod log keeps the bytes that the job wrote, and its cut line count
   assert.ok(!log.includes(secret));
 });
 
-await test('a pod that Verifold stops takes no new run, and shows as stopping until the stop ends or fails', async (t) => {
-  let release: () => void = () => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let copying: () => void = () => {};
-  const copies = new Promise<void>((resolve) => {
-    copying = resolve;
-  });
-  let hold = false;
-  // The runs of the lease copy back before its pod stops. The test holds that step.
-  const fake = await fakePod(t, {
-    runsStop: async () => {
-      if (!hold) return;
-      copying();
-      await held;
-    },
-  });
+/** A lease of d-1 whose pod is ready. */
+async function readyLease(fake: FakePod): Promise<string> {
   const lease = (
     await fake.compute.leases.request({
       by: 'agent',
@@ -1264,90 +1248,309 @@ await test('a pod that Verifold stops takes no new run, and shows as stopping un
   ).id;
   await fake.compute.leases.approve(lease, 'verifold');
   await fake.compute.leases.poll();
-  const pods = fake.compute.podRuns();
-  assert.deepEqual(pods.pick('d-1'), { lease, gpu: 'NVIDIA RTX A5000' });
-  // A stop that RunPod refuses leaves the pod as it was, ready for runs.
-  const podId = fake.compute.leases.get(lease).podId ?? '';
-  const pod = fake.pods.get(podId);
-  assert.ok(pod);
-  fake.pods.delete(podId);
-  await assert.rejects(fake.compute.leases.stop(lease, 'person', 'a test.'));
-  assert.deepEqual(fake.compute.view().stopping, []);
-  assert.deepEqual(pods.pick('d-1'), { lease, gpu: 'NVIDIA RTX A5000' });
-  fake.pods.set(podId, pod);
-  // While the stop runs, the lease still reads as ready, but no run starts on it.
-  hold = true;
-  const stop = fake.compute.leases.stop(lease, 'person', 'a test.');
-  await copies;
   assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  return lease;
+}
+
+/** End a process that a test started, with its group. */
+function kill(child: { readonly pid?: number | undefined }): void {
+  try {
+    process.kill(-(child.pid ?? 0), 'SIGKILL');
+  } catch {
+    // It ended already.
+  }
+}
+
+/** The child ended, by a signal or with a code. */
+function ended(child: {
+  readonly exitCode: number | null;
+  readonly signalCode: NodeJS.Signals | null;
+}): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+await test('a pod that Verifold stops takes no new run until its state changes, and an answer that does not come back keeps it out until a poll reads the pod', async (t) => {
+  const hold = { on: false };
+  let copying = (): void => {};
+  const copies = new Promise<void>((resolve) => {
+    copying = resolve;
+  });
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const box: { fake?: FakePod } = {};
+  // What holds each lease at the moment Verifold tells of its change.
+  const atChange: (string | undefined)[] = [];
+  const fake = await fakePod(t, {
+    runsStop: async () => {
+      if (!hold.on) return;
+      copying();
+      await held;
+    },
+    onChange: (lease) =>
+      atChange.push(box.fake?.compute.leases.closing()[lease.id]),
+  });
+  box.fake = fake;
+  const lease = await readyLease(fake);
+  const pods = fake.compute.podRuns();
+  // RunPod refuses the stop: no run starts until a poll reads that the pod still runs.
+  process.env.FAKE_ACTION_REFUSES = '1';
+  await assert.rejects(
+    fake.compute.leases.stop(lease, 'person', 'a test.'),
+    /RunPod answered with 500/,
+  );
+  delete process.env.FAKE_ACTION_REFUSES;
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'stopping' });
+  assert.throws(() => pods.pick('d-1'), /The pod of lease-1 stops now/);
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  assert.deepEqual(fake.compute.view().closing, {});
+  assert.deepEqual(pods.pick('d-1'), { lease, gpu: 'NVIDIA RTX A5000' });
+  // RunPod stops the pod, but its answer does not come back: no run starts until a poll reads the pod.
+  process.env.FAKE_ACTION_FAILS = '1';
+  await assert.rejects(
+    fake.compute.leases.stop(lease, 'person', 'a test.'),
+    /RunPod answered with 500/,
+  );
+  delete process.env.FAKE_ACTION_FAILS;
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'stopping' });
   assert.throws(
     () => pods.pick('d-1'),
     /The pod of lease-1 stops now, so no run starts on it\./,
   );
-  assert.throws(() => pods.pick('d-1', lease), /stops now/);
-  assert.deepEqual(fake.compute.view().stopping, [lease]);
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'stopped');
+  assert.deepEqual(fake.compute.view().closing, {});
+  // The hold ended before Verifold told of the new state.
+  assert.equal(atChange.at(-1), undefined);
+  await fake.compute.leases.start(lease, 'person', 'a test.');
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  // A second pod waits for the person.
+  const second = (
+    await fake.compute.leases.request({
+      by: 'agent',
+      gpu: 'NVIDIA RTX A5000',
+      hours: 1,
+      directions: ['d-1'],
+      reason: 'A second GPU.',
+    })
+  ).id;
+  // While the stop runs, the lease still reads as ready, but no run starts on it.
+  hold.on = true;
+  const stop = fake.compute.leases.stop(lease, 'person', 'a test.');
+  await copies;
+  assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'stopping' });
+  // A named lease gets the reason of its own state.
+  assert.throws(() => pods.pick('d-1', lease), /The pod of lease-1 stops now/);
+  assert.throws(
+    () => pods.pick('d-1', second),
+    /The pod of lease-2 is not ready yet\. Verifold wakes you when it is\./,
+  );
+  // With no lease named, the agent hears of the pod that it waits for.
+  assert.throws(
+    () => pods.pick('d-1'),
+    /The pod of d-1 is not ready yet\. Verifold wakes you when it is\./,
+  );
   release();
   await stop;
   assert.equal(fake.compute.leases.get(lease).state, 'stopped');
-  assert.deepEqual(fake.compute.view().stopping, []);
+  assert.deepEqual(fake.compute.view().closing, {});
+  assert.equal(atChange.at(-1), undefined);
 });
 
-/** A /proc for the fake pod: a boot ID and one stat line, for process `pid`, with its start time at field 22. */
+await test('ending a stopped lease shows as ending, and a poll ends it when the answer of RunPod does not come back', async (t) => {
+  const fake = await fakePod(t);
+  const lease = await readyLease(fake);
+  await fake.compute.leases.stop(lease, 'person', 'a test.');
+  process.env.FAKE_ACTION_FAILS = '1';
+  await assert.rejects(fake.compute.leases.end(lease, 'person', 'a test.'));
+  delete process.env.FAKE_ACTION_FAILS;
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'ending' });
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'ended');
+  assert.deepEqual(fake.compute.view().closing, {});
+});
+
+await test('after a start, no run starts on an open lease until recovery reads its pod, and recovery stops a pod that ran as a stop does', async (t) => {
+  const fake = await fakePod(t);
+  const lease = await readyLease(fake);
+  // As after a restart: the record says ready, and the pod runs.
+  await fake.compute.load();
+  fake.compute.leases.holdForRecovery();
+  const pods = fake.compute.podRuns();
+  assert.throws(
+    () => pods.pick('d-1'),
+    /Verifold checks the pod of lease-1 after its start\./,
+  );
+  assert.throws(
+    () => pods.pick('d-1', lease),
+    /Verifold checks the pod of lease-1 after its start\./,
+  );
+  // Recovery stops the pod, but RunPod's answer does not come back: the lease stays out of runs.
+  process.env.FAKE_ACTION_FAILS = '1';
+  await fake.compute.leases.recover();
+  delete process.env.FAKE_ACTION_FAILS;
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'stopping' });
+  assert.throws(() => pods.pick('d-1'), /The pod of lease-1 stops now/);
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'stopped');
+  assert.deepEqual(fake.compute.view().closing, {});
+  assert.throws(() => pods.pick('d-1'), /The pod of lease-1 stopped/);
+});
+
+await test('a stop of the pod that begins while a run saves its record ends the run before its job starts', async (t) => {
+  const fx = await fixture(t);
+  const lease = await fx.lease();
+  const { ledger } = fx.ledger();
+  let saving = (): void => {};
+  const inSave = new Promise<void>((resolve) => {
+    saving = resolve;
+  });
+  let go = (): void => {};
+  const saved = new Promise<void>((resolve) => {
+    go = resolve;
+  });
+  // The first save of the run waits until the pod stopped.
+  const ledgerSave = ledger as unknown as {
+    save(run: RunRecord): Promise<void>;
+  };
+  const save = ledgerSave.save.bind(ledger);
+  let first = true;
+  ledgerSave.save = async (run) => {
+    if (first && run.status === 'queued') {
+      first = false;
+      saving();
+      await saved;
+    }
+    return save(run);
+  };
+  const started = fx.start(ledger, 'sleep 30', { lease });
+  await inSave;
+  await fx.compute.leases.stop(lease, 'person', 'a test.');
+  go();
+  const run = await started;
+  await until(() => {
+    const status = ledger.get(run.id)?.status;
+    return status !== 'queued' && status !== 'running';
+  });
+  assert.equal(ledger.get(run.id)?.status, 'interrupted');
+  assert.doesNotMatch(ledger.get(run.id)?.note ?? '', /does not run now/);
+  // The pod got no job for the run.
+  assert.ok(!existsSync(join(fx.pod, 'verifold', '.runs', `${run.folder}.sh`)));
+});
+
+/**
+ * A /proc for the fake pod: a boot ID and a stat line for each process,
+ * with its state, its group, and its start time at field 22.
+ */
 async function fakeProc(
   fx: Fixture,
   boot: string,
-  pid: number,
-  start: number,
+  processes: readonly {
+    readonly pid: number;
+    readonly start: number;
+    readonly state?: string;
+    readonly group?: number;
+  }[],
 ): Promise<void> {
   const proc = join(fx.dir, 'proc');
+  await rm(proc, { recursive: true, force: true });
   await mkdir(join(proc, 'sys', 'kernel', 'random'), { recursive: true });
   await writeFile(
     join(proc, 'sys', 'kernel', 'random', 'boot_id'),
     `${boot}\n`,
   );
-  await mkdir(join(proc, String(pid)), { recursive: true });
-  // The name of a process can hold a parenthesis and a space.
-  await writeFile(
-    join(proc, String(pid), 'stat'),
-    `${pid} (sle) ep) S ${'0 '.repeat(18)}${start} 0 0 0\n`,
-  );
+  for (const entry of processes) {
+    await mkdir(join(proc, String(entry.pid)), { recursive: true });
+    // The name of a process can hold a parenthesis and a space.
+    await writeFile(
+      join(proc, String(entry.pid), 'stat'),
+      `${entry.pid} (sle) ep) ${entry.state ?? 'S'} 1 ${entry.group ?? entry.pid} ${'0 '.repeat(16)}${entry.start} 0 0 0\n`,
+    );
+  }
   process.env.FAKE_PROC = proc;
 }
 
-await test('a process with the number of a pod job but another boot or start time is not the job: it reads as gone, and no signal reaches it', async (t) => {
+/** The job files of a pod run, as an earlier start left them. */
+async function jobFiles(
+  fx: Fixture,
+  folder: string,
+  files: Readonly<Record<string, string>>,
+): Promise<void> {
+  const runs = join(fx.pod, 'verifold', '.runs');
+  await mkdir(runs, { recursive: true });
+  for (const [name, text] of Object.entries(files))
+    await writeFile(join(runs, `${folder}.${name}`), `${text}\n`);
+}
+
+await test('a process with the number of a pod job but another boot or start time, a zombie, or a job that ended before its start was read is not the job', async (t) => {
   const fx = await fixture(t);
   const lease = await fx.lease();
   // A process that is not the job, in a process group of its own.
   const other = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
-  t.after(() => {
-    try {
-      process.kill(-(other.pid ?? 0), 'SIGKILL');
-    } catch {
-      // It ended already.
-    }
-  });
+  t.after(() => kill(other));
   const pid = other.pid ?? 0;
-  await fakeProc(fx, 'boot-a', pid, 500);
   const folder = 'run-1-0000abcd';
-  const runs = join(fx.pod, 'verifold', '.runs');
-  await mkdir(runs, { recursive: true });
-  // As if a job had this number before the pod's container started again.
-  await writeFile(join(runs, `${folder}.wrap`), `${pid}\n`);
-  await writeFile(join(runs, `${folder}.pid`), `${pid}\n`);
-  await writeFile(join(runs, `${folder}.log`), 'epoch 1\n');
+  await jobFiles(fx, folder, {
+    wrap: String(pid),
+    pid: String(pid),
+    log: 'epoch 1',
+  });
   const pods = fx.compute.podRuns();
-  for (const id of ['boot-a 400 400', 'boot-b 500 500']) {
-    await writeFile(join(runs, `${folder}.id`), `${id}\n`);
+  await fakeProc(fx, 'boot-a', [{ pid, start: 500 }]);
+  for (const id of ['boot-a 400 400', 'boot-b 500 500', 'boot-a 400 ended']) {
+    await jobFiles(fx, folder, { id });
     assert.equal((await pods.state(lease, folder)).state, 'gone');
     // KILL here: a stop that reached the process would end it with SIGKILL.
     await pods.stop(lease, folder, 'KILL');
   }
+  // A zombie with the wrapper's number and start time does not run.
+  await fakeProc(fx, 'boot-a', [{ pid, start: 500, state: 'Z' }]);
+  await jobFiles(fx, folder, { id: 'boot-a 500 500' });
+  assert.equal((await pods.state(lease, folder)).state, 'gone');
+  // A link in place of .id counts as no file, so the state is read as before.
+  await rm(join(fx.pod, 'verifold', '.runs', `${folder}.id`));
+  await fakeProc(fx, 'boot-a', [{ pid, start: 500 }]);
+  await jobFiles(fx, folder, { id: 'boot-a 500 500' });
   // The same boot and start time: this is the job, so it runs, and a stop reaches its group.
-  await writeFile(join(runs, `${folder}.id`), 'boot-a 500 500\n');
   assert.equal((await pods.state(lease, folder)).state, 'running');
   await pods.stop(lease, folder, 'TERM');
-  await until(() => other.exitCode !== null || other.signalCode !== null);
+  await until(() => ended(other));
   assert.equal(other.signalCode, 'SIGTERM');
+});
+
+await test("when a job's own process ended, a stop reaches only the processes of its group that started with it or later", async (t) => {
+  const fx = await fixture(t);
+  const lease = await fx.lease();
+  const later = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+  const before = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+  t.after(() => {
+    kill(later);
+    kill(before);
+  });
+  // The job's number: no process has it now.
+  const job = 999_999;
+  await fakeProc(fx, 'boot-a', [
+    { pid: later.pid ?? 0, group: job, start: 600 },
+    { pid: before.pid ?? 0, group: job, start: 400 },
+  ]);
+  const folder = 'run-1-0000abcd';
+  await jobFiles(fx, folder, {
+    wrap: String(job),
+    pid: String(job),
+    id: 'boot-a 500 500',
+    log: 'epoch 1',
+  });
+  await fx.compute.podRuns().stop(lease, folder, 'TERM');
+  await until(() => ended(later), 5000);
+  assert.equal(later.signalCode, 'SIGTERM');
+  // The process that started before the job got no signal: the first that ends it is the test's own.
+  before.kill('SIGKILL');
+  await until(() => ended(before));
+  assert.equal(before.signalCode, 'SIGKILL');
 });
 
 await test(
@@ -1360,11 +1563,10 @@ await test(
     const lease = await fx.lease();
     const { ledger } = fx.ledger();
     const run = await fx.start(ledger, 'sleep 30', { lease });
-    const folder = run.folder;
     const runs = join(fx.pod, 'verifold', '.runs');
-    await until(() => existsSync(join(runs, `${folder}.id`)));
+    await until(() => existsSync(join(runs, `${run.folder}.id`)));
     const [boot, wrapper, job] = readFileSync(
-      join(runs, `${folder}.id`),
+      join(runs, `${run.folder}.id`),
       'utf8',
     )
       .trim()
@@ -1380,8 +1582,8 @@ await test(
       );
       return line.slice(line.lastIndexOf(') ') + 2).split(' ')[19];
     };
-    assert.equal(wrapper, started(`${folder}.wrap`));
-    assert.equal(job, started(`${folder}.pid`));
+    assert.equal(wrapper, started(`${run.folder}.wrap`));
+    assert.equal(job, started(`${run.folder}.pid`));
     ledger.cancel(run.id, 'person');
     await until(() => ledger.get(run.id)?.status === 'cancelled');
   },

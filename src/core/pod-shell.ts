@@ -65,12 +65,21 @@ function runFiles(run: string): string {
 const bootId = 'cat /proc/sys/kernel/random/boot_id 2>/dev/null';
 
 /**
- * Shell: the start time of process `pid` in clock ticks since the boot,
- * field 22 of its /proc stat line. The fields count after the name in
- * parentheses, which can hold spaces. Empty when /proc has no such process.
+ * Shell: `fields PID` prints the fields of the process's /proc stat line
+ * from its state on, after its name in parentheses, which can hold spaces.
+ * Then field 1 is its state, field 3 its process group, and field 20 its
+ * start time in clock ticks since the boot. Empty without the process.
  */
-function startTime(pid: string): string {
-  return `sed "s/^.*) //" /proc/${pid}/stat 2>/dev/null | cut -d " " -f 20`;
+const fields = 'fields() { sed "s/^.*) //" /proc/"$1"/stat 2>/dev/null; }';
+
+/**
+ * Shell: read a job's `.id`, at most 200 bytes, into `b`, `w` and `j`: the
+ * boot ID and the start times of the wrapper and the job. `j` is `ended`
+ * when the job ended before the wrapper could read its start. A link counts
+ * as no file. Without a file, `b` stays empty.
+ */
+function readId(at: string): string {
+  return `b= w= j=; if [ -f ${at}.id ] && [ ! -L ${at}.id ]; then set -- $(head -c 200 ${at}.id 2>/dev/null); b=$1 w=$2 j=$3; fi`;
 }
 
 /** What a lab run's job on the pod does now. */
@@ -433,7 +442,8 @@ echo watching
   ): Promise<void> {
     const folder = remoteFolder(run);
     const at = runFiles(run);
-    const identity = `b=$(${bootId}); w=$(${startTime('"$$"')}); j=$(${startTime('"$job"')}); [ -n "$b" ] && [ -n "$w" ] && [ -n "$j" ] && echo "$b $w $j" > ${at}.id.tmp && mv ${at}.id.tmp ${at}.id`;
+    // A job that ended before the wrapper read its start gets `ended`, so no stop signals its number later.
+    const identity = `${fields}; b=$(${bootId}); w=$(fields "$$" | cut -d " " -f 20); j=$(fields "$job" | cut -d " " -f 20); [ -n "$b" ] && [ -n "$w" ] && echo "$b $w \${j:-ended}" > ${at}.id.tmp && mv ${at}.id.tmp ${at}.id`;
     const result = await program(
       this.ssh,
       [
@@ -452,14 +462,14 @@ echo watching
   async runState(target: PodTarget, run: string): Promise<PodRunState> {
     const at = runFiles(run);
     // The wrapper writes the exit code before it ends, so a wrapper that is gone without one ended another way. A job with no file did not start.
-    // With `.id`, the wrapper runs only when the process with its number started at the same boot and time. Without it, as before.
-    const ours = `ours() { [ -n "$1" ] || return 1; if [ -f ${at}.id ]; then read -r b w j < ${at}.id; [ "$(${bootId})" = "$b" ] && [ "$(${startTime('"$1"')})" = "$w" ]; else kill -0 "$1" 2>/dev/null; fi; }`;
+    // With `.id`, the wrapper runs only when the process with its number started at the same boot and time. Without it, as before. A zombie does not run.
+    const up = `${fields}; ${readId(at)}; p=$(cat ${at}.wrap 2>/dev/null); up=; if [ -n "$p" ]; then if [ -n "$b" ]; then set -- $(fields "$p"); [ "$(${bootId})" = "$b" ] && [ -n "$1" ] && [ "$1" != Z ] && [ "\${20}" = "$w" ] && up=1; elif kill -0 "$p" 2>/dev/null; then set -- $(fields "$p"); [ "$1" != Z ] && up=1; fi; fi`;
     const result = answered(
       await program(
         this.ssh,
         [
           ...this.args(target),
-          `${ours}; if [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif ours "$(cat ${at}.wrap 2>/dev/null)"; then echo running; elif [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif [ -e ${at}.log ] || [ -e ${at}.pid ] || [ -e ${at}.wrap ]; then echo gone; else echo none; fi; tail -c ${podLimits.output} ${at}.log 2>/dev/null; true`,
+          `${up}; if [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif [ -n "$up" ]; then echo running; elif [ -f ${at}.exit ]; then echo "exit $(cat ${at}.exit)"; elif [ -e ${at}.log ] || [ -e ${at}.pid ] || [ -e ${at}.wrap ]; then echo gone; else echo none; fi; tail -c ${podLimits.output} ${at}.log 2>/dev/null; true`,
         ],
         // The status line comes first: the tail of stdout keeps it.
         { timeoutMs: 60_000, keep: podLimits.output + 64 },
@@ -484,11 +494,11 @@ echo watching
 
   /**
    * Send a signal to the process group of a lab run's job. Fails when the pod
-   * does not answer. With `.id`, no signal goes after another boot, or to a
-   * process that has the job's number but another start time. When no
-   * process has the number, the signal goes: the job ended, but processes
-   * that it started can stay in its group, and no other group can take the
-   * number while one of them runs.
+   * does not answer. With `.id`, no signal goes after another boot, to a job
+   * that ended before Verifold read its start, or to a process that has the
+   * job's number but another start time. When the job's own process ended,
+   * the signal goes only to the processes of its group that started at or
+   * after the job. Without `.id`, as before.
    */
   async stopRun(
     target: PodTarget,
@@ -501,7 +511,7 @@ echo watching
         this.ssh,
         [
           ...this.args(target),
-          `pid=$(cat ${at}.pid 2>/dev/null); if [ -n "$pid" ] && [ -f ${at}.id ]; then read -r b w j < ${at}.id; if [ "$(${bootId})" != "$b" ]; then pid=; elif [ -e /proc/"$pid" ] && [ "$(${startTime('"$pid"')})" != "$j" ]; then pid=; fi; fi; [ -n "$pid" ] && kill -${signal} -- -"$pid" 2>/dev/null; true`,
+          `${fields}; ${readId(at)}; pid=$(cat ${at}.pid 2>/dev/null); if [ -z "$pid" ]; then :; elif [ -z "$b" ]; then kill -${signal} -- -"$pid" 2>/dev/null; elif [ "$(${bootId})" != "$b" ] || [ "$j" = ended ]; then :; else set -- $(fields "$pid"); if [ -n "$1" ] && [ "\${20}" != "$j" ]; then :; elif [ -n "$1" ] && [ "$1" != Z ]; then kill -${signal} -- -"$pid" 2>/dev/null; else for d in /proc/[0-9]*; do q=\${d##*/}; set -- $(fields "$q"); [ "$3" = "$pid" ] && [ "\${20:-0}" -ge "$j" ] && kill -${signal} "$q" 2>/dev/null; done; fi; fi; true`,
         ],
         { timeoutMs: 60_000, keep: 1024 },
       ),

@@ -91,8 +91,8 @@ export interface ComputeView {
   readonly gpusAt: string | null;
   /** Every lease, oldest first. */
   readonly leases: readonly Lease[];
-  /** The leases whose pod Verifold stops or ends now, so no run starts on them. */
-  readonly stopping?: readonly string[];
+  /** The leases whose pod Verifold stops or deletes now, by lease ID. No run starts on them. */
+  readonly closing?: Readonly<Record<string, 'stopping' | 'ending'>>;
   readonly budget: Budget;
   /** All projects' GPU spend this month against the person's monthly limit. Null or absent: no monthly limit, or not read yet. */
   readonly month?: MonthView | null;
@@ -134,6 +134,33 @@ export interface LabPod {
 
 function fail(message: string): never {
   throw new SessionActionError(message);
+}
+
+/**
+ * Why a lease takes no run now, in the words an agent reads. `held` is what
+ * holds it, from `Leases.held`. `direction`: the direction to name for a pod
+ * that is not ready yet, when the agent named no lease.
+ */
+function notReadyText(
+  lease: Lease,
+  held: 'stopping' | 'ending' | 'unsettled' | null,
+  direction?: string,
+): string {
+  if (held === 'stopping')
+    return `The pod of ${lease.id} stops now, so no run starts on it.`;
+  if (held === 'ending')
+    return `Verifold ends ${lease.id} now, so no run starts on it.`;
+  if (held === 'unsettled')
+    return `Verifold checks the pod of ${lease.id} after its start. Try again in a minute.`;
+  if (lease.state === 'stopped')
+    return `The pod of ${lease.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`;
+  if (
+    lease.state === 'starting' ||
+    lease.state === 'requested' ||
+    lease.state === 'ready'
+  )
+    return `The pod of ${direction ?? lease.id} is not ready yet. Verifold wakes you when it is.`;
+  return `${lease.id} has ended. Ask for a new pod with verifold_request_pod.`;
 }
 
 /** A number from a form field or JSON, inside a range. `whole` asks for an integer. */
@@ -693,9 +720,7 @@ export class Compute {
     const leases = this.leases
       .list()
       .filter((lease) => lease.tasks.includes(task));
-    const ready = leases.findLast(
-      (lease) => lease.state === 'ready' && lease.ssh,
-    );
+    const ready = leases.findLast((lease) => this.leases.usable(lease));
     if (ready?.ssh)
       return { lease: ready.id, host: ready.ssh.host, port: ready.ssh.port };
     fail(
@@ -703,7 +728,9 @@ export class Compute {
         (lease) => lease.state === 'starting' || lease.state === 'requested',
       )
         ? 'The pod of this task is not ready yet. Try again in a minute.'
-        : 'This task has no ready pod. Ask the coordinator for one with verifold_post.',
+        : leases.some((lease) => this.leases.held(lease))
+          ? 'Verifold stops or checks the pod of this task now. Try again in a minute.'
+          : 'This task has no ready pod. Ask the coordinator for one with verifold_post.',
     );
   }
 
@@ -773,42 +800,33 @@ export class Compute {
     };
     return {
       pick: (direction, lease) => {
-        const stopping = new Set(this.leases.stopping());
         const own = this.leases
           .list()
           .filter((entry) => entry.directions?.includes(direction));
-        const chosen =
-          lease === undefined
-            ? own.findLast(
-                (entry) =>
-                  entry.state === 'ready' &&
-                  entry.ssh &&
-                  !stopping.has(entry.id),
-              )
-            : own.find((entry) => entry.id === lease);
-        if (lease !== undefined && !chosen)
-          throw new SessionActionError(
-            `${typeof lease === 'string' ? lease.slice(0, 40) : 'That'} is no lease of ${direction}. Read your leases with verifold_compute.`,
-          );
-        if (chosen?.state === 'ready' && chosen.ssh && !stopping.has(chosen.id))
-          return { lease: chosen.id, gpu: chosen.gpu };
-        // A pod that Verifold stops or ends now takes no new run, also when it still reads as ready.
-        const ending =
-          chosen && stopping.has(chosen.id)
-            ? chosen
-            : own.findLast((entry) => stopping.has(entry.id));
+        if (lease !== undefined) {
+          const named =
+            own.find((entry) => entry.id === lease) ??
+            fail(
+              `${typeof lease === 'string' ? lease.slice(0, 40) : 'That'} is no lease of ${direction}. Read your leases with verifold_compute.`,
+            );
+          if (this.leases.usable(named))
+            return { lease: named.id, gpu: named.gpu };
+          // A named lease gets the reason of its own state.
+          fail(notReadyText(named, this.leases.held(named)));
+        }
+        const usable = own.findLast((entry) => this.leases.usable(entry));
+        if (usable) return { lease: usable.id, gpu: usable.gpu };
+        // A pod that comes first: the agent waits for it, also while another one stops.
+        const waiting = own.findLast(
+          (entry) => entry.state === 'starting' || entry.state === 'requested',
+        );
+        const held = own.findLast((entry) => this.leases.held(entry));
         const stopped = own.findLast((entry) => entry.state === 'stopped');
-        throw new SessionActionError(
-          ending
-            ? `The pod of ${ending.id} stops now, so no run starts on it.`
-            : own.some(
-                  (entry) =>
-                    entry.state === 'starting' || entry.state === 'requested',
-                )
-              ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
-              : stopped
-                ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`
-                : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
+        const shown = waiting ?? held ?? stopped;
+        fail(
+          shown
+            ? notReadyText(shown, this.leases.held(shown), direction)
+            : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },
       guard: async (id) => secretGuard(await this.leaseSecrets(id)),
@@ -997,7 +1015,7 @@ export class Compute {
     return {
       ...this.state,
       leases: this.leases.list(),
-      stopping: this.leases.stopping(),
+      closing: this.leases.closing(),
       budget: this.leases.budget(),
       month: this.leases.month(),
       problem: this.leases.lastProblem(),

@@ -411,11 +411,15 @@ export class Leases {
   private readProblem: Problem | null = null;
   private recordProblem: Problem | null = null;
   /**
-   * The leases whose pod Verifold stops or ends now: from before their runs
-   * copy back until the lease changes, or the stop fails. No run starts on
-   * them meanwhile. Only in memory: after a restart, RunPod's state decides.
+   * The leases whose pod Verifold stops (`stopping`) or deletes (`ending`)
+   * now, from before their runs copy back until the lease's state changes.
+   * No run starts on them. A call that reached RunPod but did not finish
+   * keeps its lease here until a poll reads the pod. Only in memory: after a
+   * restart, recovery reads RunPod.
    */
-  private readonly stoppingNow = new Set<string>();
+  private readonly closingNow = new Map<string, 'stopping' | 'ending'>();
+  /** Open leases that this owner's recovery has not read from RunPod yet. No run starts on them. */
+  private readonly unsettled = new Set<string>();
 
   constructor(root: string, hooks: LeaseHooks) {
     this.root = root;
@@ -445,21 +449,57 @@ export class Leases {
     return this.leases;
   }
 
-  /** The leases whose pod Verifold stops or ends now. */
-  stopping(): readonly string[] {
-    return [...this.stoppingNow];
+  /** How Verifold closes the pod of each lease now. */
+  closing(): Readonly<Record<string, 'stopping' | 'ending'>> {
+    return Object.fromEntries(this.closingNow);
   }
 
-  /** Hold `lease` as stopping while `work` runs. */
-  private async whileStopping<T>(
+  /** The lease can take a run: its pod is ready, Verifold reaches it, and no stop or recovery holds it. */
+  usable(lease: Lease): boolean {
+    return (
+      lease.state === 'ready' &&
+      lease.ssh !== null &&
+      !this.closingNow.has(lease.id) &&
+      !this.unsettled.has(lease.id)
+    );
+  }
+
+  /** What holds the lease from runs now, if anything. */
+  held(lease: Lease): 'stopping' | 'ending' | 'unsettled' | null {
+    return (
+      this.closingNow.get(lease.id) ??
+      (this.unsettled.has(lease.id) ? 'unsettled' : null)
+    );
+  }
+
+  /** The owner calls this after load, before agents resume: no run starts on an open lease until recover() reads its pod. */
+  holdForRecovery(): void {
+    for (const lease of this.leases)
+      if (isOpen(lease)) this.unsettled.add(lease.id);
+  }
+
+  /**
+   * Hold `lease` as closing while `work` runs. `work` calls `sent` right
+   * before it asks RunPod to stop or delete the pod. A failure before that
+   * releases the hold. A failure after it keeps the hold, because RunPod may
+   * have acted: the next poll reads the pod and decides.
+   */
+  private async whileClosing<T>(
     lease: Lease,
-    work: () => Promise<T>,
+    how: 'stopping' | 'ending',
+    work: (sent: () => void) => Promise<T>,
   ): Promise<T> {
-    this.stoppingNow.add(lease.id);
+    this.closingNow.set(lease.id, how);
+    let reached = false;
     try {
-      return await work();
-    } finally {
-      this.stoppingNow.delete(lease.id);
+      const result = await work(() => {
+        reached = true;
+      });
+      this.closingNow.delete(lease.id);
+      return result;
+    } catch (error) {
+      if (!reached) this.closingNow.delete(lease.id);
+      throw error;
     }
   }
 
@@ -648,6 +688,8 @@ export class Leases {
         -leaseLimits.history,
       ),
     });
+    // A new state ends a stop or an end that held the lease, before anyone hears of it.
+    if (next.state !== lease.state) this.closingNow.delete(next.id);
     if (
       (next.state === 'ended' ||
         next.state === 'failed' ||
@@ -973,10 +1015,12 @@ export class Leases {
     const podId = lease.podId;
     if (!isRunning(lease) || !podId)
       fail(`The pod of ${lease.id} does not run.`);
-    return this.whileStopping(lease, async () => {
+    return this.whileClosing(lease, 'stopping', async (sent) => {
       // RunPod erases the disk at a stop, so the results come back first.
       const copied = lease.ssh ? await this.hooks.beforeStop?.(lease) : null;
-      await (await this.hooks.client()).action(podId, 'stop');
+      const client = await this.hooks.client();
+      sent();
+      await client.action(podId, 'stop');
       const at = this.stamp();
       return this.change(
         lease,
@@ -1042,12 +1086,16 @@ export class Leases {
         `Withdrew the request: ${reason}`,
       );
     if (!isOpen(lease)) fail(`${lease.id} has ended.`);
-    return this.whileStopping(lease, async () => {
+    return this.whileClosing(lease, 'ending', async (sent) => {
       const copied =
         lease.state === 'ready' && lease.ssh
           ? await this.hooks.beforeStop?.(lease)
           : null;
-      if (lease.podId) await (await this.hooks.client()).terminate(lease.podId);
+      if (lease.podId) {
+        const client = await this.hooks.client();
+        sent();
+        await client.terminate(lease.podId);
+      }
       const at = this.stamp();
       return this.change(
         lease,
@@ -1133,6 +1181,8 @@ export class Leases {
             ...lease,
             seen: { at, status: pod.status, gpuUtil: pod.gpuUtil },
           });
+          // A stop or an end whose call did not finish held the lease until this read. A pod that still runs did not stop.
+          if (pod.status === 'RUNNING') this.closingNow.delete(lease.id);
           if (pod.status === 'ERROR') {
             await this.endNow(
               lease,
@@ -1314,104 +1364,112 @@ export class Leases {
    * Verifold was not running is stopped, and the person learns the cost.
    */
   recover(): Promise<void> {
-    return this.serial(async () => {
-      const openLeases = this.leases.filter(isOpen);
-      if (!openLeases.length) return;
-      let client: RunPod;
+    return this.serial(() =>
+      this.recoverNow().finally(() => {
+        // Each open lease is read now, or could not be: runs may use them again.
+        this.unsettled.clear();
+      }),
+    );
+  }
+
+  private async recoverNow(): Promise<void> {
+    const openLeases = this.leases.filter(isOpen);
+    if (!openLeases.length) return;
+    let client: RunPod;
+    try {
+      client = await this.hooks.client();
+    } catch (error) {
+      this.problem = {
+        at: this.stamp(),
+        text: `Verifold could not check the open leases: ${error instanceof Error ? error.message : 'no key.'}`,
+      };
+      return;
+    }
+    for (const start of openLeases) {
+      let lease = this.get(start.id);
       try {
-        client = await this.hooks.client();
-      } catch (error) {
-        this.problem = {
-          at: this.stamp(),
-          text: `Verifold could not check the open leases: ${error instanceof Error ? error.message : 'no key.'}`,
-        };
-        return;
-      }
-      for (const start of openLeases) {
-        let lease = this.get(start.id);
-        try {
-          if (!lease.podId) {
-            const pod = (await client.pods()).find(
-              (entry) => entry.name === lease.podName,
-            );
-            if (!pod) {
-              await this.change(
-                lease,
-                {
-                  state: 'failed',
-                  end: {
-                    at: this.stamp(),
-                    by: 'recovery',
-                    reason: 'Verifold stopped before RunPod created the pod.',
-                  },
-                },
-                'recovery',
-                'Verifold stopped before RunPod created the pod.',
-              );
-              continue;
-            }
-            const at = this.stamp();
-            lease = await this.change(
-              lease,
-              {
-                podId: pod.id,
-                deadline: new Date(
-                  this.now() + lease.hours * 3_600_000,
-                ).toISOString(),
-                intervals: [{ start: at, end: null, rate: lease.rate }],
-              },
-              'recovery',
-              `Found pod ${pod.id}, which RunPod created while Verifold stopped.`,
-            );
-          }
-          if (!lease.podId) continue;
-          const pod = await client.pod(lease.podId);
-          const at = this.stamp();
-          if (!pod || pod.status === 'TERMINATED') {
+        if (!lease.podId) {
+          const pod = (await client.pods()).find(
+            (entry) => entry.name === lease.podName,
+          );
+          if (!pod) {
             await this.change(
               lease,
               {
-                state: 'ended',
-                intervals: this.closed(lease, at),
-                ssh: null,
+                state: 'failed',
                 end: {
-                  at,
-                  by: 'runpod',
-                  reason: 'RunPod no longer has the pod.',
+                  at: this.stamp(),
+                  by: 'recovery',
+                  reason: 'Verifold stopped before RunPod created the pod.',
                 },
               },
               'recovery',
-              'RunPod no longer has the pod.',
+              'Verifold stopped before RunPod created the pod.',
             );
             continue;
           }
-          if (lease.deadline && Date.parse(lease.deadline) <= this.now()) {
-            await this.endNow(
-              lease,
-              'deadline',
-              'the lease ended while Verifold stopped.',
-            );
-            continue;
-          }
-          if (
-            pod.status === 'RUNNING' ||
-            pod.status === 'PROVISIONING' ||
-            pod.status === 'STARTING'
-          ) {
-            // Pods stop when Verifold stops. This one ran, so Verifold crashed, or someone started it.
-            // The gap counts from the last time that Verifold saw the pod: an over-estimate is the safe side.
-            const since = lease.seen?.at ?? lease.intervals.at(-1)?.start ?? at;
-            const intervals = isRunning(lease)
-              ? this.closed(lease, at)
-              : [
-                  ...lease.intervals,
-                  { start: since, end: at, rate: lease.rate },
-                ];
-            const gap =
-              ((lease.rate + diskRate(lease.diskGb)) *
-                Math.max(0, this.now() - Date.parse(since))) /
-              3_600_000;
-            await client.action(lease.podId, 'stop');
+          const at = this.stamp();
+          lease = await this.change(
+            lease,
+            {
+              podId: pod.id,
+              deadline: new Date(
+                this.now() + lease.hours * 3_600_000,
+              ).toISOString(),
+              intervals: [{ start: at, end: null, rate: lease.rate }],
+            },
+            'recovery',
+            `Found pod ${pod.id}, which RunPod created while Verifold stopped.`,
+          );
+        }
+        if (!lease.podId) continue;
+        const pod = await client.pod(lease.podId);
+        const at = this.stamp();
+        if (!pod || pod.status === 'TERMINATED') {
+          await this.change(
+            lease,
+            {
+              state: 'ended',
+              intervals: this.closed(lease, at),
+              ssh: null,
+              end: {
+                at,
+                by: 'runpod',
+                reason: 'RunPod no longer has the pod.',
+              },
+            },
+            'recovery',
+            'RunPod no longer has the pod.',
+          );
+          continue;
+        }
+        if (lease.deadline && Date.parse(lease.deadline) <= this.now()) {
+          await this.endNow(
+            lease,
+            'deadline',
+            'the lease ended while Verifold stopped.',
+          );
+          continue;
+        }
+        if (
+          pod.status === 'RUNNING' ||
+          pod.status === 'PROVISIONING' ||
+          pod.status === 'STARTING'
+        ) {
+          // Pods stop when Verifold stops. This one ran, so Verifold crashed, or someone started it.
+          // The gap counts from the last time that Verifold saw the pod: an over-estimate is the safe side.
+          const since = lease.seen?.at ?? lease.intervals.at(-1)?.start ?? at;
+          const intervals = isRunning(lease)
+            ? this.closed(lease, at)
+            : [...lease.intervals, { start: since, end: at, rate: lease.rate }];
+          const gap =
+            ((lease.rate + diskRate(lease.diskGb)) *
+              Math.max(0, this.now() - Date.parse(since))) /
+            3_600_000;
+          const podId = lease.podId;
+          await this.whileClosing(lease, 'stopping', async (sent) => {
+            sent();
+            await client.action(podId, 'stop');
             await this.change(
               lease,
               {
@@ -1423,27 +1481,27 @@ export class Leases {
               'recovery',
               'Stopped the pod, which ran while Verifold was not running.',
             );
-            continue;
-          }
-          if (isRunning(lease))
-            await this.change(
-              lease,
-              {
-                state: 'stopped',
-                intervals: this.closed(lease, at),
-                ssh: null,
-              },
-              'recovery',
-              'The pod stopped while Verifold was not running.',
-            );
-        } catch (error) {
-          this.problem = {
-            at: this.stamp(),
-            text: `Verifold could not check ${lease.id}: ${error instanceof Error ? error.message : 'RunPod did not answer.'}`,
-          };
+          });
+          continue;
         }
+        if (isRunning(lease))
+          await this.change(
+            lease,
+            {
+              state: 'stopped',
+              intervals: this.closed(lease, at),
+              ssh: null,
+            },
+            'recovery',
+            'The pod stopped while Verifold was not running.',
+          );
+      } catch (error) {
+        this.problem = {
+          at: this.stamp(),
+          text: `Verifold could not check ${lease.id}: ${error instanceof Error ? error.message : 'RunPod did not answer.'}`,
+        };
       }
-    });
+    }
   }
 }
 
