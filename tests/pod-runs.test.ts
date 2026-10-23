@@ -1234,3 +1234,183 @@ await test('a pod log keeps the bytes that the job wrote, and its cut line count
   assert.ok(log.subarray(log.length - last.length).equals(last));
   assert.ok(!log.includes(secret));
 });
+
+/** A lease of d-1 whose pod is ready. */
+async function readyLease(fake: FakePod): Promise<string> {
+  const lease = (
+    await fake.compute.leases.request({
+      by: 'agent',
+      gpu: 'NVIDIA RTX A5000',
+      hours: 1,
+      directions: ['d-1'],
+      reason: 'Train on a GPU.',
+    })
+  ).id;
+  await fake.compute.leases.approve(lease, 'verifold');
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  return lease;
+}
+
+await test('a pod that Verifold stops or ends takes no new run from the start of the call until it returns, also when the answer of RunPod does not come back', async (t) => {
+  const hold = { on: false };
+  let copying = (): void => {};
+  const copies = new Promise<void>((resolve) => {
+    copying = resolve;
+  });
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const box: { fake?: FakePod } = {};
+  // How Verifold closes each pod when RunPod gets a call, and when Verifold tells of a change.
+  const atAction: unknown[] = [];
+  const atChange: (string | undefined)[] = [];
+  const fake = await fakePod(t, {
+    runsStop: async () => {
+      if (!hold.on) return;
+      copying();
+      await held;
+    },
+    onAction: () => atAction.push(box.fake?.compute.view().closing),
+    onChange: (lease) =>
+      atChange.push(box.fake?.compute.leases.closing()[lease.id]),
+  });
+  box.fake = fake;
+  const lease = await readyLease(fake);
+  const pods = fake.compute.podRuns();
+  // A second pod waits for the person.
+  const second = (
+    await fake.compute.leases.request({
+      by: 'agent',
+      gpu: 'NVIDIA RTX A5000',
+      hours: 1,
+      directions: ['d-1'],
+      reason: 'A second GPU.',
+    })
+  ).id;
+  // While the runs copy back, the lease still reads as ready, but no run starts on it.
+  hold.on = true;
+  const stop = fake.compute.leases.stop(lease, 'person', 'a test.');
+  await copies;
+  assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  assert.deepEqual(fake.compute.view().closing, { [lease]: 'stopping' });
+  // A named lease gets the reason of its own state.
+  assert.throws(
+    () => pods.pick('d-1', lease),
+    /The pod of lease-1 stops now, so no run starts on it\./,
+  );
+  assert.throws(
+    () => pods.pick('d-1', second),
+    /The pod of lease-2 is not ready yet\. Verifold wakes you when it is\./,
+  );
+  // With no lease named, the agent hears of the pod that it waits for.
+  assert.throws(
+    () => pods.pick('d-1'),
+    /The pod of d-1 is not ready yet\. Verifold wakes you when it is\./,
+  );
+  release();
+  await stop;
+  // The hold lasted while RunPod got the stop, and ended before Verifold told of the new state.
+  assert.deepEqual(atAction, [{ [lease]: 'stopping' }]);
+  assert.equal(atChange.at(-1), undefined);
+  assert.equal(fake.compute.leases.get(lease).state, 'stopped');
+  assert.deepEqual(fake.compute.view().closing, {});
+  // A stop whose answer does not come back holds the lease only until the call returns. The next poll reads the pod.
+  hold.on = false;
+  await fake.compute.leases.start(lease, 'person', 'a test.');
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'ready');
+  process.env.FAKE_ACTION_FAILS = '1';
+  await assert.rejects(
+    fake.compute.leases.stop(lease, 'person', 'a test.'),
+    /RunPod answered with 500/,
+  );
+  delete process.env.FAKE_ACTION_FAILS;
+  assert.deepEqual(fake.compute.view().closing, {});
+  await fake.compute.leases.poll();
+  assert.equal(fake.compute.leases.get(lease).state, 'stopped');
+  // An end holds the lease the same way.
+  await fake.compute.leases.end(lease, 'person', 'a test.');
+  assert.deepEqual(atAction.at(-1), { [lease]: 'ending' });
+  assert.equal(fake.compute.leases.get(lease).state, 'ended');
+  assert.deepEqual(fake.compute.view().closing, {});
+});
+
+await test("recovery's stop of a pod that ran while Verifold was not running holds the lease like any stop", async (t) => {
+  const box: { fake?: FakePod } = {};
+  const atAction: unknown[] = [];
+  const fake = await fakePod(t, {
+    onAction: () => atAction.push(box.fake?.compute.view().closing),
+  });
+  box.fake = fake;
+  const lease = await readyLease(fake);
+  // As after a restart: the record says ready, and the pod runs.
+  await fake.compute.leases.recover();
+  assert.deepEqual(atAction, [{ [lease]: 'stopping' }]);
+  assert.equal(fake.compute.leases.get(lease).state, 'stopped');
+  assert.deepEqual(fake.compute.view().closing, {});
+});
+
+await test('a stop of the pod that begins while a run saves its record waits for the run, which ends before its job starts', async (t) => {
+  const fx = await fixture(t);
+  const lease = await fx.lease();
+  const { ledger } = fx.ledger();
+  let saving = (): void => {};
+  const inSave = new Promise<void>((resolve) => {
+    saving = resolve;
+  });
+  let go = (): void => {};
+  const saved = new Promise<void>((resolve) => {
+    go = resolve;
+  });
+  // The first save of the run waits until the stop began.
+  const inside = ledger as unknown as {
+    save(run: RunRecord): Promise<void>;
+  };
+  const save = inside.save.bind(ledger);
+  let first = true;
+  inside.save = async (run) => {
+    if (first && run.status === 'queued') {
+      first = false;
+      saving();
+      await saved;
+    }
+    return save(run);
+  };
+  const started = fx.start(ledger, 'sleep 30', { lease });
+  await inSave;
+  let stopped = false;
+  const stop = fx.compute.leases.stop(lease, 'person', 'a test.').then(() => {
+    stopped = true;
+  });
+  // The stop began, and asked the ledger to end the runs of the lease.
+  await until(() => fx.compute.view().closing?.[lease] === 'stopping');
+  await delay(200);
+  assert.equal(stopped, false);
+  go();
+  await stop;
+  const run = await started;
+  // The stop waited for the run, so the record of the run is final.
+  assert.equal(ledger.get(run.id)?.status, 'interrupted');
+  assert.doesNotMatch(ledger.get(run.id)?.note ?? '', /does not run now/);
+  // The pod got no job for the run.
+  assert.ok(!existsSync(join(fx.pod, 'verifold', '.runs', `${run.folder}.sh`)));
+});
+
+await test('a run whose record does not save leaves no record for recovery to find', async (t) => {
+  const fx = await fixture(t);
+  const lease = await fx.lease();
+  const { ledger } = fx.ledger();
+  const inside = ledger as unknown as {
+    save(run: RunRecord): Promise<void>;
+    record(id: string): string;
+  };
+  inside.save = () => Promise.reject(new Error('The disk is full.'));
+  await assert.rejects(
+    fx.start(ledger, 'sleep 30', { lease }),
+    /The disk is full\./,
+  );
+  assert.ok(!existsSync(inside.record('r-1')));
+  assert.equal(ledger.get('r-1'), undefined);
+});

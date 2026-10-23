@@ -410,6 +410,14 @@ export class Leases {
    */
   private readProblem: Problem | null = null;
   private recordProblem: Problem | null = null;
+  /**
+   * The leases whose pod Verifold stops (`stopping`) or deletes (`ending`)
+   * now, from the start of the call until it returns, also when it fails. A
+   * new state of the lease ends the hold first. No run starts on a held
+   * lease. Only in memory: after a call whose outcome is not known, the next
+   * poll reads the pod.
+   */
+  private readonly closingNow = new Map<string, 'stopping' | 'ending'>();
 
   constructor(root: string, hooks: LeaseHooks) {
     this.root = root;
@@ -437,6 +445,36 @@ export class Leases {
 
   list(): readonly Lease[] {
     return this.leases;
+  }
+
+  /** How Verifold closes the pod of each lease now. */
+  closing(): Readonly<Record<string, 'stopping' | 'ending'>> {
+    return Object.fromEntries(this.closingNow);
+  }
+
+  /** The lease can take a run: its pod is ready, Verifold reaches it, and no stop or end holds it. */
+  usable(
+    lease: Lease,
+  ): lease is Lease & { readonly ssh: NonNullable<Lease['ssh']> } {
+    return (
+      lease.state === 'ready' &&
+      lease.ssh !== null &&
+      !this.closingNow.has(lease.id)
+    );
+  }
+
+  /** Hold `lease` as closing while `work` runs. */
+  private async whileClosing<T>(
+    lease: Lease,
+    how: 'stopping' | 'ending',
+    work: () => Promise<T>,
+  ): Promise<T> {
+    this.closingNow.set(lease.id, how);
+    try {
+      return await work();
+    } finally {
+      this.closingNow.delete(lease.id);
+    }
   }
 
   lastProblem(): Problem | null {
@@ -624,6 +662,8 @@ export class Leases {
         -leaseLimits.history,
       ),
     });
+    // A new state ends the stop or the end that held the lease, before anyone hears of it.
+    if (next.state !== lease.state) this.closingNow.delete(next.id);
     if (
       (next.state === 'ended' ||
         next.state === 'failed' ||
@@ -946,23 +986,26 @@ export class Leases {
     by: Cause,
     reason: string,
   ): Promise<Lease> {
-    if (!isRunning(lease) || !lease.podId)
+    const podId = lease.podId;
+    if (!isRunning(lease) || !podId)
       fail(`The pod of ${lease.id} does not run.`);
-    // RunPod erases the disk at a stop, so the results come back first.
-    const copied = lease.ssh ? await this.hooks.beforeStop?.(lease) : null;
-    await (await this.hooks.client()).action(lease.podId, 'stop');
-    const at = this.stamp();
-    return this.change(
-      lease,
-      {
-        state: 'stopped',
-        intervals: this.closed(lease, at),
-        ssh: null,
-        ...(copied ? { notice: copied } : {}),
-      },
-      by,
-      `Stopped the pod: ${reason}`,
-    );
+    return this.whileClosing(lease, 'stopping', async () => {
+      // RunPod erases the disk at a stop, so the results come back first.
+      const copied = lease.ssh ? await this.hooks.beforeStop?.(lease) : null;
+      await (await this.hooks.client()).action(podId, 'stop');
+      const at = this.stamp();
+      return this.change(
+        lease,
+        {
+          state: 'stopped',
+          intervals: this.closed(lease, at),
+          ssh: null,
+          ...(copied ? { notice: copied } : {}),
+        },
+        by,
+        `Stopped the pod: ${reason}`,
+      );
+    });
   }
 
   /** Start the stopped pod of an open lease again, inside the person's limits. */
@@ -1015,24 +1058,26 @@ export class Leases {
         `Withdrew the request: ${reason}`,
       );
     if (!isOpen(lease)) fail(`${lease.id} has ended.`);
-    const copied =
-      lease.state === 'ready' && lease.ssh
-        ? await this.hooks.beforeStop?.(lease)
-        : null;
-    if (lease.podId) await (await this.hooks.client()).terminate(lease.podId);
-    const at = this.stamp();
-    return this.change(
-      lease,
-      {
-        state: 'ended',
-        intervals: this.closed(lease, at),
-        ssh: null,
-        end: { at, by, reason },
-        notice: copied ?? notice,
-      },
-      by,
-      `Ended the lease and deleted the pod: ${reason}`,
-    );
+    return this.whileClosing(lease, 'ending', async () => {
+      const copied =
+        lease.state === 'ready' && lease.ssh
+          ? await this.hooks.beforeStop?.(lease)
+          : null;
+      if (lease.podId) await (await this.hooks.client()).terminate(lease.podId);
+      const at = this.stamp();
+      return this.change(
+        lease,
+        {
+          state: 'ended',
+          intervals: this.closed(lease, at),
+          ssh: null,
+          end: { at, by, reason },
+          notice: copied ?? notice,
+        },
+        by,
+        `Ended the lease and deleted the pod: ${reason}`,
+      );
+    });
   }
 
   /** Remove the notice of a lease from Needs you. */
@@ -1382,18 +1427,21 @@ export class Leases {
               ((lease.rate + diskRate(lease.diskGb)) *
                 Math.max(0, this.now() - Date.parse(since))) /
               3_600_000;
-            await client.action(lease.podId, 'stop');
-            await this.change(
-              lease,
-              {
-                state: 'stopped',
-                intervals,
-                ssh: null,
-                notice: `The pod of ${lease.id} ran while Verifold was not running, so Verifold stopped it.${gap >= 0.01 ? ` That time cost about ${usd(gap)}.` : ''}`,
-              },
-              'recovery',
-              'Stopped the pod, which ran while Verifold was not running.',
-            );
+            const podId = lease.podId;
+            await this.whileClosing(lease, 'stopping', async () => {
+              await client.action(podId, 'stop');
+              await this.change(
+                lease,
+                {
+                  state: 'stopped',
+                  intervals,
+                  ssh: null,
+                  notice: `The pod of ${lease.id} ran while Verifold was not running, so Verifold stopped it.${gap >= 0.01 ? ` That time cost about ${usd(gap)}.` : ''}`,
+                },
+                'recovery',
+                'Stopped the pod, which ran while Verifold was not running.',
+              );
+            });
             continue;
           }
           if (isRunning(lease))

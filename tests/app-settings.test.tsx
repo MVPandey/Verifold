@@ -343,6 +343,38 @@ await test('the settings page shows the pods, the limits, the GPUs, and Agents a
   assert.match(newer, /value="5"/);
 });
 
+await test('the settings page shows a pod that Verifold stops or ends now, with no Stop or Start again on it', () => {
+  const html = (
+    state: 'ready' | 'stopped',
+    closing: 'stopping' | 'ending',
+  ): string =>
+    render(
+      snapshot(
+        compute({
+          pods: [
+            pod({
+              id: 'lease-2',
+              state,
+              closing,
+              gpu: 'NVIDIA RTX A5000',
+              idleMinutes: 9,
+            }),
+          ],
+        }),
+      ),
+      '#/settings',
+    );
+  // End stays: it waits for the stop, then ends the lease.
+  const stopping = html('ready', 'stopping');
+  assert.ok(text(stopping).includes('Stopping Idle 9 min'), text(stopping));
+  assert.ok(!stopping.includes('>Stop</button>'));
+  assert.ok(stopping.includes('>End</button>'));
+  const ending = html('stopped', 'ending');
+  assert.ok(text(ending).includes('Ending Idle 9 min'), text(ending));
+  assert.ok(!ending.includes('>Start again</button>'));
+  assert.ok(ending.includes('>End</button>'));
+});
+
 await test('the settings page works without a lab, says when pods are off, and asks for a key first', () => {
   const off = compute({
     keyStored: null,

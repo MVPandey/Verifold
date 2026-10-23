@@ -131,7 +131,7 @@ export class PodGoneError extends SessionActionError {}
  * them: the ledger hides them with the run's guard.
  */
 export interface PodRuns {
-  /** The lease of a direction's run: `lease` when it is one of the direction's, or its newest ready lease. */
+  /** The lease of a direction's run: `lease` when it is one of the direction's, or its newest ready lease. A lease whose pod stops or ends now takes no run. */
   pick(
     direction: string,
     lease?: unknown,
@@ -845,8 +845,6 @@ export class RunLedger {
   private readonly work = new Map<string, Promise<void>>();
   /** The record that each `start` call waits for, by run ID, until the run starts or ends. Its caller tells the agent how such a run ended. */
   private readonly waiting = new Map<string, Promise<RunRecord>>();
-  /** The leases whose pods stop now. No run starts on them. */
-  private readonly stopping = new Set<string>();
   /** The background work that ends the pod runs of an earlier owner. */
   private recovering: Promise<void> | null = null;
   private last = 0;
@@ -1127,12 +1125,7 @@ export class RunLedger {
    * the agent's folder is committed for it.
    */
   podFor(direction: string, lease?: unknown): void {
-    const place = (this.options.pods ?? fail(noPodsText)).pick(
-      direction,
-      lease,
-    );
-    if (this.stopping.has(place.lease))
-      fail(`The pod of ${place.lease} stops now, so no run starts on it.`);
+    (this.options.pods ?? fail(noPodsText)).pick(direction, lease);
   }
 
   /** Refuse a start past the limits. */
@@ -1182,6 +1175,10 @@ export class RunLedger {
     const ready = new Promise<RunRecord>((resolve) => {
       started = resolve;
     });
+    let finished!: () => void;
+    const work = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
     const made = await this.options.serial(async () => {
       const known = [...this.records.values()].find(
         (run) => run.agent === input.agent && run.key === input.key,
@@ -1195,8 +1192,6 @@ export class RunLedger {
         'pods' in runner
           ? runner.pods.pick(input.direction, input.lease)
           : undefined;
-      if (place && this.stopping.has(place.lease))
-        fail(`The pod of ${place.lease} stops now, so no run starts on it.`);
       const id = `r-${++this.last}`;
       const run: RunRecord = {
         schemaVersion: 1,
@@ -1229,11 +1224,26 @@ export class RunLedger {
         folder: `run-${number(id)}-${randomBytes(4).toString('hex')}`,
         where: place ? { pod: place.lease, gpu: place.gpu } : 'local',
       };
-      await mkdir(this.record(id), { recursive: true, mode: 0o700 });
-      await this.save(run);
+      // The run and its work count from the step that picked its pod: a stop of that pod that begins while the record saves ends the run, and waits for it, as `close` does.
       this.records.set(id, run);
       this.starting.set(id, null);
       this.waiting.set(id, ready);
+      this.work.set(id, work);
+      try {
+        await mkdir(this.record(id), { recursive: true, mode: 0o700 });
+        await this.save(run);
+      } catch (error) {
+        // A run whose record did not save never started: no record of it stays for recovery to find.
+        await rm(this.record(id), { recursive: true, force: true }).catch(
+          () => {},
+        );
+        this.records.delete(id);
+        this.starting.delete(id);
+        this.waiting.delete(id);
+        this.work.delete(id);
+        finished();
+        throw error;
+      }
       return { run, known: false, lease: place?.lease ?? null };
     });
     // A repeated call waits with the first one, so both get the run as it started, or as it ended at once.
@@ -1247,7 +1257,7 @@ export class RunLedger {
       this.waiting.delete(made.run.id);
       started(run);
     };
-    const work = (
+    void (
       'pods' in runner
         ? this.executePod(
             made.run,
@@ -1271,8 +1281,8 @@ export class RunLedger {
         this.work.delete(made.run.id);
         // The caller never waits for good, also when the end's record failed.
         report(this.records.get(made.run.id) ?? made.run);
+        finished();
       });
-    this.work.set(made.run.id, work);
     return ready;
   }
 
@@ -2124,29 +2134,25 @@ export class RunLedger {
   /**
    * The pod of a lease stops: its runs end as interrupted, and the stop
    * waits until their outputs and logs came back and each record is final,
-   * or two minutes passed. No run starts on the lease meanwhile.
+   * or two minutes passed. Its lease is held as stopping or ending
+   * meanwhile, so `pick` starts no run on it.
    */
   async podStops(lease: string): Promise<void> {
-    this.stopping.add(lease);
-    try {
-      const runs = [...this.records.values()].filter(
-        (run) =>
-          runActive(run) && run.where !== 'local' && run.where.pod === lease,
-      );
-      for (const run of runs) this.halt(run.id, 'interrupted');
-      // The stop of the pod waits for the copies at most `podStopMs`, so a spend limit or an end is not held up for long.
-      await Promise.race([
-        Promise.all(
-          runs.flatMap((run) => {
-            const work = this.work.get(run.id);
-            return work ? [work] : [];
-          }),
-        ),
-        delay(this.options.podStopMs ?? 120_000, undefined, { ref: false }),
-      ]);
-    } finally {
-      this.stopping.delete(lease);
-    }
+    const runs = [...this.records.values()].filter(
+      (run) =>
+        runActive(run) && run.where !== 'local' && run.where.pod === lease,
+    );
+    for (const run of runs) this.halt(run.id, 'interrupted');
+    // The stop of the pod waits for the copies at most `podStopMs`, so a spend limit or an end is not held up for long.
+    await Promise.race([
+      Promise.all(
+        runs.flatMap((run) => {
+          const work = this.work.get(run.id);
+          return work ? [work] : [];
+        }),
+      ),
+      delay(this.options.podStopMs ?? 120_000, undefined, { ref: false }),
+    ]);
   }
 
   /** The agent heard that the run ended. Call it in the lab's queue. */

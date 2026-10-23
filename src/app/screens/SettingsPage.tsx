@@ -18,7 +18,7 @@ import {
   changesOf,
   gpuName,
   podAsker,
-  podStates,
+  podState,
   running,
   settingsText,
   shownGpus,
@@ -155,7 +155,7 @@ function PodRow({
       </td>
       <td>{gpuName(pod.gpu, compute)}</td>
       <td>
-        {podStates[pod.state]}
+        {podState(pod)}
         {pod.idleMinutes !== null && pod.idleMinutes >= 5 && (
           <span className="pods__meta">Idle {pod.idleMinutes} min</span>
         )}
@@ -180,8 +180,11 @@ function PodRow({
       </td>
       {!earlier && (
         <td className="pods__actions">
-          {running(pod) && button('stop', 'Stop')}
-          {pod.state === 'stopped' && button('start', 'Start again')}
+          {/* A stop or an end that runs now leaves no Stop or Start again. End stays. */}
+          {running(pod) && !pod.closing && button('stop', 'Stop')}
+          {pod.state === 'stopped' &&
+            !pod.closing &&
+            button('start', 'Start again')}
           {(running(pod) || pod.state === 'stopped') && button('end', 'End')}
         </td>
       )}

@@ -15,6 +15,7 @@ import type test from 'node:test';
 import { Compute } from '../src/core/compute.ts';
 import { KeyStore } from '../src/core/credentials.ts';
 import type { TaskPlace } from '../src/core/compute.ts';
+import type { Lease } from '../src/core/leases.ts';
 
 /**
  * A fake RunPod for tests: a local HTTP server for the RunPod API, a fake
@@ -86,6 +87,9 @@ export async function fakePod(
   options: {
     readonly taskFolder?: (task: string) => Promise<TaskPlace | null>;
     readonly runsStop?: (lease: string) => Promise<void>;
+    readonly onChange?: (lease: Lease, line: string, wake: boolean) => void;
+    /** RunPod got a stop, a start, or a delete (`terminate`) of a pod, and did not act yet. */
+    readonly onAction?: (action: string) => void;
   } = {},
 ): Promise<FakePod> {
   const dir = await mkdtemp(join(tmpdir(), 'verifold-pods-'));
@@ -127,6 +131,7 @@ export async function fakePod(
       'FAKE_POD',
       'FAKE_HOST_KEY',
       'FAKE_SSH_DOWN',
+      'FAKE_ACTION_FAILS',
     ])
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];
@@ -200,12 +205,15 @@ export async function fakePod(
           `data: ${JSON.stringify({ source: 'container', line: 'Setting up SSH...' })}\n\ndata: ${JSON.stringify({ source: 'container', line: `256 ${logged.fingerprint} root@pod (ED25519)` })}\n\n`,
         );
       } else if (found && match?.[2] === '/action') {
-        found.status =
-          (JSON.parse(body) as { action: string }).action === 'stop'
-            ? 'EXITED'
-            : 'RUNNING';
-        json(200, view(found));
+        const action = (JSON.parse(body) as { action: string }).action;
+        options.onAction?.(action);
+        found.status = action === 'stop' ? 'EXITED' : 'RUNNING';
+        // RunPod acted, but its answer did not come back.
+        if (process.env.FAKE_ACTION_FAILS === '1')
+          json(500, { detail: 'lost' });
+        else json(200, view(found));
       } else if (found && request.method === 'DELETE') {
+        options.onAction?.('terminate');
         pods.delete(found.id);
         json(204);
       } else if (found) json(200, view(found));
@@ -230,6 +238,7 @@ export async function fakePod(
     programs: { ssh: join(dir, 'ssh'), keyscan: join(dir, 'ssh-keyscan') },
     ...(options.taskFolder ? { taskFolder: options.taskFolder } : {}),
     ...(options.runsStop ? { runsStop: options.runsStop } : {}),
+    ...(options.onChange ? { onChange: options.onChange } : {}),
   });
   await compute.load();
   await compute.setKey(key, true);
