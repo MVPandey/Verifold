@@ -114,6 +114,8 @@ export interface PodLease {
   /** `lease-1`, `lease-2`, … */
   readonly id: string;
   readonly state: PodState;
+  /** Verifold stops its pod (`stopping`) or ends the lease and deletes its pod (`ending`) now. No run starts on it. Absent: neither. */
+  readonly closing?: 'stopping' | 'ending';
   /** A RunPod GPU type ID. */
   readonly gpu: string;
   /** Who asked for it: the person, the agent of `directions`, or the coordinator of the earlier research flow. */
