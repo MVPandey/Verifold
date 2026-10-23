@@ -443,12 +443,13 @@ echo watching
     const folder = remoteFolder(run);
     const at = runFiles(run);
     // A job that ended before the wrapper read its start gets `ended`, so no stop signals its number later.
+    // `.id` comes before `.pid`: on a pod with /proc, a stop that finds the job's number also finds its `.id`.
     const identity = `${fields}; b=$(${bootId}); w=$(fields "$$" | cut -d " " -f 20); j=$(fields "$job" | cut -d " " -f 20); [ -n "$b" ] && [ -n "$w" ] && echo "$b $w \${j:-ended}" > ${at}.id.tmp && mv ${at}.id.tmp ${at}.id`;
     const result = await program(
       this.ssh,
       [
         ...this.args(target),
-        `mkdir -p ${runsFolder} && cd ${folder} && cat > ${at}.sh && (nohup bash -c 'echo $$ > ${at}.wrap; set -m; bash ${at}.sh > ${at}.log 2>&1 < /dev/null & job=$!; echo $job > ${at}.pid; ${identity}; wait $job; echo $? > ${at}.exit.tmp; mv ${at}.exit.tmp ${at}.exit' > /dev/null 2>&1 < /dev/null &) && i=0 && while { [ ! -s ${at}.wrap ] || [ ! -s ${at}.pid ]; } && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done && [ -s ${at}.pid ] && echo started`,
+        `mkdir -p ${runsFolder} && cd ${folder} && cat > ${at}.sh && (nohup bash -c 'echo $$ > ${at}.wrap; set -m; bash ${at}.sh > ${at}.log 2>&1 < /dev/null & job=$!; ${identity}; echo $job > ${at}.pid; wait $job; echo $? > ${at}.exit.tmp; mv ${at}.exit.tmp ${at}.exit' > /dev/null 2>&1 < /dev/null &) && i=0 && while { [ ! -s ${at}.wrap ] || [ ! -s ${at}.pid ]; } && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done && [ -s ${at}.pid ] && echo started`,
       ],
       { input: script, timeoutMs: 60_000, keep: 1024 },
     );

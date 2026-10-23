@@ -1573,7 +1573,8 @@ await test(
     const { ledger } = fx.ledger();
     const run = await fx.start(ledger, 'sleep 30', { lease });
     const runs = join(fx.pod, 'verifold', '.runs');
-    await until(() => existsSync(join(runs, `${run.folder}.id`)));
+    // The wrapper writes `.id` before `.pid`, so a job that runs has both.
+    await until(() => ledger.get(run.id)?.status === 'running');
     const [boot, wrapper, job] = readFileSync(
       join(runs, `${run.folder}.id`),
       'utf8',
