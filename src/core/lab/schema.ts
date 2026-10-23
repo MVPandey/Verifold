@@ -108,7 +108,7 @@ export const labTiming = {
   backoffMs: [10 * 60_000, 30 * 60_000, 2 * 3_600_000] as readonly number[],
   /** The wait after a start that failed. It doubles with each failure in the last hour. */
   retryMs: 30_000,
-  /** One hour of a time budget. */
+  /** One hour of the lab's clock: of a time budget, of the 24 hours of agent starts, and of the hours in the ask to post. */
   hourMs: 3_600_000,
   /** One minute of a run's time limit. */
   minuteMs: 60_000,

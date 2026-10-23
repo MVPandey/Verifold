@@ -4287,7 +4287,7 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
     string,
     unknown
   >;
-  for (const key of ['quietTurns', 'nudged']) delete agent[key];
+  for (const key of ['quietTurns', 'quietWork', 'nudged']) delete agent[key];
   await writeFile(agentPath, JSON.stringify(agent));
   const reloaded = new Lab(lab.root, { sessions: lab.sessions, timing });
   await reloaded.load();
@@ -4309,6 +4309,7 @@ await test('a lab from before plans and time budgets still loads', async (t) => 
   assert.equal(state?.bringing, null);
   assert.equal(state?.signoff, null);
   assert.equal(reloaded.view()?.directions[0]?.agent.quietTurns, 0);
+  assert.equal(reloaded.view()?.directions[0]?.agent.quietWork, 0);
   assert.equal(reloaded.view()?.directions[0]?.agent.nudged, false);
   await reloaded.resume();
   assert.equal(reloaded.view()?.state.pausedAt, null);
@@ -5301,6 +5302,143 @@ await test('an agent that waits for its run is not asked to post until a turn co
   assert.match(inputs[1] ?? '', /r-1 ended: cancelled/);
   assert.match(inputs[1] ?? '', /You posted nothing in your last turn\./);
   assert.doesNotMatch(inputs[2] ?? '', /You posted nothing/);
+});
+
+await test('a post in a turn that a pause stops still ends the quiet stretch', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'step-1.txt', text: '1\n' } },
+      ],
+    },
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: { kind: 'question', text: 'Which layer?' },
+        },
+        { name: 'WAIT' },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The first turn posts nothing. The second posts, then waits until the pause stops it.
+  await until(
+    () =>
+      lab.lab.view()?.posts.some((post) => post.text === 'Which layer?') ??
+      false,
+  );
+  assert.equal(lab.lab.view()?.directions[0]?.agent.quietTurns, 1);
+  await lab.lab.pause();
+  await until(() => lab.lab.view()?.directions[0]?.agent.quietTurns === 0);
+});
+
+await test('an ask to post whose turn a pause stops comes again with the next digest', async (t) => {
+  const quiet = labLimits.quietTurns;
+  labLimits.quietTurns = 1;
+  t.after(() => {
+    labLimits.quietTurns = quiet;
+  });
+  const lab = await fixture(t);
+  const ask = /You posted nothing in your last turn\./;
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'step-1.txt', text: '1\n' } },
+      ],
+    },
+    { calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The second turn carries the ask, and it waits until the pause stops it.
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  assert.match((await lab.inputs('d-1-alpha'))[1] ?? '', ask);
+  await lab.lab.pause();
+  await until(() => lab.lab.view()?.directions[0]?.status === 'paused');
+  // The turn that carried the ask did not end, so the ask does not count yet.
+  assert.equal(lab.lab.view()?.directions[0]?.agent.nudged, false);
+  await lab.lab.resume();
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
+  assert.match((await lab.inputs('d-1-alpha'))[2] ?? '', ask);
+});
+
+await test('a new direction whose harness waits for its usage window says so', async (t) => {
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  lab.quota.record('codex', {
+    exhausted: true,
+    resetsAt: new Date(Date.now() + 60_000).toISOString(),
+    usedPercent: 100,
+    window: 'five_hour',
+  });
+  await lab.script('d-1-plan-the-lab', [
+    {
+      calls: [
+        {
+          name: 'verifold_direction',
+          arguments: {
+            action: 'open',
+            title: 'Helix',
+            bar: 'it beats the baseline on 3 seeds',
+            harness: 'codex',
+            why: 'No direction tests a helix.',
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(async () => (await results(lab, 'd-1-plan-the-lab')).length >= 1);
+  assert.equal(
+    (await results(lab, 'd-1-plan-the-lab'))[0]?.text,
+    "Opened d-2 for codex-1 (Codex). Codex's usage window is used up, so it starts when the window resets.",
+  );
+});
+
+await test('a close that the harness sends again gets the answer of the close that worked', async (t) => {
+  const lab = await fixture(t);
+  const close: Call = {
+    name: 'verifold_direction',
+    id: 'toolu-close',
+    arguments: { action: 'close', why: 'Ruled out on 3 seeds.' },
+  };
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'result.txt', text: '0.2\n' } },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'ruled-out',
+            text: 'Three seeds disagree.',
+            artifacts: [{ type: 'file', path: 'result.txt' }],
+          },
+        },
+        {
+          name: 'verifold_direction',
+          arguments: {
+            action: 'update',
+            verdict: 'ruled-out',
+            post: 'p-2',
+            evidence: '3 seeds spread 0.2',
+            why: 'Checked.',
+          },
+        },
+        close,
+        close,
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await results(lab, 'd-1-alpha')).length >= 4);
+  const said = await results(lab, 'd-1-alpha');
+  const closed = {
+    ok: true,
+    text: 'Closed your direction. Its folder and branch stay. Your session ends after this turn.',
+  };
+  assert.deepEqual(said[2], closed);
+  // The same tool-use ID again: the recorded answer, not a refusal.
+  assert.deepEqual(said[3], closed);
 });
 
 await test("a later plan's new directions count as agents that an agent starts", async (t) => {
