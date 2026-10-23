@@ -18,7 +18,7 @@ import {
   changesOf,
   gpuName,
   podAsker,
-  podStates,
+  podState,
   running,
   settingsText,
   shownGpus,
@@ -155,7 +155,7 @@ function PodRow({
       </td>
       <td>{gpuName(pod.gpu, compute)}</td>
       <td>
-        {podStates[pod.state]}
+        {podState(pod)}
         {pod.idleMinutes !== null && pod.idleMinutes >= 5 && (
           <span className="pods__meta">Idle {pod.idleMinutes} min</span>
         )}
