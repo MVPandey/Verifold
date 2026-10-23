@@ -9938,6 +9938,83 @@ await test('a bring-in that Verifold stopped in the middle finishes at the next 
   );
 });
 
+await test('Start over stops a bring-in with a plain message while it checks its files, waits in the queue, or begins, and a Start over that failed leaves its own error', async (t) => {
+  /** A lab with a.md to bring in, and the commit that the person looked at. */
+  const ready = async (): Promise<{ lab: Fixture; commit: string }> => {
+    const lab = await bringLab(t);
+    await writeFile(join(folderOf(lab, 'd-1'), 'a.md'), 'a\n');
+    return { lab, commit: await look(lab, 'd-1') };
+  };
+  /** Start over as the desk runs it: the lab's records move to the archive. */
+  const startOver = async (lab: Fixture): Promise<void> => {
+    await lab.lab.suspend();
+    await archiveRun(lab.root);
+    await lab.lab.reload(true);
+  };
+  /** Run `during` when the bring-in reads its files, outside the lab's queue. */
+  const whileChecking = (lab: Fixture, during: () => Promise<void>): void => {
+    const held = lab.lab as unknown as {
+      bringList: (...args: unknown[]) => Promise<unknown>;
+    };
+    const list = held.bringList.bind(lab.lab);
+    held.bringList = async (...args) => {
+      held.bringList = list;
+      await during();
+      return list(...args);
+    };
+  };
+  const stopped = {
+    message: 'Nothing came in: Start over stopped the bring-in.',
+  };
+
+  // Start over while the bring-in checks its files: it waits for the move to end.
+  const checking = await ready();
+  let moving: Promise<void> = Promise.resolve();
+  whileChecking(checking.lab, () => {
+    moving = startOver(checking.lab);
+    return Promise.resolve();
+  });
+  await assert.rejects(
+    checking.lab.lab.bring('d-1', checking.commit, ['a.md']),
+    stopped,
+  );
+  await moving;
+  assert.equal(existsSync(join(checking.lab.root, 'a.md')), false);
+
+  // Start over while the bring-in waits in the lab's queue.
+  const queued = await ready();
+  const waiting = queued.lab.lab.bring('d-1', queued.commit, ['a.md']);
+  const move = startOver(queued.lab);
+  await assert.rejects(waiting, stopped);
+  await move;
+  assert.equal(existsSync(join(queued.lab.root, 'a.md')), false);
+
+  // A bring-in that begins while Start over runs.
+  const late = await ready();
+  const running = startOver(late.lab);
+  await assert.rejects(
+    late.lab.lab.bring('d-1', late.commit, ['a.md']),
+    stopped,
+  );
+  await running;
+
+  // A Start over that failed: the records stay, the lab reads them again, and the bring-in keeps its own error.
+  const failed = await ready();
+  whileChecking(failed.lab, async () => {
+    await failed.lab.lab.suspend();
+    await failed.lab.lab.reload();
+  });
+  await assert.rejects(failed.lab.lab.bring('d-1', failed.commit, ['a.md']), {
+    message:
+      'The lab changed while Verifold checked the files. Bring them in again.',
+  });
+  // The lab works as before.
+  assert.deepEqual(
+    await failed.lab.lab.bring('d-1', await look(failed.lab, 'd-1'), ['a.md']),
+    ['a.md'],
+  );
+});
+
 await test("the lab's record of bring-ins stays readable: a full one refuses more files, it loads again, bad entries go, and a recovery whose direction is gone ends", async (t) => {
   const lab = await bringLab(t);
   const folder = folderOf(lab, 'd-1');

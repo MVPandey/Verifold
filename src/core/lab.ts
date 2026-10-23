@@ -158,6 +158,7 @@ import {
   barText,
   bringGroups,
   bringOut,
+  bringStoppedText,
   budgetEnded,
   callStatus,
   codeSetting,
@@ -589,6 +590,17 @@ export class Lab {
    * work starts, and the work in progress still saves its records.
    */
   private moving = false;
+  /** Each Start over or restore adds one when it begins. */
+  private moves = 0;
+  /**
+   * The number of the newest Start over that moved the lab to the archive. A
+   * restore, or a Start over that failed, leaves it as it is.
+   */
+  private startedOver = 0;
+  /** Ends with the newest Start over or restore: at `reload`, or in `suspend` when that fails. */
+  private moved: Promise<void> = Promise.resolve();
+  /** Ends `moved`. */
+  private endMove: () => void = () => {};
   /** The parks of a pause that still run. Start over waits for them. */
   private parking: Promise<void> | null = null;
   /** A plan opens its directions now. A second plan waits for it. */
@@ -743,6 +755,10 @@ export class Lab {
     // No new work starts from here on: a resume, a post, or a start refuses
     // while the agents park. The work in progress ends and saves first.
     this.moving = true;
+    this.moves += 1;
+    this.moved = new Promise((resolve) => {
+      this.endMove = resolve;
+    });
     try {
       const pausing = Boolean(this.state && !this.state.pausedAt);
       if (pausing)
@@ -762,7 +778,10 @@ export class Lab {
       return pausing;
     } catch (error) {
       // Nothing moved: the lab works as before.
-      if (!this.suspended) this.moving = false;
+      if (!this.suspended) {
+        this.moving = false;
+        this.endMove();
+      }
       throw error;
     }
   }
@@ -770,8 +789,10 @@ export class Lab {
   /**
    * Read the records again, after Start over or a restore. A restored lab
    * comes back paused, and its agents resume when the person resumes it.
+   * `startedOver`: Start over moved the lab's records to the archive, so a
+   * bring-in that it stopped says so.
    */
-  async reload(): Promise<void> {
+  async reload(startedOver = false): Promise<void> {
     await this.serial(async () => {
       this.forget();
       this.forgetChecks();
@@ -790,6 +811,9 @@ export class Lab {
           ),
         );
       if (this.runs) await this.tellRuns();
+    }).finally(() => {
+      if (startedOver) this.startedOver = this.moves;
+      this.endMove();
     });
     if (this.state) this.watch();
   }
@@ -4716,10 +4740,50 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
    * The files are checked before the lab's queue; in it, only the record
    * and the copy happen.
    */
-  async bring(
+  bring(
     id: unknown,
     commit: unknown,
     files: unknown,
+  ): Promise<readonly string[]> {
+    return this.startOverStops((copyStarts) =>
+      this.bringIn(id, commit, files, copyStarts),
+    );
+  }
+
+  /**
+   * Run a bring-in, and say plainly when Start over stopped it. When Start
+   * over moved the lab to the archive while the bring-in ran, before its
+   * copy began, any failure becomes "Nothing came in: Start over stopped the
+   * bring-in." A Start over that ran already when the bring-in began counts
+   * too. A failure while the move runs waits for its end, so that the
+   * outcome is known. A restore, a Start over that failed and left the lab
+   * as it was, and a failure of the copy itself keep their own error. `run`
+   * calls `copyStarts` when its copy begins.
+   */
+  private async startOverStops<T>(
+    run: (copyStarts: () => void) => Promise<T>,
+  ): Promise<T> {
+    const from = this.moving ? this.moves - 1 : this.moves;
+    let started = false;
+    try {
+      return await run(() => {
+        started = true;
+      });
+    } catch (error) {
+      if (!started && this.moves !== from) {
+        await this.moved;
+        if (this.startedOver > from) fail(bringStoppedText);
+      }
+      throw error;
+    }
+  }
+
+  /** The bring-in of `bring`. It calls `copyStarts` when its copy begins. */
+  private async bringIn(
+    id: unknown,
+    commit: unknown,
+    files: unknown,
+    copyStarts: () => void,
   ): Promise<readonly string[]> {
     const { direction, look, brought } = await this.serial(() => {
       const state = this.current();
@@ -4806,6 +4870,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         fail(
           'Verifold keeps a record of each file that comes in, and it has no room for this many. Tick fewer files.',
         );
+      copyStarts();
       // The record goes first, so a stop in the middle leaves no half copy.
       await this.saveState({ ...state, bringing: record });
       let copying = false;
