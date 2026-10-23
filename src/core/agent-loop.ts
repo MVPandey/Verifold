@@ -39,6 +39,8 @@ export interface WakeLimits {
   readonly debounceMs: number;
   /** A digest that did not go out is tried again after this time. Without it, the next event wakes the agent. */
   readonly retryMs?: number;
+  /** One hour of the owner's clock, for `wakeupsPerHour`. */
+  readonly hourMs?: number;
 }
 
 export interface WakeOwner<E extends WakeEvent, R extends WakeRecord<E>> {
@@ -208,10 +210,11 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
       this.schedule(Math.max(1000, Date.parse(parked) - Date.now()));
       return;
     }
-    const hour = Date.now() - 3_600_000;
+    const hourMs = this.limits.hourMs ?? 3_600_000;
+    const hour = Date.now() - hourMs;
     const recent = record.wakeups.filter((at) => Date.parse(at) > hour);
     if (recent.length >= this.limits.wakeupsPerHour) {
-      const next = Date.parse(recent[0] ?? '') + 3_600_000 + 1000;
+      const next = Date.parse(recent[0] ?? '') + hourMs + 1000;
       this.limited = new Date(next).toISOString();
       this.schedule(Math.max(1000, next - Date.now()));
       return;

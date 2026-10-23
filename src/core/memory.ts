@@ -188,8 +188,9 @@ function line(text: string, max = 300): string {
 export type LabProgress = readonly {
   readonly id: string;
   readonly title: string;
-  /** In words, such as "open" or "stopped by the person". */
-  readonly state: string;
+  readonly state: 'open' | 'closed' | 'stopped';
+  /** The state in words, such as "open" or "stopped by the person". */
+  readonly stateText: string;
   /** Its agent's handle and harness, such as "claude-1 (Claude Code)". */
   readonly agent: string | null;
   readonly bar: string | null;
@@ -216,7 +217,7 @@ function labProgress(lab: LabProgress): string {
     ? `## Lab directions\n\n${lab
         .map(
           (direction) =>
-            `- ${direction.id} ${line(direction.title, 120)}${direction.agent ? `, ${direction.agent}` : ''}: ${direction.state === 'open' ? '' : `${direction.state}, `}${direction.verdict}.${direction.evidence ? ` Evidence: ${line(direction.evidence.text, 120)} (${direction.evidence.post}${direction.evidence.run ? `, ${direction.evidence.run}` : ''}).` : ''}${direction.bar ? ` Holds up if: ${line(direction.bar, 300)}.` : ''}`,
+            `- ${direction.id} ${line(direction.title, 120)}${direction.agent ? `, ${direction.agent}` : ''}: ${direction.state === 'open' ? '' : `${direction.stateText}, `}${direction.verdict}.${direction.evidence ? ` Evidence: ${line(direction.evidence.text, 120)} (${direction.evidence.post}${direction.evidence.run ? `, ${direction.evidence.run}` : ''}).` : ''}${direction.bar ? ` Holds up if: ${line(direction.bar, 300)}.` : ''}`,
         )
         .join('\n')}\n`
     : '';
