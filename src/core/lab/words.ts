@@ -186,6 +186,9 @@ export const stoppedText =
 export const movingText =
   'Verifold is moving the lab to the archive. Try again in a moment.';
 
+export const bringStoppedText =
+  'Nothing came in: Start over stopped the bring-in.';
+
 /**
  * The bring-ins with the files of `record` that came in: each file of a
  * direction keeps only its newest base. Without files, the same list.
