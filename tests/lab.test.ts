@@ -22,20 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
 import { SessionPool } from '../src/core/workers.ts';
-import {
-  addSpend,
-  askers,
-  Lab,
-  labEnded,
-  labLimits,
-  startLabOn,
-  type Call as LabCall,
-  type Check,
-  type LabCompute,
-  type LabSessions,
-  type LabState,
-  type LabView,
-} from '../src/core/lab.ts';
+import { Lab, startLabOn } from '../src/core/lab.ts';
 import { RunTeam } from '../src/core/team.ts';
 import type {
   PodRuns,
@@ -52,8 +39,25 @@ import { secretGuard } from '../src/core/runpod.ts';
 import { ResearchRunner } from '../src/legacy/research-runner.ts';
 import { boardLimits, clip } from '../src/core/board.ts';
 import { checkToolSpecs, planLimits } from '../src/core/lab-tools.ts';
-import { moreHeld, parseState, planFacts } from '../src/core/lab/schema.ts';
-import { networkOf } from '../src/core/lab/words.ts';
+import {
+  labLimits,
+  moreHeld,
+  parseState,
+  planFacts,
+  type Call as LabCall,
+  type Check,
+  type LabCompute,
+  type LabSessions,
+  type LabState,
+  type LabView,
+} from '../src/core/lab/schema.ts';
+import {
+  addSpend,
+  askers,
+  fileText,
+  labEnded,
+  networkOf,
+} from '../src/core/lab/words.ts';
 import { Coordinator } from '../src/legacy/coordinator.ts';
 import { parseFrame, renderDesk } from '../src/desk/desk-view.ts';
 import {
@@ -11131,4 +11135,20 @@ await test("running agents get each change of the plan's facts once, as quoted n
       .some((input) => input.includes('[plan]')),
     false,
   );
+});
+
+await test('a file that an agent reads past its limit is cut between characters', () => {
+  // A three-byte character starts one byte before the limit, so a byte cut there would split it.
+  const content = Buffer.concat([
+    Buffer.from('a'.repeat(labLimits.readBytes - 1)),
+    Buffer.from('€x'),
+  ]);
+  const shown = fileText('notes.md', content);
+  assert.equal(shown.includes('�'), false);
+  assert.equal(
+    shown,
+    `${'a'.repeat(labLimits.readBytes - 1)}\n[Verifold: the file continues. It has ${content.length} bytes.]`,
+  );
+  // A file inside the limit comes whole.
+  assert.equal(fileText('short.md', Buffer.from('a €')), 'a €');
 });

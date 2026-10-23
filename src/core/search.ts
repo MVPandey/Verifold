@@ -1,6 +1,6 @@
 import { clip, type Post } from './board.ts';
-import type { Call, LabView } from './lab.ts';
-import { authorName, callWords, kindLabel } from './lab-words.ts';
+import type { Call, LabView } from './lab/schema.ts';
+import { authorName, callWords, kindLabel } from './lab/words.ts';
 import type { RunRecord } from './runs.ts';
 
 /**
