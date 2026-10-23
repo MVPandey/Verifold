@@ -220,10 +220,15 @@ export async function fakePod(
           else json(200, view(found));
         }
       } else if (found && request.method === 'DELETE') {
-        pods.delete(found.id);
-        if (process.env.FAKE_ACTION_FAILS === '1')
-          json(500, { detail: 'lost' });
-        else json(204);
+        if (process.env.FAKE_ACTION_REFUSES === '1')
+          json(500, { detail: 'refused' });
+        else {
+          pods.delete(found.id);
+          // RunPod deleted the pod, but its answer did not come back.
+          if (process.env.FAKE_ACTION_FAILS === '1')
+            json(500, { detail: 'lost' });
+          else json(204);
+        }
       } else if (found) json(200, view(found));
       else if (url.pathname === '/v2/billing/pods') json(200, { records: [] });
       else json(404, { title: 'Not Found', status: 404, detail: 'none' });

@@ -1181,8 +1181,12 @@ export class Leases {
             ...lease,
             seen: { at, status: pod.status, gpuUtil: pod.gpuUtil },
           });
-          // A stop or an end whose call did not finish held the lease until this read. A pod that still runs did not stop.
-          if (pod.status === 'RUNNING') this.closingNow.delete(lease.id);
+          // A stop or an end whose answer did not come back held the lease until this read. A pod that runs did not stop, and a pod that RunPod still has was not deleted.
+          if (
+            pod.status === 'RUNNING' ||
+            this.closingNow.get(lease.id) === 'ending'
+          )
+            this.closingNow.delete(lease.id);
           if (pod.status === 'ERROR') {
             await this.endNow(
               lease,
