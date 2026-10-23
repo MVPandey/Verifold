@@ -7,14 +7,8 @@ import {
   type PostKind,
 } from '../core/board.ts';
 import {
-  askers,
-  barSummary,
-  bringGroups,
-  budgetEnded,
   defaultLabHours,
-  labEnded,
   labLimits,
-  nameList,
   stands,
   type BringList,
   type Call,
@@ -24,15 +18,21 @@ import {
   type DirectionView,
   type LabView,
   type Verdict,
-} from '../core/lab.ts';
+} from '../core/lab/schema.ts';
 import { usd } from '../core/leases.ts';
 import {
+  askers,
   authorName,
+  barSummary,
+  bringGroups,
+  budgetEnded,
   callWords,
   counted,
   kindLabel,
+  labEnded,
+  nameList,
   verdictText,
-} from '../core/lab-words.ts';
+} from '../core/lab/words.ts';
 import {
   callSearchText,
   callState,

@@ -4,7 +4,14 @@
  * Nothing here holds state.
  */
 import { createHash } from 'node:crypto';
-import { boardLimits, clip, safePath, type NewPost } from '../board.ts';
+import {
+  boardLimits,
+  clip,
+  safePath,
+  type NewPost,
+  type Post,
+  type PostKind,
+} from '../board.ts';
 import { type SessionRecord, usdValue } from '../session.ts';
 import {
   type ChangedFile,
@@ -17,6 +24,7 @@ import {
   type Direction,
   type Evidence,
   type LabState,
+  type LabView,
   type PlanFact,
   type Spend,
   type Verdict,
@@ -163,9 +171,11 @@ export function fileText(path: string, content: Buffer): string {
   const size = content.length;
   if (content.subarray(0, 8000).includes(0))
     return `${path} is a binary file of ${size} bytes.`;
-  return size > labLimits.readBytes
-    ? `${content.subarray(0, labLimits.readBytes).toString('utf8')}\n[Verifold: the file continues. It has ${size} bytes.]`
-    : content.toString('utf8');
+  if (size <= labLimits.readBytes) return content.toString('utf8');
+  // The cut goes between characters: a byte from 0x80 to 0xbf continues the character before it.
+  let end = labLimits.readBytes;
+  while (end > 0 && ((content[end] ?? 0) & 0xc0) === 0x80) end--;
+  return `${content.subarray(0, end).toString('utf8')}\n[Verifold: the file continues. It has ${size} bytes.]`;
 }
 
 /** The note on files that stayed out of a run's commit. */
@@ -254,9 +264,7 @@ export function bringGroups(
 export function barSummary(direction: Direction): string {
   return [
     direction.bar ?? '',
-    direction.runs
-      ? `${direction.runs} ${direction.runs === 1 ? 'run' : 'runs'}`
-      : '',
+    direction.runs ? counted(direction.runs, 'run') : '',
     direction.noise ? `noise ${direction.noise}` : '',
   ]
     .filter(Boolean)
@@ -530,4 +538,57 @@ export function slug(id: string, title: string): string {
     .slice(0, 40)
     .replace(/-+$/, '');
   return words ? `${id}-${words}` : id;
+}
+
+/**
+ * The lab's words for its posts, calls, and authors. The desk and the API
+ * show them, and search matches on them, so the person finds a post by the
+ * word that it shows.
+ */
+export const kindWords: Record<PostKind, string> = {
+  plan: 'Plan of record',
+  claim: 'Claim',
+  evidence: 'Evidence',
+  objection: 'Objection',
+  question: 'Question',
+  rerun: 'Rerun',
+  'ruled-out': 'Ruled out',
+  status: 'Note',
+};
+
+/** A post's kind in words. The person's question is a message. */
+export function kindLabel(post: Post): string {
+  return post.author === 'person' && post.kind === 'question'
+    ? 'Message'
+    : kindWords[post.kind];
+}
+
+export const callWords = {
+  cost: 'Cost call',
+  scope: 'Scope call',
+  access: 'Access call',
+  go: 'Go call',
+} as const;
+
+/** Who wrote a post or asked a call, in the lab's words. */
+export function authorName(view: LabView, author: string): string {
+  return author === 'person'
+    ? 'You'
+    : author === 'verifold'
+      ? 'Verifold'
+      : (view.handles[author] ?? author);
+}
+
+/** A direction's verdict in words. A direction with no verdict is not settled yet. */
+export function verdictText(verdict: Verdict, disputed: boolean): string {
+  return disputed
+    ? 'Disputed'
+    : verdict === 'open'
+      ? 'Not settled'
+      : verdictWords[verdict];
+}
+
+/** A count with its noun, such as "1 post" or "4 posts". */
+export function counted(value: number, noun: string): string {
+  return `${value} ${noun}${value === 1 ? '' : 's'}`;
 }

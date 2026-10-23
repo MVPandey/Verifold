@@ -58,13 +58,8 @@ import {
   setAgentsAtOnce,
 } from './compute-actions.ts';
 import { commitId, directionId, proofRef, runId } from '../core/board.ts';
-import {
-  labOnDisk,
-  startLabOn,
-  type BringList,
-  type Lab,
-  type LabView,
-} from '../core/lab.ts';
+import { labOnDisk, startLabOn, type Lab } from '../core/lab.ts';
+import type { BringList, LabView } from '../core/lab/schema.ts';
 import type { Away } from '../core/away.ts';
 import type { LabDiff, LabWork } from '../desk/desk-lab.ts';
 import { loadWorkspace, readJson, writePrivateFile } from '../core/storage.ts';

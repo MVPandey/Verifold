@@ -1,5 +1,5 @@
 import type { Post } from './board.ts';
-import type { Check, LabView } from './lab.ts';
+import type { Check, LabView } from './lab/schema.ts';
 import { checkLimits } from './lab-tools.ts';
 
 /**

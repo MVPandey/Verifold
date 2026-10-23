@@ -55,12 +55,16 @@ import {
 } from '../core/leases.ts';
 import { commonGpus } from '../core/runpod.ts';
 import { openDisputes } from '../core/disputes.ts';
-import { authorName, callWords, kindLabel } from '../core/lab-words.ts';
+import {
+  askers,
+  authorName,
+  bringGroups,
+  callWords,
+  kindLabel,
+} from '../core/lab/words.ts';
 import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
 import {
-  askers,
-  bringGroups,
   labLimits,
   type BringList as LabBringList,
   type Brought,
@@ -68,9 +72,9 @@ import {
   type CallEffect,
   type Check as LabCheck,
   type Direction as LabDirection,
-  type FigureRead,
   type LabView,
-} from '../core/lab.ts';
+} from '../core/lab/schema.ts';
+import type { FigureRead } from '../core/lab.ts';
 import type { PlanFact } from '../core/lab/schema.ts';
 import { runSummary, type RunLogPart, type RunRecord } from '../core/runs.ts';
 import { loadWorkspace } from '../core/storage.ts';
