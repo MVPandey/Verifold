@@ -137,21 +137,20 @@ function fail(message: string): never {
 }
 
 /**
- * Why a lease takes no run now, in the words an agent reads. `held` is what
- * holds it, from `Leases.held`. `direction`: the direction to name for a pod
- * that is not ready yet, when the agent named no lease.
+ * Why a lease takes no run now, in the words an agent reads. `closing`: how
+ * Verifold closes its pod now, from `Leases.closing`. `direction`: the
+ * direction to name for a pod that is not ready yet, when the agent named no
+ * lease.
  */
 function notReadyText(
   lease: Lease,
-  held: 'stopping' | 'ending' | 'unsettled' | null,
+  closing: 'stopping' | 'ending' | undefined,
   direction?: string,
 ): string {
-  if (held === 'stopping')
+  if (closing === 'stopping')
     return `The pod of ${lease.id} stops now, so no run starts on it.`;
-  if (held === 'ending')
+  if (closing === 'ending')
     return `Verifold ends ${lease.id} now, so no run starts on it.`;
-  if (held === 'unsettled')
-    return `Verifold checks the pod of ${lease.id} after its start. Try again in a minute.`;
   if (lease.state === 'stopped')
     return `The pod of ${lease.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`;
   if (
@@ -721,15 +720,17 @@ export class Compute {
       .list()
       .filter((lease) => lease.tasks.includes(task));
     const ready = leases.findLast((lease) => this.leases.usable(lease));
-    if (ready?.ssh)
+    if (ready)
       return { lease: ready.id, host: ready.ssh.host, port: ready.ssh.port };
+    const closing = this.leases.closing();
+    const held = leases.findLast((lease) => closing[lease.id]);
     fail(
       leases.some(
         (lease) => lease.state === 'starting' || lease.state === 'requested',
       )
         ? 'The pod of this task is not ready yet. Try again in a minute.'
-        : leases.some((lease) => this.leases.held(lease))
-          ? 'Verifold stops or checks the pod of this task now. Try again in a minute.'
+        : held
+          ? notReadyText(held, closing[held.id])
           : 'This task has no ready pod. Ask the coordinator for one with verifold_post.',
     );
   }
@@ -803,6 +804,7 @@ export class Compute {
         const own = this.leases
           .list()
           .filter((entry) => entry.directions?.includes(direction));
+        const closing = this.leases.closing();
         if (lease !== undefined) {
           const named =
             own.find((entry) => entry.id === lease) ??
@@ -812,7 +814,7 @@ export class Compute {
           if (this.leases.usable(named))
             return { lease: named.id, gpu: named.gpu };
           // A named lease gets the reason of its own state.
-          fail(notReadyText(named, this.leases.held(named)));
+          fail(notReadyText(named, closing[named.id]));
         }
         const usable = own.findLast((entry) => this.leases.usable(entry));
         if (usable) return { lease: usable.id, gpu: usable.gpu };
@@ -820,12 +822,12 @@ export class Compute {
         const waiting = own.findLast(
           (entry) => entry.state === 'starting' || entry.state === 'requested',
         );
-        const held = own.findLast((entry) => this.leases.held(entry));
+        const held = own.findLast((entry) => closing[entry.id]);
         const stopped = own.findLast((entry) => entry.state === 'stopped');
         const shown = waiting ?? held ?? stopped;
         fail(
           shown
-            ? notReadyText(shown, this.leases.held(shown), direction)
+            ? notReadyText(shown, closing[shown.id], direction)
             : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },

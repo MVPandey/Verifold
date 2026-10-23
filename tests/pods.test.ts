@@ -228,6 +228,48 @@ await test('a task runs commands and jobs on its pod and copies files both ways,
   assert.equal(left, '');
 });
 
+await test('a task gets no pod command on a pod that Verifold stops now, and hears why', async (t) => {
+  let copying = (): void => {};
+  const copies = new Promise<void>((resolve) => {
+    copying = resolve;
+  });
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Before the stop, the results of task-1 come back. Here they wait.
+  const { compute, dir } = await fakePod(t, {
+    taskFolder: async () => {
+      copying();
+      await held;
+      return null;
+    },
+  });
+  const id = (
+    await compute.leases.request({
+      by: 'coordinator',
+      gpu: 'NVIDIA RTX A5000',
+      hours: 2,
+      tasks: ['task-1'],
+      reason: 'Train on a GPU.',
+    })
+  ).id;
+  await compute.leases.approve(id);
+  await compute.leases.poll();
+  assert.equal(compute.leases.get(id).state, 'ready');
+  const stop = compute.leases.stop(id, 'person', 'a test.');
+  await copies;
+  await assert.rejects(
+    compute
+      .podTools()
+      .call(place(dir), 'verifold_pod_run', { command: 'echo hi' }),
+    /The pod of lease-1 stops now, so no run starts on it\./,
+  );
+  release();
+  await stop;
+  assert.equal(compute.leases.get(id).state, 'stopped');
+});
+
 await test('a pod gets its secrets as environment variables, and pod output hides their values', async (t) => {
   const { compute, task, dir, pods } = await setup(t);
   const value = 'hf_SECRETVALUE0123456789';

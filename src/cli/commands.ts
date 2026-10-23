@@ -938,8 +938,6 @@ async function serveDesk(
         await coordinator.load();
         // The leases come first: the lab's runs on pods recover through them, before lease recovery stops the pods.
         await compute.load();
-        // No new run starts on an open lease until lease recovery reads its pod, which can run in the background.
-        compute.leases.holdForRecovery();
         await lab.load();
         remember();
         // Only the owner of the project recovers leases: a pod that runs now outlived an earlier owner.
