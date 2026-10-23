@@ -180,14 +180,12 @@ function PodRow({
       </td>
       {!earlier && (
         <td className="pods__actions">
-          {/* A stop or an end that runs now leaves no Stop or Start. End waits for a stop, then works. */}
+          {/* A stop or an end that runs now leaves no Stop or Start again. End stays. */}
           {running(pod) && !pod.closing && button('stop', 'Stop')}
           {pod.state === 'stopped' &&
             !pod.closing &&
             button('start', 'Start again')}
-          {(running(pod) || pod.state === 'stopped') &&
-            pod.closing !== 'ending' &&
-            button('end', 'End')}
+          {(running(pod) || pod.state === 'stopped') && button('end', 'End')}
         </td>
       )}
       {earlier && <td />}

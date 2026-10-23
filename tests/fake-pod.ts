@@ -52,9 +52,7 @@ if (args.slice(at + 1).join(' ') === 'bash -s') {
   process.stdout.write('watching\\n');
   process.exit(0);
 }
-let remote = args.slice(at + 1).join(' ').replaceAll('/root/verifold', process.env.FAKE_POD + '/verifold').replace(/timeout \\d+ /, '');
-// A test can give the pod a /proc of its own: a boot ID and stat lines that it writes.
-if (process.env.FAKE_PROC) remote = remote.replaceAll('/proc/', process.env.FAKE_PROC + '/');
+const remote = args.slice(at + 1).join(' ').replaceAll('/root/verifold', process.env.FAKE_POD + '/verifold').replace(/timeout \\d+ /, '');
 const result = spawnSync('bash', ['-c', remote], { stdio: ['inherit', 'inherit', 'inherit'] });
 process.exit(result.status ?? 1);
 `;
@@ -90,6 +88,8 @@ export async function fakePod(
     readonly taskFolder?: (task: string) => Promise<TaskPlace | null>;
     readonly runsStop?: (lease: string) => Promise<void>;
     readonly onChange?: (lease: Lease, line: string, wake: boolean) => void;
+    /** RunPod got a stop, a start, or a delete (`terminate`) of a pod, and did not act yet. */
+    readonly onAction?: (action: string) => void;
   } = {},
 ): Promise<FakePod> {
   const dir = await mkdtemp(join(tmpdir(), 'verifold-pods-'));
@@ -131,9 +131,7 @@ export async function fakePod(
       'FAKE_POD',
       'FAKE_HOST_KEY',
       'FAKE_SSH_DOWN',
-      'FAKE_PROC',
       'FAKE_ACTION_FAILS',
-      'FAKE_ACTION_REFUSES',
     ])
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];
@@ -207,28 +205,17 @@ export async function fakePod(
           `data: ${JSON.stringify({ source: 'container', line: 'Setting up SSH...' })}\n\ndata: ${JSON.stringify({ source: 'container', line: `256 ${logged.fingerprint} root@pod (ED25519)` })}\n\n`,
         );
       } else if (found && match?.[2] === '/action') {
-        if (process.env.FAKE_ACTION_REFUSES === '1')
-          json(500, { detail: 'refused' });
-        else {
-          found.status =
-            (JSON.parse(body) as { action: string }).action === 'stop'
-              ? 'EXITED'
-              : 'RUNNING';
-          // RunPod acted, but its answer did not come back.
-          if (process.env.FAKE_ACTION_FAILS === '1')
-            json(500, { detail: 'lost' });
-          else json(200, view(found));
-        }
+        const action = (JSON.parse(body) as { action: string }).action;
+        options.onAction?.(action);
+        found.status = action === 'stop' ? 'EXITED' : 'RUNNING';
+        // RunPod acted, but its answer did not come back.
+        if (process.env.FAKE_ACTION_FAILS === '1')
+          json(500, { detail: 'lost' });
+        else json(200, view(found));
       } else if (found && request.method === 'DELETE') {
-        if (process.env.FAKE_ACTION_REFUSES === '1')
-          json(500, { detail: 'refused' });
-        else {
-          pods.delete(found.id);
-          // RunPod deleted the pod, but its answer did not come back.
-          if (process.env.FAKE_ACTION_FAILS === '1')
-            json(500, { detail: 'lost' });
-          else json(204);
-        }
+        options.onAction?.('terminate');
+        pods.delete(found.id);
+        json(204);
       } else if (found) json(200, view(found));
       else if (url.pathname === '/v2/billing/pods') json(200, { records: [] });
       else json(404, { title: 'Not Found', status: 404, detail: 'none' });

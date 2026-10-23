@@ -1175,6 +1175,10 @@ export class RunLedger {
     const ready = new Promise<RunRecord>((resolve) => {
       started = resolve;
     });
+    let finished!: () => void;
+    const work = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
     const made = await this.options.serial(async () => {
       const known = [...this.records.values()].find(
         (run) => run.agent === input.agent && run.key === input.key,
@@ -1220,17 +1224,24 @@ export class RunLedger {
         folder: `run-${number(id)}-${randomBytes(4).toString('hex')}`,
         where: place ? { pod: place.lease, gpu: place.gpu } : 'local',
       };
-      // The run counts from the step that picked its pod, so a stop of that pod that begins while the record saves ends it too.
+      // The run and its work count from the step that picked its pod: a stop of that pod that begins while the record saves ends the run, and waits for it, as `close` does.
       this.records.set(id, run);
       this.starting.set(id, null);
       this.waiting.set(id, ready);
+      this.work.set(id, work);
       try {
         await mkdir(this.record(id), { recursive: true, mode: 0o700 });
         await this.save(run);
       } catch (error) {
+        // A run whose record did not save never started: no record of it stays for recovery to find.
+        await rm(this.record(id), { recursive: true, force: true }).catch(
+          () => {},
+        );
         this.records.delete(id);
         this.starting.delete(id);
         this.waiting.delete(id);
+        this.work.delete(id);
+        finished();
         throw error;
       }
       return { run, known: false, lease: place?.lease ?? null };
@@ -1246,7 +1257,7 @@ export class RunLedger {
       this.waiting.delete(made.run.id);
       started(run);
     };
-    const work = (
+    void (
       'pods' in runner
         ? this.executePod(
             made.run,
@@ -1270,8 +1281,8 @@ export class RunLedger {
         this.work.delete(made.run.id);
         // The caller never waits for good, also when the end's record failed.
         report(this.records.get(made.run.id) ?? made.run);
+        finished();
       });
-    this.work.set(made.run.id, work);
     return ready;
   }
 
@@ -2123,8 +2134,8 @@ export class RunLedger {
   /**
    * The pod of a lease stops: its runs end as interrupted, and the stop
    * waits until their outputs and logs came back and each record is final,
-   * or two minutes passed. The lease holds as stopping meanwhile, so `pick`
-   * starts no run on it.
+   * or two minutes passed. Its lease is held as stopping or ending
+   * meanwhile, so `pick` starts no run on it.
    */
   async podStops(lease: string): Promise<void> {
     const runs = [...this.records.values()].filter(
