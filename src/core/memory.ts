@@ -188,9 +188,9 @@ function line(text: string, max = 300): string {
 export type LabProgress = readonly {
   readonly id: string;
   readonly title: string;
-  readonly open: boolean;
-  /** In words, such as "open" or "stopped by the person". */
-  readonly state: string;
+  readonly state: 'open' | 'closed' | 'stopped';
+  /** The state in words, such as "open" or "stopped by the person". */
+  readonly stateText: string;
   /** Its agent's handle and harness, such as "claude-1 (Claude Code)". */
   readonly agent: string | null;
   readonly bar: string | null;
@@ -211,16 +211,16 @@ interface State {
   readonly lab: LabProgress | null;
 }
 
-/** The lab's directions with their verdicts and evidence. */
+/** The lab's directions with their verdicts and evidence. Empty for a lab without directions. */
 function labProgress(lab: LabProgress): string {
-  return `## Lab directions\n\n${
-    lab
-      .map(
-        (direction) =>
-          `- ${direction.id} ${line(direction.title, 120)}${direction.agent ? `, ${direction.agent}` : ''}: ${direction.open ? '' : `${direction.state}, `}${direction.verdict}.${direction.evidence ? ` Evidence: ${line(direction.evidence.text, 120)} (${direction.evidence.post}${direction.evidence.run ? `, ${direction.evidence.run}` : ''}).` : ''}${direction.bar ? ` Holds up if: ${line(direction.bar, 300)}.` : ''}`,
-      )
-      .join('\n') || 'No direction yet.'
-  }\n`;
+  return lab.length
+    ? `## Lab directions\n\n${lab
+        .map(
+          (direction) =>
+            `- ${direction.id} ${line(direction.title, 120)}${direction.agent ? `, ${direction.agent}` : ''}: ${direction.state === 'open' ? '' : `${direction.stateText}, `}${direction.verdict}.${direction.evidence ? ` Evidence: ${line(direction.evidence.text, 120)} (${direction.evidence.post}${direction.evidence.run ? `, ${direction.evidence.run}` : ''}).` : ''}${direction.bar ? ` Holds up if: ${line(direction.bar, 300)}.` : ''}`,
+        )
+        .join('\n')}\n`
+    : '';
 }
 
 function progress({ tasks, lab }: State): string {
@@ -256,7 +256,7 @@ function progress({ tasks, lab }: State): string {
       ),
     ]
       .filter(Boolean)
-      .join('\n') || 'No tasks yet.'
+      .join('\n') || (lab ? 'No direction yet.' : 'No tasks yet.')
   );
 }
 
@@ -378,7 +378,7 @@ function readme(state: State, notes: readonly string[]): string {
   return [
     `Question: ${workspace.research?.topic ?? 'not asked yet'}`,
     idea ? `Direction: ${idea.title}` : 'Direction: not chosen yet',
-    `This run: ${lab ? `a lab with ${lab.length} ${lab.length === 1 ? 'direction' : 'directions'}, ${lab.filter((direction) => direction.open).length} open; progress.md lists them with their verdicts.` : `${tasks.length} tasks, ${done} done.`}${archived ? ` ${archived} earlier ${archived === 1 ? 'run is' : 'runs are'} archived; their progress, decisions, and findings are in the files below.` : ''}`,
+    `This run: ${lab ? `a lab with ${lab.length} ${lab.length === 1 ? 'direction' : 'directions'}, ${lab.filter((direction) => direction.state === 'open').length} open; progress.md lists them with their verdicts.` : `${tasks.length} tasks, ${done} done.`}${archived ? ` ${archived} earlier ${archived === 1 ? 'run is' : 'runs are'} archived; their progress, decisions, and findings are in the files below.` : ''}`,
     '',
     '- direction.md: the chosen direction and its checks.',
     '- progress.md: what is done, what runs, and what comes next.',

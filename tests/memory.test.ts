@@ -226,6 +226,44 @@ await test('the project memory follows the records, keeps the person’s text an
   );
 });
 
+await test('Start over keeps no earlier run of a lab without directions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'verifold-memory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await changeWorkspace(root, () => ({
+    schemaVersion: 1,
+    visibility: 'private',
+    profile: {
+      name: 'R',
+      interests: ['Interpretability'],
+      scholar: '',
+      github: '',
+      session: '',
+    },
+    host: 'claude',
+    research: {
+      topic: 'Do months lie on a circle?',
+      autonomy: 'autonomous',
+      phase: 'needs-plan',
+    },
+    candidates: [],
+    selectedId: null,
+  }));
+  const memory = new ProjectMemory(
+    root,
+    () => Promise.resolve([]),
+    () => [],
+  );
+  await memory.write();
+  const path = join(root, 'memory', 'progress.md');
+  const before = await readFile(path, 'utf8');
+  assert.match(
+    before,
+    /<!-- verifold:progress -->\nNo direction yet\.\n<!-- \/verifold:progress -->/,
+  );
+  await memory.freeze('archived 2026-10-23 09:00');
+  assert.equal(await readFile(path, 'utf8'), before);
+});
+
 /**
  * The exact files for a legacy project and for a lab. The text comes from
  * Verifold before the memory stopped importing the task and results modules,
@@ -449,8 +487,8 @@ await test('the memory files keep their exact text for a legacy project and for 
     {
       id: 'd-1',
       title: 'Months and weekdays are circles',
-      open: true,
       state: 'open',
+      stateText: 'open',
       agent: 'claude-1 (Claude Code)',
       bar: 'a probe places 60% of months right',
       verdict: 'leading',
@@ -463,8 +501,8 @@ await test('the memory files keep their exact text for a legacy project and for 
     {
       id: 'd-2',
       title: "It's only word frequency",
-      open: false,
-      state: 'closed by its agent',
+      state: 'closed',
+      stateText: 'closed by its agent',
       agent: 'codex-1 (Codex)',
       bar: null,
       verdict: 'ruled out',
