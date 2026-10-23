@@ -393,8 +393,8 @@ async function changeRunNow(
   try {
     await coordinator?.reload();
   } finally {
-    // The records moved, so the lab is read again even when the coordinator's reload fails.
-    await labRun?.reload();
+    // The records moved, so the lab is read again even when the coordinator's reload fails. It learns whether Start over moved its records to the archive.
+    await labRun?.reload(restore === undefined);
   }
   research?.clear();
   await sessions.forget();
