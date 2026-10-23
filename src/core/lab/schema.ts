@@ -84,6 +84,8 @@ export const labLimits = {
   hours: 168,
   /** Turns in a row without a post, after which an agent's next turn asks it to post. */
   quietTurns: 6,
+  /** Hours of the lab's clock that an agent worked since its last post, after which it gets asked to post, after 2 turns at least. */
+  quietHours: 2,
   /** Characters of the person's note when they sign off. */
   signoff: boardLimits.text,
   /**
@@ -108,14 +110,12 @@ export const labTiming = {
   backoffMs: [10 * 60_000, 30 * 60_000, 2 * 3_600_000] as readonly number[],
   /** The wait after a start that failed. It doubles with each failure in the last hour. */
   retryMs: 30_000,
-  /** One hour of a time budget. */
+  /** One hour of the lab's clock: time budgets, agent starts, hourly limits of posts, stops and turns, and the ask to post. */
   hourMs: 3_600_000,
   /** One minute of a run's time limit. */
   minuteMs: 60_000,
   /** The time between two reads of a pod run's job. */
   podPollMs: 20_000,
-  /** An agent that worked this long since its last post gets asked to post, after 2 turns at least. */
-  quietMs: 2 * 3_600_000,
 };
 
 /** Work that a direction builds on: known work, or new in this lab. */

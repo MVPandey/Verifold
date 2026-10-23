@@ -243,6 +243,10 @@ interface AgentRuntime {
   posted: boolean;
   /** The agent posted to the board, or gave a verdict, in its current turn. */
   spoke: boolean;
+  /** The digest of the current turn asked the agent to post. */
+  asked: boolean;
+  /** A Verifold tool call came in the current turn, so the agent read its prompt. */
+  acted: boolean;
   /** When the current turn started. */
   turnAt: number;
   /** What the current turn read. It is saved when the turn ends cleanly. */
@@ -365,12 +369,25 @@ function toldLinked(agent: AgentRecord, print: string): AgentRecord {
     : agent;
 }
 
+/** The harness reported work, its text or a tool call, for the turn that began at `at`. */
+function worked(record: SessionRecord | null | undefined, at: number): boolean {
+  return (
+    record?.events.some(
+      (event) =>
+        (event.kind === 'agent' || event.kind === 'tool') &&
+        Date.parse(event.at) >= at,
+    ) ?? false
+  );
+}
+
 function runtime(): AgentRuntime {
   return {
     turning: false,
     turn: 0,
     posted: false,
     spoke: false,
+    asked: false,
+    acted: false,
     turnAt: 0,
     pending: null,
     usedUp: false,
@@ -872,8 +889,8 @@ export class Lab {
         return {
           id: direction.id,
           title: direction.title,
-          open: direction.state === 'open',
-          state: stateWord(direction),
+          state: direction.state,
+          stateText: stateWord(direction),
           agent: agent ? `${agent.handle} (${hostName(agent.host)})` : null,
           bar: direction.bar ? barSummary(direction) : null,
           verdict: verdictWord(direction),
@@ -1019,12 +1036,14 @@ export class Lab {
        * lists it, and its agent starts once the plan is kept.
        */
       readonly plan?: boolean;
-      /** An agent opens it with `verifold_direction`: the limits of agent starts apply. Its reason goes on the note. */
-      readonly started?: { readonly why: string };
+      /** An agent starts it, with `verifold_direction` or a later plan: the limits of agent starts apply. */
+      readonly started?: boolean;
+      /** The agent's reason, for the note on the board. */
+      readonly why?: string;
     } = {},
   ): Promise<string> {
     const checked = await this.serial(() => {
-      this.roomForDirection();
+      this.roomForDirection(this.agents.has(by));
       if (options.started) this.roomForStart();
       const host: HarnessName =
         input.harness === 'claude' || input.harness === 'codex'
@@ -1085,15 +1104,18 @@ export class Lab {
     });
   }
 
-  /** The lab has room for one more open direction. */
-  private roomForDirection(): void {
+  /**
+   * The lab has room for one more open direction. `agent`: an agent opens
+   * it, so it asks the person to stop one, because an agent cannot.
+   */
+  private roomForDirection(agent = false): void {
     if (
       this.current().directions.filter(
         (direction) => direction.state === 'open',
       ).length >= labLimits.directions
     )
       fail(
-        `${labLimits.directions} directions are open, the most that a lab allows. Stop one first.`,
+        `${labLimits.directions} directions are open, the most that a lab allows. ${agent ? 'Ask the person on the board to stop one.' : 'Stop one first.'}`,
       );
   }
 
@@ -1118,7 +1140,7 @@ export class Lab {
 
   /** When agents started agents in the last 24 hours. */
   private recentStarts(state: LabState): string[] {
-    const day = Date.now() - 24 * 3_600_000;
+    const day = Date.now() - 24 * this.timing.hourMs;
     return state.agentStarts.filter((at) => Date.parse(at) > day);
   }
 
@@ -1139,10 +1161,11 @@ export class Lab {
     options: {
       readonly opener?: boolean;
       readonly plan?: boolean;
-      readonly started?: { readonly why: string };
+      readonly started?: boolean;
+      readonly why?: string;
     },
   ): Promise<string> {
-    this.roomForDirection();
+    this.roomForDirection(this.agents.has(by));
     if (options.started) this.roomForStart();
     const state = this.current();
     // One agent plans the lab.
@@ -1234,7 +1257,7 @@ export class Lab {
         kind: 'status',
         direction: id,
         text: clip(
-          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).${options.started ? ` Why: ${JSON.stringify(options.started.why)}` : ''}`,
+          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).${options.why ? ` Why: ${JSON.stringify(options.why)}` : ''}`,
           boardLimits.text,
         ),
         mentions: [],
@@ -1805,7 +1828,17 @@ export class Lab {
         loop.turnEnded();
         return;
       }
-      const { usedUp, readBroken, pending, posted, spoke, turn, turnAt } = run;
+      const {
+        usedUp,
+        readBroken,
+        pending,
+        posted,
+        spoke,
+        asked,
+        acted,
+        turn,
+        turnAt,
+      } = run;
       run.turning = false;
       // A change that came during the turn ends the process now, before the next turn.
       this.checkProcess(agent.id);
@@ -1814,6 +1847,15 @@ export class Lab {
       run.pending = null;
       run.endedAt = Date.now();
       const clean = outcome === 'completed' && !usedUp && !readBroken;
+      // An ask that never reached the agent comes again with the next digest:
+      // a turn that the used-up usage window kept from work, or one that
+      // stopped before the agent did anything.
+      if (
+        asked &&
+        (usedUp ||
+          (!acted && outcome !== 'completed' && !worked(record, turnAt)))
+      )
+        this.takeAskBack(agent.id);
       if (pending && clean)
         void this.update(agent.id, (current) => ({
           ...current,
@@ -1890,11 +1932,42 @@ export class Lab {
   private interrupt(id: string): void {
     const run = this.rt(id);
     const turned = run.turning;
+    // An ask that never reached the agent comes again with the turn's digest.
+    const lost = turned && run.asked && (run.usedUp || !run.acted);
+    const used = run.usedUp;
+    const at = run.turnAt;
     run.turning = false;
     run.usedUp = false;
     run.readBroken = false;
     run.pending = null;
     this.loops.get(id)?.turnEnded(turned);
+    const session = this.agents.get(id)?.session;
+    if (
+      lost &&
+      (used ||
+        !worked(
+          session ? this.options.sessions.view(session)?.record : null,
+          at,
+        ))
+    )
+      this.takeAskBack(id);
+  }
+
+  /** The ask to post did not reach the agent, so the next digest asks again. */
+  private takeAskBack(id: string): void {
+    void this.update(id, (entry) => ({ ...entry, nudged: false })).catch(
+      () => {},
+    );
+  }
+
+  /** The agent posted, or gave a verdict: its quiet stretch ends, so the next stretch can get its own ask. */
+  private quietEnds(id: string): Promise<void> {
+    return this.update(id, (entry) => ({
+      ...entry,
+      quietTurns: 0,
+      quietWork: 0,
+      nudged: false,
+    }));
   }
 
   /** A post went into the agent's running turn. It counts as read when the turn ends cleanly. */
@@ -2077,6 +2150,8 @@ export class Lab {
     run.turn += 1;
     run.posted = false;
     run.spoke = false;
+    run.asked = false;
+    run.acted = false;
     run.turnAt = Date.now();
     run.usedUp = false;
     run.readBroken = false;
@@ -2099,7 +2174,7 @@ export class Lab {
    * Returns true in that case.
    */
   private async countStop(id: string): Promise<boolean> {
-    const hour = Date.now() - 3_600_000;
+    const hour = Date.now() - this.timing.hourMs;
     const restarts = [
       ...this.agent(id).restarts.filter((at) => Date.parse(at) > hour),
       new Date().toISOString(),
@@ -2397,10 +2472,13 @@ export class Lab {
           );
           this.rt(id).style = style;
           this.begin(id, digest.read);
-          if (ask)
+          // The ask counts once it goes out, so a digest before this turn's end does not ask again. A turn that never reached the agent takes it back.
+          if (ask) {
+            this.rt(id).asked = true;
             void this.update(id, (entry) => ({ ...entry, nudged: true })).catch(
               () => {},
             );
+          }
           if (facts)
             void this.update(id, (entry) => ({
               ...entry,
@@ -2417,6 +2495,7 @@ export class Lab {
         debounceMs: this.timing.debounceMs,
         // A digest that did not go out comes again after a short wait, so the agent never stalls.
         retryMs: this.timing.continueMs,
+        hourMs: this.timing.hourMs,
       },
     );
     this.loops.set(id, loop);
@@ -2686,9 +2765,20 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   ): Promise<{ readonly ok: boolean; readonly text: string }> {
     const refused = { ok: false, text: stoppedText };
     const args = object(input) ?? {};
+    // A call means that the agent read its prompt, with any ask in it.
+    const live = this.runtimes.get(id);
+    if (live?.turning) live.acted = true;
     // A harness can number its calls again in a new process, so a call is known by its launch too.
     const key = `${generation}:${callId}`;
     const known = await this.serial(() => {
+      // A call that this launch made already gets its answer again, also
+      // once the agent no longer works for the lab, as after its own close.
+      const own = this.agents.get(id);
+      const action =
+        own?.generation === generation
+          ? own.actions.find((entry) => entry.key === key)
+          : undefined;
+      if (action) return { ok: action.ok, text: action.result };
       const agent = this.usable(id, generation);
       if (!agent) return refused;
       if (
@@ -2697,8 +2787,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         agent.lastRead?.key === key
       )
         return { ok: true, text: agent.lastRead.text };
-      const action = agent.actions.find((entry) => entry.key === key);
-      return action ? { ok: action.ok, text: action.result } : null;
+      return null;
     });
     if (known) return known;
     let result: { ok: boolean; text: string };
@@ -2722,13 +2811,20 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       };
     }
     return this.serial(async () => {
-      if (!this.usable(id, generation)) return result;
+      // A call that ended the agent's work, such as its close, is recorded too, so its retry gets the same answer.
+      if (
+        this.agents.get(id)?.generation !== generation ||
+        this.closing ||
+        this.moving
+      )
+        return result;
       const read =
         name === 'verifold_board' ||
         name === 'verifold_read' ||
         name === 'verifold_run_status';
       // A refusal, such as a path that does not exist, tells the agent what it needs. Only a broken read brings the digest again.
-      if (read && broken) this.rt(id).readBroken = true;
+      if (read && broken && this.usable(id, generation))
+        this.rt(id).readBroken = true;
       if (!read)
         await this.update(id, (agent) => ({
           ...agent,
@@ -5211,6 +5307,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       });
       this.rt(id).posted = true;
       this.rt(id).spoke = true;
+      await this.quietEnds(id).catch(() => {});
       return `Posted ${post.id}.`;
     });
   }
@@ -5286,14 +5383,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const draft = await this.serial(() => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       this.postLimit(agent);
-      if (
-        this.current().directions.filter(
-          (direction) => direction.state === 'open',
-        ).length >= labLimits.directions
-      )
-        fail(
-          `${labLimits.directions} directions are open, the most that a lab allows. Ask the person on the board to stop one.`,
-        );
+      this.roomForDirection(true);
       const host =
         args.harness === 'claude' || args.harness === 'codex'
           ? args.harness
@@ -5318,7 +5408,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         buildsOn: works(args.buildsOn),
       };
     });
-    const opened = await this.addDirection(draft, id, { started: { why } });
+    const opened = await this.addDirection(draft, id, { started: true, why });
     this.progressed(id, generation);
     // The direction is open, also if Start over begins now: the answer must say so.
     const agent = this.agents.get(
@@ -5327,10 +5417,13 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const who = agent
       ? `${agent.handle} (${hostName(agent.host)})`
       : 'its agent';
+    // A new agent starts at the next tick, unless its harness or the slots make it wait.
     return `Opened ${opened} for ${who}. ${
-      this.options.sessions.full
-        ? 'Every agent slot is in use, so it starts when one is free.'
-        : 'It starts now.'
+      agent && this.options.quota?.parked(agent.host)
+        ? `${hostName(agent.host)}'s usage window is used up, so it starts when the window resets.`
+        : this.options.sessions.full
+          ? 'Every agent slot is in use, so it starts when one is free.'
+          : 'It starts now.'
     }`;
   }
 
@@ -5489,6 +5582,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const run = this.rt(id);
     run.posted = true;
     run.spoke = true;
+    void this.quietEnds(id).catch(() => {});
   }
 
   /**
@@ -6960,9 +7054,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
               },
               id,
               // The first plan opens the lab. A later plan's new directions are agents that an agent starts.
-              draft.first
-                ? { plan: true }
-                : { plan: true, started: { why: 'A change of the plan.' } },
+              draft.first ? { plan: true } : { plan: true, started: true },
             ),
           );
         } catch (error) {
@@ -7066,6 +7158,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         await this.stateFile.save().catch(() => {});
         this.rt(id).posted = true;
         this.rt(id).spoke = true;
+        await this.quietEnds(id).catch(() => {});
         // Answers that waited for another question reach the planner now: with a plan, no question waits.
         await this.tellHeld().catch(() => {});
         this.options.onChange?.();
@@ -7149,7 +7242,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
 
   /** An agent posts at most `postsPerHour` times an hour, plans too. */
   private postLimit(agent: AgentRecord): void {
-    const hour = Date.now() - 3_600_000;
+    const hour = Date.now() - this.timing.hourMs;
     if (
       this.board
         .list()
@@ -7522,7 +7615,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    * files too. After two turns in a row that gave the other agents no new
    * commit and no post, the next one waits longer. The commit runs in the
    * direction's Git queue. A turn that started meanwhile owns the folder: then
-   * this one commits nothing and sets no timer. A turn that ran into a used-up
+   * this one commits nothing, sets no timer, and counts nothing. A post ends
+   * the quiet stretch in its own step. A turn that ran into a used-up
    * usage window (`count` false) commits its work but neither counts nor sets
    * a timer: the reset wakes the agent. A commit that fails is no progress:
    * the agent hears why, and a failure that repeats waits longer. An agent
@@ -7598,27 +7692,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       );
     }
     if (!count) {
-      // The reset wakes the agent, or the run's end while a run of the agent runs. The notes wait for that turn. A post in it still ends the quiet stretch.
+      // The reset wakes the agent, or the run's end while a run of the agent runs. The notes wait for that turn.
       if (notes.length)
         this.loop(id).add([{ kind: 'continue', text: notes.join(' ') }]);
-      if (did.spoke)
-        await this.serial(async () => {
-          const latest = this.agents.get(id);
-          if (
-            latest?.generation !== generation ||
-            !this.active(latest) ||
-            this.closing ||
-            this.moving ||
-            !current()
-          )
-            return;
-          await this.update(id, (entry) => ({
-            ...entry,
-            quietTurns: 0,
-            quietWork: 0,
-            nudged: false,
-          }));
-        });
       return;
     }
     await this.serial(async () => {
@@ -7632,13 +7708,16 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       )
         return;
       const idleStreak = changed || did.posted ? 0 : latest.idleStreak + 1;
-      // A post ends the quiet stretch, so the next stretch can get its own ask.
+      // A post ended the quiet stretch in its own step. A turn without one adds to it.
       await this.update(id, (entry) => ({
         ...entry,
         idleStreak,
-        quietTurns: did.spoke ? 0 : entry.quietTurns + 1,
-        quietWork: did.spoke ? 0 : entry.quietWork + Math.max(0, did.worked),
-        nudged: !did.spoke && entry.nudged,
+        ...(did.spoke
+          ? {}
+          : {
+              quietTurns: entry.quietTurns + 1,
+              quietWork: entry.quietWork + Math.max(0, did.worked),
+            }),
       }));
       // While a run of the agent runs, the run's end wakes it instead. The notes wait for that turn: the loop holds them.
       const state = this.state;
@@ -7678,7 +7757,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   /**
    * The ask to post, for an agent that took `quietTurns` turns in a row
    * without a post, or null. It comes after `labLimits.quietTurns` turns, or
-   * after `quietMs` of turns and 2 turns at least, once in each quiet
+   * after `quietHours` of turns and 2 turns at least, once in each quiet
    * stretch. Never while the lab is paused or past its time budget, while the
    * agent's run runs, nor for a harness whose usage window is used up. It
    * goes with the agent's next digest, so it costs no turn of its own.
@@ -7698,13 +7777,19 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       return null;
     const { quietTurns, quietWork } = agent;
     const turns = quietTurns >= labLimits.quietTurns;
-    if (!turns && !(quietTurns >= 2 && quietWork >= this.timing.quietMs))
+    if (
+      !turns &&
+      !(
+        quietTurns >= 2 &&
+        quietWork >= labLimits.quietHours * this.timing.hourMs
+      )
+    )
       return null;
     const since = turns
       ? quietTurns === 1
         ? 'your last turn'
         : `your last ${quietTurns} turns`
-      : `${Math.floor(quietWork / 3_600_000)} hours of work`;
+      : `${Math.floor(quietWork / this.timing.hourMs)} hours of work`;
     return `You posted nothing in ${since}. Post what you found so far, with proof, or post what blocks you. A dead end is a result too: post it as ruled-out, with proof.`;
   }
 
@@ -7776,10 +7861,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
 
   /** When the agent's hourly turns allow its next one, or null when they allow it now. */
   private turnsUntil(agent: AgentRecord): number | null {
-    const hour = Date.now() - 3_600_000;
+    const hour = Date.now() - this.timing.hourMs;
     const recent = agent.wakeups.filter((at) => Date.parse(at) > hour);
     return recent.length >= labLimits.wakeupsPerHour
-      ? Date.parse(recent[0] ?? '') + 3_600_000
+      ? Date.parse(recent[0] ?? '') + this.timing.hourMs
       : null;
   }
 
