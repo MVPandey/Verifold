@@ -5329,12 +5329,11 @@ await test('a post in a turn that a pause stops still ends the quiet stretch', a
       lab.lab.view()?.posts.some((post) => post.text === 'Which layer?') ??
       false,
   );
-  assert.equal(lab.lab.view()?.directions[0]?.agent.quietTurns, 1);
   await lab.lab.pause();
   await until(() => lab.lab.view()?.directions[0]?.agent.quietTurns === 0);
 });
 
-await test('an ask to post whose turn a pause stops comes again with the next digest', async (t) => {
+await test('an ask to post whose turn ran into a used-up usage window comes again after the reset', async (t) => {
   const quiet = labLimits.quietTurns;
   labLimits.quietTurns = 1;
   t.after(() => {
@@ -5351,16 +5350,293 @@ await test('an ask to post whose turn a pause stops comes again with the next di
     { calls: [{ name: 'WAIT' }] },
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
-  // The second turn carries the ask, and it waits until the pause stops it.
+  // The second turn carries the ask, and it waits.
   await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
   assert.match((await lab.inputs('d-1-alpha'))[1] ?? '', ask);
-  await lab.lab.pause();
-  await until(() => lab.lab.view()?.directions[0]?.status === 'paused');
-  // The turn that carried the ask did not end, so the ask does not count yet.
-  assert.equal(lab.lab.view()?.directions[0]?.agent.nudged, false);
-  await lab.lab.resume();
-  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
+  const signal = {
+    exhausted: true,
+    resetsAt: new Date(Date.now() + 1200).toISOString(),
+    usedPercent: 100,
+    window: 'five_hour',
+  };
+  lab.quota.record('claude', signal);
+  lab.lab.limited('claude', signal);
+  // A post ends the waiting turn, which the used-up window kept from work.
+  await lab.lab.post({ text: 'Thanks.' });
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3, 8000);
   assert.match((await lab.inputs('d-1-alpha'))[2] ?? '', ask);
+});
+
+/** The parts of a lab that the quiet-stretch tests hold or drive. */
+interface QuietInside {
+  serial<T>(work: () => T | Promise<T>): Promise<T>;
+  inDirection<T>(id: string, work: () => Promise<T>): Promise<T>;
+  loop(id: string): {
+    add(
+      events: readonly { kind: 'continue'; text: string }[],
+      delay?: number,
+    ): void;
+  };
+  rt(id: string): { settling: boolean };
+}
+
+/** Hold a queue of the lab until `release` runs. */
+function hold(queue: (work: () => Promise<void>) => Promise<unknown>): {
+  readonly held: Promise<void>;
+  readonly release: () => void;
+} {
+  let release = (): void => {};
+  let holding = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    holding = resolve;
+  });
+  void queue(
+    () =>
+      new Promise<void>((resolve) => {
+        holding();
+        release = resolve;
+      }),
+  );
+  return { held, release: () => release() };
+}
+
+await test('a digest that goes out before the end of the turn with the ask does not ask again', async (t) => {
+  const quiet = labLimits.quietTurns;
+  labLimits.quietTurns = 1;
+  t.after(() => {
+    labLimits.quietTurns = quiet;
+  });
+  const lab = await fixture(t);
+  const ask = /You posted nothing in your last turn\./;
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'step-1.txt', text: '1\n' } },
+      ],
+    },
+    { calls: [{ name: 'WAIT' }] },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // The second turn carries the ask.
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  assert.match((await lab.inputs('d-1-alpha'))[1] ?? '', ask);
+  const inside = lab.lab as unknown as QuietInside;
+  const agent = lab.lab.view()?.directions[0]?.agent;
+  // The end of that turn waits in the lab's queue while the next digest goes out.
+  const queue = hold((work) => inside.serial(work));
+  t.after(queue.release);
+  await queue.held;
+  await until(() =>
+    lab.sessions.steer(agent?.session ?? '', 'Done.', () => {}),
+  );
+  inside
+    .loop(agent?.id ?? '')
+    .add([{ kind: 'continue', text: 'Look again.' }], 0);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
+  queue.release();
+  assert.doesNotMatch((await lab.inputs('d-1-alpha'))[2] ?? '', ask);
+});
+
+await test('an ask to post in a turn that read its prompt and then failed does not come again', async (t) => {
+  const quiet = labLimits.quietTurns;
+  labLimits.quietTurns = 1;
+  t.after(() => {
+    labLimits.quietTurns = quiet;
+  });
+  const lab = await fixture(t);
+  const ask = /You posted nothing in your last turn\./;
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'step-1.txt', text: '1\n' } },
+      ],
+    },
+    // The turn with the ask calls a tool, so it read its prompt, then fails.
+    {
+      calls: [
+        { name: 'verifold_board', arguments: { view: 'unread' } },
+        { name: 'FAIL' },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
+  const inputs = await lab.inputs('d-1-alpha');
+  assert.match(inputs[1] ?? '', ask);
+  // The failed turn's digest comes again, without a second ask.
+  assert.doesNotMatch(inputs[2] ?? '', ask);
+});
+
+await test('a post that lands after a pause stopped its turn still ends the quiet stretch', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'step-1.txt', text: '1\n' } },
+      ],
+    },
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'result.txt', text: '0.78\n' } },
+        {
+          name: 'verifold_post',
+          arguments: {
+            kind: 'claim',
+            text: 'Months lie on a circle.',
+            artifacts: [{ type: 'file', path: 'result.txt' }],
+          },
+        },
+        { name: 'WAIT' },
+      ],
+    },
+  ]);
+  const inside = lab.lab as unknown as QuietInside;
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(() => lab.lab.view()?.directions[0]?.agent.quietTurns === 1);
+  // The post's Git work waits while a pause stops its turn.
+  const git = hold((work) => inside.inDirection('d-1', work));
+  t.after(git.release);
+  await git.held;
+  const folder = join(
+    lab.root,
+    lab.lab.view()?.state.directions[0]?.workspace.path ?? '',
+  );
+  await until(
+    async () =>
+      (await readFile(join(folder, 'result.txt'), 'utf8').catch(() => '')) ===
+      '0.78\n',
+  );
+  await lab.lab.pause();
+  git.release();
+  await until(
+    () => lab.lab.view()?.posts.some((post) => post.kind === 'claim') ?? false,
+  );
+  assert.equal(lab.lab.view()?.directions[0]?.agent.quietTurns, 0);
+});
+
+await test('the end of an older turn does not undo the quiet stretch that a newer turn ended', async (t) => {
+  const quiet = labLimits.quietTurns;
+  labLimits.quietTurns = 1;
+  t.after(() => {
+    labLimits.quietTurns = quiet;
+  });
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        { name: 'WRITE', arguments: { path: 'step-1.txt', text: '1\n' } },
+      ],
+    },
+    // This turn carries the ask.
+    { calls: [{ name: 'WAIT' }] },
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          arguments: { kind: 'question', text: 'Found it?' },
+        },
+        { name: 'WAIT' },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  await until(async () => (await lab.inputs('d-1-alpha')).length === 2);
+  const inside = lab.lab as unknown as QuietInside;
+  const agent = lab.lab.view()?.directions[0]?.agent;
+  // The end of the turn with the ask waits for the direction's Git queue.
+  const git = hold((work) => inside.inDirection('d-1', work));
+  t.after(git.release);
+  await git.held;
+  await until(() =>
+    lab.sessions.steer(agent?.session ?? '', 'Done.', () => {}),
+  );
+  // A newer turn starts and posts.
+  inside.loop(agent?.id ?? '').add([{ kind: 'continue', text: 'Go on.' }], 0);
+  await until(
+    () =>
+      lab.lab.view()?.posts.some((post) => post.text === 'Found it?') ?? false,
+  );
+  git.release();
+  await until(() => !inside.rt(agent?.id ?? '').settling);
+  const now = lab.lab.view()?.directions[0]?.agent;
+  assert.equal(now?.nudged, false);
+  assert.equal(now?.quietTurns, 0);
+});
+
+await test("the planner's direction over the limit tells it to ask the person", async (t) => {
+  const most = labLimits.directions;
+  labLimits.directions = 2;
+  t.after(() => {
+    labLimits.directions = most;
+  });
+  const lab = await fixture(t, { harnesses: ['claude'] });
+  const direction = (title: string): Record<string, unknown> => ({
+    title,
+    bar: 'it beats the baseline',
+    runs: 3,
+    noise: '±0.02',
+    harness: 'claude',
+  });
+  await lab.script('d-1-plan-the-lab', [
+    {
+      when: 'post the plan of record',
+      calls: [
+        {
+          name: 'verifold_plan',
+          arguments: {
+            reading: 'We read the question as: do months sit on a circle?',
+            cost: 'Nothing costs money yet.',
+            directions: [
+              direction('Circles'),
+              direction('Helix'),
+              direction('Torus'),
+            ],
+            mine: 0,
+          },
+        },
+      ],
+    },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?');
+  await until(async () => (await results(lab, 'd-1-plan-the-lab')).length >= 1);
+  const said = (await results(lab, 'd-1-plan-the-lab'))[0]?.text ?? '';
+  assert.match(
+    said,
+    /"Torus": 2 directions are open, the most that a lab allows\. Ask the person on the board to stop one\./,
+  );
+  assert.doesNotMatch(said, /Stop one first/);
+});
+
+await test('a call ID that a new process uses again runs again', async (t) => {
+  const lab = await fixture(t);
+  await lab.script('d-1-alpha', [
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          id: 'toolu-again',
+          arguments: { kind: 'question', text: 'First?' },
+        },
+        { name: 'EXIT' },
+      ],
+    },
+    {
+      calls: [
+        {
+          name: 'verifold_post',
+          id: 'toolu-again',
+          arguments: { kind: 'question', text: 'Second?' },
+        },
+      ],
+    },
+  ]);
+  await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
+  // Each launch has its own key, so the second process's call is a new one.
+  await until(
+    () =>
+      lab.lab.view()?.posts.some((post) => post.text === 'Second?') ?? false,
+  );
+  assert.ok(lab.lab.view()?.posts.some((post) => post.text === 'First?'));
 });
 
 await test('a new direction whose harness waits for its usage window says so', async (t) => {

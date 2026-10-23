@@ -226,11 +226,6 @@ await test('the project memory follows the records, keeps the person’s text an
   );
 });
 
-/**
- * The exact files for a legacy project and for a lab. The text comes from
- * Verifold before the memory stopped importing the task and results modules,
- * so a change here changes what the agents and the person read.
- */
 await test('Start over keeps no earlier run of a lab without directions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'verifold-memory-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -269,6 +264,11 @@ await test('Start over keeps no earlier run of a lab without directions', async 
   assert.equal(await readFile(path, 'utf8'), before);
 });
 
+/**
+ * The exact files for a legacy project and for a lab. The text comes from
+ * Verifold before the memory stopped importing the task and results modules,
+ * so a change here changes what the agents and the person read.
+ */
 await test('the memory files keep their exact text for a legacy project and for a lab', async (t) => {
   const later = '2026-10-13T09:30:00.000Z';
   const workspace = (root: string, selected: boolean): Promise<unknown> =>
@@ -488,6 +488,7 @@ await test('the memory files keep their exact text for a legacy project and for 
       id: 'd-1',
       title: 'Months and weekdays are circles',
       state: 'open',
+      stateText: 'open',
       agent: 'claude-1 (Claude Code)',
       bar: 'a probe places 60% of months right',
       verdict: 'leading',
@@ -500,7 +501,8 @@ await test('the memory files keep their exact text for a legacy project and for 
     {
       id: 'd-2',
       title: "It's only word frequency",
-      state: 'closed by its agent',
+      state: 'closed',
+      stateText: 'closed by its agent',
       agent: 'codex-1 (Codex)',
       bar: null,
       verdict: 'ruled out',
