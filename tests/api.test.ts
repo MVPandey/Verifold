@@ -33,17 +33,16 @@ import { changeWorkspace, loadWorkspace } from '../src/core/storage.ts';
 import { fakePod, key as runpodKey } from './fake-pod.ts';
 import { computeDefaults, type ComputeView } from '../src/core/compute.ts';
 import { SessionActionError } from '../src/core/session.ts';
+import type { FigureRead, Lab } from '../src/core/lab.ts';
 import {
   labLimits,
   type AgentRecord,
   type Call,
   type Check,
   type Direction,
-  type Lab,
-  type FigureRead,
   type LabState,
   type LabView,
-} from '../src/core/lab.ts';
+} from '../src/core/lab/schema.ts';
 import { boardLimits, type Post } from '../src/core/board.ts';
 import { figureHeaders, figureName, imageSize } from '../src/server/figure.ts';
 import type { RunRecord } from '../src/core/runs.ts';

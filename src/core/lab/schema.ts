@@ -788,7 +788,7 @@ function parseCheck(value: unknown): Check | null {
     typeof entry.agent !== 'string' ||
     !agentId.test(entry.agent) ||
     typeof entry.handle !== 'string' ||
-    !new RegExp(`^${handlePattern}$`).test(entry.handle) ||
+    !handleId.test(entry.handle) ||
     typeof entry.queuedAt !== 'string' ||
     typeof entry.generation !== 'string'
   )
@@ -907,11 +907,26 @@ export function whole(
   max: number,
   what: string,
 ): number {
+  return wholeOr(
+    value,
+    min,
+    max,
+    `Give ${what} as a whole number from ${min} to ${max}.`,
+  );
+}
+
+/** A whole number from `min` to `max`, or the refusal `message`. */
+function wholeOr(
+  value: unknown,
+  min: number,
+  max: number,
+  message: string,
+): number {
   return Number.isSafeInteger(value) &&
     (value as number) >= min &&
     (value as number) <= max
     ? (value as number)
-    : fail(`Give ${what} as a whole number from ${min} to ${max}.`);
+    : fail(message);
 }
 
 /**
@@ -1270,11 +1285,12 @@ export function runArgs(
   const minutes =
     args.minutes === undefined
       ? Math.min(runLimits.defaultMinutes, most)
-      : Number.isSafeInteger(args.minutes) &&
-          (args.minutes as number) >= 1 &&
-          (args.minutes as number) <= most
-        ? (args.minutes as number)
-        : fail(`Give the minutes as a whole number from 1 to ${most}${more}.`);
+      : wholeOr(
+          args.minutes,
+          1,
+          most,
+          `Give the minutes as a whole number from 1 to ${most}${more}.`,
+        );
   const outputs = Array.isArray(args.outputs) ? args.outputs : [];
   if (outputs.length > runLimits.outputPaths)
     fail(`Name up to ${runLimits.outputPaths} outputs.`);
@@ -1291,6 +1307,9 @@ export function runArgs(
 
 /** Agent handles such as claude-12. */
 export const handlePattern = '(?:claude|codex)-[1-9]\\d{0,3}';
+
+/** A whole value that is an agent handle. */
+const handleId = new RegExp(`^${handlePattern}$`);
 
 export function text(value: unknown, limit: number, what: string): string {
   return typeof value === 'string' &&
@@ -1600,11 +1619,12 @@ export function hours(value: unknown): number {
     typeof value === 'string' && /^\d+$/.test(value.trim())
       ? Number(value)
       : value;
-  return Number.isSafeInteger(count) &&
-    (count as number) >= 1 &&
-    (count as number) <= labLimits.hours
-    ? (count as number)
-    : fail(`Give the time in whole hours, from 1 to ${labLimits.hours}.`);
+  return wholeOr(
+    count,
+    1,
+    labLimits.hours,
+    `Give the time in whole hours, from 1 to ${labLimits.hours}.`,
+  );
 }
 
 /** What a direction builds on, from an agent's tool call. */
@@ -1720,13 +1740,12 @@ function storedFacts(value: unknown): PlanFact[] {
 
 /** The repeat runs that a bar needs, from an agent's tool call. */
 export function repeatRuns(value: unknown): number {
-  return Number.isSafeInteger(value) &&
-    (value as number) >= 1 &&
-    (value as number) <= planLimits.runs
-    ? (value as number)
-    : fail(
-        `Give the repeat runs that a bar needs, from 1 to ${planLimits.runs}.`,
-      );
+  return wholeOr(
+    value,
+    1,
+    planLimits.runs,
+    `Give the repeat runs that a bar needs, from 1 to ${planLimits.runs}.`,
+  );
 }
 
 export function parseAgent(
@@ -1738,7 +1757,7 @@ export function parseAgent(
     typeof value.id !== 'string' ||
     !agentId.test(value.id) ||
     typeof value.handle !== 'string' ||
-    !new RegExp(`^${handlePattern}$`).test(value.handle) ||
+    !handleId.test(value.handle) ||
     (value.host !== 'claude' && value.host !== 'codex') ||
     typeof value.direction !== 'string' ||
     !directionId.test(value.direction) ||

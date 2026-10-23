@@ -1,5 +1,5 @@
-import type { LabView, Verdict } from './lab.ts';
-import { authorName, counted, verdictText } from './lab-words.ts';
+import type { LabView, Verdict } from './lab/schema.ts';
+import { authorName, counted, verdictText } from './lab/words.ts';
 import { usd } from './leases.ts';
 
 /**
