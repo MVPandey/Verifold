@@ -343,8 +343,8 @@ await test('the settings page shows the pods, the limits, the GPUs, and Agents a
   assert.match(newer, /value="5"/);
 });
 
-await test('the settings page shows a pod that Verifold stops now as stopping', () => {
-  const page = text(
+await test('the settings page shows a pod that Verifold stops or ends now, with no Stop on it', () => {
+  const html = (closing: 'stopping' | 'ending'): string =>
     render(
       snapshot(
         compute({
@@ -352,7 +352,7 @@ await test('the settings page shows a pod that Verifold stops now as stopping', 
             pod({
               id: 'lease-2',
               state: 'ready',
-              stopping: true,
+              closing,
               gpu: 'NVIDIA RTX A5000',
               idleMinutes: 9,
             }),
@@ -360,11 +360,18 @@ await test('the settings page shows a pod that Verifold stops now as stopping', 
         }),
       ),
       '#/settings',
-    ),
-  );
-  assert.ok(page.includes('Stopping Idle 9 min'), page);
-  assert.ok(!page.includes('Running Idle 9 min'));
+    );
+  const stopping = html('stopping');
+  assert.ok(text(stopping).includes('Stopping Idle 9 min'), text(stopping));
+  // End waits for the stop, then works. A second stop could not.
+  assert.ok(!stopping.includes('>Stop</button>'));
+  assert.ok(stopping.includes('>End</button>'));
+  const ending = html('ending');
+  assert.ok(text(ending).includes('Ending Idle 9 min'), text(ending));
+  assert.ok(!ending.includes('>Stop</button>'));
+  assert.ok(!ending.includes('>End</button>'));
 });
+
 await test('the settings page works without a lab, says when pods are off, and asks for a key first', () => {
   const off = compute({
     keyStored: null,

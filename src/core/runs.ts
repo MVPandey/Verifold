@@ -1220,11 +1220,19 @@ export class RunLedger {
         folder: `run-${number(id)}-${randomBytes(4).toString('hex')}`,
         where: place ? { pod: place.lease, gpu: place.gpu } : 'local',
       };
-      await mkdir(this.record(id), { recursive: true, mode: 0o700 });
-      await this.save(run);
+      // The run counts from the step that picked its pod, so a stop of that pod that begins while the record saves ends it too.
       this.records.set(id, run);
       this.starting.set(id, null);
       this.waiting.set(id, ready);
+      try {
+        await mkdir(this.record(id), { recursive: true, mode: 0o700 });
+        await this.save(run);
+      } catch (error) {
+        this.records.delete(id);
+        this.starting.delete(id);
+        this.waiting.delete(id);
+        throw error;
+      }
       return { run, known: false, lease: place?.lease ?? null };
     });
     // A repeated call waits with the first one, so both get the run as it started, or as it ended at once.

@@ -1329,7 +1329,7 @@ function check(entry: LabCheck): CheckItem {
 function podLease(
   lease: Lease,
   stored: ReadonlySet<string>,
-  stopping: ReadonlySet<string>,
+  closing: Readonly<Record<string, 'stopping' | 'ending'>>,
   now: number,
 ): PodLease {
   const secrets = lease.secrets ?? [];
@@ -1340,7 +1340,7 @@ function podLease(
   return {
     id: lease.id,
     state: lease.state,
-    ...(stopping.has(lease.id) ? { stopping: true } : {}),
+    ...(closing[lease.id] ? { closing: closing[lease.id] } : {}),
     gpu: lease.gpu,
     asker: lease.requestedBy,
     directions: lease.directions ?? [],
@@ -1417,7 +1417,7 @@ function shapeCompute(
   now: number,
 ): ProjectCompute {
   const stored = new Set(view.secrets.map((secret) => secret.name));
-  const stopping = new Set(view.stopping ?? []);
+  const closing = view.closing ?? {};
   const current: Lease[] = [];
   const earlier: Lease[] = [];
   for (const lease of [...view.leases].reverse())
@@ -1458,10 +1458,10 @@ function shapeCompute(
       : null,
     pods: current
       .slice(0, apiLimits.pods)
-      .map((lease) => podLease(lease, stored, stopping, now)),
+      .map((lease) => podLease(lease, stored, closing, now)),
     earlier: earlier
       .slice(0, apiLimits.earlierPods)
-      .map((lease) => podLease(lease, stored, stopping, now)),
+      .map((lease) => podLease(lease, stored, closing, now)),
     earlierCount: earlier.length,
     gpus: gpuTypes(view),
     problem: view.problem,
