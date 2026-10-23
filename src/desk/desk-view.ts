@@ -44,7 +44,7 @@ import {
   type CoordinatorView,
 } from '../legacy/coordinator.ts';
 import { defaultAgents } from '../core/workers.ts';
-import type { BringList, LabView } from '../core/lab.ts';
+import type { BringList, LabView } from '../core/lab/schema.ts';
 import { labWorks } from '../core/team.ts';
 import {
   answerPanel,

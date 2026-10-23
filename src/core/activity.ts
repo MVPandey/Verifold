@@ -1,5 +1,5 @@
 import type { HarnessName } from './harness.ts';
-import { labLimits, type Check, type DirectionView } from './lab.ts';
+import { labLimits, type Check, type DirectionView } from './lab/schema.ts';
 import { hostName } from './session.ts';
 import type { TranscriptEntry } from './transcript.ts';
 
