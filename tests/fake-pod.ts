@@ -51,7 +51,9 @@ if (args.slice(at + 1).join(' ') === 'bash -s') {
   process.stdout.write('watching\\n');
   process.exit(0);
 }
-const remote = args.slice(at + 1).join(' ').replaceAll('/root/verifold', process.env.FAKE_POD + '/verifold').replace(/timeout \\d+ /, '');
+let remote = args.slice(at + 1).join(' ').replaceAll('/root/verifold', process.env.FAKE_POD + '/verifold').replace(/timeout \\d+ /, '');
+// A test can give the pod a /proc of its own: a boot ID and stat lines that it writes.
+if (process.env.FAKE_PROC) remote = remote.replaceAll('/proc/', process.env.FAKE_PROC + '/');
 const result = spawnSync('bash', ['-c', remote], { stdio: ['inherit', 'inherit', 'inherit'] });
 process.exit(result.status ?? 1);
 `;
@@ -127,6 +129,7 @@ export async function fakePod(
       'FAKE_POD',
       'FAKE_HOST_KEY',
       'FAKE_SSH_DOWN',
+      'FAKE_PROC',
     ])
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];

@@ -91,6 +91,8 @@ export interface ComputeView {
   readonly gpusAt: string | null;
   /** Every lease, oldest first. */
   readonly leases: readonly Lease[];
+  /** The leases whose pod Verifold stops or ends now, so no run starts on them. */
+  readonly stopping?: readonly string[];
   readonly budget: Budget;
   /** All projects' GPU spend this month against the person's monthly limit. Null or absent: no monthly limit, or not read yet. */
   readonly month?: MonthView | null;
@@ -771,29 +773,42 @@ export class Compute {
     };
     return {
       pick: (direction, lease) => {
+        const stopping = new Set(this.leases.stopping());
         const own = this.leases
           .list()
           .filter((entry) => entry.directions?.includes(direction));
         const chosen =
           lease === undefined
-            ? own.findLast((entry) => entry.state === 'ready' && entry.ssh)
+            ? own.findLast(
+                (entry) =>
+                  entry.state === 'ready' &&
+                  entry.ssh &&
+                  !stopping.has(entry.id),
+              )
             : own.find((entry) => entry.id === lease);
         if (lease !== undefined && !chosen)
           throw new SessionActionError(
             `${typeof lease === 'string' ? lease.slice(0, 40) : 'That'} is no lease of ${direction}. Read your leases with verifold_compute.`,
           );
-        if (chosen?.state === 'ready' && chosen.ssh)
+        if (chosen?.state === 'ready' && chosen.ssh && !stopping.has(chosen.id))
           return { lease: chosen.id, gpu: chosen.gpu };
+        // A pod that Verifold stops or ends now takes no new run, also when it still reads as ready.
+        const ending =
+          chosen && stopping.has(chosen.id)
+            ? chosen
+            : own.findLast((entry) => stopping.has(entry.id));
         const stopped = own.findLast((entry) => entry.state === 'stopped');
         throw new SessionActionError(
-          own.some(
-            (entry) =>
-              entry.state === 'starting' || entry.state === 'requested',
-          )
-            ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
-            : stopped
-              ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`
-              : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
+          ending
+            ? `The pod of ${ending.id} stops now, so no run starts on it.`
+            : own.some(
+                  (entry) =>
+                    entry.state === 'starting' || entry.state === 'requested',
+                )
+              ? `The pod of ${direction} is not ready yet. Verifold wakes you when it is.`
+              : stopped
+                ? `The pod of ${stopped.id} stopped, for example after its idle minutes, and its disk was erased. End the lease with verifold_end_lease, then ask for a new pod, or ask the person to start it again in the project's settings.`
+                : `${direction} has no ready pod. Ask for one with verifold_request_pod.`,
         );
       },
       guard: async (id) => secretGuard(await this.leaseSecrets(id)),
@@ -982,6 +997,7 @@ export class Compute {
     return {
       ...this.state,
       leases: this.leases.list(),
+      stopping: this.leases.stopping(),
       budget: this.leases.budget(),
       month: this.leases.month(),
       problem: this.leases.lastProblem(),

@@ -10,7 +10,7 @@ import { clock, usd } from './format.ts';
 import { numberOf, type GpuRow } from './components/Limits.tsx';
 
 /** A pod's state in the words of the settings page. */
-export const podStates: Readonly<Record<PodState, string>> = {
+const podStates: Readonly<Record<PodState, string>> = {
   requested: 'Waits for you',
   denied: 'Denied',
   starting: 'Starting',
@@ -19,6 +19,11 @@ export const podStates: Readonly<Record<PodState, string>> = {
   ended: 'Ended',
   failed: 'Failed',
 };
+
+/** A pod's state as the settings page shows it: "Stopping" while Verifold stops or ends its pod. */
+export function podState(pod: PodLease): string {
+  return pod.stopping ? 'Stopping' : podStates[pod.state];
+}
 
 /** The pod runs, or starts, and bills. */
 export function running(pod: PodLease): boolean {

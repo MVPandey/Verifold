@@ -131,7 +131,7 @@ export class PodGoneError extends SessionActionError {}
  * them: the ledger hides them with the run's guard.
  */
 export interface PodRuns {
-  /** The lease of a direction's run: `lease` when it is one of the direction's, or its newest ready lease. */
+  /** The lease of a direction's run: `lease` when it is one of the direction's, or its newest ready lease. A lease whose pod stops or ends now takes no run. */
   pick(
     direction: string,
     lease?: unknown,
@@ -845,8 +845,6 @@ export class RunLedger {
   private readonly work = new Map<string, Promise<void>>();
   /** The record that each `start` call waits for, by run ID, until the run starts or ends. Its caller tells the agent how such a run ended. */
   private readonly waiting = new Map<string, Promise<RunRecord>>();
-  /** The leases whose pods stop now. No run starts on them. */
-  private readonly stopping = new Set<string>();
   /** The background work that ends the pod runs of an earlier owner. */
   private recovering: Promise<void> | null = null;
   private last = 0;
@@ -1127,12 +1125,7 @@ export class RunLedger {
    * the agent's folder is committed for it.
    */
   podFor(direction: string, lease?: unknown): void {
-    const place = (this.options.pods ?? fail(noPodsText)).pick(
-      direction,
-      lease,
-    );
-    if (this.stopping.has(place.lease))
-      fail(`The pod of ${place.lease} stops now, so no run starts on it.`);
+    (this.options.pods ?? fail(noPodsText)).pick(direction, lease);
   }
 
   /** Refuse a start past the limits. */
@@ -1195,8 +1188,6 @@ export class RunLedger {
         'pods' in runner
           ? runner.pods.pick(input.direction, input.lease)
           : undefined;
-      if (place && this.stopping.has(place.lease))
-        fail(`The pod of ${place.lease} stops now, so no run starts on it.`);
       const id = `r-${++this.last}`;
       const run: RunRecord = {
         schemaVersion: 1,
@@ -2124,29 +2115,25 @@ export class RunLedger {
   /**
    * The pod of a lease stops: its runs end as interrupted, and the stop
    * waits until their outputs and logs came back and each record is final,
-   * or two minutes passed. No run starts on the lease meanwhile.
+   * or two minutes passed. The lease holds as stopping meanwhile, so `pick`
+   * starts no run on it.
    */
   async podStops(lease: string): Promise<void> {
-    this.stopping.add(lease);
-    try {
-      const runs = [...this.records.values()].filter(
-        (run) =>
-          runActive(run) && run.where !== 'local' && run.where.pod === lease,
-      );
-      for (const run of runs) this.halt(run.id, 'interrupted');
-      // The stop of the pod waits for the copies at most `podStopMs`, so a spend limit or an end is not held up for long.
-      await Promise.race([
-        Promise.all(
-          runs.flatMap((run) => {
-            const work = this.work.get(run.id);
-            return work ? [work] : [];
-          }),
-        ),
-        delay(this.options.podStopMs ?? 120_000, undefined, { ref: false }),
-      ]);
-    } finally {
-      this.stopping.delete(lease);
-    }
+    const runs = [...this.records.values()].filter(
+      (run) =>
+        runActive(run) && run.where !== 'local' && run.where.pod === lease,
+    );
+    for (const run of runs) this.halt(run.id, 'interrupted');
+    // The stop of the pod waits for the copies at most `podStopMs`, so a spend limit or an end is not held up for long.
+    await Promise.race([
+      Promise.all(
+        runs.flatMap((run) => {
+          const work = this.work.get(run.id);
+          return work ? [work] : [];
+        }),
+      ),
+      delay(this.options.podStopMs ?? 120_000, undefined, { ref: false }),
+    ]);
   }
 
   /** The agent heard that the run ended. Call it in the lab's queue. */
