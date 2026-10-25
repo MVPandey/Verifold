@@ -27,6 +27,7 @@ import { KeyStore } from '../src/core/credentials.ts';
 import type { HarnessStatus } from '../src/core/detect.ts';
 import {
   copyGlobalProfile,
+  isolationProblem,
   ownProfileCopied,
   ownProfileFolder,
   profileDenial,
@@ -78,6 +79,8 @@ async function globalProfile(agency: string): Promise<void> {
   );
   const skill = join(agency, 'skills', 'owner', 'repo', 'a'.repeat(40), 'id');
   await mkdir(skill, { recursive: true });
+  await mkdir(join(agency, 'skills', '.catalogs'));
+  await writeFile(join(agency, 'skills', '.catalogs', 'read.json'), '{}');
   await writeFile(join(skill, 'SKILL.md'), '---\nname: probe\n---\n');
   await chmod(skill, 0o555);
   await mkdir(join(agency, 'gpu'));
@@ -92,6 +95,34 @@ const workspace: Workspace = {
   candidates: [],
   selectedId: null,
 };
+
+const claudeFound: HarnessStatus = {
+  harness: 'claude',
+  installed: true,
+  version: '2.1.304',
+  signedIn: true,
+  plan: 'max',
+  models: [{ id: 'opus[1m]', label: 'Opus' }],
+};
+
+async function options(base: string, root: string, global: string) {
+  const compute = new Compute(join(base, 'here'), {
+    store: new KeyStore({
+      home: join(base, 'home'),
+      platform: 'linux',
+      secretTool: join(base, 'none'),
+    }),
+  });
+  await compute.load();
+  return {
+    directory: global,
+    root,
+    compute,
+    signal,
+    detect: () => Promise.resolve([claudeFound]),
+    installed: () => Promise.resolve(['claude' as const]),
+  };
+}
 
 await test("an isolated project's settings are a copy of the global profile in its own folder, with every step to do and no monthly limit, while the global profile's lock holds", async (t) => {
   const base = await folder(t, 'own-copy');
@@ -123,6 +154,8 @@ await test("an isolated project's settings are a copy of the global profile in i
   const names = await readdir(own);
   assert.equal(names.includes('gpu'), false);
   assert.equal(names.includes('profile.lock'), false);
+  // The catalogs as read are a cache of the global profile: a search here reads them again.
+  assert.equal(existsSync(join(own, 'skills', '.catalogs')), false);
   assert.match((await ownProfileCopied(here)) ?? '', /^\d{4}-\d\d-\d\dT/);
   // The global profile does not change, and its lock is gone again.
   assert.deepEqual((await loadSettings(global)).steps, {
@@ -140,11 +173,29 @@ await test("an isolated project's settings are a copy of the global profile in i
   assert.equal(existsSync(join(own, 'left.txt')), false);
   assert.equal(existsSync(join(own, 'profile-state.json')), false);
   assert.match((await loadMemory(own)) ?? '', /Probes/);
-  // While another setup holds the global profile's lock, nothing is copied.
-  const lock = await open(join(global, 'profile.lock'), 'wx');
-  await lock.close();
+  // Global files that do not read stop no copy: it reads only the settings, and tolerates them too.
+  await writeFile(join(global, 'profile-state.json'), '{ not json');
+  await writeFile(join(global, 'USER.md'), 'x'.repeat(20_000));
+  await copyGlobalProfile(global, here, signal);
+  await rm(join(global, 'profile-state.json'));
+  await saveAgencyFile(
+    global,
+    'USER.md',
+    cardMarkdown({ workOn: 'Probes', explore: 'SAEs', talk: 'Short.' }),
+  );
+  // A global lock that another setup holds a moment is waited for. One that stays held stops the copy.
+  const held = join(global, 'profile.lock');
+  await (await open(held, 'wx')).close();
+  const waited = copyGlobalProfile(global, here, signal);
+  setTimeout(() => void rm(held), 300);
+  await waited;
+  await (await open(held, 'wx')).close();
   await assert.rejects(copyGlobalProfile(global, here, signal), /locked/);
-  await rm(join(global, 'profile.lock'));
+  await rm(held);
+  // A lock on the copy itself, from another process, stops it too.
+  await (await open(join(own, 'profile.lock'), 'wx')).close();
+  await assert.rejects(copyGlobalProfile(global, here, signal), /locked/);
+  await rm(join(own, 'profile.lock'));
   // A .verifold that is a link is refused.
   const linked = join(base, 'linked');
   await mkdir(linked);
@@ -153,6 +204,53 @@ await test("an isolated project's settings are a copy of the global profile in i
     copyGlobalProfile(global, linked, signal),
     /real folder/,
   );
+});
+
+await test('a folder that holds the global profile, or sits inside it, cannot hold an isolated project’s settings, and its copy never touches the global profile', async (t) => {
+  const base = await folder(t, 'own-home');
+  // As in the home folder: the global profile is .verifold/agency of the folder itself.
+  const global = join(base, '.verifold', 'agency');
+  await globalProfile(global);
+  assert.match(
+    (await isolationProblem(global, base)) ?? '',
+    /This folder holds your global settings/,
+  );
+  assert.match(
+    (await isolationProblem(global, join(global, 'inside'))) ?? '',
+    /holds your global settings/,
+  );
+  assert.match(
+    (await isolationProblem(
+      join(base, 'x', '.verifold', 'agency', 'deep'),
+      join(base, 'x'),
+    )) ?? '',
+    /holds your global settings/,
+  );
+  assert.equal(await isolationProblem(global, join(base, 'elsewhere')), null);
+  await assert.rejects(
+    copyGlobalProfile(global, base, signal),
+    /holds your global settings/,
+  );
+  const setup = new FirstRuns({
+    ...(await options(base, base, global)),
+    own: 'new',
+  });
+  assert.match(
+    (await setup.view()).ownProblem ?? '',
+    /holds your global settings/,
+  );
+  await assert.rejects(
+    setup.act({ action: 'setup-copy-global', profile: 'project' }),
+    /holds your global settings/,
+  );
+  // The global profile is as it was.
+  assert.deepEqual((await loadSettings(global)).steps, {
+    agents: 'done',
+    about: 'done',
+    skills: 'done',
+    money: 'done',
+  });
+  assert.match((await loadMemory(global)) ?? '', /Probes/);
 });
 
 await test('a project with its own settings records it at the start, and each later read of the project uses them', async (t) => {
@@ -220,34 +318,6 @@ await test('no session reads an isolated project’s settings, whether the proje
   ]);
 });
 
-const claudeFound: HarnessStatus = {
-  harness: 'claude',
-  installed: true,
-  version: '2.1.304',
-  signedIn: true,
-  plan: 'max',
-  models: [{ id: 'opus[1m]', label: 'Opus' }],
-};
-
-async function options(base: string, root: string, global: string) {
-  const compute = new Compute(join(base, 'here'), {
-    store: new KeyStore({
-      home: join(base, 'home'),
-      platform: 'linux',
-      secretTool: join(base, 'none'),
-    }),
-  });
-  await compute.load();
-  return {
-    directory: global,
-    root,
-    compute,
-    signal,
-    detect: () => Promise.resolve([claudeFound]),
-    installed: () => Promise.resolve(['claude' as const]),
-  };
-}
-
 await test('without a project, the first runs serve the global settings, and for profile project a copy in the folder that shows the global monthly limit and never saves one', async (t) => {
   const base = await folder(t, 'own-run');
   const global = join(base, 'agency');
@@ -262,7 +332,18 @@ await test('without a project, the first runs serve the global settings, and for
   assert.equal(shared.scope, 'global');
   assert.equal(shared.steps.about, 'done');
   assert.equal(shared.ownCopied, null);
-  // The first read of the project's settings copies the global ones here.
+  assert.equal(shared.ownProblem, null);
+  // A read copies nothing: only the choice of Isolated project does.
+  await assert.rejects(setup.view('project'), /no isolated settings yet/);
+  await assert.rejects(
+    setup.act({ action: 'setup-check', profile: 'project' }),
+    /no isolated settings yet/,
+  );
+  assert.equal(existsSync(ownProfileFolder(here)), false);
+  assert.equal(
+    await setup.act({ action: 'setup-copy-global', profile: 'project' }),
+    200,
+  );
   const own = await setup.view('project');
   assert.equal(own.scope, 'project');
   assert.deepEqual(own.steps, {
@@ -310,12 +391,38 @@ await test('without a project, the first runs serve the global settings, and for
   assert.equal((await setup.view('project')).money.limits.limitUsd, 40);
   // Without profile project, a copy again is not an action of the global settings.
   assert.equal(await setup.act({ action: 'setup-copy-global' }), 400);
+  // A save that runs when a copy again starts ends first, so the copy is the last word.
+  const [saving, copying] = await Promise.all([
+    setup.act({ action: 'setup-skip', profile: 'project', step: 'money' }),
+    setup.act({ action: 'setup-copy-global', profile: 'project' }),
+  ]);
+  assert.deepEqual([saving, copying], [200, 200]);
+  assert.deepEqual((await loadSettings(ownProfileFolder(here))).steps, {});
   // Global GPU limits that do not read: the copy says so, and never claims no limit.
   await writeFile(
     join(global, 'settings.json'),
     JSON.stringify({ host: 'claude', money: { limitUsd: -1 } }),
   );
   assert.equal((await setup.view('project')).money.globalMonth, null);
+  // A copy that went away is not used: the next read says so.
+  await chmodTree(ownProfileFolder(here));
+  await rm(ownProfileFolder(here), { recursive: true });
+  await assert.rejects(setup.view('project'), /no isolated settings yet/);
+  // Once the project starts, its settings take no more saves here, and no copy again.
+  assert.equal(
+    await setup.act({ action: 'setup-copy-global', profile: 'project' }),
+    200,
+  );
+  await setup.stop();
+  await assert.rejects(
+    setup.act({ action: 'setup-skip', profile: 'project', step: 'about' }),
+    /has started/,
+  );
+  await assert.rejects(
+    setup.act({ action: 'setup-copy-global', profile: 'project' }),
+    /has started/,
+  );
+  assert.equal((await setup.view()).scope, 'global');
 });
 
 await test('in a project, only an isolated one has settings of its own, and they are not copied again', async (t) => {

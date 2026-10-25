@@ -1219,24 +1219,60 @@ await test('an isolated project has its own setup and Ask pages, and its first r
   );
 });
 
-await test('a new project offers the global settings or its own, the global ones first when nobody set them up, and the copy that this folder holds', () => {
-  const set = renderToStaticMarkup(<NewProjectChoice set copied={null} />);
+await test('a new project offers the global settings or its own, the global ones first when nobody set them up, the copy that this folder holds, and why a folder cannot hold one', () => {
+  const isolate = { busy: false, error: null, run: quiet };
+  const choice = (
+    fields: Partial<Parameters<typeof NewProjectChoice>[0]> = {},
+  ): ReactElement => (
+    <NewProjectChoice
+      set
+      copied={null}
+      problem={null}
+      isolate={isolate}
+      {...fields}
+    />
+  );
+  const set = renderToStaticMarkup(choice());
   assert.match(
-    text(<NewProjectChoice set copied={null} />),
+    text(choice()),
     /How should this project start\? Use my global settings .* Isolated project .*copy of your global settings\. Your global settings don’t change\./,
   );
-  assert.match(set, /href="#\/setup".*href="#\/project\/setup"/s);
+  // Isolated project copies the settings only when the person picks it: a button, not a link.
+  assert.match(set, /href="#\/setup"/);
+  assert.match(set, /<button type="button" class="start">/);
+  assert.doesNotMatch(set, /href="#\/project\/setup"/);
   // Each card shows its arrow, so it reads as a link.
   assert.equal(set.split('M9 6l6 6-6 6').length - 1, 2);
-  const fresh = text(<NewProjectChoice set={false} copied={null} />);
+  const fresh = text(choice({ set: false }));
   assert.match(fresh, /Set up my global settings/);
   assert.doesNotMatch(fresh, /copy of your global settings/);
-  // A copy that the person left here goes on.
+  // A copy that the person left here goes on, by its link.
   const at = new Date();
   at.setHours(9, 30, 0, 0);
+  const copied = choice({ copied: at.toISOString() });
   assert.match(
-    text(<NewProjectChoice set copied={at.toISOString()} />),
+    text(copied),
     /Continue this project’s settings Agents, a profile, skills and GPU limits for this project only, copied from your global settings today at 09:30\./,
+  );
+  assert.match(renderToStaticMarkup(copied), /href="#\/project\/setup"/);
+  // A folder that holds the global settings, as the home folder does, offers no isolated project, and says why.
+  const home = text(
+    choice({
+      problem:
+        'This folder holds your global settings, so a project here can’t have settings of its own.',
+    }),
+  );
+  assert.match(
+    home,
+    /Use my global settings .* This folder holds your global settings, so a project here can’t have settings of its own\./,
+  );
+  assert.doesNotMatch(home, /Isolated project/);
+  // A failed copy says why.
+  assert.match(
+    text(
+      choice({ isolate: { ...isolate, error: 'Agency settings are locked.' } }),
+    ),
+    /Agency settings are locked\./,
   );
 });
 

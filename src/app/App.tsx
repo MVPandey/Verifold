@@ -49,6 +49,8 @@ import {
 } from './screens/History.tsx';
 import { HistoryContext, historyTools } from './history.ts';
 import { setupActions, type SetupActions } from './setup.ts';
+import { useSetup } from './useSetup.ts';
+import { StatusBar } from './components/StatusBar.tsx';
 import { FigurePage } from './screens/FigurePage.tsx';
 import { PostPage } from './screens/PostPage.tsx';
 import { RunPage } from './screens/RunPage.tsx';
@@ -168,6 +170,45 @@ function Redirect({ to }: { readonly to: string }): ReactNode {
   return null;
 }
 
+/**
+ * An isolated project's pages while Verifold runs without a project. They
+ * show once the global settings say that this folder holds a copy for it.
+ * Without one, the choice of settings opens instead. In a project, the
+ * pages show at once.
+ */
+function OwnCopy({
+  setup,
+  project,
+  children,
+}: {
+  /** The global settings' read. */
+  readonly setup: SetupActions;
+  /** The project's folder name. Empty: no project. Null: before the first snapshot. */
+  readonly project: string | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { view, error } = useSetup(setup.read);
+  if (project) return children;
+  // Before the first snapshot, nobody knows whether a project exists, so the page waits.
+  if (project === '' && view)
+    return view.ownCopied ? children : <Redirect to={href.new} />;
+  return (
+    <div className="page">
+      <main className="setup">
+        <div className="setup__column">
+          {error ? (
+            <p role="alert" className="setup__error">
+              {error}
+            </p>
+          ) : (
+            <StatusBar tone="plan">Reading your settings.</StatusBar>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
 interface ScreenProps {
   readonly state: LabState;
   readonly route: Route;
@@ -267,12 +308,22 @@ function Page({
     !snapshot.ownProfile
   )
     return <Redirect to={href.setup(route.step ?? undefined)} />;
+  if (route.page === 'setup' && route.scope)
+    return (
+      <OwnCopy setup={setup} project={snapshot ? snapshot.project : null}>
+        <SetupPage
+          step={route.step}
+          scope={route.scope}
+          actions={projectSetup}
+          project={snapshot ? snapshot.project : null}
+        />
+      </OwnCopy>
+    );
   if (route.page === 'setup')
     return (
       <SetupPage
         step={route.step}
-        {...(route.scope ? { scope: route.scope } : {})}
-        actions={route.scope ? projectSetup : setup}
+        actions={setup}
         // Null until the first snapshot says whether a project exists.
         project={snapshot ? snapshot.project : null}
       />
@@ -281,13 +332,15 @@ function Page({
   if (snapshot && !snapshot.project) {
     if (route.page === 'ask')
       return route.scope ? (
-        <AskPage
-          scope={route.scope}
-          setup={projectSetup}
-          start={projectStart}
-          now={now}
-          connection={connection}
-        />
+        <OwnCopy setup={setup} project="">
+          <AskPage
+            scope={route.scope}
+            setup={projectSetup}
+            start={projectStart}
+            now={now}
+            connection={connection}
+          />
+        </OwnCopy>
       ) : (
         <AskPage
           setup={setup}
@@ -297,7 +350,7 @@ function Page({
         />
       );
     return route.page === 'new' ? (
-      <NewProjectPage setup={setup} />
+      <NewProjectPage setup={setup} projectSetup={projectSetup} />
     ) : (
       <Redirect to={href.new} />
     );

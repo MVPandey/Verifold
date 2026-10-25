@@ -1139,7 +1139,10 @@ export class SessionManager {
           ? [
               '-c',
               'approval_policy="never"',
-              ...strictCodexOptions(Boolean(record.network?.length)),
+              ...strictCodexOptions(
+                Boolean(record.network?.length),
+                this.denied(record),
+              ),
             ]
           : []),
         // The terminal keeps the worker's MCP isolation.
@@ -1811,7 +1814,6 @@ export class SessionManager {
     });
   }
 
-  /** The working folder of a session: the task folder of a Strict worker, else the project. */
   /** What a session cannot read beyond the credential paths: its own record's paths, and the manager's. */
   private denied(record: SessionRecord): string[] {
     return [
@@ -1822,6 +1824,7 @@ export class SessionManager {
     ];
   }
 
+  /** The working folder of a session: the task folder of a Strict worker, else the project. */
   private folder(record: SessionRecord | null): string {
     return record?.cwd ? join(this.root, record.cwd) : this.root;
   }

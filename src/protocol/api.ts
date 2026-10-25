@@ -1048,6 +1048,12 @@ export interface SetupView {
    * can go on with. Null: there is no copy. Added after version 1.
    */
   readonly ownCopied?: string | null;
+  /**
+   * Without a project, in the global settings: why this folder cannot hold
+   * an isolated project's own settings, as in the home folder, which holds
+   * the global ones. Null: it can. Added after version 1.
+   */
+  readonly ownProblem?: string | null;
   /** Each step: `done`, `skipped`, or null when the person never saw it. An older server has no `skills`. */
   readonly steps: Readonly<
     Record<Exclude<SetupStep, 'skills'>, 'done' | 'skipped' | null> &

@@ -254,20 +254,25 @@ export function SetupPage({
   /** The project's folder name. Empty: Verifold runs without a project. Null: before the first snapshot. */
   readonly project: string | null;
 }): ReactNode {
-  const { view, error, refresh } = useSetup(actions.read);
+  const { view, error, refresh, landed } = useSetup(actions.read);
   useEffect(() => {
     const to = openingRoute(view, step, project, scope);
     if (to) replaceRoute(to);
   }, [view, step, project, scope]);
-  // A copy again of the global settings: the view from before it, until a new read lands. Then the first step opens, and each step starts from the new view.
-  const [copiedOver, setCopiedOver] = useState<SetupView | null>(null);
+  // A copy again of the global settings: the number of the read that follows it, until that read answers. Then the first step opens, and each step starts from the new view. A read that fails shows its error.
+  const [copyRead, setCopyRead] = useState<number | null>(null);
+  const [copyFailed, setCopyFailed] = useState<string | null>(null);
   const [copies, setCopies] = useState(0);
   useEffect(() => {
-    if (!copiedOver || !view || view === copiedOver) return;
-    setCopiedOver(null);
+    if (copyRead === null || landed < copyRead) return;
+    setCopyRead(null);
+    if (error) {
+      setCopyFailed(error);
+      return;
+    }
     setCopies((count) => count + 1);
     replaceRoute(href.setup(setupSteps[0], scope));
-  }, [view, copiedOver, scope]);
+  }, [landed, copyRead, error, scope]);
   // The step reports whether it holds unsaved input. `leaving`: the address that Back, the step bar or the link to the lab asked for meanwhile.
   const [unsaved, setUnsaved] = useState(false);
   const [leaving, setLeaving] = useState<string | null>(null);
@@ -314,9 +319,28 @@ export function SetupPage({
     unsaved: setUnsaved,
   };
   let body: ReactNode;
-  if (copiedOver)
+  if (copyRead !== null)
     body = (
       <StatusBar tone="plan">Copying your global settings again.</StatusBar>
+    );
+  else if (copyFailed)
+    body = (
+      <div className="setup__problem">
+        <span role="alert">
+          Your global settings were copied again, but Verifold could not read
+          them: {copyFailed}
+        </span>
+        <button
+          type="button"
+          className="button button--small"
+          onClick={() => {
+            setCopyFailed(null);
+            setCopyRead(refresh());
+          }}
+        >
+          Try again
+        </button>
+      </div>
     );
   else if (!view || step === null)
     body = error ? (
@@ -388,10 +412,7 @@ export function SetupPage({
           ? {
               onCopy: async (key: string) => {
                 const outcome = await actions.copyGlobal(key);
-                if ('ok' in outcome && view) {
-                  setCopiedOver(view);
-                  refresh();
-                }
+                if ('ok' in outcome) setCopyRead(refresh());
                 return outcome;
               },
             }

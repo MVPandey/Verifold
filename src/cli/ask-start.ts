@@ -11,7 +11,11 @@ import type { Workspace } from '../core/contracts.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
 import { defaultLabHours, hours, labLimits, text } from '../core/lab/schema.ts';
-import { ownProfileFolder } from '../core/project-profile.ts';
+import {
+  isolationProblem,
+  ownProfileCopied,
+  ownProfileFolder,
+} from '../core/project-profile.ts';
 import { removeTree } from '../core/skills.ts';
 import { SessionActionError } from '../core/session.ts';
 import type { ProjectAgents, StartView } from '../protocol/api.ts';
@@ -118,6 +122,8 @@ export function askStart(options: {
   readonly signal: AbortSignal;
   /** Tests use fakes. */
   readonly detect?: () => Promise<readonly HarnessStatus[]>;
+  /** The project started: its settings take no more saves from the first run. */
+  readonly onStart?: () => Promise<void>;
 }): { readonly start: ProjectStart; readonly begun: Promise<Begun> } {
   let settle: (project: Begun) => void = () => {};
   const begun = new Promise<Begun>((resolve) => {
@@ -162,6 +168,13 @@ export function askStart(options: {
   };
   const start: ProjectStart = {
     view: async (scope?: 'project'): Promise<StartView> => {
+      if (
+        scope === 'project' &&
+        (await ownProfileCopied(options.root)) === null
+      )
+        fail(
+          'This folder has no isolated settings yet. Choose Isolated project first.',
+        );
       const { agents, gpuUsd, money } = await defaults(
         scope === 'project' ? ownProfileFolder(options.root) : options.agency,
       );
@@ -266,10 +279,14 @@ export function askStart(options: {
           );
         }
         done = true;
-        // A project on the global settings drops an isolated copy that the person left here: nothing uses it.
-        const left = ownProfileFolder(folder);
-        if (!own && left !== options.agency)
-          await removeTree(left).catch(() => {});
+        await options.onStart?.();
+        // A project on the global settings drops an isolated copy that the person made in this folder: nothing uses it. Never the global profile.
+        if (
+          !own &&
+          folder === options.root &&
+          (await isolationProblem(options.agency, folder)) === null
+        )
+          await removeTree(ownProfileFolder(folder)).catch(() => {});
         settle({ root: folder, question, hours: budget });
         return 202;
       } finally {
