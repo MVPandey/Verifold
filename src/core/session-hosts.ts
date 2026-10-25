@@ -69,8 +69,12 @@ export function strictClaudeSettings(
   domains: readonly string[] = [],
   denyRead: readonly string[] = [],
 ): string {
+  return JSON.stringify(strictRules(domains, denyRead));
+}
+
+function strictRules(domains: readonly string[], denyRead: readonly string[]) {
   const denied = [...credentialPaths, ...denyRead];
-  return JSON.stringify({
+  return {
     // Edit(./**) and Write(./**) resolve against Claude Code's current folder. See strictClaudeEnvironment.
     sandbox: {
       enabled: true,
@@ -89,7 +93,64 @@ export function strictClaudeSettings(
         return [`Read(${rule})`, `Read(${rule}/**)`];
       }),
     },
+  };
+}
+
+/**
+ * The `--settings` of a session: the strict rules in strict mode, and the
+ * person's own skills in `skillsOff` turned off. `skillsOff` holds the names
+ * that invoke each one. Each name gets a deny rule, so the skill cannot run.
+ * A name without `:`, of the person's skill folder, also gets
+ * `skillOverrides`, so the skill leaves the list. `skillOverrides` does not
+ * reach plugin and claude.ai skills, so they stay listed. Null: the session
+ * needs none. Probed on Claude Code 2.1.310.
+ */
+export function claudeSessionSettings(options: {
+  readonly mode?: HostOptions['mode'];
+  readonly network?: readonly string[] | undefined;
+  readonly denyRead?: readonly string[] | undefined;
+  readonly skillsOff?: readonly string[] | undefined;
+}): string | null {
+  const off = options.skillsOff ?? [];
+  const strict =
+    options.mode === 'strict'
+      ? strictRules(options.network ?? [], options.denyRead ?? [])
+      : null;
+  if (!strict && !off.length) return null;
+  const personal = off.filter((name) => !name.includes(':'));
+  return JSON.stringify({
+    ...strict,
+    permissions: {
+      ...strict?.permissions,
+      deny: [
+        ...(strict?.permissions.deny ?? []),
+        ...off.flatMap((name) => [`Skill(${name})`, `Skill(${name} *)`]),
+      ],
+    },
+    ...(personal.length
+      ? {
+          skillOverrides: Object.fromEntries(
+            personal.map((name) => [name, 'off']),
+          ),
+        }
+      : {}),
   });
+}
+
+/**
+ * The `-c` option that turns off the person's own skills for a Codex
+ * app-server, by their SKILL.md paths in `off`, so a bundled or project skill
+ * with the same name stays on. Codex adds these rules to the person's own,
+ * so a skill that they turned off stays off. Probed on Codex 0.160.0.
+ */
+export function codexSkillsOff(off: readonly string[]): string[] {
+  // JSON's string form is also TOML's: the paths hold no control characters.
+  return off.length
+    ? [
+        '-c',
+        `skills.config=[${off.map((path) => `{path=${JSON.stringify(path)},enabled=false}`).join(',')}]`,
+      ]
+    : [];
 }
 
 /**
@@ -311,6 +372,8 @@ export interface HostOptions {
    * `--plugin-dir`, and Codex its `skills/` folder as an extra skill root.
    */
   readonly skills?: string;
+  /** The person's own skills that this session does not load: names for Claude Code, SKILL.md paths for Codex. */
+  readonly skillsOff?: readonly string[];
   readonly onEvent: (event: HostEvent) => void;
 }
 
@@ -674,6 +737,7 @@ function claude(options: HostOptions): HostSession {
   let errors = '';
   /** What Verifold wrote before Claude Code started, for a second run. */
   const early: unknown[] = [];
+  const settings = claudeSessionSettings(options);
   const args = (): string[] => [
     '-p',
     '--input-format',
@@ -693,9 +757,7 @@ function claude(options: HostOptions): HostSession {
       : options.mode === 'strict'
         ? 'dontAsk'
         : 'default',
-    ...(options.mode === 'strict'
-      ? ['--settings', strictClaudeSettings(options.network, options.denyRead)]
-      : []),
+    ...(settings ? ['--settings', settings] : []),
     ...(options.mode === 'coordinator' ? ['--tools', ''] : []),
     ...(options.model ? ['--model', options.model] : []),
     ...(plugin ? ['--plugin-dir', plugin] : []),
@@ -1143,6 +1205,7 @@ function codex(options: HostOptions): HostSession {
       ...(options.skills
         ? ['-c', 'features.skill_mcp_dependency_install=false']
         : []),
+      ...codexSkillsOff(options.skillsOff ?? []),
     ],
     session: options,
   });

@@ -36,6 +36,7 @@ import {
 } from '../core/profile-chat.ts';
 import { commonGpus, type GpuOffer } from '../core/runpod.ts';
 import { SessionActionError, hostName } from '../core/session.ts';
+import type { OwnSkills } from '../core/own-skills.ts';
 import type { GitHubHosts } from '../core/skills.ts';
 import type { AgentTool, GpuPrice, SetupView } from '../protocol/api.ts';
 import { record } from './http.ts';
@@ -85,6 +86,8 @@ export interface FirstRunOptions {
   readonly installed?: () => Promise<readonly HarnessName[]>;
   /** Where the Skills step reads GitHub. Tests use a fake server. */
   readonly github?: GitHubHosts;
+  /** List the skills that the person's own harnesses load, such as `listOwnSkills`. Without it, the Skills step lists none. */
+  readonly ownSkills?: (signal: AbortSignal) => Promise<OwnSkills>;
 }
 
 /**
@@ -137,6 +140,7 @@ export class FirstRun {
       signal: options.signal,
       ...(options.harness ? { harness: options.harness } : {}),
       ...(options.github ? { hosts: options.github } : {}),
+      ...(options.ownSkills ? { ownSkills: options.ownSkills } : {}),
       picker: () => this.chatHarness(),
       locked: (work) => this.locked(work),
     });
@@ -376,6 +380,10 @@ export class FirstRun {
         return this.skills.add(body.id);
       case 'setup-skill-remove':
         return this.skills.remove(body.id);
+      case 'setup-own-skills':
+        return this.skills.ownChoices(body.choices);
+      case 'setup-own-skills-list':
+        return Promise.resolve(this.skills.listOwn(body.again));
       case 'setup-skills-done':
         await this.write((current) => ({
           ...current,
