@@ -72,6 +72,21 @@ export interface HarnessRequest {
    * every MCP server of the person.
    */
   readonly outsideText?: boolean;
+  /**
+   * The harness answers from the prompt and from what it loads by itself,
+   * such as its own instructions and memories. Paths are absolute or start
+   * with `~/`, and can hold `*` or `**`.
+   * - Claude Code gets only its Read tool, in `dontAsk` mode: it may read
+   *   `allow` and nothing else, and never `deny`. None of the person's
+   *   settings files load, and no hook runs.
+   * - Codex gets the text-only options without its command and image tools,
+   *   and a permission profile that closes `deny`. Verifold also stops the
+   *   call at its first command or tool call.
+   */
+  readonly ownFiles?: {
+    readonly allow: readonly string[];
+    readonly deny: readonly string[];
+  };
 }
 
 /** A harness call ran into a time limit: it sent nothing for too long, or it ran for too long. */
@@ -405,7 +420,8 @@ async function codexServers(
   limitMs: number,
   onSpawn: ((pid: number) => void) | undefined,
 ): Promise<readonly string[] | null> {
-  const key = `${executable}\0${cwd}`;
+  // Text-only calls run in an empty folder, so the list is the same for each of them.
+  const key = executable;
   const known = codexServerNames.get(key);
   if (known && Date.now() - known.at < codexServerListMs) return known.names;
   const names = await new Promise<readonly string[] | null>(
@@ -511,6 +527,96 @@ async function codexTextOnly(
   };
 }
 
+/** A path that a permission rule can hold: absolute or under `~/`, without parentheses or control characters. */
+function plainPath(path: string): string {
+  if (
+    !(path.startsWith('/') || path.startsWith('~/')) ||
+    [...path].some((char) => {
+      const code = char.charCodeAt(0);
+      return code < 0x20 || code === 0x7f || char === '(' || char === ')';
+    })
+  )
+    throw new Error(
+      'A file that the harness may or may not read must have an absolute path without parentheses or control characters.',
+    );
+  return path;
+}
+
+/** A path as a Claude Code rule path, where one that starts with `//` is absolute. */
+function rulePath(path: string): string {
+  return path.startsWith('/') ? `/${plainPath(path)}` : plainPath(path);
+}
+
+/**
+ * Claude Code settings that let its Read tool open `allow` and close `deny`,
+ * a folder with all that it holds. Deny rules win over allow rules. In
+ * `dontAsk` mode it can read no other file outside its empty working folder.
+ * No hook runs. Probed on Claude Code 2.1.310.
+ */
+function claudeOwnSettings(
+  files: NonNullable<HarnessRequest['ownFiles']>,
+): string {
+  return JSON.stringify({
+    disableAllHooks: true,
+    permissions: {
+      allow: files.allow.map((path) => `Read(${rulePath(path)})`),
+      deny: files.deny.flatMap((path) => {
+        const rule = rulePath(path);
+        // A pattern stays as it is. A plain path is a file, or a folder with all that it holds.
+        return rule.includes('*')
+          ? [`Read(${rule})`]
+          : [`Read(${rule})`, `Read(${rule}/**)`];
+      }),
+    },
+  });
+}
+
+/**
+ * The Codex options of a call that reads no files: no command or image
+ * tool, and a permission profile that closes `deny`. Every option goes
+ * before `exec`, with no `--sandbox`, which would replace the profile.
+ * Probed on Codex 0.160.0.
+ */
+function codexOwnOptions(deny: readonly string[]): string[] {
+  const closed = deny
+    .map((path) => `${JSON.stringify(plainPath(path))}="deny"`)
+    .join(',');
+  return [
+    '-c',
+    'features.shell_tool=false',
+    '-c',
+    'features.unified_exec=false',
+    '-c',
+    'features.view_image=false',
+    '-c',
+    'permissions.verifold-own.extends=":read-only"',
+    '-c',
+    `permissions.verifold-own.filesystem={${closed}}`,
+    '-c',
+    'default_permissions="verifold-own"',
+  ];
+}
+
+/** Codex items that only carry its reply, or a warning. Any other item is a command or a tool call. */
+const codexReplyItems = new Set([
+  'agent_message',
+  'reasoning',
+  'todo_list',
+  'error',
+]);
+
+/** A Codex event that starts, updates, or ends a command or a tool call. */
+function codexTool(event: unknown): boolean {
+  return (
+    record(event) &&
+    typeof event.type === 'string' &&
+    event.type.startsWith('item.') &&
+    record(event.item) &&
+    typeof event.item.type === 'string' &&
+    !codexReplyItems.has(event.item.type)
+  );
+}
+
 /**
  * Run one host request with the user's host configuration and permissions.
  * Prompts use stdin and are limited to 2 MiB. Output is read line by line, and
@@ -540,9 +646,14 @@ export async function runHarness(
   }
   const startedAt = Date.now();
   const executable = options.executable ?? request.host;
+  const own = request.ownFiles
+    ? request.host === 'claude'
+      ? claudeOwnSettings(request.ownFiles)
+      : codexOwnOptions(request.ownFiles.deny)
+    : null;
   // The listing of Codex's MCP servers counts in the call's time.
   const textOnly =
-    request.host === 'codex' && request.textOnly
+    request.host === 'codex' && (request.textOnly || own)
       ? await codexTextOnly(request, executable, Math.min(10_000, timeoutMs))
       : null;
   const args =
@@ -552,14 +663,30 @@ export async function runHarness(
           '--output-format',
           'stream-json',
           '--verbose',
-          ...(request.textOnly ? ['--tools', '', '--strict-mcp-config'] : []),
+          ...(typeof own === 'string'
+            ? [
+                '--tools',
+                'Read',
+                '--strict-mcp-config',
+                '--permission-mode',
+                'dontAsk',
+                // None of the person's settings files: their allow rules, folders and hooks would widen the call.
+                '--setting-sources',
+                'project',
+                '--settings',
+                own,
+              ]
+            : request.textOnly
+              ? ['--tools', '', '--strict-mcp-config']
+              : []),
           ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
       : [
           ...(textOnly ? textOnly.global : ['--search']),
+          ...(Array.isArray(own) ? own : []),
           'exec',
-          ...(textOnly ? textOnly.exec : []),
+          ...(textOnly && !own ? textOnly.exec : []),
           '--skip-git-repo-check',
           '--color',
           'never',
@@ -611,6 +738,10 @@ export async function runHarness(
       try {
         event = JSON.parse(text);
         stream.line(event);
+        if (own && request.host === 'codex' && codexTool(event))
+          throw new Error(
+            'Codex started a command or a tool, which this request does not allow, so Verifold stopped it.',
+          );
       } catch (error) {
         stop(
           error instanceof SyntaxError

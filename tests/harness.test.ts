@@ -182,6 +182,149 @@ await test('a text-only call gives Claude Code no tools or MCP servers, and Code
     );
 });
 
+await test("a call that may read its own files gives Claude Code only its Read tool, with none of the person's settings files or hooks, and Codex no command or image tool, a profile that closes the denied paths, and no sandbox flag", async () => {
+  const ownFiles = {
+    allow: [
+      '/home/me/.claude/CLAUDE.md',
+      '/home/me/.claude/projects/*/memory/**',
+    ],
+    deny: [
+      '/home/me/.claude/projects/**/*.jsonl',
+      '/home/me/.claude/todos',
+      '~/.ssh',
+    ],
+  };
+  for (const host of ['claude', 'codex'] as const)
+    await fixture(
+      textOnlyHost(
+        `console.log(JSON.stringify([{ name: 'github', enabled: true }]));`,
+      ),
+      async (executable, cwd) => {
+        const result = await runHarness(
+          {
+            host,
+            cwd,
+            prompt: 'What do you know about the person?',
+            signal: new AbortController().signal,
+            ownFiles,
+            outsideText: true,
+          },
+          { executable },
+        );
+        assert.deepEqual(
+          JSON.parse(result.text),
+          host === 'claude'
+            ? [
+                '-p',
+                '--output-format',
+                'stream-json',
+                '--verbose',
+                '--tools',
+                'Read',
+                '--strict-mcp-config',
+                '--permission-mode',
+                'dontAsk',
+                '--setting-sources',
+                'project',
+                '--settings',
+                JSON.stringify({
+                  disableAllHooks: true,
+                  permissions: {
+                    allow: [
+                      'Read(//home/me/.claude/CLAUDE.md)',
+                      'Read(//home/me/.claude/projects/*/memory/**)',
+                    ],
+                    // A folder is closed with all that it holds. Deny rules win over allow rules.
+                    deny: [
+                      'Read(//home/me/.claude/projects/**/*.jsonl)',
+                      'Read(//home/me/.claude/todos)',
+                      'Read(//home/me/.claude/todos/**)',
+                      'Read(~/.ssh)',
+                      'Read(~/.ssh/**)',
+                    ],
+                  },
+                }),
+              ]
+            : [
+                ...appsOff,
+                '-c',
+                'mcp_servers.github.enabled=false',
+                ...codexTextOnlyOptions,
+                '-c',
+                'features.shell_tool=false',
+                '-c',
+                'features.unified_exec=false',
+                '-c',
+                'features.view_image=false',
+                '-c',
+                'permissions.verifold-own.extends=":read-only"',
+                '-c',
+                'permissions.verifold-own.filesystem={"/home/me/.claude/projects/**/*.jsonl"="deny","/home/me/.claude/todos"="deny","~/.ssh"="deny"}',
+                '-c',
+                'default_permissions="verifold-own"',
+                // No --sandbox: it would replace the profile.
+                ...codexExecTail.filter(
+                  (arg) => arg !== '--sandbox' && arg !== 'read-only',
+                ),
+              ],
+        );
+      },
+    );
+  // A path that a rule cannot hold is refused before any process starts.
+  for (const path of [
+    'relative/CLAUDE.md',
+    '/home/me (work)/CLAUDE.md',
+    '/home/me/\nCLAUDE.md',
+  ])
+    for (const host of ['claude', 'codex'] as const)
+      await assert.rejects(
+        runHarness(
+          {
+            host,
+            cwd: tmpdir(),
+            prompt: 'x',
+            signal: new AbortController().signal,
+            ownFiles: { allow: [], deny: [path] },
+          },
+          { executable: join(tmpdir(), 'no-such-host') },
+        ),
+        /absolute path without parentheses or control characters/,
+      );
+});
+
+await test('Verifold stops a Codex call that may read no files at its first command, before Codex reads the output, and lets a warning pass', async () => {
+  await fixture(
+    `const { writeFileSync } = require('node:fs');
+     const args = process.argv.slice(2);
+     if (args.includes('mcp')) console.log('[]');
+     else {
+       process.stdin.resume(); process.stdin.on('end', () => {
+         console.log(JSON.stringify({ type: 'item.completed', item: { type: 'error', message: 'A warning.' } }));
+         console.log(JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'cat ~/.codex/auth.json' } }));
+         // A Codex that went on would write this after the command.
+         setTimeout(() => { writeFileSync('went-on', ''); console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '{}' } })); }, 2000);
+       });
+     }`,
+    async (executable, cwd) => {
+      await assert.rejects(
+        runHarness(
+          {
+            host: 'codex',
+            cwd,
+            prompt: 'What do you know about the person?',
+            signal: new AbortController().signal,
+            ownFiles: { allow: [], deny: ['/home/me'] },
+          },
+          { executable },
+        ),
+        /Codex started a command or a tool/,
+      );
+      await delay(2500);
+      await assert.rejects(readFile(join(cwd, 'went-on')), { code: 'ENOENT' });
+    },
+  );
+});
+
 for (const [what, servers] of [
   ['its MCP servers cannot be listed', `process.exit(1);`],
   ['the list is not JSON', `console.log('github  enabled');`],

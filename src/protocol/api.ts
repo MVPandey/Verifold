@@ -1220,6 +1220,46 @@ export interface SetupAbout {
     readonly explore: number;
     readonly talk: number;
   };
+  /** "Get information about me from my harnesses". Added after version 1. */
+  readonly import?: SetupImport;
+}
+
+/**
+ * The import: each harness that the person uses tells what it knows about
+ * them, from its own instructions and memories. Nothing is saved until the
+ * person accepts the result.
+ */
+export interface SetupImport {
+  /** When the import started. Null: it does not run. */
+  readonly busy: string | null;
+  /** The harnesses that the running import asks. */
+  readonly asking: readonly Harness[];
+  /** Why the last import failed. */
+  readonly error: string | null;
+  /** The result, until the person accepts or discards it. */
+  readonly result: {
+    /** The harnesses that answered, the lead first. */
+    readonly from: readonly Harness[];
+    /** The draft card. A part that no harness knew is empty. */
+    readonly card: ProfileCard;
+    /**
+     * The skills that the answers named. Accept sets each one that the
+     * person never chose: Yes with its note when it fits, else No.
+     */
+    readonly skills: readonly {
+      readonly harness: Harness;
+      readonly id: string;
+      readonly name: string;
+      readonly fits: boolean;
+      readonly when: string;
+      /** The person's saved choice: Yes (true) or No (false). Accept leaves it as it is. */
+      readonly chosen?: boolean;
+    }[];
+    /** What each harness says that it read. */
+    readonly read: readonly string[];
+    /** Why a harness did not answer, or why the drafts were not merged. */
+    readonly problems: readonly string[];
+  } | null;
 }
 
 /** The GPU limits for new projects. `limitUsd` null: pods are off. */
@@ -1489,6 +1529,12 @@ export interface ActionBodies {
    * serves until `again`. Added after version 1.
    */
   'setup-own-skills-list': { readonly again?: boolean; readonly key?: string };
+  /** Ask each harness that the person uses what it knows about them. Added after version 1. */
+  'setup-import': { readonly key?: string };
+  /** Accept the import: save its skill choices, and make its card the draft. */
+  'setup-import-accept': { readonly key?: string };
+  /** Discard the import's result, or stop the import while it runs. */
+  'setup-import-discard': { readonly key?: string };
   /**
    * Without a project: create one for the person's question, and start its
    * lab. The settings apply to this project only. Each one that is left out

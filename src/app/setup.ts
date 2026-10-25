@@ -122,6 +122,11 @@ export interface SetupActions {
     choices: ActionBodies['setup-own-skills']['choices'],
     key: string,
   ) => Promise<ActOutcome>;
+  /** Ask the person's harnesses what they know about the person. */
+  readonly importAsk: (key: string) => Promise<ActOutcome>;
+  /** Accept the import's card and skill choices. */
+  readonly importAccept: (key: string) => Promise<ActOutcome>;
+  readonly importDiscard: (key: string) => Promise<ActOutcome>;
 }
 
 const signedOut = (): Promise<{ readonly refused: string }> =>
@@ -157,6 +162,9 @@ export function setupActions(
       copyGlobal: signedOut,
       ownSkills: signedOut,
       ownSkillsList: signedOut,
+      importAsk: signedOut,
+      importAccept: signedOut,
+      importDiscard: signedOut,
     };
   const run = <Name extends Extract<ActionName, `setup-${string}`>>(
     name: Name,
@@ -194,6 +202,9 @@ export function setupActions(
     ownSkills: (choices, key) => run('setup-own-skills', { choices }, key),
     ownSkillsList: (again, key) =>
       run('setup-own-skills-list', again ? { again } : {}, key),
+    importAsk: (key) => run('setup-import', {}, key),
+    importAccept: (key) => run('setup-import-accept', {}, key),
+    importDiscard: (key) => run('setup-import-discard', {}, key),
   };
 }
 

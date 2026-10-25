@@ -32,6 +32,8 @@ export const promptIds = [
   'lab-pods',
   'lab-check',
   'profile-card',
+  'profile-import',
+  'profile-merge',
   'skills-pick',
 ] as const;
 

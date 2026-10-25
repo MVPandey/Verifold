@@ -1,6 +1,6 @@
-import { mkdir, open, rename, rm, lstat } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rename, rm, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseWorkspace } from './contracts.ts';
@@ -12,6 +12,19 @@ export function homeShown(path: string): string {
   return path === home || path.startsWith(`${home}/`)
     ? `~${path.slice(home.length)}`
     : path;
+}
+
+/** Run `work` in a new, empty, private folder, which is removed afterwards. Harness calls that read no project run in one. */
+export async function inEmptyFolder<T>(
+  name: string,
+  work: (folder: string) => Promise<T>,
+): Promise<T> {
+  const folder = await mkdtemp(join(tmpdir(), `verifold-${name}-`));
+  try {
+    return await work(folder);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 }
 
 /**
