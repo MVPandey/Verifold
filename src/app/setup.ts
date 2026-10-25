@@ -115,6 +115,13 @@ export interface SetupActions {
   readonly skillsDone: (key: string) => Promise<ActOutcome>;
   /** An isolated project's settings: make them a copy of the global ones again. */
   readonly copyGlobal: (key: string) => Promise<ActOutcome>;
+  /** List the person's own skills. `again`: read them again, though a list exists. */
+  readonly ownSkillsList: (again: boolean, key: string) => Promise<ActOutcome>;
+  /** Which of the person's own skills Verifold's agents load, with notes on when to use them. */
+  readonly ownSkills: (
+    choices: ActionBodies['setup-own-skills']['choices'],
+    key: string,
+  ) => Promise<ActOutcome>;
 }
 
 const signedOut = (): Promise<{ readonly refused: string }> =>
@@ -148,6 +155,8 @@ export function setupActions(
       skillRemove: signedOut,
       skillsDone: signedOut,
       copyGlobal: signedOut,
+      ownSkills: signedOut,
+      ownSkillsList: signedOut,
     };
   const run = <Name extends Extract<ActionName, `setup-${string}`>>(
     name: Name,
@@ -182,6 +191,9 @@ export function setupActions(
     skillRemove: (id, key) => run('setup-skill-remove', { id }, key),
     skillsDone: (key) => run('setup-skills-done', {}, key),
     copyGlobal: (key) => run('setup-copy-global', {}, key),
+    ownSkills: (choices, key) => run('setup-own-skills', { choices }, key),
+    ownSkillsList: (again, key) =>
+      run('setup-own-skills-list', again ? { again } : {}, key),
   };
 }
 

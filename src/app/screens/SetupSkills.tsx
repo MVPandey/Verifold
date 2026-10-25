@@ -6,6 +6,7 @@ import { newKey } from '../intent.ts';
 import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 import { dayClock } from '../format.ts';
+import { OwnSkills } from './SetupOwnSkills.tsx';
 
 /** "A", "A and B", "A, B and C". */
 function list(items: readonly string[]): string {
@@ -242,6 +243,14 @@ export function SkillsStep({
         version shown, and loads only for Verifold’s agents, not in your own
         Claude Code or Codex. Read what each one can run before you add it.
       </p>
+      {skills && (
+        <OwnSkills
+          skills={skills}
+          actions={actions}
+          refresh={refresh}
+          nav={nav}
+        />
+      )}
       {error && (
         <span role="alert" className="setup__error">
           {error}{' '}

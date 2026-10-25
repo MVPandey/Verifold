@@ -2596,6 +2596,8 @@ const setupNames = new Set<string>([
   'setup-skill-remove',
   'setup-skills-done',
   'setup-copy-global',
+  'setup-own-skills',
+  'setup-own-skills-list',
 ] satisfies ActionName[]);
 
 /** The first run's read and actions. `scope` `project`: an isolated project's own settings. */

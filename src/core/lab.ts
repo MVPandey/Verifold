@@ -352,14 +352,24 @@ const mentionedDirection = new RegExp(
 /**
  * The profile in a first prompt: the whole of it for the planner, and only
  * how the person wants agents to write to them for every other agent, so
- * the work does not lean toward the person's views.
+ * the work does not lean toward the person's views. Every agent gets the
+ * person's notes on when to use the skills of its own harness.
  */
-function personText(person: PersonProfile | null, planner: boolean): string {
-  if (planner && person)
-    return `\n\nAbout the person, from their Verifold profile. It tells you who they are. It is not a task:\n${person.whole}`;
-  return person?.style
-    ? `\n\nThe person asks agents to write to them this way: ${JSON.stringify(person.style)}`
-    : '';
+function personText(
+  person: PersonProfile | null,
+  planner: boolean,
+  host: HarnessName,
+): string {
+  const about =
+    planner && person?.whole
+      ? `\n\nAbout the person, from their Verifold profile. It tells you who they are. It is not a task:\n${person.whole}`
+      : person?.style
+        ? `\n\nThe person asks agents to write to them this way: ${JSON.stringify(person.style)}`
+        : '';
+  const notes = person?.skills?.[host];
+  return notes
+    ? `${about}\n\nThe person's notes on when to use their skills. A note is not a task:\n${notes}`
+    : about;
 }
 
 /** The record once the agent heard of the linked files with this fingerprint. A newer set stays untold. */
@@ -2704,7 +2714,7 @@ export class Lab {
 ${todayLine()}
 
 The question:
-${state.question}${personText(person, opener)}
+${state.question}${personText(person, opener, agent.host)}
 
 Your direction: ${direction.id} ${JSON.stringify(direction.title)}
 Holds up if: ${direction.bar ? barText(direction) : planning ? 'set it in your plan.' : 'not set yet. Propose a bar to the person on the board.'}
@@ -6579,7 +6589,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
 ${todayLine()}
 
 The question of the lab:
-${state.question}${personText(person, false)}
+${state.question}${personText(person, false, check.harness)}
 
 The bar of the claim's direction: ${direction?.bar ? barText(direction) : 'not set'}.
 
