@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadOwnChoices } from '../src/core/agency.ts';
@@ -10,7 +10,11 @@ import { KeyStore } from '../src/core/credentials.ts';
 import { claudeChoices, type HarnessStatus } from '../src/core/detect.ts';
 import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
 import type { OwnSkill } from '../src/core/own-skills.ts';
-import { claudeMemory, importProfile } from '../src/core/profile-import.ts';
+import {
+  claudeFolder,
+  claudeMemory,
+  importProfile,
+} from '../src/core/profile-import.ts';
 import { SessionActionError } from '../src/core/session.ts';
 import { FirstRun } from '../src/server/setup.ts';
 
@@ -49,41 +53,81 @@ const skills: readonly OwnSkill[] = [
   },
 ];
 
-/** A Claude Code settings folder with two memory folders, transcripts beside them, and a project without memory. */
-async function claudeFolder(base: string): Promise<string> {
+/**
+ * A Claude Code settings folder: one memory folder whose MEMORY.md changed
+ * last, one without MEMORY.md and with seven notes, transcripts and settings
+ * beside them, and a project without memory.
+ */
+async function fakeClaude(base: string): Promise<string> {
   const config = join(base, 'claude');
-  await mkdir(join(config, 'projects', 'old', 'memory'), { recursive: true });
-  await mkdir(join(config, 'projects', 'new', 'memory'), { recursive: true });
+  const memory = (name: string): string =>
+    join(config, 'projects', name, 'memory');
+  await mkdir(memory('new'), { recursive: true });
+  await mkdir(memory('old'), { recursive: true });
   await mkdir(join(config, 'projects', 'none'), { recursive: true });
   await writeFile(join(config, 'CLAUDE.md'), 'Short answers.');
-  await writeFile(join(config, 'projects', 'new', 'memory', 'MEMORY.md'), '');
+  await writeFile(join(config, 'settings.json'), '{}');
+  await writeFile(join(memory('new'), 'MEMORY.md'), '');
   await writeFile(join(config, 'projects', 'new', 's.jsonl'), 'transcript');
-  await writeFile(join(config, 'projects', 'old', 'memory', 'a.md'), 'note');
-  const past = new Date(Date.now() - 86_400_000);
-  await utimes(join(config, 'projects', 'old', 'memory'), past, past);
+  for (let note = 0; note < 7; note++)
+    await writeFile(join(memory('old'), `n${note}.md`), 'note');
+  await writeFile(join(memory('old'), 'x.jsonl'), 'not a note');
+  const day = 86_400_000;
+  const at = (ago: number): Date => new Date(Date.now() - ago);
+  // The folder of "new" is older, but its MEMORY.md changed last.
+  await utimes(memory('new'), at(2 * day), at(2 * day));
+  await utimes(memory('old'), at(day), at(day));
   return config;
 }
 
-await test("Claude Code may read its CLAUDE.md and its projects' memory folders, never the transcripts beside them, the newest project first", async (t) => {
-  const config = await claudeFolder(await folder(t, 'import-memory'));
+await test("Claude Code may read its CLAUDE.md and its projects' memory folders, never the transcripts and settings beside them, the newest memory first", async (t) => {
+  const config = await fakeClaude(await folder(t, 'import-memory'));
   const memory = await claudeMemory(config, signal);
   assert.deepEqual(memory.allow, [
     join(config, 'CLAUDE.md'),
     join(config, 'projects', '*', 'memory', '**'),
   ]);
-  // A folder with MEMORY.md starts there. One without starts at the folder.
-  assert.deepEqual(memory.files, [
-    join(config, 'CLAUDE.md'),
+  for (const closed of [
+    join(config, 'projects', '**', '*.jsonl'),
+    join(config, 'settings*.json'),
+    join(config, 'history.jsonl'),
+    join(config, 'file-history'),
+    '~/.ssh',
+  ])
+    assert.ok(memory.deny.includes(closed), closed);
+  // A folder with MEMORY.md starts there. One without names up to five of its notes.
+  assert.equal(memory.files[0], join(config, 'CLAUDE.md'));
+  assert.equal(
+    memory.files[1],
     join(config, 'projects', 'new', 'memory', 'MEMORY.md'),
-    join(config, 'projects', 'old', 'memory'),
-  ]);
+  );
+  const notes = memory.files.slice(2);
+  assert.equal(notes.length, 5);
+  for (const note of notes)
+    assert.match(note, /projects\/old\/memory\/n\d\.md$/);
   // Without a settings folder, it may read nothing that exists.
   const none = await claudeMemory(join(config, 'missing'), signal);
   assert.deepEqual(none.files, []);
+  // A folder path that a rule would read as syntax is refused with a reason.
+  assert.equal(
+    claudeFolder('relative/../claude'),
+    join(process.cwd(), 'claude'),
+  );
+  for (const odd of [
+    '/home/me/claude*',
+    '/home/me (work)/.claude',
+    '/home/[me]',
+  ])
+    assert.throws(
+      () => claudeFolder(odd),
+      (error: unknown) =>
+        error instanceof SessionActionError &&
+        /a permission rule cannot hold/.test(error.message),
+    );
 });
 
-await test('the import asks each harness at once, keeps only listed skills, counts left-out skills as not fitting, and merges two cards', async (t) => {
-  const config = await claudeFolder(await folder(t, 'import-run'));
+await test('the import asks each harness at once, keeps only listed skills that it named, and merges two cards', async (t) => {
+  const config = await fakeClaude(await folder(t, 'import-run'));
   const requests: HarnessRequest[] = [];
   const run = (request: HarnessRequest): Promise<HarnessResult> => {
     requests.push(request);
@@ -147,15 +191,14 @@ await test('the import asks each harness at once, keeps only listed skills, coun
   assert.deepEqual(
     result.skills.map((skill) => [skill.harness, skill.name, skill.fits]),
     [
+      // vercel:deploy is left out of the answer: no opinion.
       ['claude', 'research-paper-writing', true],
-      // The answer left it out, so it does not fit.
-      ['claude', 'vercel:deploy', false],
       ['codex', 'python', false],
     ],
   );
   // A note is cut to its limit, and a skill that does not fit gets none.
   assert.equal(result.skills[0]?.when.length, 300);
-  assert.equal(result.skills[2]?.when, '');
+  assert.equal(result.skills[1]?.when, '');
   assert.deepEqual(result.read, [
     'Claude Code: My instructions and the memories of two projects.',
     'Codex: It did not say what it read.',
@@ -166,23 +209,29 @@ await test('the import asks each harness at once, keeps only listed skills, coun
   const claude = asked.find((request) => request.host === 'claude');
   const codex = asked.find((request) => request.host === 'codex');
   const merge = requests.find((request) => request.textOnly);
-  // Claude Code may read its memory. Codex may read nothing and gets only its own skills.
-  assert.deepEqual(claude?.ownFiles, [
+  // Claude Code may read its memory and nothing beside it. Codex's commands may read nothing at home, and it gets only its own skills.
+  assert.deepEqual(claude?.ownFiles?.allow, [
     join(config, 'CLAUDE.md'),
     join(config, 'projects', '*', 'memory', '**'),
   ]);
+  assert.ok(
+    claude?.ownFiles?.deny.includes(join(config, 'projects', '**', '*.jsonl')),
+  );
   assert.match(claude?.prompt ?? '', /"files":\[/);
   assert.match(claude?.prompt ?? '', /research-paper-writing/);
   assert.doesNotMatch(claude?.prompt ?? '', /python/);
-  assert.deepEqual(codex?.ownFiles, []);
+  assert.deepEqual(codex?.ownFiles?.allow, []);
+  assert.equal(codex?.ownFiles?.deny[0], homedir());
+  assert.ok(codex?.ownFiles?.deny.includes('~/.codex/auth.json'));
   assert.doesNotMatch(codex?.prompt ?? '', /"files":\[/);
   assert.match(codex?.prompt ?? '', /I am Verifold, an automated science/);
   assert.equal(claude?.outsideText, true);
   assert.equal(claude?.model, 'opus');
   // Each call runs in its own empty folder.
   assert.notEqual(claude?.cwd, codex?.cwd);
-  // The merge sees only the two cards, as text only.
+  // The merge sees only the two cards, as text only, and they count as text from outside.
   assert.equal(merge?.textOnly, true);
+  assert.equal(merge?.outsideText, true);
   assert.equal(merge?.ownFiles, undefined);
   assert.match(merge?.prompt ?? '', /"drafts":\[/);
 });
@@ -210,11 +259,8 @@ await test("one harness that fails leaves the other's answer, a failed merge kee
   assert.deepEqual(one.problems, [
     'Codex did not answer: Codex started a command or a tool.',
   ]);
-  // Only the skills of the harness that answered come back.
-  assert.deepEqual(
-    one.skills.map((skill) => skill.harness),
-    ['claude', 'claude'],
-  );
+  // An answer that names no skill has no opinion on any.
+  assert.deepEqual(one.skills, []);
   const merged = await importProfile({
     ...base,
     harnesses: [{ host: 'claude' }, { host: 'codex' }],
@@ -275,7 +321,7 @@ async function until(check: () => Promise<boolean>): Promise<void> {
   }
 }
 
-await test('the import through the first run: one at a time, shown until the person accepts it, and Accept sets the draft card and the skill switches', async (t) => {
+await test('the import through the first run: one at a time, a stop that the next import waits for, and an Accept that sets the draft card and only the skills that the person never chose', async (t) => {
   const base = await folder(t, 'import-first-run');
   const agency = join(base, 'agency');
   const compute = new Compute(join(base, 'here'), {
@@ -286,6 +332,7 @@ await test('the import through the first run: one at a time, shown until the per
     }),
   });
   await compute.load();
+  // A harness that answers when the test says so, and fails when its call is stopped.
   const waiting: ((text: string) => void)[] = [];
   const requests: HarnessRequest[] = [];
   let detected: readonly HarnessStatus[] = [
@@ -298,9 +345,12 @@ await test('the import through the first run: one at a time, shown until the per
     claudeConfig: join(base, 'claude'),
     harness: (request) => {
       requests.push(request);
-      return new Promise((resolve) =>
-        waiting.push((text) => resolve({ text })),
-      );
+      return new Promise((resolve, reject) => {
+        waiting.push((text) => resolve({ text }));
+        request.signal.addEventListener('abort', () =>
+          setTimeout(() => reject(new Error('Stopped.')), 200),
+        );
+      });
     },
     detect: () => Promise.resolve(detected),
     installed: () => Promise.resolve(['claude']),
@@ -310,6 +360,16 @@ await test('the import through the first run: one at a time, shown until the per
         problems: [],
       }),
   });
+  const answer = JSON.stringify({
+    card: { workOn: 'CoT faithfulness.', explore: 'Probes.', talk: '' },
+    skills: [
+      { id: 'research-paper-writing', fits: true, when: 'Drafts.' },
+      { id: 'vercel:deploy', fits: false },
+    ],
+    read: 'My instructions.',
+  });
+  const idle = async (): Promise<void> =>
+    until(async () => (await setup.view()).about.import?.busy === null);
   // Before any import, the view says that none runs.
   assert.deepEqual((await setup.view()).about.import, {
     busy: null,
@@ -323,30 +383,46 @@ await test('the import through the first run: one at a time, shown until the per
   detected = [claudeFound, codexOut];
   await setup.act({ action: 'setup-check' });
   await until(async () => !(await setup.view()).agents.checking);
+  // The person chose Yes for vercel:deploy before the import.
+  await setup.act({ action: 'setup-own-skills-list' });
+  await until(async () => !(await setup.view()).skills?.ownReading);
+  await setup.act({
+    action: 'setup-own-skills',
+    choices: [{ harness: 'claude', id: 'vercel:deploy', use: true }],
+  });
   assert.equal(await setup.act({ action: 'setup-import' }), 202);
   // A signed-out Codex is not asked, and a second import waits.
-  assert.deepEqual((await setup.view()).about.import?.asking, ['claude']);
-  await assert.rejects(setup.act({ action: 'setup-import' }), /Wait a moment/);
-  await assert.rejects(
-    setup.act({ action: 'setup-import-discard' }),
-    /Wait a moment/,
+  await until(
+    async () => (await setup.view()).about.import?.asking.join() === 'claude',
   );
+  await assert.rejects(setup.act({ action: 'setup-import' }), /Wait a moment/);
   await until(() => Promise.resolve(waiting.length === 1));
   assert.equal(requests[0]?.host, 'claude');
   assert.equal(requests[0]?.model, 'opus[1m]');
-  waiting.shift()?.(
-    JSON.stringify({
-      card: { workOn: 'CoT faithfulness.', explore: 'Probes.', talk: '' },
-      skills: [{ id: 'research-paper-writing', fits: true, when: 'Drafts.' }],
-      read: 'My instructions.',
-    }),
-  );
-  await until(async () => (await setup.view()).about.import?.busy === null);
+  // Stop: the call is stopped, the view shows no import at once, and nothing comes of it.
+  assert.equal(await setup.act({ action: 'setup-import-discard' }), 200);
+  assert.equal(requests[0]?.signal.aborted, true);
+  assert.equal((await setup.view()).about.import?.busy, null);
+  // A new import waits until the stopped one ended, then asks again.
+  waiting.length = 0;
+  assert.equal(await setup.act({ action: 'setup-import' }), 202);
+  await until(() => Promise.resolve(waiting.length === 1));
+  assert.equal(requests.length, 2);
+  waiting.shift()?.(answer);
+  await idle();
   const shown = (await setup.view()).about;
+  assert.equal(shown.import?.error, null);
   assert.deepEqual(shown.import?.result?.from, ['claude']);
+  // The skill that the person chose says so.
+  assert.deepEqual(
+    shown.import?.result?.skills.map((skill) => [skill.name, skill.chosen]),
+    [
+      ['research-paper-writing', undefined],
+      ['vercel:deploy', true],
+    ],
+  );
   // Nothing is saved, and the card is not a draft yet.
   assert.equal(shown.card, null);
-  assert.equal((await loadOwnChoices(agency)).claude.size, 0);
   // Discard drops it.
   assert.equal(await setup.act({ action: 'setup-import-discard' }), 200);
   assert.equal((await setup.view()).about.import?.result, null);
@@ -354,16 +430,11 @@ await test('the import through the first run: one at a time, shown until the per
     setup.act({ action: 'setup-import-accept' }),
     /Nothing waits to be accepted/,
   );
-  // Again, and Accept: the card becomes the draft, and the switches are set.
+  // Again, and Accept: the card becomes the draft, and only the skill that the person never chose is set.
   await setup.act({ action: 'setup-import' });
   await until(() => Promise.resolve(waiting.length === 1));
-  waiting.shift()?.(
-    JSON.stringify({
-      card: { workOn: 'CoT faithfulness.', explore: 'Probes.', talk: '' },
-      skills: [{ id: 'research-paper-writing', fits: true, when: 'Drafts.' }],
-    }),
-  );
-  await until(async () => (await setup.view()).about.import?.busy === null);
+  waiting.shift()?.(answer);
+  await idle();
   assert.equal(await setup.act({ action: 'setup-import-accept' }), 200);
   const accepted = (await setup.view()).about;
   assert.deepEqual(accepted.card, {
@@ -378,8 +449,8 @@ await test('the import through the first run: one at a time, shown until the per
   assert.deepEqual(
     [...choices].map(([id, choice]) => [id, choice.use, choice.when]),
     [
+      ['vercel:deploy', true, ''],
       ['research-paper-writing', true, 'Drafts.'],
-      ['vercel:deploy', false, ''],
     ],
   );
 });
