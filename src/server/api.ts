@@ -130,6 +130,7 @@ import {
   type RunDetail,
   type SearchHit,
   type SearchResult,
+  type SetupView,
   type Snapshot,
   type StartView,
   type Step,
@@ -332,6 +333,8 @@ export interface ApiSources {
   readonly bring?: BringSource | undefined;
   /** Why the project's lab did not start, when its start failed. */
   readonly startProblem?: (() => string | null) | undefined;
+  /** The project uses its own settings, not the global ones. */
+  readonly ownProfile?: boolean | undefined;
   /** "Agents at once" of the project, when this process runs its worker slots. */
   readonly agentsAtOnce?: (() => number | null) | undefined;
   /** The slow pod actions that run in the background, and the ones that failed there. */
@@ -2009,6 +2012,7 @@ export class ApiReader {
         project,
         lab: null,
         trimmed: false,
+        ...(root && sources.ownProfile ? { ownProfile: true as const } : {}),
         ...(root
           ? {
               question: question && clip(question, apiLimits.question),
@@ -2027,6 +2031,7 @@ export class ApiReader {
       const data: SnapshotData = {
         project,
         lab,
+        ...(sources.ownProfile ? { ownProfile: true as const } : {}),
         ...compute,
         trimmed: smaller || Object.keys(lab.omitted).length > 0,
       };
@@ -2590,6 +2595,7 @@ const setupNames = new Set<string>([
   'setup-skill-add',
   'setup-skill-remove',
   'setup-skills-done',
+  'setup-copy-global',
   'setup-own-skills',
   'setup-own-skills-list',
   'setup-import',
@@ -2597,12 +2603,19 @@ const setupNames = new Set<string>([
   'setup-import-discard',
 ] satisfies ActionName[]);
 
+/** The first run's read and actions. `scope` `project`: an isolated project's own settings. */
+export interface SetupSource {
+  readonly view: (scope?: 'project') => Promise<SetupView>;
+  readonly act: FirstRun['act'];
+}
+
 /**
  * Verifold without a project: the Ask page's read, and the start of a
  * project with the person's question.
  */
 export interface ProjectStart {
-  readonly view: () => Promise<StartView>;
+  /** `scope` `project`: the defaults of an isolated project, from its own settings in this folder. */
+  readonly view: (scope?: 'project') => Promise<StartView>;
   /** Run `project-start`. Returns 202: the project starts in the background. */
   readonly act: (body: Record<string, unknown>) => Promise<number>;
 }
@@ -2705,7 +2718,7 @@ export async function answerApi(
   feed: ApiFeed,
   reader: ApiReader,
   act: (body: Record<string, unknown>) => Promise<number>,
-  setup?: Pick<FirstRun, 'view' | 'act'>,
+  setup?: SetupSource,
   start?: ProjectStart,
 ): Promise<void> {
   if (!authorized) {
@@ -2774,17 +2787,28 @@ export async function answerApi(
     json(response, 200, (await feed.current()).text);
     return;
   }
-  if (first === 'start' && parts.length === 1 && !keys.length && start) {
-    json(response, 200, await start.view());
+  // A first-run read and the Ask page's read take `?profile=project` for an isolated project.
+  const scope = keys.length
+    ? keys.length === 1 && url.searchParams.get('profile') === 'project'
+      ? 'project'
+      : null
+    : undefined;
+  if (first === 'start' && parts.length === 1 && scope !== null && start) {
+    try {
+      json(response, 200, await start.view(scope));
+    } catch (error) {
+      if (!(error instanceof SessionActionError)) throw error;
+      json(response, 409, { error: error.message });
+    }
     return;
   }
   if (first === 'history') {
     await answerHistory(response, url, parts, reader);
     return;
   }
-  if (first === 'setup' && parts.length === 1 && !keys.length && setup) {
+  if (first === 'setup' && parts.length === 1 && scope !== null && setup) {
     try {
-      json(response, 200, await setup.view());
+      json(response, 200, await setup.view(scope));
     } catch (error) {
       if (!(error instanceof SessionActionError)) throw error;
       json(response, 409, { error: error.message });

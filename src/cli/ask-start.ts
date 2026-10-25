@@ -11,6 +11,12 @@ import type { Workspace } from '../core/contracts.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
 import { defaultLabHours, hours, labLimits, text } from '../core/lab/schema.ts';
+import {
+  isolationProblem,
+  ownProfileCopied,
+  ownProfileFolder,
+} from '../core/project-profile.ts';
+import { removeTree } from '../core/skills.ts';
 import { SessionActionError } from '../core/session.ts';
 import type { ProjectAgents, StartView } from '../protocol/api.ts';
 import type { ProjectStart } from '../server/api.ts';
@@ -111,11 +117,13 @@ export function defaultTeam(
 export function askStart(options: {
   /** The folder where Verifold started. */
   readonly root: string;
-  /** The folder of the person's profile. */
+  /** The folder of the person's global profile. */
   readonly agency: string;
   readonly signal: AbortSignal;
   /** Tests use fakes. */
   readonly detect?: () => Promise<readonly HarnessStatus[]>;
+  /** The project started: its settings take no more saves from the first run. */
+  readonly onStart?: () => Promise<void>;
 }): { readonly start: ProjectStart; readonly begun: Promise<Begun> } {
   let settle: (project: Begun) => void = () => {};
   const begun = new Promise<Begun>((resolve) => {
@@ -124,9 +132,9 @@ export function askStart(options: {
   let busy = false;
   let done = false;
   let detected: Promise<readonly HarnessStatus[]> | null = null;
-  /** The defaults, from the profile when it reads, else from this computer. */
-  const defaults = async (): Promise<Defaults> => {
-    const settings = await loadSettings(options.agency).catch(() => null);
+  /** The defaults, from the profile at `folder` when it reads, else from this computer. */
+  const defaults = async (folder: string): Promise<Defaults> => {
+    const settings = await loadSettings(folder).catch(() => null);
     const saved = settings?.agency;
     const profile: ProjectAgents | null = saved
       ? {
@@ -159,8 +167,17 @@ export function askStart(options: {
     };
   };
   const start: ProjectStart = {
-    view: async (): Promise<StartView> => {
-      const { agents, gpuUsd, money } = await defaults();
+    view: async (scope?: 'project'): Promise<StartView> => {
+      if (
+        scope === 'project' &&
+        (await ownProfileCopied(options.root)) === null
+      )
+        fail(
+          'This folder has no isolated settings yet. Choose Isolated project first.',
+        );
+      const { agents, gpuUsd, money } = await defaults(
+        scope === 'project' ? ownProfileFolder(options.root) : options.agency,
+      );
       return {
         folder: homeShown(options.root),
         // The person's own files, not what macOS adds.
@@ -186,6 +203,16 @@ export function askStart(options: {
           labLimits.question,
           'the question',
         );
+        // An isolated project's own settings are in this folder already, so it starts here.
+        const own =
+          body.profile === undefined
+            ? false
+            : body.profile === 'project' ||
+              fail('Choose the global settings, or this project’s own.');
+        if (own && body.folder !== undefined && body.folder !== '')
+          fail(
+            'An isolated project stays in this folder. To use another folder, run verifold there.',
+          );
         const folder =
           body.folder === undefined || body.folder === ''
             ? options.root
@@ -198,7 +225,9 @@ export function askStart(options: {
                 );
         const budget =
           body.hours === undefined ? defaultLabHours : hours(body.hours);
-        const fallback = await defaults();
+        const fallback = await defaults(
+          own ? ownProfileFolder(folder) : options.agency,
+        );
         const agents =
           body.agents === undefined ? fallback.agents : team(body.agents);
         if (!agents)
@@ -241,6 +270,7 @@ export function askStart(options: {
             options.signal,
             true,
             compute,
+            own,
           );
         } catch (error) {
           if (error instanceof SessionActionError) throw error;
@@ -249,6 +279,14 @@ export function askStart(options: {
           );
         }
         done = true;
+        await options.onStart?.();
+        // A project on the global settings drops an isolated copy that the person made in this folder: nothing uses it. Never the global profile.
+        if (
+          !own &&
+          folder === options.root &&
+          (await isolationProblem(options.agency, folder)) === null
+        )
+          await removeTree(ownProfileFolder(folder)).catch(() => {});
         settle({ root: folder, question, hours: budget });
         return 202;
       } finally {

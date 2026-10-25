@@ -64,10 +64,15 @@ import type { Away } from '../core/away.ts';
 import type { LabDiff, LabWork } from '../desk/desk-lab.ts';
 import { loadWorkspace, readJson, writePrivateFile } from '../core/storage.ts';
 import { startPageServer, type PageServer } from '../legacy/pages.ts';
-import { ApiFeed, ApiReader, answerApi, type ProjectStart } from './api.ts';
+import {
+  ApiFeed,
+  ApiReader,
+  answerApi,
+  type ProjectStart,
+  type SetupSource,
+} from './api.ts';
 import { researchRunOnDisk } from '../core/history.ts';
 import { labScreen, type LabScreen } from './screen.ts';
-import type { FirstRun } from './setup.ts';
 import { contentType, readJsonBody, record } from './http.ts';
 
 export interface DeskServer {
@@ -1219,11 +1224,13 @@ export async function startDesk(
     /** The new app's build: index.html and assets/. Without one, /app/ is not served. */
     readonly appRoot?: URL;
     /** The first run, which the app shows with or without a project. */
-    readonly firstRun?: FirstRun;
+    readonly firstRun?: SetupSource;
     /** Without a project: the Ask page's read and the start of a project. */
     readonly start?: ProjectStart;
     /** Why the project's lab did not start, when its start failed. */
     readonly startProblem?: () => string | null;
+    /** The project uses its own settings, not the global ones. */
+    readonly ownProfile?: boolean;
   } = {},
 ): Promise<DeskServer> {
   signal.throwIfAborted();
@@ -1257,6 +1264,7 @@ export async function startDesk(
         : null;
     },
     startProblem: options.startProblem,
+    ownProfile: options.ownProfile,
     agentsAtOnce: () => sessions?.limit ?? null,
     computeWorks: () => pods.works,
     // The same reads as the desk's bring-in panel and its diffs.

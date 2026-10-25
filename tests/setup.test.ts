@@ -409,9 +409,11 @@ for (const background of [false, true])
       // The owner opened its desk on the port and token of the setup desk, so the tab needed no new URL.
       assert.equal(handoffs.length, 1);
       assert.equal(opened.length, 1);
-      assert.ok(
-        lines.includes('The page in your browser now shows the project.'),
-      );
+      // The terminal reaches the owner's control socket a moment after the owner starts.
+      const moved = 'The page in your browser now shows the project.';
+      for (let tries = 0; tries < 500 && !lines.includes(moved); tries++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(lines.includes(moved));
       // The page server moved to the same port too, so the tab can still frame pages.
       assert.equal(await frames(), framed);
       // Ctrl+C detaches the terminal. The owner keeps the project.

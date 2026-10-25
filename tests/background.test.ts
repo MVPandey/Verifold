@@ -1069,3 +1069,31 @@ await test('a terminal that attaches gets a fresh screen, not the one from befor
   back.abort();
   await again;
 });
+
+await test('a workspace that does not read stops the launch before any owner starts, since Verifold cannot tell which settings the project uses', async (t) => {
+  const { root, keys, assets } = await project(t);
+  await writeFile(join(root, '.verifold', 'workspace.json'), '{ broken');
+  const started: string[] = [];
+  const io: CliIO = {
+    interactive: true,
+    ask: () => Promise.reject(new Error('No prompts')),
+    out: () => {},
+    progress: () => {},
+    browse: () => Promise.resolve(true),
+    deskAssets: assets,
+    background: {
+      keys,
+      start: (folder) => {
+        started.push(folder);
+        return Promise.reject(new Error('No owner starts.'));
+      },
+      input: () => Promise.reject(new Error('No input')),
+    },
+  };
+  await assert.rejects(
+    runCli([], root, io),
+    /cannot tell which settings this project uses/,
+  );
+  assert.deepEqual(started, []);
+  assert.equal(await liveOwner(root), null);
+});

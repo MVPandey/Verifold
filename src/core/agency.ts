@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { validateModel, type HarnessName } from './harness.ts';
 import { object, text } from './research-contracts.ts';
 import { parseProfileMoney, type ProfileMoney } from './compute.ts';
@@ -286,28 +287,44 @@ export async function saveAgencyFile(
 
 /**
  * Run `work` while this process holds the agency's lock. Another process
- * that holds it makes this fail with how to recover, and never waits.
+ * that holds it makes this fail with how to recover. By default it never
+ * waits, and it reads the profile's files first, so a broken one stops the
+ * work. `waitMs`: wait up to that long for a lock that another process
+ * holds. `check: false`: read nothing first, as a copy of the folder does.
  */
 export async function withProfileLock<T>(
   directory: string,
   signal: AbortSignal,
   work: () => Promise<T>,
+  options: { readonly waitMs?: number; readonly check?: boolean } = {},
 ): Promise<T> {
   signal.throwIfAborted();
   await prepareAgency(directory);
   signal.throwIfAborted();
   const lockPath = join(directory, 'profile.lock');
-  const lock = await open(lockPath, 'wx', 0o600).catch((error: unknown) => {
-    if (error instanceof Error && 'code' in error && error.code === 'EEXIST')
-      throw new SessionActionError(
-        `Agency settings are locked. Confirm no profile setup or initialization is running before removing ${lockPath}.`,
-      );
-    throw error;
-  });
+  const until = Date.now() + (options.waitMs ?? 0);
+  let lock;
+  for (;;)
+    try {
+      lock = await open(lockPath, 'wx', 0o600);
+      break;
+    } catch (error) {
+      if (
+        !(error instanceof Error && 'code' in error && error.code === 'EEXIST')
+      )
+        throw error;
+      if (Date.now() >= until)
+        throw new SessionActionError(
+          `Agency settings are locked. Confirm no profile setup or initialization is running before removing ${lockPath}.`,
+        );
+      await delay(100, undefined, { signal });
+    }
   try {
     await lock.writeFile(`${process.pid}\n`);
-    await loadProfileState(directory);
-    await loadMemory(directory);
+    if (options.check !== false) {
+      await loadProfileState(directory);
+      await loadMemory(directory);
+    }
     signal.throwIfAborted();
     return await work();
   } finally {
