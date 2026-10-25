@@ -1,13 +1,14 @@
-import { useEffect, type ReactNode } from 'react';
-import type { SetupView } from '../../protocol/api.ts';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { SetupStep, SetupView } from '../../protocol/api.ts';
 import { Logo } from '../components/Icons.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { href, replaceRoute } from '../route.ts';
+import { href, parseRoute, replaceRoute } from '../route.ts';
 import {
   firstPage,
   pageAfter,
   pageBefore,
   setupSteps,
+  shownSteps,
   type SetupActions,
   type SetupPage as Page,
 } from '../setup.ts';
@@ -46,14 +47,12 @@ function SetupHeader({ project }: { readonly project: string }): ReactNode {
 export function DoneStep({
   view,
   project,
-  onBack,
 }: {
   readonly view: SetupView;
   readonly project: string;
-  readonly onBack: () => void;
 }): ReactNode {
   // An older Verifold reports no Skills step, so the page leaves it out.
-  const steps = setupSteps.filter((step) => view.steps[step] !== undefined);
+  const steps = shownSteps(view.steps);
   const skipped = steps.filter((step) => view.steps[step] !== 'done');
   return (
     <>
@@ -79,22 +78,18 @@ export function DoneStep({
           </li>
         ))}
       </ul>
-      {project && (
+      {project ? (
         <p className="step__lead">
           New projects start from this profile. A project that exists keeps its
           own GPU limits. <a href={href.lab}>Back to the lab</a>
         </p>
-      )}
-      <div className="setup__actions">
-        <button type="button" className="button button--big" onClick={onBack}>
-          Back
-        </button>
-        {!project && (
+      ) : (
+        <div className="setup__actions">
           <a className="button button--primary button--big" href={href.ask}>
             Ask your question
           </a>
-        )}
-      </div>
+        </div>
+      )}
     </>
   );
 }
@@ -102,6 +97,61 @@ export function DoneStep({
 /** A page of the first run. Without a project, the end of the first run is the Ask page. */
 export function pageRoute(page: Page, project: string | null): string {
   return page === 'done' && project === '' ? href.ask : href.setup(page);
+}
+
+/**
+ * A step's request ended. Its next page opens only while the page still
+ * shows that step, so a Back or a step link meanwhile is not undone.
+ */
+export function stillOn(hash: string, step: SetupStep): boolean {
+  const route = parseRoute(hash);
+  return route.page === 'setup' && route.step === step;
+}
+
+/**
+ * What Back or a step link does: nothing on the page that shows, ask first
+ * when the step has unsaved input, else open the page.
+ */
+export function leaveFor(
+  page: Page,
+  step: Page | null,
+  unsaved: boolean,
+): 'none' | 'ask' | 'open' {
+  if (page === step) return 'none';
+  return unsaved ? 'ask' : 'open';
+}
+
+/** Back or a step link while the step has unsaved input. No browser dialog. */
+export function UnsavedLine({
+  onLeave,
+  onStay,
+}: {
+  readonly onLeave: () => void;
+  readonly onStay: () => void;
+}): ReactNode {
+  return (
+    <div role="alert" className="setup__problem">
+      <span>Your changes on this step aren’t saved.</span>
+      <div className="setup__row">
+        <button
+          type="button"
+          className="button button--small"
+          onClick={onLeave}
+        >
+          Leave without saving
+        </button>
+        {/* Focus moves here, so the line comes into view wherever the click was. */}
+        <button
+          type="button"
+          className="button button--small"
+          autoFocus
+          onClick={onStay}
+        >
+          Stay
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -121,7 +171,8 @@ export function openingRoute(
 
 /**
  * The first run: `step` null opens the first step without a record. Each
- * step saves on its own and then opens the next one.
+ * step saves on its own and then opens the next one. Back and the step bar
+ * ask first when the step has unsaved input.
  */
 export function SetupPage({
   step,
@@ -138,14 +189,30 @@ export function SetupPage({
     const to = openingRoute(view, step, project);
     if (to) replaceRoute(to);
   }, [view, step, project]);
+  // The step reports whether it holds unsaved input. `leaving`: the page that Back or a step link asked for meanwhile.
+  const [unsaved, setUnsaved] = useState(false);
+  const [leaving, setLeaving] = useState<Page | null>(null);
+  useEffect(() => {
+    setLeaving(null);
+  }, [step]);
   const open = (page: Page): void => {
     location.hash = pageRoute(page, project);
     refresh();
   };
-  // Back only opens the step before. It saves and skips nothing.
-  const before = step && pageBefore(step);
-  const back = (): void => {
-    if (before) open(before);
+  /** Back and the step bar. */
+  const go = (page: Page): void => {
+    const move = leaveFor(page, step, unsaved);
+    if (move === 'ask') setLeaving(page);
+    else if (move === 'open') open(page);
+  };
+  /** After a step's own request: the next page, unless the person left the step meanwhile. */
+  const after = (from: SetupStep, next: Page) => (): void => {
+    if (stillOn(location.hash, from)) open(next);
+  };
+  const steps = view ? shownSteps(view.steps) : setupSteps;
+  const back = (from: SetupStep) => (): void => {
+    const before = pageBefore(from, steps);
+    if (before) go(before);
   };
   let body: ReactNode;
   if (!view || step === null)
@@ -164,8 +231,10 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={() => open(pageAfter('agents'))}
-        onSkip={() => open('done')}
+        onSaved={after('agents', pageAfter('agents', steps))}
+        onSkip={after('agents', 'done')}
+        onOpen={go}
+        onUnsaved={setUnsaved}
       />
     );
   else if (step === 'about')
@@ -174,8 +243,10 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={() => open(pageAfter('about'))}
-        onBack={back}
+        onSaved={after('about', pageAfter('about', steps))}
+        onBack={back('about')}
+        onOpen={go}
+        onUnsaved={setUnsaved}
       />
     );
   else if (step === 'skills')
@@ -184,8 +255,9 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onDone={() => open(pageAfter('skills'))}
-        onBack={back}
+        onDone={after('skills', pageAfter('skills', steps))}
+        onBack={back('skills')}
+        onOpen={go}
       />
     );
   else if (step === 'money')
@@ -194,16 +266,29 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={() => open(pageAfter('money'))}
-        onBack={back}
+        onSaved={after('money', pageAfter('money', steps))}
+        onBack={back('money')}
+        onOpen={go}
+        onUnsaved={setUnsaved}
       />
     );
-  else body = <DoneStep view={view} project={project ?? ''} onBack={back} />;
+  else body = <DoneStep view={view} project={project ?? ''} />;
   return (
     <div className="page">
       <SetupHeader project={project ?? ''} />
       <main className="setup">
-        <div className="setup__column">{body}</div>
+        <div className="setup__column">
+          {body}
+          {leaving && (
+            <UnsavedLine
+              onLeave={() => {
+                setLeaving(null);
+                open(leaving);
+              }}
+              onStay={() => setLeaving(null)}
+            />
+          )}
+        </div>
       </main>
     </div>
   );

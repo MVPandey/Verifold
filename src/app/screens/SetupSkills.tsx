@@ -1,7 +1,12 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import type { SetupView, SkillCard, SkillRuns } from '../../protocol/api.ts';
+import type {
+  SetupStep,
+  SetupView,
+  SkillCard,
+  SkillRuns,
+} from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { StepHeader } from '../components/StepHeader.tsx';
+import { BackButton, StepHeader } from '../components/StepHeader.tsx';
 import { newKey } from '../intent.ts';
 import { href } from '../route.ts';
 import type { SetupActions } from '../setup.ts';
@@ -106,12 +111,14 @@ export function SkillsStep({
   refresh,
   onDone,
   onBack,
+  onOpen,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onDone: () => void;
   readonly onBack: () => void;
+  readonly onOpen: (step: SetupStep) => void;
 }): ReactNode {
   const skills = view.skills;
   const search = useAction((_: null, key) => actions.skillsSearch(key));
@@ -152,7 +159,12 @@ export function SkillsStep({
   };
   return (
     <>
-      <StepHeader step="skills" title="Skills that fit your work">
+      <StepHeader
+        step="skills"
+        steps={view.steps}
+        onOpen={onOpen}
+        title="Skills that fit your work"
+      >
         {read
           ? `Verifold read ${readable.length} skill ${readable.length === 1 ? 'catalog' : 'catalogs'} ${dayClock(read.at)} ${
               skills?.needsProfile
@@ -253,9 +265,7 @@ export function SkillsStep({
         </span>
       )}
       <div className="setup__actions">
-        <button type="button" className="button button--big" onClick={onBack}>
-          Back
-        </button>
+        <BackButton onBack={onBack} />
         <button
           type="button"
           className="button button--primary button--big"

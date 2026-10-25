@@ -1,8 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { MoneyLimits, SetupView } from '../../protocol/api.ts';
+import type { MoneyLimits, SetupStep, SetupView } from '../../protocol/api.ts';
 import { Check } from '../components/Icons.tsx';
 import { GpuTable, LimitField, numberOf } from '../components/Limits.tsx';
-import { StepHeader } from '../components/StepHeader.tsx';
+import {
+  BackButton,
+  StepHeader,
+  useUnsaved,
+} from '../components/StepHeader.tsx';
 import { dayClock, usd } from '../format.ts';
 import { newKey } from '../intent.ts';
 import { allowedGpus, type SetupActions } from '../setup.ts';
@@ -42,12 +46,16 @@ export function MoneyStep({
   refresh,
   onSaved,
   onBack,
+  onOpen,
+  onUnsaved,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
   readonly onBack: () => void;
+  readonly onOpen: (step: SetupStep) => void;
+  readonly onUnsaved: (unsaved: boolean) => void;
 }): ReactNode {
   const money = view.money;
   const keyField = useId();
@@ -60,6 +68,13 @@ export function MoneyStep({
   const [problem, setProblem] = useState<string | null>(null);
   const cap = numberOf(limits.maxUsdPerHour) ?? money.limits.maxUsdPerHour;
   const allowed = ticked ?? allowedGpus(view, cap);
+  // Typed limits, ticked GPUs, or a typed key. The key stays in this step's state only.
+  useUnsaved(
+    JSON.stringify(limits) !== JSON.stringify(textOf(money.limits)) ||
+      ticked !== null ||
+      secret !== '',
+    onUnsaved,
+  );
   const storeKey = useAction(
     (value: { readonly secret: string; readonly file: boolean }, key) =>
       actions.runpodKey(value.secret, value.file, key),
@@ -111,7 +126,12 @@ export function MoneyStep({
     setLimits((current) => ({ ...current, [field]: value }));
   return (
     <>
-      <StepHeader step="money" title="When agents may rent GPUs">
+      <StepHeader
+        step="money"
+        steps={view.steps}
+        onOpen={onOpen}
+        title="When agents may rent GPUs"
+      >
         Agents rent a GPU on RunPod only when a direction needs one. The first
         rental in each project always asks you.
       </StepHeader>
@@ -370,9 +390,7 @@ export function MoneyStep({
         </span>
       )}
       <div className="setup__actions">
-        <button type="button" className="button button--big" onClick={onBack}>
-          Back
-        </button>
+        <BackButton onBack={onBack} />
         <button
           type="button"
           className="button button--primary button--big"

@@ -16,12 +16,19 @@ import {
   pageBefore,
   planName,
   setupActions,
+  shownSteps,
 } from '../src/app/setup.ts';
 import { AgentsStep } from '../src/app/screens/SetupAgents.tsx';
 import { AboutStep } from '../src/app/screens/SetupAbout.tsx';
 import { MoneyStep } from '../src/app/screens/SetupMoney.tsx';
 import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
-import { DoneStep } from '../src/app/screens/Setup.tsx';
+import {
+  DoneStep,
+  UnsavedLine,
+  leaveFor,
+  stillOn,
+} from '../src/app/screens/Setup.tsx';
+import { StepHeader } from '../src/app/components/StepHeader.tsx';
 
 const claude: AgentTool = {
   harness: 'claude',
@@ -68,7 +75,7 @@ const about: SetupAbout = {
 
 function view(fields: Partial<SetupView> = {}): SetupView {
   return {
-    steps: { agents: null, about: null, money: null },
+    steps: { agents: null, about: null, skills: null, money: null },
     agents: { checking: false, tools: [claude, codex] },
     about,
     money: {
@@ -125,19 +132,34 @@ await test('the first run opens its first step without a record, and each step l
   assert.equal(isSetupView({ steps: {} }), false);
 });
 
-await test('each step after the first has Back, and the step bar links to each step', () => {
+/** The bar's links: address, accessible name, and whether it is the current step. */
+function barLinks(html: string): string[][] {
+  return [
+    ...html.matchAll(
+      /<a href="([^"]+)" class="step__link" aria-label="([^"]+)"( aria-current="step")?/g,
+    ),
+  ].map(([, to, name, current]) => [
+    to ?? '',
+    name ?? '',
+    current ? 'current' : '',
+  ]);
+}
+
+const backButton =
+  /<button type="button" class="button button--big">Back<\/button>/;
+
+await test('Back opens the step before, and an older Verifold without a Skills step leaves it out going back and on', () => {
   assert.equal(pageBefore('agents'), null);
   assert.equal(pageBefore('about'), 'agents');
   assert.equal(pageBefore('money'), 'skills');
-  assert.equal(pageBefore('done'), 'money');
-  const links = (html: string): string[][] =>
-    [
-      ...html.matchAll(
-        /<a href="([^"]+)" class="step__link" aria-label="([^"]+)"( aria-current="step")?/g,
-      ),
-    ].map(([, to, name, current]) => [to ?? '', name ?? '', current ?? '']);
-  const back =
-    /<button type="button" class="button button--big">Back<\/button>/;
+  const older = shownSteps({ agents: 'done', about: null, money: null });
+  assert.deepEqual(older, ['agents', 'about', 'money']);
+  assert.equal(pageAfter('about', older), 'money');
+  assert.equal(pageBefore('money', older), 'about');
+  // Skills opened by its address on an older Verifold still leads on.
+  assert.equal(pageAfter('skills', older), 'money');
+  assert.equal(pageBefore('skills', older), 'about');
+  // Back shows on steps 2 to 4 only.
   const agents = renderToStaticMarkup(
     <AgentsStep
       view={view()}
@@ -145,35 +167,22 @@ await test('each step after the first has Back, and the step bar links to each s
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      onOpen={quiet}
+      onUnsaved={quiet}
     />,
   );
-  assert.doesNotMatch(agents, back);
-  assert.deepEqual(links(agents), [
-    ['#/setup/agents', 'Agents', ' aria-current="step"'],
-    ['#/setup/about', 'About you', ''],
-    ['#/setup/skills', 'Skills (optional)', ''],
-    ['#/setup/money', 'GPU money', ''],
-  ]);
-  const about = renderToStaticMarkup(
+  assert.doesNotMatch(agents, backButton);
+  for (const page of [
     <AboutStep
+      key="about"
       view={view()}
       actions={actions}
       refresh={quiet}
       onSaved={quiet}
       onBack={quiet}
+      onOpen={quiet}
+      onUnsaved={quiet}
     />,
-  );
-  assert.match(about, back);
-  assert.deepEqual(
-    links(about).map(([to, , current]) => [to, current]),
-    [
-      ['#/setup/agents', ''],
-      ['#/setup/about', ' aria-current="step"'],
-      ['#/setup/skills', ''],
-      ['#/setup/money', ''],
-    ],
-  );
-  for (const page of [
     <SkillsStep
       key="skills"
       view={view()}
@@ -181,6 +190,7 @@ await test('each step after the first has Back, and the step bar links to each s
       refresh={quiet}
       onDone={quiet}
       onBack={quiet}
+      onOpen={quiet}
     />,
     <MoneyStep
       key="money"
@@ -189,11 +199,124 @@ await test('each step after the first has Back, and the step bar links to each s
       refresh={quiet}
       onSaved={quiet}
       onBack={quiet}
+      onOpen={quiet}
+      onUnsaved={quiet}
     />,
-    <DoneStep key="done" view={view()} project="" onBack={quiet} />,
-    <DoneStep key="lab" view={view()} project="cot" onBack={quiet} />,
   ])
-    assert.match(renderToStaticMarkup(page), back);
+    assert.match(renderToStaticMarkup(page), backButton);
+  // The last page has its Change links instead.
+  for (const project of ['', 'cot'])
+    assert.doesNotMatch(
+      renderToStaticMarkup(<DoneStep view={view()} project={project} />),
+      backButton,
+    );
+});
+
+await test('the step bar shows each step as it is: done, skipped, or not yet, with the current one marked', () => {
+  const html = renderToStaticMarkup(
+    <StepHeader
+      step="about"
+      steps={{ agents: 'done', about: null, skills: 'skipped', money: null }}
+      onOpen={quiet}
+      title="About you"
+    />,
+  );
+  assert.match(html, /Step 2 of 4: About you/);
+  assert.deepEqual(barLinks(html), [
+    ['#/setup/agents', 'Agents, done', ''],
+    ['#/setup/about', 'About you, not yet', 'current'],
+    ['#/setup/skills', 'Skills (optional), skipped', ''],
+    ['#/setup/money', 'GPU money, not yet', ''],
+  ]);
+  assert.deepEqual(
+    [...html.matchAll(/class="(step__segment[^"]*)"/g)].map(([, name]) => name),
+    [
+      'step__segment step__segment--done',
+      'step__segment',
+      'step__segment step__segment--skipped',
+      'step__segment',
+    ],
+  );
+  // An older Verifold without a Skills step: three steps.
+  const older = renderToStaticMarkup(
+    <StepHeader
+      step="money"
+      steps={{ agents: 'done', about: 'done', money: null }}
+      onOpen={quiet}
+      title="GPU money"
+    />,
+  );
+  assert.match(older, /Step 3 of 3: GPU money/);
+  assert.deepEqual(
+    barLinks(older).map(([to]) => to),
+    ['#/setup/agents', '#/setup/about', '#/setup/money'],
+  );
+});
+
+await test('a click on the step bar goes through the setup page, and a click with a modifier key opens the link the browser way', () => {
+  const opened: string[] = [];
+  const header = StepHeader({
+    step: 'money',
+    steps: { agents: 'done', about: 'done', skills: null, money: null },
+    onOpen: (step) => opened.push(step),
+    title: 'GPU money',
+  }) as ReactElement<{ children: ReactElement<{ children: unknown }>[] }>;
+  const nav = header.props.children[1];
+  const links = nav?.props.children as ReactElement<{
+    onClick: (event: object) => void;
+  }>[];
+  const click = (at: number, keys: object): boolean => {
+    let prevented = false;
+    links[at]?.props.onClick({
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      ...keys,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    return prevented;
+  };
+  assert.equal(click(1, {}), true);
+  assert.equal(click(0, { metaKey: true }), false);
+  assert.equal(click(2, { button: 1 }), false);
+  assert.deepEqual(opened, ['about']);
+});
+
+await test('Back and the bar ask first when the step has unsaved input, and a step that a request left meanwhile stays left', () => {
+  assert.equal(leaveFor('about', 'money', false), 'open');
+  assert.equal(leaveFor('about', 'money', true), 'ask');
+  assert.equal(leaveFor('money', 'money', true), 'none');
+  // Continue on Skills, then Back to About before the save answers: the answer opens nothing.
+  assert.equal(stillOn('#/setup/skills', 'skills'), true);
+  assert.equal(stillOn('#/setup/about', 'skills'), false);
+  assert.equal(stillOn('#/ask', 'money'), false);
+  const html = renderToStaticMarkup(
+    <UnsavedLine onLeave={quiet} onStay={quiet} />,
+  );
+  assert.match(html, /role="alert"/);
+  assert.match(
+    text(<UnsavedLine onLeave={quiet} onStay={quiet} />),
+    /Your changes on this step aren’t saved\. Leave without saving Stay/,
+  );
+  assert.match(
+    html,
+    /<button type="button" class="button button--small" autofocus="">Stay/,
+  );
+  // Both choices reach the page.
+  const chose: string[] = [];
+  const line = UnsavedLine({
+    onLeave: () => chose.push('leave'),
+    onStay: () => chose.push('stay'),
+  }) as ReactElement<{ children: ReactElement<{ children: unknown }>[] }>;
+  const buttons = line.props.children[1]?.props.children as ReactElement<{
+    onClick: () => void;
+  }>[];
+  for (const button of buttons) button.props.onClick();
+  assert.deepEqual(chose, ['leave', 'stay']);
 });
 
 await test('the GPUs that agents may rent: those at or under the cap before a save, and the saved list after', () => {
@@ -266,6 +389,8 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      onOpen={quiet}
+      onUnsaved={quiet}
     />,
   );
   for (const expected of [
@@ -290,6 +415,8 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      onOpen={quiet}
+      onUnsaved={quiet}
     />,
   );
   assert.match(html, /<option value="opus\[1m\]" selected="">/);
@@ -308,6 +435,8 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      onOpen={quiet}
+      onUnsaved={quiet}
     />,
   );
   assert.match(
@@ -322,6 +451,8 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
         refresh={quiet}
         onSaved={quiet}
         onSkip={quiet}
+        onOpen={quiet}
+        onUnsaved={quiet}
       />,
     ),
     /Looking for Claude Code and Codex on this computer\./,
@@ -337,6 +468,8 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         refresh={quiet}
         onSaved={quiet}
         onBack={quiet}
+        onOpen={quiet}
+        onUnsaved={quiet}
       />,
     );
   const first = step({});
@@ -353,6 +486,8 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         refresh={quiet}
         onSaved={quiet}
         onBack={quiet}
+        onOpen={quiet}
+        onUnsaved={quiet}
       />,
     ),
     /placeholder="Answer in your own words"/,
@@ -407,6 +542,8 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         refresh={quiet}
         onSaved={quiet}
         onBack={quiet}
+        onOpen={quiet}
+        onUnsaved={quiet}
       />,
     ),
     /placeholder="Add anything else, in your own words"/,
@@ -440,6 +577,8 @@ await test('step 4 asks for a key without one, and with one shows the prices wit
         refresh={quiet}
         onSaved={quiet}
         onBack={quiet}
+        onOpen={quiet}
+        onUnsaved={quiet}
       />,
     );
   const none = step({});
@@ -536,7 +675,6 @@ await test('after the last step, each step says done or skipped, with a way to c
         },
       })}
       project=""
-      onBack={quiet}
     />,
   );
   assert.match(done, /Setup is saved/);
@@ -553,7 +691,6 @@ await test('after the last step, each step says done or skipped, with a way to c
           steps: { agents: 'done', about: 'skipped', money: 'done' },
         })}
         project=""
-        onBack={quiet}
       />,
     ),
     /href="#\/ask"/,
@@ -562,7 +699,6 @@ await test('after the last step, each step says done or skipped, with a way to c
     <DoneStep
       view={view({ steps: { agents: 'done', about: 'done', money: 'done' } })}
       project="cot"
-      onBack={quiet}
     />,
   );
   assert.match(set, /You’re set/);
@@ -631,6 +767,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       refresh={quiet}
       onDone={quiet}
       onBack={quiet}
+      onOpen={quiet}
     />,
   );
   assert.match(shown, /Step 3 of 4: Skills \(optional\)/);
@@ -664,6 +801,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       refresh={quiet}
       onDone={quiet}
       onBack={quiet}
+      onOpen={quiet}
     />,
   );
   assert.match(markup, /aria-pressed="true"[^>]*>Added</);
@@ -682,6 +820,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         refresh={quiet}
         onDone={quiet}
         onBack={quiet}
+        onOpen={quiet}
       />,
     ),
     /Update/,
@@ -696,6 +835,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         refresh={quiet}
         onDone={quiet}
         onBack={quiet}
+        onOpen={quiet}
       />,
     ),
     /this step needs About you first/,
@@ -710,6 +850,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         refresh={quiet}
         onDone={quiet}
         onBack={quiet}
+        onOpen={quiet}
       />,
     ),
     /Reading the skill catalogs on GitHub/,
@@ -741,6 +882,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       refresh={quiet}
       onDone={quiet}
       onBack={quiet}
+      onOpen={quiet}
     />,
   );
   assert.match(updates, /@ aaaaaaa · updated: not read/);
