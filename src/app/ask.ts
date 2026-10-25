@@ -33,15 +33,31 @@ export function isStartView(value: unknown): value is StartView {
   );
 }
 
-export function startActions(token: string | null): StartActions {
+/** The Ask page's read and start. `scope` `project`: an isolated project, which starts with its own profile. */
+export function startActions(
+  token: string | null,
+  scope?: 'project',
+): StartActions {
   if (!token)
     return {
       read: () => Promise.resolve({ error: 'This tab has no access key.' }),
       start: () => Promise.resolve({ refused: 'This tab has no access key.' }),
     };
   return {
-    read: (signal) => load(token, '/api/v1/start', isStartView, signal),
-    start: (body, key) => act(token, 'project-start', body, key),
+    read: (signal) =>
+      load(
+        token,
+        `/api/v1/start${scope ? `?profile=${scope}` : ''}`,
+        isStartView,
+        signal,
+      ),
+    start: (body, key) =>
+      act(
+        token,
+        'project-start',
+        scope ? { ...body, profile: scope } : body,
+        key,
+      ),
   };
 }
 

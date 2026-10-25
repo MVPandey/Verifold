@@ -37,10 +37,12 @@ const toolName = (harness: Harness): string =>
 function AgentsEditor({
   tools,
   agents,
+  scope,
   onChange,
 }: {
   readonly tools: readonly AgentTool[];
   readonly agents: ProjectAgents | null;
+  readonly scope: 'project' | undefined;
   readonly onChange: (agents: ProjectAgents | null) => void;
 }): ReactNode {
   const installed = teamOrder(
@@ -51,7 +53,7 @@ function AgentsEditor({
     return (
       <p className="setup__note">
         Verifold found no agent tool on this computer.{' '}
-        <a href={href.setup('agents')}>Check your agents</a>.
+        <a href={href.setup('agents', scope)}>Check your agents</a>.
       </p>
     );
   const modelOf = (harness: Harness): string =>
@@ -117,11 +119,14 @@ function AgentsEditor({
  * shows. As on the v9 canvas ("5 Ask").
  */
 export function AskPage({
+  scope,
   setup,
   start,
   now,
   connection,
 }: {
+  /** `project`: an isolated project, with its own settings. `setup` and `start` are for them too. */
+  readonly scope?: 'project';
   readonly setup: SetupActions;
   readonly start: StartActions;
   readonly now: number;
@@ -144,7 +149,7 @@ export function AskPage({
   }, [start, reads]);
   if (!where)
     return (
-      <AskFrame>
+      <AskFrame scope={scope}>
         {problem ? (
           <div className="setup__problem">
             <span role="alert">{problem}</span>
@@ -164,6 +169,7 @@ export function AskPage({
   return (
     <AskForm
       where={where}
+      scope={scope}
       tools={profile.view?.agents.tools ?? null}
       profileError={profile.error}
       onRetry={profile.refresh}
@@ -174,19 +180,38 @@ export function AskPage({
   );
 }
 
-function AskFrame({ children }: { readonly children: ReactNode }): ReactNode {
+/**
+ * The Ask page's frame. Back opens the last step of an isolated project's
+ * settings, or the choice between the global settings and an isolated
+ * project.
+ */
+function AskFrame({
+  scope,
+  children,
+}: {
+  readonly scope: 'project' | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
   return (
     <div className="page">
       <header className="header">
         <Logo />
         <span className="header__brand">verifold</span>
         <div className="header__spacer" />
-        <a className="header__link" href={href.setup('agents')}>
-          Profile
+        <a className="header__link" href={href.setup('agents', scope)}>
+          {scope ? 'This project’s settings' : 'Profile'}
         </a>
       </header>
       <main className="ask">
-        <div className="ask__column">{children}</div>
+        <div className="ask__column">
+          <a
+            className="ask__back"
+            href={scope ? href.setup('money', scope) : href.new}
+          >
+            Back
+          </a>
+          {children}
+        </div>
       </main>
     </div>
   );
@@ -195,6 +220,7 @@ function AskFrame({ children }: { readonly children: ReactNode }): ReactNode {
 /** The Ask page once Verifold sent the project's defaults. Tests render it directly. */
 export function AskForm({
   where,
+  scope,
   tools,
   profileError,
   onRetry,
@@ -203,6 +229,8 @@ export function AskForm({
   connection,
 }: {
   readonly where: StartView;
+  /** `project`: an isolated project, with its own settings. */
+  readonly scope?: 'project' | undefined;
   /** The harnesses on this computer, from the profile's read. Null: not read yet, or not readable. */
   readonly tools: readonly AgentTool[] | null;
   readonly profileError: string | null;
@@ -288,7 +316,7 @@ export function AskForm({
   };
   if (phase === 'starting')
     return (
-      <AskFrame>
+      <AskFrame scope={scope}>
         <StatusBar tone="plan">
           The project starts. Its lab opens here in a moment.
         </StatusBar>
@@ -301,7 +329,7 @@ export function AskForm({
     );
   const shownFolder = folder ?? where.folder;
   return (
-    <AskFrame>
+    <AskFrame scope={scope}>
       <form
         className="ask__form"
         onSubmit={(event) => {
@@ -334,8 +362,9 @@ export function AskForm({
           {chip('hours', dueLabel(hours, now))}
         </div>
         <span className="ask__hint">
-          These come from your profile. Click one to change it for this project
-          only.
+          {scope
+            ? 'These come from this project’s settings. Click one to change it.'
+            : 'These come from your profile. Click one to change it for this project only.'}
         </span>
         {profileError && (
           <div className="setup__problem">
@@ -359,6 +388,7 @@ export function AskForm({
                 <AgentsEditor
                   tools={tools}
                   agents={agents}
+                  scope={scope}
                   onChange={setAgents}
                 />
               ) : (
@@ -409,7 +439,8 @@ export function AskForm({
               ) : (
                 <p className="setup__note">
                   Your profile has no GPU limits yet, so this project starts
-                  without GPUs. <a href={href.setup('money')}>Set GPU limits</a>
+                  without GPUs.{' '}
+                  <a href={href.setup('money', scope)}>Set GPU limits</a>
                 </p>
               ))}
             {editing === 'hours' && (
@@ -478,17 +509,25 @@ export function AskForm({
             In {shownFolder}
             {folder === null && where.files
               ? '. The agents may read the files in it.'
-              : ''}{' '}
-            ·{' '}
-            <button
-              type="button"
-              className="link-button"
-              aria-expanded={editing === 'folder'}
-              aria-controls={editorId}
-              onClick={() => toggle('folder')}
-            >
-              Change
-            </button>
+              : ''}
+            {scope ? (
+              // The project's own settings are in this folder already.
+              '. An isolated project stays in this folder. To use another folder, run verifold there.'
+            ) : (
+              <>
+                {' '}
+                ·{' '}
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-expanded={editing === 'folder'}
+                  aria-controls={editorId}
+                  onClick={() => toggle('folder')}
+                >
+                  Change
+                </button>
+              </>
+            )}
           </span>
           <div className="header__spacer" />
           <button

@@ -3,8 +3,14 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Workspace } from '../core/contracts.ts';
 import type { Profile } from '../core/profile.ts';
-import { changeWorkspace, loadWorkspace, missing } from '../core/storage.ts';
+import {
+  changeWorkspace,
+  isFolder,
+  loadWorkspace,
+  missing,
+} from '../core/storage.ts';
 import { writeComputeSettings, type ComputeSettings } from '../core/compute.ts';
+import { ownProfileFolder } from '../core/project-profile.ts';
 
 const folders = {
   literature: 'Source notes, papers, and citation provenance.',
@@ -84,8 +90,14 @@ export async function createProject(
   lab = false,
   /** The project's first GPU limits, copied from the person's profile. */
   compute?: ComputeSettings,
+  /** The project uses its own profile, which `.verifold/agency/` holds already. */
+  own = false,
 ): Promise<Workspace> {
   await checkProjectDirectory(root);
+  if (own && !(await isFolder(ownProfileFolder(root))))
+    throw new Error(
+      "This project's own settings are not there. Choose Isolated project again.",
+    );
   const created: string[] = [];
   let markerCreated = false;
   // What this call made for the GPU limits, so a rollback removes only that.
@@ -108,7 +120,7 @@ export async function createProject(
       signal.throwIfAborted();
       if (current)
         throw new Error('Workspace already exists; refusing to overwrite it.');
-      return workspace;
+      return own ? { ...workspace, ownProfile: true } : workspace;
     },
     {
       apply: async () => {

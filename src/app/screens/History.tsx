@@ -57,6 +57,7 @@ function Page({
     <div className="page">
       <AppHeader
         project={snapshot.project}
+        own={snapshot.ownProfile === true}
         lab={snapshot.lab}
         now={now}
         onPause={onPause}

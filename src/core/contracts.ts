@@ -38,6 +38,8 @@ export interface Workspace {
   /** How many agents may run at the same time, 1 to 8. Absent means the default, 3. */
   readonly agents?: number;
   readonly context?: string;
+  /** The project uses its own profile in `.verifold/agency/`, not the global one. */
+  readonly ownProfile?: true;
   readonly candidates: readonly Candidate[];
   readonly selectedId: string | null;
   readonly research?: ResearchState;
@@ -122,6 +124,7 @@ export function parseWorkspace(value: unknown): Workspace {
     ...(data.context === undefined
       ? {}
       : { context: parseContext(data.context) }),
+    ...(data.ownProfile === true ? { ownProfile: true as const } : {}),
     candidates,
     selectedId,
     ...(data.research === undefined

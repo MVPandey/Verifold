@@ -26,7 +26,7 @@ Verifold starts your harness with its own configuration and permissions. The age
 Run `verifold` in your terminal.
 
 - In a folder that is already a Verifold project, Verifold opens the project's lab in your browser. This does not change the harness or the research that the project saved. A project whose current run is from the earlier research flow opens in the old desk instead, and the terminal says so. The app shows that run read-only in History, and `verifold --app` opens the app there.
-- In a folder without a project, Verifold opens the first run in your browser (see The first run in the app), then the Ask page. Start on the Ask page creates the project and starts a lab on your question (see The lab).
+- In a folder without a project, Verifold asks in your browser whether the new project uses your global settings or its own (see Isolated projects). Then it opens the first run (see The first run in the app), then the Ask page. Start on the Ask page creates the project and starts a lab on your question (see The lab).
 
 The team works in a background process, so you can close the terminal or press Ctrl+C, and the work goes on. Run `verifold` in the project again to see it, or `verifold stop` to stop it. Stop the team in the top bar of the old desk does the same.
 
@@ -152,7 +152,7 @@ Profile setup and initialization share a lock on the global settings, so only on
 
 ### The first run in the app
 
-`verifold` in a folder without a project opens the first run in the app. No project starts until you ask a question on the Ask page, and Ctrl+C in the terminal stops it. There are four steps, and you can skip each one:
+`verifold` in a folder without a project opens the first run in the app. No project starts until you ask a question on the Ask page, and Ctrl+C in the terminal stops it. There are four steps. You can skip each one, go Back, or open any step from the bar at the top:
 
 1. **Agents.** Claude Code and Codex, each with its version, its sign-in, and a model. Verifold reads only the sign-in state and the plan from `claude auth status` and `codex login status`, never the account's email. It offers Fable only on a plan that includes it.
 2. **About you.** Verifold asks what you work on. Your agent, with the model that you picked, asks up to two more questions in an empty private folder, then drafts a card: "You work on", "To explore", and "Talk to me". Edit the card, or add a note and the agent changes it. Verifold saves the card as `USER.md`. Without a signed-in agent, Verifold asks the questions and fills the card from your answers.
@@ -162,6 +162,17 @@ Profile setup and initialization share a lock on the global settings, so only on
 `settings.json` keeps the agents in the fields that older versions read, and adds the GPU limits and the steps that you finished or skipped. A new project copies the harnesses and the GPU limits. The planner of each lab reads your whole profile. Every other agent, and each checker, gets only "Talk to me". An edit reaches a running lab with its next prompt. Open these pages again with Profile in the app's top bar.
 
 `skills.json` lists the skills that you added, each with its repository, commit, folder, and tree hash. Verifold keeps each one read-only in `skills/` in the same folder, without its `allowed-tools`. Only lab agents and checkers load them, from a read-only copy in `~/.verifold/plugins/`, outside the profile folder: Claude Code with `--plugin-dir`, and Codex as an extra skill root of the session's own app-server, with `skill_mcp_dependency_install` off. Your own Claude Code and Codex settings do not change. When a catalog changes a skill that you added, the step offers Update, and the new version installs only when you click it.
+
+### Isolated projects
+
+A folder without a project opens on a choice:
+
+- **Use my global settings** opens the Ask page. If you did not finish the first run, its open steps come first.
+- **Isolated project** opens the same four steps for this project only. They start as a copy of your global settings, and a change here does not change the global ones. "Start again from my global settings" copies them again. When you come back to a folder that holds such a copy, this choice reads **Continue this project's settings** and says when the copy was made.
+
+The copy is in `.verifold/agency/` of the folder from the moment you choose Isolated project, so an isolated project stays in this folder: its Ask page has no Change for the folder. A folder that holds your global settings, such as your home folder, cannot hold an isolated project's settings, and the choice says so. Start records `ownProfile` in `workspace.json`. Each later `verifold` in the project uses these settings, also with `--agency-dir`, which only moves the global folder. A project that you start on the global settings instead removes a copy that you left in its folder. No agent or session that Verifold runs unattended can read the folder: tasks, the coordinator, lab agents, checkers, and runs. In the project, Profile opens these settings, and Settings links to them and to your global settings.
+
+The monthly GPU limit across projects stays in your global settings. An isolated project counts toward it, and its GPU money step only shows it. The RunPod key is the same for every project on this computer, so a new key in any project's settings replaces it for all of them.
 
 ### Editable harness prompts
 
