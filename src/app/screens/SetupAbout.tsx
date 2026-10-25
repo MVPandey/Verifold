@@ -6,10 +6,14 @@ import type {
   SetupView,
 } from '../../protocol/api.ts';
 import { Avatar, type Who } from '../components/Avatar.tsx';
-import { StepHeader } from '../components/StepHeader.tsx';
+import {
+  BackButton,
+  StepHeader,
+  useUnsaved,
+} from '../components/StepHeader.tsx';
 import { harnessName, since } from '../format.ts';
 import { afterSend } from '../intent.ts';
-import type { SetupActions } from '../setup.ts';
+import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 const fieldNames: readonly {
@@ -145,11 +149,13 @@ export function AboutStep({
   actions,
   refresh,
   onSaved,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const about = view.about;
   const box = useId();
@@ -177,6 +183,11 @@ export function AboutStep({
     actions.about(value, key),
   );
   const skip = useAction((_: null, key) => actions.skip('about', key));
+  // A typed answer, or card edits.
+  useUnsaved(
+    text.trim() !== '' || (edited && !sameCard(edits.card, edits.from)),
+    nav,
+  );
   const error =
     say.error ??
     retry.error ??
@@ -192,7 +203,12 @@ export function AboutStep({
   if (about.saved === 'text' && about.text && !started && !fresh)
     return (
       <>
-        <StepHeader step="about" title="About you" />
+        <StepHeader
+          step="about"
+          states={view.steps}
+          nav={nav}
+          title="About you"
+        />
         <section aria-label="Your profile" className="profile">
           <h2 className="profile__title">
             Your profile from an earlier version
@@ -209,6 +225,7 @@ export function AboutStep({
           </span>
         )}
         <div className="setup__actions">
+          <BackButton step="about" nav={nav} />
           <button
             type="button"
             className="button button--primary button--big"
@@ -245,7 +262,12 @@ export function AboutStep({
   const noteBox = card !== null && about.harness !== null;
   return (
     <>
-      <StepHeader step="about" title="About you" />
+      <StepHeader
+        step="about"
+        states={view.steps}
+        nav={nav}
+        title="About you"
+      />
       <section aria-label="Conversation" className="chat">
         {about.lines.map((line, index) => (
           <Line
@@ -353,6 +375,7 @@ export function AboutStep({
         </span>
       )}
       <div className="setup__actions">
+        <BackButton step="about" nav={nav} />
         {card && (
           <button
             type="button"

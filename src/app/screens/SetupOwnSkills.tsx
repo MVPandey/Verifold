@@ -1,7 +1,15 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type { Harness, OwnSkill, SetupSkills } from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
-import type { SetupActions } from '../setup.ts';
+import { useUnsaved } from '../components/StepHeader.tsx';
+import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 /** A description longer than this shows its first lines, with a button for the rest. */
@@ -53,10 +61,13 @@ function OwnRow({
   skill,
   noteLimit,
   onChoose,
+  onTyped,
 }: {
   readonly skill: OwnSkill;
   readonly noteLimit: number;
   readonly onChoose: (choice: Choice) => void;
+  /** The note in the box differs from the saved one, or no longer does. */
+  readonly onTyped: (typed: boolean) => void;
 }): ReactNode {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -67,6 +78,8 @@ function OwnRow({
   const [noting, setNoting] = useState(false);
   const long = skill.description.length > shortWhat;
   const note = when.trim() !== skill.when ? { when: when.trim() } : {};
+  const typed = 'when' in note;
+  useEffect(() => onTyped(typed), [typed, onTyped]);
   const save = (): void => {
     if ('when' in note)
       onChoose({
@@ -175,11 +188,25 @@ export function OwnSkills({
   skills,
   actions,
   refresh,
+  nav,
 }: {
   readonly skills: SetupSkills;
   readonly actions: SetupActions;
   readonly refresh: () => void;
+  readonly nav: StepNav;
 }): ReactNode {
+  // The rows with a note typed but not saved, so leaving the step asks first.
+  const [typing, setTyping] = useState<ReadonlySet<string>>(new Set());
+  useUnsaved(typing.size > 0, nav);
+  const typed = useCallback((row: string, now: boolean): void => {
+    setTyping((rows) => {
+      if (rows.has(row) === now) return rows;
+      const next = new Set(rows);
+      if (now) next.add(row);
+      else next.delete(row);
+      return next;
+    });
+  }, []);
   const choose = useAction((choices: readonly Choice[], key) =>
     actions.ownSkills(choices, key),
   );
@@ -259,6 +286,9 @@ export function OwnSkills({
                           skill={skill}
                           noteLimit={noteLimit}
                           onChoose={onChoose}
+                          onTyped={(now) =>
+                            typed(`${skill.harness}:${skill.id}`, now)
+                          }
                         />
                       ))}
                     </ul>
