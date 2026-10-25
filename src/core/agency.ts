@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path';
 import { validateModel, type HarnessName } from './harness.ts';
 import { object, text } from './research-contracts.ts';
 import { parseProfileMoney, type ProfileMoney } from './compute.ts';
-import { SessionActionError, hostName } from './session.ts';
-import { missing, writePrivateFile } from './storage.ts';
+import { SessionActionError } from './session.ts';
+import { homeShown, missing, writePrivateFile } from './storage.ts';
 
 /**
  * The person's global profile lives in `~/.verifold/agency/`:
@@ -370,70 +370,118 @@ export interface OwnChoice {
   readonly use: boolean;
   /** When and how agents should use it, in the person's words. Empty: no note. */
   readonly when: string;
+  /** What turns the skill off in its harness: its names for Claude Code, its SKILL.md path for Codex. Empty while it loads. */
+  readonly off: readonly string[];
 }
 
-/** A change of one choice. Without `when`, the note stays as it is. */
+/** A change of one choice. Without `when`, the note stays as it is. `off` comes from the list of the person's skills. */
 export interface OwnChange {
   readonly harness: HarnessName;
   readonly name: string;
   readonly use: boolean;
   readonly when?: string;
+  readonly off: readonly string[];
 }
 
 /** The choices by harness, keyed by the name that the harness lists. A skill without a choice loads, with no note. */
-export type OwnChoices = Readonly<
-  Record<HarnessName, ReadonlyMap<string, OwnChoice>>
->;
+export interface OwnChoices {
+  readonly claude: ReadonlyMap<string, OwnChoice>;
+  readonly codex: ReadonlyMap<string, OwnChoice>;
+  /** Entries of the file that Verifold could not read, and so left out. */
+  readonly skipped: number;
+}
 
 /**
  * A skill's name as Claude Code or Codex lists it, such as `python` or
- * `vercel:nextjs`. It goes as it is into a permission rule and a `-c` option.
+ * `vercel:nextjs`. It goes as it is into a permission rule.
  */
 export const ownSkillName = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-/** The most characters of a note on when to use a skill. */
-export const whenLimit = 300;
+/** The most characters of a note on when to use a skill, choices in the file, bytes of the file, and characters of a path. */
+export const ownLimits = {
+  when: 300,
+  choices: 600,
+  bytes: 1024 * 1024,
+  path: 1024,
+} as const;
 
-/** `own-skills.json`. A missing file holds no choices. */
+/** A target in `off`: a skill name for Claude Code, an absolute SKILL.md path for Codex. */
+export function offTarget(host: HarnessName, value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (host === 'claude') return ownSkillName.test(value);
+  return (
+    value.startsWith('/') &&
+    value.endsWith('/SKILL.md') &&
+    value.length <= ownLimits.path &&
+    ![...value].some((char) => char.charCodeAt(0) < 0x20)
+  );
+}
+
+const ownFile = 'own-skills.json';
+
+/** The file of the choices, as the person reads its path. */
+export function ownChoicesFile(directory: string): string {
+  return homeShown(join(directory, ownFile));
+}
+
+/**
+ * `own-skills.json`. A missing file holds no choices. An entry that is not
+ * valid is left out and counted. A file that cannot be read at all throws.
+ */
 export async function loadOwnChoices(directory: string): Promise<OwnChoices> {
   let content: string;
   try {
-    content = await readMemory(join(directory, 'own-skills.json'), 256 * 1024);
+    content = await readMemory(join(directory, ownFile), ownLimits.bytes);
   } catch (error) {
-    if (missing(error)) return { claude: new Map(), codex: new Map() };
+    if (missing(error))
+      return { claude: new Map(), codex: new Map(), skipped: 0 };
     throw error;
   }
-  const invalid = (): never => {
-    throw new Error('The choices for your own skills are not valid.');
-  };
   const data: unknown = JSON.parse(content);
   if (!record(data) || data.schemaVersion !== 1 || !record(data.skills))
-    invalid();
-  const skills = (data as { skills: Record<string, unknown> }).skills;
+    throw new Error(`${ownChoicesFile(directory)} is not valid.`);
+  const skills = data.skills;
+  let skipped = 0;
   const side = (host: HarnessName): Map<string, OwnChoice> => {
     const entries = Object.hasOwn(skills, host) ? skills[host] : {};
-    if (!record(entries)) return invalid();
-    return new Map(
-      Object.entries(entries).map(([name, value]): [string, OwnChoice] => {
-        if (
-          !ownSkillName.test(name) ||
-          !record(value) ||
-          typeof value.use !== 'boolean' ||
-          (value.when !== undefined &&
-            (typeof value.when !== 'string' || value.when.length > whenLimit))
-        )
-          invalid();
-        const entry = value as { use: boolean; when?: string };
-        return [name, { use: entry.use, when: entry.when ?? '' }];
-      }),
-    );
+    const found = new Map<string, OwnChoice>();
+    if (!record(entries)) {
+      skipped += 1;
+      return found;
+    }
+    for (const [name, value] of Object.entries(entries)) {
+      const off: unknown = record(value) ? (value.off ?? []) : null;
+      if (
+        found.size >= ownLimits.choices ||
+        !ownSkillName.test(name) ||
+        !record(value) ||
+        typeof value.use !== 'boolean' ||
+        (value.when !== undefined &&
+          (typeof value.when !== 'string' ||
+            value.when.length > ownLimits.when)) ||
+        !Array.isArray(off) ||
+        off.length > 2 ||
+        !off.every((target) => offTarget(host, target)) ||
+        (!value.use && !off.length)
+      ) {
+        skipped += 1;
+        continue;
+      }
+      found.set(name, {
+        use: value.use,
+        when: typeof value.when === 'string' ? value.when : '',
+        off: value.use ? [] : off,
+      });
+    }
+    return found;
   };
-  return { claude: side('claude'), codex: side('codex') };
+  return { claude: side('claude'), codex: side('codex'), skipped };
 }
 
 /**
  * Apply changes to `own-skills.json`. The caller holds the lock. A skill
- * that loads with no note needs no entry, so it has none.
+ * that loads with no note needs no entry, so it has none. A change that
+ * would pass the limits is refused before anything is written.
  */
 export async function writeOwnChoices(
   directory: string,
@@ -445,56 +493,76 @@ export async function writeOwnChoices(
     codex: new Map(current.codex),
   };
   for (const change of changes) {
+    if (
+      !change.use &&
+      (!change.off.length ||
+        !change.off.every((target) => offTarget(change.harness, target)))
+    )
+      throw new SessionActionError(
+        `Verifold cannot turn off ${change.name}. Read the list again.`,
+      );
     const side = next[change.harness];
     const when =
       change.when === undefined
         ? (side.get(change.name)?.when ?? '')
-        : change.when.trim().slice(0, whenLimit);
+        : change.when.trim().slice(0, ownLimits.when);
     if (change.use && !when) side.delete(change.name);
-    else side.set(change.name, { use: change.use, when });
+    else
+      side.set(change.name, {
+        use: change.use,
+        when,
+        off: change.use ? [] : change.off,
+      });
   }
+  if (next.claude.size + next.codex.size > ownLimits.choices)
+    throw new SessionActionError(
+      `Verifold keeps choices for at most ${ownLimits.choices} skills. Say Yes with no note to some skills, then try again.`,
+    );
   const entries = (side: ReadonlyMap<string, OwnChoice>) =>
     Object.fromEntries(
-      [...side].map(([name, { use, when }]) => [
+      [...side].map(([name, { use, when, off }]) => [
         name,
-        { use, ...(when ? { when } : {}) },
+        { use, ...(when ? { when } : {}), ...(off.length ? { off } : {}) },
       ]),
     );
-  await saveAgencyFile(
-    directory,
-    'own-skills.json',
-    JSON.stringify(
-      {
-        schemaVersion: 1,
-        skills: { claude: entries(next.claude), codex: entries(next.codex) },
-      },
-      null,
-      2,
-    ),
-  );
+  const content = JSON.stringify({
+    schemaVersion: 1,
+    skills: { claude: entries(next.claude), codex: entries(next.codex) },
+  });
+  if (Buffer.byteLength(content) > ownLimits.bytes)
+    throw new SessionActionError(
+      'The skill choices would be too large to keep. Remove some notes, then try again.',
+    );
+  await saveAgencyFile(directory, ownFile, content);
 }
 
-/** The skills of a harness that Verifold's agents do not load. */
+/** What turns off each skill of a harness that Verifold's agents do not load. */
 export function skillsOff(
   choices: OwnChoices,
   host: HarnessName,
 ): readonly string[] {
-  return [...choices[host]]
-    .filter(([, choice]) => !choice.use)
-    .map(([name]) => name);
+  return [
+    ...new Set(
+      [...choices[host].values()].flatMap((choice) =>
+        choice.use ? [] : choice.off,
+      ),
+    ),
+  ];
 }
 
-/** The most characters of the notes in a prompt. */
+/** The most characters of one harness's notes in a prompt. */
 const notesLimit = 2000;
 
-/** The notes on when to use the skills that load, one line each. Null without any. */
-function skillNotes(choices: OwnChoices): string | null {
-  const lines = (['claude', 'codex'] as const).flatMap((host) =>
-    [...choices[host]]
+/** The notes on when to use the skills that load, one line each, for each harness that has any. */
+function skillNotes(choices: OwnChoices): Partial<Record<HarnessName, string>> {
+  const notes: Partial<Record<HarnessName, string>> = {};
+  for (const host of ['claude', 'codex'] as const) {
+    const lines = [...choices[host]]
       .filter(([, choice]) => choice.use && choice.when)
-      .map(([name, choice]) => `- ${name} (${hostName(host)}): ${choice.when}`),
-  );
-  return lines.length ? lines.join('\n').slice(0, notesLimit) : null;
+      .map(([name, choice]) => `- ${name}: ${choice.when}`);
+    if (lines.length) notes[host] = lines.join('\n').slice(0, notesLimit);
+  }
+  return notes;
 }
 
 /**
@@ -552,8 +620,8 @@ export interface PersonProfile {
   readonly whole: string;
   /** "Talk to me", for every agent. Null when the profile has none. */
   readonly style: string | null;
-  /** The person's notes on when to use their own skills, for every agent. */
-  readonly skills?: string;
+  /** The person's notes on when to use their own skills, for the agents of each harness. */
+  readonly skills?: Partial<Record<HarnessName, string>>;
 }
 
 /** The most characters of the profile in the planner's prompt. */
@@ -569,8 +637,8 @@ export async function personProfile(
   directory: string,
 ): Promise<PersonProfile | null> {
   const markdown = await loadMemory(directory);
-  const notes = await loadOwnChoices(directory).then(skillNotes, () => null);
-  const skills = notes ? { skills: notes } : {};
+  const notes = await loadOwnChoices(directory).then(skillNotes, () => ({}));
+  const skills = Object.keys(notes).length ? { skills: notes } : {};
   const card = markdown ? parseCard(markdown) : null;
   const lines = card
     ? [
@@ -591,7 +659,7 @@ export async function personProfile(
       style: card?.talk || null,
       ...skills,
     };
-  return notes ? { whole: '', style: null, ...skills } : null;
+  return 'skills' in skills ? { whole: '', style: null, ...skills } : null;
 }
 
 /**

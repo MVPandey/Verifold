@@ -1097,10 +1097,14 @@ export interface SetupSkills {
   readonly needsProfile: boolean;
   /** Why the last search, add, or removal failed. */
   readonly problem: string | null;
-  /** The skills that the person's own Claude Code and Codex load, with the person's choices. Added after version 1. */
+  /** The skills that the person's own Claude Code and Codex load, with the person's choices. Left out before Verifold lists them. Added after version 1. */
   readonly own?: readonly OwnSkill[];
   /** Verifold lists them now. Ask again in a moment. Added after version 1. */
   readonly ownReading?: boolean;
+  /** What Verifold could not list or read, one line each. Added after version 1. */
+  readonly ownProblems?: readonly string[];
+  /** The most characters of a note on when to use a skill. Added after version 1. */
+  readonly noteLimit?: number;
 }
 
 /** A skill that the person's own Claude Code or Codex loads. Verifold's agents load it unless the person says no. */
@@ -1420,6 +1424,11 @@ export interface ActionBodies {
     }[];
     readonly key?: string;
   };
+  /**
+   * List the skills that the person's own harnesses load. A list with skills
+   * serves until `again`. Added after version 1.
+   */
+  'setup-own-skills-list': { readonly again?: boolean; readonly key?: string };
   /**
    * Without a project: create one for the person's question, and start its
    * lab. The settings apply to this project only. Each one that is left out

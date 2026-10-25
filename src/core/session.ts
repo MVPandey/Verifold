@@ -17,7 +17,7 @@ import type { LimitSignal } from './quota.ts';
 import {
   startHostSession,
   strictClaudeEnvironment,
-  strictClaudeSettings,
+  claudeSessionSettings,
   strictCodexOptions,
   validDomain,
   type AgentTools,
@@ -987,6 +987,8 @@ export class SessionManager {
   private readonly options: SessionManagerOptions;
   private current: SessionRecord | null = null;
   private host: HostSession | null = null;
+  /** The person's own skills that the live process left out, for a terminal that resumes it. */
+  private skillsOff: readonly string[] = [];
   /** The plugin folder of added skills that the live process loaded. */
   private skillsFolder: string | null = null;
   /** Request IDs continue across sessions, so an old desk button cannot answer a new request. */
@@ -1096,6 +1098,13 @@ export class SessionManager {
       record.nativeSessionId ??
       fail('The harness has not reported its session yet.');
     const strict = record.mode === 'strict';
+    // The terminal keeps the session's rules, with the skills that it leaves out.
+    const settings = claudeSessionSettings({
+      mode: record.mode,
+      network: record.network,
+      denyRead: record.denyRead,
+      skillsOff: this.skillsOff,
+    });
     let args: string[];
     if (record.host === 'claude')
       args = [
@@ -1105,12 +1114,7 @@ export class SessionManager {
         '--strict-mcp-config',
         '--permission-mode',
         record.mode === 'auto' ? 'auto' : strict ? 'dontAsk' : 'default',
-        ...(strict
-          ? [
-              '--settings',
-              strictClaudeSettings(record.network, record.denyRead),
-            ]
-          : []),
+        ...(settings ? ['--settings', settings] : []),
       ];
     else {
       const socket =
@@ -1671,9 +1675,9 @@ export class SessionManager {
           ? await this.options.skills?.folder(record.host)
           : null) ?? null;
       this.skillsFolder = skills;
-      const skillsOff = record.agent
-        ? ((await this.options.skills?.off?.(record.host)) ?? [])
-        : [];
+      // Every session that Verifold starts leaves out the person's own skills that they turned off.
+      const skillsOff = (await this.options.skills?.off?.(record.host)) ?? [];
+      this.skillsOff = skillsOff;
       const writer = await TranscriptWriter.open(
         transcriptFile(this.root, record.id),
       );

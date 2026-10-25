@@ -42,12 +42,19 @@ interface Ran {
   /** Standard output and standard error together. */
   readonly output: string;
   readonly missing: boolean;
+  /** The output was longer than `maxBuffer`, so the command stopped. */
+  readonly overflow: boolean;
 }
 
-/** Run a harness command with no shell and no RunPod variables, for at most 10 seconds. */
+/**
+ * Run a harness command with no shell and no RunPod variables, for at most
+ * 10 seconds. `maxBuffer` bounds each output stream, 256 KB by default.
+ * `signal` stops the command.
+ */
 export function runCommand(
   executable: string,
   args: readonly string[],
+  options: { readonly maxBuffer?: number; readonly signal?: AbortSignal } = {},
 ): Promise<Ran> {
   return new Promise((resolve) => {
     execFile(
@@ -56,10 +63,11 @@ export function runCommand(
       {
         env: childEnvironment(),
         timeout: commandMs,
-        maxBuffer: 256 * 1024,
+        maxBuffer: options.maxBuffer ?? 256 * 1024,
         encoding: 'utf8',
         shell: false,
         windowsHide: true,
+        ...(options.signal ? { signal: options.signal } : {}),
       },
       (error, stdout, stderr) => {
         const code =
@@ -73,6 +81,7 @@ export function runCommand(
           stdout,
           output: `${stdout}\n${stderr}`,
           missing: error?.code === 'ENOENT',
+          overflow: error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
         });
       },
     );
@@ -146,13 +155,16 @@ export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
  * One question to a short-lived Codex app-server, started with the `-c`
  * options in `config`. After `initialize`, `ask` sends its requests with
  * `call` and gives the answer to `finish`. Null when the server does not
- * answer in 10 seconds, or refuses a request that has no `onError`.
+ * answer in 10 seconds, refuses a request that has no `onError`, or
+ * `signal` stops the question.
  */
 export async function askCodexServer<T>(
   executable: string,
   config: readonly string[],
   ask: (call: CodexCall, finish: (value: T | null) => void) => void,
+  signal?: AbortSignal,
 ): Promise<T | null> {
+  if (signal?.aborted) return null;
   const server = startCodexServer({ executable, config });
   let finish: (value: T | null) => void = () => {};
   const answer = new Promise<T | null>((resolve) => {
@@ -160,6 +172,9 @@ export async function askCodexServer<T>(
   });
   const deadline = Date.now() + commandMs;
   const timer = setTimeout(() => finish(null), commandMs);
+  // A stop ends the wait, and the `finally` below stops the server.
+  const stop = (): void => finish(null);
+  signal?.addEventListener('abort', stop, { once: true });
   let connection: UnixWebSocket | null = null;
   try {
     const answers = new Map<
@@ -205,6 +220,7 @@ export async function askCodexServer<T>(
     return await answer;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
     connection?.close();
     server.stop();
   }

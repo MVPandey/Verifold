@@ -1,13 +1,12 @@
-import { useId, useState, type ReactNode } from 'react';
-import type { Harness, OwnSkill } from '../../protocol/api.ts';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import type { Harness, OwnSkill, SetupSkills } from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
+import { newKey } from '../intent.ts';
 import type { SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 /** A description longer than this shows its first lines, with a button for the rest. */
 const shortWhat = 160;
-/** The most characters of a note on when to use a skill, as the server takes it. */
-const whenLimit = 300;
 
 type Choice = Parameters<SetupActions['ownSkills']>[0][number];
 
@@ -53,11 +52,11 @@ function shortName(skill: OwnSkill): string {
 
 function OwnRow({
   skill,
-  busy,
+  noteLimit,
   onChoose,
 }: {
   readonly skill: OwnSkill;
-  readonly busy: boolean;
+  readonly noteLimit: number;
   readonly onChoose: (choice: Choice) => void;
 }): ReactNode {
   const id = useId();
@@ -66,13 +65,14 @@ function OwnRow({
   // The note's box opens on a click, so a long list stays short.
   const [noting, setNoting] = useState(false);
   const long = skill.description.length > shortWhat;
+  const note = when.trim() !== skill.when ? { when: when.trim() } : {};
   const save = (): void => {
-    if (when.trim() !== skill.when)
+    if ('when' in note)
       onChoose({
         harness: skill.harness,
         name: skill.name,
         use: true,
-        when: when.trim(),
+        ...note,
       });
     else if (!when.trim()) setNoting(false);
   };
@@ -103,6 +103,7 @@ function OwnRow({
             </button>
           )}
         </div>
+        {/* The switch stays on while a note saves, and a choice takes the note with it, so neither is lost. */}
         <div
           role="group"
           aria-label={`Verifold’s agents use ${shortName(skill)}`}
@@ -114,10 +115,14 @@ function OwnRow({
               type="button"
               className="own__choice"
               aria-pressed={skill.use === use}
-              disabled={busy}
               onClick={() =>
-                skill.use !== use &&
-                onChoose({ harness: skill.harness, name: skill.name, use })
+                (skill.use !== use || 'when' in note) &&
+                onChoose({
+                  harness: skill.harness,
+                  name: skill.name,
+                  use,
+                  ...note,
+                })
               }
             >
               {use ? 'Yes' : 'No'}
@@ -134,7 +139,7 @@ function OwnRow({
             <input
               id={`${id}-when`}
               className="own__when"
-              maxLength={whenLimit}
+              maxLength={noteLimit}
               placeholder="When should agents use it?"
               // The box opens on the person's click, so it takes the typing at once.
               autoFocus={noting}
@@ -167,26 +172,52 @@ function OwnRow({
  */
 export function OwnSkills({
   skills,
-  reading,
   actions,
   refresh,
 }: {
-  readonly skills: readonly OwnSkill[];
-  readonly reading: boolean;
+  readonly skills: SetupSkills;
   readonly actions: SetupActions;
   readonly refresh: () => void;
 }): ReactNode {
   const choose = useAction((choices: readonly Choice[], key) =>
     actions.ownSkills(choices, key),
   );
+  const list = useAction((again: boolean, key) =>
+    actions.ownSkillsList(again, key),
+  );
   const onChoose = (choice: Choice): void => {
     void choose.submit([choice]).then(refresh);
   };
+  // Only this step lists the skills: when it opens, and when the person asks again.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    void actions.ownSkillsList(false, newKey()).then(refresh);
+  }, [actions, refresh]);
+  const own = skills.own;
+  const problems = skills.ownProblems ?? [];
+  // Before the first list ends, the step waits for it. A list that failed says why, below.
+  const reading = Boolean(skills.ownReading) || (!own && !problems.length);
+  const noteLimit = skills.noteLimit ?? 300;
+  const error = choose.error ?? list.error;
   return (
     <section aria-labelledby="own-skills" className="skills">
-      <h2 id="own-skills" className="setup__subtitle">
-        Your skills
-      </h2>
+      <div className="setup__heading">
+        <h2 id="own-skills" className="setup__subtitle">
+          Your skills
+        </h2>
+        {!reading && (
+          <button
+            type="button"
+            className="link-button link-button--inline"
+            disabled={list.busy}
+            onClick={() => void list.submit(true).then(refresh)}
+          >
+            Read again
+          </button>
+        )}
+      </div>
       <p className="setup__line">
         Your own Claude Code and Codex already load these. Verifold’s agents
         load them too, unless you say No.
@@ -195,13 +226,13 @@ export function OwnSkills({
         <StatusBar tone="plan">
           Listing the skills that your Claude Code and Codex load.
         </StatusBar>
-      ) : !skills.length ? (
+      ) : !own ? null : !own.length ? (
         <p className="setup__note">
           Your Claude Code and Codex load no skills of their own.
         </p>
       ) : (
         (['claude', 'codex'] as const).map((harness) => {
-          const mine = skills.filter((skill) => skill.harness === harness);
+          const mine = own.filter((skill) => skill.harness === harness);
           if (!mine.length) return null;
           return (
             <div key={harness} className="own-list">
@@ -225,7 +256,7 @@ export function OwnSkills({
                         <OwnRow
                           key={`${skill.name}:${skill.when}`}
                           skill={skill}
-                          busy={choose.busy}
+                          noteLimit={noteLimit}
                           onChoose={onChoose}
                         />
                       ))}
@@ -237,9 +268,14 @@ export function OwnSkills({
           );
         })
       )}
-      {choose.error && (
+      {problems.map((line) => (
+        <p key={line} className="setup__note">
+          {line}
+        </p>
+      ))}
+      {error && (
         <span role="alert" className="setup__error">
-          {choose.error}
+          {error}
         </span>
       )}
       <p className="setup__note">

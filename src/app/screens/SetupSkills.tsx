@@ -238,12 +238,7 @@ export function SkillsStep({
         Claude Code or Codex. Read what each one can run before you add it.
       </p>
       {skills && (
-        <OwnSkills
-          skills={skills.own ?? []}
-          reading={Boolean(skills.ownReading)}
-          actions={actions}
-          refresh={refresh}
-        />
+        <OwnSkills skills={skills} actions={actions} refresh={refresh} />
       )}
       {error && (
         <span role="alert" className="setup__error">
