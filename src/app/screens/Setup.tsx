@@ -6,6 +6,7 @@ import { href, replaceRoute } from '../route.ts';
 import {
   firstPage,
   pageAfter,
+  pageBefore,
   setupSteps,
   type SetupActions,
   type SetupPage as Page,
@@ -45,9 +46,11 @@ function SetupHeader({ project }: { readonly project: string }): ReactNode {
 export function DoneStep({
   view,
   project,
+  onBack,
 }: {
   readonly view: SetupView;
   readonly project: string;
+  readonly onBack: () => void;
 }): ReactNode {
   // An older Verifold reports no Skills step, so the page leaves it out.
   const steps = setupSteps.filter((step) => view.steps[step] !== undefined);
@@ -76,18 +79,22 @@ export function DoneStep({
           </li>
         ))}
       </ul>
-      {project ? (
+      {project && (
         <p className="step__lead">
           New projects start from this profile. A project that exists keeps its
           own GPU limits. <a href={href.lab}>Back to the lab</a>
         </p>
-      ) : (
-        <div className="setup__actions">
+      )}
+      <div className="setup__actions">
+        <button type="button" className="button button--big" onClick={onBack}>
+          Back
+        </button>
+        {!project && (
           <a className="button button--primary button--big" href={href.ask}>
             Ask your question
           </a>
-        </div>
-      )}
+        )}
+      </div>
     </>
   );
 }
@@ -135,6 +142,11 @@ export function SetupPage({
     location.hash = pageRoute(page, project);
     refresh();
   };
+  // Back only opens the step before. It saves and skips nothing.
+  const before = step && pageBefore(step);
+  const back = (): void => {
+    if (before) open(before);
+  };
   let body: ReactNode;
   if (!view || step === null)
     body = error ? (
@@ -163,6 +175,7 @@ export function SetupPage({
         actions={actions}
         refresh={refresh}
         onSaved={() => open(pageAfter('about'))}
+        onBack={back}
       />
     );
   else if (step === 'skills')
@@ -172,6 +185,7 @@ export function SetupPage({
         actions={actions}
         refresh={refresh}
         onDone={() => open(pageAfter('skills'))}
+        onBack={back}
       />
     );
   else if (step === 'money')
@@ -181,9 +195,10 @@ export function SetupPage({
         actions={actions}
         refresh={refresh}
         onSaved={() => open(pageAfter('money'))}
+        onBack={back}
       />
     );
-  else body = <DoneStep view={view} project={project ?? ''} />;
+  else body = <DoneStep view={view} project={project ?? ''} onBack={back} />;
   return (
     <div className="page">
       <SetupHeader project={project ?? ''} />

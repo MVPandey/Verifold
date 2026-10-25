@@ -105,11 +105,13 @@ export function SkillsStep({
   actions,
   refresh,
   onDone,
+  onBack,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onDone: () => void;
+  readonly onBack: () => void;
 }): ReactNode {
   const skills = view.skills;
   const search = useAction((_: null, key) => actions.skillsSearch(key));
@@ -251,6 +253,9 @@ export function SkillsStep({
         </span>
       )}
       <div className="setup__actions">
+        <button type="button" className="button button--big" onClick={onBack}>
+          Back
+        </button>
         <button
           type="button"
           className="button button--primary button--big"

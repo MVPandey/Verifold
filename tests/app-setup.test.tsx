@@ -13,6 +13,7 @@ import {
   firstPage,
   isSetupView,
   pageAfter,
+  pageBefore,
   planName,
   setupActions,
 } from '../src/app/setup.ts';
@@ -122,6 +123,77 @@ await test('the first run opens its first step without a record, and each step l
   assert.equal(planName('team_premium'), 'Team premium plan');
   assert.ok(isSetupView(view()));
   assert.equal(isSetupView({ steps: {} }), false);
+});
+
+await test('each step after the first has Back, and the step bar links to each step', () => {
+  assert.equal(pageBefore('agents'), null);
+  assert.equal(pageBefore('about'), 'agents');
+  assert.equal(pageBefore('money'), 'skills');
+  assert.equal(pageBefore('done'), 'money');
+  const links = (html: string): string[][] =>
+    [
+      ...html.matchAll(
+        /<a href="([^"]+)" class="step__link" aria-label="([^"]+)"( aria-current="step")?/g,
+      ),
+    ].map(([, to, name, current]) => [to ?? '', name ?? '', current ?? '']);
+  const back =
+    /<button type="button" class="button button--big">Back<\/button>/;
+  const agents = renderToStaticMarkup(
+    <AgentsStep
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      onSkip={quiet}
+    />,
+  );
+  assert.doesNotMatch(agents, back);
+  assert.deepEqual(links(agents), [
+    ['#/setup/agents', 'Agents', ' aria-current="step"'],
+    ['#/setup/about', 'About you', ''],
+    ['#/setup/skills', 'Skills (optional)', ''],
+    ['#/setup/money', 'GPU money', ''],
+  ]);
+  const about = renderToStaticMarkup(
+    <AboutStep
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      onBack={quiet}
+    />,
+  );
+  assert.match(about, back);
+  assert.deepEqual(
+    links(about).map(([to, , current]) => [to, current]),
+    [
+      ['#/setup/agents', ''],
+      ['#/setup/about', ' aria-current="step"'],
+      ['#/setup/skills', ''],
+      ['#/setup/money', ''],
+    ],
+  );
+  for (const page of [
+    <SkillsStep
+      key="skills"
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+      onBack={quiet}
+    />,
+    <MoneyStep
+      key="money"
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      onBack={quiet}
+    />,
+    <DoneStep key="done" view={view()} project="" onBack={quiet} />,
+    <DoneStep key="lab" view={view()} project="cot" onBack={quiet} />,
+  ])
+    assert.match(renderToStaticMarkup(page), back);
 });
 
 await test('the GPUs that agents may rent: those at or under the cap before a save, and the saved list after', () => {
@@ -264,6 +336,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        onBack={quiet}
       />,
     );
   const first = step({});
@@ -279,6 +352,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        onBack={quiet}
       />,
     ),
     /placeholder="Answer in your own words"/,
@@ -332,6 +406,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        onBack={quiet}
       />,
     ),
     /placeholder="Add anything else, in your own words"/,
@@ -364,6 +439,7 @@ await test('step 4 asks for a key without one, and with one shows the prices wit
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        onBack={quiet}
       />,
     );
   const none = step({});
@@ -460,6 +536,7 @@ await test('after the last step, each step says done or skipped, with a way to c
         },
       })}
       project=""
+      onBack={quiet}
     />,
   );
   assert.match(done, /Setup is saved/);
@@ -476,6 +553,7 @@ await test('after the last step, each step says done or skipped, with a way to c
           steps: { agents: 'done', about: 'skipped', money: 'done' },
         })}
         project=""
+        onBack={quiet}
       />,
     ),
     /href="#\/ask"/,
@@ -484,6 +562,7 @@ await test('after the last step, each step says done or skipped, with a way to c
     <DoneStep
       view={view({ steps: { agents: 'done', about: 'done', money: 'done' } })}
       project="cot"
+      onBack={quiet}
     />,
   );
   assert.match(set, /You’re set/);
@@ -551,6 +630,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      onBack={quiet}
     />,
   );
   assert.match(shown, /Step 3 of 4: Skills \(optional\)/);
@@ -583,6 +663,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      onBack={quiet}
     />,
   );
   assert.match(markup, /aria-pressed="true"[^>]*>Added</);
@@ -600,6 +681,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        onBack={quiet}
       />,
     ),
     /Update/,
@@ -613,6 +695,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        onBack={quiet}
       />,
     ),
     /this step needs About you first/,
@@ -626,6 +709,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        onBack={quiet}
       />,
     ),
     /Reading the skill catalogs on GitHub/,
@@ -656,6 +740,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      onBack={quiet}
     />,
   );
   assert.match(updates, /@ aaaaaaa · updated: not read/);

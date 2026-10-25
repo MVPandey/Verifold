@@ -145,11 +145,13 @@ export function AboutStep({
   actions,
   refresh,
   onSaved,
+  onBack,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
+  readonly onBack: () => void;
 }): ReactNode {
   const about = view.about;
   const box = useId();
@@ -209,6 +211,9 @@ export function AboutStep({
           </span>
         )}
         <div className="setup__actions">
+          <button type="button" className="button button--big" onClick={onBack}>
+            Back
+          </button>
           <button
             type="button"
             className="button button--primary button--big"
@@ -353,6 +358,9 @@ export function AboutStep({
         </span>
       )}
       <div className="setup__actions">
+        <button type="button" className="button button--big" onClick={onBack}>
+          Back
+        </button>
         {card && (
           <button
             type="button"
