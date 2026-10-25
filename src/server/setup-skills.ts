@@ -1,13 +1,12 @@
 import {
   loadMemory,
-  loadOwnChoices,
+  offTarget,
   ownChoicesFile,
+  ownChoicesReader,
   ownLimits,
-  ownSkillName,
   parseCard,
   writeOwnChoices,
   type OwnChange,
-  type OwnChoices,
 } from '../core/agency.ts';
 import type { runHarness } from '../core/harness.ts';
 import type { OwnSkill, OwnSkills } from '../core/own-skills.ts';
@@ -70,14 +69,13 @@ function ownChanges(
       typeof entry === 'object' && entry !== null
         ? (entry as Record<string, unknown>)
         : {};
-    const { harness, name, use, when } = data;
+    const { harness, id, use, when } = data;
     if (
       (harness !== 'claude' && harness !== 'codex') ||
-      typeof name !== 'string' ||
-      !ownSkillName.test(name) ||
+      !offTarget(harness, id) ||
       typeof use !== 'boolean'
     )
-      fail('Each skill choice needs a harness, the skill name, and yes or no.');
+      fail('Each skill choice needs a harness, the skill, and yes or no.');
     if (
       when !== undefined &&
       (typeof when !== 'string' || when.length > ownLimits.when)
@@ -86,12 +84,12 @@ function ownChanges(
         `Write at most ${ownLimits.when} characters on when to use a skill.`,
       );
     const skill =
-      listed.find(
-        (entry) => entry.harness === harness && entry.name === name,
-      ) ?? fail(`Verifold does not list ${name} now. Read the list again.`);
+      listed.find((entry) => entry.harness === harness && entry.id === id) ??
+      fail('Verifold does not list that skill now. Read the list again.');
     return {
       harness,
-      name,
+      id,
+      name: skill.name,
       use,
       off: skill.off,
       ...(when === undefined ? {} : { when }),
@@ -112,10 +110,15 @@ export class SkillsStep {
   /** The last list of the person's own skills, and what Verifold could not list then. Null: no list yet. */
   private own: readonly OwnSkill[] | null = null;
   private ownProblems: readonly string[] = [];
+  /** A save moved an unreadable file of choices aside. The step says so. */
+  private moved: string | null = null;
+  /** The choices, read again only when the file changes. */
+  private readonly choices: ReturnType<typeof ownChoicesReader>;
   private listing: Promise<void> | null = null;
 
   constructor(options: SkillsStepOptions) {
     this.options = options;
+    this.choices = ownChoicesReader(options.directory);
   }
 
   /** What the search matches: "You work on" and "To explore", or a profile in free form. */
@@ -164,9 +167,7 @@ export class SkillsStep {
   async view(): Promise<SetupSkills> {
     const added = await this.added();
     // Choices that cannot be read show each skill as on, which is what agents then load.
-    const choices: OwnChoices | null = await loadOwnChoices(
-      this.options.directory,
-    ).catch(() => null);
+    const choices = await this.choices();
     const file = ownChoicesFile(this.options.directory);
     // The search and `busy` are read with no wait between them, so a search that ends meanwhile never shows as neither.
     const found = this.found;
@@ -203,9 +204,10 @@ export class SkillsStep {
       ...(this.own
         ? {
             own: this.own.map((skill) => {
-              const choice = choices?.[skill.harness].get(skill.name);
+              const choice = choices?.[skill.harness].get(skill.id);
               return {
                 harness: skill.harness,
+                id: skill.id,
                 name: skill.name,
                 description: skill.description,
                 source: skill.source,
@@ -218,6 +220,11 @@ export class SkillsStep {
       ownReading: this.listing !== null,
       ownProblems: [
         ...this.ownProblems,
+        ...(this.moved
+          ? [
+              `Verifold could not read the earlier choices, so it kept them as ${this.moved} and started a new file.`,
+            ]
+          : []),
         ...(!choices
           ? [`Verifold could not read ${file}, so agents load all your skills.`]
           : choices.skipped
@@ -233,9 +240,10 @@ export class SkillsStep {
   /** Save the person's choices for their own skills. */
   async ownChoices(value: unknown): Promise<number> {
     const changes = ownChanges(value, this.own);
-    await this.options.locked(() =>
+    const moved = await this.options.locked(() =>
       writeOwnChoices(this.options.directory, changes),
     );
+    if (moved) this.moved = moved;
     return 200;
   }
 

@@ -1110,6 +1110,8 @@ export interface SetupSkills {
 /** A skill that the person's own Claude Code or Codex loads. Verifold's agents load it unless the person says no. */
 export interface OwnSkill {
   readonly harness: Harness;
+  /** The skill's ID in the choices: its name for Claude Code, its SKILL.md path for Codex. */
+  readonly id: string;
   /** The name that the harness lists, such as `python` or `vercel:nextjs`. */
   readonly name: string;
   readonly description: string;
@@ -1418,7 +1420,8 @@ export interface ActionBodies {
   'setup-own-skills': {
     readonly choices: readonly {
       readonly harness: Harness;
-      readonly name: string;
+      /** The skill's `id` from the list. */
+      readonly id: string;
       readonly use: boolean;
       readonly when?: string;
     }[];

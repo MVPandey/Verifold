@@ -8,12 +8,13 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   cardMarkdown,
   loadOwnChoices,
+  ownChoicesReader,
   ownLimits,
   personProfile,
   profileReader,
@@ -243,12 +244,20 @@ await test('the own skills: Claude Code folders and plugins, and Codex user and 
     'plugin vercel:nextjs vercel:nextjs',
     'synced anthropic-skills:pdf anthropic-skills:pdf',
   ]);
-  // Each name once per harness, the first one kept. Codex turns a skill off by its path.
+  // Codex skills are told apart by path, so two of one name both show, each with its own rule.
   assert.deepEqual(names('codex'), [
     'admin site /etc/codex/skills/site/SKILL.md',
     `personal python ${python}`,
+    'personal python /home/p/.codex/skills/python/SKILL.md',
     'synced docs /home/p/.agents/skills/synced/org/docs/SKILL.md',
   ]);
+  assert.ok(
+    found.every((entry) =>
+      entry.harness === 'codex'
+        ? entry.id === entry.off[0]
+        : entry.id === entry.name,
+    ),
+  );
   assert.deepEqual(problems, [
     "Verifold leaves out 1 skill of your Claude Code skill folder whose names hold “:”, the mark of a plugin's skill.",
   ]);
@@ -338,16 +347,21 @@ function change(
   use: boolean,
   when?: string,
 ): OwnChange {
+  const id =
+    harness === 'codex' ? `/home/p/.agents/skills/${name}/SKILL.md` : name;
   return {
     harness,
+    id,
     name,
     use,
-    off: [
-      harness === 'codex' ? `/home/p/.agents/skills/${name}/SKILL.md` : name,
-    ],
+    off: [id],
     ...(when === undefined ? {} : { when }),
   };
 }
+
+/** A Codex skill's ID in the tests. */
+const codexId = (name: string): string =>
+  `/home/p/.agents/skills/${name}/SKILL.md`;
 
 await test('the choices: stored compact by harness with what turns each skill off, within limits, and a bad entry is skipped and counted', async (t) => {
   const agency = join(await folder(t, 'own-choices'), 'agency');
@@ -361,6 +375,7 @@ await test('the choices: stored compact by harness with what turns each skill of
   ]);
   let choices = await loadOwnChoices(agency);
   assert.deepEqual(choices.claude.get('python'), {
+    name: 'python',
     use: false,
     when: 'Never here.',
     off: ['python'],
@@ -378,29 +393,30 @@ await test('the choices: stored compact by harness with what turns each skill of
   ]);
   choices = await loadOwnChoices(agency);
   assert.deepEqual(choices.claude.get('python'), {
+    name: 'python',
     use: true,
     when: 'Never here.',
     off: [],
   });
-  assert.equal(choices.codex.has('python'), false);
+  assert.equal(choices.codex.has(codexId('python')), false);
   const raw = await readFile(join(agency, 'own-skills.json'), 'utf8');
   assert.doesNotMatch(raw, /\n/);
   assert.deepEqual(
     (JSON.parse(raw) as { skills: { codex: unknown } }).skills.codex,
     {
-      constructor: {
+      [codexId('constructor')]: {
+        name: 'constructor',
         use: false,
-        off: ['/home/p/.agents/skills/constructor/SKILL.md'],
+        off: [codexId('constructor')],
       },
     },
   );
-  // A No without a target, or with one that cannot go into a rule, is refused.
-  await assert.rejects(
-    writeOwnChoices(agency, [
-      { ...change('codex', 'x', false), off: ['rel/SKILL.md'] },
-    ]),
-    /cannot turn off x/,
-  );
+  // A No without a target, or a path that cannot go into a TOML string, is refused.
+  for (const off of [['rel/SKILL.md'], ['/a\x7fb/SKILL.md'], []])
+    await assert.rejects(
+      writeOwnChoices(agency, [{ ...change('codex', 'x', false), off }]),
+      /cannot turn off x/,
+    );
   // More choices than the limit are refused before anything is written.
   await assert.rejects(
     writeOwnChoices(
@@ -431,9 +447,42 @@ await test('the choices: stored compact by harness with what turns each skill of
   choices = await loadOwnChoices(agency);
   assert.deepEqual([...choices.claude.keys()], ['python']);
   assert.equal(choices.skipped, 4);
-  // A file that is not the choices at all cannot be read.
-  await writeFile(join(agency, 'own-skills.json'), '{"schemaVersion":2}');
-  await assert.rejects(loadOwnChoices(agency), /own-skills\.json is not valid/);
+  // A file that is not the choices at all cannot be read. A save moves it aside and starts again.
+  for (const bad of ['{"schemaVersion":2}', '{}', '{']) {
+    await writeFile(join(agency, 'own-skills.json'), bad);
+    await assert.rejects(loadOwnChoices(agency), /not valid|JSON/);
+    assert.match(
+      (await writeOwnChoices(agency, [change('claude', 'python', false)])) ??
+        '',
+      /own-skills\.json\.bad$/,
+    );
+    assert.equal(
+      await readFile(join(agency, 'own-skills.json.bad'), 'utf8'),
+      bad,
+    );
+    assert.deepEqual(skillsOff(await loadOwnChoices(agency), 'claude'), [
+      'python',
+    ]);
+  }
+  // A readable file is never moved.
+  assert.equal(
+    await writeOwnChoices(agency, [change('claude', 'ruby', false)]),
+    null,
+  );
+});
+
+await test('the choices reader reads the file again only when it changed', async (t) => {
+  const agency = join(await folder(t, 'own-reader'), 'agency');
+  const read = ownChoicesReader(agency);
+  const none = await read();
+  assert.equal(none?.claude.size, 0);
+  assert.equal(await read(), none);
+  await writeOwnChoices(agency, [change('claude', 'python', false)]);
+  const first = await read();
+  assert.equal(first?.claude.size, 1);
+  assert.equal(await read(), first);
+  await writeFile(join(agency, 'own-skills.json'), '{');
+  assert.equal(await read(), null);
 });
 
 await test("each agent gets the notes on its own harness's skills with the profile, and the reader reads them again when they change", async (t) => {
@@ -528,9 +577,25 @@ await test('the session loader reads the skills that are off at each launch, and
   const base = await folder(t, 'own-loader');
   const agency = join(base, 'agency');
   const told: string[] = [];
-  const loader = skillLoader(agency, join(base, 'plugins'), (text) =>
-    told.push(text),
+  // Before the lab exists, nothing takes a note, so it comes again at the next launch.
+  let lab = false;
+  const loader = skillLoader(agency, join(base, 'plugins'), (text) => {
+    if (lab) told.push(text);
+    return lab;
+  });
+  await mkdir(agency, { recursive: true });
+  await writeFile(join(agency, 'own-skills.json'), '{');
+  assert.deepEqual(await loader.off?.('claude'), []);
+  assert.deepEqual(told, []);
+  lab = true;
+  assert.deepEqual(await loader.off?.('claude'), []);
+  assert.equal(told.length, 1);
+  assert.match(
+    told[0] ?? '',
+    /^Verifold could not read .*agency\/own-skills\.json, so agents load all your skills\.$/,
   );
+  told.length = 0;
+  await rm(join(agency, 'own-skills.json'));
   assert.deepEqual(await loader.off?.('claude'), []);
   await writeOwnChoices(agency, [change('claude', 'python', false)]);
   assert.deepEqual(await loader.off?.('claude'), ['python']);
@@ -546,14 +611,11 @@ await test('the session loader reads the skills that are off at each launch, and
   await writeFile(join(agency, 'own-skills.json'), '{');
   assert.deepEqual(await loader.off?.('claude'), []);
   assert.deepEqual(await loader.off?.('codex'), []);
-  assert.equal(told.length, 2);
+  // Each note comes once: the one about the unreadable file came already.
+  assert.equal(told.length, 1);
   assert.match(
     told[0] ?? '',
     /^Verifold skipped 1 entry of .*own-skills\.json that it could not read\. Agents load those skills\.$/,
-  );
-  assert.match(
-    told[1] ?? '',
-    /^Verifold could not read .*agency\/own-skills\.json, so agents load all your skills\.$/,
   );
 });
 
@@ -574,6 +636,7 @@ await test('the Skills step lists the own skills only when asked, keeps a list w
   const own: OwnSkill[] = [
     {
       harness: 'claude',
+      id: 'python',
       name: 'python',
       description: 'Style.',
       source: 'personal',
@@ -581,10 +644,11 @@ await test('the Skills step lists the own skills only when asked, keeps a list w
     },
     {
       harness: 'codex',
+      id: codexId('python'),
       name: 'python',
       description: 'Style.',
       source: 'personal',
-      off: ['/home/p/.agents/skills/python/SKILL.md'],
+      off: [codexId('python')],
     },
   ];
   const controller = new AbortController();
@@ -618,7 +682,7 @@ await test('the Skills step lists the own skills only when asked, keeps a list w
   await assert.rejects(
     setup.act({
       action: 'setup-own-skills',
-      choices: [{ harness: 'claude', name: 'python', use: false }],
+      choices: [{ harness: 'claude', id: 'python', use: false }],
     }),
     /has not listed your skills yet/,
   );
@@ -653,8 +717,13 @@ await test('the Skills step lists the own skills only when asked, keeps a list w
     await setup.act({
       action: 'setup-own-skills',
       choices: [
-        { harness: 'claude', name: 'python', use: false },
-        { harness: 'codex', name: 'python', use: false, when: 'For scripts.' },
+        { harness: 'claude', id: 'python', use: false },
+        {
+          harness: 'codex',
+          id: codexId('python'),
+          use: false,
+          when: 'For scripts.',
+        },
       ],
     }),
     200,
@@ -667,31 +736,46 @@ await test('the Skills step lists the own skills only when asked, keeps a list w
       ['codex', false, 'For scripts.'],
     ],
   );
-  // The view never shows what turns a skill off. The file keeps it, from the list.
-  assert.doesNotMatch(JSON.stringify(skills), /SKILL\.md/);
+  // The view names each skill by its ID, never by what turns it off. The file keeps that, from the list.
+  assert.equal(skills?.own?.[1]?.id, codexId('python'));
+  assert.doesNotMatch(JSON.stringify(skills), /"off"/);
   const choices = await loadOwnChoices(agency);
   assert.deepEqual(skillsOff(choices, 'codex'), [
     '/home/p/.agents/skills/python/SKILL.md',
   ]);
   for (const [sent, reason] of [
     [[], /from 1 to 600/],
-    [[{ harness: 'gemini', name: 'python', use: true }], /harness/],
-    [[{ harness: 'claude', name: 'bad name', use: true }], /skill name/],
-    [[{ harness: 'claude', name: 'python', use: 'yes' }], /yes or no/],
+    [[{ harness: 'gemini', id: 'python', use: true }], /harness/],
+    [[{ harness: 'claude', id: 'bad name', use: true }], /the skill/],
+    [[{ harness: 'codex', id: 'python', use: true }], /the skill/],
+    [[{ harness: 'claude', id: 'python', use: 'yes' }], /yes or no/],
     [
-      [{ harness: 'claude', name: 'python', use: true, when: 'x'.repeat(301) }],
+      [{ harness: 'claude', id: 'python', use: true, when: 'x'.repeat(301) }],
       /at most 300/,
     ],
-    [[{ harness: 'claude', name: 'ruby', use: false }], /does not list ruby/],
+    [
+      [{ harness: 'claude', id: 'ruby', use: false }],
+      /does not list that skill/,
+    ],
   ] as const)
     await assert.rejects(
       setup.act({ action: 'setup-own-skills', choices: sent }),
       reason,
     );
-  // A file that cannot be read says so on the step.
+  // A file that cannot be read says so on the step, and a save moves it aside and says so too.
   await writeFile(join(agency, 'own-skills.json'), '{');
   assert.match(
     ((await setup.view()).skills?.ownProblems ?? []).join(' '),
     /could not read .*own-skills\.json, so agents load all your skills/,
   );
+  assert.equal(
+    await setup.act({
+      action: 'setup-own-skills',
+      choices: [{ harness: 'claude', id: 'python', use: false }],
+    }),
+    200,
+  );
+  assert.deepEqual((await setup.view()).skills?.ownProblems, [
+    `Verifold could not read the earlier choices, so it kept them as ${join(agency, 'own-skills.json.bad').replace(homedir(), '~')} and started a new file.`,
+  ]);
 });

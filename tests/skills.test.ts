@@ -716,7 +716,7 @@ await test('a set of skills that a session uses is never pruned: each turn marks
     hosts: github.hosts,
     locked,
   });
-  const loader = skillLoader(agency, plugins, () => {});
+  const loader = skillLoader(agency, plugins, () => true);
   const old = await loader.folder('claude');
   assert.ok(old);
   // A week and a day without use: an older set goes when a new one is built, unless a turn marked it.
@@ -746,8 +746,10 @@ await test('a set of skills that a session uses is never pruned: each turn marks
 await test('the session loader gives the plugin to each harness until that harness cannot load it, and reports each reason once', async (t) => {
   const agency = join(await folder(t, 'loader'), 'agency');
   const told: string[] = [];
-  const loader = skillLoader(agency, join(agency, '..', 'plugins'), (text) =>
-    told.push(text),
+  const loader = skillLoader(
+    agency,
+    join(agency, '..', 'plugins'),
+    (text) => told.push(text) > 0,
   );
   assert.equal(await loader.folder('claude'), null, 'no skills, no plugin');
   loader.problem('claude', 'Blocked.');

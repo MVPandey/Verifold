@@ -671,6 +671,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
   const own: NonNullable<SetupSkills['own']> = [
     {
       harness: 'claude',
+      id: 'python',
       name: 'python',
       description: 'Python style.',
       source: 'personal',
@@ -679,6 +680,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
     },
     {
       harness: 'claude',
+      id: 'humanizer',
       name: 'humanizer',
       description: 'd'.repeat(200),
       source: 'personal',
@@ -687,6 +689,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
     },
     {
       harness: 'claude',
+      id: 'anthropic-skills:pdf',
       name: 'anthropic-skills:pdf',
       description: 'PDFs.',
       source: 'synced',
@@ -695,6 +698,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
     },
     {
       harness: 'claude',
+      id: 'vercel:nextjs',
       name: 'vercel:nextjs',
       description: 'Next.js.',
       source: 'plugin',
@@ -703,6 +707,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
     },
     {
       harness: 'claude',
+      id: 'vercel:deploy',
       name: 'vercel:deploy',
       description: 'Deploys.',
       source: 'plugin',
@@ -711,6 +716,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
     },
     {
       harness: 'codex',
+      id: '/etc/codex/skills/site/SKILL.md',
       name: 'site',
       description: 'Site.',
       source: 'admin',
@@ -788,25 +794,31 @@ await test("step 3 lists the person's own skills by harness and group, each with
   assert.match(shown, /Your skills Read again/);
   // The switch stays on while a note saves, so a click after a note is never lost.
   assert.doesNotMatch(markup, /class="own__choice"[^>]*disabled/);
-  // Before the first list, and while one runs, the step waits for it.
-  for (const waiting of [
-    { ...unlisted, ownProblems: [] },
-    { ...skills, own: [], ownReading: true },
-  ] satisfies SetupSkills[]) {
-    const page = text(
-      <SkillsStep
-        view={view({ skills: waiting })}
-        actions={actions}
-        refresh={quiet}
-        onDone={quiet}
-      />,
-    );
-    assert.match(
-      page,
-      /Listing the skills that your Claude Code and Codex load\./,
-    );
-    assert.doesNotMatch(page, /Read again/);
-  }
+  // While a list runs, the step waits for it.
+  const waiting = text(
+    <SkillsStep
+      view={view({ skills: { ...skills, own: [], ownReading: true } })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  assert.match(
+    waiting,
+    /Listing the skills that your Claude Code and Codex load\./,
+  );
+  assert.doesNotMatch(waiting, /Read again/);
+  // With no list running, Read again shows, so a request that was refused or lost never leaves the step waiting.
+  const idle = text(
+    <SkillsStep
+      view={view({ skills: { ...unlisted, ownProblems: [] } })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  assert.doesNotMatch(idle, /Listing the skills/);
+  assert.match(idle, /Your skills Read again/);
   // A first list that failed says why, and offers to read again.
   const failed = text(
     <SkillsStep
@@ -840,7 +852,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
     return Promise.resolve(new Response('{"ok":true}', { status: 200 }));
   };
   await setupActions('token').ownSkills(
-    [{ harness: 'claude', name: 'python', use: true, when: 'For scripts.' }],
+    [{ harness: 'claude', id: 'python', use: true, when: 'For scripts.' }],
     'd'.repeat(32),
   );
   await setupActions('token').ownSkillsList(true, 'e'.repeat(32));
@@ -848,7 +860,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
   assert.deepEqual(sent, [
     {
       choices: [
-        { harness: 'claude', name: 'python', use: true, when: 'For scripts.' },
+        { harness: 'claude', id: 'python', use: true, when: 'For scripts.' },
       ],
       key: 'd'.repeat(32),
     },

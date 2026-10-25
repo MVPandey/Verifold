@@ -14,6 +14,33 @@ export function homeShown(path: string): string {
     : path;
 }
 
+/**
+ * A regular file's text, read without following a final symlink or blocking
+ * on a pipe. Null: it is not a regular file, or it holds more than `limit`
+ * bytes. With `cut`, a longer file gives its first `limit` bytes instead.
+ */
+export async function readBounded(
+  path: string,
+  limit: number,
+  cut = false,
+): Promise<string | null> {
+  const file = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || (stat.size > limit && !cut)) return null;
+    // One byte more than the limit tells a file that grew after the check.
+    const buffer = Buffer.alloc(Math.min(stat.size, limit) + 1);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > limit && !cut) return null;
+    return buffer.subarray(0, Math.min(bytesRead, limit)).toString('utf8');
+  } finally {
+    await file.close();
+  }
+}
+
 /** A file or folder that does not exist. */
 export function missing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
