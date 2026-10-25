@@ -178,16 +178,15 @@ export function AgentsStep({
   const check = useAction((_: null, key) => actions.check(key));
   const skip = useAction((_: null, key) => actions.skip('all', key));
   const used = tools.some((tool) => choices[tool.harness]?.use);
-  // Changed choices, while no save of them runs.
+  // Changed choices.
   useUnsaved(
-    !save.busy &&
-      tools.some((tool) => {
-        const choice = choices[tool.harness];
-        return (
-          choice !== undefined &&
-          (choice.use !== tool.use || choice.model !== (tool.model ?? ''))
-        );
-      }),
+    tools.some((tool) => {
+      const choice = choices[tool.harness];
+      return (
+        choice !== undefined &&
+        (choice.use !== tool.use || choice.model !== (tool.model ?? ''))
+      );
+    }),
     nav,
   );
   const unsure = tools.some(

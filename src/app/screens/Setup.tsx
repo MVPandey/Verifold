@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { SetupView } from '../../protocol/api.ts';
+import type { SetupStep, SetupView } from '../../protocol/api.ts';
 import { Logo } from '../components/Icons.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { href, plainClick, replaceRoute } from '../route.ts';
+import { href, parseRoute, plainClick, replaceRoute } from '../route.ts';
 import {
   firstPage,
   pageAfter,
@@ -118,29 +118,13 @@ export function pageRoute(page: Page, project: string | null): string {
 }
 
 /**
- * Counts the pages that the setup page shows, as it renders them. A step's
- * request that ends after the person left the step, even if they came back
- * since, moves nothing: the page only reads the profile again.
+ * What a step's request does when it answers: open the next page while the
+ * page still shows the step that sent it, else only read the profile again.
+ * `hash` is read when the answer arrives. A return to the same step before
+ * the answer still counts as showing it.
  */
-export function visitCounter(): {
-  /** The page that renders now. A new page is a new visit. */
-  readonly see: (page: Page | null) => void;
-  /** At a request's start: what runs when it ends. `next` while the visit lasts, else `refresh`. */
-  readonly after: (next: () => void, refresh: () => void) => () => void;
-} {
-  let shown: Page | null | undefined;
-  let visits = 0;
-  return {
-    see: (page) => {
-      if (page === shown) return;
-      shown = page;
-      visits += 1;
-    },
-    after: (next, refresh) => {
-      const visit = visits;
-      return () => (visits === visit ? next() : refresh());
-    },
-  };
+export function afterAnswer(hash: string, from: SetupStep): 'next' | 'refresh' {
+  return hash === href.setup(from) ? 'next' : 'refresh';
 }
 
 /**
@@ -158,8 +142,8 @@ export function leaveFor(
 
 /**
  * The question before the page drops unsaved input. It shows only while
- * the person asked to leave and the step still holds unsaved input: input
- * that a save takes meanwhile is no longer unsaved. No browser dialog.
+ * the person asked to leave and the step still holds unsaved input. No
+ * browser dialog.
  */
 export function UnsavedLine({
   leaving,
@@ -245,16 +229,15 @@ export function SetupPage({
     if (!unsaved) return;
     const ask = (event: BeforeUnloadEvent): void => {
       event.preventDefault();
+      // Older browsers ask only when this is set.
+      event.returnValue = '';
     };
     addEventListener('beforeunload', ask);
     return () => removeEventListener('beforeunload', ask);
   }, [unsaved]);
-  // Each page that renders, by any way of going there, is a new visit.
-  const [visits] = useState(visitCounter);
-  visits.see(step);
   const leave = (to: string): void => {
     location.hash = to;
-    refresh();
+    if (parseRoute(to).page === 'setup') refresh();
   };
   const open = (page: Page): void => leave(pageRoute(page, project));
   /** Back, the step bar, and the link to the lab. */
@@ -263,9 +246,11 @@ export function SetupPage({
     if (move === 'ask') setLeaving(to);
     else if (move === 'open') leave(to);
   };
-  /** After a step's own request: the next page while the visit lasts. The profile is read again either way. */
-  const after = (next: Page): (() => void) =>
-    visits.after(() => open(next), refresh);
+  /** After a step's own request: the next page while the step shows. The profile is read again either way. */
+  const after = (from: SetupStep, next: Page) => (): void => {
+    if (afterAnswer(location.hash, from) === 'next') open(next);
+    else refresh();
+  };
   // One list, so the label, the bar, Back and Continue agree.
   const steps = view ? shownSteps(view.steps) : setupSteps;
   const nav: StepNav = {
@@ -290,8 +275,8 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={after(pageAfter('agents', steps))}
-        onSkip={after('done')}
+        onSaved={after('agents', pageAfter('agents', steps))}
+        onSkip={after('agents', 'done')}
         nav={nav}
       />
     );
@@ -301,7 +286,7 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={after(pageAfter('about', steps))}
+        onSaved={after('about', pageAfter('about', steps))}
         nav={nav}
       />
     );
@@ -311,7 +296,7 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onDone={after(pageAfter('skills', steps))}
+        onDone={after('skills', pageAfter('skills', steps))}
         nav={nav}
       />
     );
@@ -321,7 +306,7 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={after(pageAfter('money', steps))}
+        onSaved={after('money', pageAfter('money', steps))}
         nav={nav}
       />
     );

@@ -183,11 +183,9 @@ export function AboutStep({
     actions.about(value, key),
   );
   const skip = useAction((_: null, key) => actions.skip('about', key));
-  // A typed answer, or card edits, while no send or save of them runs.
+  // A typed answer, or card edits.
   useUnsaved(
-    !say.busy &&
-      !save.busy &&
-      (text.trim() !== '' || (edited && !sameCard(edits.card, edits.from))),
+    text.trim() !== '' || (edited && !sameCard(edits.card, edits.from)),
     nav,
   );
   const error =

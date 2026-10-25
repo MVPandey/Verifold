@@ -24,7 +24,7 @@ export interface StepNav {
   readonly steps: readonly SetupStep[];
   /** Back and the step bar: open a step. The page asks first while the step holds unsaved input. */
   readonly open: (step: SetupStep) => void;
-  /** The step holds input that is not saved, and no save of it runs now. */
+  /** The step holds input that is not saved. */
   readonly unsaved: (unsaved: boolean) => void;
 }
 
