@@ -134,11 +134,12 @@ export class SkillsStep {
   async view(): Promise<SetupSkills> {
     this.listOwn();
     const added = await this.added();
-    const found = this.found;
     // Choices that cannot be read show each skill as on, which is what agents then load.
     const choices = await loadOwnChoices(this.options.directory).catch(
       () => null,
     );
+    // The search and `busy` are read with no wait between them, so a search that ends meanwhile never shows as neither.
+    const found = this.found;
     return {
       busy: this.busy,
       search: found

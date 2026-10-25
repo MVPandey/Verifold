@@ -667,7 +667,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
   assert.match(updates, /Update/);
 });
 
-await test("step 3 lists the person's own skills by harness and group, each with Yes or No, and a note line under each Yes", async (t) => {
+await test("step 3 lists the person's own skills by harness and group, each with Yes or No, and a note on when to use each Yes", async (t) => {
   const own: NonNullable<SetupSkills['own']> = [
     {
       harness: 'claude',
@@ -768,15 +768,16 @@ await test("step 3 lists the person's own skills by harness and group, each with
     markup,
     /aria-pressed="false"[^>]*>Yes<\/button><button[^>]*aria-pressed="true"[^>]*>No</,
   );
-  // A note line under each Yes, with the saved note.
-  assert.equal((markup.match(/class="own__when"/g) ?? []).length, 4);
+  // A saved note shows in its box. Another Yes offers a note on a click.
+  assert.equal((markup.match(/class="own__when"/g) ?? []).length, 1);
   assert.match(markup, /value="For text the person reads\."/);
+  assert.equal((markup.match(/>Say when to use it</g) ?? []).length, 3);
   // A long description shows its start, with a button for the rest.
   assert.match(markup, /own__what own__what--short/);
   assert.match(markup, /aria-expanded="false"[^>]*>More</);
   assert.match(
     shown,
-    /No turns a skill off only for Verifold’s agents\. Your own Claude Code and Codex don’t change\./,
+    /“No” turns a skill off only for Verifold’s agents\. Your own Claude Code and Codex don’t change\./,
   );
   assert.match(
     text(

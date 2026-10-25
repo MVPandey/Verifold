@@ -762,11 +762,32 @@
 .own-group__title {
   min-height: 44px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 0 18px;
   font-weight: 800;
   cursor: pointer;
+  list-style: none;
+}
+
+.own-group__title::-webkit-details-marker {
+  display: none;
+}
+
+/* A flex summary loses the browser's marker, so the group draws its own. */
+.own-group__title::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-right: 2px solid var(--ink-2);
+  border-bottom: 2px solid var(--ink-2);
+  transform: rotate(-45deg);
+}
+
+.own-group[open] > .own-group__title::before {
+  transform: rotate(45deg);
 }
 
 .own-group__list {
@@ -818,6 +839,7 @@
 }
 
 .own__more {
+  min-height: 28px;
   font-size: 13px;
 }
 
