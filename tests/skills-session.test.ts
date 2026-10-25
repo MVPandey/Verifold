@@ -439,8 +439,10 @@ await test('with the profile folder unreadable, both harnesses read the added sk
     '---\nname: transformer-lens\ndescription: Activation patching.\n---\n',
   );
   const told: string[] = [];
-  const skills = skillLoader(agency, join(root, 'plugins'), (text) =>
-    told.push(text),
+  const skills = skillLoader(
+    agency,
+    join(root, 'plugins'),
+    (text) => told.push(text) > 0,
   );
   const folder = await skills.folder('claude');
   assert.ok(folder && !folder.startsWith(`${agency}/`));
@@ -483,4 +485,68 @@ await test('with the profile folder unreadable, both harnesses read the added sk
     await chmod(join(agency, 'skills'), 0o700);
   }
   assert.deepEqual(told, []);
+});
+
+await test("the person's own skills that are off stay out of every session: Claude Code by its settings, Codex by a -c rule on each path", async (t) => {
+  const { root, work, start } = await project(t);
+  const python = '/home/p/.agents/skills/python/SKILL.md';
+  const off = (host: HarnessName): Promise<readonly string[]> =>
+    Promise.resolve(host === 'claude' ? ['python', 'vercel:nextjs'] : [python]);
+  await start('claude', { ...loader(null), off });
+  await until(
+    async () => (await args(work, 'args.json').catch(() => null)) !== null,
+  );
+  const given = await args(work, 'args.json');
+  const settings = JSON.parse(
+    given[given.indexOf('--settings') + 1] ?? '{}',
+  ) as {
+    sandbox?: unknown;
+    permissions: { deny: string[] };
+    skillOverrides: Record<string, string>;
+  };
+  // The lab's agent runs in strict mode, so its rules stay, with the skills added.
+  assert.ok(settings.sandbox);
+  assert.ok(settings.permissions.deny.some((rule) => rule.startsWith('Read(')));
+  assert.deepEqual(settings.permissions.deny.slice(-4), [
+    'Skill(python)',
+    'Skill(python *)',
+    'Skill(vercel:nextjs)',
+    'Skill(vercel:nextjs *)',
+  ]);
+  assert.deepEqual(settings.skillOverrides, { python: 'off' });
+  assert.equal(given.filter((arg) => arg === '--settings').length, 1);
+
+  await start('codex', { ...loader(null), off });
+  await until(
+    async () =>
+      (await args(work, 'codex-args.json').catch(() => null)) !== null,
+  );
+  const codex = await args(work, 'codex-args.json');
+  const rule = codex.indexOf(
+    `skills.config=[{path="${python}",enabled=false}]`,
+  );
+  assert.equal(codex[rule - 1], '-c');
+  assert.ok(rule < codex.indexOf('app-server'));
+
+  // A task of the coordinator is no lab agent, and leaves them out too.
+  await rm(join(work, 'args.json'));
+  const manager = new SessionManager(root, {
+    clientVersion: 'test',
+    ownerId: 'test-owner',
+    executables: { claude: join(root, 'fake-claude') },
+    skills: { ...loader(null), off },
+  });
+  t.after(() => manager.close());
+  await manager.startTask({
+    host: 'claude',
+    prompt: 'Go.',
+    cwd: work,
+    task: { id: 't-1', claim: 'c' },
+  });
+  await until(
+    async () => (await args(work, 'args.json').catch(() => null)) !== null,
+  );
+  const task = await args(work, 'args.json');
+  assert.ok(task[task.indexOf('--settings') + 1]?.includes('Skill(python)'));
+  assert.ok(!task.includes('--plugin-dir'));
 });

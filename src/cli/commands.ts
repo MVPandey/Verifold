@@ -41,6 +41,7 @@ import {
   type DeskServer,
 } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
+import { listOwnSkills } from '../core/own-skills.ts';
 import { askStart, type Begun } from './ask-start.ts';
 import { FirstRun } from '../server/setup.ts';
 import { pluginsHome, skillLoader } from '../core/skills.ts';
@@ -737,14 +738,17 @@ async function serveDesk(
       // The person's profile: the lab reads it for each prompt, its added skills load for each agent's session,
       // and pods read its monthly limit across projects at each check.
       const agency = run.agency ?? agencyDirectory(root);
+      // Every session of this owner leaves out the person's own skills that they turned off. Only lab agents and checkers load the added skills.
+      const skills = skillLoader(agency, pluginsHome(), (text) => {
+        // Before the lab exists, the note waits for the next launch to tell it.
+        if (!owned.lab) return false;
+        void owned.lab.note(text);
+        return true;
+      });
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
-        skills: skillLoader(
-          agency,
-          pluginsHome(),
-          (text) => void owned.lab?.note(text),
-        ),
+        skills,
         agents:
           (await loadWorkspace(root).catch(() => null))?.agents ??
           defaultAgents,
@@ -873,6 +877,7 @@ async function serveDesk(
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
+          skills,
           onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
           onLimit: (host, signal) => {
             quota.record(host, signal);
@@ -998,6 +1003,7 @@ async function serveDesk(
                 compute,
                 signal: deskSignal,
                 harness,
+                ownSkills: (signal) => listOwnSkills({ signal }),
               }),
               ...(io.appAssets ? { appRoot: io.appAssets } : {}),
             },
@@ -1175,6 +1181,7 @@ async function serveStart(
         compute,
         signal: deskSignal,
         harness: run.harness,
+        ownSkills: (signal) => listOwnSkills({ signal }),
       }),
       start: ask.start,
       ...(io.appAssets ? { appRoot: io.appAssets } : {}),

@@ -42,10 +42,20 @@ interface Ran {
   /** Standard output and standard error together. */
   readonly output: string;
   readonly missing: boolean;
+  /** The output was longer than `maxBuffer`, so the command stopped. */
+  readonly overflow: boolean;
 }
 
-/** Run a harness command with no shell and no RunPod variables, for at most 10 seconds. */
-function run(executable: string, args: readonly string[]): Promise<Ran> {
+/**
+ * Run a harness command with no shell and no RunPod variables, for at most
+ * 10 seconds. `maxBuffer` bounds each output stream, 256 KB by default.
+ * `signal` stops the command.
+ */
+export function runCommand(
+  executable: string,
+  args: readonly string[],
+  options: { readonly maxBuffer?: number; readonly signal?: AbortSignal } = {},
+): Promise<Ran> {
   return new Promise((resolve) => {
     execFile(
       executable,
@@ -53,10 +63,11 @@ function run(executable: string, args: readonly string[]): Promise<Ran> {
       {
         env: childEnvironment(),
         timeout: commandMs,
-        maxBuffer: 256 * 1024,
+        maxBuffer: options.maxBuffer ?? 256 * 1024,
         encoding: 'utf8',
         shell: false,
         windowsHide: true,
+        ...(options.signal ? { signal: options.signal } : {}),
       },
       (error, stdout, stderr) => {
         const code =
@@ -70,6 +81,7 @@ function run(executable: string, args: readonly string[]): Promise<Ran> {
           stdout,
           output: `${stdout}\n${stderr}`,
           missing: error?.code === 'ENOENT',
+          overflow: error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
         });
       },
     );
@@ -140,18 +152,29 @@ export function codexChoices(entries: readonly unknown[]): ModelChoice[] {
 }
 
 /**
- * Codex's `model/list`, through a short-lived app-server, read with the
- * session's own paging. Null when it does not answer in 10 seconds or
- * refuses.
+ * One question to a short-lived Codex app-server, started with the `-c`
+ * options in `config`. After `initialize`, `ask` sends its requests with
+ * `call` and gives the answer to `finish`. Null when the server does not
+ * answer in 10 seconds, refuses a request that has no `onError`, or
+ * `signal` stops the question.
  */
-async function codexModelList(executable: string): Promise<unknown[] | null> {
-  const server = startCodexServer({ executable, config: [] });
-  let finish: (value: unknown[] | null) => void = () => {};
-  const answer = new Promise<unknown[] | null>((resolve) => {
+export async function askCodexServer<T>(
+  executable: string,
+  config: readonly string[],
+  ask: (call: CodexCall, finish: (value: T | null) => void) => void,
+  signal?: AbortSignal,
+): Promise<T | null> {
+  if (signal?.aborted) return null;
+  const server = startCodexServer({ executable, config });
+  let finish: (value: T | null) => void = () => {};
+  const answer = new Promise<T | null>((resolve) => {
     finish = resolve;
   });
   const deadline = Date.now() + commandMs;
   const timer = setTimeout(() => finish(null), commandMs);
+  // A stop ends the wait, and the `finally` below stops the server.
+  const stop = (): void => finish(null);
+  signal?.addEventListener('abort', stop, { once: true });
   let connection: UnixWebSocket | null = null;
   try {
     const answers = new Map<
@@ -181,9 +204,9 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
         },
         () => finish(null),
       ),
-      answer,
+      answer.then(() => null),
     ]).catch(() => null);
-    if (!opened || Array.isArray(opened)) return null;
+    if (!opened) return null;
     connection = opened;
     const call: CodexCall = (method, params, onResult, onError) => {
       const id = nextId++;
@@ -192,14 +215,22 @@ async function codexModelList(executable: string): Promise<unknown[] | null> {
     };
     call('initialize', codexInitialize('1'), () => {
       opened.send(JSON.stringify({ method: 'initialized', params: {} }));
-      listCodexModels(call, finish);
+      ask(call, finish);
     });
     return await answer;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
     connection?.close();
     server.stop();
   }
+}
+
+/** Codex's `model/list`, read with the session's own paging. */
+function codexModelList(executable: string): Promise<unknown[] | null> {
+  return askCodexServer<unknown[]>(executable, [], (call, finish) =>
+    listCodexModels(call, finish),
+  );
 }
 
 /** The executables that detection runs. Tests use fakes. */
@@ -212,7 +243,7 @@ export interface DetectOptions {
 
 async function detectClaude(options: DetectOptions): Promise<HarnessStatus> {
   const executable = options.claude ?? 'claude';
-  const shown = await run(executable, ['--version']);
+  const shown = await runCommand(executable, ['--version']);
   if (shown.missing)
     return {
       harness: 'claude',
@@ -222,7 +253,7 @@ async function detectClaude(options: DetectOptions): Promise<HarnessStatus> {
       plan: null,
       models: [],
     };
-  const auth = await run(executable, ['auth', 'status']);
+  const auth = await runCommand(executable, ['auth', 'status']);
   let signedIn: boolean | null = null;
   let plan: string | null = null;
   try {
@@ -253,7 +284,7 @@ async function detectClaude(options: DetectOptions): Promise<HarnessStatus> {
 
 async function detectCodex(options: DetectOptions): Promise<HarnessStatus> {
   const executable = options.codex ?? 'codex';
-  const shown = await run(executable, ['--version']);
+  const shown = await runCommand(executable, ['--version']);
   if (shown.missing)
     return {
       harness: 'codex',
@@ -263,7 +294,7 @@ async function detectCodex(options: DetectOptions): Promise<HarnessStatus> {
       plan: null,
       models: [],
     };
-  const login = await run(executable, ['login', 'status']);
+  const login = await runCommand(executable, ['login', 'status']);
   const signedIn = /\bnot logged in\b/i.test(login.output)
     ? false
     : /\blogged in\b/i.test(login.output)

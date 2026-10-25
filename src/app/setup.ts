@@ -111,6 +111,13 @@ export interface SetupActions {
   readonly skillAdd: (id: string, key: string) => Promise<ActOutcome>;
   readonly skillRemove: (id: string, key: string) => Promise<ActOutcome>;
   readonly skillsDone: (key: string) => Promise<ActOutcome>;
+  /** List the person's own skills. `again`: read them again, though a list exists. */
+  readonly ownSkillsList: (again: boolean, key: string) => Promise<ActOutcome>;
+  /** Which of the person's own skills Verifold's agents load, with notes on when to use them. */
+  readonly ownSkills: (
+    choices: ActionBodies['setup-own-skills']['choices'],
+    key: string,
+  ) => Promise<ActOutcome>;
 }
 
 const signedOut = (): Promise<{ readonly refused: string }> =>
@@ -135,6 +142,8 @@ export function setupActions(token: string | null): SetupActions {
       skillAdd: signedOut,
       skillRemove: signedOut,
       skillsDone: signedOut,
+      ownSkills: signedOut,
+      ownSkillsList: signedOut,
     };
   const run = <Name extends ActionName>(
     name: Name,
@@ -161,6 +170,9 @@ export function setupActions(token: string | null): SetupActions {
     skillAdd: (id, key) => run('setup-skill-add', { id }, key),
     skillRemove: (id, key) => run('setup-skill-remove', { id }, key),
     skillsDone: (key) => run('setup-skills-done', {}, key),
+    ownSkills: (choices, key) => run('setup-own-skills', { choices }, key),
+    ownSkillsList: (again, key) =>
+      run('setup-own-skills-list', again ? { again } : {}, key),
   };
 }
 
