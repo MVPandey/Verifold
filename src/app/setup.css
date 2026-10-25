@@ -442,6 +442,53 @@
   color: var(--muted);
 }
 
+/* "Get information about me from my harnesses" on the About step. */
+.import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.import.profile {
+  gap: 12px;
+}
+
+.import__busy {
+  padding-left: 0;
+}
+
+.import__skills {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+}
+
+.import__when {
+  display: block;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.import__rest summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.import__rest .import__skills {
+  margin-top: 6px;
+}
+
+.import__read {
+  margin: 0;
+  padding: 10px 0 0 18px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+  color: var(--muted);
+}
+
 .profile__text {
   margin: 0;
   max-height: 240px;

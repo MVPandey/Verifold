@@ -10,7 +10,7 @@ import { dayClock } from '../format.ts';
 import { OwnSkills } from './SetupOwnSkills.tsx';
 
 /** "A", "A and B", "A, B and C". */
-function list(items: readonly string[]): string {
+export function list(items: readonly string[]): string {
   if (items.length < 2) return items.join('');
   return `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }

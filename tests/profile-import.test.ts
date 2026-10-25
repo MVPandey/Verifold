@@ -1,0 +1,385 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { loadOwnChoices } from '../src/core/agency.ts';
+import { Compute } from '../src/core/compute.ts';
+import { KeyStore } from '../src/core/credentials.ts';
+import { claudeChoices, type HarnessStatus } from '../src/core/detect.ts';
+import type { HarnessRequest, HarnessResult } from '../src/core/harness.ts';
+import type { OwnSkill } from '../src/core/own-skills.ts';
+import { claudeMemory, importProfile } from '../src/core/profile-import.ts';
+import { SessionActionError } from '../src/core/session.ts';
+import { FirstRun } from '../src/server/setup.ts';
+
+async function folder(t: test.TestContext, name: string): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), `verifold-${name}-`));
+  t.after(() => rm(path, { recursive: true, force: true }));
+  return path;
+}
+
+const signal = new AbortController().signal;
+
+const skills: readonly OwnSkill[] = [
+  {
+    harness: 'claude',
+    id: 'research-paper-writing',
+    name: 'research-paper-writing',
+    description: 'Improve ML papers.',
+    source: 'personal',
+    off: ['research-paper-writing'],
+  },
+  {
+    harness: 'claude',
+    id: 'vercel:deploy',
+    name: 'vercel:deploy',
+    description: 'Deploy to Vercel.',
+    source: 'plugin',
+    off: ['vercel:deploy'],
+  },
+  {
+    harness: 'codex',
+    id: '/home/p/.agents/skills/python/SKILL.md',
+    name: 'python',
+    description: 'Python style.',
+    source: 'personal',
+    off: ['/home/p/.agents/skills/python/SKILL.md'],
+  },
+];
+
+/** A Claude Code settings folder with two memory folders, transcripts beside them, and a project without memory. */
+async function claudeFolder(base: string): Promise<string> {
+  const config = join(base, 'claude');
+  await mkdir(join(config, 'projects', 'old', 'memory'), { recursive: true });
+  await mkdir(join(config, 'projects', 'new', 'memory'), { recursive: true });
+  await mkdir(join(config, 'projects', 'none'), { recursive: true });
+  await writeFile(join(config, 'CLAUDE.md'), 'Short answers.');
+  await writeFile(join(config, 'projects', 'new', 'memory', 'MEMORY.md'), '');
+  await writeFile(join(config, 'projects', 'new', 's.jsonl'), 'transcript');
+  await writeFile(join(config, 'projects', 'old', 'memory', 'a.md'), 'note');
+  const past = new Date(Date.now() - 86_400_000);
+  await utimes(join(config, 'projects', 'old', 'memory'), past, past);
+  return config;
+}
+
+await test("Claude Code may read its CLAUDE.md and its projects' memory folders, never the transcripts beside them, the newest project first", async (t) => {
+  const config = await claudeFolder(await folder(t, 'import-memory'));
+  const memory = await claudeMemory(config, signal);
+  assert.deepEqual(memory.allow, [
+    join(config, 'CLAUDE.md'),
+    join(config, 'projects', '*', 'memory', '**'),
+  ]);
+  // A folder with MEMORY.md starts there. One without starts at the folder.
+  assert.deepEqual(memory.files, [
+    join(config, 'CLAUDE.md'),
+    join(config, 'projects', 'new', 'memory', 'MEMORY.md'),
+    join(config, 'projects', 'old', 'memory'),
+  ]);
+  // Without a settings folder, it may read nothing that exists.
+  const none = await claudeMemory(join(config, 'missing'), signal);
+  assert.deepEqual(none.files, []);
+});
+
+await test('the import asks each harness at once, keeps only listed skills, counts left-out skills as not fitting, and merges two cards', async (t) => {
+  const config = await claudeFolder(await folder(t, 'import-run'));
+  const requests: HarnessRequest[] = [];
+  const run = (request: HarnessRequest): Promise<HarnessResult> => {
+    requests.push(request);
+    if (request.prompt.includes('Merge the two drafts'))
+      return Promise.resolve({
+        text: JSON.stringify({
+          card: { workOn: 'CoT faithfulness; probes.', explore: '', talk: '' },
+        }),
+      });
+    return Promise.resolve({
+      text: JSON.stringify(
+        request.host === 'claude'
+          ? {
+              card: {
+                workOn: 'CoT faithfulness.',
+                explore: '',
+                talk: 'Short.',
+              },
+              skills: [
+                {
+                  id: 'research-paper-writing',
+                  fits: true,
+                  when: `For drafts. ${'x'.repeat(400)}`,
+                },
+                // An unknown ID, and a second answer for one skill, count for nothing.
+                { id: 'not-listed', fits: true, when: 'x' },
+                { id: 'research-paper-writing', fits: false },
+              ],
+              read: 'My instructions and the memories of two projects.',
+            }
+          : {
+              card: { workOn: 'Probes.', explore: '', talk: '' },
+              skills: [
+                {
+                  id: '/home/p/.agents/skills/python/SKILL.md',
+                  fits: false,
+                  when: 'Never.',
+                },
+              ],
+            },
+      ),
+    });
+  };
+  const result = await importProfile({
+    harnesses: [
+      { host: 'claude', model: 'opus' },
+      { host: 'codex', model: 'gpt-6-astra' },
+    ],
+    merger: { host: 'claude', model: 'opus' },
+    skills,
+    claudeConfig: config,
+    signal,
+    run,
+  });
+  assert.deepEqual(result.from, ['claude', 'codex']);
+  assert.deepEqual(result.card, {
+    workOn: 'CoT faithfulness; probes.',
+    explore: '',
+    talk: '',
+  });
+  assert.deepEqual(
+    result.skills.map((skill) => [skill.harness, skill.name, skill.fits]),
+    [
+      ['claude', 'research-paper-writing', true],
+      // The answer left it out, so it does not fit.
+      ['claude', 'vercel:deploy', false],
+      ['codex', 'python', false],
+    ],
+  );
+  // A note is cut to its limit, and a skill that does not fit gets none.
+  assert.equal(result.skills[0]?.when.length, 300);
+  assert.equal(result.skills[2]?.when, '');
+  assert.deepEqual(result.read, [
+    'Claude Code: My instructions and the memories of two projects.',
+    'Codex: It did not say what it read.',
+  ]);
+  assert.deepEqual(result.problems, []);
+  // The two harnesses run at once, so their requests come in either order.
+  const asked = requests.filter((request) => !request.textOnly);
+  const claude = asked.find((request) => request.host === 'claude');
+  const codex = asked.find((request) => request.host === 'codex');
+  const merge = requests.find((request) => request.textOnly);
+  // Claude Code may read its memory. Codex may read nothing and gets only its own skills.
+  assert.deepEqual(claude?.ownFiles, [
+    join(config, 'CLAUDE.md'),
+    join(config, 'projects', '*', 'memory', '**'),
+  ]);
+  assert.match(claude?.prompt ?? '', /"files":\[/);
+  assert.match(claude?.prompt ?? '', /research-paper-writing/);
+  assert.doesNotMatch(claude?.prompt ?? '', /python/);
+  assert.deepEqual(codex?.ownFiles, []);
+  assert.doesNotMatch(codex?.prompt ?? '', /"files":\[/);
+  assert.match(codex?.prompt ?? '', /I am Verifold, an automated science/);
+  assert.equal(claude?.outsideText, true);
+  assert.equal(claude?.model, 'opus');
+  // Each call runs in its own empty folder.
+  assert.notEqual(claude?.cwd, codex?.cwd);
+  // The merge sees only the two cards, as text only.
+  assert.equal(merge?.textOnly, true);
+  assert.equal(merge?.ownFiles, undefined);
+  assert.match(merge?.prompt ?? '', /"drafts":\[/);
+});
+
+await test("one harness that fails leaves the other's answer, a failed merge keeps the lead's card, and no answer at all fails", async () => {
+  const answer = {
+    card: { workOn: 'Lead card.', explore: '', talk: '' },
+    skills: [],
+  };
+  const base = {
+    merger: { host: 'claude' as const },
+    skills,
+    claudeConfig: join(tmpdir(), 'verifold-no-such-folder'),
+    signal,
+  };
+  const one = await importProfile({
+    ...base,
+    harnesses: [{ host: 'claude' }, { host: 'codex' }],
+    run: (request) =>
+      request.host === 'codex'
+        ? Promise.reject(new Error('Codex started a command or a tool.'))
+        : Promise.resolve({ text: JSON.stringify(answer) }),
+  });
+  assert.deepEqual(one.from, ['claude']);
+  assert.deepEqual(one.problems, [
+    'Codex did not answer: Codex started a command or a tool.',
+  ]);
+  // Only the skills of the harness that answered come back.
+  assert.deepEqual(
+    one.skills.map((skill) => skill.harness),
+    ['claude', 'claude'],
+  );
+  const merged = await importProfile({
+    ...base,
+    harnesses: [{ host: 'claude' }, { host: 'codex' }],
+    run: (request) =>
+      request.textOnly
+        ? Promise.resolve({ text: 'no card' })
+        : Promise.resolve({
+            text: JSON.stringify(
+              request.host === 'codex'
+                ? { ...answer, card: { ...answer.card, workOn: 'Other.' } }
+                : answer,
+            ),
+          }),
+  });
+  assert.deepEqual(merged.card, answer.card);
+  assert.match(
+    merged.problems[0] ?? '',
+    /could not merge the two drafts, so the card is Claude Code's draft/,
+  );
+  // An answer that is not JSON is a failure too.
+  await assert.rejects(
+    importProfile({
+      ...base,
+      harnesses: [{ host: 'claude' }],
+      run: () => Promise.resolve({ text: 'I know nothing.' }),
+    }),
+    (error: unknown) =>
+      error instanceof SessionActionError &&
+      /Claude Code did not answer: Claude Code did not send an answer/.test(
+        error.message,
+      ),
+  );
+});
+
+const claudeFound: HarnessStatus = {
+  harness: 'claude',
+  installed: true,
+  version: '2.1.310',
+  signedIn: true,
+  plan: 'max',
+  models: claudeChoices('opus[1m]', 'max'),
+};
+
+const codexOut: HarnessStatus = {
+  harness: 'codex',
+  installed: true,
+  version: '0.160.0',
+  signedIn: false,
+  plan: null,
+  models: [],
+};
+
+async function until(check: () => Promise<boolean>): Promise<void> {
+  const end = Date.now() + 10_000;
+  while (!(await check())) {
+    if (Date.now() > end) throw new Error('The condition did not hold.');
+    await delay(20);
+  }
+}
+
+await test('the import through the first run: one at a time, shown until the person accepts it, and Accept sets the draft card and the skill switches', async (t) => {
+  const base = await folder(t, 'import-first-run');
+  const agency = join(base, 'agency');
+  const compute = new Compute(join(base, 'here'), {
+    store: new KeyStore({
+      home: join(base, 'home'),
+      platform: 'linux',
+      secretTool: join(base, 'none'),
+    }),
+  });
+  await compute.load();
+  const waiting: ((text: string) => void)[] = [];
+  const requests: HarnessRequest[] = [];
+  let detected: readonly HarnessStatus[] = [
+    { ...claudeFound, signedIn: false },
+  ];
+  const setup = new FirstRun({
+    directory: agency,
+    compute,
+    signal,
+    claudeConfig: join(base, 'claude'),
+    harness: (request) => {
+      requests.push(request);
+      return new Promise((resolve) =>
+        waiting.push((text) => resolve({ text })),
+      );
+    },
+    detect: () => Promise.resolve(detected),
+    installed: () => Promise.resolve(['claude']),
+    ownSkills: () =>
+      Promise.resolve({
+        skills: skills.filter((skill) => skill.harness === 'claude'),
+        problems: [],
+      }),
+  });
+  // Before any import, the view says that none runs.
+  assert.deepEqual((await setup.view()).about.import, {
+    busy: null,
+    asking: [],
+    error: null,
+    result: null,
+  });
+  // With no agent signed in, the import is refused and does not count as running.
+  await assert.rejects(setup.act({ action: 'setup-import' }), /signed in/);
+  assert.equal((await setup.view()).about.import?.busy, null);
+  detected = [claudeFound, codexOut];
+  await setup.act({ action: 'setup-check' });
+  await until(async () => !(await setup.view()).agents.checking);
+  assert.equal(await setup.act({ action: 'setup-import' }), 202);
+  // A signed-out Codex is not asked, and a second import waits.
+  assert.deepEqual((await setup.view()).about.import?.asking, ['claude']);
+  await assert.rejects(setup.act({ action: 'setup-import' }), /Wait a moment/);
+  await assert.rejects(
+    setup.act({ action: 'setup-import-discard' }),
+    /Wait a moment/,
+  );
+  await until(() => Promise.resolve(waiting.length === 1));
+  assert.equal(requests[0]?.host, 'claude');
+  assert.equal(requests[0]?.model, 'opus[1m]');
+  waiting.shift()?.(
+    JSON.stringify({
+      card: { workOn: 'CoT faithfulness.', explore: 'Probes.', talk: '' },
+      skills: [{ id: 'research-paper-writing', fits: true, when: 'Drafts.' }],
+      read: 'My instructions.',
+    }),
+  );
+  await until(async () => (await setup.view()).about.import?.busy === null);
+  const shown = (await setup.view()).about;
+  assert.deepEqual(shown.import?.result?.from, ['claude']);
+  // Nothing is saved, and the card is not a draft yet.
+  assert.equal(shown.card, null);
+  assert.equal((await loadOwnChoices(agency)).claude.size, 0);
+  // Discard drops it.
+  assert.equal(await setup.act({ action: 'setup-import-discard' }), 200);
+  assert.equal((await setup.view()).about.import?.result, null);
+  await assert.rejects(
+    setup.act({ action: 'setup-import-accept' }),
+    /Nothing waits to be accepted/,
+  );
+  // Again, and Accept: the card becomes the draft, and the switches are set.
+  await setup.act({ action: 'setup-import' });
+  await until(() => Promise.resolve(waiting.length === 1));
+  waiting.shift()?.(
+    JSON.stringify({
+      card: { workOn: 'CoT faithfulness.', explore: 'Probes.', talk: '' },
+      skills: [{ id: 'research-paper-writing', fits: true, when: 'Drafts.' }],
+    }),
+  );
+  await until(async () => (await setup.view()).about.import?.busy === null);
+  assert.equal(await setup.act({ action: 'setup-import-accept' }), 200);
+  const accepted = (await setup.view()).about;
+  assert.deepEqual(accepted.card, {
+    workOn: 'CoT faithfulness.',
+    explore: 'Probes.',
+    talk: '',
+  });
+  assert.equal(accepted.import?.result, null);
+  // The card is still a draft until "Looks right".
+  assert.equal(accepted.saved, null);
+  const choices = (await loadOwnChoices(agency)).claude;
+  assert.deepEqual(
+    [...choices].map(([id, choice]) => [id, choice.use, choice.when]),
+    [
+      ['research-paper-writing', true, 'Drafts.'],
+      ['vercel:deploy', false, ''],
+    ],
+  );
+});

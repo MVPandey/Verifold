@@ -72,6 +72,15 @@ export interface HarnessRequest {
    * every MCP server of the person.
    */
   readonly outsideText?: boolean;
+  /**
+   * The harness answers from the prompt and from what it loads by itself,
+   * such as its own instructions and memories. Claude Code may also read
+   * these absolute paths, which can end in `*` or `**`, with its Read tool,
+   * and nothing else. Codex gets the text-only options, and Verifold stops
+   * the call at its first command or tool call: Codex 0.160.0 applies no
+   * limit on what `exec` commands read.
+   */
+  readonly ownFiles?: readonly string[];
 }
 
 /** A harness call ran into a time limit: it sent nothing for too long, or it ran for too long. */
@@ -512,6 +521,44 @@ async function codexTextOnly(
 }
 
 /**
+ * Claude Code settings that let its Read tool open these absolute paths. In
+ * `dontAsk` mode it can read no other file outside its empty working folder.
+ * Probed on Claude Code 2.1.310.
+ */
+function ownFilesSettings(paths: readonly string[]): string {
+  for (const path of paths)
+    if (
+      !path.startsWith('/') ||
+      [...path].some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f || char === '(' || char === ')';
+      })
+    )
+      throw new Error(
+        'A file that the harness may read must have an absolute path without parentheses or control characters.',
+      );
+  // A rule path that starts with `//` is absolute.
+  return JSON.stringify({
+    permissions: { allow: paths.map((path) => `Read(/${path})`) },
+  });
+}
+
+/** Codex items that only carry its reply. Any other item is a command or a tool call. */
+const codexReplyItems = new Set(['agent_message', 'reasoning', 'todo_list']);
+
+/** A Codex event that starts, updates, or ends a command or a tool call. */
+function codexTool(event: unknown): boolean {
+  return (
+    record(event) &&
+    typeof event.type === 'string' &&
+    event.type.startsWith('item.') &&
+    record(event.item) &&
+    typeof event.item.type === 'string' &&
+    !codexReplyItems.has(event.item.type)
+  );
+}
+
+/**
  * Run one host request with the user's host configuration and permissions.
  * Prompts use stdin and are limited to 2 MiB. Output is read line by line, and
  * one line is limited to 8 MiB. Error output is limited to 2 MiB. A call stops
@@ -540,9 +587,10 @@ export async function runHarness(
   }
   const startedAt = Date.now();
   const executable = options.executable ?? request.host;
+  const own = request.ownFiles ? ownFilesSettings(request.ownFiles) : null;
   // The listing of Codex's MCP servers counts in the call's time.
   const textOnly =
-    request.host === 'codex' && request.textOnly
+    request.host === 'codex' && (request.textOnly || own)
       ? await codexTextOnly(request, executable, Math.min(10_000, timeoutMs))
       : null;
   const args =
@@ -552,7 +600,19 @@ export async function runHarness(
           '--output-format',
           'stream-json',
           '--verbose',
-          ...(request.textOnly ? ['--tools', '', '--strict-mcp-config'] : []),
+          ...(own
+            ? [
+                '--tools',
+                'Read',
+                '--strict-mcp-config',
+                '--permission-mode',
+                'dontAsk',
+                '--settings',
+                own,
+              ]
+            : request.textOnly
+              ? ['--tools', '', '--strict-mcp-config']
+              : []),
           ...(request.model ? ['--model', request.model] : []),
           ...(request.sessionId ? ['--resume', request.sessionId] : []),
         ]
@@ -611,6 +671,10 @@ export async function runHarness(
       try {
         event = JSON.parse(text);
         stream.line(event);
+        if (own && request.host === 'codex' && codexTool(event))
+          throw new Error(
+            'Codex started a command or a tool, which this request does not allow, so Verifold stopped it.',
+          );
       } catch (error) {
         stop(
           error instanceof SyntaxError

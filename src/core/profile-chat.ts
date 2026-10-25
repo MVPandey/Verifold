@@ -71,6 +71,19 @@ function field(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.trim().slice(0, limit) : '';
 }
 
+/** The card in a harness's reply, each field cut to its limit. Null: no card, or no field with text. */
+export function replyCard(value: unknown): ProfileCard | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return null;
+  const fields = value as Record<string, unknown>;
+  const card = {
+    workOn: field(fields.workOn, cardLimits.workOn),
+    explore: field(fields.explore, cardLimits.explore),
+    talk: field(fields.talk, cardLimits.talk),
+  };
+  return card.workOn || card.explore || card.talk ? card : null;
+}
+
 /** The harness's reply as a step. A question when none is left is refused. */
 function parseStep(text: string, left: number): ChatStep {
   let value: unknown;
@@ -81,17 +94,8 @@ function parseStep(text: string, left: number): ChatStep {
   }
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const reply = value as Record<string, unknown>;
-    const card = reply.card;
-    if (typeof card === 'object' && card !== null && !Array.isArray(card)) {
-      const fields = card as Record<string, unknown>;
-      const result = {
-        workOn: field(fields.workOn, cardLimits.workOn),
-        explore: field(fields.explore, cardLimits.explore),
-        talk: field(fields.talk, cardLimits.talk),
-      };
-      if (result.workOn || result.explore || result.talk)
-        return { card: result };
-    }
+    const card = replyCard(reply.card);
+    if (card) return { card };
     const question = field(reply.question, 300);
     if (question && left > 0)
       return {
