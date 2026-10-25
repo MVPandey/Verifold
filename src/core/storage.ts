@@ -1,9 +1,18 @@
 import { mkdir, open, rename, rm, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseWorkspace } from './contracts.ts';
 import type { Workspace } from './contracts.ts';
+
+/** A folder as the person reads it, with the home folder as `~`. */
+export function homeShown(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`)
+    ? `~${path.slice(home.length)}`
+    : path;
+}
 
 /** A file or folder that does not exist. */
 export function missing(error: unknown): boolean {

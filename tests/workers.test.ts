@@ -30,7 +30,7 @@ import { startDesk } from '../src/server/desk.ts';
 import { terminalInput } from '../src/cli/commands.ts';
 import { renderDesk } from '../src/desk/desk-view.ts';
 import { ResearchRunner } from '../src/legacy/research-runner.ts';
-import { loadPaused } from '../src/core/session.ts';
+import { loadPaused, type SessionSkills } from '../src/core/session.ts';
 import { readDeskSnapshot } from '../src/server/desk-records.ts';
 import { parseWorkspace } from '../src/core/contracts.ts';
 
@@ -140,6 +140,7 @@ async function owner(
   t: test.TestContext,
   executables: { claude?: string; codex?: string } = {},
   agents = 2,
+  skills?: SessionSkills,
 ): Promise<{ root: string; sessions: SessionPool; tasks: TaskManager }> {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), 'verifold-workers-')),
@@ -180,6 +181,7 @@ async function owner(
     },
     onTaskTurn: (task, turn, detail, reply) =>
       void owned.tasks?.turnEnded(task, turn, detail, reply),
+    ...(skills ? { skills } : {}),
   });
   const tasks = new TaskManager(root, { ownerId: 'owner-1', sessions });
   owned.tasks = tasks;
@@ -619,6 +621,32 @@ await test(
         (event) => event.text === 'You returned to Verifold.',
       ),
     );
+  },
+);
+
+await test(
+  "a Claude Code terminal keeps the person's own skills that are off out, as the session did",
+  { skip: terminals },
+  async (t) => {
+    const { sessions } = await owner(t, {}, 2, {
+      folder: () => Promise.resolve(null),
+      problem: () => {},
+      used: () => {},
+      off: () => Promise.resolve(['python']),
+    });
+    // A session of the person's own, not a lab agent's, leaves them out too.
+    const id = await sessions.start({
+      host: 'claude',
+      mode: 'auto',
+      prompt: 'Start',
+    });
+    await status(sessions, id, 'idle');
+    await sessions.takeTerminal(id, lease);
+    const shown = await screen(sessions, id, /Skill\(python \*\)/);
+    assert.match(shown, /--settings/);
+    assert.match(shown, /skillOverrides/);
+    sessions.terminal(id)?.write(lease, '/exit\r');
+    await status(sessions, id, 'idle');
   },
 );
 

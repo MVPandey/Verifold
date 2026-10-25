@@ -33,13 +33,7 @@ export function expandHome(path: string, cwd: string): string {
     : resolve(cwd, path);
 }
 
-/** A folder as the person reads it, with the home folder as `~`. */
-export function homeShown(path: string): string {
-  const home = homedir();
-  return path === home || path.startsWith(`${home}/`)
-    ? `~${path.slice(home.length)}`
-    : path;
-}
+export { homeShown } from '../core/storage.ts';
 
 /** Reject redirected project roots and conflicting artifacts before initialization. */
 export async function checkProjectDirectory(root: string): Promise<void> {

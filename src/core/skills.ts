@@ -16,6 +16,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import {
   loadOwnChoices,
+  ownChoicesFile,
   prepareAgency,
   readMemory,
   saveAgencyFile,
@@ -1349,14 +1350,19 @@ export function skillLoader(
       void utimes(folder, now, now).catch(() => {});
     },
     off: async (host) => {
-      try {
-        return skillsOff(await loadOwnChoices(directory), host);
-      } catch (error) {
+      const file = ownChoicesFile(directory);
+      const choices = await loadOwnChoices(directory).catch(() => null);
+      if (!choices) {
         tell(
-          `Verifold could not read your choices for your own skills, so agents load all of them: ${error instanceof Error ? error.message : 'unknown error'}`,
+          `Verifold could not read ${file}, so agents load all your skills.`,
         );
         return [];
       }
+      if (choices.skipped)
+        tell(
+          `Verifold skipped ${choices.skipped} ${choices.skipped === 1 ? 'entry' : 'entries'} of ${file} that it could not read. Agents load those skills.`,
+        );
+      return skillsOff(choices, host);
     },
   };
 }

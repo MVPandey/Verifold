@@ -485,12 +485,11 @@ await test('with the profile folder unreadable, both harnesses read the added sk
   assert.deepEqual(told, []);
 });
 
-await test("the person's own skills that are off stay out of each agent session: Claude Code by its settings, Codex by a -c rule", async (t) => {
-  const { work, start } = await project(t);
+await test("the person's own skills that are off stay out of every session: Claude Code by its settings, Codex by a -c rule on each path", async (t) => {
+  const { root, work, start } = await project(t);
+  const python = '/home/p/.agents/skills/python/SKILL.md';
   const off = (host: HarnessName): Promise<readonly string[]> =>
-    Promise.resolve(
-      host === 'claude' ? ['python', 'vercel:nextjs'] : ['python'],
-    );
+    Promise.resolve(host === 'claude' ? ['python', 'vercel:nextjs'] : [python]);
   await start('claude', { ...loader(null), off });
   await until(
     async () => (await args(work, 'args.json').catch(() => null)) !== null,
@@ -521,7 +520,31 @@ await test("the person's own skills that are off stay out of each agent session:
       (await args(work, 'codex-args.json').catch(() => null)) !== null,
   );
   const codex = await args(work, 'codex-args.json');
-  const rule = codex.indexOf('skills.config=[{name="python",enabled=false}]');
+  const rule = codex.indexOf(
+    `skills.config=[{path="${python}",enabled=false}]`,
+  );
   assert.equal(codex[rule - 1], '-c');
   assert.ok(rule < codex.indexOf('app-server'));
+
+  // A task of the coordinator is no lab agent, and leaves them out too.
+  await rm(join(work, 'args.json'));
+  const manager = new SessionManager(root, {
+    clientVersion: 'test',
+    ownerId: 'test-owner',
+    executables: { claude: join(root, 'fake-claude') },
+    skills: { ...loader(null), off },
+  });
+  t.after(() => manager.close());
+  await manager.startTask({
+    host: 'claude',
+    prompt: 'Go.',
+    cwd: work,
+    task: { id: 't-1', claim: 'c' },
+  });
+  await until(
+    async () => (await args(work, 'args.json').catch(() => null)) !== null,
+  );
+  const task = await args(work, 'args.json');
+  assert.ok(task[task.indexOf('--settings') + 1]?.includes('Skill(python)'));
+  assert.ok(!task.includes('--plugin-dir'));
 });

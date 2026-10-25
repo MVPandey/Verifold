@@ -718,16 +718,19 @@ await test("step 3 lists the person's own skills by harness and group, each with
       when: '',
     },
   ];
-  const skills: SetupSkills = {
+  // Before a list, the view leaves `own` out.
+  const unlisted: SetupSkills = {
     busy: null,
     search: null,
     cards: [],
     added: [],
     needsProfile: true,
     problem: null,
-    own,
     ownReading: false,
+    ownProblems: ['Codex did not list its skills. Read the list again.'],
+    noteLimit: 280,
   };
+  const skills: SetupSkills = { ...unlisted, own };
   const markup = renderToStaticMarkup(
     <SkillsStep
       view={view({ skills })}
@@ -748,7 +751,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
   assert.match(shown, /this step needs About you first/);
   assert.match(
     shown,
-    /Your skills Your own Claude Code and Codex already load these/,
+    /Your skills Read again Your own Claude Code and Codex already load these/,
   );
   assert.match(
     shown,
@@ -779,17 +782,42 @@ await test("step 3 lists the person's own skills by harness and group, each with
     shown,
     /“No” turns a skill off only for Verifold’s agents\. Your own Claude Code and Codex don’t change\./,
   );
-  assert.match(
-    text(
+  // The note's limit comes from the view, a problem shows as its own line, and the list can be read again.
+  assert.match(markup, /maxLength="280"|maxlength="280"/);
+  assert.match(shown, /Codex did not list its skills\. Read the list again\./);
+  assert.match(shown, /Your skills Read again/);
+  // The switch stays on while a note saves, so a click after a note is never lost.
+  assert.doesNotMatch(markup, /class="own__choice"[^>]*disabled/);
+  // Before the first list, and while one runs, the step waits for it.
+  for (const waiting of [
+    { ...unlisted, ownProblems: [] },
+    { ...skills, own: [], ownReading: true },
+  ] satisfies SetupSkills[]) {
+    const page = text(
       <SkillsStep
-        view={view({ skills: { ...skills, own: [], ownReading: true } })}
+        view={view({ skills: waiting })}
         actions={actions}
         refresh={quiet}
         onDone={quiet}
       />,
-    ),
-    /Listing the skills that your Claude Code and Codex load\./,
+    );
+    assert.match(
+      page,
+      /Listing the skills that your Claude Code and Codex load\./,
+    );
+    assert.doesNotMatch(page, /Read again/);
+  }
+  // A first list that failed says why, and offers to read again.
+  const failed = text(
+    <SkillsStep
+      view={view({ skills: unlisted })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
   );
+  assert.doesNotMatch(failed, /Listing the skills/);
+  assert.match(failed, /Read again .*Codex did not list its skills/);
   assert.match(
     text(
       <SkillsStep
@@ -815,6 +843,8 @@ await test("step 3 lists the person's own skills by harness and group, each with
     [{ harness: 'claude', name: 'python', use: true, when: 'For scripts.' }],
     'd'.repeat(32),
   );
+  await setupActions('token').ownSkillsList(true, 'e'.repeat(32));
+  await setupActions('token').ownSkillsList(false, 'f'.repeat(32));
   assert.deepEqual(sent, [
     {
       choices: [
@@ -822,5 +852,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
       ],
       key: 'd'.repeat(32),
     },
+    { again: true, key: 'e'.repeat(32) },
+    { key: 'f'.repeat(32) },
   ]);
 });
