@@ -41,6 +41,7 @@ import {
   type DeskServer,
 } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
+import { listOwnSkills } from '../core/own-skills.ts';
 import { askStart, type Begun } from './ask-start.ts';
 import { FirstRun } from '../server/setup.ts';
 import { pluginsHome, skillLoader } from '../core/skills.ts';
@@ -998,6 +999,7 @@ async function serveDesk(
                 compute,
                 signal: deskSignal,
                 harness,
+                ownSkills: () => listOwnSkills(),
               }),
               ...(io.appAssets ? { appRoot: io.appAssets } : {}),
             },
@@ -1175,6 +1177,7 @@ async function serveStart(
         compute,
         signal: deskSignal,
         harness: run.harness,
+        ownSkills: () => listOwnSkills(),
       }),
       start: ask.start,
       ...(io.appAssets ? { appRoot: io.appAssets } : {}),

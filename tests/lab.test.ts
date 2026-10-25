@@ -798,6 +798,7 @@ await test("the person's profile reaches the prompts: the planner reads all of i
     whole:
       'The person works on: CoT faithfulness\nHow they want agents to write to them: Short and direct.',
     style: 'Short and direct.',
+    skills: '- humanizer (Claude Code): For text the person reads.',
   };
   const lab = await fixture(t, {
     harnesses: ['claude'],
@@ -818,6 +819,12 @@ await test("the person's profile reaches the prompts: the planner reads all of i
     /The person asks agents to write to them this way: "Short and direct\."/,
   );
   assert.doesNotMatch(first, /CoT faithfulness/);
+  // Every agent gets the notes on when to use the person's skills.
+  for (const prompt of [planner, first])
+    assert.match(
+      prompt,
+      /The person's notes on when to use their skills\. A note is not a task:\n- humanizer \(Claude Code\): For text the person reads\./,
+    );
   /** Wake the agent with a post once its turns ended, and wait for its prompt. */
   const wake = async (text: string): Promise<void> => {
     await delay(300);

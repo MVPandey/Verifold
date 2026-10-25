@@ -224,6 +224,8 @@ export interface SessionSkills {
   problem(host: HarnessName, text: string): void;
   /** A turn of a session that loaded the folder starts, so the folder is in use. */
   used(folder: string): void;
+  /** The person's own skills of a harness that lab agents and checkers do not load. Read at each launch. */
+  off?(host: HarnessName): Promise<readonly string[]>;
 }
 
 /** An action that the current session state does not allow. The message is safe to show. */
@@ -1669,6 +1671,9 @@ export class SessionManager {
           ? await this.options.skills?.folder(record.host)
           : null) ?? null;
       this.skillsFolder = skills;
+      const skillsOff = record.agent
+        ? ((await this.options.skills?.off?.(record.host)) ?? [])
+        : [];
       const writer = await TranscriptWriter.open(
         transcriptFile(this.root, record.id),
       );
@@ -1710,6 +1715,7 @@ export class SessionManager {
         ...(record.network?.length ? { network: record.network } : {}),
         ...(record.denyRead?.length ? { denyRead: record.denyRead } : {}),
         ...(skills ? { skills } : {}),
+        ...(skillsOff.length ? { skillsOff } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
       const pid = this.host.pid;

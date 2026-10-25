@@ -666,3 +666,160 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
   assert.match(updates, /this step needs About you first/);
   assert.match(updates, /Update/);
 });
+
+await test("step 3 lists the person's own skills by harness and group, each with Yes or No, and a note line under each Yes", async (t) => {
+  const own: NonNullable<SetupSkills['own']> = [
+    {
+      harness: 'claude',
+      name: 'python',
+      description: 'Python style.',
+      source: 'personal',
+      use: false,
+      when: '',
+    },
+    {
+      harness: 'claude',
+      name: 'humanizer',
+      description: 'd'.repeat(200),
+      source: 'personal',
+      use: true,
+      when: 'For text the person reads.',
+    },
+    {
+      harness: 'claude',
+      name: 'anthropic-skills:pdf',
+      description: 'PDFs.',
+      source: 'synced',
+      use: true,
+      when: '',
+    },
+    {
+      harness: 'claude',
+      name: 'vercel:nextjs',
+      description: 'Next.js.',
+      source: 'plugin',
+      use: false,
+      when: '',
+    },
+    {
+      harness: 'claude',
+      name: 'vercel:deploy',
+      description: 'Deploys.',
+      source: 'plugin',
+      use: true,
+      when: '',
+    },
+    {
+      harness: 'codex',
+      name: 'site',
+      description: 'Site.',
+      source: 'admin',
+      use: true,
+      when: '',
+    },
+  ];
+  const skills: SetupSkills = {
+    busy: null,
+    search: null,
+    cards: [],
+    added: [],
+    needsProfile: true,
+    problem: null,
+    own,
+    ownReading: false,
+  };
+  const markup = renderToStaticMarkup(
+    <SkillsStep
+      view={view({ skills })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  const shown = text(
+    <SkillsStep
+      view={view({ skills })}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+    />,
+  );
+  // The own skills show without a profile, which only the catalog search needs.
+  assert.match(shown, /this step needs About you first/);
+  assert.match(
+    shown,
+    /Your skills Your own Claude Code and Codex already load these/,
+  );
+  assert.match(
+    shown,
+    /Claude Code Your skill folder · 2 skills · 1 off .*From claude\.ai · 1 skill .*The vercel plugin · 2 skills · 1 off .*Codex This computer’s skills · 1 skill/,
+  );
+  // The group names the plugin and claude.ai, so the rows drop the prefix.
+  assert.match(shown, / nextjs Next\.js\. /);
+  assert.doesNotMatch(shown, / vercel:nextjs /);
+  // The skill folder opens at once. Plugins and claude.ai open on a click.
+  assert.equal(
+    (markup.match(/<details class="own-group" open="">/g) ?? []).length,
+    1,
+  );
+  assert.equal((markup.match(/<details class="own-group">/g) ?? []).length, 3);
+  assert.match(markup, /aria-label="Verifold’s agents use python"/);
+  assert.match(
+    markup,
+    /aria-pressed="false"[^>]*>Yes<\/button><button[^>]*aria-pressed="true"[^>]*>No</,
+  );
+  // A note line under each Yes, with the saved note.
+  assert.equal((markup.match(/class="own__when"/g) ?? []).length, 4);
+  assert.match(markup, /value="For text the person reads\."/);
+  // A long description shows its start, with a button for the rest.
+  assert.match(markup, /own__what own__what--short/);
+  assert.match(markup, /aria-expanded="false"[^>]*>More</);
+  assert.match(
+    shown,
+    /No turns a skill off only for Verifold’s agents\. Your own Claude Code and Codex don’t change\./,
+  );
+  assert.match(
+    text(
+      <SkillsStep
+        view={view({ skills: { ...skills, own: [], ownReading: true } })}
+        actions={actions}
+        refresh={quiet}
+        onDone={quiet}
+      />,
+    ),
+    /Listing the skills that your Claude Code and Codex load\./,
+  );
+  assert.match(
+    text(
+      <SkillsStep
+        view={view({ skills: { ...skills, own: [] } })}
+        actions={actions}
+        refresh={quiet}
+        onDone={quiet}
+      />,
+    ),
+    /Your Claude Code and Codex load no skills of their own\./,
+  );
+  // The choices go in one request, with the key of the intent.
+  const sent: unknown[] = [];
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  globalThis.fetch = (_input: string | URL | Request, init?: RequestInit) => {
+    sent.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null);
+    return Promise.resolve(new Response('{"ok":true}', { status: 200 }));
+  };
+  await setupActions('token').ownSkills(
+    [{ harness: 'claude', name: 'python', use: true, when: 'For scripts.' }],
+    'd'.repeat(32),
+  );
+  assert.deepEqual(sent, [
+    {
+      choices: [
+        { harness: 'claude', name: 'python', use: true, when: 'For scripts.' },
+      ],
+      key: 'd'.repeat(32),
+    },
+  ]);
+});

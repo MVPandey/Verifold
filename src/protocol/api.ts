@@ -1097,6 +1097,24 @@ export interface SetupSkills {
   readonly needsProfile: boolean;
   /** Why the last search, add, or removal failed. */
   readonly problem: string | null;
+  /** The skills that the person's own Claude Code and Codex load, with the person's choices. Added after version 1. */
+  readonly own?: readonly OwnSkill[];
+  /** Verifold lists them now. Ask again in a moment. Added after version 1. */
+  readonly ownReading?: boolean;
+}
+
+/** A skill that the person's own Claude Code or Codex loads. Verifold's agents load it unless the person says no. */
+export interface OwnSkill {
+  readonly harness: Harness;
+  /** The name that the harness lists, such as `python` or `vercel:nextjs`. */
+  readonly name: string;
+  readonly description: string;
+  /** The person's own skill folder, claude.ai, a Claude Code plugin, or the computer's admin folder for Codex. */
+  readonly source: 'personal' | 'synced' | 'plugin' | 'admin';
+  /** Verifold's agents load it. */
+  readonly use: boolean;
+  /** When and how agents should use it, in the person's words. Empty: no note. */
+  readonly when: string;
 }
 
 export interface SetupAgents {
@@ -1388,6 +1406,20 @@ export interface ActionBodies {
   'setup-skill-remove': { readonly id: string; readonly key?: string };
   /** Finish the Skills step. */
   'setup-skills-done': { readonly key?: string };
+  /**
+   * Choose which of the person's own skills Verifold's agents load, and add
+   * notes on when to use them. Without `when`, a note stays as it is.
+   * Added after version 1.
+   */
+  'setup-own-skills': {
+    readonly choices: readonly {
+      readonly harness: Harness;
+      readonly name: string;
+      readonly use: boolean;
+      readonly when?: string;
+    }[];
+    readonly key?: string;
+  };
   /**
    * Without a project: create one for the person's question, and start its
    * lab. The settings apply to this project only. Each one that is left out

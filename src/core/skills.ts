@@ -14,7 +14,13 @@ import {
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
-import { prepareAgency, readMemory, saveAgencyFile } from './agency.ts';
+import {
+  loadOwnChoices,
+  prepareAgency,
+  readMemory,
+  saveAgencyFile,
+  skillsOff,
+} from './agency.ts';
 import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
@@ -1304,9 +1310,10 @@ async function prune(plugins: string, keep: string): Promise<void> {
 }
 
 /**
- * The added skills for the sessions of a project's owner. A harness that
- * could not load them gets no more of them while this process runs, and
- * `report` gets each reason once.
+ * The added skills for the sessions of a project's owner, and the person's
+ * own skills that agents do not load. A harness that could not load the
+ * added skills gets no more of them while this process runs, and `report`
+ * gets each reason once.
  */
 export function skillLoader(
   directory: string,
@@ -1340,6 +1347,16 @@ export function skillLoader(
     used: (folder) => {
       const now = new Date();
       void utimes(folder, now, now).catch(() => {});
+    },
+    off: async (host) => {
+      try {
+        return skillsOff(await loadOwnChoices(directory), host);
+      } catch (error) {
+        tell(
+          `Verifold could not read your choices for your own skills, so agents load all of them: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+        return [];
+      }
     },
   };
 }

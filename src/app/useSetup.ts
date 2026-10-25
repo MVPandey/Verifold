@@ -8,7 +8,7 @@ export const setupPollMs = 1_000;
 /**
  * The first run's view: read once, again after `refresh`, and each second
  * while Verifold looks for the harnesses, an agent writes, the prices load,
- * or the skill catalogs load.
+ * the skill catalogs load, or Verifold lists the person's own skills.
  */
 export function useSetup(read: SetupActions['read']): {
   readonly view: SetupView | null;
@@ -35,7 +35,8 @@ export function useSetup(read: SetupActions['read']): {
     (view.agents.checking ||
       view.about.busy !== null ||
       view.money.reading ||
-      Boolean(view.skills?.busy));
+      Boolean(view.skills?.busy) ||
+      Boolean(view.skills?.ownReading));
   useEffect(() => {
     if (!waiting) return;
     const timer = setTimeout(refresh, setupPollMs);
