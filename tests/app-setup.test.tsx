@@ -27,8 +27,8 @@ import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
 import {
   DoneStep,
   UnsavedLine,
+  afterAnswer,
   leaveFor,
-  visitCounter,
 } from '../src/app/screens/Setup.tsx';
 import { StepHeader } from '../src/app/components/StepHeader.tsx';
 
@@ -299,33 +299,13 @@ await test('a plain click on the step bar goes through the setup page, and any o
   assert.deepEqual(opened, ['about']);
 });
 
-await test('a save that ends after the person left its step moves nothing, even when they came back, and the profile is read again either way', () => {
-  const visits = visitCounter();
-  const ran: string[] = [];
-  const next = (): void => {
-    ran.push('next');
-  };
-  const refresh = (): void => {
-    ran.push('refresh');
-  };
-  visits.see('money');
-  // The save answers while the step shows: the next page opens (and reads the profile).
-  visits.after(next, refresh)();
-  // Finish setup, then Back before the save answers.
-  const left = visits.after(next, refresh);
-  visits.see('skills');
-  left();
-  // Finish setup, Back, then the same step again before the save answers.
-  visits.see('money');
-  const back = visits.after(next, refresh);
-  visits.see('skills');
-  visits.see('money');
-  back();
-  // Another render of the same page is the same visit.
-  const same = visits.after(next, refresh);
-  visits.see('money');
-  same();
-  assert.deepEqual(ran, ['next', 'refresh', 'refresh', 'next']);
+await test('a save opens the next page only while its step still shows, and reads the profile again either way', () => {
+  // The save answers while Money shows.
+  assert.equal(afterAnswer('#/setup/money', 'money'), 'next');
+  // Finish setup, then Back to Skills before the save answers.
+  assert.equal(afterAnswer('#/setup/skills', 'money'), 'refresh');
+  // Finish setup, then Back to the lab.
+  assert.equal(afterAnswer('#/', 'money'), 'refresh');
 });
 
 await test('Back, the bar and the link to the lab ask first only while the step holds unsaved input, and the line offers to leave or stay', () => {
@@ -384,8 +364,8 @@ await test('Back, the bar and the link to the lab ask first only while the step 
   assert.deepEqual(chose, ['leave', 'stay']);
 });
 
-await test('GPU money holds unsaved input against what it opened with: typed limits, other GPUs, or a typed key, and none while its save runs', () => {
-  const start = {
+await test('GPU money holds unsaved input: limits that differ from the saved ones, other GPUs, or a typed key', () => {
+  const saved = {
     limitUsd: '25',
     maxUsdPerHour: '4',
     maxHoursPerLease: '4',
@@ -394,18 +374,17 @@ await test('GPU money holds unsaved input against what it opened with: typed lim
     monthUsd: '',
   } as const;
   const opened = {
-    start,
-    limits: start,
+    saved,
+    limits: saved,
     ticked: null,
     defaults: ['h100', 'a100'],
     secret: '',
-    saving: false,
   };
   assert.equal(moneyUnsaved(opened), false);
-  const typed = { ...opened, limits: { ...start, limitUsd: '40' } };
-  assert.equal(moneyUnsaved(typed), true);
-  // While Finish setup saves, the input is not unsaved.
-  assert.equal(moneyUnsaved({ ...typed, saving: true }), false);
+  assert.equal(
+    moneyUnsaved({ ...opened, limits: { ...saved, limitUsd: '40' } }),
+    true,
+  );
   // Ticking back to the default GPUs, in any order, is no change.
   assert.equal(moneyUnsaved({ ...opened, ticked: ['a100', 'h100'] }), false);
   assert.equal(moneyUnsaved({ ...opened, ticked: ['h100'] }), true);

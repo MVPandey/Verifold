@@ -24,29 +24,27 @@ interface LimitText {
 }
 
 /**
- * Limits typed since the step opened, ticked GPUs other than the default
- * ones, or a typed key, while no save of them runs. The default GPUs are
- * those that the step allows without a tick, so ticking back to them is no
- * change.
+ * Limits that differ from the saved ones, ticked GPUs other than the
+ * default ones, or a typed key. The default GPUs are those that the step
+ * allows without a tick, so ticking back to them is no change. The saved
+ * limits change only on a save, so a poll does not change the answer.
  */
 export function moneyUnsaved(input: {
-  /** The limits as the step opened, before any poll changed them. */
-  readonly start: LimitText;
+  readonly saved: LimitText;
   readonly limits: LimitText;
   readonly ticked: readonly string[] | null;
   readonly defaults: readonly string[];
   readonly secret: string;
-  readonly saving: boolean;
 }): boolean {
-  const { start, limits, ticked, defaults } = input;
-  const typed = (Object.keys(start) as (keyof LimitText)[]).some(
-    (field) => start[field] !== limits[field],
+  const { saved, limits, ticked, defaults } = input;
+  const typed = (Object.keys(saved) as (keyof LimitText)[]).some(
+    (field) => saved[field] !== limits[field],
   );
   const gpus =
     ticked !== null &&
     (ticked.length !== defaults.length ||
       ticked.some((id) => !defaults.includes(id)));
-  return !input.saving && (typed || gpus || input.secret !== '');
+  return typed || gpus || input.secret !== '';
 }
 
 function textOf(limits: MoneyLimits): LimitText {
@@ -81,8 +79,7 @@ export function MoneyStep({
 }): ReactNode {
   const money = view.money;
   const keyField = useId();
-  const [start] = useState<LimitText>(() => textOf(money.limits));
-  const [limits, setLimits] = useState<LimitText>(start);
+  const [limits, setLimits] = useState<LimitText>(() => textOf(money.limits));
   // Null: the person did not tick any GPU, so the price cap decides.
   const [ticked, setTicked] = useState<readonly string[] | null>(null);
   const [replacing, setReplacing] = useState(false);
@@ -103,12 +100,11 @@ export function MoneyStep({
   // The key stays in this step's state. The page hears only whether something is unsaved.
   useUnsaved(
     moneyUnsaved({
-      start,
+      saved: textOf(money.limits),
       limits,
       ticked,
       defaults: allowedGpus(view, cap),
       secret,
-      saving: save.busy || storeKey.busy,
     }),
     nav,
   );
