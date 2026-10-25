@@ -39,6 +39,7 @@ import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { AppHeader } from './components/AppHeader.tsx';
 import { PodNeeds, PodsLine } from './components/Pods.tsx';
+import { NewProjectPage } from './screens/NewProject.tsx';
 import { SetupPage } from './screens/Setup.tsx';
 import { SettingsPage, type ComputeActions } from './screens/SettingsPage.tsx';
 import {
@@ -176,6 +177,9 @@ interface ScreenProps {
   readonly answers?: AnswerActions;
   readonly setup?: SetupActions;
   readonly start?: StartActions;
+  /** An isolated project's own settings and start, while Verifold runs without a project. */
+  readonly projectSetup?: SetupActions;
+  readonly projectStart?: StartActions;
   readonly startLab?: AppActions['startLab'];
   readonly compute?: ComputeActions;
 }
@@ -224,6 +228,8 @@ function Page({
   answers = signedOutAnswers,
   setup = signedOutSetup,
   start = signedOutStart,
+  projectSetup = signedOutSetup,
+  projectStart = signedOutStart,
   startLab = signedOutApp.startLab,
   compute = signedOutCompute,
 }: Omit<ScreenProps, 'route'> & { readonly route: PageRoute }): ReactNode {
@@ -253,22 +259,44 @@ function Page({
       </Notice>
     );
   if (route.page === 'unknown') return <NotFound />;
+  // An isolated project's own settings are for a folder without a project. In a project, its settings open at #/setup.
+  if (route.page === 'setup' && route.scope && snapshot?.project)
+    return <Redirect to={href.setup(route.step ?? undefined)} />;
   if (route.page === 'setup')
     return (
       <SetupPage
         step={route.step}
-        actions={setup}
+        {...(route.scope ? { scope: route.scope } : {})}
+        actions={route.scope ? projectSetup : setup}
         // Null until the first snapshot says whether a project exists.
         project={snapshot ? snapshot.project : null}
       />
     );
-  // Without a project, the app asks the question of a new one, after the first run.
-  if (snapshot && !snapshot.project)
-    return route.page === 'ask' ? (
-      <AskPage setup={setup} start={start} now={now} connection={connection} />
+  // Without a project, the app asks whether the new one uses the global settings or its own, then its question.
+  if (snapshot && !snapshot.project) {
+    if (route.page === 'ask')
+      return route.scope ? (
+        <AskPage
+          scope={route.scope}
+          setup={projectSetup}
+          start={projectStart}
+          now={now}
+          connection={connection}
+        />
+      ) : (
+        <AskPage
+          setup={setup}
+          start={start}
+          now={now}
+          connection={connection}
+        />
+      );
+    return route.page === 'new' ? (
+      <NewProjectPage setup={setup} />
     ) : (
-      <SetupPage step={null} actions={setup} project="" />
+      <Redirect to={href.new} />
     );
+  }
   if (!snapshot)
     return connection === 'unreachable' ? (
       <Notice title="Can't reach Verifold. Is it running?">
@@ -283,8 +311,9 @@ function Page({
         <p>The lab shows here in a moment.</p>
       </Notice>
     );
-  // The Ask page is for a folder without a project. With one, the lab opens.
-  if (route.page === 'ask') return <Redirect to={href.lab} />;
+  // The Ask page and the choice of settings are for a folder without a project. With one, the lab opens.
+  if (route.page === 'ask' || route.page === 'new')
+    return <Redirect to={href.lab} />;
   // A project's settings and pods open with or without a lab.
   if (route.page === 'settings')
     return (
@@ -527,6 +556,8 @@ export function App({
   const [answers] = useState(() => answerActions(token));
   const [setup] = useState(() => setupActions(token));
   const [start] = useState(() => startActions(token));
+  const [projectSetup] = useState(() => setupActions(token, 'project'));
+  const [projectStart] = useState(() => startActions(token, 'project'));
   const [app] = useState(() => appActions(token));
   const [history] = useState(() => historyTools(token));
   const [controls] = useState(() => (token ? labControls(token) : null));
@@ -564,6 +595,8 @@ export function App({
             answers={answers}
             setup={setup}
             start={start}
+            projectSetup={projectSetup}
+            projectStart={projectStart}
             startLab={app.startLab}
             compute={compute}
           />

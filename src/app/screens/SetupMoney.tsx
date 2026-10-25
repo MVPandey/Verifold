@@ -148,6 +148,12 @@ export function MoneyStep({
   const error = problem ?? storeKey.error ?? prices.error ?? save.error;
   const set = (field: keyof LimitText) => (value: string) =>
     setLimits((current) => ({ ...current, [field]: value }));
+  const spent = money.month?.problem
+    ? money.month.problem
+    : money.month && money.month.spentUsd > 0
+      ? `Spent so far this month: ${usd(money.month.spentUsd)}.`
+      : 'Nothing spent this month.';
+  const globalMonth = money.limits.monthUsd ?? null;
   return (
     <>
       <StepHeader
@@ -335,26 +341,37 @@ export function MoneyStep({
           min={1}
           step={1}
         />
-        <LimitField
-          label="All projects together, each month"
-          before="$"
-          value={limits.monthUsd}
-          onChange={set('monthUsd')}
-          min={1}
-          step={1}
-          note={
-            <>
-              {money.month?.problem
-                ? `${money.month.problem} `
-                : money.month && money.month.spentUsd > 0
-                  ? `Spent so far this month: ${usd(money.month.spentUsd)}. `
-                  : 'Nothing spent this month. '}
-              Leave it empty for no monthly limit. Two projects that rent at the
-              same moment can go over it by one pod’s cost. Verifold then stops
-              their pods.
-            </>
-          }
-        />
+        {view.scope === 'project' ? (
+          // The monthly limit counts every project, so only the global settings change it.
+          <div className="limit">
+            <span className="limit__label">
+              All projects together, each month
+            </span>
+            <span className="limit__value">
+              {globalMonth === null ? 'No limit' : usd(globalMonth)}
+            </span>
+            <span className="limit__note">
+              {spent} This limit comes from your global settings, and this
+              project counts toward it.
+            </span>
+          </div>
+        ) : (
+          <LimitField
+            label="All projects together, each month"
+            before="$"
+            value={limits.monthUsd}
+            onChange={set('monthUsd')}
+            min={1}
+            step={1}
+            note={
+              <>
+                {spent} Leave it empty for no monthly limit. Two projects that
+                rent at the same moment can go over it by one pod’s cost.
+                Verifold then stops their pods.
+              </>
+            }
+          />
+        )}
         <LimitField
           label="Stop a pod that sits idle for"
           after="minutes"

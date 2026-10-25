@@ -42,7 +42,8 @@ import {
 } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { askStart, type Begun } from './ask-start.ts';
-import { FirstRun } from '../server/setup.ts';
+import { FirstRun, StartFirstRun } from '../server/setup.ts';
+import { profileDenial, projectProfile } from '../core/project-profile.ts';
 import { pluginsHome, skillLoader } from '../core/skills.ts';
 import { TaskManager } from '../legacy/tasks.ts';
 import { ResultsStore } from '../legacy/results.ts';
@@ -234,7 +235,8 @@ Options: --workspace path (default: the current folder), --help, --version
 
 In a folder without a project, verifold opens the first run in your browser:
 your agents, a short profile, skills, and the GPU limits that new projects
-start with. Then the Ask page takes your question, and a lab starts on it.
+start with. An isolated project gets its own copy of these settings instead.
+Then the Ask page takes your question, and a lab starts on it.
 Several agents each own a direction and post what they find, with proof, on
 one board. They check each other's claims, and they ask you only about money,
 scope, access, or more time. Runs go on this computer, or on RunPod GPU pods
@@ -734,9 +736,10 @@ async function serveDesk(
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);
       await quota.load();
-      // The person's profile: the lab reads it for each prompt, its added skills load for each agent's session,
-      // and pods read its monthly limit across projects at each check.
-      const agency = run.agency ?? agencyDirectory(root);
+      // The person's profile: the lab reads it for each prompt, and its added skills load for each agent's session.
+      // An isolated project has its own. Pods read the monthly limit across projects in the global one at each check.
+      const global = run.agency ?? agencyDirectory(root);
+      const agency = await projectProfile(root, global);
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
@@ -812,7 +815,7 @@ async function serveDesk(
         },
         (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
         (lease) => owned.lab?.podStops(lease) ?? Promise.resolve(),
-        agency,
+        global,
       );
       // The project memory follows every change of the records, and every agent reads its index.
       const memory = new ProjectMemory(
@@ -894,8 +897,8 @@ async function serveDesk(
             (await loadSettings(agency).catch(() => null))?.agency,
           ),
         person: profileReader(agency),
-        // A profile folder outside the default one is closed to the lab's sessions and runs too.
-        ...(agency === agencyDirectory(root) ? {} : { denyRead: [agency] }),
+        // A profile folder outside the default one, such as an isolated project's own, is closed to the lab's sessions and runs too.
+        ...profileDenial(root, [agency, global]),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);
@@ -995,6 +998,7 @@ async function serveDesk(
               // The app opens the first run here too, to change the profile.
               firstRun: new FirstRun({
                 directory: agency,
+                ...(agency === global ? {} : { global }),
                 compute,
                 signal: deskSignal,
                 harness,
@@ -1170,8 +1174,9 @@ async function serveStart(
     undefined,
     undefined,
     {
-      firstRun: new FirstRun({
+      firstRun: new StartFirstRun({
         directory: run.agency,
+        root,
         compute,
         signal: deskSignal,
         harness: run.harness,
@@ -1389,8 +1394,9 @@ async function runOwner(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
   const { research, desk, lab, agency, hours } = ownerStart(input);
-  // The profile that the lab reads. A terminal that attaches with another one hears so.
-  const profile = agency ?? agencyDirectory(root);
+  const global = agency ?? agencyDirectory(root);
+  // The profile that the lab reads: an isolated project's own, else the global one. A terminal that attaches with another one hears so.
+  const profile = await projectProfile(root, global);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
   let early: { readonly progress: string; readonly feed?: true }[] | null = [];
@@ -1510,7 +1516,7 @@ async function runOwner(
         hours,
         harness,
         lab,
-        agency: profile,
+        agency: global,
         owner: { control, keys: io.background.keys, desk },
       },
     );
@@ -1602,6 +1608,11 @@ async function attachTeam(
   }
   let client: ControlClient | null = null;
   let shown = false;
+  // An owner that ran already keeps the profile that it started with.
+  const wanted = await projectProfile(
+    root,
+    start.agency ?? agencyDirectory(root),
+  );
   client = await reach(
     control,
     (message) => {
@@ -1612,8 +1623,6 @@ async function attachTeam(
       else if ('screen' in message) io.screens?.show?.(message.screen, true);
       else if ('url' in message && !shown) {
         shown = true;
-        // An owner that ran already keeps the profile that it started with.
-        const wanted = start.agency ?? agencyDirectory(root);
         if (message.agency && message.agency !== wanted)
           io.progress?.(
             `The running Verifold uses the profile in ${message.agency}, so stop it with verifold stop to use another.`,
@@ -2111,7 +2120,7 @@ export async function runCli(
     if (launch && desk) {
       const workspace = await loadWorkspace(root);
       await ensureGlobalProfile(
-        agencyDirectory(cwd, values['agency-dir']),
+        await projectProfile(root, agencyDirectory(cwd, values['agency-dir'])),
         cwd,
         workspace.host === 'claude' || workspace.host === 'codex'
           ? {

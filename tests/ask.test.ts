@@ -2,20 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { existsSync, rmSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { writeSettings } from '../src/core/agency.ts';
+import { loadSettings, writeSettings } from '../src/core/agency.ts';
 import { profileMoneyDefaults } from '../src/core/compute.ts';
 import { loadWorkspace } from '../src/core/storage.ts';
 import type { HarnessStatus } from '../src/core/detect.ts';
 import { askStart, defaultTeam } from '../src/cli/ask-start.ts';
 import { expandHome, homeShown } from '../src/cli/project.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
-import type { StartView } from '../src/protocol/api.ts';
+import type { SetupView, StartView } from '../src/protocol/api.ts';
 
 // The lab that a start begins runs its first agent from PATH. Fake claude
 // and codex commands that stop at once come first, so no test reaches a
@@ -594,6 +601,72 @@ await test('the Ask page starts the project: the desk hands it to a background o
     body: JSON.stringify({ question: 'Again?' }),
   });
   assert.equal(again.status, 404);
+  await run.stop();
+});
+
+await test('an isolated project starts with its own profile: its settings are a copy of the global ones, the project keeps them, and the global profile does not change', async (t) => {
+  const run = await askByApp(t, []);
+  const { url, headers } = run;
+  const root = join(dirname(run.agency), 'cot');
+  const read = async (path: string): Promise<Response> =>
+    fetch(`${url.origin}${path}`, { headers });
+  const act = async (
+    name: string,
+    body: Record<string, unknown>,
+  ): Promise<number> =>
+    (
+      await fetch(`${url.origin}/api/v1/actions/${name}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    ).status;
+  // Only profile=project is a scope of a read.
+  assert.equal((await read('/api/v1/setup?profile=other')).status, 404);
+  const own = (await (
+    await read('/api/v1/setup?profile=project')
+  ).json()) as SetupView;
+  assert.equal(own.scope, 'project');
+  assert.equal(own.steps.agents, null);
+  // The project's own agents: Codex alone. The global profile keeps its team.
+  assert.equal(
+    await act('setup-agents', {
+      profile: 'project',
+      claude: { use: false },
+      codex: { use: true },
+    }),
+    200,
+  );
+  const shared = (await (await read('/api/v1/setup')).json()) as SetupView;
+  assert.equal(shared.scope, 'global');
+  const where = (await (
+    await read('/api/v1/start?profile=project')
+  ).json()) as StartView;
+  assert.deepEqual(where.agents, { host: 'codex' });
+  assert.equal(where.gpuUsd, 30);
+  await startProject(run, {
+    question: 'Can cheap fine-tunes keep a CoT faithful?',
+    profile: 'project',
+  });
+  await labAt(run, url.origin);
+  const workspace = await loadWorkspace(root);
+  assert.equal(workspace.ownProfile, true);
+  assert.equal(workspace.host, 'codex');
+  assert.equal(
+    (await loadSettings(join(root, '.verifold', 'agency'))).agency?.host,
+    'codex',
+  );
+  // The draft is gone, and the global profile is as it was.
+  assert.deepEqual(await readdir(join(run.agency, 'drafts')), []);
+  assert.equal((await loadSettings(run.agency)).agency?.host, 'claude');
+  // The owner gets the global profile for the month across projects, and its first run shows the project's own.
+  const input = JSON.parse(run.handoffs[0] ?? '{}') as { agency: string };
+  assert.equal(input.agency, run.agency);
+  await until(async () => {
+    const response = await read('/api/v1/setup');
+    if (!response.ok) return false;
+    return ((await response.json()) as SetupView).scope === 'project';
+  });
   await run.stop();
 });
 

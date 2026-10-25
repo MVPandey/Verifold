@@ -5,6 +5,8 @@ import type { Workspace } from '../core/contracts.ts';
 import type { Profile } from '../core/profile.ts';
 import { changeWorkspace, loadWorkspace, missing } from '../core/storage.ts';
 import { writeComputeSettings, type ComputeSettings } from '../core/compute.ts';
+import { placeProfile } from '../core/project-profile.ts';
+import { removeTree } from '../core/skills.ts';
 
 const folders = {
   literature: 'Source notes, papers, and citation provenance.',
@@ -90,9 +92,13 @@ export async function createProject(
   lab = false,
   /** The project's first GPU limits, copied from the person's profile. */
   compute?: ComputeSettings,
+  /** The draft of the project's own profile, which the project takes a copy of. Without it, the project uses the global profile. */
+  profile?: string,
 ): Promise<Workspace> {
   await checkProjectDirectory(root);
   const created: string[] = [];
+  // The project's own profile folder, once this call made it.
+  let placed: string | undefined;
   let markerCreated = false;
   // What this call made for the GPU limits, so a rollback removes only that.
   let limitsCreated = false;
@@ -114,7 +120,7 @@ export async function createProject(
       signal.throwIfAborted();
       if (current)
         throw new Error('Workspace already exists; refusing to overwrite it.');
-      return workspace;
+      return profile ? { ...workspace, ownProfile: true } : workspace;
     },
     {
       apply: async () => {
@@ -159,9 +165,11 @@ export async function createProject(
           limitsCreated = true;
           await writeComputeSettings(root, compute);
         }
+        if (profile) placed = await placeProfile(profile, root);
         signal.throwIfAborted();
       },
       rollback: async () => {
+        if (placed) await removeTree(placed);
         if (markerCreated) await rm(marker, { force: true });
         if (limitsCreated) await rm(limits, { force: true });
         if (computeCreated)

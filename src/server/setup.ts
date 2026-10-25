@@ -34,6 +34,7 @@ import {
   type ChatHarness,
   type ChatLine,
 } from '../core/profile-chat.ts';
+import { readyDraft } from '../core/project-profile.ts';
 import { commonGpus, type GpuOffer } from '../core/runpod.ts';
 import { SessionActionError, hostName } from '../core/session.ts';
 import type { GitHubHosts } from '../core/skills.ts';
@@ -74,6 +75,12 @@ const keyMs = 60_000;
 export interface FirstRunOptions {
   /** The folder of the person's profile. */
   readonly directory: string;
+  /**
+   * The global profile folder, when `directory` is the profile of one
+   * project. The monthly GPU limit across projects and the month's records
+   * stay there, so this run shows that limit and never saves it.
+   */
+  readonly global?: string;
   /** The RunPod key and prices. A project's own compute, or one for the folder without a project. */
   readonly compute: Compute;
   /** The desk's signal: the agent's reply stops when the desk closes. */
@@ -168,7 +175,12 @@ export class FirstRun {
     );
   }
 
-  async view(): Promise<SetupView> {
+  /**
+   * The view. `scope` `project` asks for a project's own profile, which
+   * this run has only when it was made with `global`.
+   */
+  async view(scope?: 'project'): Promise<SetupView> {
+    this.scoped(scope);
     if (!this.detected) this.check();
     const settings = await this.settings();
     const markdown = await loadMemory(this.options.directory).catch(() => null);
@@ -176,7 +188,15 @@ export class FirstRun {
     const compute = this.options.compute.view();
     const chat = chatChoice(this.detected ?? [], settings.agency);
     const month = await this.month();
+    const global = this.options.global;
+    // A project's own profile shows the global monthly limit, which counts every project.
+    const limits = settings.money ?? profileMoneyDefaults;
+    const monthUsd = global
+      ? ((await loadSettings(global).catch(() => null))?.money?.monthUsd ??
+        null)
+      : limits.monthUsd;
     return {
+      scope: global ? 'project' : 'global',
       steps: {
         agents: settings.steps.agents ?? null,
         about: settings.steps.about ?? null,
@@ -215,7 +235,7 @@ export class FirstRun {
             : null,
         reading: this.reading !== null || this.saving !== null,
         problem: this.problem,
-        limits: settings.money ?? profileMoneyDefaults,
+        limits: { ...limits, monthUsd },
         unreadable: settings.unreadMoney
           ? `The saved GPU limits are not valid: ${settings.unreadMoney.reason} They show the defaults until you save new ones.`
           : null,
@@ -233,7 +253,10 @@ export class FirstRun {
     if (!this.monthRead || now - this.monthRead.at > monthReadMs)
       this.monthRead = {
         at: now,
-        read: await readMonth(monthFolder(this.options.directory), now),
+        read: await readMonth(
+          monthFolder(this.options.global ?? this.options.directory),
+          now,
+        ),
       };
     return this.monthRead.read;
   }
@@ -309,6 +332,7 @@ export class FirstRun {
    * in the background, and the view then shows how it ends.
    */
   act(body: Record<string, unknown>): Promise<number> {
+    this.scoped(body.profile);
     const key =
       typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
         ? body.key
@@ -653,8 +677,16 @@ export class FirstRun {
     return this.background(work, 'Verifold could not read the prices.', asked);
   }
 
+  /** Refuse a request for a project's own profile when this run holds the global one. */
+  private scoped(scope: unknown): void {
+    if (scope !== undefined && (scope !== 'project' || !this.options.global))
+      fail('This Verifold has no profile of a project to set up here.');
+  }
+
   private async saveMoney(body: Record<string, unknown>): Promise<void> {
-    const money = parseProfileMoney(body);
+    const parsed = parseProfileMoney(body);
+    // Only the global profile holds the monthly limit across projects.
+    const money = this.options.global ? { ...parsed, monthUsd: null } : parsed;
     await this.write((current) => ({
       ...current,
       money,
@@ -673,6 +705,58 @@ export class FirstRun {
           steps[name] = 'skipped';
       return { ...current, steps };
     });
+  }
+}
+
+/**
+ * The first run while Verifold runs without a project: the global profile,
+ * and, for `profile: 'project'`, the draft of the own profile of the
+ * project that starts. The draft is made from the global profile at its
+ * first use, and `setup-copy-global` makes it again.
+ */
+export class StartFirstRun {
+  private readonly options: FirstRunOptions & { readonly root: string };
+  private readonly global: FirstRun;
+  private draft: Promise<FirstRun> | null = null;
+
+  /** `root`: the folder where Verifold started, whose draft this is. */
+  constructor(options: FirstRunOptions & { readonly root: string }) {
+    this.options = options;
+    this.global = new FirstRun(options);
+  }
+
+  /** The draft's first run, once the draft exists. A failure is not kept. A copy again starts a new conversation. */
+  private project(again = false): Promise<FirstRun> {
+    if (again || !this.draft) {
+      const { directory, root, signal } = this.options;
+      const made = readyDraft(directory, root, signal, again).then(
+        (folder) =>
+          new FirstRun({
+            ...this.options,
+            directory: folder,
+            global: directory,
+          }),
+      );
+      this.draft = made;
+      made.catch(() => {
+        if (this.draft === made) this.draft = null;
+      });
+    }
+    return this.draft;
+  }
+
+  async view(scope?: 'project'): Promise<SetupView> {
+    return scope === 'project'
+      ? (await this.project()).view('project')
+      : this.global.view(scope);
+  }
+
+  async act(body: Record<string, unknown>): Promise<number> {
+    if (body.profile !== 'project') return this.global.act(body);
+    if (body.action !== 'setup-copy-global')
+      return (await this.project()).act(body);
+    await this.project(true);
+    return 200;
   }
 }
 
