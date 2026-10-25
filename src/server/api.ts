@@ -2590,6 +2590,7 @@ const setupNames = new Set<string>([
   'setup-skill-add',
   'setup-skill-remove',
   'setup-skills-done',
+  'setup-own-skills',
 ] satisfies ActionName[]);
 
 /**

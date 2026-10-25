@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { validateModel, type HarnessName } from './harness.ts';
 import { object, text } from './research-contracts.ts';
 import { parseProfileMoney, type ProfileMoney } from './compute.ts';
-import { SessionActionError } from './session.ts';
+import { SessionActionError, hostName } from './session.ts';
 import { missing, writePrivateFile } from './storage.ts';
 
 /**
@@ -14,7 +14,9 @@ import { missing, writePrivateFile } from './storage.ts';
  *   first-run steps the person finished or skipped;
  * - `USER.md`: the profile that the person approved;
  * - `profile-state.json`: how the last profile setup in the terminal ended;
- * - `skills.json` and `skills/`: the skills that the person added (see skills.ts).
+ * - `skills.json` and `skills/`: the skills that the person added (see skills.ts);
+ * - `own-skills.json`: the person's choices for the skills that their own
+ *   Claude Code and Codex load (see own-skills.ts).
  */
 export interface Agency {
   readonly host: HarnessName;
@@ -274,7 +276,12 @@ export async function loadProfileState(
 /** Replace one owned file atomically. Existing symlink targets are never written. */
 export async function saveAgencyFile(
   directory: string,
-  name: 'settings.json' | 'USER.md' | 'profile-state.json' | 'skills.json',
+  name:
+    | 'settings.json'
+    | 'USER.md'
+    | 'profile-state.json'
+    | 'skills.json'
+    | 'own-skills.json',
   content: string,
 ): Promise<void> {
   await prepareAgency(directory);
@@ -357,6 +364,139 @@ export async function saveAgencyPreferences(
   );
 }
 
+/** The person's choice for one of the skills that their own harness loads. */
+export interface OwnChoice {
+  /** Verifold's agents load the skill. */
+  readonly use: boolean;
+  /** When and how agents should use it, in the person's words. Empty: no note. */
+  readonly when: string;
+}
+
+/** A change of one choice. Without `when`, the note stays as it is. */
+export interface OwnChange {
+  readonly harness: HarnessName;
+  readonly name: string;
+  readonly use: boolean;
+  readonly when?: string;
+}
+
+/** The choices by harness, keyed by the name that the harness lists. A skill without a choice loads, with no note. */
+export type OwnChoices = Readonly<
+  Record<HarnessName, ReadonlyMap<string, OwnChoice>>
+>;
+
+/**
+ * A skill's name as Claude Code or Codex lists it, such as `python` or
+ * `vercel:nextjs`. It goes as it is into a permission rule and a `-c` option.
+ */
+export const ownSkillName = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/** The most characters of a note on when to use a skill. */
+export const whenLimit = 300;
+
+/** `own-skills.json`. A missing file holds no choices. */
+export async function loadOwnChoices(directory: string): Promise<OwnChoices> {
+  let content: string;
+  try {
+    content = await readMemory(join(directory, 'own-skills.json'), 256 * 1024);
+  } catch (error) {
+    if (missing(error)) return { claude: new Map(), codex: new Map() };
+    throw error;
+  }
+  const invalid = (): never => {
+    throw new Error('The choices for your own skills are not valid.');
+  };
+  const data: unknown = JSON.parse(content);
+  if (!record(data) || data.schemaVersion !== 1 || !record(data.skills))
+    invalid();
+  const skills = (data as { skills: Record<string, unknown> }).skills;
+  const side = (host: HarnessName): Map<string, OwnChoice> => {
+    const entries = Object.hasOwn(skills, host) ? skills[host] : {};
+    if (!record(entries)) return invalid();
+    return new Map(
+      Object.entries(entries).map(([name, value]): [string, OwnChoice] => {
+        if (
+          !ownSkillName.test(name) ||
+          !record(value) ||
+          typeof value.use !== 'boolean' ||
+          (value.when !== undefined &&
+            (typeof value.when !== 'string' || value.when.length > whenLimit))
+        )
+          invalid();
+        const entry = value as { use: boolean; when?: string };
+        return [name, { use: entry.use, when: entry.when ?? '' }];
+      }),
+    );
+  };
+  return { claude: side('claude'), codex: side('codex') };
+}
+
+/**
+ * Apply changes to `own-skills.json`. The caller holds the lock. A skill
+ * that loads with no note needs no entry, so it has none.
+ */
+export async function writeOwnChoices(
+  directory: string,
+  changes: readonly OwnChange[],
+): Promise<void> {
+  const current = await loadOwnChoices(directory);
+  const next = {
+    claude: new Map(current.claude),
+    codex: new Map(current.codex),
+  };
+  for (const change of changes) {
+    const side = next[change.harness];
+    const when =
+      change.when === undefined
+        ? (side.get(change.name)?.when ?? '')
+        : change.when.trim().slice(0, whenLimit);
+    if (change.use && !when) side.delete(change.name);
+    else side.set(change.name, { use: change.use, when });
+  }
+  const entries = (side: ReadonlyMap<string, OwnChoice>) =>
+    Object.fromEntries(
+      [...side].map(([name, { use, when }]) => [
+        name,
+        { use, ...(when ? { when } : {}) },
+      ]),
+    );
+  await saveAgencyFile(
+    directory,
+    'own-skills.json',
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        skills: { claude: entries(next.claude), codex: entries(next.codex) },
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/** The skills of a harness that Verifold's agents do not load. */
+export function skillsOff(
+  choices: OwnChoices,
+  host: HarnessName,
+): readonly string[] {
+  return [...choices[host]]
+    .filter(([, choice]) => !choice.use)
+    .map(([name]) => name);
+}
+
+/** The most characters of the notes in a prompt. */
+const notesLimit = 2000;
+
+/** The notes on when to use the skills that load, one line each. Null without any. */
+function skillNotes(choices: OwnChoices): string | null {
+  const lines = (['claude', 'codex'] as const).flatMap((host) =>
+    [...choices[host]]
+      .filter(([, choice]) => choice.use && choice.when)
+      .map(([name, choice]) => `- ${name} (${hostName(host)}): ${choice.when}`),
+  );
+  return lines.length ? lines.join('\n').slice(0, notesLimit) : null;
+}
+
 /**
  * A field's line that starts with `#`, after any backslashes, gets one more
  * backslash in USER.md, so no line of a field reads as a heading.
@@ -408,10 +548,12 @@ export function parseCard(markdown: string): ProfileCard | null {
 
 /** What the lab's prompts take from the profile. */
 export interface PersonProfile {
-  /** The whole profile, for the planner of each project. */
+  /** The whole profile, for the planner of each project. Empty without a profile. */
   readonly whole: string;
   /** "Talk to me", for every agent. Null when the profile has none. */
   readonly style: string | null;
+  /** The person's notes on when to use their own skills, for every agent. */
+  readonly skills?: string;
 }
 
 /** The most characters of the profile in the planner's prompt. */
@@ -421,30 +563,41 @@ const wholeLimit = 4000;
  * The profile for the lab's prompts, or null without one. A card becomes
  * plain sentences about the person, so no heading reads as an order to the
  * agent. A free-form profile goes to the planner as it is, and has no style.
+ * The notes on skills come with it. Choices that cannot be read add none.
  */
 export async function personProfile(
   directory: string,
 ): Promise<PersonProfile | null> {
   const markdown = await loadMemory(directory);
-  if (!markdown) return null;
-  const card = parseCard(markdown);
-  if (!card)
-    return { whole: markdown.trim().slice(0, wholeLimit), style: null };
-  const lines = [
-    card.workOn && `The person works on: ${card.workOn}`,
-    card.explore && `They want the agents to explore: ${card.explore}`,
-    card.talk && `How they want agents to write to them: ${card.talk}`,
-  ].filter(Boolean);
-  if (!lines.length) return null;
-  return {
-    whole: lines.join('\n').slice(0, wholeLimit),
-    style: card.talk || null,
-  };
+  const notes = await loadOwnChoices(directory).then(skillNotes, () => null);
+  const skills = notes ? { skills: notes } : {};
+  const card = markdown ? parseCard(markdown) : null;
+  const lines = card
+    ? [
+        card.workOn && `The person works on: ${card.workOn}`,
+        card.explore && `They want the agents to explore: ${card.explore}`,
+        card.talk && `How they want agents to write to them: ${card.talk}`,
+      ].filter(Boolean)
+    : [];
+  if (markdown && !card)
+    return {
+      whole: markdown.trim().slice(0, wholeLimit),
+      style: null,
+      ...skills,
+    };
+  if (lines.length)
+    return {
+      whole: lines.join('\n').slice(0, wholeLimit),
+      style: card?.talk || null,
+      ...skills,
+    };
+  return notes ? { whole: '', style: null, ...skills } : null;
 }
 
 /**
- * A reader of the profile for the lab's prompts. It reads USER.md again only
- * when the file changed: its inode, its change time, or its size.
+ * A reader of the profile for the lab's prompts. It reads USER.md and the
+ * skill choices again only when a file changed: its inode, its change time,
+ * or its size.
  */
 export function profileReader(
   directory: string,
@@ -454,13 +607,16 @@ export function profileReader(
     readonly value: PersonProfile | null;
   } | null = null;
   return async () => {
-    const info = await lstat(join(directory, 'USER.md')).catch(
-      (error: unknown) => {
-        if (missing(error)) return null;
-        throw error;
-      },
-    );
-    const key = info ? `${info.ino}:${info.mtimeMs}:${info.size}` : 'none';
+    const stamp = async (name: string): Promise<string> => {
+      const info = await lstat(join(directory, name)).catch(
+        (error: unknown) => {
+          if (missing(error)) return null;
+          throw error;
+        },
+      );
+      return info ? `${info.ino}:${info.mtimeMs}:${info.size}` : 'none';
+    };
+    const key = `${await stamp('USER.md')}/${await stamp('own-skills.json')}`;
     if (last?.key === key) return last.value;
     const value = await personProfile(directory);
     last = { key, value };

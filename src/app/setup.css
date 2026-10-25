@@ -738,3 +738,130 @@
   align-items: center;
   gap: 10px;
 }
+
+/* Step 3: the skills that the person's own Claude Code and Codex load. */
+.own-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.own-list__title {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink-2);
+}
+
+.own-group {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.own-group__title {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.own-group__list {
+  margin: 0;
+  padding: 0 18px 4px;
+  list-style: none;
+}
+
+.own {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.own__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.own__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.own__name {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.own__what {
+  font-size: 14px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.own__what--short {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.own__more {
+  font-size: 13px;
+}
+
+.own__switch {
+  flex: none;
+  display: inline-flex;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.own__choice {
+  min-width: 52px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.own__choice + .own__choice {
+  border-left: 1px solid var(--control);
+}
+
+.own__choice[aria-pressed='true'] {
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+
+.own__choice:disabled {
+  cursor: default;
+}
+
+.own__when {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: 500 14px/1.4 var(--font);
+  color: var(--ink);
+  background: var(--surface);
+}

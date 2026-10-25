@@ -484,3 +484,44 @@ await test('with the profile folder unreadable, both harnesses read the added sk
   }
   assert.deepEqual(told, []);
 });
+
+await test("the person's own skills that are off stay out of each agent session: Claude Code by its settings, Codex by a -c rule", async (t) => {
+  const { work, start } = await project(t);
+  const off = (host: HarnessName): Promise<readonly string[]> =>
+    Promise.resolve(
+      host === 'claude' ? ['python', 'vercel:nextjs'] : ['python'],
+    );
+  await start('claude', { ...loader(null), off });
+  await until(
+    async () => (await args(work, 'args.json').catch(() => null)) !== null,
+  );
+  const given = await args(work, 'args.json');
+  const settings = JSON.parse(
+    given[given.indexOf('--settings') + 1] ?? '{}',
+  ) as {
+    sandbox?: unknown;
+    permissions: { deny: string[] };
+    skillOverrides: Record<string, string>;
+  };
+  // The lab's agent runs in strict mode, so its rules stay, with the skills added.
+  assert.ok(settings.sandbox);
+  assert.ok(settings.permissions.deny.some((rule) => rule.startsWith('Read(')));
+  assert.deepEqual(settings.permissions.deny.slice(-4), [
+    'Skill(python)',
+    'Skill(python *)',
+    'Skill(vercel:nextjs)',
+    'Skill(vercel:nextjs *)',
+  ]);
+  assert.deepEqual(settings.skillOverrides, { python: 'off' });
+  assert.equal(given.filter((arg) => arg === '--settings').length, 1);
+
+  await start('codex', { ...loader(null), off });
+  await until(
+    async () =>
+      (await args(work, 'codex-args.json').catch(() => null)) !== null,
+  );
+  const codex = await args(work, 'codex-args.json');
+  const rule = codex.indexOf('skills.config=[{name="python",enabled=false}]');
+  assert.equal(codex[rule - 1], '-c');
+  assert.ok(rule < codex.indexOf('app-server'));
+});

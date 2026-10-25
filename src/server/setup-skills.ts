@@ -1,5 +1,14 @@
-import { loadMemory, parseCard } from '../core/agency.ts';
+import {
+  loadMemory,
+  loadOwnChoices,
+  ownSkillName,
+  parseCard,
+  whenLimit,
+  writeOwnChoices,
+  type OwnChange,
+} from '../core/agency.ts';
 import type { runHarness } from '../core/harness.ts';
+import type { OwnSkill } from '../core/own-skills.ts';
 import type { ChatHarness } from '../core/profile-chat.ts';
 import { SessionActionError } from '../core/session.ts';
 import {
@@ -12,6 +21,11 @@ import {
   type SkillSearch,
 } from '../core/skills.ts';
 import type { SetupSkills, SkillCard } from '../protocol/api.ts';
+
+/** The most choices in one request: more than both harnesses list. */
+const choicesLimit = 600;
+/** A list of the person's own skills older than this is read again when the page asks. */
+const ownMs = 5 * 60_000;
 
 function fail(message: string): never {
   throw new SessionActionError(message);
@@ -34,6 +48,34 @@ export interface SkillsStepOptions {
   readonly picker: () => Promise<ChatHarness | null>;
   /** Run a change of the profile under its lock. */
   readonly locked: <T>(work: () => Promise<T>) => Promise<T>;
+  /** The skills that the person's own harnesses load. Without it, the step lists none. */
+  readonly ownSkills?: () => Promise<readonly OwnSkill[]>;
+}
+
+/** The choices of a `setup-own-skills` request, or a reason that the person can read. */
+function ownChanges(value: unknown): OwnChange[] {
+  if (!Array.isArray(value) || !value.length || value.length > choicesLimit)
+    fail(`Send from 1 to ${choicesLimit} skill choices.`);
+  return value.map((entry: unknown): OwnChange => {
+    const data =
+      typeof entry === 'object' && entry !== null
+        ? (entry as Record<string, unknown>)
+        : {};
+    const { harness, name, use, when } = data;
+    if (
+      (harness !== 'claude' && harness !== 'codex') ||
+      typeof name !== 'string' ||
+      !ownSkillName.test(name) ||
+      typeof use !== 'boolean'
+    )
+      fail('Each skill choice needs a harness, the skill name, and yes or no.');
+    if (
+      when !== undefined &&
+      (typeof when !== 'string' || when.length > whenLimit)
+    )
+      fail(`Write at most ${whenLimit} characters on when to use a skill.`);
+    return { harness, name, use, ...(when === undefined ? {} : { when }) };
+  });
 }
 
 /**
@@ -46,6 +88,12 @@ export class SkillsStep {
   private found: SkillSearch | null = null;
   private busy: 'search' | 'add' | null = null;
   private problem: string | null = null;
+  /** The person's own skills, and when Verifold listed them. */
+  private own: {
+    readonly at: number;
+    readonly skills: readonly OwnSkill[];
+  } | null = null;
+  private listing: Promise<void> | null = null;
 
   constructor(options: SkillsStepOptions) {
     this.options = options;
@@ -66,9 +114,31 @@ export class SkillsStep {
     return loadSkills(this.options.directory).catch(() => []);
   }
 
+  /** List the person's own skills in the background, once, or again when the list is old. */
+  private listOwn(): void {
+    const list = this.options.ownSkills;
+    if (!list || this.listing || (this.own && Date.now() - this.own.at < ownMs))
+      return;
+    this.listing = list()
+      .then((skills) => {
+        this.own = { at: Date.now(), skills };
+      })
+      .catch(() => {
+        this.own = { at: Date.now(), skills: [] };
+      })
+      .finally(() => {
+        this.listing = null;
+      });
+  }
+
   async view(): Promise<SetupSkills> {
+    this.listOwn();
     const added = await this.added();
     const found = this.found;
+    // Choices that cannot be read show each skill as on, which is what agents then load.
+    const choices = await loadOwnChoices(this.options.directory).catch(
+      () => null,
+    );
     return {
       busy: this.busy,
       search: found
@@ -99,7 +169,21 @@ export class SkillsStep {
       })),
       needsProfile: (await this.profile()) === null,
       problem: this.problem,
+      own: (this.own?.skills ?? []).map((skill) => {
+        const choice = choices?.[skill.harness].get(skill.name);
+        return { ...skill, use: choice?.use ?? true, when: choice?.when ?? '' };
+      }),
+      ownReading: this.own === null && this.listing !== null,
     };
+  }
+
+  /** Save the person's choices for their own skills. */
+  async ownChoices(value: unknown): Promise<number> {
+    const changes = ownChanges(value);
+    await this.options.locked(() =>
+      writeOwnChoices(this.options.directory, changes),
+    );
+    return 200;
   }
 
   private idle(): void {
