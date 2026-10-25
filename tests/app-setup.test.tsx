@@ -1155,3 +1155,109 @@ await test("step 3 lists the person's own skills by harness and group, each with
     { key: 'f'.repeat(32) },
   ]);
 });
+
+await test('step 2 offers to ask the harnesses: the button with what they read, a line while they answer, then their answer with Accept and Discard', async (t) => {
+  const step = (fields: Partial<SetupAbout>): string =>
+    text(
+      <AboutStep
+        view={view({ about: { ...about, ...fields } })}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    );
+  // An older Verifold has no import, so the step shows no button.
+  assert.doesNotMatch(step({}), /Get information about me/);
+  const idle = { busy: null, asking: [], error: null, result: null } as const;
+  const ready = step({ import: idle });
+  assert.match(
+    ready,
+    /Get information about me from my harnesses Each harness reads its own memories, instructions and skills, read-only\. It doesn’t read your past sessions\. Nothing is saved until you accept\./,
+  );
+  assert.match(
+    step({ import: { ...idle, error: 'No agent that you use is signed in.' } }),
+    /No agent that you use is signed in\./,
+  );
+  assert.match(
+    step({
+      import: {
+        ...idle,
+        busy: new Date().toISOString(),
+        asking: ['claude', 'codex'],
+      },
+    }),
+    /Claude Code and Codex read what they know about you · \d+ s/,
+  );
+  const answered = step({
+    import: {
+      ...idle,
+      result: {
+        from: ['claude'],
+        card: { workOn: 'CoT faithfulness.', explore: '', talk: 'Short.' },
+        skills: [
+          {
+            harness: 'claude',
+            id: 'research-paper-writing',
+            name: 'research-paper-writing',
+            fits: true,
+            when: 'For paper drafts.',
+          },
+          {
+            harness: 'claude',
+            id: 'vercel:deploy',
+            name: 'vercel:deploy',
+            fits: false,
+            when: '',
+          },
+        ],
+        read: ['Claude Code: My instructions.'],
+        problems: ['Codex did not answer: it timed out.'],
+      },
+    },
+  });
+  assert.match(
+    answered,
+    /What Claude Code knows about you You work on CoT faithfulness\. To explore Not known Talk to me Short\./,
+  );
+  assert.match(
+    answered,
+    /Skills that fit your research research-paper-writing · Claude Code For paper drafts\. Not for research: 1 vercel:deploy · Claude Code/,
+  );
+  assert.match(
+    answered,
+    /Claude Code: My instructions\. Codex did not answer: it timed out\./,
+  );
+  assert.match(
+    answered,
+    /Accept makes this your draft card\. You can still edit it before you save it\. It also sets Your skills: Yes for the skills that fit, with their notes, and No for the rest\. Accept Discard/,
+  );
+  // While the answer waits, the button is gone.
+  assert.doesNotMatch(answered, /Get information about me/);
+  // Each action goes to its own route, with the key of the intent.
+  const sent: unknown[] = [];
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+    sent.push([
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+      typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+    ]);
+    return Promise.resolve(new Response('{"ok":true}', { status: 202 }));
+  };
+  const live = setupActions('token');
+  await live.importAsk('a'.repeat(32));
+  await live.importAccept('b'.repeat(32));
+  await live.importDiscard('c'.repeat(32));
+  assert.deepEqual(sent, [
+    ['/api/v1/actions/setup-import', { key: 'a'.repeat(32) }],
+    ['/api/v1/actions/setup-import-accept', { key: 'b'.repeat(32) }],
+    ['/api/v1/actions/setup-import-discard', { key: 'c'.repeat(32) }],
+  ]);
+});

@@ -24,7 +24,7 @@ interface Group {
   readonly skills: readonly OwnSkill[];
 }
 
-const harnessTitles: Readonly<Record<Harness, string>> = {
+export const harnessTitles: Readonly<Record<Harness, string>> = {
   claude: 'Claude Code',
   codex: 'Codex',
 };
