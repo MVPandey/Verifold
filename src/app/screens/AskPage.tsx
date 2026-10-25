@@ -509,17 +509,25 @@ export function AskForm({
             In {shownFolder}
             {folder === null && where.files
               ? '. The agents may read the files in it.'
-              : ''}{' '}
-            ·{' '}
-            <button
-              type="button"
-              className="link-button"
-              aria-expanded={editing === 'folder'}
-              aria-controls={editorId}
-              onClick={() => toggle('folder')}
-            >
-              Change
-            </button>
+              : ''}
+            {scope ? (
+              // The project's own settings are in this folder already.
+              '. An isolated project stays in this folder. To use another folder, run verifold there.'
+            ) : (
+              <>
+                {' '}
+                ·{' '}
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-expanded={editing === 'folder'}
+                  aria-controls={editorId}
+                  onClick={() => toggle('folder')}
+                >
+                  Change
+                </button>
+              </>
+            )}
           </span>
           <div className="header__spacer" />
           <button

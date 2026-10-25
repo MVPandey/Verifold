@@ -42,7 +42,7 @@ import {
 } from '../server/desk.ts';
 import { SetupBridge } from './setup-bridge.ts';
 import { askStart, type Begun } from './ask-start.ts';
-import { FirstRun, StartFirstRun } from '../server/setup.ts';
+import { FirstRuns } from '../server/setup.ts';
 import { profileDenial, projectProfile } from '../core/project-profile.ts';
 import { pluginsHome, skillLoader } from '../core/skills.ts';
 import { TaskManager } from '../legacy/tasks.ts';
@@ -740,9 +740,12 @@ async function serveDesk(
       // An isolated project has its own. Pods read the monthly limit across projects in the global one at each check.
       const global = run.agency ?? agencyDirectory(root);
       const agency = await projectProfile(root, global);
+      // No session reads a profile folder: an isolated project's own, or a global one outside the default folder.
+      const closed = profileDenial(root, global);
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
+        denyRead: closed,
         skills: skillLoader(
           agency,
           pluginsHome(),
@@ -876,6 +879,7 @@ async function serveDesk(
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
+          denyRead: closed,
           onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
           onLimit: (host, signal) => {
             quota.record(host, signal);
@@ -897,8 +901,8 @@ async function serveDesk(
             (await loadSettings(agency).catch(() => null))?.agency,
           ),
         person: profileReader(agency),
-        // A profile folder outside the default one, such as an isolated project's own, is closed to the lab's sessions and runs too.
-        ...profileDenial(root, [agency, global]),
+        // The lab's runs cannot read those profile folders either.
+        ...(closed.length ? { denyRead: closed } : {}),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);
@@ -996,9 +1000,11 @@ async function serveDesk(
               // The app shows why the lab did not start, and offers to start it again.
               startProblem: () => labProblem,
               // The app opens the first run here too, to change the profile.
-              firstRun: new FirstRun({
-                directory: agency,
-                ...(agency === global ? {} : { global }),
+              ownProfile: agency !== global,
+              firstRun: new FirstRuns({
+                directory: global,
+                root,
+                own: agency === global ? null : 'project',
                 compute,
                 signal: deskSignal,
                 harness,
@@ -1174,9 +1180,10 @@ async function serveStart(
     undefined,
     undefined,
     {
-      firstRun: new StartFirstRun({
+      firstRun: new FirstRuns({
         directory: run.agency,
         root,
+        own: 'new',
         compute,
         signal: deskSignal,
         harness: run.harness,

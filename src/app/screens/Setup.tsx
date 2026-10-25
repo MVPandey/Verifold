@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import type { ActOutcome } from '../api.ts';
 import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import type { SetupStep, SetupView } from '../../protocol/api.ts';
@@ -259,6 +259,15 @@ export function SetupPage({
     const to = openingRoute(view, step, project, scope);
     if (to) replaceRoute(to);
   }, [view, step, project, scope]);
+  // A copy again of the global settings: the view from before it, until a new read lands. Then the first step opens, and each step starts from the new view.
+  const [copiedOver, setCopiedOver] = useState<SetupView | null>(null);
+  const [copies, setCopies] = useState(0);
+  useEffect(() => {
+    if (!copiedOver || !view || view === copiedOver) return;
+    setCopiedOver(null);
+    setCopies((count) => count + 1);
+    replaceRoute(href.setup(setupSteps[0], scope));
+  }, [view, copiedOver, scope]);
   // The step reports whether it holds unsaved input. `leaving`: the address that Back, the step bar or the link to the lab asked for meanwhile.
   const [unsaved, setUnsaved] = useState(false);
   const [leaving, setLeaving] = useState<string | null>(null);
@@ -305,7 +314,11 @@ export function SetupPage({
     unsaved: setUnsaved,
   };
   let body: ReactNode;
-  if (!view || step === null)
+  if (copiedOver)
+    body = (
+      <StatusBar tone="plan">Copying your global settings again.</StatusBar>
+    );
+  else if (!view || step === null)
     body = error ? (
       <p role="alert" className="setup__error">
         {error}
@@ -368,13 +381,17 @@ export function SetupPage({
     <div className="page">
       <SetupHeader
         project={project ?? ''}
-        own={scope === 'project' || view?.scope === 'project'}
+        own={scope === 'project'}
         onLeave={go}
-        {...(scope
+        // Only an isolated project that has not started copies the global settings again.
+        {...(scope && project === ''
           ? {
               onCopy: async (key: string) => {
                 const outcome = await actions.copyGlobal(key);
-                if ('ok' in outcome) leave(href.setup(undefined, scope));
+                if ('ok' in outcome && view) {
+                  setCopiedOver(view);
+                  refresh();
+                }
                 return outcome;
               },
             }
@@ -382,7 +399,7 @@ export function SetupPage({
       />
       <main className="setup">
         <div className="setup__column">
-          {body}
+          <Fragment key={copies}>{body}</Fragment>
           <UnsavedLine
             leaving={leaving}
             unsaved={unsaved}

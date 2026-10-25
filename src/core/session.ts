@@ -214,6 +214,12 @@ export interface SessionManagerOptions {
   readonly requests?: { next: number };
   /** The skills that the person added, for lab agents and checkers. */
   readonly skills?: SessionSkills;
+  /**
+   * Paths that no session of this manager can read, such as an isolated
+   * project's own profile folder. They apply wherever Verifold closes the
+   * credential paths: tasks, lab agents, checkers, and the coordinator.
+   */
+  readonly denyRead?: readonly string[];
 }
 
 /** The skills that the person added in Verifold, for the sessions of lab agents and checkers. */
@@ -1028,6 +1034,8 @@ export class SessionManager {
   >();
 
   constructor(root: string, options: SessionManagerOptions) {
+    if (options.denyRead && !options.denyRead.every(denyPath))
+      throw new Error('A path that a session cannot read is not valid.');
     this.root = root;
     this.options = options;
     this.requests = options.requests ?? { next: 1 };
@@ -1106,7 +1114,7 @@ export class SessionManager {
         ...(strict
           ? [
               '--settings',
-              strictClaudeSettings(record.network, record.denyRead),
+              strictClaudeSettings(record.network, this.denied(record)),
             ]
           : []),
       ];
@@ -1708,7 +1716,9 @@ export class SessionManager {
         ...(executable ? { executable } : {}),
         ...(this.tools ? { tools: this.tools } : {}),
         ...(record.network?.length ? { network: record.network } : {}),
-        ...(record.denyRead?.length ? { denyRead: record.denyRead } : {}),
+        ...(this.denied(record).length
+          ? { denyRead: this.denied(record) }
+          : {}),
         ...(skills ? { skills } : {}),
         onEvent: (event) => this.onHost(record.id, launch.id, event),
       });
@@ -1792,6 +1802,16 @@ export class SessionManager {
   }
 
   /** The working folder of a session: the task folder of a Strict worker, else the project. */
+  /** What a session cannot read beyond the credential paths: its own record's paths, and the manager's. */
+  private denied(record: SessionRecord): string[] {
+    return [
+      ...new Set([
+        ...(record.denyRead ?? []),
+        ...(this.options.denyRead ?? []),
+      ]),
+    ];
+  }
+
   private folder(record: SessionRecord | null): string {
     return record?.cwd ? join(this.root, record.cwd) : this.root;
   }

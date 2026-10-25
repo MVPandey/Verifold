@@ -130,6 +130,7 @@ import {
   type RunDetail,
   type SearchHit,
   type SearchResult,
+  type SetupView,
   type Snapshot,
   type StartView,
   type Step,
@@ -332,6 +333,8 @@ export interface ApiSources {
   readonly bring?: BringSource | undefined;
   /** Why the project's lab did not start, when its start failed. */
   readonly startProblem?: (() => string | null) | undefined;
+  /** The project uses its own settings, not the global ones. */
+  readonly ownProfile?: boolean | undefined;
   /** "Agents at once" of the project, when this process runs its worker slots. */
   readonly agentsAtOnce?: (() => number | null) | undefined;
   /** The slow pod actions that run in the background, and the ones that failed there. */
@@ -2009,6 +2012,7 @@ export class ApiReader {
         project,
         lab: null,
         trimmed: false,
+        ...(root && sources.ownProfile ? { ownProfile: true as const } : {}),
         ...(root
           ? {
               question: question && clip(question, apiLimits.question),
@@ -2027,6 +2031,7 @@ export class ApiReader {
       const data: SnapshotData = {
         project,
         lab,
+        ...(sources.ownProfile ? { ownProfile: true as const } : {}),
         ...compute,
         trimmed: smaller || Object.keys(lab.omitted).length > 0,
       };
@@ -2593,6 +2598,12 @@ const setupNames = new Set<string>([
   'setup-copy-global',
 ] satisfies ActionName[]);
 
+/** The first run's read and actions. `scope` `project`: an isolated project's own settings. */
+export interface SetupSource {
+  readonly view: (scope?: 'project') => Promise<SetupView>;
+  readonly act: FirstRun['act'];
+}
+
 /**
  * Verifold without a project: the Ask page's read, and the start of a
  * project with the person's question.
@@ -2702,7 +2713,7 @@ export async function answerApi(
   feed: ApiFeed,
   reader: ApiReader,
   act: (body: Record<string, unknown>) => Promise<number>,
-  setup?: Pick<FirstRun, 'view' | 'act'>,
+  setup?: SetupSource,
   start?: ProjectStart,
 ): Promise<void> {
   if (!authorized) {

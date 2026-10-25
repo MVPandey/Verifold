@@ -19,11 +19,14 @@ import { MoreMenu } from './MoreMenu.tsx';
  */
 export function AppHeader({
   project,
+  own = false,
   lab,
   now,
   onPause,
 }: {
   readonly project: string;
+  /** The project uses its own settings, so Profile opens them. */
+  readonly own?: boolean;
   readonly lab: Lab | null;
   readonly now: number;
   readonly onPause: (pause: boolean, key: string) => Promise<ActOutcome>;
@@ -67,7 +70,10 @@ export function AppHeader({
       <a className="header__link" href={href.settings}>
         Settings
       </a>
-      <a className="header__link" href={href.setup('agents')}>
+      <a
+        className="header__link"
+        href={href.setup('agents', own ? 'project' : undefined)}
+      >
         Profile
       </a>
       {/* The project menu: its earlier runs, and Start over while a lab is here. In a narrow window, also Settings and Profile. */}
@@ -77,7 +83,7 @@ export function AppHeader({
         </a>
         <a
           className="more-menu__item header__in-menu"
-          href={href.setup('agents')}
+          href={href.setup('agents', own ? 'project' : undefined)}
         >
           Profile
         </a>

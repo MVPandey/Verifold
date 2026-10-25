@@ -781,19 +781,40 @@
 
 .start {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 16px;
   padding: 18px 20px;
   color: var(--ink);
   text-decoration: none;
   background: var(--surface);
   border: 1.5px solid var(--line);
   border-radius: 14px;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+/* The arrow says that the whole card opens its page. */
+.start > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+  transition: transform 0.15s;
 }
 
 .start:hover {
   border-color: var(--accent-line);
   background: var(--accent-wash);
+}
+
+.start:hover > svg {
+  transform: translateX(3px);
+}
+
+.start__text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .start__name {

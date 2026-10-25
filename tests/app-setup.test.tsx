@@ -1011,16 +1011,25 @@ await test('an isolated project has its own setup and Ask pages, and its first r
   );
 });
 
-await test('a new project offers the global settings or its own, and the global ones first when nobody set them up', () => {
-  const set = renderToStaticMarkup(<NewProjectChoice set />);
+await test('a new project offers the global settings or its own, the global ones first when nobody set them up, and the copy that this folder holds', () => {
+  const set = renderToStaticMarkup(<NewProjectChoice set copied={null} />);
   assert.match(
-    text(<NewProjectChoice set />),
+    text(<NewProjectChoice set copied={null} />),
     /How should this project start\? Use my global settings .* Isolated project .*copy of your global settings\. Your global settings don’t change\./,
   );
   assert.match(set, /href="#\/setup".*href="#\/project\/setup"/s);
-  const fresh = text(<NewProjectChoice set={false} />);
+  // Each card shows its arrow, so it reads as a link.
+  assert.equal(set.split('M9 6l6 6-6 6').length - 1, 2);
+  const fresh = text(<NewProjectChoice set={false} copied={null} />);
   assert.match(fresh, /Set up my global settings/);
   assert.doesNotMatch(fresh, /copy of your global settings/);
+  // A copy that the person left here goes on.
+  const at = new Date();
+  at.setHours(9, 30, 0, 0);
+  assert.match(
+    text(<NewProjectChoice set copied={at.toISOString()} />),
+    /Continue this project’s settings Agents, a profile, skills and GPU limits for this project only, copied from your global settings today at 09:30\./,
+  );
 });
 
 await test("an isolated project's money step shows the global monthly limit and offers no field for it", () => {
@@ -1028,10 +1037,7 @@ await test("an isolated project's money step shows the global monthly limit and 
     <MoneyStep
       view={view({
         scope: 'project',
-        money: {
-          ...view().money,
-          limits: { ...view().money.limits, monthUsd: 300 },
-        },
+        money: { ...view().money, globalMonth: { usd: 300 } },
       })}
       actions={actions}
       refresh={quiet}
@@ -1043,16 +1049,52 @@ await test("an isolated project's money step shows the global monthly limit and 
     own,
     /All projects together, each month \$300 Nothing spent this month\. This limit comes from your global settings, and this project counts toward it\./,
   );
-  const html = renderToStaticMarkup(
+  assert.match(
+    text(
+      <MoneyStep
+        view={view({
+          scope: 'project',
+          money: { ...view().money, globalMonth: { usd: null } },
+        })}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    ),
+    /each month No limit/,
+  );
+  // A global limit that does not read never shows as no limit.
+  const unread = renderToStaticMarkup(
     <MoneyStep
-      view={view({ scope: 'project' })}
+      view={view({
+        scope: 'project',
+        money: { ...view().money, globalMonth: null },
+      })}
       actions={actions}
       refresh={quiet}
       onSaved={quiet}
       nav={nav}
     />,
   );
-  assert.match(html, /No limit/);
+  assert.match(
+    unread,
+    /Verifold can’t read your global monthly limit\. <a href="#\/setup\/money">Check it in your global settings<\/a>/,
+  );
+  assert.doesNotMatch(unread, /No limit/);
+  // The RunPod key is this computer's, so a new one here replaces it for every project.
+  assert.match(
+    text(
+      <MoneyStep
+        view={view({ scope: 'project' })}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    ),
+    /The RunPod key is the same for every project on this computer\. Verifold checks it/,
+  );
   // The global profile's step keeps the field.
   assert.match(
     text(
@@ -1100,7 +1142,14 @@ await test("the Ask page goes Back to the isolated project's last step, or to th
   );
   assert.match(own, /class="ask__back" href="#\/project\/setup\/money">Back</);
   assert.match(own, /These come from this project’s settings/);
+  // An isolated project's settings are in this folder, so it cannot move.
+  assert.match(
+    own,
+    /In ~\/cot\. An isolated project stays in this folder\. To use another folder, run verifold there\./,
+  );
+  assert.doesNotMatch(own, />Change</);
   const global = form();
   assert.match(global, /href="#\/setup\/agents">Profile</);
   assert.match(global, /class="ask__back" href="#\/new">Back</);
+  assert.match(global, />Change</);
 });
