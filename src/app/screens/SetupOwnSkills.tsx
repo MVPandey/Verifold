@@ -63,6 +63,8 @@ function OwnRow({
   const id = useId();
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState(skill.when);
+  // The note's box opens on a click, so a long list stays short.
+  const [noting, setNoting] = useState(false);
   const long = skill.description.length > shortWhat;
   const save = (): void => {
     if (when.trim() !== skill.when)
@@ -72,6 +74,7 @@ function OwnRow({
         use: true,
         when: when.trim(),
       });
+    else if (!when.trim()) setNoting(false);
   };
   return (
     <li className="own">
@@ -122,25 +125,36 @@ function OwnRow({
           ))}
         </div>
       </div>
-      {skill.use && (
-        <>
-          <label htmlFor={`${id}-when`} className="visually-hidden">
-            When should agents use {shortName(skill)}?
-          </label>
-          <input
-            id={`${id}-when`}
-            className="own__when"
-            maxLength={whenLimit}
-            placeholder="When should agents use it? (optional)"
-            value={when}
-            onChange={(event) => setWhen(event.target.value)}
-            onBlur={save}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur();
-            }}
-          />
-        </>
-      )}
+      {skill.use &&
+        (skill.when || noting ? (
+          <>
+            <label htmlFor={`${id}-when`} className="visually-hidden">
+              When should agents use {shortName(skill)}?
+            </label>
+            <input
+              id={`${id}-when`}
+              className="own__when"
+              maxLength={whenLimit}
+              placeholder="When should agents use it?"
+              // The box opens on the person's click, so it takes the typing at once.
+              autoFocus={noting}
+              value={when}
+              onChange={(event) => setWhen(event.target.value)}
+              onBlur={save}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+              }}
+            />
+          </>
+        ) : (
+          <button
+            type="button"
+            className="link-button own__more"
+            onClick={() => setNoting(true)}
+          >
+            Say when to use it
+          </button>
+        ))}
     </li>
   );
 }
@@ -229,7 +243,7 @@ export function OwnSkills({
         </span>
       )}
       <p className="setup__note">
-        No turns a skill off only for Verifold’s agents. Your own Claude Code
+        “No” turns a skill off only for Verifold’s agents. Your own Claude Code
         and Codex don’t change. Changes apply to agent sessions that start after
         this.
       </p>
