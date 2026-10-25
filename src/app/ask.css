@@ -377,3 +377,10 @@
   font-weight: 500;
   color: var(--muted);
 }
+
+/* Back: to the last step of an isolated project's settings, or to the choice of settings. */
+.ask__back {
+  align-self: flex-start;
+  font-size: 14px;
+  color: var(--muted);
+}

@@ -1219,7 +1219,7 @@ export async function startDesk(
     /** The new app's build: index.html and assets/. Without one, /app/ is not served. */
     readonly appRoot?: URL;
     /** The first run, which the app shows with or without a project. */
-    readonly firstRun?: FirstRun;
+    readonly firstRun?: Pick<FirstRun, 'view' | 'act'>;
     /** Without a project: the Ask page's read and the start of a project. */
     readonly start?: ProjectStart;
     /** Why the project's lab did not start, when its start failed. */

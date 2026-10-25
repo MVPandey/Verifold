@@ -3,7 +3,6 @@ import type { SetupView, SkillCard, SkillRuns } from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { BackButton, StepHeader } from '../components/StepHeader.tsx';
 import { newKey } from '../intent.ts';
-import { href } from '../route.ts';
 import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 import { dayClock } from '../format.ts';
@@ -177,7 +176,7 @@ export function SkillsStep({
       ) : skills.needsProfile ? (
         <p className="setup__line">
           Skills are matched to what you work on, so this step needs{' '}
-          <a href={href.setup('about')}>About you</a> first.
+          <a href={nav.link('about')}>About you</a> first.
         </p>
       ) : skills.busy === 'search' ? (
         <StatusBar tone="plan">

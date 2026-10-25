@@ -1016,10 +1016,27 @@ export interface PostThread {
 export type SetupStep = 'agents' | 'about' | 'skills' | 'money';
 
 /**
+ * Which profile a first-run read or action is for, and which profile a new
+ * project starts with, while Verifold runs without a project. `project`:
+ * the project's own profile, which starts as a copy of the global one and
+ * never changes it. Without it: the global profile. A read takes it as
+ * the query `?profile=project`. Added after version 1.
+ */
+export interface ForProject {
+  readonly profile?: 'project';
+}
+
+/**
  * `GET /api/v1/setup`: the first run, which the app also opens later to
  * change the profile. Each step saves on its own. Added after version 1.
  */
 export interface SetupView {
+  /**
+   * Whose settings these are: the global profile that new projects start
+   * from, or one project's own. In a project's own, the monthly GPU limit
+   * is the global one, which this view only shows. Added after version 1.
+   */
+  readonly scope?: 'global' | 'project';
   /** Each step: `done`, `skipped`, or null when the person never saw it. An older server has no `skills`. */
   readonly steps: Readonly<
     Record<Exclude<SetupStep, 'skills'>, 'done' | 'skipped' | null> &
@@ -1341,59 +1358,76 @@ export interface ActionBodies {
     readonly key?: string;
   };
   /** The first run's actions, added after version 1. Save the agents step. */
-  'setup-agents': {
+  'setup-agents': ForProject & {
     readonly claude: { readonly use: boolean; readonly model?: string };
     readonly codex: { readonly use: boolean; readonly model?: string };
     readonly key?: string;
   };
   /** Look for the harnesses again. */
-  'setup-check': { readonly key?: string };
+  'setup-check': ForProject & { readonly key?: string };
   /**
    * The person's answer, or, once a card is shown, a note that changes it.
    * `card`: the card as the person edited it, which the note then changes.
    */
-  'setup-say': {
+  'setup-say': ForProject & {
     readonly text: string;
     readonly card?: ProfileCard;
     readonly key?: string;
   };
   /** Ask the harness again after a failed reply. */
-  'setup-retry': { readonly key?: string };
+  'setup-retry': ForProject & { readonly key?: string };
   /** Fill the card from the answers so far, without the harness. */
-  'setup-fill': { readonly key?: string };
+  'setup-fill': ForProject & { readonly key?: string };
   /** Start the conversation again. The saved profile stays until a new one is saved. */
-  'setup-restart': { readonly key?: string };
+  'setup-restart': ForProject & { readonly key?: string };
   /** Save the card to the profile, or keep the profile in free form as it is. */
-  'setup-about':
-    | { readonly card: ProfileCard; readonly key?: string }
-    | { readonly keep: true; readonly key?: string };
+  'setup-about': ForProject &
+    (
+      | { readonly card: ProfileCard; readonly key?: string }
+      | { readonly keep: true; readonly key?: string }
+    );
   /** Check a RunPod key with RunPod, then store it outside every project. No answer holds it. */
-  'setup-key': {
+  'setup-key': ForProject & {
     readonly runpodKey: string;
     /** Keep it in a private file instead of the keyring. */
     readonly file?: boolean;
     readonly key?: string;
   };
   /** Read RunPod's prices again. */
-  'setup-prices': { readonly key?: string };
+  'setup-prices': ForProject & { readonly key?: string };
   /** Save the GPU limits for new projects. `limitUsd` null: no GPUs for now. */
-  'setup-money': MoneyLimits & { readonly key?: string };
+  'setup-money': ForProject & MoneyLimits & { readonly key?: string };
   /** Skip a step, or every step that the person did not finish. */
-  'setup-skip': { readonly step: SetupStep | 'all'; readonly key?: string };
+  'setup-skip': ForProject & {
+    readonly step: SetupStep | 'all';
+    readonly key?: string;
+  };
   /** Read the skill catalogs and match them to the profile. Added after version 1. */
-  'setup-skills-search': { readonly key?: string };
+  'setup-skills-search': ForProject & { readonly key?: string };
   /** Add a skill of the last search, pinned to its commit. */
-  'setup-skill-add': { readonly id: string; readonly key?: string };
+  'setup-skill-add': ForProject & {
+    readonly id: string;
+    readonly key?: string;
+  };
   /** Remove an added skill. */
-  'setup-skill-remove': { readonly id: string; readonly key?: string };
+  'setup-skill-remove': ForProject & {
+    readonly id: string;
+    readonly key?: string;
+  };
   /** Finish the Skills step. */
-  'setup-skills-done': { readonly key?: string };
+  'setup-skills-done': ForProject & { readonly key?: string };
+  /**
+   * Without a project: make the profile of the project that starts a copy
+   * of the global one again, with every step to do. Only for
+   * `profile: 'project'`. Added after version 1.
+   */
+  'setup-copy-global': ForProject & { readonly key?: string };
   /**
    * Without a project: create one for the person's question, and start its
    * lab. The settings apply to this project only. Each one that is left out
    * comes from the profile. Added after version 1.
    */
-  'project-start': {
+  'project-start': ForProject & {
     readonly question: string;
     /** Another folder: an absolute path, or one that starts with `~/`. Without it, the folder where Verifold started. */
     readonly folder?: string;

@@ -885,14 +885,23 @@ await test('the app explains a missing token, the first connection, and a projec
     text(render({ ...story(), lab: null })),
     /CoT faithfulness has no lab yet/,
   );
-  // Without a project, the app is the first run, at any page of the lab.
-  for (const hash of ['#/', '#/d/d-2', '#/answer']) {
-    const first = text(
+  // Without a project, any page of the lab leads to the choice of settings for the new project.
+  for (const hash of ['#/', '#/d/d-2', '#/answer'])
+    assert.equal(
       render({ ...story(), project: '', lab: null }, 'live', hash),
+      '',
+      hash,
     );
-    assert.match(first, /Set up once\. Every project starts from it\./, hash);
-    assert.doesNotMatch(first, /Back to the lab/, hash);
-  }
+  const choice = text(
+    render({ ...story(), project: '', lab: null }, 'live', '#/new'),
+  );
+  assert.match(
+    choice,
+    /How should this project start\? Use my global settings .* Isolated project /,
+  );
+  assert.doesNotMatch(choice, /Back to the lab/);
+  // With a project, the choice leads to the lab.
+  assert.equal(render(story(), 'live', '#/new'), '');
 });
 
 await test('the desk serves the app build under /app/: its page with no-store, hashed files kept for a year, and token.js', async (t) => {

@@ -29,8 +29,14 @@ import {
   UnsavedLine,
   afterAnswer,
   leaveFor,
+  openingRoute,
+  pageRoute,
 } from '../src/app/screens/Setup.tsx';
 import { StepHeader } from '../src/app/components/StepHeader.tsx';
+import { href, parseRoute } from '../src/app/route.ts';
+import { NewProjectChoice } from '../src/app/screens/NewProject.tsx';
+import { AskForm } from '../src/app/screens/AskPage.tsx';
+import { startActions } from '../src/app/ask.ts';
 
 const claude: AgentTool = {
   harness: 'claude',
@@ -101,7 +107,12 @@ function view(fields: Partial<SetupView> = {}): SetupView {
 
 const actions = setupActions(null);
 const quiet = (): void => {};
-const nav: StepNav = { steps: setupSteps, open: quiet, unsaved: quiet };
+const nav: StepNav = {
+  steps: setupSteps,
+  open: quiet,
+  link: (step) => href.setup(step),
+  unsaved: quiet,
+};
 
 /** Visible text, with tags removed and entities decoded. */
 function text(element: ReactElement): string {
@@ -946,4 +957,150 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
   );
   assert.match(updates, /this step needs About you first/);
   assert.match(updates, /Update/);
+});
+
+await test('an isolated project has its own setup and Ask pages, and its first run ends on its own Ask page', () => {
+  assert.deepEqual(parseRoute('#/new'), { page: 'new' });
+  assert.deepEqual(parseRoute('#/project/setup'), {
+    page: 'setup',
+    step: null,
+    scope: 'project',
+  });
+  assert.deepEqual(parseRoute('#/project/setup/about'), {
+    page: 'setup',
+    step: 'about',
+    scope: 'project',
+  });
+  assert.deepEqual(parseRoute('#/project/ask'), {
+    page: 'ask',
+    scope: 'project',
+  });
+  assert.deepEqual(parseRoute('#/setup/money'), {
+    page: 'setup',
+    step: 'money',
+  });
+  assert.equal(parseRoute('#/project/setup/nothing').page, 'unknown');
+  assert.equal(href.setup('money', 'project'), '#/project/setup/money');
+  assert.equal(href.setup(undefined, 'project'), '#/project/setup');
+  assert.equal(href.setup('money'), '#/setup/money');
+  // Without a project, the end of an isolated project's steps is its own Ask page.
+  assert.equal(pageRoute('done', '', 'project'), href.projectAsk);
+  assert.equal(pageRoute('done', ''), href.ask);
+  assert.equal(pageRoute('skills', '', 'project'), '#/project/setup/skills');
+  const finished = view({
+    steps: { agents: 'done', about: 'done', skills: 'done', money: 'done' },
+  });
+  assert.equal(openingRoute(finished, null, '', 'project'), href.projectAsk);
+  assert.equal(
+    openingRoute(view(), null, '', 'project'),
+    '#/project/setup/agents',
+  );
+  // A save opens the next step only while the page still shows the step in the same profile.
+  assert.equal(
+    afterAnswer('#/project/setup/skills', 'skills', 'project'),
+    'next',
+  );
+  assert.equal(afterAnswer('#/setup/skills', 'skills', 'project'), 'refresh');
+  assert.equal(afterAnswer('#/project/setup/skills', 'skills'), 'refresh');
+  // The last page leads to the isolated project's Ask page.
+  assert.match(
+    renderToStaticMarkup(
+      <DoneStep view={finished} project="" scope="project" />,
+    ),
+    /href="#\/project\/setup\/agents".*href="#\/project\/ask"/s,
+  );
+});
+
+await test('a new project offers the global settings or its own, and the global ones first when nobody set them up', () => {
+  const set = renderToStaticMarkup(<NewProjectChoice set />);
+  assert.match(
+    text(<NewProjectChoice set />),
+    /How should this project start\? Use my global settings .* Isolated project .*copy of your global settings\. Your global settings don’t change\./,
+  );
+  assert.match(set, /href="#\/setup".*href="#\/project\/setup"/s);
+  const fresh = text(<NewProjectChoice set={false} />);
+  assert.match(fresh, /Set up my global settings/);
+  assert.doesNotMatch(fresh, /copy of your global settings/);
+});
+
+await test("an isolated project's money step shows the global monthly limit and offers no field for it", () => {
+  const own = text(
+    <MoneyStep
+      view={view({
+        scope: 'project',
+        money: {
+          ...view().money,
+          limits: { ...view().money.limits, monthUsd: 300 },
+        },
+      })}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />,
+  );
+  assert.match(
+    own,
+    /All projects together, each month \$300 Nothing spent this month\. This limit comes from your global settings, and this project counts toward it\./,
+  );
+  const html = renderToStaticMarkup(
+    <MoneyStep
+      view={view({ scope: 'project' })}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />,
+  );
+  assert.match(html, /No limit/);
+  // The global profile's step keeps the field.
+  assert.match(
+    text(
+      <MoneyStep
+        view={view()}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    ),
+    /Leave it empty for no monthly limit/,
+  );
+});
+
+await test("the Ask page goes Back to the isolated project's last step, or to the choice of settings, and names whose settings it shows", () => {
+  const where = {
+    folder: '~/cot',
+    files: false,
+    hours: 8,
+    maxHours: 168,
+    questionLimit: 4000,
+    agents: { host: 'claude' as const },
+    gpuUsd: null,
+    gpuLimits: true,
+    started: false,
+  };
+  const form = (scope?: 'project'): string =>
+    renderToStaticMarkup(
+      <AskForm
+        where={where}
+        scope={scope}
+        tools={null}
+        profileError={null}
+        onRetry={quiet}
+        start={startActions(null)}
+        now={0}
+        connection="live"
+      />,
+    );
+  const own = form('project');
+  assert.match(
+    own,
+    /href="#\/project\/setup\/agents">This project’s settings</,
+  );
+  assert.match(own, /class="ask__back" href="#\/project\/setup\/money">Back</);
+  assert.match(own, /These come from this project’s settings/);
+  const global = form();
+  assert.match(global, /href="#\/setup\/agents">Profile</);
+  assert.match(global, /class="ask__back" href="#\/new">Back</);
 });

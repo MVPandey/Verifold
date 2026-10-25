@@ -41,7 +41,7 @@ verifold
 
 Run `verifold` in an empty folder, or in a folder that already holds your work. Verifold opens in your browser.
 
-1. The first time, set up your agents, a short profile, skills, and GPU limits. You can skip each step.
+1. Choose your global settings, or an isolated project with its own. The first time, set up your agents, a short profile, skills, and GPU limits. You can skip each step or go back to one.
 2. Ask your question. The planner checks current facts first, and it can ask you up to three questions. Each one has options and a box for your own words.
 3. The planner posts a plan that splits the question into directions. Each direction gets its own agent. The agents post what they find on one board and check each other's claims.
 4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick and a box for your own words.

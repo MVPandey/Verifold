@@ -1,6 +1,6 @@
 import { mkdir, readdir } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import { loadSettings } from '../core/agency.ts';
+import { loadSettings, withProfileLock } from '../core/agency.ts';
 import {
   computeDefaults,
   parseSettings,
@@ -11,6 +11,8 @@ import type { Workspace } from '../core/contracts.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
 import { defaultLabHours, hours, labLimits, text } from '../core/lab/schema.ts';
+import { readyDraft } from '../core/project-profile.ts';
+import { removeTree } from '../core/skills.ts';
 import { SessionActionError } from '../core/session.ts';
 import type { ProjectAgents, StartView } from '../protocol/api.ts';
 import type { ProjectStart } from '../server/api.ts';
@@ -111,7 +113,7 @@ export function defaultTeam(
 export function askStart(options: {
   /** The folder where Verifold started. */
   readonly root: string;
-  /** The folder of the person's profile. */
+  /** The folder of the person's global profile. An isolated project's draft profile is under it. */
   readonly agency: string;
   readonly signal: AbortSignal;
   /** Tests use fakes. */
@@ -124,9 +126,12 @@ export function askStart(options: {
   let busy = false;
   let done = false;
   let detected: Promise<readonly HarnessStatus[]> | null = null;
-  /** The defaults, from the profile when it reads, else from this computer. */
-  const defaults = async (): Promise<Defaults> => {
-    const settings = await loadSettings(options.agency).catch(() => null);
+  /** The draft of an isolated project's profile, made from the global profile when it is not there yet. */
+  const draft = (): Promise<string> =>
+    readyDraft(options.agency, options.root, options.signal);
+  /** The defaults, from the profile at `folder` when it reads, else from this computer. */
+  const defaults = async (folder: string): Promise<Defaults> => {
+    const settings = await loadSettings(folder).catch(() => null);
     const saved = settings?.agency;
     const profile: ProjectAgents | null = saved
       ? {
@@ -159,8 +164,10 @@ export function askStart(options: {
     };
   };
   const start: ProjectStart = {
-    view: async (): Promise<StartView> => {
-      const { agents, gpuUsd, money } = await defaults();
+    view: async (scope?: 'project'): Promise<StartView> => {
+      const { agents, gpuUsd, money } = await defaults(
+        scope === 'project' ? await draft() : options.agency,
+      );
       return {
         folder: homeShown(options.root),
         // The person's own files, not what macOS adds.
@@ -198,7 +205,14 @@ export function askStart(options: {
                 );
         const budget =
           body.hours === undefined ? defaultLabHours : hours(body.hours);
-        const fallback = await defaults();
+        // An isolated project takes its draft profile, and the defaults come from it.
+        const own =
+          body.profile === undefined
+            ? undefined
+            : body.profile === 'project'
+              ? await draft()
+              : fail('Choose the global profile, or this project’s own.');
+        const fallback = await defaults(own ?? options.agency);
         const agents =
           body.agents === undefined ? fallback.agents : team(body.agents);
         if (!agents)
@@ -216,7 +230,7 @@ export function askStart(options: {
           },
           base,
         );
-        try {
+        const create = async (): Promise<void> => {
           await checkProjectDirectory(folder);
           // A new folder from Change comes into being here.
           await mkdir(folder, { recursive: true, mode: 0o700 });
@@ -241,7 +255,13 @@ export function askStart(options: {
             options.signal,
             true,
             compute,
+            own,
           );
+        };
+        try {
+          // The draft's lock keeps a save of its settings out while the project takes its copy.
+          if (own) await withProfileLock(own, options.signal, create);
+          else await create();
         } catch (error) {
           if (error instanceof SessionActionError) throw error;
           fail(
@@ -249,6 +269,8 @@ export function askStart(options: {
           );
         }
         done = true;
+        // The project has its copy, so the draft goes.
+        if (own) await removeTree(own).catch(() => {});
         settle({ root: folder, question, hours: budget });
         return 202;
       } finally {

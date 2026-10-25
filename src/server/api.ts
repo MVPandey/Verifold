@@ -2590,6 +2590,7 @@ const setupNames = new Set<string>([
   'setup-skill-add',
   'setup-skill-remove',
   'setup-skills-done',
+  'setup-copy-global',
 ] satisfies ActionName[]);
 
 /**
@@ -2597,7 +2598,8 @@ const setupNames = new Set<string>([
  * project with the person's question.
  */
 export interface ProjectStart {
-  readonly view: () => Promise<StartView>;
+  /** `scope` `project`: the defaults of an isolated project, from its draft profile. */
+  readonly view: (scope?: 'project') => Promise<StartView>;
   /** Run `project-start`. Returns 202: the project starts in the background. */
   readonly act: (body: Record<string, unknown>) => Promise<number>;
 }
@@ -2769,17 +2771,28 @@ export async function answerApi(
     json(response, 200, (await feed.current()).text);
     return;
   }
-  if (first === 'start' && parts.length === 1 && !keys.length && start) {
-    json(response, 200, await start.view());
+  // A first-run read and the Ask page's read take `?profile=project` for an isolated project.
+  const scope = keys.length
+    ? keys.length === 1 && url.searchParams.get('profile') === 'project'
+      ? 'project'
+      : null
+    : undefined;
+  if (first === 'start' && parts.length === 1 && scope !== null && start) {
+    try {
+      json(response, 200, await start.view(scope));
+    } catch (error) {
+      if (!(error instanceof SessionActionError)) throw error;
+      json(response, 409, { error: error.message });
+    }
     return;
   }
   if (first === 'history') {
     await answerHistory(response, url, parts, reader);
     return;
   }
-  if (first === 'setup' && parts.length === 1 && !keys.length && setup) {
+  if (first === 'setup' && parts.length === 1 && scope !== null && setup) {
     try {
-      json(response, 200, await setup.view());
+      json(response, 200, await setup.view(scope));
     } catch (error) {
       if (!(error instanceof SessionActionError)) throw error;
       json(response, 409, { error: error.message });
