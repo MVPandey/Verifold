@@ -98,6 +98,12 @@ const codexTextOnlyOptions = [
   'web_search="disabled"',
   '-c',
   'approval_policy="never"',
+  '-c',
+  'features.shell_tool=false',
+  '-c',
+  'features.unified_exec=false',
+  '-c',
+  'features.view_image=false',
 ];
 const codexExecTail = [
   'exec',
@@ -126,7 +132,7 @@ await test('the -c options that turn off MCP servers name each server, and none 
     assert.equal(codexOffOptions(['github', odd]), null);
 });
 
-await test('a text-only call gives Claude Code no tools or MCP servers, and Codex no web search, a read-only sandbox with no approvals, and none of the MCP servers, plugins or apps of the person', async () => {
+await test('a text-only call gives Claude Code no tools or MCP servers, and Codex no web search, no command or image tool, a read-only sandbox with no approvals, and none of the MCP servers, plugins or apps of the person', async () => {
   for (const host of ['claude', 'codex'] as const)
     await fixture(
       textOnlyHost(
@@ -251,12 +257,6 @@ await test("a call that may read its own files gives Claude Code only its Read t
                 'mcp_servers.github.enabled=false',
                 ...codexTextOnlyOptions,
                 '-c',
-                'features.shell_tool=false',
-                '-c',
-                'features.unified_exec=false',
-                '-c',
-                'features.view_image=false',
-                '-c',
                 'permissions.verifold-own.extends=":read-only"',
                 '-c',
                 'permissions.verifold-own.filesystem={"/home/me/.claude/projects/**/*.jsonl"="deny","/home/me/.claude/todos"="deny","~/.ssh"="deny"}',
@@ -325,6 +325,33 @@ await test('Verifold stops a Codex call that may read no files at its first comm
   );
 });
 
+await test('a Codex call that may read no files goes on past reply items in either spelling', async () => {
+  const events = [
+    { type: 'item.started', item: { type: 'agentMessage' } },
+    { type: 'item.completed', item: { type: 'agentMessage', text: 'Interim' } },
+    { type: 'item.completed', item: { type: 'reasoning', text: 'Thinking' } },
+    { type: 'item.completed', item: { type: 'agent_message', text: 'Final' } },
+  ];
+  await fixture(
+    `const args = process.argv.slice(2);
+     if (args.includes('mcp')) console.log('[]');
+     else { process.stdin.resume(); process.stdin.on('end', () => { for (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event)); }); }`,
+    async (executable, cwd) => {
+      const result = await runHarness(
+        {
+          host: 'codex',
+          cwd,
+          prompt: 'What do you know about the person?',
+          signal: new AbortController().signal,
+          ownFiles: { allow: [], deny: ['/home/me'] },
+        },
+        { executable },
+      );
+      assert.equal(result.text, 'Final');
+    },
+  );
+});
+
 for (const [what, servers] of [
   ['its MCP servers cannot be listed', `process.exit(1);`],
   ['the list is not JSON', `console.log('github  enabled');`],
@@ -347,7 +374,7 @@ for (const [what, servers] of [
         /did not run this request/,
       );
       await assert.rejects(readFile(join(cwd, 'ran')), { code: 'ENOENT' });
-      // The person's own text, as in the About-you chat: the call runs, with plugins, apps and web search off and a read-only sandbox.
+      // The person's own text, as in the About-you chat: the call runs, with plugins, apps, web search and the command and image tools off, and a read-only sandbox.
       const result = await runHarness(request, { executable });
       assert.deepEqual(JSON.parse(result.text), [
         ...appsOff,

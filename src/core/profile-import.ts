@@ -1,4 +1,4 @@
-import { opendir, stat } from 'node:fs/promises';
+import { opendir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ownLimits, type ProfileCard } from './agency.ts';
@@ -7,6 +7,7 @@ import type { OwnSkill } from './own-skills.ts';
 import { replyCard, type ChatHarness } from './profile-chat.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
+import { deniedPaths } from './runs.ts';
 import { SessionActionError, hostName } from './session.ts';
 import { credentialPaths } from './session-hosts.ts';
 import { inEmptyFolder } from './storage.ts';
@@ -178,14 +179,22 @@ export async function claudeMemory(
   };
 }
 
-/** What Codex's commands may not read: the person's home folder, Codex's own folder, and the credential paths. */
-function codexClosed(): string[] {
-  const home = homedir();
-  const codex = resolve(process.env.CODEX_HOME ?? join(home, '.codex'));
+/**
+ * What Codex's commands may not read: the person's home folder, and Codex's
+ * own folder and the credential paths that lie outside it. Each path is a
+ * real path and comes once: a path twice is a duplicate key in the profile.
+ */
+export async function codexClosed(
+  home = homedir(),
+  codexHome = process.env.CODEX_HOME,
+): Promise<string[]> {
+  const real = await realpath(home).catch(() => home);
+  const closed = await deniedPaths(real, [
+    resolve(codexHome ?? join(real, '.codex')),
+  ]);
   return [
-    home,
-    ...(codex.startsWith(`${home}/`) ? [] : [codex]),
-    ...credentialPaths,
+    real,
+    ...closed.filter((path) => path !== real && !path.startsWith(`${real}/`)),
   ];
 }
 
@@ -279,6 +288,9 @@ export async function importProfile(input: {
               signal,
             )
           : null;
+      const ownFiles = memory
+        ? { allow: memory.allow, deny: memory.deny }
+        : { allow: [], deny: await codexClosed() };
       const result = await inEmptyFolder('import', (cwd) =>
         run({
           host: harness.host,
@@ -287,9 +299,7 @@ export async function importProfile(input: {
           signal,
           timeoutMs: limits.timeoutMs,
           idleMs: limits.idleMs,
-          ownFiles: memory
-            ? { allow: memory.allow, deny: memory.deny }
-            : { allow: [], deny: codexClosed() },
+          ownFiles,
           // Skill descriptions come from plugins and catalogs.
           outsideText: true,
           prompt: `${instructions}
