@@ -18,9 +18,43 @@ export function firstPage(view: SetupView): SetupPage {
   return setupSteps.find((step) => view.steps[step] === null) ?? 'done';
 }
 
-/** The page after a step. */
-export function pageAfter(step: SetupStep): SetupPage {
-  return setupSteps[setupSteps.indexOf(step) + 1] ?? 'done';
+/** What a step needs from the setup page to move between steps. */
+export interface StepNav {
+  /** The steps that this Verifold has, in order. The label, the bar, Back and Continue all use this list. */
+  readonly steps: readonly SetupStep[];
+  /** Back and the step bar: open a step. The page asks first while the step holds unsaved input. */
+  readonly open: (step: SetupStep) => void;
+  /** The step holds input that is not saved. */
+  readonly unsaved: (unsaved: boolean) => void;
+}
+
+/** The steps that this Verifold has. An older one reports no Skills step. */
+export function shownSteps(steps: SetupView['steps']): readonly SetupStep[] {
+  return setupSteps.filter((step) => steps[step] !== undefined);
+}
+
+/**
+ * The page after a step, among `steps`. The order is that of `setupSteps`,
+ * so a step that `steps` leaves out, such as Skills on an older Verifold,
+ * still leads on.
+ */
+export function pageAfter(
+  step: SetupStep,
+  steps: readonly SetupStep[] = setupSteps,
+): SetupPage {
+  const at = setupSteps.indexOf(step);
+  return steps.find((next) => setupSteps.indexOf(next) > at) ?? 'done';
+}
+
+/** The step before a step, among `steps`. Null: the first step. */
+export function pageBefore(
+  step: SetupStep,
+  steps: readonly SetupStep[] = setupSteps,
+): SetupStep | null {
+  const at = setupSteps.indexOf(step);
+  return (
+    steps.filter((before) => setupSteps.indexOf(before) < at).at(-1) ?? null
+  );
 }
 
 function object(value: unknown): value is Record<string, unknown> {

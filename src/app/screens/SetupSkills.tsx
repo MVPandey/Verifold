@@ -1,10 +1,10 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { SetupView, SkillCard, SkillRuns } from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { StepHeader } from '../components/StepHeader.tsx';
+import { BackButton, StepHeader } from '../components/StepHeader.tsx';
 import { newKey } from '../intent.ts';
 import { href } from '../route.ts';
-import type { SetupActions } from '../setup.ts';
+import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 import { dayClock } from '../format.ts';
 import { OwnSkills } from './SetupOwnSkills.tsx';
@@ -106,11 +106,13 @@ export function SkillsStep({
   actions,
   refresh,
   onDone,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onDone: () => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const skills = view.skills;
   const search = useAction((_: null, key) => actions.skillsSearch(key));
@@ -151,7 +153,12 @@ export function SkillsStep({
   };
   return (
     <>
-      <StepHeader step="skills" title="Skills that fit your work">
+      <StepHeader
+        step="skills"
+        states={view.steps}
+        nav={nav}
+        title="Skills that fit your work"
+      >
         {read
           ? `Verifold read ${readable.length} skill ${readable.length === 1 ? 'catalog' : 'catalogs'} ${dayClock(read.at)} ${
               skills?.needsProfile
@@ -238,7 +245,12 @@ export function SkillsStep({
         Claude Code or Codex. Read what each one can run before you add it.
       </p>
       {skills && (
-        <OwnSkills skills={skills} actions={actions} refresh={refresh} />
+        <OwnSkills
+          skills={skills}
+          actions={actions}
+          refresh={refresh}
+          nav={nav}
+        />
       )}
       {error && (
         <span role="alert" className="setup__error">
@@ -255,6 +267,7 @@ export function SkillsStep({
         </span>
       )}
       <div className="setup__actions">
+        <BackButton step="skills" nav={nav} />
         <button
           type="button"
           className="button button--primary button--big"

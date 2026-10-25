@@ -2,8 +2,8 @@ import { useState, type ReactNode } from 'react';
 import type { AgentTool, Harness, SetupView } from '../../protocol/api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { StepHeader } from '../components/StepHeader.tsx';
-import { planName, type SetupActions } from '../setup.ts';
+import { StepHeader, useUnsaved } from '../components/StepHeader.tsx';
+import { planName, type SetupActions, type StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 const toolNames: Readonly<Record<Harness, string>> = {
@@ -144,12 +144,14 @@ export function AgentsStep({
   refresh,
   onSaved,
   onSkip,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
   readonly onSkip: () => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const { tools, checking } = view.agents;
   const [choices, setChoices] = useState<Choices>(() =>
@@ -176,12 +178,28 @@ export function AgentsStep({
   const check = useAction((_: null, key) => actions.check(key));
   const skip = useAction((_: null, key) => actions.skip('all', key));
   const used = tools.some((tool) => choices[tool.harness]?.use);
+  // Changed choices.
+  useUnsaved(
+    tools.some((tool) => {
+      const choice = choices[tool.harness];
+      return (
+        choice !== undefined &&
+        (choice.use !== tool.use || choice.model !== (tool.model ?? ''))
+      );
+    }),
+    nav,
+  );
   const unsure = tools.some(
     (tool) => !tool.installed || tool.signedIn !== true,
   );
   return (
     <>
-      <StepHeader step="agents" title="Your agents">
+      <StepHeader
+        step="agents"
+        states={view.steps}
+        nav={nav}
+        title="Your agents"
+      >
         Verifold runs research with the agent tools you already use.
         {tools.length ? ' It found these on this computer.' : ''}
       </StepHeader>

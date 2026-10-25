@@ -13,14 +13,24 @@ import {
   firstPage,
   isSetupView,
   pageAfter,
+  pageBefore,
   planName,
   setupActions,
+  setupSteps,
+  shownSteps,
+  type StepNav,
 } from '../src/app/setup.ts';
 import { AgentsStep } from '../src/app/screens/SetupAgents.tsx';
 import { AboutStep } from '../src/app/screens/SetupAbout.tsx';
-import { MoneyStep } from '../src/app/screens/SetupMoney.tsx';
+import { MoneyStep, moneyUnsaved } from '../src/app/screens/SetupMoney.tsx';
 import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
-import { DoneStep } from '../src/app/screens/Setup.tsx';
+import {
+  DoneStep,
+  UnsavedLine,
+  afterAnswer,
+  leaveFor,
+} from '../src/app/screens/Setup.tsx';
+import { StepHeader } from '../src/app/components/StepHeader.tsx';
 
 const claude: AgentTool = {
   harness: 'claude',
@@ -67,7 +77,7 @@ const about: SetupAbout = {
 
 function view(fields: Partial<SetupView> = {}): SetupView {
   return {
-    steps: { agents: null, about: null, money: null },
+    steps: { agents: null, about: null, skills: null, money: null },
     agents: { checking: false, tools: [claude, codex] },
     about,
     money: {
@@ -91,6 +101,7 @@ function view(fields: Partial<SetupView> = {}): SetupView {
 
 const actions = setupActions(null);
 const quiet = (): void => {};
+const nav: StepNav = { steps: setupSteps, open: quiet, unsaved: quiet };
 
 /** Visible text, with tags removed and entities decoded. */
 function text(element: ReactElement): string {
@@ -122,6 +133,262 @@ await test('the first run opens its first step without a record, and each step l
   assert.equal(planName('team_premium'), 'Team premium plan');
   assert.ok(isSetupView(view()));
   assert.equal(isSetupView({ steps: {} }), false);
+});
+
+/** The bar's links: address, accessible name, and whether it is the current step. */
+function barLinks(html: string): string[][] {
+  return [
+    ...html.matchAll(
+      /<a href="([^"]+)" class="step__link" aria-label="([^"]+)"( aria-current="step")?/g,
+    ),
+  ].map(([, to, name, current]) => [
+    to ?? '',
+    name ?? '',
+    current ? 'current' : '',
+  ]);
+}
+
+const backButton =
+  /<button type="button" class="button button--big">Back<\/button>/;
+
+await test('Back opens the step before, and an older Verifold without a Skills step leaves it out going back and on', () => {
+  assert.equal(pageBefore('agents'), null);
+  assert.equal(pageBefore('about'), 'agents');
+  assert.equal(pageBefore('money'), 'skills');
+  const older = shownSteps({ agents: 'done', about: null, money: null });
+  assert.deepEqual(older, ['agents', 'about', 'money']);
+  assert.equal(pageAfter('about', older), 'money');
+  assert.equal(pageBefore('money', older), 'about');
+  // Skills opened by its address on an older Verifold still leads on.
+  assert.equal(pageAfter('skills', older), 'money');
+  assert.equal(pageBefore('skills', older), 'about');
+  // Back shows on steps 2 to 4 only.
+  const agents = renderToStaticMarkup(
+    <AgentsStep
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      onSkip={quiet}
+      nav={nav}
+    />,
+  );
+  assert.doesNotMatch(agents, backButton);
+  for (const page of [
+    <AboutStep
+      key="about"
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />,
+    <SkillsStep
+      key="skills"
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onDone={quiet}
+      nav={nav}
+    />,
+    <MoneyStep
+      key="money"
+      view={view()}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />,
+  ])
+    assert.match(renderToStaticMarkup(page), backButton);
+  // The last page has its Change links instead.
+  for (const project of ['', 'cot'])
+    assert.doesNotMatch(
+      renderToStaticMarkup(<DoneStep view={view()} project={project} />),
+      backButton,
+    );
+});
+
+await test('the step bar shows each step as it is: done, skipped, or not yet, and rings the current one on top of its state', () => {
+  const html = renderToStaticMarkup(
+    <StepHeader
+      step="about"
+      states={{ agents: 'done', about: null, skills: 'skipped', money: null }}
+      nav={nav}
+      title="About you"
+    />,
+  );
+  assert.match(html, /Step 2 of 4: About you/);
+  assert.deepEqual(barLinks(html), [
+    ['#/setup/agents', 'Agents, done', ''],
+    ['#/setup/about', 'About you, not yet', 'current'],
+    ['#/setup/skills', 'Skills (optional), skipped', ''],
+    ['#/setup/money', 'GPU money, not yet', ''],
+  ]);
+  const segments = (markup: string): string[] =>
+    [...markup.matchAll(/class="(step__segment[^"]*)"/g)].map(
+      ([, name]) => name ?? '',
+    );
+  assert.deepEqual(segments(html), [
+    'step__segment step__segment--done',
+    'step__segment',
+    'step__segment step__segment--skipped',
+    'step__segment',
+  ]);
+  // The current step keeps its state.
+  const done = renderToStaticMarkup(
+    <StepHeader
+      step="about"
+      states={{ agents: 'done', about: 'done', skills: null, money: null }}
+      nav={nav}
+      title="About you"
+    />,
+  );
+  assert.deepEqual(barLinks(done)[1], [
+    '#/setup/about',
+    'About you, done',
+    'current',
+  ]);
+  assert.equal(segments(done)[1], 'step__segment step__segment--done');
+  // An older Verifold without a Skills step: the page passes three steps.
+  const states = { agents: 'done', about: 'done', money: null } as const;
+  const older = renderToStaticMarkup(
+    <StepHeader
+      step="money"
+      states={states}
+      nav={{ ...nav, steps: shownSteps(states) }}
+      title="GPU money"
+    />,
+  );
+  assert.match(older, /Step 3 of 3: GPU money/);
+  assert.deepEqual(
+    barLinks(older).map(([to]) => to),
+    ['#/setup/agents', '#/setup/about', '#/setup/money'],
+  );
+});
+
+await test('a plain click on the step bar goes through the setup page, and any other click opens the link the browser way', () => {
+  const opened: string[] = [];
+  const header = StepHeader({
+    step: 'money',
+    states: { agents: 'done', about: 'done', skills: null, money: null },
+    nav: { ...nav, open: (step) => opened.push(step) },
+    title: 'GPU money',
+  }) as ReactElement<{ children: ReactElement<{ children: unknown }>[] }>;
+  const links = header.props.children[1]?.props.children as ReactElement<{
+    onClick: (event: object) => void;
+  }>[];
+  const click = (at: number, keys: object): boolean => {
+    let prevented = false;
+    links[at]?.props.onClick({
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      ...keys,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    return prevented;
+  };
+  assert.equal(click(1, {}), true);
+  assert.equal(click(0, { metaKey: true }), false);
+  assert.equal(click(2, { button: 1 }), false);
+  assert.deepEqual(opened, ['about']);
+});
+
+await test('a save opens the next page only while its step still shows, and reads the profile again either way', () => {
+  // The save answers while Money shows.
+  assert.equal(afterAnswer('#/setup/money', 'money'), 'next');
+  // Finish setup, then Back to Skills before the save answers.
+  assert.equal(afterAnswer('#/setup/skills', 'money'), 'refresh');
+  // Finish setup, then Back to the lab.
+  assert.equal(afterAnswer('#/', 'money'), 'refresh');
+});
+
+await test('Back, the bar and the link to the lab ask first only while the step holds unsaved input, and the line offers to leave or stay', () => {
+  assert.equal(leaveFor('#/setup/about', '#/setup/money', false), 'open');
+  assert.equal(leaveFor('#/setup/about', '#/setup/money', true), 'ask');
+  assert.equal(leaveFor('#/', '#/setup/money', true), 'ask');
+  assert.equal(leaveFor('#/setup/money', '#/setup/money', true), 'none');
+  // The line shows only while the person asked to leave and the input is still unsaved.
+  assert.equal(
+    renderToStaticMarkup(
+      <UnsavedLine leaving={null} unsaved onLeave={quiet} onStay={quiet} />,
+    ),
+    '',
+  );
+  assert.equal(
+    renderToStaticMarkup(
+      <UnsavedLine
+        leaving="#/setup/about"
+        unsaved={false}
+        onLeave={quiet}
+        onStay={quiet}
+      />,
+    ),
+    '',
+  );
+  const shown = (
+    <UnsavedLine
+      leaving="#/setup/about"
+      unsaved
+      onLeave={quiet}
+      onStay={quiet}
+    />
+  );
+  const html = renderToStaticMarkup(shown);
+  assert.match(html, /role="alert"/);
+  assert.match(
+    text(shown),
+    /Your changes on this step aren’t saved\. Leave without saving Stay/,
+  );
+  assert.match(
+    html,
+    /<button type="button" class="button button--small" autofocus="">Stay/,
+  );
+  // Both choices reach the page.
+  const chose: string[] = [];
+  const line = UnsavedLine({
+    leaving: '#/setup/about',
+    unsaved: true,
+    onLeave: () => chose.push('leave'),
+    onStay: () => chose.push('stay'),
+  }) as ReactElement<{ children: ReactElement<{ children: unknown }>[] }>;
+  const buttons = line.props.children[1]?.props.children as ReactElement<{
+    onClick: () => void;
+  }>[];
+  for (const button of buttons) button.props.onClick();
+  assert.deepEqual(chose, ['leave', 'stay']);
+});
+
+await test('GPU money holds unsaved input: limits that differ from the saved ones, other GPUs, or a typed key', () => {
+  const saved = {
+    limitUsd: '25',
+    maxUsdPerHour: '4',
+    maxHoursPerLease: '4',
+    idleMinutes: '15',
+    maxRunningPods: '1',
+    monthUsd: '',
+  } as const;
+  const opened = {
+    saved,
+    limits: saved,
+    ticked: null,
+    defaults: ['h100', 'a100'],
+    secret: '',
+  };
+  assert.equal(moneyUnsaved(opened), false);
+  assert.equal(
+    moneyUnsaved({ ...opened, limits: { ...saved, limitUsd: '40' } }),
+    true,
+  );
+  // Ticking back to the default GPUs, in any order, is no change.
+  assert.equal(moneyUnsaved({ ...opened, ticked: ['a100', 'h100'] }), false);
+  assert.equal(moneyUnsaved({ ...opened, ticked: ['h100'] }), true);
+  assert.equal(moneyUnsaved({ ...opened, secret: 'rpa_KEY' }), true);
 });
 
 await test('the GPUs that agents may rent: those at or under the cap before a save, and the saved list after', () => {
@@ -194,6 +461,7 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      nav={nav}
     />,
   );
   for (const expected of [
@@ -218,6 +486,7 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      nav={nav}
     />,
   );
   assert.match(html, /<option value="opus\[1m\]" selected="">/);
@@ -236,6 +505,7 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
       refresh={quiet}
       onSaved={quiet}
       onSkip={quiet}
+      nav={nav}
     />,
   );
   assert.match(
@@ -250,6 +520,7 @@ await test('step 1 shows each harness with its sign-in, its model and its use, a
         refresh={quiet}
         onSaved={quiet}
         onSkip={quiet}
+        nav={nav}
       />,
     ),
     /Looking for Claude Code and Codex on this computer\./,
@@ -264,6 +535,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        nav={nav}
       />,
     );
   const first = step({});
@@ -279,6 +551,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        nav={nav}
       />,
     ),
     /placeholder="Answer in your own words"/,
@@ -332,6 +605,7 @@ await test('step 2 is a conversation with chips, a card with what each agent rea
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        nav={nav}
       />,
     ),
     /placeholder="Add anything else, in your own words"/,
@@ -364,6 +638,7 @@ await test('step 4 asks for a key without one, and with one shows the prices wit
         actions={actions}
         refresh={quiet}
         onSaved={quiet}
+        nav={nav}
       />,
     );
   const none = step({});
@@ -551,6 +826,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   assert.match(shown, /Step 3 of 4: Skills \(optional\)/);
@@ -583,6 +859,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   assert.match(markup, /aria-pressed="true"[^>]*>Added</);
@@ -600,6 +877,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        nav={nav}
       />,
     ),
     /Update/,
@@ -613,6 +891,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        nav={nav}
       />,
     ),
     /this step needs About you first/,
@@ -626,6 +905,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        nav={nav}
       />,
     ),
     /Reading the skill catalogs on GitHub/,
@@ -656,6 +936,7 @@ await test('step 3 shows the skills that fit, pinned with what they can run, and
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   assert.match(updates, /@ aaaaaaa · updated: not read/);
@@ -743,6 +1024,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   const shown = text(
@@ -751,6 +1033,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   // The own skills show without a profile, which only the catalog search needs.
@@ -801,6 +1084,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   assert.match(
@@ -815,6 +1099,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   assert.doesNotMatch(idle, /Listing the skills/);
@@ -826,6 +1111,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
       actions={actions}
       refresh={quiet}
       onDone={quiet}
+      nav={nav}
     />,
   );
   assert.doesNotMatch(failed, /Listing the skills/);
@@ -837,6 +1123,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
         actions={actions}
         refresh={quiet}
         onDone={quiet}
+        nav={nav}
       />,
     ),
     /Your Claude Code and Codex load no skills of their own\./,

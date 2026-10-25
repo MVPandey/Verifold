@@ -44,7 +44,16 @@
   gap: 6px;
 }
 
+/* Each segment is a link to its step. The padding makes a 24 px target, and the negative margin keeps the bar's place. */
+.step__link {
+  display: block;
+  margin: -10px 0;
+  padding: 10px 0;
+  border-radius: 4px;
+}
+
 .step__segment {
+  display: block;
   height: 4px;
   border-radius: 2px;
   background: var(--line-faint);
@@ -52,6 +61,30 @@
 
 .step__segment--done {
   background: var(--accent);
+}
+
+/* A skipped step: a dashed segment. */
+.step__segment--skipped {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--control) 0 6px,
+    transparent 6px 10px
+  );
+}
+
+/* The current step keeps its state's color, with a ring on top. */
+.step__link[aria-current='step'] .step__segment {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+
+/* The ring stays inside the target, so it does not cover the step label above. */
+.step__link:focus-visible {
+  outline-offset: -3px;
+}
+
+.step__link:hover .step__segment {
+  filter: brightness(0.8);
 }
 
 .step__title {
