@@ -61,9 +61,9 @@ export interface HarnessRequest {
   readonly onTranscript?: (update: TranscriptUpdate) => void;
   /**
    * The harness answers from the prompt alone. Claude Code gets no built-in
-   * tools and no MCP servers. Codex gets no web search, a read-only sandbox
-   * with no approvals, and none of the person's plugins, apps, or MCP
-   * servers, when Verifold can list them.
+   * tools and no MCP servers. Codex gets no web search, no command or image
+   * tool, a read-only sandbox with no approvals, and none of the person's
+   * plugins, apps, or MCP servers, when Verifold can list them.
    */
   readonly textOnly?: boolean;
   /**
@@ -79,9 +79,9 @@ export interface HarnessRequest {
    * - Claude Code gets only its Read tool, in `dontAsk` mode: it may read
    *   `allow` and nothing else, and never `deny`. None of the person's
    *   settings files load, and no hook runs.
-   * - Codex gets the text-only options without its command and image tools,
-   *   and a permission profile that closes `deny`. Verifold also stops the
-   *   call at its first command or tool call.
+   * - Codex gets the text-only options, with a permission profile that
+   *   closes `deny` in place of the read-only sandbox. Verifold also stops
+   *   the call at its first command or tool call.
    */
   readonly ownFiles?: {
     readonly allow: readonly string[];
@@ -490,11 +490,12 @@ async function codexServers(
 }
 
 /**
- * The options of a text-only Codex call: no web search, a read-only sandbox
- * with no approvals, and none of the person's plugins, apps, or MCP servers.
- * Without a list of the MCP servers, or with a name that `-c` cannot hold,
- * the call runs with them on, unless the prompt holds text from outside: that
- * call does not run.
+ * The options of a text-only Codex call: no web search, no command or image
+ * tool, a read-only sandbox with no approvals, and none of the person's
+ * plugins, apps, or MCP servers. A Codex that does not know a feature key
+ * ignores it. Without a list of the MCP servers, or with a name that `-c`
+ * cannot hold, the call runs with them on, unless the prompt holds text from
+ * outside: that call does not run.
  */
 async function codexTextOnly(
   request: HarnessRequest,
@@ -522,6 +523,12 @@ async function codexTextOnly(
       'web_search="disabled"',
       '-c',
       'approval_policy="never"',
+      '-c',
+      'features.shell_tool=false',
+      '-c',
+      'features.unified_exec=false',
+      '-c',
+      'features.view_image=false',
     ],
     exec: ['--sandbox', 'read-only'],
   };
@@ -572,22 +579,16 @@ function claudeOwnSettings(
 }
 
 /**
- * The Codex options of a call that reads no files: no command or image
- * tool, and a permission profile that closes `deny`. Every option goes
- * before `exec`, with no `--sandbox`, which would replace the profile.
- * Probed on Codex 0.160.0.
+ * The Codex permission profile of a call that reads no files, which closes
+ * `deny`. Every option goes before `exec`, with no `--sandbox`: a
+ * `--sandbox`, or a `-c` option after `exec`, replaces the profile. Probed on
+ * Codex 0.160.0.
  */
 function codexOwnOptions(deny: readonly string[]): string[] {
   const closed = deny
     .map((path) => `${JSON.stringify(plainPath(path))}="deny"`)
     .join(',');
   return [
-    '-c',
-    'features.shell_tool=false',
-    '-c',
-    'features.unified_exec=false',
-    '-c',
-    'features.view_image=false',
     '-c',
     'permissions.verifold-own.extends=":read-only"',
     '-c',
@@ -600,6 +601,7 @@ function codexOwnOptions(deny: readonly string[]): string[] {
 /** Codex items that only carry its reply, or a warning. Any other item is a command or a tool call. */
 const codexReplyItems = new Set([
   'agent_message',
+  'agentMessage',
   'reasoning',
   'todo_list',
   'error',
