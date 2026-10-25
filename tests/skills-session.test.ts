@@ -439,8 +439,10 @@ await test('with the profile folder unreadable, both harnesses read the added sk
     '---\nname: transformer-lens\ndescription: Activation patching.\n---\n',
   );
   const told: string[] = [];
-  const skills = skillLoader(agency, join(root, 'plugins'), (text) =>
-    told.push(text),
+  const skills = skillLoader(
+    agency,
+    join(root, 'plugins'),
+    (text) => told.push(text) > 0,
   );
   const folder = await skills.folder('claude');
   assert.ok(folder && !folder.startsWith(`${agency}/`));

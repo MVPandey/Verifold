@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Harness, OwnSkill, SetupSkills } from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { newKey } from '../intent.ts';
 import type { SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
@@ -62,6 +61,8 @@ function OwnRow({
   const id = useId();
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState(skill.when);
+  // A note that changed elsewhere, such as from an import, shows in the box.
+  useEffect(() => setWhen(skill.when), [skill.when]);
   // The note's box opens on a click, so a long list stays short.
   const [noting, setNoting] = useState(false);
   const long = skill.description.length > shortWhat;
@@ -70,7 +71,7 @@ function OwnRow({
     if ('when' in note)
       onChoose({
         harness: skill.harness,
-        name: skill.name,
+        id: skill.id,
         use: true,
         ...note,
       });
@@ -119,7 +120,7 @@ function OwnRow({
                 (skill.use !== use || 'when' in note) &&
                 onChoose({
                   harness: skill.harness,
-                  name: skill.name,
+                  id: skill.id,
                   use,
                   ...note,
                 })
@@ -193,12 +194,12 @@ export function OwnSkills({
   useEffect(() => {
     if (asked.current) return;
     asked.current = true;
-    void actions.ownSkillsList(false, newKey()).then(refresh);
-  }, [actions, refresh]);
+    void list.submit(false).then(refresh);
+  }, [list, refresh]);
   const own = skills.own;
   const problems = skills.ownProblems ?? [];
-  // Before the first list ends, the step waits for it. A list that failed says why, below.
-  const reading = Boolean(skills.ownReading) || (!own && !problems.length);
+  // Read again shows whenever no list runs, so a refused or lost request never leaves the step waiting.
+  const reading = Boolean(skills.ownReading) || list.busy;
   const noteLimit = skills.noteLimit ?? 300;
   const error = choose.error ?? list.error;
   return (
@@ -254,7 +255,7 @@ export function OwnSkills({
                     <ul className="own-group__list">
                       {group.skills.map((skill) => (
                         <OwnRow
-                          key={`${skill.name}:${skill.when}`}
+                          key={`${skill.harness}:${skill.id}`}
                           skill={skill}
                           noteLimit={noteLimit}
                           onChoose={onChoose}

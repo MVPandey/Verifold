@@ -739,11 +739,12 @@ async function serveDesk(
       // and pods read its monthly limit across projects at each check.
       const agency = run.agency ?? agencyDirectory(root);
       // Every session of this owner leaves out the person's own skills that they turned off. Only lab agents and checkers load the added skills.
-      const skills = skillLoader(
-        agency,
-        pluginsHome(),
-        (text) => void owned.lab?.note(text),
-      );
+      const skills = skillLoader(agency, pluginsHome(), (text) => {
+        // Before the lab exists, the note waits for the next launch to tell it.
+        if (!owned.lab) return false;
+        void owned.lab.note(text);
+        return true;
+      });
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,

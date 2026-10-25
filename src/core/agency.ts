@@ -1,12 +1,17 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { validateModel, type HarnessName } from './harness.ts';
 import { object, text } from './research-contracts.ts';
 import { parseProfileMoney, type ProfileMoney } from './compute.ts';
 import { SessionActionError } from './session.ts';
-import { homeShown, missing, writePrivateFile } from './storage.ts';
+import {
+  homeShown,
+  missing,
+  readBounded,
+  writePrivateFile,
+} from './storage.ts';
 
 /**
  * The person's global profile lives in `~/.verifold/agency/`:
@@ -148,23 +153,14 @@ export async function readMemory(path: string, limit = 12000): Promise<string> {
 
 /** A regular file's text, which can be empty. A final symlink is not followed, and a pipe does not block. */
 async function readFileText(path: string, limit: number): Promise<string> {
-  const file = await open(
-    path,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > limit)
-      throw new Error(
-        `Memory must be a regular text file of at most ${limit} bytes.`,
-      );
-    const content = await file.readFile('utf8');
-    if (content.includes('\0') || Buffer.byteLength(content) > limit)
-      throw new Error('Memory must contain bounded plain text.');
-    return content;
-  } finally {
-    await file.close();
-  }
+  const content = await readBounded(path, limit);
+  if (content === null)
+    throw new Error(
+      `Memory must be a regular text file of at most ${limit} bytes.`,
+    );
+  if (content.includes('\0'))
+    throw new Error('Memory must contain bounded plain text.');
+  return content;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -366,6 +362,8 @@ export async function saveAgencyPreferences(
 
 /** The person's choice for one of the skills that their own harness loads. */
 export interface OwnChoice {
+  /** The skill's name, as its harness lists it. */
+  readonly name: string;
   /** Verifold's agents load the skill. */
   readonly use: boolean;
   /** When and how agents should use it, in the person's words. Empty: no note. */
@@ -374,16 +372,22 @@ export interface OwnChoice {
   readonly off: readonly string[];
 }
 
-/** A change of one choice. Without `when`, the note stays as it is. `off` comes from the list of the person's skills. */
+/** A change of one choice. Without `when`, the note stays as it is. `name` and `off` come from the list of the person's skills. */
 export interface OwnChange {
   readonly harness: HarnessName;
+  readonly id: string;
   readonly name: string;
   readonly use: boolean;
   readonly when?: string;
   readonly off: readonly string[];
 }
 
-/** The choices by harness, keyed by the name that the harness lists. A skill without a choice loads, with no note. */
+/**
+ * The choices by harness, keyed by each skill's ID: its name for Claude
+ * Code, whose rules cover every skill of a name, and its SKILL.md path for
+ * Codex, whose rules name one file. A skill without a choice loads, with no
+ * note.
+ */
 export interface OwnChoices {
   readonly claude: ReadonlyMap<string, OwnChoice>;
   readonly codex: ReadonlyMap<string, OwnChoice>;
@@ -405,7 +409,11 @@ export const ownLimits = {
   path: 1024,
 } as const;
 
-/** A target in `off`: a skill name for Claude Code, an absolute SKILL.md path for Codex. */
+/**
+ * A skill's ID, which is also what turns it off: a skill name for Claude
+ * Code, an absolute SKILL.md path for Codex. A path holds no control
+ * character, which a TOML string cannot hold.
+ */
 export function offTarget(host: HarnessName, value: unknown): value is string {
   if (typeof value !== 'string') return false;
   if (host === 'claude') return ownSkillName.test(value);
@@ -413,7 +421,10 @@ export function offTarget(host: HarnessName, value: unknown): value is string {
     value.startsWith('/') &&
     value.endsWith('/SKILL.md') &&
     value.length <= ownLimits.path &&
-    ![...value].some((char) => char.charCodeAt(0) < 0x20)
+    ![...value].some((char) => {
+      const code = char.charCodeAt(0);
+      return code < 0x20 || code === 0x7f;
+    })
   );
 }
 
@@ -449,11 +460,13 @@ export async function loadOwnChoices(directory: string): Promise<OwnChoices> {
       skipped += 1;
       return found;
     }
-    for (const [name, value] of Object.entries(entries)) {
+    for (const [id, value] of Object.entries(entries)) {
       const off: unknown = record(value) ? (value.off ?? []) : null;
+      const name: unknown = record(value) ? (value.name ?? id) : null;
       if (
         found.size >= ownLimits.choices ||
-        !ownSkillName.test(name) ||
+        !offTarget(host, id) ||
+        !ownSkillName.test(String(name)) ||
         !record(value) ||
         typeof value.use !== 'boolean' ||
         (value.when !== undefined &&
@@ -467,7 +480,8 @@ export async function loadOwnChoices(directory: string): Promise<OwnChoices> {
         skipped += 1;
         continue;
       }
-      found.set(name, {
+      found.set(id, {
+        name: String(name),
         use: value.use,
         when: typeof value.when === 'string' ? value.when : '',
         off: value.use ? [] : off,
@@ -481,34 +495,54 @@ export async function loadOwnChoices(directory: string): Promise<OwnChoices> {
 /**
  * Apply changes to `own-skills.json`. The caller holds the lock. A skill
  * that loads with no note needs no entry, so it has none. A change that
- * would pass the limits is refused before anything is written.
+ * would pass the limits is refused before anything is written. A file that
+ * cannot be read at all moves to `own-skills.json.bad`, and the changes
+ * start a new one. Returns the moved file's path as the person reads it, or
+ * null.
  */
 export async function writeOwnChoices(
   directory: string,
   changes: readonly OwnChange[],
-): Promise<void> {
-  const current = await loadOwnChoices(directory);
+): Promise<string | null> {
+  for (const change of changes)
+    if (
+      !offTarget(change.harness, change.id) ||
+      (!change.use &&
+        (!change.off.length ||
+          !change.off.every((target) => offTarget(change.harness, target))))
+    )
+      throw new SessionActionError(
+        `Verifold cannot turn off ${change.name}. Read the list again.`,
+      );
+  let moved: string | null = null;
+  const current: OwnChoices = await loadOwnChoices(directory).catch(
+    async (error: unknown): Promise<OwnChoices> => {
+      const bad = join(directory, `${ownFile}.bad`);
+      try {
+        await rename(join(directory, ownFile), bad);
+      } catch {
+        throw new SessionActionError(
+          `Verifold could not read or move ${ownChoicesFile(directory)}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+      moved = homeShown(bad);
+      return { claude: new Map(), codex: new Map(), skipped: 0 };
+    },
+  );
   const next = {
     claude: new Map(current.claude),
     codex: new Map(current.codex),
   };
   for (const change of changes) {
-    if (
-      !change.use &&
-      (!change.off.length ||
-        !change.off.every((target) => offTarget(change.harness, target)))
-    )
-      throw new SessionActionError(
-        `Verifold cannot turn off ${change.name}. Read the list again.`,
-      );
     const side = next[change.harness];
     const when =
       change.when === undefined
-        ? (side.get(change.name)?.when ?? '')
+        ? (side.get(change.id)?.when ?? '')
         : change.when.trim().slice(0, ownLimits.when);
-    if (change.use && !when) side.delete(change.name);
+    if (change.use && !when) side.delete(change.id);
     else
-      side.set(change.name, {
+      side.set(change.id, {
+        name: change.name,
         use: change.use,
         when,
         off: change.use ? [] : change.off,
@@ -520,9 +554,14 @@ export async function writeOwnChoices(
     );
   const entries = (side: ReadonlyMap<string, OwnChoice>) =>
     Object.fromEntries(
-      [...side].map(([name, { use, when, off }]) => [
-        name,
-        { use, ...(when ? { when } : {}), ...(off.length ? { off } : {}) },
+      [...side].map(([id, { name, use, when, off }]) => [
+        id,
+        {
+          ...(name === id ? {} : { name }),
+          use,
+          ...(when ? { when } : {}),
+          ...(off.length ? { off } : {}),
+        },
       ]),
     );
   const content = JSON.stringify({
@@ -534,6 +573,34 @@ export async function writeOwnChoices(
       'The skill choices would be too large to keep. Remove some notes, then try again.',
     );
   await saveAgencyFile(directory, ownFile, content);
+  return moved;
+}
+
+/** The inode, change time and size of a file of the profile folder, so a reader can tell when it changed. */
+async function stamp(directory: string, name: string): Promise<string> {
+  const info = await lstat(join(directory, name)).catch((error: unknown) => {
+    if (missing(error)) return null;
+    throw error;
+  });
+  return info ? `${info.ino}:${info.mtimeMs}:${info.size}` : 'none';
+}
+
+/**
+ * A reader of the choices that reads the file again only when it changed.
+ * Null: the file cannot be read at all.
+ */
+export function ownChoicesReader(
+  directory: string,
+): () => Promise<OwnChoices | null> {
+  let last: { readonly key: string; readonly value: OwnChoices | null } | null =
+    null;
+  return async () => {
+    const key = await stamp(directory, ownFile).catch(() => 'unread');
+    if (last?.key === key && key !== 'unread') return last.value;
+    const value = await loadOwnChoices(directory).catch(() => null);
+    last = { key, value };
+    return value;
+  };
 }
 
 /** What turns off each skill of a harness that Verifold's agents do not load. */
@@ -557,9 +624,9 @@ const notesLimit = 2000;
 function skillNotes(choices: OwnChoices): Partial<Record<HarnessName, string>> {
   const notes: Partial<Record<HarnessName, string>> = {};
   for (const host of ['claude', 'codex'] as const) {
-    const lines = [...choices[host]]
-      .filter(([, choice]) => choice.use && choice.when)
-      .map(([name, choice]) => `- ${name}: ${choice.when}`);
+    const lines = [...choices[host].values()]
+      .filter((choice) => choice.use && choice.when)
+      .map((choice) => `- ${choice.name}: ${choice.when}`);
     if (lines.length) notes[host] = lines.join('\n').slice(0, notesLimit);
   }
   return notes;
@@ -675,16 +742,7 @@ export function profileReader(
     readonly value: PersonProfile | null;
   } | null = null;
   return async () => {
-    const stamp = async (name: string): Promise<string> => {
-      const info = await lstat(join(directory, name)).catch(
-        (error: unknown) => {
-          if (missing(error)) return null;
-          throw error;
-        },
-      );
-      return info ? `${info.ino}:${info.mtimeMs}:${info.size}` : 'none';
-    };
-    const key = `${await stamp('USER.md')}/${await stamp('own-skills.json')}`;
+    const key = `${await stamp(directory, 'USER.md')}/${await stamp(directory, ownFile)}`;
     if (last?.key === key) return last.value;
     const value = await personProfile(directory);
     last = { key, value };

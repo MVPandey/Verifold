@@ -1,11 +1,11 @@
-import { constants } from 'node:fs';
-import { open, opendir } from 'node:fs/promises';
+import { opendir } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, sep } from 'node:path';
 import { offTarget, ownSkillName } from './agency.ts';
 import { askCodexServer, runCommand } from './detect.ts';
 import type { HarnessName } from './harness.ts';
 import { frontmatter, safeRelativePath } from './skill-files.ts';
+import { readBounded } from './storage.ts';
 
 /**
  * The skills that the person's own Claude Code and Codex load, read from
@@ -15,6 +15,12 @@ import { frontmatter, safeRelativePath } from './skill-files.ts';
  */
 export interface OwnSkill {
   readonly harness: HarnessName;
+  /**
+   * The skill's ID in the person's choices: its name for Claude Code, whose
+   * rules cover every skill of a name, and its SKILL.md path for Codex,
+   * where two skills of one name can each be turned off.
+   */
+  readonly id: string;
   /** The name that the harness lists, such as `python` or `vercel:nextjs`. */
   readonly name: string;
   readonly description: string;
@@ -59,23 +65,8 @@ const limits = {
 } as const;
 
 /** The start of a regular file, or null. A final symlink is not followed, and a pipe does not block. */
-async function head(path: string): Promise<string | null> {
-  try {
-    const file = await open(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      if (!(await file.stat()).isFile()) return null;
-      const buffer = Buffer.alloc(limits.head);
-      const { bytesRead } = await file.read(buffer, 0, limits.head, 0);
-      return buffer.subarray(0, bytesRead).toString('utf8');
-    } finally {
-      await file.close();
-    }
-  } catch {
-    return null;
-  }
+function head(path: string): Promise<string | null> {
+  return readBounded(path, limits.head, true).catch(() => null);
 }
 
 /** A skill folder as Verifold reads it: the frontmatter's name, the folder's name, and the description. */
@@ -156,12 +147,12 @@ async function claudeSkills(
   problems: string[],
 ): Promise<OwnSkill[]> {
   const { signal } = options;
-  const listed = await runCommand(
+  // The plugin list runs while Verifold reads the skill folders.
+  const listing = runCommand(
     options.claude ?? 'claude',
     ['plugin', 'list', '--json'],
     { maxBuffer: limits.pluginList, ...(signal ? { signal } : {}) },
   );
-  if (listed.missing) return [];
   const config =
     options.claudeConfig ??
     process.env.CLAUDE_CONFIG_DIR ??
@@ -176,10 +167,11 @@ async function claudeSkills(
   ): void => {
     for (const skill of folders) {
       const off = claudeOff(prefix, skill);
-      if (off && found.length < limits.skills)
+      if (off?.[0] && found.length < limits.skills)
         found.push({
           harness: 'claude',
-          name: off[0] ?? skill.name,
+          id: off[0],
+          name: off[0],
           description: skill.description,
           source,
           off,
@@ -196,15 +188,17 @@ async function claudeSkills(
     'personal',
     '',
   );
-  if (clashing.length)
-    problems.push(
-      `Verifold leaves out ${clashing.length} ${clashing.length === 1 ? 'skill' : 'skills'} of your Claude Code skill folder whose names hold “:”, the mark of a plugin's skill.`,
-    );
   for (const org of await syncedFolders(skills, signal))
     add(
       await skillFolders(join(skills, 'synced', org), room(), signal),
       'synced',
       'anthropic-skills:',
+    );
+  const listed = await listing;
+  if (listed.missing) return [];
+  if (clashing.length)
+    problems.push(
+      `Verifold leaves out ${clashing.length} ${clashing.length === 1 ? 'skill' : 'skills'} of your Claude Code skill folder whose names hold “:”, the mark of a plugin's skill.`,
     );
   let plugins: unknown = [];
   if (listed.overflow)
@@ -348,6 +342,7 @@ async function codexSkills(
         continue;
       found.push({
         harness: 'codex',
+        id: skill.path,
         name: skill.name,
         description:
           typeof skill.description === 'string'
@@ -365,7 +360,7 @@ async function codexSkills(
   return found;
 }
 
-/** The skills of both harnesses, each name once per harness, at most 300 each. */
+/** The skills of both harnesses, each ID once per harness, at most 300 each. */
 export async function listOwnSkills(
   options: OwnSkillsOptions = {},
 ): Promise<OwnSkills> {
@@ -378,8 +373,8 @@ export async function listOwnSkills(
   const skills = lists.flatMap((list) => {
     const seen = new Set<string>();
     return list.filter((skill) => {
-      if (seen.has(skill.name)) return false;
-      seen.add(skill.name);
+      if (seen.has(skill.id)) return false;
+      seen.add(skill.id);
       return true;
     });
   });

@@ -1314,19 +1314,18 @@ async function prune(plugins: string, keep: string): Promise<void> {
  * The added skills for the sessions of a project's owner, and the person's
  * own skills that agents do not load. A harness that could not load the
  * added skills gets no more of them while this process runs, and `report`
- * gets each reason once.
+ * gets each reason once it takes it.
  */
 export function skillLoader(
   directory: string,
   plugins: string,
-  report: (text: string) => void,
+  /** Tell the person. False: nothing could take the text yet, so it comes again later. */
+  report: (text: string) => boolean,
 ): SessionSkills {
   const blocked = new Set<HarnessName>();
   const told = new Set<string>();
   const tell = (text: string): void => {
-    if (told.has(text)) return;
-    told.add(text);
-    report(text);
+    if (!told.has(text) && report(text)) told.add(text);
   };
   return {
     folder: async (host) => {
