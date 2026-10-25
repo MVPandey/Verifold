@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,6 +21,7 @@ import type { OwnSkill } from '../src/core/own-skills.ts';
 import {
   claudeFolder,
   claudeMemory,
+  codexClosed,
   importProfile,
 } from '../src/core/profile-import.ts';
 import { SessionActionError } from '../src/core/session.ts';
@@ -225,8 +234,7 @@ await test('the import asks each harness at once, keeps only listed skills that 
   assert.match(claude?.prompt ?? '', /research-paper-writing/);
   assert.doesNotMatch(claude?.prompt ?? '', /python/);
   assert.deepEqual(codex?.ownFiles?.allow, []);
-  assert.equal(codex?.ownFiles?.deny[0], homedir());
-  assert.ok(codex?.ownFiles?.deny.includes('~/.codex/auth.json'));
+  assert.equal(codex?.ownFiles?.deny[0], await realpath(homedir()));
   assert.doesNotMatch(codex?.prompt ?? '', /"files":\[/);
   assert.match(codex?.prompt ?? '', /I am Verifold, an automated science/);
   assert.equal(claude?.outsideText, true);
@@ -238,6 +246,24 @@ await test('the import asks each harness at once, keeps only listed skills that 
   assert.equal(merge?.outsideText, true);
   assert.equal(merge?.ownFiles, undefined);
   assert.match(merge?.prompt ?? '', /"drafts":\[/);
+});
+
+await test("Codex's commands may not read the home folder, by its real path, nor Codex's folder or a credential path outside it, and no path comes twice", async (t) => {
+  const base = await realpath(await folder(t, 'closed'));
+  const home = join(base, 'home');
+  const keys = join(base, 'keys');
+  const codex = join(base, 'codex');
+  await mkdir(join(home, '.ssh'), { recursive: true });
+  await mkdir(join(home, '.config'));
+  await mkdir(keys);
+  await mkdir(codex);
+  // ~/.ssh lies in the home folder, which closes it. ~/.config/gh leads out of it.
+  await symlink(keys, join(home, '.config', 'gh'));
+  const link = join(base, 'home-link');
+  await symlink(home, link);
+  // CODEX_HOME is the home folder, by another path.
+  assert.deepEqual(await codexClosed(link, link), [home, keys]);
+  assert.deepEqual(await codexClosed(home, codex), [home, keys, codex]);
 });
 
 await test("one harness that fails leaves the other's answer, a failed merge keeps the lead's card, and no answer at all fails", async () => {
