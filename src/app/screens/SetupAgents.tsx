@@ -1,8 +1,13 @@
 import { useState, type ReactNode } from 'react';
-import type { AgentTool, Harness, SetupView } from '../../protocol/api.ts';
+import type {
+  AgentTool,
+  Harness,
+  SetupStep,
+  SetupView,
+} from '../../protocol/api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { StepHeader } from '../components/StepHeader.tsx';
+import { StepHeader, useUnsaved } from '../components/StepHeader.tsx';
 import { planName, type SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
@@ -144,12 +149,16 @@ export function AgentsStep({
   refresh,
   onSaved,
   onSkip,
+  onOpen,
+  onUnsaved,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
   readonly onSkip: () => void;
+  readonly onOpen: (step: SetupStep) => void;
+  readonly onUnsaved: (unsaved: boolean) => void;
 }): ReactNode {
   const { tools, checking } = view.agents;
   const [choices, setChoices] = useState<Choices>(() =>
@@ -176,12 +185,27 @@ export function AgentsStep({
   const check = useAction((_: null, key) => actions.check(key));
   const skip = useAction((_: null, key) => actions.skip('all', key));
   const used = tools.some((tool) => choices[tool.harness]?.use);
+  useUnsaved(
+    tools.some((tool) => {
+      const choice = choices[tool.harness];
+      return (
+        choice !== undefined &&
+        (choice.use !== tool.use || choice.model !== (tool.model ?? ''))
+      );
+    }),
+    onUnsaved,
+  );
   const unsure = tools.some(
     (tool) => !tool.installed || tool.signedIn !== true,
   );
   return (
     <>
-      <StepHeader step="agents" title="Your agents">
+      <StepHeader
+        step="agents"
+        steps={view.steps}
+        onOpen={onOpen}
+        title="Your agents"
+      >
         Verifold runs research with the agent tools you already use.
         {tools.length ? ' It found these on this computer.' : ''}
       </StepHeader>
