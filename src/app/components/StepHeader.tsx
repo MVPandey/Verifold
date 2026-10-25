@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import type { SetupStep, SetupView } from '../../protocol/api.ts';
-import { href, plainClick } from '../route.ts';
+import { plainClick } from '../route.ts';
 import { pageBefore, setupSteps, type StepNav } from '../setup.ts';
 
 const stepNames: Readonly<Record<SetupStep, string>> = {
@@ -50,7 +50,7 @@ export function StepHeader({
           return (
             <a
               key={name}
-              href={href.setup(name)}
+              href={nav.link(name)}
               className="step__link"
               aria-label={`${stepNames[name]}, ${stateNames[state]}`}
               aria-current={name === step ? 'step' : undefined}

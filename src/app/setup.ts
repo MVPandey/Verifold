@@ -24,6 +24,8 @@ export interface StepNav {
   readonly steps: readonly SetupStep[];
   /** Back and the step bar: open a step. The page asks first while the step holds unsaved input. */
   readonly open: (step: SetupStep) => void;
+  /** A step's address, in the profile that the page sets up. */
+  readonly link: (step: SetupStep) => string;
   /** The step holds input that is not saved. */
   readonly unsaved: (unsaved: boolean) => void;
 }
@@ -111,6 +113,8 @@ export interface SetupActions {
   readonly skillAdd: (id: string, key: string) => Promise<ActOutcome>;
   readonly skillRemove: (id: string, key: string) => Promise<ActOutcome>;
   readonly skillsDone: (key: string) => Promise<ActOutcome>;
+  /** An isolated project's settings: make them a copy of the global ones again. */
+  readonly copyGlobal: (key: string) => Promise<ActOutcome>;
   /** List the person's own skills. `again`: read them again, though a list exists. */
   readonly ownSkillsList: (again: boolean, key: string) => Promise<ActOutcome>;
   /** Which of the person's own skills Verifold's agents load, with notes on when to use them. */
@@ -123,7 +127,15 @@ export interface SetupActions {
 const signedOut = (): Promise<{ readonly refused: string }> =>
   Promise.resolve({ refused: 'This tab has no access key.' });
 
-export function setupActions(token: string | null): SetupActions {
+/**
+ * The first run's read and actions with the tab's token. `scope`
+ * `project`: the own profile of an isolated project that starts, while
+ * Verifold runs without a project.
+ */
+export function setupActions(
+  token: string | null,
+  scope?: 'project',
+): SetupActions {
   if (!token)
     return {
       read: () => Promise.resolve({ error: 'This tab has no access key.' }),
@@ -142,16 +154,24 @@ export function setupActions(token: string | null): SetupActions {
       skillAdd: signedOut,
       skillRemove: signedOut,
       skillsDone: signedOut,
+      copyGlobal: signedOut,
       ownSkills: signedOut,
       ownSkillsList: signedOut,
     };
-  const run = <Name extends ActionName>(
+  const run = <Name extends Extract<ActionName, `setup-${string}`>>(
     name: Name,
     body: ActionBodies[Name],
     key: string,
-  ): Promise<ActOutcome> => act(token, name, body, key);
+  ): Promise<ActOutcome> =>
+    act(token, name, scope ? { ...body, profile: scope } : body, key);
   return {
-    read: (signal) => load(token, '/api/v1/setup', isSetupView, signal),
+    read: (signal) =>
+      load(
+        token,
+        `/api/v1/setup${scope ? `?profile=${scope}` : ''}`,
+        isSetupView,
+        signal,
+      ),
     agents: (body, key) => run('setup-agents', body, key),
     check: (key) => run('setup-check', {}, key),
     say: (text, card, key) =>
@@ -170,6 +190,7 @@ export function setupActions(token: string | null): SetupActions {
     skillAdd: (id, key) => run('setup-skill-add', { id }, key),
     skillRemove: (id, key) => run('setup-skill-remove', { id }, key),
     skillsDone: (key) => run('setup-skills-done', {}, key),
+    copyGlobal: (key) => run('setup-copy-global', {}, key),
     ownSkills: (choices, key) => run('setup-own-skills', { choices }, key),
     ownSkillsList: (again, key) =>
       run('setup-own-skills-list', again ? { again } : {}, key),

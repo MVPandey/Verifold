@@ -34,6 +34,12 @@ import {
   type ChatHarness,
   type ChatLine,
 } from '../core/profile-chat.ts';
+import {
+  copyGlobalProfile,
+  isolationProblem,
+  ownProfileCopied,
+  ownProfileFolder,
+} from '../core/project-profile.ts';
 import { commonGpus, type GpuOffer } from '../core/runpod.ts';
 import { SessionActionError, hostName } from '../core/session.ts';
 import type { OwnSkills } from '../core/own-skills.ts';
@@ -75,6 +81,12 @@ const keyMs = 60_000;
 export interface FirstRunOptions {
   /** The folder of the person's profile. */
   readonly directory: string;
+  /**
+   * The global profile folder, when `directory` is the profile of one
+   * project. The monthly GPU limit across projects and the month's records
+   * stay there, so this run shows that limit and never saves it.
+   */
+  readonly global?: string;
   /** The RunPod key and prices. A project's own compute, or one for the folder without a project. */
   readonly compute: Compute;
   /** The desk's signal: the agent's reply stops when the desk closes. */
@@ -126,6 +138,8 @@ export class FirstRun {
   private monthRead: { readonly at: number; readonly read: MonthRead } | null =
     null;
   private queue: Promise<unknown> = Promise.resolve();
+  /** This run saves nothing more: its folder was copied again, or its project started. */
+  private closed: 'copied' | 'started' | null = null;
   private readonly requests = new Map<
     string,
     { readonly status: Promise<number>; readonly at: number }
@@ -180,7 +194,17 @@ export class FirstRun {
     const compute = this.options.compute.view();
     const chat = chatChoice(this.detected ?? [], settings.agency);
     const month = await this.month();
+    const global = this.options.global;
+    // A project's own profile shows the global monthly limit, which counts every project. Null: it does not read.
+    const globalMonth = global
+      ? await loadSettings(global).then(
+          (read) =>
+            read.unreadMoney ? null : { usd: read.money?.monthUsd ?? null },
+          () => null,
+        )
+      : undefined;
     return {
+      scope: global ? 'project' : 'global',
       steps: {
         agents: settings.steps.agents ?? null,
         about: settings.steps.about ?? null,
@@ -220,6 +244,7 @@ export class FirstRun {
         reading: this.reading !== null || this.saving !== null,
         problem: this.problem,
         limits: settings.money ?? profileMoneyDefaults,
+        ...(globalMonth === undefined ? {} : { globalMonth }),
         unreadable: settings.unreadMoney
           ? `The saved GPU limits are not valid: ${settings.unreadMoney.reason} They show the defaults until you save new ones.`
           : null,
@@ -237,7 +262,10 @@ export class FirstRun {
     if (!this.monthRead || now - this.monthRead.at > monthReadMs)
       this.monthRead = {
         at: now,
-        read: await readMonth(monthFolder(this.options.directory), now),
+        read: await readMonth(
+          monthFolder(this.options.global ?? this.options.directory),
+          now,
+        ),
       };
     return this.monthRead.read;
   }
@@ -259,10 +287,24 @@ export class FirstRun {
    * Run `work` under the profile's lock, one at a time. A failure, such as
    * a lock that a terminal holds, comes back as a reason for the person.
    */
-  private locked<T>(work: () => Promise<T>): Promise<T> {
+  private locked<T>(
+    work: () => Promise<T>,
+    options?: Parameters<typeof withProfileLock>[3],
+  ): Promise<T> {
+    if (this.closed)
+      fail(
+        this.closed === 'started'
+          ? 'This project has started. Change its settings in its lab.'
+          : 'These settings were copied from your global settings again. Reload the page.',
+      );
     const next = this.queue
       .then(() =>
-        withProfileLock(this.options.directory, this.options.signal, work),
+        withProfileLock(
+          this.options.directory,
+          this.options.signal,
+          work,
+          options,
+        ),
       )
       .catch((error: unknown) => {
         if (error instanceof SessionActionError) throw error;
@@ -661,8 +703,28 @@ export class FirstRun {
     return this.background(work, 'Verifold could not read the prices.', asked);
   }
 
+  /**
+   * This run saves nothing more: its settings were copied again, or its
+   * project started. Settles once the saves that it took have run.
+   */
+  async close(why: 'copied' | 'started'): Promise<void> {
+    this.closed = why;
+    await this.queue;
+  }
+
+  /**
+   * Run a copy of this profile under its lock, after this run's own saves.
+   * The copy reads none of the profile's files first, and waits a moment
+   * for a lock that another process holds.
+   */
+  holdForCopy<T>(work: () => Promise<T>): Promise<T> {
+    return this.locked(work, { check: false, waitMs: 2_000 });
+  }
+
   private async saveMoney(body: Record<string, unknown>): Promise<void> {
-    const money = parseProfileMoney(body);
+    const parsed = parseProfileMoney(body);
+    // Only the global profile holds the monthly limit across projects.
+    const money = this.options.global ? { ...parsed, monthUsd: null } : parsed;
     await this.write((current) => ({
       ...current,
       money,
@@ -681,6 +743,111 @@ export class FirstRun {
           steps[name] = 'skipped';
       return { ...current, steps };
     });
+  }
+}
+
+/**
+ * The first runs of one Verifold: the global profile, and, for
+ * `profile: 'project'`, an isolated project's own profile in
+ * `.verifold/agency/` of its folder.
+ * - `own` `new`, without a project: `setup-copy-global` copies the global
+ *   profile there, and again. Nothing else makes the copy.
+ * - `own` `project`: an isolated project, with its own profile.
+ * - `own` null: a project on the global settings, which has none.
+ */
+export class FirstRuns {
+  private readonly options: FirstRunOptions & {
+    /** The folder of the project, or where Verifold started without one. */
+    readonly root: string;
+    readonly own: 'new' | 'project' | null;
+  };
+  private readonly global: FirstRun;
+  private project: FirstRun | null = null;
+  /** The own profile's runs, and the copies of the global settings, one at a time. */
+  private copying: Promise<unknown> = Promise.resolve();
+  /** The project started from this Verifold, so its own settings change only in its lab. */
+  private started = false;
+
+  /** `directory`: the global profile folder. */
+  constructor(options: FirstRuns['options']) {
+    this.options = options;
+    this.global = new FirstRun(options);
+  }
+
+  /** The project started: its own settings take no more saves here, and no copy again. */
+  async stop(): Promise<void> {
+    this.started = true;
+    await this.project?.close('started');
+  }
+
+  /** The own profile's run. `again`: copy the global settings first, and start a new run. */
+  private ownRun(again = false): Promise<FirstRun> {
+    const { own, root, directory, signal } = this.options;
+    if (!own) fail('This project uses your global settings.');
+    if (this.started)
+      fail('This project has started. Change its settings in its lab.');
+    if (again && own !== 'new')
+      fail(
+        'This project has started, so its settings stay. Change them step by step.',
+      );
+    const next = this.copying.then(async () => {
+      if (this.started)
+        fail('This project has started. Change its settings in its lab.');
+      if (again) {
+        // The run before saves nothing more, and its saves end before the copy starts.
+        await this.project?.close('copied');
+        this.project = null;
+        await copyGlobalProfile(directory, root, signal, (work) =>
+          this.global.holdForCopy(work),
+        ).catch((error: unknown) => {
+          if (error instanceof SessionActionError) throw error;
+          fail(
+            `Verifold could not copy your global settings for this project: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+        });
+      } else if ((await ownProfileCopied(root)) === null) {
+        // The copy is gone, or there never was one: no run works on an empty folder.
+        await this.project?.close('copied');
+        this.project = null;
+        fail(
+          own === 'new'
+            ? 'This folder has no isolated settings yet. Choose Isolated project first.'
+            : 'This project’s own settings are missing from .verifold/agency.',
+        );
+      }
+      this.project ??= new FirstRun({
+        ...this.options,
+        directory: ownProfileFolder(root),
+        global: directory,
+      });
+      return this.project;
+    });
+    this.copying = next.catch(() => {});
+    return next;
+  }
+
+  /**
+   * The view. Without a project, the global view says when this folder's
+   * own settings were copied, or why this folder cannot hold any.
+   */
+  async view(scope?: 'project'): Promise<SetupView> {
+    if (scope === 'project') return (await this.ownRun()).view();
+    const view = await this.global.view();
+    if (this.options.own !== 'new') return view;
+    const { directory, root } = this.options;
+    return {
+      ...view,
+      ownCopied: await ownProfileCopied(root),
+      ownProblem: await isolationProblem(directory, root),
+    };
+  }
+
+  async act(body: Record<string, unknown>): Promise<number> {
+    if (body.profile !== 'project') return this.global.act(body);
+    if (body.action !== 'setup-copy-global')
+      return (await this.ownRun()).act(body);
+    await this.ownRun(true);
+    return 200;
   }
 }
 

@@ -10,8 +10,11 @@ import type { SetupPage } from './setup.ts';
  * `#/post/<id>` is a post's own page, with its replies. `#/d/<id>/run/<run>`
  * is a direction's page with a run marked in the turn that started it. The
  * first run is `#/setup/<step>`, and `#/setup` opens its first step without
- * a record. `#/ask` asks the question of a new project, while Verifold runs
- * without one. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's
+ * a record. While Verifold runs without a project, `#/new` asks whether
+ * the new project uses the global settings or its own, `#/ask` asks the
+ * question of a new project, and `#/project/setup/<step>` and
+ * `#/project/ask` do the same for an isolated project, with its own
+ * profile. `#/run/<id>` is a run's own page, `#/agent/<id>` an agent's
  * page, such as a checker's, with its turns at `#/agent/<id>/turn/<turn>`,
  * and `#/d/<id>/diff` what a direction changed, or with a proof such as
  * `#/d/<id>/diff/p-12.0` the diff that a post cites. `#/figure/p-12.0` is a
@@ -51,8 +54,16 @@ export type Route =
       readonly page: 'setup';
       /** Null: the first step without a record, or the end. */
       readonly step: SetupPage | null;
+      /** `project`: the own profile of an isolated project that starts. */
+      readonly scope?: 'project';
     }
-  | { readonly page: 'ask' }
+  | {
+      readonly page: 'ask';
+      /** `project`: an isolated project, with its own profile. */
+      readonly scope?: 'project';
+    }
+  /** Without a project: the global settings, or an isolated project. */
+  | { readonly page: 'new' }
   | { readonly page: 'run'; readonly id: string }
   | { readonly page: 'agent'; readonly id: string }
   | {
@@ -150,9 +161,16 @@ export function parseRoute(hash: string): Route {
   );
   if (historyRun?.[1]) return { page: 'history-run', id: historyRun[1] };
   if (path === '/start-over') return { page: 'start-over' };
-  if (path === '/setup') return { page: 'setup', step: null };
-  const setup = /^\/setup\/(agents|about|skills|money|done)$/.exec(path)?.[1];
-  if (setup) return { page: 'setup', step: setup as SetupPage };
+  if (path === '/new') return { page: 'new' };
+  if (path === '/project/ask') return { page: 'ask', scope: 'project' };
+  const setup =
+    /^(\/project)?\/setup(?:\/(agents|about|skills|money|done))?$/.exec(path);
+  if (setup)
+    return {
+      page: 'setup',
+      step: (setup[2] as SetupPage | undefined) ?? null,
+      ...(setup[1] ? { scope: 'project' as const } : {}),
+    };
   return { page: 'unknown' };
 }
 
@@ -178,8 +196,13 @@ export const href = {
   /** What a direction changed, or with `proof` the diff that a post cites. */
   diff: (direction: string, proof?: string): string =>
     `#/d/${direction}/diff${proof ? `/${proof}` : ''}`,
-  setup: (step?: SetupPage): string => (step ? `#/setup/${step}` : '#/setup'),
+  /** A page of the first run. `scope` `project`: an isolated project's own. */
+  setup: (step?: SetupPage, scope?: 'project'): string =>
+    `#${scope ? '/project' : ''}/setup${step ? `/${step}` : ''}`,
   ask: '#/ask',
+  /** The Ask page of an isolated project. */
+  projectAsk: '#/project/ask',
+  new: '#/new',
   settings: '#/settings',
   history: '#/history',
   historyRun: (id: string): string => `#/history/${id}`,

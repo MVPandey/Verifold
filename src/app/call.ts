@@ -287,6 +287,7 @@ export function callOpener(state: unknown): Opener | null {
     route.page === 'call' ||
     route.page === 'setup' ||
     route.page === 'ask' ||
+    route.page === 'new' ||
     route.page === 'unknown'
   )
     return null;

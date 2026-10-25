@@ -68,6 +68,7 @@ export function SettingsPage({
     <div className="page">
       <AppHeader
         project={snapshot.project}
+        own={snapshot.ownProfile === true}
         lab={snapshot.lab}
         now={now}
         onPause={onPause}
@@ -83,8 +84,22 @@ export function SettingsPage({
             <h1 className="settings__title">Settings</h1>
             <p className="settings__intro">
               These settings belong to this project. A change applies at once,
-              with no undo. New projects start from the defaults in{' '}
-              <a href={href.setup('money')}>your profile</a>.
+              with no undo.{' '}
+              {snapshot.ownProfile ? (
+                <>
+                  This project has its own settings:{' '}
+                  <a href={href.setup('agents', 'project')}>
+                    its agents, profile, skills and GPU limits
+                  </a>
+                  . New projects start from your{' '}
+                  <a href={href.setup('agents')}>global settings</a>.
+                </>
+              ) : (
+                <>
+                  New projects start from the defaults in{' '}
+                  <a href={href.setup('money')}>your profile</a>.
+                </>
+              )}
             </p>
           </div>
           {compute ? (

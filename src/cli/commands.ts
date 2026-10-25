@@ -43,7 +43,8 @@ import {
 import { SetupBridge } from './setup-bridge.ts';
 import { listOwnSkills } from '../core/own-skills.ts';
 import { askStart, type Begun } from './ask-start.ts';
-import { FirstRun } from '../server/setup.ts';
+import { FirstRuns } from '../server/setup.ts';
+import { profileDenial, projectProfile } from '../core/project-profile.ts';
 import { pluginsHome, skillLoader } from '../core/skills.ts';
 import { TaskManager } from '../legacy/tasks.ts';
 import { ResultsStore } from '../legacy/results.ts';
@@ -235,7 +236,8 @@ Options: --workspace path (default: the current folder), --help, --version
 
 In a folder without a project, verifold opens the first run in your browser:
 your agents, a short profile, skills, and the GPU limits that new projects
-start with. Then the Ask page takes your question, and a lab starts on it.
+start with. An isolated project gets its own copy of these settings instead.
+Then the Ask page takes your question, and a lab starts on it.
 Several agents each own a direction and post what they find, with proof, on
 one board. They check each other's claims, and they ask you only about money,
 scope, access, or more time. Runs go on this computer, or on RunPod GPU pods
@@ -735,9 +737,12 @@ async function serveDesk(
       // Usage windows belong to the harness accounts. Every session reports them here.
       const quota = new Quota(root);
       await quota.load();
-      // The person's profile: the lab reads it for each prompt, its added skills load for each agent's session,
-      // and pods read its monthly limit across projects at each check.
-      const agency = run.agency ?? agencyDirectory(root);
+      // The person's profile: the lab reads it for each prompt, and its added skills load for each agent's session.
+      // An isolated project has its own. Pods read the monthly limit across projects in the global one at each check.
+      const global = run.agency ?? agencyDirectory(root);
+      const agency = await projectProfile(root, global);
+      // No session reads a profile folder: an isolated project's own, or a global one outside the default folder.
+      const closed = profileDenial(root, global);
       // Every session of this owner leaves out the person's own skills that they turned off. Only lab agents and checkers load the added skills.
       const skills = skillLoader(agency, pluginsHome(), (text) => {
         // Before the lab exists, the note waits for the next launch to tell it.
@@ -748,6 +753,7 @@ async function serveDesk(
       const sessions: SessionPool = new SessionPool(root, {
         clientVersion: version,
         ownerId: owner.ownerId,
+        denyRead: closed,
         skills,
         agents:
           (await loadWorkspace(root).catch(() => null))?.agents ??
@@ -816,7 +822,7 @@ async function serveDesk(
         },
         (task) => owned.tasks?.folderOf(task) ?? Promise.resolve(null),
         (lease) => owned.lab?.podStops(lease) ?? Promise.resolve(),
-        agency,
+        global,
       );
       // The project memory follows every change of the records, and every agent reads its index.
       const memory = new ProjectMemory(
@@ -877,6 +883,7 @@ async function serveDesk(
         sessions: new SessionManager(root, {
           clientVersion: version,
           ownerId: owner.ownerId,
+          denyRead: closed,
           skills,
           onTurnEnd: (record) => owned.coordinator?.turnEnded(record),
           onLimit: (host, signal) => {
@@ -899,8 +906,8 @@ async function serveDesk(
             (await loadSettings(agency).catch(() => null))?.agency,
           ),
         person: profileReader(agency),
-        // A profile folder outside the default one is closed to the lab's sessions and runs too.
-        ...(agency === agencyDirectory(root) ? {} : { denyRead: [agency] }),
+        // The lab's runs cannot read those profile folders either.
+        ...(closed.length ? { denyRead: closed } : {}),
         // The project's team: its main harness plans the lab.
         harnesses: async () => {
           const workspace = await loadWorkspace(root);
@@ -998,8 +1005,11 @@ async function serveDesk(
               // The app shows why the lab did not start, and offers to start it again.
               startProblem: () => labProblem,
               // The app opens the first run here too, to change the profile.
-              firstRun: new FirstRun({
-                directory: agency,
+              ownProfile: agency !== global,
+              firstRun: new FirstRuns({
+                directory: global,
+                root,
+                own: agency === global ? null : 'project',
                 compute,
                 signal: deskSignal,
                 harness,
@@ -1163,7 +1173,21 @@ async function serveStart(
   // The desk closes after the person starts a project.
   const handed = new AbortController();
   const deskSignal = AbortSignal.any([signal, handed.signal]);
-  const ask = askStart({ root, agency: run.agency, signal: deskSignal });
+  const firstRun = new FirstRuns({
+    directory: run.agency,
+    root,
+    own: 'new',
+    compute,
+    signal: deskSignal,
+    harness: run.harness,
+    ownSkills: (signal) => listOwnSkills({ signal }),
+  });
+  const ask = askStart({
+    root,
+    agency: run.agency,
+    signal: deskSignal,
+    onStart: () => firstRun.stop(),
+  });
   const desk = await startDesk(
     null,
     deskSignal,
@@ -1176,13 +1200,7 @@ async function serveStart(
     undefined,
     undefined,
     {
-      firstRun: new FirstRun({
-        directory: run.agency,
-        compute,
-        signal: deskSignal,
-        harness: run.harness,
-        ownSkills: (signal) => listOwnSkills({ signal }),
-      }),
+      firstRun,
       start: ask.start,
       ...(io.appAssets ? { appRoot: io.appAssets } : {}),
     },
@@ -1396,8 +1414,9 @@ async function runOwner(
       'verifold owner runs only when Verifold starts it. Run verifold in the project folder.',
     );
   const { research, desk, lab, agency, hours } = ownerStart(input);
-  // The profile that the lab reads. A terminal that attaches with another one hears so.
-  const profile = agency ?? agencyDirectory(root);
+  const global = agency ?? agencyDirectory(root);
+  // The profile that the lab reads: an isolated project's own, else the global one. A terminal that attaches with another one hears so.
+  const profile = await projectProfile(root, global);
   const quit = new AbortController();
   // Lines from before the first terminal attached wait for it.
   let early: { readonly progress: string; readonly feed?: true }[] | null = [];
@@ -1517,7 +1536,7 @@ async function runOwner(
         hours,
         harness,
         lab,
-        agency: profile,
+        agency: global,
         owner: { control, keys: io.background.keys, desk },
       },
     );
@@ -1576,6 +1595,11 @@ async function attachTeam(
   },
 ): Promise<void> {
   const running = await liveOwner(root);
+  const global = start.agency ?? agencyDirectory(root);
+  // The profile that the project uses, read before an owner starts, so a workspace that does not read stops here. An owner that runs already keeps the profile that it started with, so attaching to it never stops on this.
+  const wanted = running
+    ? await projectProfile(root, global).catch(() => global)
+    : await projectProfile(root, global);
   let control: Control;
   if (running) {
     const saved = await readControl(background.keys, running.ownerId);
@@ -1619,8 +1643,6 @@ async function attachTeam(
       else if ('screen' in message) io.screens?.show?.(message.screen, true);
       else if ('url' in message && !shown) {
         shown = true;
-        // An owner that ran already keeps the profile that it started with.
-        const wanted = start.agency ?? agencyDirectory(root);
         if (message.agency && message.agency !== wanted)
           io.progress?.(
             `The running Verifold uses the profile in ${message.agency}, so stop it with verifold stop to use another.`,
@@ -2118,7 +2140,7 @@ export async function runCli(
     if (launch && desk) {
       const workspace = await loadWorkspace(root);
       await ensureGlobalProfile(
-        agencyDirectory(cwd, values['agency-dir']),
+        await projectProfile(root, agencyDirectory(cwd, values['agency-dir'])),
         cwd,
         workspace.host === 'claude' || workspace.host === 'codex'
           ? {

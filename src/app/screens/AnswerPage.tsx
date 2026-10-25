@@ -292,6 +292,7 @@ export function AnswerPage({
     <div className="page">
       <AppHeader
         project={snapshot.project}
+        own={snapshot.ownProfile === true}
         lab={lab}
         now={now}
         onPause={actions.pause}
