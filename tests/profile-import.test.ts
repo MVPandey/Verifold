@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { loadOwnChoices } from '../src/core/agency.ts';
+import { loadOwnChoices, writeSettings } from '../src/core/agency.ts';
 import { Compute } from '../src/core/compute.ts';
 import { KeyStore } from '../src/core/credentials.ts';
 import { claudeChoices, type HarnessStatus } from '../src/core/detect.ts';
@@ -16,7 +16,11 @@ import {
   importProfile,
 } from '../src/core/profile-import.ts';
 import { SessionActionError } from '../src/core/session.ts';
-import { FirstRun } from '../src/server/setup.ts';
+import {
+  copyGlobalProfile,
+  ownProfileFolder,
+} from '../src/core/project-profile.ts';
+import { FirstRun, FirstRuns } from '../src/server/setup.ts';
 
 async function folder(t: test.TestContext, name: string): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), `verifold-${name}-`));
@@ -453,4 +457,70 @@ await test('the import through the first run: one at a time, a stop that the nex
       ['research-paper-writing', true, 'Drafts.'],
     ],
   );
+});
+
+await test("in an isolated project, the import runs in the project's own settings, and Accept saves only there", async (t) => {
+  const base = await folder(t, 'import-scope');
+  const global = join(base, 'agency');
+  await writeSettings(global, () => ({
+    agency: { host: 'claude' },
+    money: null,
+    unreadMoney: null,
+    steps: { agents: 'done' },
+  }));
+  const here = join(base, 'here');
+  await mkdir(here);
+  await copyGlobalProfile(global, here, signal);
+  const compute = new Compute(join(base, 'compute'), {
+    store: new KeyStore({
+      home: join(base, 'home'),
+      platform: 'linux',
+      secretTool: join(base, 'none'),
+    }),
+  });
+  await compute.load();
+  const runs = new FirstRuns({
+    directory: global,
+    root: here,
+    own: 'project',
+    compute,
+    signal,
+    claudeConfig: join(base, 'claude'),
+    harness: () =>
+      Promise.resolve({
+        text: JSON.stringify({
+          card: { workOn: 'Probes.', explore: '', talk: '' },
+          skills: [
+            { id: 'research-paper-writing', fits: true, when: 'Drafts.' },
+          ],
+        }),
+      }),
+    detect: () => Promise.resolve([claudeFound]),
+    installed: () => Promise.resolve(['claude']),
+    ownSkills: () =>
+      Promise.resolve({
+        skills: skills.filter((skill) => skill.harness === 'claude'),
+        problems: [],
+      }),
+  });
+  const project = { profile: 'project' } as const;
+  assert.equal(await runs.act({ action: 'setup-import', ...project }), 202);
+  await until(
+    async () => (await runs.view('project')).about.import?.result != null,
+  );
+  // The global settings have no import of their own.
+  assert.equal((await runs.view()).about.import?.result, null);
+  assert.equal(
+    await runs.act({ action: 'setup-import-accept', ...project }),
+    200,
+  );
+  assert.deepEqual((await runs.view('project')).about.card?.workOn, 'Probes.');
+  assert.equal(
+    (await loadOwnChoices(ownProfileFolder(here))).claude.get(
+      'research-paper-writing',
+    )?.when,
+    'Drafts.',
+  );
+  assert.equal((await loadOwnChoices(global)).claude.size, 0);
+  assert.equal((await runs.view()).about.card, null);
 });

@@ -1841,6 +1841,69 @@ await test('a task with domains opens only those to its shell commands', async (
   });
 });
 
+await test("every session of a manager cannot read the paths that it closes, such as an isolated project's own settings", async () => {
+  await project(async (root, _executables, create) => {
+    const own = join(root, '.verifold', 'agency');
+    const file = async (path: string): Promise<string> => {
+      for (let tries = 0; tries < 250; tries++) {
+        const text = await readFile(path, 'utf8').catch(() => '');
+        if (text) return text;
+        await delay(20);
+      }
+      throw new Error(`${path} was not written.`);
+    };
+    const cwd = join(root, '.verifold', 'workspaces', 'closed');
+    await mkdir(cwd, { recursive: true });
+    const task = create({ denyRead: [own] });
+    await task.startTask({
+      host: 'claude',
+      prompt: 'Read the notes.',
+      cwd,
+      task: { id: 'task-3', claim: '0123456789abcdef' },
+    });
+    const args = JSON.parse(await file(join(cwd, 'args.json'))) as string[];
+    const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '') as {
+      sandbox: { filesystem: { denyRead: string[] } };
+      permissions: { deny: string[] };
+    };
+    assert.ok(settings.sandbox.filesystem.denyRead.includes(own));
+    assert.ok(settings.permissions.deny.includes(`Read(/${own}/**)`));
+    // The manager's paths apply at each launch, so the session's record keeps only its own.
+    assert.equal(task.view()?.record.denyRead, undefined);
+    await task.close();
+    // The coordinator's read-only profile closes them too.
+    const coordinator = create({ denyRead: [own] });
+    await coordinator.startCoordinator({
+      host: 'codex',
+      prompt: 'Plan the work.',
+      tools: { specs: [], call: () => Promise.resolve({ ok: true, text: '' }) },
+    });
+    let planning = '';
+    for (let tries = 0; tries < 250 && !planning; tries++) {
+      planning =
+        (await readFile(join(root, 'rpc.jsonl'), 'utf8').catch(() => ''))
+          .split('\n')
+          .find((line) => line.includes('"thread/start"')) ?? '';
+      if (!planning) await delay(20);
+    }
+    const params = (
+      JSON.parse(planning) as {
+        params: {
+          config: {
+            permissions: Record<string, { filesystem: Record<string, string> }>;
+          };
+        };
+      }
+    ).params;
+    assert.equal(
+      params.config.permissions['verifold-coordinator']?.filesystem[own],
+      'deny',
+    );
+    await coordinator.close();
+    assert.throws(() => create({ denyRead: ['relative/path'] }), /not valid/);
+  });
+});
+
 await test("a strict session cannot read the person's Verifold profile, in Claude Code or in Codex", () => {
   const settings = JSON.parse(strictClaudeSettings()) as {
     sandbox: { filesystem: { denyRead: string[] } };
@@ -1853,6 +1916,14 @@ await test("a strict session cannot read the person's Verifold profile, in Claud
   assert.ok(
     strictCodexOptions(false).some((option) =>
       option.includes('"~/.verifold/agency"="deny"'),
+    ),
+  );
+  // A Codex terminal closes the same extra paths as the session's thread, such as an isolated project's settings.
+  assert.ok(
+    strictCodexOptions(false, ['/work/cot/.verifold/agency']).some(
+      (option) =>
+        option.includes('"/work/cot/.verifold/agency"="deny"') &&
+        option.includes('"~/.ssh"="deny"'),
     ),
   );
 });

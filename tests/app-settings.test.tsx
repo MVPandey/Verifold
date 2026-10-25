@@ -765,3 +765,25 @@ await test("the compute actions send the desk's action names with the intent key
     refused: 'This tab has no access key.',
   });
 });
+
+await test('an isolated project links its own settings and, apart from them, the global settings that new projects start from', () => {
+  const own = { ...snapshot(compute()), ownProfile: true as const };
+  const html = render(own, '#/settings');
+  assert.match(
+    text(html),
+    /These settings belong to this project\. A change applies at once, with no undo\. This project has its own settings: its agents, profile, skills and GPU limits \. New projects start from your global settings \./,
+  );
+  assert.match(
+    html,
+    /href="#\/project\/setup\/agents">its agents, profile, skills and GPU limits<\/a>.*href="#\/setup\/agents">global settings<\/a>/s,
+  );
+  // The top bar's Profile opens the project's own settings.
+  assert.match(
+    html,
+    /<a class="header__link" href="#\/project\/setup\/agents">Profile<\/a>/,
+  );
+  assert.match(
+    render(snapshot(compute()), '#/settings'),
+    /<a class="header__link" href="#\/setup\/agents">Profile<\/a>/,
+  );
+});

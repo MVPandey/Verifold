@@ -1050,7 +1050,7 @@ async function lockDown(folder: string): Promise<void> {
 }
 
 /** Remove a read-only folder that Verifold made. A missing folder is fine. */
-async function removeTree(folder: string): Promise<void> {
+export async function removeTree(folder: string): Promise<void> {
   if (!(await isFolder(folder))) return;
   await chmod(folder, 0o700);
   const entries = await readdir(folder, {
@@ -1210,8 +1210,8 @@ function saveSkills(
   );
 }
 
-/** Copy an added skill's folder. The copy's modes follow its files. */
-async function copyTree(from: string, to: string): Promise<void> {
+/** Copy a folder's files and folders. Links are not copied. The copy's modes follow its files. */
+export async function copyTree(from: string, to: string): Promise<void> {
   await mkdir(to, { recursive: true, mode: 0o700 });
   for (const entry of await readdir(from, { withFileTypes: true })) {
     const source = join(from, entry.name);

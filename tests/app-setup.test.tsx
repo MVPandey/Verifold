@@ -30,8 +30,14 @@ import {
   UnsavedLine,
   afterAnswer,
   leaveFor,
+  openingRoute,
+  pageRoute,
 } from '../src/app/screens/Setup.tsx';
 import { StepHeader } from '../src/app/components/StepHeader.tsx';
+import { href, parseRoute } from '../src/app/route.ts';
+import { NewProjectChoice } from '../src/app/screens/NewProject.tsx';
+import { AskForm } from '../src/app/screens/AskPage.tsx';
+import { startActions } from '../src/app/ask.ts';
 
 const claude: AgentTool = {
   harness: 'claude',
@@ -102,7 +108,12 @@ function view(fields: Partial<SetupView> = {}): SetupView {
 
 const actions = setupActions(null);
 const quiet = (): void => {};
-const nav: StepNav = { steps: setupSteps, open: quiet, unsaved: quiet };
+const nav: StepNav = {
+  steps: setupSteps,
+  open: quiet,
+  link: (step) => href.setup(step),
+  unsaved: quiet,
+};
 
 /** Visible text, with tags removed and entities decoded. */
 function text(element: ReactElement): string {
@@ -1155,6 +1166,237 @@ await test("step 3 lists the person's own skills by harness and group, each with
     { again: true, key: 'e'.repeat(32) },
     { key: 'f'.repeat(32) },
   ]);
+});
+
+await test('an isolated project has its own setup and Ask pages, and its first run ends on its own Ask page', () => {
+  assert.deepEqual(parseRoute('#/new'), { page: 'new' });
+  assert.deepEqual(parseRoute('#/project/setup'), {
+    page: 'setup',
+    step: null,
+    scope: 'project',
+  });
+  assert.deepEqual(parseRoute('#/project/setup/about'), {
+    page: 'setup',
+    step: 'about',
+    scope: 'project',
+  });
+  assert.deepEqual(parseRoute('#/project/ask'), {
+    page: 'ask',
+    scope: 'project',
+  });
+  assert.deepEqual(parseRoute('#/setup/money'), {
+    page: 'setup',
+    step: 'money',
+  });
+  assert.equal(parseRoute('#/project/setup/nothing').page, 'unknown');
+  assert.equal(href.setup('money', 'project'), '#/project/setup/money');
+  assert.equal(href.setup(undefined, 'project'), '#/project/setup');
+  assert.equal(href.setup('money'), '#/setup/money');
+  // Without a project, the end of an isolated project's steps is its own Ask page.
+  assert.equal(pageRoute('done', '', 'project'), href.projectAsk);
+  assert.equal(pageRoute('done', ''), href.ask);
+  assert.equal(pageRoute('skills', '', 'project'), '#/project/setup/skills');
+  const finished = view({
+    steps: { agents: 'done', about: 'done', skills: 'done', money: 'done' },
+  });
+  assert.equal(openingRoute(finished, null, '', 'project'), href.projectAsk);
+  assert.equal(
+    openingRoute(view(), null, '', 'project'),
+    '#/project/setup/agents',
+  );
+  // A save opens the next step only while the page still shows the step in the same profile.
+  assert.equal(
+    afterAnswer('#/project/setup/skills', 'skills', 'project'),
+    'next',
+  );
+  assert.equal(afterAnswer('#/setup/skills', 'skills', 'project'), 'refresh');
+  assert.equal(afterAnswer('#/project/setup/skills', 'skills'), 'refresh');
+  // The last page leads to the isolated project's Ask page.
+  assert.match(
+    renderToStaticMarkup(
+      <DoneStep view={finished} project="" scope="project" />,
+    ),
+    /href="#\/project\/setup\/agents".*href="#\/project\/ask"/s,
+  );
+});
+
+await test('a new project offers the global settings or its own, the global ones first when nobody set them up, the copy that this folder holds, and why a folder cannot hold one', () => {
+  const isolate = { busy: false, error: null, run: quiet };
+  const choice = (
+    fields: Partial<Parameters<typeof NewProjectChoice>[0]> = {},
+  ): ReactElement => (
+    <NewProjectChoice
+      set
+      copied={null}
+      problem={null}
+      isolate={isolate}
+      {...fields}
+    />
+  );
+  const set = renderToStaticMarkup(choice());
+  assert.match(
+    text(choice()),
+    /How should this project start\? Use my global settings .* Isolated project .*copy of your global settings\. Your global settings don’t change\./,
+  );
+  // Isolated project copies the settings only when the person picks it: a button, not a link.
+  assert.match(set, /href="#\/setup"/);
+  assert.match(set, /<button type="button" class="start">/);
+  assert.doesNotMatch(set, /href="#\/project\/setup"/);
+  // Each card shows its arrow, so it reads as a link.
+  assert.equal(set.split('M9 6l6 6-6 6').length - 1, 2);
+  const fresh = text(choice({ set: false }));
+  assert.match(fresh, /Set up my global settings/);
+  assert.doesNotMatch(fresh, /copy of your global settings/);
+  // A copy that the person left here goes on, by its link.
+  const at = new Date();
+  at.setHours(9, 30, 0, 0);
+  const copied = choice({ copied: at.toISOString() });
+  assert.match(
+    text(copied),
+    /Continue this project’s settings Agents, a profile, skills and GPU limits for this project only, copied from your global settings today at 09:30\./,
+  );
+  assert.match(renderToStaticMarkup(copied), /href="#\/project\/setup"/);
+  // A folder that holds the global settings, as the home folder does, offers no isolated project, and says why.
+  const home = text(
+    choice({
+      problem:
+        'This folder holds your global settings, so a project here can’t have settings of its own.',
+    }),
+  );
+  assert.match(
+    home,
+    /Use my global settings .* This folder holds your global settings, so a project here can’t have settings of its own\./,
+  );
+  assert.doesNotMatch(home, /Isolated project/);
+  // A failed copy says why.
+  assert.match(
+    text(
+      choice({ isolate: { ...isolate, error: 'Agency settings are locked.' } }),
+    ),
+    /Agency settings are locked\./,
+  );
+});
+
+await test("an isolated project's money step shows the global monthly limit and offers no field for it", () => {
+  const own = text(
+    <MoneyStep
+      view={view({
+        scope: 'project',
+        money: { ...view().money, globalMonth: { usd: 300 } },
+      })}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />,
+  );
+  assert.match(
+    own,
+    /All projects together, each month \$300 Nothing spent this month\. This limit comes from your global settings, and this project counts toward it\./,
+  );
+  assert.match(
+    text(
+      <MoneyStep
+        view={view({
+          scope: 'project',
+          money: { ...view().money, globalMonth: { usd: null } },
+        })}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    ),
+    /each month No limit/,
+  );
+  // A global limit that does not read never shows as no limit.
+  const unread = renderToStaticMarkup(
+    <MoneyStep
+      view={view({
+        scope: 'project',
+        money: { ...view().money, globalMonth: null },
+      })}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />,
+  );
+  assert.match(
+    unread,
+    /Verifold can’t read your global monthly limit\. <a href="#\/setup\/money">Check it in your global settings<\/a>/,
+  );
+  assert.doesNotMatch(unread, /No limit/);
+  // The RunPod key is this computer's, so a new one here replaces it for every project.
+  assert.match(
+    text(
+      <MoneyStep
+        view={view({ scope: 'project' })}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    ),
+    /The RunPod key is the same for every project on this computer\. Verifold checks it/,
+  );
+  // The global profile's step keeps the field.
+  assert.match(
+    text(
+      <MoneyStep
+        view={view()}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    ),
+    /Leave it empty for no monthly limit/,
+  );
+});
+
+await test("the Ask page goes Back to the isolated project's last step, or to the choice of settings, and names whose settings it shows", () => {
+  const where = {
+    folder: '~/cot',
+    files: false,
+    hours: 8,
+    maxHours: 168,
+    questionLimit: 4000,
+    agents: { host: 'claude' as const },
+    gpuUsd: null,
+    gpuLimits: true,
+    started: false,
+  };
+  const form = (scope?: 'project'): string =>
+    renderToStaticMarkup(
+      <AskForm
+        where={where}
+        scope={scope}
+        tools={null}
+        profileError={null}
+        onRetry={quiet}
+        start={startActions(null)}
+        now={0}
+        connection="live"
+      />,
+    );
+  const own = form('project');
+  assert.match(
+    own,
+    /href="#\/project\/setup\/agents">This project’s settings</,
+  );
+  assert.match(own, /class="ask__back" href="#\/project\/setup\/money">Back</);
+  assert.match(own, /These come from this project’s settings/);
+  // An isolated project's settings are in this folder, so it cannot move.
+  assert.match(
+    own,
+    /In ~\/cot\. An isolated project stays in this folder\. To use another folder, run verifold there\./,
+  );
+  assert.doesNotMatch(own, />Change</);
+  const global = form();
+  assert.match(global, /href="#\/setup\/agents">Profile</);
+  assert.match(global, /class="ask__back" href="#\/new">Back</);
+  assert.match(global, />Change</);
 });
 
 await test('step 2 offers to ask the harnesses: the button with what they read, a line while they answer, then their answer with Accept and Discard', async (t) => {

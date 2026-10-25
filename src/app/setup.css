@@ -829,6 +829,74 @@
   gap: 10px;
 }
 
+/* Without a project: the global settings, or an isolated project. */
+.starts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.start {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  color: var(--ink);
+  text-decoration: none;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+/* The arrow says that the whole card opens its page. */
+.start > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+  transition: transform 0.15s;
+}
+
+.start:hover {
+  border-color: var(--accent-line);
+  background: var(--accent-wash);
+}
+
+.start:hover > svg {
+  transform: translateX(3px);
+}
+
+/* Isolated project is a button: it copies the global settings first. */
+button.start {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.start:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.start__text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.start__name {
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.start__line {
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
 /* Step 3: the skills that the person's own Claude Code and Codex load. */
 .own-list {
   display: flex;

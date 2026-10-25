@@ -5,17 +5,17 @@ import { existsSync, rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { writeSettings } from '../src/core/agency.ts';
+import { loadSettings, writeSettings } from '../src/core/agency.ts';
 import { profileMoneyDefaults } from '../src/core/compute.ts';
 import { loadWorkspace } from '../src/core/storage.ts';
 import type { HarnessStatus } from '../src/core/detect.ts';
 import { askStart, defaultTeam } from '../src/cli/ask-start.ts';
 import { expandHome, homeShown } from '../src/cli/project.ts';
 import { runCli, type CliIO } from '../src/cli/commands.ts';
-import type { StartView } from '../src/protocol/api.ts';
+import type { SetupView, StartView } from '../src/protocol/api.ts';
 
 // The lab that a start begins runs its first agent from PATH. Fake claude
 // and codex commands that stop at once come first, so no test reaches a
@@ -594,6 +594,122 @@ await test('the Ask page starts the project: the desk hands it to a background o
     body: JSON.stringify({ question: 'Again?' }),
   });
   assert.equal(again.status, 404);
+  await run.stop();
+});
+
+await test('an isolated project starts with its own settings in its folder: they are a copy of the global ones, the start records them, and the global settings do not change', async (t) => {
+  const run = await askByApp(t, []);
+  const { url, headers } = run;
+  const root = join(dirname(run.agency), 'cot');
+  const read = async (path: string): Promise<Response> =>
+    fetch(`${url.origin}${path}`, { headers });
+  const act = async (
+    name: string,
+    body: Record<string, unknown>,
+  ): Promise<number> =>
+    (
+      await fetch(`${url.origin}/api/v1/actions/${name}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    ).status;
+  // Only profile=project is a scope of a read.
+  assert.equal((await read('/api/v1/setup?profile=other')).status, 404);
+  assert.equal(
+    ((await (await read('/api/v1/setup')).json()) as SetupView).ownCopied,
+    null,
+  );
+  // A read copies nothing: the person picks Isolated project first.
+  assert.equal((await read('/api/v1/setup?profile=project')).status, 409);
+  assert.equal((await read('/api/v1/start?profile=project')).status, 409);
+  assert.equal(existsSync(join(root, '.verifold', 'agency')), false);
+  assert.equal(await act('setup-copy-global', { profile: 'project' }), 200);
+  const own = (await (
+    await read('/api/v1/setup?profile=project')
+  ).json()) as SetupView;
+  assert.equal(own.scope, 'project');
+  assert.equal(own.steps.agents, null);
+  // The copy is in the folder, and the global settings say when it was made.
+  assert.ok(existsSync(join(root, '.verifold', 'agency', 'settings.json')));
+  assert.match(
+    ((await (await read('/api/v1/setup')).json()) as SetupView).ownCopied ?? '',
+    /^\d{4}-/,
+  );
+  // The project's own agents: Codex alone. The global settings keep their team.
+  assert.equal(
+    await act('setup-agents', {
+      profile: 'project',
+      claude: { use: false },
+      codex: { use: true },
+    }),
+    200,
+  );
+  const where = (await (
+    await read('/api/v1/start?profile=project')
+  ).json()) as StartView;
+  assert.deepEqual(where.agents, { host: 'codex' });
+  assert.equal(where.gpuUsd, 30);
+  // An isolated project stays in its folder.
+  assert.equal(
+    await act('project-start', {
+      question: 'Elsewhere?',
+      profile: 'project',
+      folder: join(dirname(root), 'elsewhere'),
+    }),
+    409,
+  );
+  await startProject(run, {
+    question: 'Can cheap fine-tunes keep a CoT faithful?',
+    profile: 'project',
+  });
+  await labAt(run, url.origin);
+  const workspace = await loadWorkspace(root);
+  assert.equal(workspace.ownProfile, true);
+  assert.equal(workspace.host, 'codex');
+  assert.equal(
+    (await loadSettings(join(root, '.verifold', 'agency'))).agency?.host,
+    'codex',
+  );
+  assert.equal((await loadSettings(run.agency)).agency?.host, 'claude');
+  // The owner gets the global folder, for the month across projects. It serves both settings, and the snapshot says the project has its own.
+  const input = JSON.parse(run.handoffs[0] ?? '{}') as { agency: string };
+  assert.equal(input.agency, run.agency);
+  await until(async () => {
+    const response = await read('/api/v1/setup?profile=project');
+    return (
+      response.ok && ((await response.json()) as SetupView).scope === 'project'
+    );
+  });
+  assert.equal(
+    ((await (await read('/api/v1/setup')).json()) as SetupView).scope,
+    'global',
+  );
+  const seen = (await (await read('/api/v1/snapshot')).json()) as {
+    ownProfile?: boolean;
+  };
+  assert.equal(seen.ownProfile, true);
+  await run.stop();
+});
+
+await test('a project on the global settings drops an isolated copy that the person left in its folder, once the project exists', async (t) => {
+  const run = await askByApp(t, []);
+  const root = join(dirname(run.agency), 'cot');
+  assert.equal(
+    (
+      await fetch(`${run.url.origin}/api/v1/actions/setup-copy-global`, {
+        method: 'POST',
+        headers: run.headers,
+        body: JSON.stringify({ profile: 'project' }),
+      })
+    ).status,
+    200,
+  );
+  assert.ok(existsSync(join(root, '.verifold', 'agency')));
+  await startProject(run, { question: 'Do probes see faithfulness?' });
+  await labAt(run, run.url.origin);
+  assert.equal((await loadWorkspace(root)).ownProfile, undefined);
+  assert.equal(existsSync(join(root, '.verifold', 'agency')), false);
   await run.stop();
 });
 
