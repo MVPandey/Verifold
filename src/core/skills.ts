@@ -14,7 +14,14 @@ import {
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
-import { prepareAgency, readMemory, saveAgencyFile } from './agency.ts';
+import {
+  loadOwnChoices,
+  ownChoicesFile,
+  prepareAgency,
+  readMemory,
+  saveAgencyFile,
+  skillsOff,
+} from './agency.ts';
 import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
@@ -1304,21 +1311,21 @@ async function prune(plugins: string, keep: string): Promise<void> {
 }
 
 /**
- * The added skills for the sessions of a project's owner. A harness that
- * could not load them gets no more of them while this process runs, and
- * `report` gets each reason once.
+ * The added skills for the sessions of a project's owner, and the person's
+ * own skills that agents do not load. A harness that could not load the
+ * added skills gets no more of them while this process runs, and `report`
+ * gets each reason once it takes it.
  */
 export function skillLoader(
   directory: string,
   plugins: string,
-  report: (text: string) => void,
+  /** Tell the person. False: nothing could take the text yet, so it comes again later. */
+  report: (text: string) => boolean,
 ): SessionSkills {
   const blocked = new Set<HarnessName>();
   const told = new Set<string>();
   const tell = (text: string): void => {
-    if (told.has(text)) return;
-    told.add(text);
-    report(text);
+    if (!told.has(text) && report(text)) told.add(text);
   };
   return {
     folder: async (host) => {
@@ -1340,6 +1347,21 @@ export function skillLoader(
     used: (folder) => {
       const now = new Date();
       void utimes(folder, now, now).catch(() => {});
+    },
+    off: async (host) => {
+      const file = ownChoicesFile(directory);
+      const choices = await loadOwnChoices(directory).catch(() => null);
+      if (!choices) {
+        tell(
+          `Verifold could not read ${file}, so agents load all your skills.`,
+        );
+        return [];
+      }
+      if (choices.skipped)
+        tell(
+          `Verifold skipped ${choices.skipped} ${choices.skipped === 1 ? 'entry' : 'entries'} of ${file} that it could not read. Agents load those skills.`,
+        );
+      return skillsOff(choices, host);
     },
   };
 }

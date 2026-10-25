@@ -1125,6 +1125,30 @@ export interface SetupSkills {
   readonly needsProfile: boolean;
   /** Why the last search, add, or removal failed. */
   readonly problem: string | null;
+  /** The skills that the person's own Claude Code and Codex load, with the person's choices. Left out before Verifold lists them. Added after version 1. */
+  readonly own?: readonly OwnSkill[];
+  /** Verifold lists them now. Ask again in a moment. Added after version 1. */
+  readonly ownReading?: boolean;
+  /** What Verifold could not list or read, one line each. Added after version 1. */
+  readonly ownProblems?: readonly string[];
+  /** The most characters of a note on when to use a skill. Added after version 1. */
+  readonly noteLimit?: number;
+}
+
+/** A skill that the person's own Claude Code or Codex loads. Verifold's agents load it unless the person says no. */
+export interface OwnSkill {
+  readonly harness: Harness;
+  /** The skill's ID in the choices: its name for Claude Code, its SKILL.md path for Codex. */
+  readonly id: string;
+  /** The name that the harness lists, such as `python` or `vercel:nextjs`. */
+  readonly name: string;
+  readonly description: string;
+  /** The person's own skill folder, claude.ai, a Claude Code plugin, or the computer's admin folder for Codex. */
+  readonly source: 'personal' | 'synced' | 'plugin' | 'admin';
+  /** Verifold's agents load it. */
+  readonly use: boolean;
+  /** When and how agents should use it, in the person's words. Empty: no note. */
+  readonly when: string;
 }
 
 export interface SetupAgents {
@@ -1439,6 +1463,26 @@ export interface ActionBodies {
    * `profile: 'project'`. Added after version 1.
    */
   'setup-copy-global': ForProject & { readonly key?: string };
+  /**
+   * Choose which of the person's own skills Verifold's agents load, and add
+   * notes on when to use them. Without `when`, a note stays as it is.
+   * Added after version 1.
+   */
+  'setup-own-skills': {
+    readonly choices: readonly {
+      readonly harness: Harness;
+      /** The skill's `id` from the list. */
+      readonly id: string;
+      readonly use: boolean;
+      readonly when?: string;
+    }[];
+    readonly key?: string;
+  };
+  /**
+   * List the skills that the person's own harnesses load. A list with skills
+   * serves until `again`. Added after version 1.
+   */
+  'setup-own-skills-list': { readonly again?: boolean; readonly key?: string };
   /**
    * Without a project: create one for the person's question, and start its
    * lab. The settings apply to this project only. Each one that is left out
