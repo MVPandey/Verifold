@@ -135,11 +135,14 @@ export class FirstRun {
   >();
 
   private readonly skills: SkillsStep;
-  /** When the import started, and the harnesses that it asks. Null: it does not run. */
+  /** The import that runs: when it started, the harnesses that it asks, and what stops it. Null: none runs. */
   private importing: {
     readonly at: string;
-    readonly asking: readonly HarnessName[];
+    asking: readonly HarnessName[];
+    readonly stop: AbortController;
   } | null = null;
+  /** An import that the person stopped, until its harnesses end. The next import waits for it. */
+  private stopping: Promise<void> = Promise.resolve();
   /** The import's result, until the person accepts or discards it. */
   private imported: ProfileImport | null = null;
   private importError: string | null = null;
@@ -213,12 +216,7 @@ export class FirstRun {
         busy: this.busy,
         error: this.error,
         limits: { answer: answerLimit, ...cardLimits },
-        import: {
-          busy: this.importing?.at ?? null,
-          asking: this.importing?.asking ?? [],
-          error: this.importError,
-          result: this.imported,
-        },
+        import: await this.importView(),
       },
       skills: await this.skills.view(),
       money: {
@@ -407,8 +405,9 @@ export class FirstRun {
         await this.acceptImport();
         return 200;
       case 'setup-import-discard':
-        if (this.importing)
-          fail('Verifold asks your agents now. Wait a moment.');
+        // While the import runs, this stops it.
+        this.importing?.stop.abort();
+        this.importing = null;
         this.imported = null;
         this.importError = null;
         return 200;
@@ -476,17 +475,45 @@ export class FirstRun {
     });
   }
 
+  /** The import as the page shows it. A skill that the person already chose says so: Accept leaves it as it is. */
+  private async importView(): Promise<
+    NonNullable<SetupView['about']['import']>
+  > {
+    const result = this.imported;
+    const chosen = result ? await this.skills.savedChoices() : null;
+    return {
+      busy: this.importing?.at ?? null,
+      asking: this.importing?.asking ?? [],
+      error: this.importError,
+      result: result && {
+        ...result,
+        skills: result.skills.map((skill) => {
+          const choice = chosen?.[skill.harness].get(skill.id);
+          return choice ? { ...skill, chosen: choice.use } : skill;
+        }),
+      },
+    };
+  }
+
   /**
    * Ask each harness that the person uses what it knows about them. The
    * view shows the result when it comes. Nothing is saved until the person
-   * accepts it.
+   * accepts it. An import that the person stopped ends first.
    */
   private async startImport(): Promise<number> {
     if (this.importing) fail('Verifold asks your agents now. Wait a moment.');
     // Taken before the first wait, so a second request at the same time is refused.
-    this.importing = { at: new Date().toISOString(), asking: [] };
+    const run = {
+      at: new Date().toISOString(),
+      asking: [] as readonly HarnessName[],
+      stop: new AbortController(),
+    };
+    this.importing = run;
+    this.imported = null;
+    this.importError = null;
     let harnesses: ChatHarness[];
     try {
+      await this.stopping;
       if (!this.detected) this.check();
       await this.detecting;
       harnesses = inUse(this.detected ?? [], (await this.settings()).agency);
@@ -495,28 +522,29 @@ export class FirstRun {
           'No agent that you use is signed in. Sign in to Claude Code or Codex, then try again.',
         );
     } catch (error) {
-      this.importing = null;
+      if (this.importing === run) this.importing = null;
       throw error;
     }
-    this.importing = {
-      ...this.importing,
-      asking: harnesses.map((harness) => harness.host),
-    };
-    this.imported = null;
-    this.importError = null;
-    const { signal } = this.options;
-    void (async () => {
+    if (run.stop.signal.aborted) return 200;
+    run.asking = harnesses.map((harness) => harness.host);
+    const signal = AbortSignal.any([this.options.signal, run.stop.signal]);
+    const work = (async () => {
       try {
-        this.imported = await importProfile({
+        const [merger, skills] = await Promise.all([
+          this.chatHarness(),
+          this.skills.ownList(),
+        ]);
+        const result = await importProfile({
           harnesses,
-          merger: await this.chatHarness(),
-          skills: await this.skills.ownList(),
+          merger,
+          skills,
           signal,
           ...(this.options.harness ? { run: this.options.harness } : {}),
           ...(this.options.claudeConfig
             ? { claudeConfig: this.options.claudeConfig }
             : {}),
         });
+        if (!signal.aborted) this.imported = result;
       } catch (error) {
         if (!signal.aborted)
           this.importError =
@@ -524,30 +552,43 @@ export class FirstRun {
               ? error.message
               : `Verifold could not ask your agents${error instanceof Error ? `: ${error.message.slice(0, 300)}` : '.'}`;
       } finally {
-        this.importing = null;
+        if (this.importing === run) this.importing = null;
       }
     })();
+    // A stop leaves the harnesses to end. The next import waits for them.
+    run.stop.signal.addEventListener('abort', () => {
+      this.stopping = work;
+    });
     return 202;
   }
 
   /**
-   * Accept the import: its choices for the person's own skills are saved,
-   * and its card becomes the draft, which the person still edits and saves
-   * with "Looks right".
+   * Accept the import: the card becomes the draft, which the person still
+   * edits and saves with "Looks right", and each skill that it named and
+   * the person never chose is set. It holds the conversation meanwhile, so
+   * an answer, a save, or a new start waits.
    */
   private async acceptImport(): Promise<void> {
     const result =
       this.imported ??
       fail('Nothing waits to be accepted. Ask your agents first.');
     this.idle();
-    await this.skills.importChoices(result.skills);
+    this.holding = true;
+    const generation = this.generation;
+    try {
+      await this.skills.importChoices(result.skills);
+    } finally {
+      this.holding = false;
+    }
+    // Discarded, replaced, or the conversation started again meanwhile.
+    if (this.imported !== result || generation !== this.generation) return;
+    this.imported = null;
     const { card } = result;
     if (card.workOn || card.explore || card.talk) {
       this.card = card;
       this.error = null;
       this.retryNote = undefined;
     }
-    this.imported = null;
   }
 
   /** Refuse a change of the conversation while an answer or a save runs. */

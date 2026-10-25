@@ -1,6 +1,6 @@
-import { mkdtemp, opendir, rm, stat } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { opendir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { ownLimits, type ProfileCard } from './agency.ts';
 import { runHarness, type HarnessName } from './harness.ts';
 import type { OwnSkill } from './own-skills.ts';
@@ -8,6 +8,8 @@ import { replyCard, type ChatHarness } from './profile-chat.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
 import { SessionActionError, hostName } from './session.ts';
+import { credentialPaths } from './session-hosts.ts';
+import { inEmptyFolder } from './storage.ts';
 
 /**
  * "Get information about me from my harnesses": each harness that the
@@ -29,7 +31,7 @@ export interface ProfileImport {
   readonly from: readonly HarnessName[];
   /** The draft card. A part that no harness knew is empty. */
   readonly card: ProfileCard;
-  /** Every listed skill of each harness that answered. A skill that its answer left out does not fit. */
+  /** The skills that each answer named. A skill that it left out has no opinion. */
   readonly skills: readonly ImportedSkill[];
   /** What each harness says that it read, one line each. */
   readonly read: readonly string[];
@@ -40,7 +42,9 @@ export interface ProfileImport {
 const limits = {
   /** The memory folders of Claude Code's projects that the prompt names, the newest first. */
   memoryFolders: 40,
-  /** Entries of Claude Code's projects folder that Verifold looks at. */
+  /** Files that the prompt names in a memory folder without MEMORY.md. */
+  memoryFiles: 5,
+  /** Entries of a folder that Verifold looks at. */
   entries: 2000,
   /** Characters of a skill's description in the prompt. */
   description: 300,
@@ -52,73 +56,140 @@ const limits = {
 
 const empty: ProfileCard = { workOn: '', explore: '', talk: '' };
 
+/** What Claude Code keeps beside its memory, which the import never reads. */
+const claudePrivate = [
+  'projects/**/*.jsonl',
+  'history.jsonl',
+  '.credentials.json',
+  'settings*.json',
+  'file-history',
+  'paste-cache',
+  'shell-snapshots',
+  'session-env',
+  'todos',
+  'debug',
+  'telemetry',
+] as const;
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function fail(message: string): never {
+  throw new SessionActionError(message);
+}
+
+/** The entries of a folder, at most `limits.entries`. None when it cannot be read. */
+async function entries(
+  folder: string,
+  signal: AbortSignal,
+): Promise<{ readonly name: string; readonly folder: boolean }[]> {
+  const dir = await opendir(folder).catch(() => null);
+  if (!dir) return [];
+  const found: { name: string; folder: boolean }[] = [];
+  try {
+    for await (const entry of dir) {
+      signal.throwIfAborted();
+      if (found.length >= limits.entries) break;
+      found.push({ name: entry.name, folder: entry.isDirectory() });
+    }
+  } finally {
+    // A loop that ends early leaves the folder open.
+    await dir.close().catch(() => {});
+  }
+  return found;
+}
+
+async function mtime(path: string): Promise<number> {
+  return (await stat(path).catch(() => null))?.mtimeMs ?? 0;
+}
+
+/**
+ * Claude Code's settings folder, as an absolute path that a permission rule
+ * can hold. A rule reads `*`, `?`, `[`, `]`, `{`, `}` and parentheses in it
+ * as syntax, so such a path is refused.
+ */
+export function claudeFolder(config: string): string {
+  const path = resolve(config);
+  if (
+    [...path].some((char) => {
+      const code = char.charCodeAt(0);
+      return code < 0x20 || code === 0x7f || '*?[]{}()'.includes(char);
+    })
+  )
+    fail(
+      'Verifold did not ask Claude Code: the path of its settings folder holds a character that a permission rule cannot hold, such as * or (.',
+    );
+  return path;
+}
+
 /**
  * What Claude Code may read: its CLAUDE.md and the memory folders of its
- * projects, never the session transcripts beside them. `files` names where
- * to start: CLAUDE.md, and each memory folder's MEMORY.md, else the folder.
+ * projects, never the session transcripts and settings beside them. `files`
+ * names where to start: CLAUDE.md, then for each memory folder, the newest
+ * first, its MEMORY.md, else up to five of its notes.
  */
 export async function claudeMemory(
   config: string,
   signal: AbortSignal,
 ): Promise<{
   readonly allow: readonly string[];
+  readonly deny: readonly string[];
   readonly files: readonly string[];
 }> {
   const projects = join(config, 'projects');
   const found: { readonly path: string; readonly at: number }[] = [];
-  const dir = await opendir(projects).catch(() => null);
-  if (dir) {
-    let seen = 0;
-    try {
-      for await (const entry of dir) {
-        signal.throwIfAborted();
-        if (++seen > limits.entries) break;
-        if (!entry.isDirectory()) continue;
-        const memory = join(projects, entry.name, 'memory');
-        const info = await stat(memory).catch(() => null);
-        if (info?.isDirectory()) found.push({ path: memory, at: info.mtimeMs });
-      }
-    } finally {
-      // A loop that ends early leaves the folder open.
-      await dir.close().catch(() => {});
-    }
+  for (const entry of await entries(projects, signal)) {
+    if (!entry.folder) continue;
+    const memory = join(projects, entry.name, 'memory');
+    if (!(await stat(memory).catch(() => null))?.isDirectory()) continue;
+    // A note changes MEMORY.md, which the folder's own time does not show.
+    found.push({
+      path: memory,
+      at: Math.max(await mtime(memory), await mtime(join(memory, 'MEMORY.md'))),
+    });
   }
   const newest = found
     .sort((a, b) => b.at - a.at)
     .slice(0, limits.memoryFolders);
-  const instructions = join(config, 'CLAUDE.md');
   const starts = await Promise.all(
     newest.map(async ({ path }) => {
       const index = join(path, 'MEMORY.md');
-      return (await stat(index).catch(() => null))?.isFile() ? index : path;
+      if ((await stat(index).catch(() => null))?.isFile()) return [index];
+      return (await entries(path, signal))
+        .filter((entry) => !entry.folder && entry.name.endsWith('.md'))
+        .slice(0, limits.memoryFiles)
+        .map((entry) => join(path, entry.name));
     }),
   );
+  const instructions = join(config, 'CLAUDE.md');
   return {
     allow: [instructions, join(projects, '*', 'memory', '**')],
+    deny: [
+      ...claudePrivate.map((path) => join(config, path)),
+      ...credentialPaths,
+    ],
     files: [
       ...((await stat(instructions).catch(() => null))?.isFile()
         ? [instructions]
         : []),
-      ...starts,
+      ...starts.flat(),
     ],
   };
 }
 
-/** Run `work` in an empty private folder, which Verifold removes afterwards. */
-async function inEmptyFolder<T>(work: (cwd: string) => Promise<T>): Promise<T> {
-  const folder = await mkdtemp(join(tmpdir(), 'verifold-import-'));
-  try {
-    return await work(folder);
-  } finally {
-    await rm(folder, { recursive: true, force: true });
-  }
+/** What Codex's commands may not read: the person's home folder, Codex's own folder, and the credential paths. */
+function codexClosed(): string[] {
+  const home = homedir();
+  const codex = resolve(process.env.CODEX_HOME ?? join(home, '.codex'));
+  return [
+    home,
+    ...(codex.startsWith(`${home}/`) ? [] : [codex]),
+    ...credentialPaths,
+  ];
 }
 
-/** One harness's answer, checked: the card, a choice for each of its listed skills, and what it read. */
+/** One harness's answer, checked: the card, its view of each listed skill that it named, and what it read. */
 function answerOf(
   text: string,
   host: HarnessName,
@@ -135,17 +206,15 @@ function answerOf(
     value = null;
   }
   if (!record(value))
-    throw new SessionActionError(
-      `${hostName(host)} did not send an answer that Verifold can read.`,
-    );
+    fail(`${hostName(host)} did not send an answer that Verifold can read.`);
   const byId = new Map(listed.map((skill) => [skill.id, skill]));
-  const answered = new Map<string, ImportedSkill>();
+  const skills = new Map<string, ImportedSkill>();
   for (const entry of Array.isArray(value.skills) ? value.skills : []) {
     if (!record(entry) || typeof entry.id !== 'string') continue;
     const skill = byId.get(entry.id);
-    if (!skill || answered.has(skill.id)) continue;
+    if (!skill || skills.has(skill.id)) continue;
     const fits = entry.fits === true;
-    answered.set(skill.id, {
+    skills.set(skill.id, {
       harness: host,
       id: skill.id,
       name: skill.name,
@@ -158,16 +227,7 @@ function answerOf(
   }
   return {
     card: replyCard(value.card),
-    skills: listed.map(
-      (skill) =>
-        answered.get(skill.id) ?? {
-          harness: host,
-          id: skill.id,
-          name: skill.name,
-          fits: false,
-          when: '',
-        },
-    ),
+    skills: [...skills.values()],
     read:
       typeof value.read === 'string'
         ? value.read.trim().slice(0, limits.read)
@@ -202,10 +262,6 @@ export async function importProfile(input: {
 }): Promise<ProfileImport> {
   const { signal } = input;
   const run = input.run ?? runHarness;
-  const config =
-    input.claudeConfig ??
-    process.env.CLAUDE_CONFIG_DIR ??
-    join(homedir(), '.claude');
   const instructions = await loadPrompt('profile-import');
   const answers = await Promise.allSettled(
     input.harnesses.map(async (harness) => {
@@ -213,8 +269,17 @@ export async function importProfile(input: {
         (skill) => skill.harness === harness.host,
       );
       const memory =
-        harness.host === 'claude' ? await claudeMemory(config, signal) : null;
-      const result = await inEmptyFolder((cwd) =>
+        harness.host === 'claude'
+          ? await claudeMemory(
+              claudeFolder(
+                input.claudeConfig ??
+                  process.env.CLAUDE_CONFIG_DIR ??
+                  join(homedir(), '.claude'),
+              ),
+              signal,
+            )
+          : null;
+      const result = await inEmptyFolder('import', (cwd) =>
         run({
           host: harness.host,
           ...(harness.model ? { model: harness.model } : {}),
@@ -222,7 +287,9 @@ export async function importProfile(input: {
           signal,
           timeoutMs: limits.timeoutMs,
           idleMs: limits.idleMs,
-          ownFiles: memory?.allow ?? [],
+          ownFiles: memory
+            ? { allow: memory.allow, deny: memory.deny }
+            : { allow: [], deny: codexClosed() },
           // Skill descriptions come from plugins and catalogs.
           outsideText: true,
           prompt: `${instructions}
@@ -253,9 +320,7 @@ ${JSON.stringify({
     return [];
   });
   if (!done.length)
-    throw new SessionActionError(
-      problems.join(' ') || 'No agent is signed in to answer.',
-    );
+    fail(problems.join(' ') || 'No agent is signed in to answer.');
   const cards = done.flatMap((answer) => (answer.card ? [answer.card] : []));
   let card = cards[0] ?? empty;
   if (cards.length > 1 && input.merger) {
@@ -265,7 +330,7 @@ ${JSON.stringify({
 
 The input, as JSON:
 ${JSON.stringify({ drafts: cards })}`;
-      const result = await inEmptyFolder((cwd) =>
+      const result = await inEmptyFolder('import', (cwd) =>
         run({
           host: merger.host,
           ...(merger.model ? { model: merger.model } : {}),
@@ -274,6 +339,8 @@ ${JSON.stringify({ drafts: cards })}`;
           timeoutMs: 180_000,
           idleMs: limits.idleMs,
           textOnly: true,
+          // The drafts hold what the harnesses read.
+          outsideText: true,
           prompt,
         }),
       );
@@ -298,8 +365,4 @@ ${JSON.stringify({ drafts: cards })}`;
     ),
     problems,
   };
-}
-
-function fail(message: string): never {
-  throw new SessionActionError(message);
 }

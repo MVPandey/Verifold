@@ -4,7 +4,6 @@ import {
   copyFile,
   lstat,
   mkdir,
-  mkdtemp,
   readFile,
   readdir,
   rename,
@@ -12,7 +11,7 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import {
   loadOwnChoices,
@@ -26,7 +25,7 @@ import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
 import { SessionActionError, type SessionSkills } from './session.ts';
-import { isFolder } from './storage.ts';
+import { inEmptyFolder, isFolder } from './storage.ts';
 import {
   blobSha,
   contentRefusal,
@@ -646,19 +645,19 @@ async function pick(
   signal: AbortSignal,
   run: typeof runHarness,
 ): Promise<{ readonly id: string; readonly what: string }[] | null> {
-  const folder = await mkdtemp(join(tmpdir(), 'verifold-skills-'));
-  try {
-    const result = await run({
-      host: picker.host,
-      ...(picker.model ? { model: picker.model } : {}),
-      cwd: folder,
-      signal,
-      timeoutMs: 180_000,
-      idleMs: 120_000,
-      // The catalogs' descriptions come from outside, so the picker can neither search nor fetch, and without every MCP server off it does not run.
-      textOnly: true,
-      outsideText: true,
-      prompt: `${await loadPrompt('skills-pick')}
+  return inEmptyFolder('skills', async (folder) => {
+    try {
+      const result = await run({
+        host: picker.host,
+        ...(picker.model ? { model: picker.model } : {}),
+        cwd: folder,
+        signal,
+        timeoutMs: 180_000,
+        idleMs: 120_000,
+        // The catalogs' descriptions come from outside, so the picker can neither search nor fetch, and without every MCP server off it does not run.
+        textOnly: true,
+        outsideText: true,
+        prompt: `${await loadPrompt('skills-pick')}
 
 The input, as JSON:
 ${JSON.stringify({
@@ -670,26 +669,25 @@ ${JSON.stringify({
     catalog: `${skill.owner}/${skill.repo}`,
   })),
 })}`,
-    });
-    const value = parseHostJson(result.text);
-    if (!record(value) || !Array.isArray(value.picks)) return null;
-    const ids = new Set(pool.map(({ skill }) => skill.id));
-    const picks: { id: string; what: string }[] = [];
-    for (const entry of value.picks) {
-      if (!record(entry) || typeof entry.id !== 'string') continue;
-      if (!ids.has(entry.id) || picks.some((item) => item.id === entry.id))
-        continue;
-      const what = typeof entry.what === 'string' ? entry.what.trim() : '';
-      picks.push({ id: entry.id, what: cut(what) });
-      if (picks.length === limits.cards) break;
+      });
+      const value = parseHostJson(result.text);
+      if (!record(value) || !Array.isArray(value.picks)) return null;
+      const ids = new Set(pool.map(({ skill }) => skill.id));
+      const picks: { id: string; what: string }[] = [];
+      for (const entry of value.picks) {
+        if (!record(entry) || typeof entry.id !== 'string') continue;
+        if (!ids.has(entry.id) || picks.some((item) => item.id === entry.id))
+          continue;
+        const what = typeof entry.what === 'string' ? entry.what.trim() : '';
+        picks.push({ id: entry.id, what: cut(what) });
+        if (picks.length === limits.cards) break;
+      }
+      return picks;
+    } catch {
+      signal.throwIfAborted();
+      return null;
     }
-    return picks;
-  } catch {
-    signal.throwIfAborted();
-    return null;
-  } finally {
-    await rm(folder, { recursive: true, force: true });
-  }
+  });
 }
 
 /**

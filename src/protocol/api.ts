@@ -1208,13 +1208,18 @@ export interface SetupImport {
     readonly from: readonly Harness[];
     /** The draft card. A part that no harness knew is empty. */
     readonly card: ProfileCard;
-    /** Each listed skill of the harnesses that answered. Accept turns on the ones that fit, with their notes, and turns off the rest. */
+    /**
+     * The skills that the answers named. Accept sets each one that the
+     * person never chose: Yes with its note when it fits, else No.
+     */
     readonly skills: readonly {
       readonly harness: Harness;
       readonly id: string;
       readonly name: string;
       readonly fits: boolean;
       readonly when: string;
+      /** The person's saved choice: Yes (true) or No (false). Accept leaves it as it is. */
+      readonly chosen?: boolean;
     }[];
     /** What each harness says that it read. */
     readonly read: readonly string[];
@@ -1471,7 +1476,7 @@ export interface ActionBodies {
   'setup-import': { readonly key?: string };
   /** Accept the import: save its skill choices, and make its card the draft. */
   'setup-import-accept': { readonly key?: string };
-  /** Discard the import's result. */
+  /** Discard the import's result, or stop the import while it runs. */
   'setup-import-discard': { readonly key?: string };
   /**
    * Without a project: create one for the person's question, and start its

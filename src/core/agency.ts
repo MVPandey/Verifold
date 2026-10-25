@@ -539,18 +539,17 @@ export async function writeOwnChoices(
       change.when === undefined
         ? (side.get(change.id)?.when ?? '')
         : change.when.trim().slice(0, ownLimits.when);
-    if (change.use && !when) side.delete(change.id);
-    else
-      side.set(change.id, {
-        name: change.name,
-        use: change.use,
-        when,
-        off: change.use ? [] : change.off,
-      });
+    // A Yes stays as the person's choice, so an import never changes it.
+    side.set(change.id, {
+      name: change.name,
+      use: change.use,
+      when,
+      off: change.use ? [] : change.off,
+    });
   }
   if (next.claude.size + next.codex.size > ownLimits.choices)
     throw new SessionActionError(
-      `Verifold keeps choices for at most ${ownLimits.choices} skills. Say Yes with no note to some skills, then try again.`,
+      `Verifold keeps choices for at most ${ownLimits.choices} skills.`,
     );
   const entries = (side: ReadonlyMap<string, OwnChoice>) =>
     Object.fromEntries(

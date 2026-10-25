@@ -175,11 +175,10 @@ export function AboutStep({
     actions.about(value, key),
   );
   const skip = useAction((_: null, key) => actions.skip('about', key));
+  const cardEdited = edited && !sameCard(edits.card, edits.from);
   // A typed answer, card edits, or an import that waits for Accept or Discard.
   useUnsaved(
-    text.trim() !== '' ||
-      (edited && !sameCard(edits.card, edits.from)) ||
-      Boolean(about.import?.result),
+    text.trim() !== '' || cardEdited || Boolean(about.import?.result),
     nav,
   );
   const error =
@@ -203,7 +202,12 @@ export function AboutStep({
           nav={nav}
           title="About you"
         />
-        <ImportPanel state={about.import} actions={actions} refresh={refresh} />
+        <ImportPanel
+          state={about.import}
+          actions={actions}
+          refresh={refresh}
+          cardEdited={false}
+        />
         <section aria-label="Your profile" className="profile">
           <h2 className="profile__title">
             Your profile from an earlier version
@@ -263,7 +267,12 @@ export function AboutStep({
         nav={nav}
         title="About you"
       />
-      <ImportPanel state={about.import} actions={actions} refresh={refresh} />
+      <ImportPanel
+        state={about.import}
+        actions={actions}
+        refresh={refresh}
+        cardEdited={cardEdited}
+      />
       <section aria-label="Conversation" className="chat">
         {about.lines.map((line, index) => (
           <Line

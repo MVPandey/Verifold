@@ -1,11 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { cardLimits, type ProfileCard } from './agency.ts';
 import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
 import { SessionActionError } from './session.ts';
+import { inEmptyFolder } from './storage.ts';
 
 /**
  * The "About you" conversation of the first run. Verifold asks the first
@@ -134,8 +132,7 @@ export async function nextStep(input: {
     return localStep(lines);
   }
   const left = card ? 0 : Math.max(0, followUps - asked(lines));
-  const folder = await mkdtemp(join(tmpdir(), 'verifold-profile-'));
-  try {
+  return inEmptyFolder('profile', async (folder) => {
     const result = await (input.run ?? runHarness)({
       host: harness.host,
       ...(harness.model ? { model: harness.model } : {}),
@@ -158,9 +155,7 @@ ${JSON.stringify({
 })}`,
     });
     return parseStep(result.text, left);
-  } finally {
-    await rm(folder, { recursive: true, force: true });
-  }
+  });
 }
 
 /**

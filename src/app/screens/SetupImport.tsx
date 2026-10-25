@@ -1,5 +1,7 @@
 import { useId, type ReactNode } from 'react';
 import type { SetupImport } from '../../protocol/api.ts';
+
+type ImportedSkill = NonNullable<SetupImport['result']>['skills'][number];
 import { since } from '../format.ts';
 import type { SetupActions } from '../setup.ts';
 import { useAction } from '../useAction.ts';
@@ -22,11 +24,14 @@ export function ImportPanel({
   state,
   actions,
   refresh,
+  cardEdited,
 }: {
   /** Undefined: an older Verifold without the import. */
   readonly state: SetupImport | undefined;
   readonly actions: SetupActions;
   readonly refresh: () => void;
+  /** The card below has edits that are not saved, which Accept would replace. */
+  readonly cardEdited: boolean;
 }): ReactNode {
   const title = useId();
   const ask = useAction((_: null, key) => actions.importAsk(key));
@@ -43,11 +48,28 @@ export function ImportPanel({
       <section aria-label="What your harnesses know" className="import">
         <div className="chat__busy import__busy" role="status">
           <span className="dot" aria-hidden="true" />
-          {list(state.asking.map((harness) => harnessTitles[harness]))}{' '}
-          {state.asking.length > 1 ? 'read' : 'reads'} what{' '}
-          {state.asking.length > 1 ? 'they know' : 'it knows'} about you ·{' '}
-          {since(state.busy, Date.now())}
+          {state.asking.length
+            ? `${list(state.asking.map((harness) => harnessTitles[harness]))} ${
+                state.asking.length > 1
+                  ? 'read what they know'
+                  : 'reads what it knows'
+              } about you`
+            : 'Verifold finds your harnesses'}{' '}
+          · {since(state.busy, Date.now())}
+          <button
+            type="button"
+            className="link-button"
+            disabled={discard.busy}
+            onClick={run(discard)}
+          >
+            Stop
+          </button>
         </div>
+        {error && (
+          <span role="alert" className="setup__error">
+            {error}
+          </span>
+        )}
       </section>
     );
   if (!result)
@@ -77,6 +99,14 @@ export function ImportPanel({
     );
   const fits = result.skills.filter((skill) => skill.fits);
   const rest = result.skills.filter((skill) => !skill.fits);
+  /** The person's saved choice, which Accept keeps. */
+  const chosen = (skill: ImportedSkill): ReactNode =>
+    skill.chosen !== undefined && (
+      <span className="import__chosen">
+        {' '}
+        · You chose {skill.chosen ? 'Yes' : 'No'}
+      </span>
+    );
   return (
     <section aria-labelledby={title} className="profile import">
       <h2 id={title} className="profile__title">
@@ -104,6 +134,7 @@ export function ImportPanel({
                   <span className="muted">
                     · {harnessTitles[skill.harness]}
                   </span>
+                  {chosen(skill)}
                   {skill.when && (
                     <span className="import__when">{skill.when}</span>
                   )}
@@ -125,6 +156,7 @@ export function ImportPanel({
                     <span className="muted">
                       · {harnessTitles[skill.harness]}
                     </span>
+                    {chosen(skill)}
                   </li>
                 ))}
               </ul>
@@ -141,8 +173,11 @@ export function ImportPanel({
         Accept makes this your draft card. You can still edit it before you save
         it.
         {result.skills.length > 0 &&
-          ' It also sets Your skills: Yes for the skills that fit, with their notes, and No for the rest.'}
+          ' It also sets the skills that you have not chosen yet: Yes, with the note, for each one that fits, and No for each one that does not.'}
       </p>
+      {cardEdited && (
+        <p className="setup__line">Save or undo your card edits first.</p>
+      )}
       {error && (
         <span role="alert" className="setup__error">
           {error}
@@ -152,7 +187,7 @@ export function ImportPanel({
         <button
           type="button"
           className="button button--primary"
-          disabled={accept.busy || discard.busy}
+          disabled={accept.busy || discard.busy || cardEdited}
           onClick={run(accept)}
         >
           Accept

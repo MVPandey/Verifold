@@ -22,6 +22,7 @@ import {
 } from '../src/app/setup.ts';
 import { AgentsStep } from '../src/app/screens/SetupAgents.tsx';
 import { AboutStep } from '../src/app/screens/SetupAbout.tsx';
+import { ImportPanel } from '../src/app/screens/SetupImport.tsx';
 import { MoneyStep, moneyUnsaved } from '../src/app/screens/SetupMoney.tsx';
 import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
 import {
@@ -1187,7 +1188,12 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
         asking: ['claude', 'codex'],
       },
     }),
-    /Claude Code and Codex read what they know about you · \d+ s/,
+    /Claude Code and Codex read what they know about you · \d+ s Stop/,
+  );
+  // Before Verifold knows which harnesses to ask.
+  assert.match(
+    step({ import: { ...idle, busy: new Date().toISOString() } }),
+    /Verifold finds your harnesses · \d+ s Stop/,
   );
   const answered = step({
     import: {
@@ -1209,6 +1215,7 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
             name: 'vercel:deploy',
             fits: false,
             when: '',
+            chosen: true,
           },
         ],
         read: ['Claude Code: My instructions.'],
@@ -1222,7 +1229,7 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
   );
   assert.match(
     answered,
-    /Skills that fit your research research-paper-writing · Claude Code For paper drafts\. Not for research: 1 vercel:deploy · Claude Code/,
+    /Skills that fit your research research-paper-writing · Claude Code For paper drafts\. Not for research: 1 vercel:deploy · Claude Code · You chose Yes/,
   );
   assert.match(
     answered,
@@ -1230,7 +1237,39 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
   );
   assert.match(
     answered,
-    /Accept makes this your draft card\. You can still edit it before you save it\. It also sets Your skills: Yes for the skills that fit, with their notes, and No for the rest\. Accept Discard/,
+    /Accept makes this your draft card\. You can still edit it before you save it\. It also sets the skills that you have not chosen yet: Yes, with the note, for each one that fits, and No for each one that does not\. Accept Discard/,
+  );
+  // With card edits that are not saved, Accept waits, and says why.
+  const result = {
+    from: ['claude' as const],
+    card: { workOn: 'CoT.', explore: '', talk: '' },
+    skills: [],
+    read: [],
+    problems: [],
+  };
+  const held = renderToStaticMarkup(
+    <ImportPanel
+      state={{ ...idle, result }}
+      actions={actions}
+      refresh={quiet}
+      cardEdited
+    />,
+  );
+  assert.match(held, /Save or undo your card edits first\./);
+  assert.match(
+    held,
+    /<button type="button" class="button button--primary" disabled="">Accept/,
+  );
+  assert.doesNotMatch(
+    renderToStaticMarkup(
+      <ImportPanel
+        state={{ ...idle, result }}
+        actions={actions}
+        refresh={quiet}
+        cardEdited={false}
+      />,
+    ),
+    /Save or undo|disabled="">Accept/,
   );
   // While the answer waits, the button is gone.
   assert.doesNotMatch(answered, /Get information about me/);

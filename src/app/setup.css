@@ -466,6 +466,16 @@
   font-size: 15px;
 }
 
+.import__busy .link-button {
+  margin-left: 8px;
+}
+
+.import__chosen {
+  color: var(--accent-deep);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .import__when {
   display: block;
   color: var(--ink-2);
