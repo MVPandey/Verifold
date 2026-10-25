@@ -386,7 +386,7 @@ await test('the choices: stored compact by harness with what turns each skill of
     '/home/p/.agents/skills/constructor/SKILL.md',
   ]);
   assert.deepEqual(skillsOff(choices, 'claude'), ['python']);
-  // Without `when`, the note stays. Yes with no note leaves no entry.
+  // Without `when`, the note stays. A Yes with no note stays as a choice.
   await writeOwnChoices(agency, [
     change('claude', 'python', true),
     change('codex', 'python', true, ''),
@@ -398,12 +398,18 @@ await test('the choices: stored compact by harness with what turns each skill of
     when: 'Never here.',
     off: [],
   });
-  assert.equal(choices.codex.has(codexId('python')), false);
+  assert.deepEqual(choices.codex.get(codexId('python')), {
+    name: 'python',
+    use: true,
+    when: '',
+    off: [],
+  });
   const raw = await readFile(join(agency, 'own-skills.json'), 'utf8');
   assert.doesNotMatch(raw, /\n/);
   assert.deepEqual(
     (JSON.parse(raw) as { skills: { codex: unknown } }).skills.codex,
     {
+      [codexId('python')]: { name: 'python', use: true },
       [codexId('constructor')]: {
         name: 'constructor',
         use: false,

@@ -8,10 +8,11 @@ export const setupPollMs = 1_000;
 /**
  * The first run's view: read once, again after `refresh`, and each second
  * while Verifold looks for the harnesses, an agent writes, the prices load,
- * the skill catalogs load, or Verifold lists the person's own skills. Each
- * read has a number: `refresh` returns the number of the read that it
- * starts, and `landed` is the number of the last read that answered, with
- * its view or its error. A new read stops the one before it.
+ * the skill catalogs load, Verifold lists the person's own skills, or the
+ * person's harnesses answer an import. Each read has a number: `refresh`
+ * returns the number of the read that it starts, and `landed` is the
+ * number of the last read that answered, with its view or its error. A new
+ * read stops the one before it.
  */
 export function useSetup(read: SetupActions['read']): {
   readonly view: SetupView | null;
@@ -45,6 +46,7 @@ export function useSetup(read: SetupActions['read']): {
     view !== null &&
     (view.agents.checking ||
       view.about.busy !== null ||
+      Boolean(view.about.import?.busy) ||
       view.money.reading ||
       Boolean(view.skills?.busy) ||
       Boolean(view.skills?.ownReading));

@@ -34,6 +34,7 @@ import {
   type ChatHarness,
   type ChatLine,
 } from '../core/profile-chat.ts';
+import { importProfile, type ProfileImport } from '../core/profile-import.ts';
 import {
   copyGlobalProfile,
   isolationProblem,
@@ -100,6 +101,8 @@ export interface FirstRunOptions {
   readonly github?: GitHubHosts;
   /** List the skills that the person's own harnesses load, such as `listOwnSkills`. Without it, the Skills step lists none. */
   readonly ownSkills?: (signal: AbortSignal) => Promise<OwnSkills>;
+  /** Claude Code's settings folder, which the import reads. Tests use a fake one. */
+  readonly claudeConfig?: string;
 }
 
 /**
@@ -146,6 +149,17 @@ export class FirstRun {
   >();
 
   private readonly skills: SkillsStep;
+  /** The import that runs: when it started, the harnesses that it asks, and what stops it. Null: none runs. */
+  private importing: {
+    readonly at: string;
+    asking: readonly HarnessName[];
+    readonly stop: AbortController;
+  } | null = null;
+  /** An import that the person stopped, until its harnesses end. The next import waits for it. */
+  private stopping: Promise<void> = Promise.resolve();
+  /** The import's result, until the person accepts or discards it. */
+  private imported: ProfileImport | null = null;
+  private importError: string | null = null;
 
   constructor(options: FirstRunOptions) {
     this.options = options;
@@ -226,6 +240,7 @@ export class FirstRun {
         busy: this.busy,
         error: this.error,
         limits: { answer: answerLimit, ...cardLimits },
+        import: await this.importView(),
       },
       skills: await this.skills.view(),
       money: {
@@ -426,6 +441,18 @@ export class FirstRun {
         return this.skills.ownChoices(body.choices);
       case 'setup-own-skills-list':
         return Promise.resolve(this.skills.listOwn(body.again));
+      case 'setup-import':
+        return this.startImport();
+      case 'setup-import-accept':
+        await this.acceptImport();
+        return 200;
+      case 'setup-import-discard':
+        // While the import runs, this stops it.
+        this.importing?.stop.abort();
+        this.importing = null;
+        this.imported = null;
+        this.importError = null;
+        return 200;
       case 'setup-skills-done':
         await this.write((current) => ({
           ...current,
@@ -488,6 +515,122 @@ export class FirstRun {
         steps: { ...current.steps, agents: 'done' },
       };
     });
+  }
+
+  /** The import as the page shows it. A skill that the person already chose says so: Accept leaves it as it is. */
+  private async importView(): Promise<
+    NonNullable<SetupView['about']['import']>
+  > {
+    const result = this.imported;
+    const chosen = result ? await this.skills.savedChoices() : null;
+    return {
+      busy: this.importing?.at ?? null,
+      asking: this.importing?.asking ?? [],
+      error: this.importError,
+      result: result && {
+        ...result,
+        skills: result.skills.map((skill) => {
+          const choice = chosen?.[skill.harness].get(skill.id);
+          return choice ? { ...skill, chosen: choice.use } : skill;
+        }),
+      },
+    };
+  }
+
+  /**
+   * Ask each harness that the person uses what it knows about them. The
+   * view shows the result when it comes. Nothing is saved until the person
+   * accepts it. An import that the person stopped ends first.
+   */
+  private async startImport(): Promise<number> {
+    if (this.importing) fail('Verifold asks your agents now. Wait a moment.');
+    // Taken before the first wait, so a second request at the same time is refused.
+    const run = {
+      at: new Date().toISOString(),
+      asking: [] as readonly HarnessName[],
+      stop: new AbortController(),
+    };
+    this.importing = run;
+    this.imported = null;
+    this.importError = null;
+    let harnesses: ChatHarness[];
+    try {
+      await this.stopping;
+      if (!this.detected) this.check();
+      await this.detecting;
+      harnesses = inUse(this.detected ?? [], (await this.settings()).agency);
+      if (!harnesses.length)
+        fail(
+          'No agent that you use is signed in. Sign in to Claude Code or Codex, then try again.',
+        );
+    } catch (error) {
+      if (this.importing === run) this.importing = null;
+      throw error;
+    }
+    if (run.stop.signal.aborted) return 200;
+    run.asking = harnesses.map((harness) => harness.host);
+    const signal = AbortSignal.any([this.options.signal, run.stop.signal]);
+    const work = (async () => {
+      try {
+        const [merger, skills] = await Promise.all([
+          this.chatHarness(),
+          this.skills.ownList(),
+        ]);
+        const result = await importProfile({
+          harnesses,
+          merger,
+          skills,
+          signal,
+          ...(this.options.harness ? { run: this.options.harness } : {}),
+          ...(this.options.claudeConfig
+            ? { claudeConfig: this.options.claudeConfig }
+            : {}),
+        });
+        if (!signal.aborted) this.imported = result;
+      } catch (error) {
+        if (!signal.aborted)
+          this.importError =
+            error instanceof SessionActionError
+              ? error.message
+              : `Verifold could not ask your agents${error instanceof Error ? `: ${error.message.slice(0, 300)}` : '.'}`;
+      } finally {
+        if (this.importing === run) this.importing = null;
+      }
+    })();
+    // A stop leaves the harnesses to end. The next import waits for them.
+    run.stop.signal.addEventListener('abort', () => {
+      this.stopping = work;
+    });
+    return 202;
+  }
+
+  /**
+   * Accept the import: the card becomes the draft, which the person still
+   * edits and saves with "Looks right", and each skill that it named and
+   * the person never chose is set. It holds the conversation meanwhile, so
+   * an answer, a save, or a new start waits.
+   */
+  private async acceptImport(): Promise<void> {
+    const result =
+      this.imported ??
+      fail('Nothing waits to be accepted. Ask your agents first.');
+    this.idle();
+    this.holding = true;
+    const generation = this.generation;
+    try {
+      await this.skills.importChoices(result.skills);
+    } finally {
+      this.holding = false;
+    }
+    // Discarded, replaced, or the conversation started again meanwhile.
+    if (this.imported !== result || generation !== this.generation) return;
+    this.imported = null;
+    const { card } = result;
+    if (card.workOn || card.explore || card.talk) {
+      this.card = card;
+      this.error = null;
+      this.retryNote = undefined;
+    }
   }
 
   /** Refuse a change of the conversation while an answer or a save runs. */
@@ -709,6 +852,10 @@ export class FirstRun {
    */
   async close(why: 'copied' | 'started'): Promise<void> {
     this.closed = why;
+    // An import would save into settings that take no more saves.
+    this.importing?.stop.abort();
+    this.importing = null;
+    this.imported = null;
     await this.queue;
   }
 
@@ -883,16 +1030,42 @@ function chatChoice(
   detected: readonly HarnessStatus[],
   agency: Agency | null,
 ): ChatHarness | null {
-  const order: HarnessName[] = agency
-    ? [agency.host, ...(agency.helper ? [agency.helper] : [])]
-    : ['claude', 'codex'];
-  for (const name of order) {
+  for (const name of harnessOrder(agency)) {
     const status = detected.find((entry) => entry.harness === name);
-    if (status?.signedIn !== true) continue;
-    const model = profileModel(name, agency) ?? status.models[0]?.id;
-    return { host: name, ...(model ? { model } : {}) };
+    if (status?.signedIn === true) return withModel(status, agency);
   }
   return null;
+}
+
+/** The lead and the helper of the agents step. Before it, Claude Code, then Codex. */
+function harnessOrder(agency: Agency | null): HarnessName[] {
+  return agency
+    ? [agency.host, ...(agency.helper ? [agency.helper] : [])]
+    : ['claude', 'codex'];
+}
+
+/** A harness with the model that the person picked for it, else the first one offered. */
+function withModel(status: HarnessStatus, agency: Agency | null): ChatHarness {
+  const model = profileModel(status.harness, agency) ?? status.models[0]?.id;
+  return { host: status.harness, ...(model ? { model } : {}) };
+}
+
+/**
+ * The harnesses that the import asks, the lead first: each one that the
+ * agents step uses, else each one that is installed. A harness that is
+ * signed out is left out. One whose sign-in Verifold could not tell is
+ * asked, and its failure shows in the result.
+ */
+function inUse(
+  detected: readonly HarnessStatus[],
+  agency: Agency | null,
+): ChatHarness[] {
+  return harnessOrder(agency).flatMap((name) => {
+    const status = detected.find((entry) => entry.harness === name);
+    return status?.installed && status.signedIn !== false
+      ? [withModel(status, agency)]
+      : [];
+  });
 }
 
 /** A harness as the agents step shows it, with the person's saved choice. */

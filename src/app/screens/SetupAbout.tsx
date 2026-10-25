@@ -15,15 +15,7 @@ import { harnessName, since } from '../format.ts';
 import { afterSend } from '../intent.ts';
 import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
-
-const fieldNames: readonly {
-  readonly field: keyof ProfileCard;
-  readonly label: string;
-}[] = [
-  { field: 'workOn', label: 'You work on' },
-  { field: 'explore', label: 'To explore' },
-  { field: 'talk', label: 'Talk to me' },
-];
+import { cardFields, ImportPanel } from './SetupImport.tsx';
 
 function sameCard(a: ProfileCard, b: ProfileCard): boolean {
   return a.workOn === b.workOn && a.explore === b.explore && a.talk === b.talk;
@@ -103,7 +95,7 @@ function CardView({
         </button>
       </div>
       <dl className="profile__fields">
-        {fieldNames.map(({ field, label }) => (
+        {cardFields.map(({ field, label }) => (
           <div key={field} className="profile__field">
             <dt>
               {editing ? (
@@ -183,9 +175,10 @@ export function AboutStep({
     actions.about(value, key),
   );
   const skip = useAction((_: null, key) => actions.skip('about', key));
-  // A typed answer, or card edits.
+  const cardEdited = edited && !sameCard(edits.card, edits.from);
+  // A typed answer, card edits, or an import that waits for Accept or Discard.
   useUnsaved(
-    text.trim() !== '' || (edited && !sameCard(edits.card, edits.from)),
+    text.trim() !== '' || cardEdited || Boolean(about.import?.result),
     nav,
   );
   const error =
@@ -208,6 +201,12 @@ export function AboutStep({
           states={view.steps}
           nav={nav}
           title="About you"
+        />
+        <ImportPanel
+          state={about.import}
+          actions={actions}
+          refresh={refresh}
+          cardEdited={false}
         />
         <section aria-label="Your profile" className="profile">
           <h2 className="profile__title">
@@ -267,6 +266,12 @@ export function AboutStep({
         states={view.steps}
         nav={nav}
         title="About you"
+      />
+      <ImportPanel
+        state={about.import}
+        actions={actions}
+        refresh={refresh}
+        cardEdited={cardEdited}
       />
       <section aria-label="Conversation" className="chat">
         {about.lines.map((line, index) => (

@@ -7,9 +7,11 @@ import {
   parseCard,
   writeOwnChoices,
   type OwnChange,
+  type OwnChoices,
 } from '../core/agency.ts';
 import type { runHarness } from '../core/harness.ts';
 import type { OwnSkill, OwnSkills } from '../core/own-skills.ts';
+import type { ImportedSkill } from '../core/profile-import.ts';
 import type { ChatHarness } from '../core/profile-chat.ts';
 import { SessionActionError } from '../core/session.ts';
 import {
@@ -162,6 +164,43 @@ export class SkillsStep {
         this.listing = null;
       });
     return 202;
+  }
+
+  /** The listed skills. Without a list that has skills, it lists them first and waits. */
+  async ownList(): Promise<readonly OwnSkill[]> {
+    this.listOwn(false);
+    await this.listing;
+    return this.own ?? [];
+  }
+
+  /** The person's saved choices for their own skills. Null: the file cannot be read. */
+  savedChoices(): Promise<OwnChoices | null> {
+    return this.choices();
+  }
+
+  /**
+   * Save an import's view of the skills that the person never chose: Yes
+   * with its note for each one that fits, No for each one that does not. A
+   * saved choice, and a skill that the list no longer has, stay as they are.
+   */
+  async importChoices(skills: readonly ImportedSkill[]): Promise<void> {
+    const saved = await this.choices();
+    const listed = new Set(
+      (this.own ?? []).map((skill) => `${skill.harness}\0${skill.id}`),
+    );
+    const choices = skills
+      .filter(
+        (skill) =>
+          listed.has(`${skill.harness}\0${skill.id}`) &&
+          !saved?.[skill.harness].has(skill.id),
+      )
+      .map((skill) => ({
+        harness: skill.harness,
+        id: skill.id,
+        use: skill.fits,
+        ...(skill.fits ? { when: skill.when } : {}),
+      }));
+    if (choices.length) await this.ownChoices(choices);
   }
 
   async view(): Promise<SetupSkills> {

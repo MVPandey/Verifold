@@ -22,6 +22,7 @@ import {
 } from '../src/app/setup.ts';
 import { AgentsStep } from '../src/app/screens/SetupAgents.tsx';
 import { AboutStep } from '../src/app/screens/SetupAbout.tsx';
+import { ImportPanel } from '../src/app/screens/SetupImport.tsx';
 import { MoneyStep, moneyUnsaved } from '../src/app/screens/SetupMoney.tsx';
 import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
 import {
@@ -1396,4 +1397,148 @@ await test("the Ask page goes Back to the isolated project's last step, or to th
   assert.match(global, /href="#\/setup\/agents">Profile</);
   assert.match(global, /class="ask__back" href="#\/new">Back</);
   assert.match(global, />Change</);
+});
+
+await test('step 2 offers to ask the harnesses: the button with what they read, a line while they answer, then their answer with Accept and Discard', async (t) => {
+  const step = (fields: Partial<SetupAbout>): string =>
+    text(
+      <AboutStep
+        view={view({ about: { ...about, ...fields } })}
+        actions={actions}
+        refresh={quiet}
+        onSaved={quiet}
+        nav={nav}
+      />,
+    );
+  // An older Verifold has no import, so the step shows no button.
+  assert.doesNotMatch(step({}), /Get information about me/);
+  const idle = { busy: null, asking: [], error: null, result: null } as const;
+  const ready = step({ import: idle });
+  assert.match(
+    ready,
+    /Get information about me from my harnesses Each harness reads its own memories, instructions and skills, read-only\. It doesn’t read your past sessions\. Nothing is saved until you accept\./,
+  );
+  assert.match(
+    step({ import: { ...idle, error: 'No agent that you use is signed in.' } }),
+    /No agent that you use is signed in\./,
+  );
+  assert.match(
+    step({
+      import: {
+        ...idle,
+        busy: new Date().toISOString(),
+        asking: ['claude', 'codex'],
+      },
+    }),
+    /Claude Code and Codex read what they know about you · \d+ s Stop/,
+  );
+  // Before Verifold knows which harnesses to ask.
+  assert.match(
+    step({ import: { ...idle, busy: new Date().toISOString() } }),
+    /Verifold finds your harnesses · \d+ s Stop/,
+  );
+  const answered = step({
+    import: {
+      ...idle,
+      result: {
+        from: ['claude'],
+        card: { workOn: 'CoT faithfulness.', explore: '', talk: 'Short.' },
+        skills: [
+          {
+            harness: 'claude',
+            id: 'research-paper-writing',
+            name: 'research-paper-writing',
+            fits: true,
+            when: 'For paper drafts.',
+          },
+          {
+            harness: 'claude',
+            id: 'vercel:deploy',
+            name: 'vercel:deploy',
+            fits: false,
+            when: '',
+            chosen: true,
+          },
+        ],
+        read: ['Claude Code: My instructions.'],
+        problems: ['Codex did not answer: it timed out.'],
+      },
+    },
+  });
+  assert.match(
+    answered,
+    /What Claude Code knows about you You work on CoT faithfulness\. To explore Not known Talk to me Short\./,
+  );
+  assert.match(
+    answered,
+    /Skills that fit your research research-paper-writing · Claude Code For paper drafts\. Not for research: 1 vercel:deploy · Claude Code · You chose Yes/,
+  );
+  assert.match(
+    answered,
+    /Claude Code: My instructions\. Codex did not answer: it timed out\./,
+  );
+  assert.match(
+    answered,
+    /Accept makes this your draft card\. You can still edit it before you save it\. It also sets the skills that you have not chosen yet: Yes, with the note, for each one that fits, and No for each one that does not\. Accept Discard/,
+  );
+  // With card edits that are not saved, Accept waits, and says why.
+  const result = {
+    from: ['claude' as const],
+    card: { workOn: 'CoT.', explore: '', talk: '' },
+    skills: [],
+    read: [],
+    problems: [],
+  };
+  const held = renderToStaticMarkup(
+    <ImportPanel
+      state={{ ...idle, result }}
+      actions={actions}
+      refresh={quiet}
+      cardEdited
+    />,
+  );
+  assert.match(held, /Save or undo your card edits first\./);
+  assert.match(
+    held,
+    /<button type="button" class="button button--primary" disabled="">Accept/,
+  );
+  assert.doesNotMatch(
+    renderToStaticMarkup(
+      <ImportPanel
+        state={{ ...idle, result }}
+        actions={actions}
+        refresh={quiet}
+        cardEdited={false}
+      />,
+    ),
+    /Save or undo|disabled="">Accept/,
+  );
+  // While the answer waits, the button is gone.
+  assert.doesNotMatch(answered, /Get information about me/);
+  // Each action goes to its own route, with the key of the intent.
+  const sent: unknown[] = [];
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+    sent.push([
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+      typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+    ]);
+    return Promise.resolve(new Response('{"ok":true}', { status: 202 }));
+  };
+  const live = setupActions('token');
+  await live.importAsk('a'.repeat(32));
+  await live.importAccept('b'.repeat(32));
+  await live.importDiscard('c'.repeat(32));
+  assert.deepEqual(sent, [
+    ['/api/v1/actions/setup-import', { key: 'a'.repeat(32) }],
+    ['/api/v1/actions/setup-import-accept', { key: 'b'.repeat(32) }],
+    ['/api/v1/actions/setup-import-discard', { key: 'c'.repeat(32) }],
+  ]);
 });

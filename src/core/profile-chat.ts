@@ -1,11 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { cardLimits, type ProfileCard } from './agency.ts';
 import { runHarness, type HarnessName } from './harness.ts';
 import { loadPrompt } from './prompts.ts';
 import { parseHostJson } from './research-contracts.ts';
 import { SessionActionError } from './session.ts';
+import { inEmptyFolder } from './storage.ts';
 
 /**
  * The "About you" conversation of the first run. Verifold asks the first
@@ -71,6 +69,19 @@ function field(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.trim().slice(0, limit) : '';
 }
 
+/** The card in a harness's reply, each field cut to its limit. Null: no card, or no field with text. */
+export function replyCard(value: unknown): ProfileCard | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return null;
+  const fields = value as Record<string, unknown>;
+  const card = {
+    workOn: field(fields.workOn, cardLimits.workOn),
+    explore: field(fields.explore, cardLimits.explore),
+    talk: field(fields.talk, cardLimits.talk),
+  };
+  return card.workOn || card.explore || card.talk ? card : null;
+}
+
 /** The harness's reply as a step. A question when none is left is refused. */
 function parseStep(text: string, left: number): ChatStep {
   let value: unknown;
@@ -81,17 +92,8 @@ function parseStep(text: string, left: number): ChatStep {
   }
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const reply = value as Record<string, unknown>;
-    const card = reply.card;
-    if (typeof card === 'object' && card !== null && !Array.isArray(card)) {
-      const fields = card as Record<string, unknown>;
-      const result = {
-        workOn: field(fields.workOn, cardLimits.workOn),
-        explore: field(fields.explore, cardLimits.explore),
-        talk: field(fields.talk, cardLimits.talk),
-      };
-      if (result.workOn || result.explore || result.talk)
-        return { card: result };
-    }
+    const card = replyCard(reply.card);
+    if (card) return { card };
     const question = field(reply.question, 300);
     if (question && left > 0)
       return {
@@ -130,8 +132,7 @@ export async function nextStep(input: {
     return localStep(lines);
   }
   const left = card ? 0 : Math.max(0, followUps - asked(lines));
-  const folder = await mkdtemp(join(tmpdir(), 'verifold-profile-'));
-  try {
+  return inEmptyFolder('profile', async (folder) => {
     const result = await (input.run ?? runHarness)({
       host: harness.host,
       ...(harness.model ? { model: harness.model } : {}),
@@ -154,9 +155,7 @@ ${JSON.stringify({
 })}`,
     });
     return parseStep(result.text, left);
-  } finally {
-    await rm(folder, { recursive: true, force: true });
-  }
+  });
 }
 
 /**
