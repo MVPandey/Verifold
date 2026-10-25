@@ -70,6 +70,11 @@ export interface Snapshot {
    * archives it first. Added after version 1.
    */
   readonly researchRun?: boolean;
+  /**
+   * The project uses its own settings, at `#/project/setup`, not the global
+   * ones. Added after version 1.
+   */
+  readonly ownProfile?: true;
   /** The snapshot left items out: lists past their bounds, or less of a large lab to stay under the size bound. */
   readonly trimmed: boolean;
 }
@@ -1037,6 +1042,12 @@ export interface SetupView {
    * is the global one, which this view only shows. Added after version 1.
    */
   readonly scope?: 'global' | 'project';
+  /**
+   * Without a project, in the global settings: when the global settings
+   * were copied for an isolated project in this folder, which the person
+   * can go on with. Null: there is no copy. Added after version 1.
+   */
+  readonly ownCopied?: string | null;
   /** Each step: `done`, `skipped`, or null when the person never saw it. An older server has no `skills`. */
   readonly steps: Readonly<
     Record<Exclude<SetupStep, 'skills'>, 'done' | 'skipped' | null> &
@@ -1225,6 +1236,12 @@ export interface SetupMoney {
   readonly limits: MoneyLimits;
   /** Why the saved limits are not valid. The defaults show until a save replaces them. */
   readonly unreadable?: string | null;
+  /**
+   * A project's own settings: the global monthly limit, which counts every
+   * project and which only the global settings change. `usd` null: no
+   * monthly limit. Null: Verifold cannot read it. Added after version 1.
+   */
+  readonly globalMonth?: { readonly usd: number | null } | null;
   /**
    * What all projects spent on GPU pods this calendar month. `problem`: why
    * Verifold cannot tell it, or counts a last known value. Added after

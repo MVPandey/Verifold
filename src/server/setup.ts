@@ -34,10 +34,15 @@ import {
   type ChatHarness,
   type ChatLine,
 } from '../core/profile-chat.ts';
-import { readyDraft } from '../core/project-profile.ts';
+import {
+  copyGlobalProfile,
+  ownProfileCopied,
+  ownProfileFolder,
+} from '../core/project-profile.ts';
 import { commonGpus, type GpuOffer } from '../core/runpod.ts';
 import { SessionActionError, hostName } from '../core/session.ts';
 import type { GitHubHosts } from '../core/skills.ts';
+import { isFolder } from '../core/storage.ts';
 import type { AgentTool, GpuPrice, SetupView } from '../protocol/api.ts';
 import { record } from './http.ts';
 import { SkillsStep } from './setup-skills.ts';
@@ -130,6 +135,8 @@ export class FirstRun {
   private monthRead: { readonly at: number; readonly read: MonthRead } | null =
     null;
   private queue: Promise<unknown> = Promise.resolve();
+  /** A copy again of the global settings replaced this run's folder. */
+  private closed = false;
   private readonly requests = new Map<
     string,
     { readonly status: Promise<number>; readonly at: number }
@@ -175,12 +182,7 @@ export class FirstRun {
     );
   }
 
-  /**
-   * The view. `scope` `project` asks for a project's own profile, which
-   * this run has only when it was made with `global`.
-   */
-  async view(scope?: 'project'): Promise<SetupView> {
-    this.scoped(scope);
+  async view(): Promise<SetupView> {
     if (!this.detected) this.check();
     const settings = await this.settings();
     const markdown = await loadMemory(this.options.directory).catch(() => null);
@@ -189,12 +191,14 @@ export class FirstRun {
     const chat = chatChoice(this.detected ?? [], settings.agency);
     const month = await this.month();
     const global = this.options.global;
-    // A project's own profile shows the global monthly limit, which counts every project.
-    const limits = settings.money ?? profileMoneyDefaults;
-    const monthUsd = global
-      ? ((await loadSettings(global).catch(() => null))?.money?.monthUsd ??
-        null)
-      : limits.monthUsd;
+    // A project's own profile shows the global monthly limit, which counts every project. Null: it does not read.
+    const globalMonth = global
+      ? await loadSettings(global).then(
+          (read) =>
+            read.unreadMoney ? null : { usd: read.money?.monthUsd ?? null },
+          () => null,
+        )
+      : undefined;
     return {
       scope: global ? 'project' : 'global',
       steps: {
@@ -235,7 +239,8 @@ export class FirstRun {
             : null,
         reading: this.reading !== null || this.saving !== null,
         problem: this.problem,
-        limits: { ...limits, monthUsd },
+        limits: settings.money ?? profileMoneyDefaults,
+        ...(globalMonth === undefined ? {} : { globalMonth }),
         unreadable: settings.unreadMoney
           ? `The saved GPU limits are not valid: ${settings.unreadMoney.reason} They show the defaults until you save new ones.`
           : null,
@@ -279,6 +284,10 @@ export class FirstRun {
    * a lock that a terminal holds, comes back as a reason for the person.
    */
   private locked<T>(work: () => Promise<T>): Promise<T> {
+    if (this.closed)
+      fail(
+        'These settings were copied from your global settings again. Reload the page.',
+      );
     const next = this.queue
       .then(() =>
         withProfileLock(this.options.directory, this.options.signal, work),
@@ -332,7 +341,6 @@ export class FirstRun {
    * in the background, and the view then shows how it ends.
    */
   act(body: Record<string, unknown>): Promise<number> {
-    this.scoped(body.profile);
     const key =
       typeof body.key === 'string' && /^[a-f0-9]{32}$/.test(body.key)
         ? body.key
@@ -677,10 +685,9 @@ export class FirstRun {
     return this.background(work, 'Verifold could not read the prices.', asked);
   }
 
-  /** Refuse a request for a project's own profile when this run holds the global one. */
-  private scoped(scope: unknown): void {
-    if (scope !== undefined && (scope !== 'project' || !this.options.global))
-      fail('This Verifold has no profile of a project to set up here.');
+  /** The settings were copied again: this run saves nothing more, and a new one takes over. */
+  close(): void {
+    this.closed = true;
   }
 
   private async saveMoney(body: Record<string, unknown>): Promise<void> {
@@ -709,53 +716,77 @@ export class FirstRun {
 }
 
 /**
- * The first run while Verifold runs without a project: the global profile,
- * and, for `profile: 'project'`, the draft of the own profile of the
- * project that starts. The draft is made from the global profile at its
- * first use, and `setup-copy-global` makes it again.
+ * The first runs of one Verifold: the global profile, and, for
+ * `profile: 'project'`, an isolated project's own profile in
+ * `.verifold/agency/` of its folder.
+ * - `own` `new`, without a project: the first use copies the global
+ *   profile there, and `setup-copy-global` copies it again.
+ * - `own` `project`: an isolated project, with its own profile.
+ * - `own` null: a project on the global settings, which has none.
  */
-export class StartFirstRun {
-  private readonly options: FirstRunOptions & { readonly root: string };
+export class FirstRuns {
+  private readonly options: FirstRunOptions & {
+    /** The folder of the project, or where Verifold started without one. */
+    readonly root: string;
+    readonly own: 'new' | 'project' | null;
+  };
   private readonly global: FirstRun;
-  private draft: Promise<FirstRun> | null = null;
+  private project: FirstRun | null = null;
+  /** The own profile's runs, and the copies of the global settings, one at a time. */
+  private copying: Promise<unknown> = Promise.resolve();
 
-  /** `root`: the folder where Verifold started, whose draft this is. */
-  constructor(options: FirstRunOptions & { readonly root: string }) {
+  /** `directory`: the global profile folder. */
+  constructor(options: FirstRuns['options']) {
     this.options = options;
     this.global = new FirstRun(options);
   }
 
-  /** The draft's first run, once the draft exists. A failure is not kept. A copy again starts a new conversation. */
-  private project(again = false): Promise<FirstRun> {
-    if (again || !this.draft) {
-      const { directory, root, signal } = this.options;
-      const made = readyDraft(directory, root, signal, again).then(
-        (folder) =>
-          new FirstRun({
-            ...this.options,
-            directory: folder,
-            global: directory,
-          }),
+  /** The own profile's run. `again`: copy the global settings again first, and start a new run. */
+  private ownRun(again = false): Promise<FirstRun> {
+    const { own, root, directory, signal } = this.options;
+    if (!own) fail('This project uses your global settings.');
+    if (again && own !== 'new')
+      fail(
+        'This project has started, so its settings stay. Change them step by step.',
       );
-      this.draft = made;
-      made.catch(() => {
-        if (this.draft === made) this.draft = null;
+    const next = this.copying.then(async () => {
+      if (this.project && !again) return this.project;
+      const folder = ownProfileFolder(root);
+      if (own === 'new' && (again || !(await isFolder(folder))))
+        await copyGlobalProfile(directory, root, signal).catch(
+          (error: unknown) => {
+            if (error instanceof SessionActionError) throw error;
+            fail(
+              `Verifold could not copy your global settings for this project: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
+          },
+        );
+      this.project?.close();
+      this.project = new FirstRun({
+        ...this.options,
+        directory: folder,
+        global: directory,
       });
-    }
-    return this.draft;
+      return this.project;
+    });
+    this.copying = next.catch(() => {});
+    return next;
   }
 
+  /** The view. Without a project, the global view says when this folder's own settings were copied. */
   async view(scope?: 'project'): Promise<SetupView> {
-    return scope === 'project'
-      ? (await this.project()).view('project')
-      : this.global.view(scope);
+    if (scope === 'project') return (await this.ownRun()).view();
+    const view = await this.global.view();
+    return this.options.own === 'new'
+      ? { ...view, ownCopied: await ownProfileCopied(this.options.root) }
+      : view;
   }
 
   async act(body: Record<string, unknown>): Promise<number> {
     if (body.profile !== 'project') return this.global.act(body);
     if (body.action !== 'setup-copy-global')
-      return (await this.project()).act(body);
-    await this.project(true);
+      return (await this.ownRun()).act(body);
+    await this.ownRun(true);
     return 200;
   }
 }

@@ -168,11 +168,11 @@ Profile setup and initialization share a lock on the global settings, so only on
 A folder without a project opens on a choice:
 
 - **Use my global settings** opens the Ask page. If you did not finish the first run, its open steps come first.
-- **Isolated project** opens the same four steps for this project only. They start as a copy of your global settings, and a change here does not change the global ones. "Start again from my global settings" copies them again.
+- **Isolated project** opens the same four steps for this project only. They start as a copy of your global settings, and a change here does not change the global ones. "Start again from my global settings" copies them again. When you come back to a folder that holds such a copy, this choice reads **Continue this project's settings** and says when the copy was made.
 
-Until you start the project, Verifold keeps its settings in `drafts/` in your global profile folder. Then the project keeps them in `.verifold/agency/`, and `workspace.json` records `ownProfile`. Each later `verifold` in the project uses them, also with `--agency-dir`, which only moves the global folder. Lab agents and checkers cannot read the folder. In the project, Profile opens these settings.
+The copy is in `.verifold/agency/` of the folder from the moment you choose Isolated project, so an isolated project stays in this folder: its Ask page has no Change for the folder. Start records `ownProfile` in `workspace.json`. Each later `verifold` in the project uses these settings, also with `--agency-dir`, which only moves the global folder. A project that you start on the global settings instead removes a copy that you left in its folder. No agent or session that Verifold runs unattended can read the folder: tasks, the coordinator, lab agents, checkers, and runs. In the project, Profile opens these settings, and Settings links to them and to your global settings.
 
-The monthly GPU limit across projects stays in your global settings. An isolated project counts toward it, and its GPU money step only shows it. The RunPod key is the same for every project.
+The monthly GPU limit across projects stays in your global settings. An isolated project counts toward it, and its GPU money step only shows it. The RunPod key is the same for every project on this computer, so a new key in any project's settings replaces it for all of them.
 
 ### Editable harness prompts
 

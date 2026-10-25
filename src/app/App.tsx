@@ -259,8 +259,13 @@ function Page({
       </Notice>
     );
   if (route.page === 'unknown') return <NotFound />;
-  // An isolated project's own settings are for a folder without a project. In a project, its settings open at #/setup.
-  if (route.page === 'setup' && route.scope && snapshot?.project)
+  // A project on the global settings has no settings of its own.
+  if (
+    route.page === 'setup' &&
+    route.scope &&
+    snapshot?.project &&
+    !snapshot.ownProfile
+  )
     return <Redirect to={href.setup(route.step ?? undefined)} />;
   if (route.page === 'setup')
     return (
@@ -345,6 +350,7 @@ function Page({
       <div className="page">
         <AppHeader
           project={snapshot.project}
+          own={snapshot.ownProfile === true}
           lab={null}
           now={now}
           onPause={actions.pause}
