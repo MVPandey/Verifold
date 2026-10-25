@@ -23,6 +23,12 @@ export function pageAfter(step: SetupStep): SetupPage {
   return setupSteps[setupSteps.indexOf(step) + 1] ?? 'done';
 }
 
+/** The step before a page. Null: the first step. */
+export function pageBefore(page: SetupPage): SetupStep | null {
+  const at = page === 'done' ? setupSteps.length : setupSteps.indexOf(page);
+  return setupSteps[at - 1] ?? null;
+}
+
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

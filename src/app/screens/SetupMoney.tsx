@@ -41,11 +41,13 @@ export function MoneyStep({
   actions,
   refresh,
   onSaved,
+  onBack,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
+  readonly onBack: () => void;
 }): ReactNode {
   const money = view.money;
   const keyField = useId();
@@ -368,6 +370,9 @@ export function MoneyStep({
         </span>
       )}
       <div className="setup__actions">
+        <button type="button" className="button button--big" onClick={onBack}>
+          Back
+        </button>
         <button
           type="button"
           className="button button--primary button--big"

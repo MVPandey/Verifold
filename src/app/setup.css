@@ -44,7 +44,16 @@
   gap: 6px;
 }
 
+/* Each segment is a link to its step. The padding makes a 24 px target, and the negative margin keeps the bar's place. */
+.step__link {
+  display: block;
+  margin: -10px 0;
+  padding: 10px 0;
+  border-radius: 4px;
+}
+
 .step__segment {
+  display: block;
   height: 4px;
   border-radius: 2px;
   background: var(--line-faint);
@@ -52,6 +61,19 @@
 
 .step__segment--done {
   background: var(--accent);
+}
+
+/* The ring stays inside the target, so it does not cover the step label above. */
+.step__link:focus-visible {
+  outline-offset: -3px;
+}
+
+.step__link:hover .step__segment {
+  background: var(--control);
+}
+
+.step__link:hover .step__segment--done {
+  background: var(--accent-deep);
 }
 
 .step__title {
