@@ -72,10 +72,10 @@
   );
 }
 
-/* The current step stands out in any state. The scale keeps the bar's height. */
+/* The current step keeps its state's color, with a ring on top. */
 .step__link[aria-current='step'] .step__segment {
-  background: var(--accent-deep);
-  transform: scaleY(2);
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
 }
 
 /* The ring stays inside the target, so it does not cover the step label above. */

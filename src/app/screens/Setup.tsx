@@ -1,16 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { SetupStep, SetupView } from '../../protocol/api.ts';
+import type { SetupView } from '../../protocol/api.ts';
 import { Logo } from '../components/Icons.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
-import { href, parseRoute, replaceRoute } from '../route.ts';
+import { href, plainClick, replaceRoute } from '../route.ts';
 import {
   firstPage,
   pageAfter,
-  pageBefore,
   setupSteps,
   shownSteps,
   type SetupActions,
   type SetupPage as Page,
+  type StepNav,
 } from '../setup.ts';
 import { useSetup } from '../useSetup.ts';
 import { AboutStep } from './SetupAbout.tsx';
@@ -25,15 +25,33 @@ const stepTitles = {
   money: 'GPU money',
 } as const;
 
-/** The first run's top bar. With a project, it leads back to the lab. */
-function SetupHeader({ project }: { readonly project: string }): ReactNode {
+/**
+ * The first run's top bar. With a project, it leads back to the lab, through
+ * `onLeave`, which asks first while the step holds unsaved input.
+ */
+function SetupHeader({
+  project,
+  onLeave,
+}: {
+  readonly project: string;
+  readonly onLeave: (to: string) => void;
+}): ReactNode {
   return (
     <header className="header">
       <Logo />
       <span className="header__brand">verifold</span>
       <div className="header__spacer" />
       {project ? (
-        <a href={href.lab}>Back to the lab</a>
+        <a
+          href={href.lab}
+          onClick={(event) => {
+            if (!plainClick(event)) return;
+            event.preventDefault();
+            onLeave(href.lab);
+          }}
+        >
+          Back to the lab
+        </a>
       ) : (
         <span className="header__note">
           Set up once. Every project starts from it.
@@ -100,35 +118,62 @@ export function pageRoute(page: Page, project: string | null): string {
 }
 
 /**
- * A step's request ended. Its next page opens only while the page still
- * shows that step, so a Back or a step link meanwhile is not undone.
+ * Counts the pages that the setup page shows, as it renders them. A step's
+ * request that ends after the person left the step, even if they came back
+ * since, moves nothing: the page only reads the profile again.
  */
-export function stillOn(hash: string, step: SetupStep): boolean {
-  const route = parseRoute(hash);
-  return route.page === 'setup' && route.step === step;
+export function visitCounter(): {
+  /** The page that renders now. A new page is a new visit. */
+  readonly see: (page: Page | null) => void;
+  /** At a request's start: what runs when it ends. `next` while the visit lasts, else `refresh`. */
+  readonly after: (next: () => void, refresh: () => void) => () => void;
+} {
+  let shown: Page | null | undefined;
+  let visits = 0;
+  return {
+    see: (page) => {
+      if (page === shown) return;
+      shown = page;
+      visits += 1;
+    },
+    after: (next, refresh) => {
+      const visit = visits;
+      return () => (visits === visit ? next() : refresh());
+    },
+  };
 }
 
 /**
- * What Back or a step link does: nothing on the page that shows, ask first
- * when the step has unsaved input, else open the page.
+ * What Back, a step link, or the link to the lab does: nothing for the page
+ * that shows, ask first when the step has unsaved input, else open it.
  */
 export function leaveFor(
-  page: Page,
-  step: Page | null,
+  to: string,
+  here: string,
   unsaved: boolean,
 ): 'none' | 'ask' | 'open' {
-  if (page === step) return 'none';
+  if (to === here) return 'none';
   return unsaved ? 'ask' : 'open';
 }
 
-/** Back or a step link while the step has unsaved input. No browser dialog. */
+/**
+ * The question before the page drops unsaved input. It shows only while
+ * the person asked to leave and the step still holds unsaved input: input
+ * that a save takes meanwhile is no longer unsaved. No browser dialog.
+ */
 export function UnsavedLine({
+  leaving,
+  unsaved,
   onLeave,
   onStay,
 }: {
+  /** The address that the person asked for. Null: they asked for none. */
+  readonly leaving: string | null;
+  readonly unsaved: boolean;
   readonly onLeave: () => void;
   readonly onStay: () => void;
 }): ReactNode {
+  if (!leaving || !unsaved) return null;
   return (
     <div role="alert" className="setup__problem">
       <span>Your changes on this step aren’t saved.</span>
@@ -171,8 +216,8 @@ export function openingRoute(
 
 /**
  * The first run: `step` null opens the first step without a record. Each
- * step saves on its own and then opens the next one. Back and the step bar
- * ask first when the step has unsaved input.
+ * step saves on its own and then opens the next one. Back, the step bar
+ * and the link to the lab ask first while the step holds unsaved input.
  */
 export function SetupPage({
   step,
@@ -189,30 +234,44 @@ export function SetupPage({
     const to = openingRoute(view, step, project);
     if (to) replaceRoute(to);
   }, [view, step, project]);
-  // The step reports whether it holds unsaved input. `leaving`: the page that Back or a step link asked for meanwhile.
+  // The step reports whether it holds unsaved input. `leaving`: the address that Back, the step bar or the link to the lab asked for meanwhile.
   const [unsaved, setUnsaved] = useState(false);
-  const [leaving, setLeaving] = useState<Page | null>(null);
+  const [leaving, setLeaving] = useState<string | null>(null);
   useEffect(() => {
     setLeaving(null);
   }, [step]);
-  const open = (page: Page): void => {
-    location.hash = pageRoute(page, project);
+  // While the step holds unsaved input, a reload or a closed tab asks first. The browser's own Back does not.
+  useEffect(() => {
+    if (!unsaved) return;
+    const ask = (event: BeforeUnloadEvent): void => {
+      event.preventDefault();
+    };
+    addEventListener('beforeunload', ask);
+    return () => removeEventListener('beforeunload', ask);
+  }, [unsaved]);
+  // Each page that renders, by any way of going there, is a new visit.
+  const [visits] = useState(visitCounter);
+  visits.see(step);
+  const leave = (to: string): void => {
+    location.hash = to;
     refresh();
   };
-  /** Back and the step bar. */
-  const go = (page: Page): void => {
-    const move = leaveFor(page, step, unsaved);
-    if (move === 'ask') setLeaving(page);
-    else if (move === 'open') open(page);
+  const open = (page: Page): void => leave(pageRoute(page, project));
+  /** Back, the step bar, and the link to the lab. */
+  const go = (to: string): void => {
+    const move = leaveFor(to, step === null ? '' : href.setup(step), unsaved);
+    if (move === 'ask') setLeaving(to);
+    else if (move === 'open') leave(to);
   };
-  /** After a step's own request: the next page, unless the person left the step meanwhile. */
-  const after = (from: SetupStep, next: Page) => (): void => {
-    if (stillOn(location.hash, from)) open(next);
-  };
+  /** After a step's own request: the next page while the visit lasts. The profile is read again either way. */
+  const after = (next: Page): (() => void) =>
+    visits.after(() => open(next), refresh);
+  // One list, so the label, the bar, Back and Continue agree.
   const steps = view ? shownSteps(view.steps) : setupSteps;
-  const back = (from: SetupStep) => (): void => {
-    const before = pageBefore(from, steps);
-    if (before) go(before);
+  const nav: StepNav = {
+    steps,
+    open: (page) => go(pageRoute(page, project)),
+    unsaved: setUnsaved,
   };
   let body: ReactNode;
   if (!view || step === null)
@@ -231,10 +290,9 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={after('agents', pageAfter('agents', steps))}
-        onSkip={after('agents', 'done')}
-        onOpen={go}
-        onUnsaved={setUnsaved}
+        onSaved={after(pageAfter('agents', steps))}
+        onSkip={after('done')}
+        nav={nav}
       />
     );
   else if (step === 'about')
@@ -243,10 +301,8 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={after('about', pageAfter('about', steps))}
-        onBack={back('about')}
-        onOpen={go}
-        onUnsaved={setUnsaved}
+        onSaved={after(pageAfter('about', steps))}
+        nav={nav}
       />
     );
   else if (step === 'skills')
@@ -255,9 +311,8 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onDone={after('skills', pageAfter('skills', steps))}
-        onBack={back('skills')}
-        onOpen={go}
+        onDone={after(pageAfter('skills', steps))}
+        nav={nav}
       />
     );
   else if (step === 'money')
@@ -266,28 +321,27 @@ export function SetupPage({
         view={view}
         actions={actions}
         refresh={refresh}
-        onSaved={after('money', pageAfter('money', steps))}
-        onBack={back('money')}
-        onOpen={go}
-        onUnsaved={setUnsaved}
+        onSaved={after(pageAfter('money', steps))}
+        nav={nav}
       />
     );
   else body = <DoneStep view={view} project={project ?? ''} />;
   return (
     <div className="page">
-      <SetupHeader project={project ?? ''} />
+      <SetupHeader project={project ?? ''} onLeave={go} />
       <main className="setup">
         <div className="setup__column">
           {body}
-          {leaving && (
-            <UnsavedLine
-              onLeave={() => {
-                setLeaving(null);
-                open(leaving);
-              }}
-              onStay={() => setLeaving(null)}
-            />
-          )}
+          <UnsavedLine
+            leaving={leaving}
+            unsaved={unsaved}
+            onLeave={() => {
+              if (!leaving) return;
+              setLeaving(null);
+              leave(leaving);
+            }}
+            onStay={() => setLeaving(null)}
+          />
         </div>
       </main>
     </div>

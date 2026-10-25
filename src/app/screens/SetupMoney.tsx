@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { MoneyLimits, SetupStep, SetupView } from '../../protocol/api.ts';
+import type { MoneyLimits, SetupView } from '../../protocol/api.ts';
 import { Check } from '../components/Icons.tsx';
 import { GpuTable, LimitField, numberOf } from '../components/Limits.tsx';
 import {
@@ -9,7 +9,7 @@ import {
 } from '../components/StepHeader.tsx';
 import { dayClock, usd } from '../format.ts';
 import { newKey } from '../intent.ts';
-import { allowedGpus, type SetupActions } from '../setup.ts';
+import { allowedGpus, type SetupActions, type StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 /** The limit fields as the person types them. */
@@ -21,6 +21,32 @@ interface LimitText {
   readonly maxRunningPods: '1' | '2';
   /** Empty: no monthly limit. */
   readonly monthUsd: string;
+}
+
+/**
+ * Limits typed since the step opened, ticked GPUs other than the default
+ * ones, or a typed key, while no save of them runs. The default GPUs are
+ * those that the step allows without a tick, so ticking back to them is no
+ * change.
+ */
+export function moneyUnsaved(input: {
+  /** The limits as the step opened, before any poll changed them. */
+  readonly start: LimitText;
+  readonly limits: LimitText;
+  readonly ticked: readonly string[] | null;
+  readonly defaults: readonly string[];
+  readonly secret: string;
+  readonly saving: boolean;
+}): boolean {
+  const { start, limits, ticked, defaults } = input;
+  const typed = (Object.keys(start) as (keyof LimitText)[]).some(
+    (field) => start[field] !== limits[field],
+  );
+  const gpus =
+    ticked !== null &&
+    (ticked.length !== defaults.length ||
+      ticked.some((id) => !defaults.includes(id)));
+  return !input.saving && (typed || gpus || input.secret !== '');
 }
 
 function textOf(limits: MoneyLimits): LimitText {
@@ -45,21 +71,18 @@ export function MoneyStep({
   actions,
   refresh,
   onSaved,
-  onBack,
-  onOpen,
-  onUnsaved,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
-  readonly onBack: () => void;
-  readonly onOpen: (step: SetupStep) => void;
-  readonly onUnsaved: (unsaved: boolean) => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const money = view.money;
   const keyField = useId();
-  const [limits, setLimits] = useState<LimitText>(() => textOf(money.limits));
+  const [start] = useState<LimitText>(() => textOf(money.limits));
+  const [limits, setLimits] = useState<LimitText>(start);
   // Null: the person did not tick any GPU, so the price cap decides.
   const [ticked, setTicked] = useState<readonly string[] | null>(null);
   const [replacing, setReplacing] = useState(false);
@@ -68,13 +91,6 @@ export function MoneyStep({
   const [problem, setProblem] = useState<string | null>(null);
   const cap = numberOf(limits.maxUsdPerHour) ?? money.limits.maxUsdPerHour;
   const allowed = ticked ?? allowedGpus(view, cap);
-  // Typed limits, ticked GPUs, or a typed key. The key stays in this step's state only.
-  useUnsaved(
-    JSON.stringify(limits) !== JSON.stringify(textOf(money.limits)) ||
-      ticked !== null ||
-      secret !== '',
-    onUnsaved,
-  );
   const storeKey = useAction(
     (value: { readonly secret: string; readonly file: boolean }, key) =>
       actions.runpodKey(value.secret, value.file, key),
@@ -83,6 +99,18 @@ export function MoneyStep({
   const prices = useAction((_: null, key) => actions.prices(key));
   const save = useAction((value: MoneyLimits, key) =>
     actions.money(value, key),
+  );
+  // The key stays in this step's state. The page hears only whether something is unsaved.
+  useUnsaved(
+    moneyUnsaved({
+      start,
+      limits,
+      ticked,
+      defaults: allowedGpus(view, cap),
+      secret,
+      saving: save.busy || storeKey.busy,
+    }),
+    nav,
   );
   // With a key and no prices yet, the step reads them once when it opens.
   const asked = useRef(false);
@@ -128,8 +156,8 @@ export function MoneyStep({
     <>
       <StepHeader
         step="money"
-        steps={view.steps}
-        onOpen={onOpen}
+        states={view.steps}
+        nav={nav}
         title="When agents may rent GPUs"
       >
         Agents rent a GPU on RunPod only when a direction needs one. The first
@@ -390,7 +418,7 @@ export function MoneyStep({
         </span>
       )}
       <div className="setup__actions">
-        <BackButton onBack={onBack} />
+        <BackButton step="money" nav={nav} />
         <button
           type="button"
           className="button button--primary button--big"
