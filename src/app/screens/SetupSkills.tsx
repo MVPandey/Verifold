@@ -1,15 +1,10 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import type {
-  SetupStep,
-  SetupView,
-  SkillCard,
-  SkillRuns,
-} from '../../protocol/api.ts';
+import type { SetupView, SkillCard, SkillRuns } from '../../protocol/api.ts';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { BackButton, StepHeader } from '../components/StepHeader.tsx';
 import { newKey } from '../intent.ts';
 import { href } from '../route.ts';
-import type { SetupActions } from '../setup.ts';
+import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 import { dayClock } from '../format.ts';
 
@@ -110,15 +105,13 @@ export function SkillsStep({
   actions,
   refresh,
   onDone,
-  onBack,
-  onOpen,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onDone: () => void;
-  readonly onBack: () => void;
-  readonly onOpen: (step: SetupStep) => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const skills = view.skills;
   const search = useAction((_: null, key) => actions.skillsSearch(key));
@@ -161,8 +154,8 @@ export function SkillsStep({
     <>
       <StepHeader
         step="skills"
-        steps={view.steps}
-        onOpen={onOpen}
+        states={view.steps}
+        nav={nav}
         title="Skills that fit your work"
       >
         {read
@@ -265,7 +258,7 @@ export function SkillsStep({
         </span>
       )}
       <div className="setup__actions">
-        <BackButton onBack={onBack} />
+        <BackButton step="skills" nav={nav} />
         <button
           type="button"
           className="button button--primary button--big"

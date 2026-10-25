@@ -18,6 +18,16 @@ export function firstPage(view: SetupView): SetupPage {
   return setupSteps.find((step) => view.steps[step] === null) ?? 'done';
 }
 
+/** What a step needs from the setup page to move between steps. */
+export interface StepNav {
+  /** The steps that this Verifold has, in order. The label, the bar, Back and Continue all use this list. */
+  readonly steps: readonly SetupStep[];
+  /** Back and the step bar: open a step. The page asks first while the step holds unsaved input. */
+  readonly open: (step: SetupStep) => void;
+  /** The step holds input that is not saved, and no save of it runs now. */
+  readonly unsaved: (unsaved: boolean) => void;
+}
+
 /** The steps that this Verifold has. An older one reports no Skills step. */
 export function shownSteps(steps: SetupView['steps']): readonly SetupStep[] {
   return setupSteps.filter((step) => steps[step] !== undefined);

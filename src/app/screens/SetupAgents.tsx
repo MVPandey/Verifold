@@ -1,14 +1,9 @@
 import { useState, type ReactNode } from 'react';
-import type {
-  AgentTool,
-  Harness,
-  SetupStep,
-  SetupView,
-} from '../../protocol/api.ts';
+import type { AgentTool, Harness, SetupView } from '../../protocol/api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 import { StepHeader, useUnsaved } from '../components/StepHeader.tsx';
-import { planName, type SetupActions } from '../setup.ts';
+import { planName, type SetupActions, type StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 const toolNames: Readonly<Record<Harness, string>> = {
@@ -149,16 +144,14 @@ export function AgentsStep({
   refresh,
   onSaved,
   onSkip,
-  onOpen,
-  onUnsaved,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
   readonly onSkip: () => void;
-  readonly onOpen: (step: SetupStep) => void;
-  readonly onUnsaved: (unsaved: boolean) => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const { tools, checking } = view.agents;
   const [choices, setChoices] = useState<Choices>(() =>
@@ -185,15 +178,17 @@ export function AgentsStep({
   const check = useAction((_: null, key) => actions.check(key));
   const skip = useAction((_: null, key) => actions.skip('all', key));
   const used = tools.some((tool) => choices[tool.harness]?.use);
+  // Changed choices, while no save of them runs.
   useUnsaved(
-    tools.some((tool) => {
-      const choice = choices[tool.harness];
-      return (
-        choice !== undefined &&
-        (choice.use !== tool.use || choice.model !== (tool.model ?? ''))
-      );
-    }),
-    onUnsaved,
+    !save.busy &&
+      tools.some((tool) => {
+        const choice = choices[tool.harness];
+        return (
+          choice !== undefined &&
+          (choice.use !== tool.use || choice.model !== (tool.model ?? ''))
+        );
+      }),
+    nav,
   );
   const unsure = tools.some(
     (tool) => !tool.installed || tool.signedIn !== true,
@@ -202,8 +197,8 @@ export function AgentsStep({
     <>
       <StepHeader
         step="agents"
-        steps={view.steps}
-        onOpen={onOpen}
+        states={view.steps}
+        nav={nav}
         title="Your agents"
       >
         Verifold runs research with the agent tools you already use.

@@ -3,7 +3,6 @@ import type {
   ChatLine,
   ProfileCard,
   SetupAbout,
-  SetupStep,
   SetupView,
 } from '../../protocol/api.ts';
 import { Avatar, type Who } from '../components/Avatar.tsx';
@@ -14,7 +13,7 @@ import {
 } from '../components/StepHeader.tsx';
 import { harnessName, since } from '../format.ts';
 import { afterSend } from '../intent.ts';
-import type { SetupActions } from '../setup.ts';
+import type { SetupActions, StepNav } from '../setup.ts';
 import { useAction } from '../useAction.ts';
 
 const fieldNames: readonly {
@@ -150,17 +149,13 @@ export function AboutStep({
   actions,
   refresh,
   onSaved,
-  onBack,
-  onOpen,
-  onUnsaved,
+  nav,
 }: {
   readonly view: SetupView;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   readonly onSaved: () => void;
-  readonly onBack: () => void;
-  readonly onOpen: (step: SetupStep) => void;
-  readonly onUnsaved: (unsaved: boolean) => void;
+  readonly nav: StepNav;
 }): ReactNode {
   const about = view.about;
   const box = useId();
@@ -178,11 +173,6 @@ export function AboutStep({
   const edited =
     edits !== null && about.card !== null && sameCard(edits.from, about.card);
   const card = edited ? edits.card : about.card;
-  // A typed answer, or card edits that are not saved.
-  useUnsaved(
-    text.trim() !== '' || (edited && !sameCard(edits.card, edits.from)),
-    onUnsaved,
-  );
   const say = useAction((value: string, key) =>
     actions.say(value, edited ? card : null, key),
   );
@@ -193,6 +183,13 @@ export function AboutStep({
     actions.about(value, key),
   );
   const skip = useAction((_: null, key) => actions.skip('about', key));
+  // A typed answer, or card edits, while no send or save of them runs.
+  useUnsaved(
+    !say.busy &&
+      !save.busy &&
+      (text.trim() !== '' || (edited && !sameCard(edits.card, edits.from))),
+    nav,
+  );
   const error =
     say.error ??
     retry.error ??
@@ -210,8 +207,8 @@ export function AboutStep({
       <>
         <StepHeader
           step="about"
-          steps={view.steps}
-          onOpen={onOpen}
+          states={view.steps}
+          nav={nav}
           title="About you"
         />
         <section aria-label="Your profile" className="profile">
@@ -230,7 +227,7 @@ export function AboutStep({
           </span>
         )}
         <div className="setup__actions">
-          <BackButton onBack={onBack} />
+          <BackButton step="about" nav={nav} />
           <button
             type="button"
             className="button button--primary button--big"
@@ -269,8 +266,8 @@ export function AboutStep({
     <>
       <StepHeader
         step="about"
-        steps={view.steps}
-        onOpen={onOpen}
+        states={view.steps}
+        nav={nav}
         title="About you"
       />
       <section aria-label="Conversation" className="chat">
@@ -380,7 +377,7 @@ export function AboutStep({
         </span>
       )}
       <div className="setup__actions">
-        <BackButton onBack={onBack} />
+        <BackButton step="about" nav={nav} />
         {card && (
           <button
             type="button"
