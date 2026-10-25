@@ -620,12 +620,17 @@ await test('an isolated project starts with its own settings in its folder: they
     ((await (await read('/api/v1/setup')).json()) as SetupView).ownCopied,
     null,
   );
+  // A read copies nothing: the person picks Isolated project first.
+  assert.equal((await read('/api/v1/setup?profile=project')).status, 409);
+  assert.equal((await read('/api/v1/start?profile=project')).status, 409);
+  assert.equal(existsSync(join(root, '.verifold', 'agency')), false);
+  assert.equal(await act('setup-copy-global', { profile: 'project' }), 200);
   const own = (await (
     await read('/api/v1/setup?profile=project')
   ).json()) as SetupView;
   assert.equal(own.scope, 'project');
   assert.equal(own.steps.agents, null);
-  // The copy is in the folder from the first read, and the global settings say when it was made.
+  // The copy is in the folder, and the global settings say when it was made.
   assert.ok(existsSync(join(root, '.verifold', 'agency', 'settings.json')));
   assert.match(
     ((await (await read('/api/v1/setup')).json()) as SetupView).ownCopied ?? '',
@@ -692,8 +697,10 @@ await test('a project on the global settings drops an isolated copy that the per
   const root = join(dirname(run.agency), 'cot');
   assert.equal(
     (
-      await fetch(`${run.url.origin}/api/v1/setup?profile=project`, {
+      await fetch(`${run.url.origin}/api/v1/actions/setup-copy-global`, {
+        method: 'POST',
         headers: run.headers,
+        body: JSON.stringify({ profile: 'project' }),
       })
     ).status,
     200,

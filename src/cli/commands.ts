@@ -1173,7 +1173,21 @@ async function serveStart(
   // The desk closes after the person starts a project.
   const handed = new AbortController();
   const deskSignal = AbortSignal.any([signal, handed.signal]);
-  const ask = askStart({ root, agency: run.agency, signal: deskSignal });
+  const firstRun = new FirstRuns({
+    directory: run.agency,
+    root,
+    own: 'new',
+    compute,
+    signal: deskSignal,
+    harness: run.harness,
+    ownSkills: (signal) => listOwnSkills({ signal }),
+  });
+  const ask = askStart({
+    root,
+    agency: run.agency,
+    signal: deskSignal,
+    onStart: () => firstRun.stop(),
+  });
   const desk = await startDesk(
     null,
     deskSignal,
@@ -1186,15 +1200,7 @@ async function serveStart(
     undefined,
     undefined,
     {
-      firstRun: new FirstRuns({
-        directory: run.agency,
-        root,
-        own: 'new',
-        compute,
-        signal: deskSignal,
-        harness: run.harness,
-        ownSkills: (signal) => listOwnSkills({ signal }),
-      }),
+      firstRun,
       start: ask.start,
       ...(io.appAssets ? { appRoot: io.appAssets } : {}),
     },
@@ -1589,6 +1595,11 @@ async function attachTeam(
   },
 ): Promise<void> {
   const running = await liveOwner(root);
+  const global = start.agency ?? agencyDirectory(root);
+  // The profile that the project uses, read before an owner starts, so a workspace that does not read stops here. An owner that runs already keeps the profile that it started with, so attaching to it never stops on this.
+  const wanted = running
+    ? await projectProfile(root, global).catch(() => global)
+    : await projectProfile(root, global);
   let control: Control;
   if (running) {
     const saved = await readControl(background.keys, running.ownerId);
@@ -1622,11 +1633,6 @@ async function attachTeam(
   }
   let client: ControlClient | null = null;
   let shown = false;
-  // An owner that ran already keeps the profile that it started with.
-  const wanted = await projectProfile(
-    root,
-    start.agency ?? agencyDirectory(root),
-  );
   client = await reach(
     control,
     (message) => {

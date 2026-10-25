@@ -2611,7 +2611,7 @@ export interface SetupSource {
  * project with the person's question.
  */
 export interface ProjectStart {
-  /** `scope` `project`: the defaults of an isolated project, from its draft profile. */
+  /** `scope` `project`: the defaults of an isolated project, from its own settings in this folder. */
   readonly view: (scope?: 'project') => Promise<StartView>;
   /** Run `project-start`. Returns 202: the project starts in the background. */
   readonly act: (body: Record<string, unknown>) => Promise<number>;

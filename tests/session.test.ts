@@ -1918,6 +1918,14 @@ await test("a strict session cannot read the person's Verifold profile, in Claud
       option.includes('"~/.verifold/agency"="deny"'),
     ),
   );
+  // A Codex terminal closes the same extra paths as the session's thread, such as an isolated project's settings.
+  assert.ok(
+    strictCodexOptions(false, ['/work/cot/.verifold/agency']).some(
+      (option) =>
+        option.includes('"/work/cot/.verifold/agency"="deny"') &&
+        option.includes('"~/.ssh"="deny"'),
+    ),
+  );
 });
 
 await test("a strict session's extra read denials close the sandbox and the Read tool, absolute and home paths alike", () => {

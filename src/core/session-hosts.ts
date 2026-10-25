@@ -176,9 +176,12 @@ function codexProfile(
   };
 }
 
-/** The strict profile as `-c` options, for a Codex terminal on a strict task session. */
-export function strictCodexOptions(network: boolean): string[] {
-  const deny = credentialPaths
+/** The strict profile as `-c` options, for a Codex terminal on a strict task session. `denyRead` closes more paths, as for the session's thread. */
+export function strictCodexOptions(
+  network: boolean,
+  denyRead: readonly string[] = [],
+): string[] {
+  const deny = [...credentialPaths, ...denyRead]
     .map((path) => `${JSON.stringify(path)}="deny"`)
     .join(',');
   return [
