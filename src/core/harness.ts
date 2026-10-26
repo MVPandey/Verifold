@@ -76,9 +76,9 @@ export interface HarnessRequest {
    * The harness answers from the prompt and from what it loads by itself,
    * such as its own instructions and memories. Paths are absolute or start
    * with `~/`, and can hold `*` or `**`.
-   * - Claude Code gets only its Read tool, in `dontAsk` mode: it may read
-   *   `allow` and nothing else, and never `deny`. None of the person's
-   *   settings files load, and no hook runs.
+   * - Claude Code gets only its Read, Glob and Grep tools, in `dontAsk`
+   *   mode: it may read and search `allow` and nothing else, and never
+   *   `deny`. None of the person's settings files load, and no hook runs.
    * - Codex gets the text-only options, with a permission profile that
    *   closes `deny` in place of the read-only sandbox. Verifold also stops
    *   the call at its first command or tool call.
@@ -556,9 +556,11 @@ function rulePath(path: string): string {
 
 /**
  * Claude Code settings that let its Read tool open `allow` and close `deny`,
- * a folder with all that it holds. Deny rules win over allow rules. In
- * `dontAsk` mode it can read no other file outside its empty working folder.
- * No hook runs. Probed on Claude Code 2.1.310.
+ * a folder with all that it holds. Deny rules win over allow rules. Glob and
+ * Grep follow the Read rules: they search an allowed folder, skip its denied
+ * files, and are refused elsewhere. In `dontAsk` mode it can read no other
+ * file outside its empty working folder. No hook runs. Probed on Claude Code
+ * 2.1.310.
  */
 function claudeOwnSettings(
   files: NonNullable<HarnessRequest['ownFiles']>,
@@ -668,7 +670,7 @@ export async function runHarness(
           ...(typeof own === 'string'
             ? [
                 '--tools',
-                'Read',
+                'Read,Glob,Grep',
                 '--strict-mcp-config',
                 '--permission-mode',
                 'dontAsk',

@@ -188,7 +188,7 @@ await test('a text-only call gives Claude Code no tools or MCP servers, and Code
     );
 });
 
-await test("a call that may read its own files gives Claude Code only its Read tool, with none of the person's settings files or hooks, and Codex no command or image tool, a profile that closes the denied paths, and no sandbox flag", async () => {
+await test("a call that may read its own files gives Claude Code only its Read, Glob and Grep tools, with none of the person's settings files or hooks, and Codex no command or image tool, a profile that closes the denied paths, and no sandbox flag", async () => {
   const ownFiles = {
     allow: [
       '/home/me/.claude/CLAUDE.md',
@@ -226,7 +226,7 @@ await test("a call that may read its own files gives Claude Code only its Read t
                 'stream-json',
                 '--verbose',
                 '--tools',
-                'Read',
+                'Read,Glob,Grep',
                 '--strict-mcp-config',
                 '--permission-mode',
                 'dontAsk',
