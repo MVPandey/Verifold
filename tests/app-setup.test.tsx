@@ -25,6 +25,7 @@ import { AboutStep } from '../src/app/screens/SetupAbout.tsx';
 import { ImportPanel } from '../src/app/screens/SetupImport.tsx';
 import { MoneyStep, moneyUnsaved } from '../src/app/screens/SetupMoney.tsx';
 import { SkillsStep, runsLine } from '../src/app/screens/SetupSkills.tsx';
+import { GroupSwitch } from '../src/app/screens/SetupOwnSkills.tsx';
 import {
   DoneStep,
   UnsavedLine,
@@ -1056,7 +1057,17 @@ await test("step 3 lists the person's own skills by harness and group, each with
   );
   assert.match(
     shown,
-    /Claude Code Your skill folder · 2 skills · 1 off .*From claude\.ai · 1 skill .*The vercel plugin · 2 skills · 1 off .*Codex This computer’s skills · 1 skill/,
+    /Claude Code Yes No Your skill folder · 2 skills · 1 off .*Yes No From claude\.ai · 1 skill .*Yes No The vercel plugin · 2 skills · 1 off .*Codex Yes No This computer’s skills · 1 skill/,
+  );
+  // Each group's switch sits beside its summary, never in it, so a click cannot open or close the group.
+  assert.doesNotMatch(markup, /<summary(?:(?!<\/summary>).)*<button/);
+  assert.match(
+    markup,
+    /<div class="own-group__box"><div role="group" aria-label="Verifold’s agents use all skills in the group “The vercel plugin”" class="own__switch"><button[^>]*aria-pressed="mixed"[^>]*>Yes<\/button><button[^>]*aria-pressed="mixed"[^>]*>No<\/button><\/div><details class="own-group">/,
+  );
+  assert.match(
+    markup,
+    /“From claude\.ai”[^>]*><button[^>]*aria-pressed="true"[^>]*>Yes<\/button><button[^>]*aria-pressed="false"[^>]*>No</,
   );
   // The group names the plugin and claude.ai, so the rows drop the prefix.
   assert.match(shown, / nextjs Next\.js\. /);
@@ -1087,7 +1098,7 @@ await test("step 3 lists the person's own skills by harness and group, each with
   assert.match(markup, /maxLength="280"|maxlength="280"/);
   assert.match(shown, /Codex did not list its skills\. Read the list again\./);
   assert.match(shown, /Your skills Read again/);
-  // The switch stays on while a note saves, so a click after a note is never lost.
+  // The rows' and the groups' switches stay on while a note saves, so a click after a note is never lost.
   assert.doesNotMatch(markup, /class="own__choice"[^>]*disabled/);
   // While a list runs, the step waits for it.
   const waiting = text(
@@ -1166,6 +1177,65 @@ await test("step 3 lists the person's own skills by harness and group, each with
     { again: true, key: 'e'.repeat(32) },
     { key: 'f'.repeat(32) },
   ]);
+});
+
+await test("a group's switch sets all its skills to Yes or No in one request, without their notes", () => {
+  const skill = (
+    id: string,
+    use: boolean,
+    when = '',
+  ): NonNullable<SetupSkills['own']>[number] => ({
+    harness: 'claude',
+    id: `vercel:${id}`,
+    name: `vercel:${id}`,
+    description: '',
+    source: 'plugin',
+    use,
+    when,
+  });
+  const press = (
+    skills: NonNullable<SetupSkills['own']>,
+    use: boolean,
+  ): { sent: unknown[]; pressed: unknown } => {
+    const sent: unknown[] = [];
+    const element = GroupSwitch({
+      group: { key: 'plugin:vercel', title: 'The vercel plugin', skills },
+      onChoose: (choices) => sent.push(choices),
+    }) as ReactElement<{ pressed: unknown; onPick: (use: boolean) => void }>;
+    element.props.onPick(use);
+    return { sent, pressed: element.props.pressed };
+  };
+  // All Yes: No sends every skill of the group in one request. A saved note goes nowhere, so the server keeps it.
+  const on = [
+    skill('nextjs', true, 'For web apps.'),
+    skill('deploy', true),
+    skill('cli', true),
+  ];
+  const off = press(on, false);
+  assert.equal(off.pressed, true);
+  assert.deepEqual(off.sent, [
+    [
+      { harness: 'claude', id: 'vercel:nextjs', use: false },
+      { harness: 'claude', id: 'vercel:deploy', use: false },
+      { harness: 'claude', id: 'vercel:cli', use: false },
+    ],
+  ]);
+  // The pressed choice sends nothing.
+  assert.deepEqual(press(on, true).sent, []);
+  // Mixed: neither shows as pressed, and Yes sends only the skills that are off.
+  const mixed = press(
+    [skill('nextjs', false, 'For web apps.'), skill('deploy', true)],
+    true,
+  );
+  assert.equal(mixed.pressed, 'mixed');
+  assert.deepEqual(mixed.sent, [
+    [{ harness: 'claude', id: 'vercel:nextjs', use: true }],
+  ]);
+  // All No shows No as pressed.
+  assert.equal(
+    press([skill('nextjs', false), skill('deploy', false)], true).pressed,
+    false,
+  );
 });
 
 await test('an isolated project has its own setup and Ask pages, and its first run ends on its own Ask page', () => {

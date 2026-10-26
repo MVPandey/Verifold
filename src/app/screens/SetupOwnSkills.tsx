@@ -57,6 +57,71 @@ function shortName(skill: OwnSkill): string {
     : skill.name;
 }
 
+/**
+ * Yes and No, with the one that holds pressed. `mixed`: a group whose
+ * skills say both, which shows neither as pressed and tells a screen reader
+ * "mixed".
+ */
+function Switch({
+  label,
+  pressed,
+  onPick,
+}: {
+  readonly label: string;
+  /** True: Yes holds. False: No holds. */
+  readonly pressed: boolean | 'mixed';
+  readonly onPick: (use: boolean) => void;
+}): ReactNode {
+  return (
+    <div role="group" aria-label={label} className="own__switch">
+      {[true, false].map((use) => (
+        <button
+          key={String(use)}
+          type="button"
+          className="own__choice"
+          aria-pressed={pressed === 'mixed' ? 'mixed' : pressed === use}
+          onClick={() => onPick(use)}
+        >
+          {use ? 'Yes' : 'No'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Yes or No for every skill of a group, in one request. It sits beside the
+ * group's summary, not in it, so a click never opens or closes the group.
+ * Like a row's switch, it stays on while a save runs, and a click sends
+ * only the skills that change, each without a note, so each note stays.
+ */
+export function GroupSwitch({
+  group,
+  onChoose,
+}: {
+  readonly group: Group;
+  readonly onChoose: (choices: readonly Choice[]) => void;
+}): ReactNode {
+  const on = group.skills.filter((skill) => skill.use).length;
+  return (
+    <Switch
+      label={`Verifold’s agents use all skills in the group “${group.title}”`}
+      pressed={on === group.skills.length ? true : on === 0 ? false : 'mixed'}
+      onPick={(use) => {
+        const changes = group.skills.filter((skill) => skill.use !== use);
+        if (changes.length)
+          onChoose(
+            changes.map((skill) => ({
+              harness: skill.harness,
+              id: skill.id,
+              use,
+            })),
+          );
+      }}
+    />
+  );
+}
+
 function OwnRow({
   skill,
   noteLimit,
@@ -118,31 +183,19 @@ function OwnRow({
           )}
         </div>
         {/* The switch stays on while a note saves, and a choice takes the note with it, so neither is lost. */}
-        <div
-          role="group"
-          aria-label={`Verifold’s agents use ${shortName(skill)}`}
-          className="own__switch"
-        >
-          {[true, false].map((use) => (
-            <button
-              key={String(use)}
-              type="button"
-              className="own__choice"
-              aria-pressed={skill.use === use}
-              onClick={() =>
-                (skill.use !== use || 'when' in note) &&
-                onChoose({
-                  harness: skill.harness,
-                  id: skill.id,
-                  use,
-                  ...note,
-                })
-              }
-            >
-              {use ? 'Yes' : 'No'}
-            </button>
-          ))}
-        </div>
+        <Switch
+          label={`Verifold’s agents use ${shortName(skill)}`}
+          pressed={skill.use}
+          onPick={(use) => {
+            if (skill.use !== use || 'when' in note)
+              onChoose({
+                harness: skill.harness,
+                id: skill.id,
+                use,
+                ...note,
+              });
+          }}
+        />
       </div>
       {skill.use &&
         (skill.when || noting ? (
@@ -181,6 +234,7 @@ function OwnRow({
 /**
  * The skills that the person's own Claude Code and Codex load, each with
  * Yes or No for Verifold's agents and an optional note on when to use it.
+ * Each group also has Yes or No for all of its skills.
  * The person's skill folder opens at once; claude.ai and each plugin open
  * on a click, since a plugin can hold dozens of skills.
  */
@@ -207,14 +261,16 @@ export function OwnSkills({
       return next;
     });
   }, []);
-  const choose = useAction((choices: readonly Choice[], key) =>
-    actions.ownSkills(choices, key),
+  // A retry of the same choices keeps its key, so a lost answer and the retry run once.
+  const choose = useAction(
+    (choices: readonly Choice[], key) => actions.ownSkills(choices, key),
+    (a, b) => JSON.stringify(a) === JSON.stringify(b),
   );
   const list = useAction((again: boolean, key) =>
     actions.ownSkillsList(again, key),
   );
-  const onChoose = (choice: Choice): void => {
-    void choose.submit([choice]).then(refresh);
+  const save = (choices: readonly Choice[]): void => {
+    void choose.submit(choices).then(refresh);
   };
   // Only this step lists the skills: when it opens, and when the person asks again.
   const asked = useRef(false);
@@ -267,32 +323,35 @@ export function OwnSkills({
               <h3 className="own-list__title">{harnessTitles[harness]}</h3>
               {groups(mine).map((group) => {
                 const off = group.skills.filter((skill) => !skill.use).length;
+                // The switch comes first, so Tab reaches it before the rows of an open group.
                 return (
-                  <details
-                    key={group.key}
-                    className="own-group"
-                    open={group.key.startsWith('personal:')}
-                  >
-                    <summary className="own-group__title">
-                      {group.title}
-                      <span className="setup__meta">
-                        {` · ${group.skills.length} ${group.skills.length === 1 ? 'skill' : 'skills'}${off ? ` · ${off} off` : ''}`}
-                      </span>
-                    </summary>
-                    <ul className="own-group__list">
-                      {group.skills.map((skill) => (
-                        <OwnRow
-                          key={`${skill.harness}:${skill.id}`}
-                          skill={skill}
-                          noteLimit={noteLimit}
-                          onChoose={onChoose}
-                          onTyped={(now) =>
-                            typed(`${skill.harness}:${skill.id}`, now)
-                          }
-                        />
-                      ))}
-                    </ul>
-                  </details>
+                  <div key={group.key} className="own-group__box">
+                    <GroupSwitch group={group} onChoose={save} />
+                    <details
+                      className="own-group"
+                      open={group.key.startsWith('personal:')}
+                    >
+                      <summary className="own-group__title">
+                        {group.title}
+                        <span className="setup__meta">
+                          {` · ${group.skills.length} ${group.skills.length === 1 ? 'skill' : 'skills'}${off ? ` · ${off} off` : ''}`}
+                        </span>
+                      </summary>
+                      <ul className="own-group__list">
+                        {group.skills.map((skill) => (
+                          <OwnRow
+                            key={`${skill.harness}:${skill.id}`}
+                            skill={skill}
+                            noteLimit={noteLimit}
+                            onChoose={(choice) => save([choice])}
+                            onTyped={(now) =>
+                              typed(`${skill.harness}:${skill.id}`, now)
+                            }
+                          />
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
                 );
               })}
             </div>
