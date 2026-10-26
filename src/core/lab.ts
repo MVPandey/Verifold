@@ -167,6 +167,7 @@ import {
   movingText,
   nameList,
   networkOf,
+  personal,
   type PodsState,
   podsWords,
   sameAsk,
@@ -2375,13 +2376,15 @@ export class Lab {
         return told;
       }),
     });
-    // One event, shown whole: the planner reads every answer in full, in one digest.
+    // One event, shown whole: the planner reads every answer in full, in one
+    // digest. The answers are the person's, so they wake it past its hourly turns.
     this.loop(opener.id).add(
       [
         {
           kind: 'call',
           text: held.map((call) => call.held).join(' '),
           whole: true,
+          byPerson: true,
         },
       ],
       0,
@@ -2432,6 +2435,7 @@ export class Lab {
               (event) => event.seq > agent.cursor && this.wakesMidRun(event),
             )),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
+        person: personal,
         // The profile as it is now, so a changed "Talk to me" comes with this digest.
         prepare: async () => {
           await this.readPerson();
@@ -3458,9 +3462,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   /**
    * A line on the board about a call, which also wakes every agent that
    * asked it. A question of the planner keeps its line until the planner
-   * hears all its answers together. In the lab's queue.
+   * hears all its answers together. `byPerson`: the line is the person's
+   * answer or undo. In the lab's queue.
    */
-  private async tell(call: Call, line: string): Promise<void> {
+  private async tell(
+    call: Call,
+    line: string,
+    byPerson = false,
+  ): Promise<void> {
     const post = await this.add({
       author: 'verifold',
       kind: 'status',
@@ -3478,15 +3487,18 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       this.planQuestion(this.state, call)
     )
       await this.hold(call, line);
-    else this.wakeAskers(call, line);
+    else this.wakeAskers(call, line, byPerson);
   }
 
   /** Each agent that asked a call and still works gets the line. */
-  private wakeAskers(call: Call, line: string): void {
+  private wakeAskers(call: Call, line: string, byPerson: boolean): void {
     for (const id of askers(call)) {
       const agent = this.agents.get(id);
       if (agent && this.active(agent))
-        this.loop(agent.id).add([{ kind: 'call', text: line }], 0);
+        this.loop(agent.id).add(
+          [{ kind: 'call', text: line, ...(byPerson ? { byPerson } : {}) }],
+          0,
+        );
     }
   }
 
@@ -3604,7 +3616,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       this.unheard(call, post);
       const line = wordsLine(call, body);
       if (this.planQuestion(this.current(), call)) await this.hold(call, line);
-      else this.wakeAskers(call, line);
+      else this.wakeAskers(call, line, true);
     });
   }
 
@@ -3800,6 +3812,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       await this.tell(
         call,
         `The person chose ${JSON.stringify(chosen?.label ?? '')} on ${call.id}.${did ? ` ${did}` : ''}`,
+        true,
       );
     });
   }
@@ -3854,6 +3867,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       await this.tell(
         call,
         `The person undid their answer to ${call.id}.${did ? ` ${did}` : ''}${stale ? '' : ' The call is open again.'}`,
+        true,
       );
       if (stale) await this.withdraw(call, stale);
     });
@@ -7869,8 +7883,16 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     this.kick();
   }
 
-  /** When the agent's hourly turns allow its next one, or null when they allow it now. */
+  /**
+   * When the agent's hourly turns allow its next one, or null when they allow
+   * it now. The person's own words that wait for it pass the limit, as in its
+   * wake loop.
+   */
   private turnsUntil(agent: AgentRecord): number | null {
+    if (
+      agent.events.some((event) => event.seq > agent.cursor && personal(event))
+    )
+      return null;
     const hour = Date.now() - this.timing.hourMs;
     const recent = agent.wakeups.filter((at) => Date.parse(at) > hour);
     return recent.length >= labLimits.wakeupsPerHour

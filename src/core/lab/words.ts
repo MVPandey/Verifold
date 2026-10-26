@@ -23,6 +23,7 @@ import {
   type Call,
   type Direction,
   type Evidence,
+  type LabEvent,
   type LabState,
   type LabView,
   type PlanFact,
@@ -52,6 +53,15 @@ export function addSpend(
     session: record.id,
     seen: total,
   };
+}
+
+/**
+ * The event holds the person's own words: their post, or their answer to a
+ * call. It wakes the agent past its hourly turns, and that turn does not
+ * count.
+ */
+export function personal(event: LabEvent): boolean {
+  return event.kind === 'person' || event.byPerson === true;
 }
 
 /** The agents that asked a call: the first, then those that joined. Verifold's own call has none. */

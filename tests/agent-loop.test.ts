@@ -11,8 +11,14 @@ import { until } from './wait.ts';
 
 type Record = WakeRecord<WakeEvent> & { readonly stopped: boolean };
 
-/** An agent whose record lives in memory. `fail` makes the next send throw. */
-function agent(start: Partial<Record> = {}): {
+/**
+ * An agent whose record lives in memory. `fail` makes the next send throw.
+ * `person` says which events hold the person's own words.
+ */
+function agent(
+  start: Partial<Record> = {},
+  person?: (event: WakeEvent) => boolean,
+): {
   loop: WakeLoop<WakeEvent, Record>;
   record: () => Record;
   sent: (readonly QueuedEvent<WakeEvent>[])[];
@@ -38,6 +44,7 @@ function agent(start: Partial<Record> = {}): {
         return Promise.resolve();
       },
       ready: () => true,
+      ...(person ? { person } : {}),
       send: (events) => {
         attempts += 1;
         if (fail) {
@@ -107,6 +114,33 @@ await test('a failed send keeps the events for the next wakeup, and the hourly l
   assert.ok(loop.limitedUntil && Date.parse(loop.limitedUntil) > Date.now());
   loop.cancel(true);
   assert.equal(loop.limitedUntil, null);
+});
+
+await test("the person's words wake the agent past the hourly limit with the events that wait, and that wakeup does not count", async () => {
+  const { loop, record, sent } = agent({}, (event) => event.kind === 'person');
+  loop.add([{ kind: 'post', text: 'a' }], 0);
+  await until(() => sent.length === 1);
+  loop.add([{ kind: 'post', text: 'b' }], 0);
+  await until(() => sent.length === 2);
+  // Two wakeups an hour: another agent's post waits.
+  loop.add([{ kind: 'post', text: 'c' }], 0);
+  await until(() => loop.limitedUntil !== null);
+  assert.equal(sent.length, 2);
+  // The person's post wakes the agent at once, and the post that waited comes with it.
+  loop.add([{ kind: 'person', text: 'Look at seed 2.' }], 0);
+  await until(() => sent.length === 3);
+  assert.deepEqual(
+    sent[2]?.map((event) => event.text),
+    ['c', 'Look at seed 2.'],
+  );
+  assert.equal(loop.limitedUntil, null);
+  assert.equal(record().wakeups.length, 2);
+  // The next post of another agent waits for the hour again.
+  loop.add([{ kind: 'post', text: 'd' }], 0);
+  await until(() => loop.limitedUntil !== null);
+  await loop.close();
+  assert.equal(sent.length, 3);
+  loop.cancel(true);
 });
 
 await test('events of a turn whose read failed come once more, marked again', async () => {

@@ -588,6 +588,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 **Keeping going**
 
 - While its direction is open, an agent takes its next turn 20 seconds after the last one.
+- An agent takes at most 30 turns an hour, so agents can't wake each other in a loop. Your post and your answer to its call wake it at once, also after its 30 turns, and those turns don't count. A parked agent still waits for a free slot.
 - After two turns in a row that change no file and post nothing, it waits 10 minutes, then 30 minutes, then 2 hours. A file that the project ignores counts as a change. A turn that ran into a used-up usage window does not count. A post for it ends the wait.
 - An agent that posts nothing for 6 turns, or for 2 hours of turns and 2 turns at least, is asked once to post what it found or what blocks it. Waits and pauses do not count. The ask comes with its next turn, so it costs no turn of its own. Its next post, verdict, or open ends the quiet stretch. No ask comes while it waits for its run, while the lab is paused or past its time budget, or while its harness's usage window is used up.
 - When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 30 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.

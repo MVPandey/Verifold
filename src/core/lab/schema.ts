@@ -503,6 +503,8 @@ export interface LabEvent {
   readonly whole?: true;
   /** The text says when the agent's turn came. A run's end makes it old. */
   readonly timing?: true;
+  /** A `call` event with the person's answer, or their undo of one. See `personal`. */
+  readonly byPerson?: true;
 }
 
 export interface LabAction {
