@@ -1400,15 +1400,9 @@ await test("the Ask page goes Back to the isolated project's last step, or to th
 });
 
 await test('step 2 offers to ask the harnesses: the consent for all of Claude Code\'s memories and the button with what they read, a line while they answer, then their answer without "To explore", with Accept and Discard', async (t) => {
-  const element = (
-    fields: Partial<SetupAbout>,
-    tools: readonly AgentTool[] = [claude, codex],
-  ): ReactElement => (
+  const element = (fields: Partial<SetupAbout>): ReactElement => (
     <AboutStep
-      view={view({
-        about: { ...about, ...fields },
-        agents: { checking: false, tools },
-      })}
+      view={view({ about: { ...about, ...fields } })}
       actions={actions}
       refresh={quiet}
       onSaved={quiet}
@@ -1418,7 +1412,13 @@ await test('step 2 offers to ask the harnesses: the consent for all of Claude Co
   const step = (fields: Partial<SetupAbout>): string => text(element(fields));
   // An older Verifold has no import, so the step shows no button.
   assert.doesNotMatch(step({}), /Get information about me/);
-  const idle = { busy: null, asking: [], error: null, result: null } as const;
+  const idle = {
+    busy: null,
+    asking: [],
+    claude: true,
+    error: null,
+    result: null,
+  } as const;
   const ready = step({ import: idle });
   assert.match(
     ready,
@@ -1429,14 +1429,13 @@ await test('step 2 offers to ask the harnesses: the consent for all of Claude Co
     renderToStaticMarkup(element({ import: idle })),
     /<input type="checkbox"\/>/,
   );
-  // Without Claude Code in the import, there is no box.
-  for (const tools of [
-    [{ ...claude, use: false }, codex],
-    [{ ...claude, signedIn: false }, codex],
-    [{ ...claude, installed: false }, codex],
+  // When the server says that the import does not ask Claude Code, or says nothing, there is no box.
+  for (const state of [
+    { ...idle, claude: false },
+    { busy: null, asking: [], error: null, result: null },
   ])
     assert.doesNotMatch(
-      renderToStaticMarkup(element({ import: idle }, tools)),
+      renderToStaticMarkup(element({ import: state })),
       /type="checkbox"|memories of all your projects/,
     );
   assert.match(
@@ -1514,7 +1513,6 @@ await test('step 2 offers to ask the harnesses: the consent for all of Claude Co
   const held = renderToStaticMarkup(
     <ImportPanel
       state={{ ...idle, result }}
-      claude
       actions={actions}
       refresh={quiet}
       cardEdited
@@ -1529,7 +1527,6 @@ await test('step 2 offers to ask the harnesses: the consent for all of Claude Co
     renderToStaticMarkup(
       <ImportPanel
         state={{ ...idle, result }}
-        claude
         actions={actions}
         refresh={quiet}
         cardEdited={false}

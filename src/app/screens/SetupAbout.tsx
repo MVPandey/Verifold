@@ -176,14 +176,6 @@ export function AboutStep({
   );
   const skip = useAction((_: null, key) => actions.skip('about', key));
   const cardEdited = edited && !sameCard(edits.card, edits.from);
-  // The import asks Claude Code, as the server picks the harnesses: in use, installed, and not signed out.
-  const claude = view.agents.tools.some(
-    (tool) =>
-      tool.harness === 'claude' &&
-      tool.use &&
-      tool.installed &&
-      tool.signedIn !== false,
-  );
   // A typed answer, card edits, or an import that waits for Accept or Discard.
   useUnsaved(
     text.trim() !== '' || cardEdited || Boolean(about.import?.result),
@@ -212,7 +204,6 @@ export function AboutStep({
         />
         <ImportPanel
           state={about.import}
-          claude={claude}
           actions={actions}
           refresh={refresh}
           cardEdited={false}
@@ -278,7 +269,6 @@ export function AboutStep({
       />
       <ImportPanel
         state={about.import}
-        claude={claude}
         actions={actions}
         refresh={refresh}
         cardEdited={cardEdited}

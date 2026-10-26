@@ -200,11 +200,20 @@ export class FirstRun {
     );
   }
 
+  /** The saved profile, and its card. Card null: no profile, or one in free form. */
+  private async savedCard(): Promise<{
+    readonly markdown: string | null;
+    readonly card: ProfileCard | null;
+  }> {
+    const markdown =
+      (await loadMemory(this.options.directory).catch(() => null)) ?? null;
+    return { markdown, card: markdown ? parseCard(markdown) : null };
+  }
+
   async view(): Promise<SetupView> {
     if (!this.detected) this.check();
     const settings = await this.settings();
-    const markdown = await loadMemory(this.options.directory).catch(() => null);
-    const saved = markdown ? parseCard(markdown) : null;
+    const { markdown, card: saved } = await this.savedCard();
     const compute = this.options.compute.view();
     const chat = chatChoice(this.detected ?? [], settings.agency);
     const month = await this.month();
@@ -240,7 +249,7 @@ export class FirstRun {
         busy: this.busy,
         error: this.error,
         limits: { answer: answerLimit, ...cardLimits },
-        import: await this.importView(),
+        import: await this.importView(settings.agency),
       },
       skills: await this.skills.view(),
       money: {
@@ -518,14 +527,17 @@ export class FirstRun {
   }
 
   /** The import as the page shows it. A skill that the person already chose says so: Accept leaves it as it is. */
-  private async importView(): Promise<
-    NonNullable<SetupView['about']['import']>
-  > {
+  private async importView(
+    agency: Agency | null,
+  ): Promise<NonNullable<SetupView['about']['import']>> {
     const result = this.imported;
     const chosen = result ? await this.skills.savedChoices() : null;
     return {
       busy: this.importing?.at ?? null,
       asking: this.importing?.asking ?? [],
+      claude: inUse(this.detected ?? [], agency).some(
+        (harness) => harness.host === 'claude',
+      ),
       error: this.importError,
       result: result && {
         ...result,
@@ -611,8 +623,9 @@ export class FirstRun {
    * Accept the import: its card becomes the draft, which the person still
    * edits and saves with "Looks right", and each skill that it named and
    * the person never chose is set. "To explore" stays as the person wrote
-   * it, in the draft, else in the saved card. It holds the conversation
-   * meanwhile, so an answer, a save, or a new start waits.
+   * it: the draft's when it has text, else the saved card's, also after a
+   * new start. It holds the conversation meanwhile, so an answer, a save,
+   * or a new start waits.
    */
   private async acceptImport(): Promise<void> {
     const result =
@@ -621,15 +634,10 @@ export class FirstRun {
     this.idle();
     this.holding = true;
     const generation = this.generation;
-    let saved: ProfileCard | null = null;
+    let saved: ProfileCard | null;
     try {
       await this.skills.importChoices(result.skills);
-      if (!this.card && !this.fresh) {
-        const markdown = await loadMemory(this.options.directory).catch(
-          () => null,
-        );
-        saved = markdown ? parseCard(markdown) : null;
-      }
+      saved = (await this.savedCard()).card;
     } finally {
       this.holding = false;
     }
@@ -638,7 +646,11 @@ export class FirstRun {
     this.imported = null;
     const { card } = result;
     if (card.workOn || card.talk) {
-      this.card = { ...card, explore: (this.card ?? saved)?.explore ?? '' };
+      // "Looks right" saves the whole card, so an empty "To explore" would erase the saved one.
+      this.card = {
+        ...card,
+        explore: this.card?.explore || saved?.explore || '',
+      };
       this.error = null;
       this.retryNote = undefined;
     }
@@ -676,12 +688,7 @@ export class FirstRun {
     this.busy = new Date().toISOString();
     this.error = null;
     try {
-      if (!this.card && !this.fresh) {
-        const markdown = await loadMemory(this.options.directory).catch(
-          () => null,
-        );
-        this.card = markdown ? parseCard(markdown) : null;
-      }
+      if (!this.card && !this.fresh) this.card = (await this.savedCard()).card;
       if (this.card && edited !== undefined) this.card = cardOf(edited);
     } catch (error) {
       this.busy = null;
@@ -748,10 +755,8 @@ export class FirstRun {
     this.holding = true;
     try {
       if (body.keep === true) {
-        const markdown = await loadMemory(this.options.directory).catch(
-          () => null,
-        );
-        if (!markdown) fail('No profile is saved to keep.');
+        if (!(await this.savedCard()).markdown)
+          fail('No profile is saved to keep.');
         await this.write((current) => ({
           ...current,
           steps: { ...current.steps, about: 'done' },
