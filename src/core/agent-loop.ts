@@ -1,9 +1,10 @@
 /**
  * The wake loop of a long-lived agent session. Events wait in the agent's
- * record. One digest at a time wakes the session, within an hourly limit, and
- * events that arrive close together join one digest. The record keeps the
- * events, the cursor of the last event that a digest carried, and the recent
- * wakeups. Its owner saves it, decides how a digest reads, and sends it.
+ * record. One digest at a time wakes the session, within an hourly limit that
+ * the person's own words pass, and events that arrive close together join one
+ * digest. The record keeps the events, the cursor of the last event that a
+ * digest carried, and the recent wakeups. Its owner saves it, decides how a
+ * digest reads, and sends it.
  */
 
 export interface WakeEvent {
@@ -51,6 +52,8 @@ export interface WakeOwner<E extends WakeEvent, R extends WakeRecord<E>> {
   ready(record: R): boolean;
   /** The usage window of the session's harness is used up until this time, so a turn would fail. */
   parked?(record: R): string | null;
+  /** The event holds the person's own words. It wakes the agent past the hourly limit, and that wakeup does not count. */
+  person?(event: E): boolean;
   /** Read what the digest needs, just before it is sent. */
   prepare?(): Promise<void>;
   /** Send one digest as a turn. Throw when nothing was sent: the events then wait for the next wakeup. */
@@ -197,6 +200,36 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     await this.queue;
   }
 
+  /** The event holds the person's own words. */
+  private person(event: E): boolean {
+    return this.owner.person?.(event) === true;
+  }
+
+  /** The record's wakeups within the last hour of the owner's clock. */
+  private recent(record: R): string[] {
+    const hour = Date.now() - (this.limits.hourMs ?? 3_600_000);
+    return record.wakeups.filter((at) => Date.parse(at) > hour);
+  }
+
+  /**
+   * When the hourly limit allows the agent's next wakeup, or null when it
+   * allows it now. The person's own words that wait pass the limit. The
+   * owner asks this too, so the loop and the owner's scheduler never
+   * disagree.
+   */
+  nextAllowed(record: R): number | null {
+    if (
+      record.events.some(
+        (event) => event.seq > record.cursor && this.person(event),
+      )
+    )
+      return null;
+    const recent = this.recent(record);
+    return recent.length >= this.limits.wakeupsPerHour
+      ? Date.parse(recent[0] ?? '') + (this.limits.hourMs ?? 3_600_000)
+      : null;
+  }
+
   /** Send the waiting events as one turn, within the hourly limit. */
   private async wake(): Promise<void> {
     const record = this.owner.record();
@@ -210,26 +243,39 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
       this.schedule(Math.max(1000, Date.parse(parked) - Date.now()));
       return;
     }
-    const hourMs = this.limits.hourMs ?? 3_600_000;
-    const hour = Date.now() - hourMs;
-    const recent = record.wakeups.filter((at) => Date.parse(at) > hour);
-    if (recent.length >= this.limits.wakeupsPerHour) {
-      const next = Date.parse(recent[0] ?? '') + hourMs + 1000;
-      this.limited = new Date(next).toISOString();
-      this.schedule(Math.max(1000, next - Date.now()));
+    const next = this.nextAllowed(record);
+    if (next !== null) {
+      this.limited = new Date(next + 1000).toISOString();
+      this.schedule(Math.max(1000, next + 1000 - Date.now()));
       return;
     }
     this.limited = null;
     await this.owner.prepare?.();
-    const sent = waiting.slice(0, this.limits.digest);
+    // The person's own words go first, so a digest that cannot take every
+    // waiting event still takes them. The events take the waiting numbers in
+    // this order, so the cursor still marks what a digest carried.
+    const ordered = [
+      ...waiting.filter((event) => this.person(event)),
+      ...waiting.filter((event) => !this.person(event)),
+    ].map((event, index) => ({ ...event, seq: waiting[index]?.seq ?? 0 }));
+    const sent = ordered.slice(0, this.limits.digest);
+    // A wakeup that carries the person's words does not count, so the
+    // person never uses up the agent's turns, and other agents still
+    // cannot wake it in a loop.
+    const free = sent.some((event) => this.person(event));
+    const recent = this.recent(record);
     // The cursor is saved first, so a restart never repeats a digest.
     await this.owner.save({
       ...record,
       cursor: sent.at(-1)?.seq ?? record.cursor,
-      wakeups: [...recent, new Date().toISOString()],
+      wakeups: free ? recent : [...recent, new Date().toISOString()],
+      events: [
+        ...record.events.filter((event) => event.seq <= record.cursor),
+        ...ordered,
+      ],
     });
     try {
-      this.owner.send(sent, waiting.length - sent.length);
+      this.owner.send(sent, ordered.length - sent.length);
     } catch {
       // Nothing was sent, so the events wait for the next wakeup.
       const current = this.owner.record();

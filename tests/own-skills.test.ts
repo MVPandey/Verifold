@@ -742,6 +742,38 @@ await test('the Skills step lists the own skills only when asked, keeps a list w
       ['codex', false, 'For scripts.'],
     ],
   );
+  // A group's switch sends many choices without notes. Each saved note stays.
+  assert.equal(
+    await setup.act({
+      action: 'setup-own-skills',
+      choices: [
+        { harness: 'claude', id: 'python', use: true },
+        { harness: 'codex', id: codexId('python'), use: true },
+      ],
+    }),
+    200,
+  );
+  assert.deepEqual(
+    (await setup.view()).skills?.own?.map((skill) => [
+      skill.harness,
+      skill.use,
+      skill.when,
+    ]),
+    [
+      ['claude', true, ''],
+      ['codex', true, 'For scripts.'],
+    ],
+  );
+  assert.equal(
+    await setup.act({
+      action: 'setup-own-skills',
+      choices: [
+        { harness: 'claude', id: 'python', use: false },
+        { harness: 'codex', id: codexId('python'), use: false },
+      ],
+    }),
+    200,
+  );
   // The view names each skill by its ID, never by what turns it off. The file keeps that, from the list.
   assert.equal(skills?.own?.[1]?.id, codexId('python'));
   assert.doesNotMatch(JSON.stringify(skills), /"off"/);
