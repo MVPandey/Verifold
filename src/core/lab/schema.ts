@@ -484,6 +484,8 @@ export interface Call {
   readonly facts?: readonly PlanFact[];
   /** A question of the planner before the plan: its answer's line, until the planner hears all its answers together. */
   readonly held?: string;
+  /** A held line is the person's answer or undo, not only Verifold's own note. */
+  readonly heldByPerson?: true;
 }
 
 export interface LabEvent {
@@ -1259,7 +1261,10 @@ function parseCall(value: unknown): Call | null {
     note: typeof entry.note === 'string' ? entry.note.slice(0, 500) : null,
     ...(facts.length ? { facts } : {}),
     ...(typeof entry.held === 'string' && entry.held
-      ? { held: entry.held.slice(0, heldChars) }
+      ? {
+          held: entry.held.slice(0, heldChars),
+          ...(entry.heldByPerson === true ? { heldByPerson: true } : {}),
+        }
       : {}),
   };
 }

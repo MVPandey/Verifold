@@ -2373,18 +2373,22 @@ export class Lab {
         if (!call.held) return call;
         const told: { -readonly [Key in keyof Call]: Call[Key] } = { ...call };
         delete told.held;
+        delete told.heldByPerson;
         return told;
       }),
     });
     // One event, shown whole: the planner reads every answer in full, in one
-    // digest. The answers are the person's, so they wake it past its hourly turns.
+    // digest. With an answer of the person in it, it wakes the planner past
+    // its hourly turns. Verifold's own notes alone count as a turn.
     this.loop(opener.id).add(
       [
         {
           kind: 'call',
           text: held.map((call) => call.held).join(' '),
           whole: true,
-          byPerson: true,
+          ...(held.some((call) => call.heldByPerson)
+            ? { byPerson: true as const }
+            : {}),
         },
       ],
       0,
@@ -2403,10 +2407,15 @@ export class Lab {
   }
 
   /** Keep an answer's line on a question of the planner until it hears them all. In the lab's queue. */
-  private async hold(call: Call, line: string): Promise<void> {
+  private async hold(
+    call: Call,
+    line: string,
+    byPerson: boolean,
+  ): Promise<void> {
     await this.changeCall(call.id, (entry) => ({
       ...entry,
       held: moreHeld(entry.held, line),
+      ...(byPerson ? { heldByPerson: true as const } : {}),
     }));
     await this.tellHeld();
   }
@@ -3486,7 +3495,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       !this.moving &&
       this.planQuestion(this.state, call)
     )
-      await this.hold(call, line);
+      await this.hold(call, line, byPerson);
     else this.wakeAskers(call, line, byPerson);
   }
 
@@ -3615,7 +3624,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       const post = await this.add(wordsPost(call, body)).catch(() => null);
       this.unheard(call, post);
       const line = wordsLine(call, body);
-      if (this.planQuestion(this.current(), call)) await this.hold(call, line);
+      if (this.planQuestion(this.current(), call))
+        await this.hold(call, line, true);
       else this.wakeAskers(call, line, true);
     });
   }
@@ -3708,7 +3718,13 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         const line = lineOf(answer);
         const held = moreHeld(entry.held, line);
         if (answer.words !== null)
-          return { ...entry, state: 'answered', words: answer.words, held };
+          return {
+            ...entry,
+            state: 'answered',
+            words: answer.words,
+            held,
+            heldByPerson: true,
+          };
         return {
           ...entry,
           state: 'answered',
@@ -3720,6 +3736,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
                 ).toISOString()
               : null,
           held,
+          heldByPerson: true,
         };
       }),
     });
@@ -7843,8 +7860,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       };
     const parked = this.options.quota?.parked(agent.host) ?? null;
     if (parked) return { status: 'usage', until: parked };
+    // The person's words pass the hourly turns, so an agent with them waits for a slot at most.
     const limited = this.loops.get(agent.id)?.limitedUntil ?? null;
-    if (limited) return { status: 'turns', until: limited };
+    if (limited && this.turnsUntil(agent) !== null)
+      return { status: 'turns', until: limited };
     if (
       !alive &&
       (agent.session === null || this.waiting(agent)) &&
@@ -7883,21 +7902,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     this.kick();
   }
 
-  /**
-   * When the agent's hourly turns allow its next one, or null when they allow
-   * it now. The person's own words that wait for it pass the limit, as in its
-   * wake loop.
-   */
+  /** When the agent's hourly turns allow its next one, or null when they allow it now. Its wake loop owns the rule. */
   private turnsUntil(agent: AgentRecord): number | null {
-    if (
-      agent.events.some((event) => event.seq > agent.cursor && personal(event))
-    )
-      return null;
-    const hour = Date.now() - this.timing.hourMs;
-    const recent = agent.wakeups.filter((at) => Date.parse(at) > hour);
-    return recent.length >= labLimits.wakeupsPerHour
-      ? Date.parse(recent[0] ?? '') + this.timing.hourMs
-      : null;
+    return this.loop(agent.id).nextAllowed(agent);
   }
 
   /**
