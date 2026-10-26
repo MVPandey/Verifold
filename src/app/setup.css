@@ -285,6 +285,7 @@
 }
 
 .agent__use input,
+.import__all input,
 .prices__allow input,
 .keyform__file input {
   width: 20px;
@@ -455,6 +456,13 @@
 
 .import__busy {
   padding-left: 0;
+}
+
+.import__all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
 }
 
 .import__skills {

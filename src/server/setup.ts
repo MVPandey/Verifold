@@ -200,11 +200,20 @@ export class FirstRun {
     );
   }
 
+  /** The saved profile, and its card. Card null: no profile, or one in free form. */
+  private async savedCard(): Promise<{
+    readonly markdown: string | null;
+    readonly card: ProfileCard | null;
+  }> {
+    const markdown =
+      (await loadMemory(this.options.directory).catch(() => null)) ?? null;
+    return { markdown, card: markdown ? parseCard(markdown) : null };
+  }
+
   async view(): Promise<SetupView> {
     if (!this.detected) this.check();
     const settings = await this.settings();
-    const markdown = await loadMemory(this.options.directory).catch(() => null);
-    const saved = markdown ? parseCard(markdown) : null;
+    const { markdown, card: saved } = await this.savedCard();
     const compute = this.options.compute.view();
     const chat = chatChoice(this.detected ?? [], settings.agency);
     const month = await this.month();
@@ -240,7 +249,7 @@ export class FirstRun {
         busy: this.busy,
         error: this.error,
         limits: { answer: answerLimit, ...cardLimits },
-        import: await this.importView(),
+        import: await this.importView(settings.agency),
       },
       skills: await this.skills.view(),
       money: {
@@ -442,7 +451,7 @@ export class FirstRun {
       case 'setup-own-skills-list':
         return Promise.resolve(this.skills.listOwn(body.again));
       case 'setup-import':
-        return this.startImport();
+        return this.startImport(body.allMemories === true);
       case 'setup-import-accept':
         await this.acceptImport();
         return 200;
@@ -518,14 +527,17 @@ export class FirstRun {
   }
 
   /** The import as the page shows it. A skill that the person already chose says so: Accept leaves it as it is. */
-  private async importView(): Promise<
-    NonNullable<SetupView['about']['import']>
-  > {
+  private async importView(
+    agency: Agency | null,
+  ): Promise<NonNullable<SetupView['about']['import']>> {
     const result = this.imported;
     const chosen = result ? await this.skills.savedChoices() : null;
     return {
       busy: this.importing?.at ?? null,
       asking: this.importing?.asking ?? [],
+      claude: inUse(this.detected ?? [], agency).some(
+        (harness) => harness.host === 'claude',
+      ),
       error: this.importError,
       result: result && {
         ...result,
@@ -540,9 +552,11 @@ export class FirstRun {
   /**
    * Ask each harness that the person uses what it knows about them. The
    * view shows the result when it comes. Nothing is saved until the person
-   * accepts it. An import that the person stopped ends first.
+   * accepts it. An import that the person stopped ends first. With
+   * `allMemories`, Claude Code looks through the memories of all the
+   * person's projects, not only the newest.
    */
-  private async startImport(): Promise<number> {
+  private async startImport(allMemories: boolean): Promise<number> {
     if (this.importing) fail('Verifold asks your agents now. Wait a moment.');
     // Taken before the first wait, so a second request at the same time is refused.
     const run = {
@@ -580,6 +594,7 @@ export class FirstRun {
           harnesses,
           merger,
           skills,
+          allMemories,
           signal,
           ...(this.options.harness ? { run: this.options.harness } : {}),
           ...(this.options.claudeConfig
@@ -605,10 +620,12 @@ export class FirstRun {
   }
 
   /**
-   * Accept the import: the card becomes the draft, which the person still
+   * Accept the import: its card becomes the draft, which the person still
    * edits and saves with "Looks right", and each skill that it named and
-   * the person never chose is set. It holds the conversation meanwhile, so
-   * an answer, a save, or a new start waits.
+   * the person never chose is set. "To explore" stays as the person wrote
+   * it: the draft's when it has text, else the saved card's, also after a
+   * new start. It holds the conversation meanwhile, so an answer, a save,
+   * or a new start waits.
    */
   private async acceptImport(): Promise<void> {
     const result =
@@ -617,8 +634,10 @@ export class FirstRun {
     this.idle();
     this.holding = true;
     const generation = this.generation;
+    let saved: ProfileCard | null;
     try {
       await this.skills.importChoices(result.skills);
+      saved = (await this.savedCard()).card;
     } finally {
       this.holding = false;
     }
@@ -626,8 +645,12 @@ export class FirstRun {
     if (this.imported !== result || generation !== this.generation) return;
     this.imported = null;
     const { card } = result;
-    if (card.workOn || card.explore || card.talk) {
-      this.card = card;
+    if (card.workOn || card.talk) {
+      // "Looks right" saves the whole card, so an empty "To explore" would erase the saved one.
+      this.card = {
+        ...card,
+        explore: this.card?.explore || saved?.explore || '',
+      };
       this.error = null;
       this.retryNote = undefined;
     }
@@ -665,12 +688,7 @@ export class FirstRun {
     this.busy = new Date().toISOString();
     this.error = null;
     try {
-      if (!this.card && !this.fresh) {
-        const markdown = await loadMemory(this.options.directory).catch(
-          () => null,
-        );
-        this.card = markdown ? parseCard(markdown) : null;
-      }
+      if (!this.card && !this.fresh) this.card = (await this.savedCard()).card;
       if (this.card && edited !== undefined) this.card = cardOf(edited);
     } catch (error) {
       this.busy = null;
@@ -737,10 +755,8 @@ export class FirstRun {
     this.holding = true;
     try {
       if (body.keep === true) {
-        const markdown = await loadMemory(this.options.directory).catch(
-          () => null,
-        );
-        if (!markdown) fail('No profile is saved to keep.');
+        if (!(await this.savedCard()).markdown)
+          fail('No profile is saved to keep.');
         await this.write((current) => ({
           ...current,
           steps: { ...current.steps, about: 'done' },
