@@ -925,13 +925,26 @@ button.start:disabled {
   border-radius: 14px;
 }
 
+/* The group's switch sits on its summary line, above the rows' switches. */
+.own-group__box {
+  position: relative;
+}
+
+.own-group__switch {
+  position: absolute;
+  top: 2px;
+  right: 19px;
+  z-index: 1;
+}
+
 .own-group__title {
   min-height: 44px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  padding: 0 18px;
+  /* The right side leaves room for the group's switch. */
+  padding: 0 136px 0 18px;
   font-weight: 800;
   cursor: pointer;
   list-style: none;
