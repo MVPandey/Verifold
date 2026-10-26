@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import type { SetupImport } from '../../protocol/api.ts';
 
 type ImportedSkill = NonNullable<SetupImport['result']>['skills'][number];
@@ -15,6 +15,9 @@ export const cardFields = [
   { field: 'talk', label: 'Talk to me' },
 ] as const;
 
+/** The parts of the card that the import fills. The person writes "To explore". */
+const importFields = cardFields.filter(({ field }) => field !== 'explore');
+
 /**
  * "Get information about me from my harnesses" on the About step: the
  * button, a line for each harness while they answer, then what they sent,
@@ -22,19 +25,23 @@ export const cardFields = [
  */
 export function ImportPanel({
   state,
+  claude,
   actions,
   refresh,
   cardEdited,
 }: {
   /** Undefined: an older Verifold without the import. */
   readonly state: SetupImport | undefined;
+  /** The import asks Claude Code, so the person can let it read all their projects' memories. */
+  readonly claude: boolean;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   /** The card below has edits that are not saved, which Accept would replace. */
   readonly cardEdited: boolean;
 }): ReactNode {
   const title = useId();
-  const ask = useAction((_: null, key) => actions.importAsk(key));
+  const [allMemories, setAllMemories] = useState(false);
+  const ask = useAction((all: boolean, key) => actions.importAsk(all, key));
   const accept = useAction((_: null, key) => actions.importAccept(key));
   const discard = useAction((_: null, key) => actions.importDiscard(key));
   if (!state) return null;
@@ -75,12 +82,23 @@ export function ImportPanel({
   if (!result)
     return (
       <section aria-label="What your harnesses know" className="import">
+        {claude && (
+          <label className="import__all">
+            <input
+              type="checkbox"
+              checked={allMemories}
+              onChange={(event) => setAllMemories(event.target.checked)}
+            />
+            Let Claude Code look through the memories of all your projects, not
+            only the recent ones.
+          </label>
+        )}
         <div>
           <button
             type="button"
             className="button button--outline"
             disabled={ask.busy}
-            onClick={run(ask)}
+            onClick={() => void ask.submit(claude && allMemories).then(refresh)}
           >
             Get information about me from my harnesses
           </button>
@@ -114,7 +132,7 @@ export function ImportPanel({
         {result.from.length > 1 ? 'know' : 'knows'} about you
       </h2>
       <dl className="profile__fields">
-        {cardFields.map(({ field, label }) => (
+        {importFields.map(({ field, label }) => (
           <div key={field} className="profile__field">
             <dt>{label}</dt>
             <dd>
@@ -170,8 +188,8 @@ export function ImportPanel({
         ))}
       </ul>
       <p className="profile__note">
-        Accept makes this your draft card. You can still edit it before you save
-        it.
+        Accept puts this in your draft card and keeps your “To explore” text.
+        You can still edit the card before you save it.
         {result.skills.length > 0 &&
           ' It also sets the skills that you have not chosen yet: Yes, with the note, for each one that fits, and No for each one that does not.'}
       </p>
