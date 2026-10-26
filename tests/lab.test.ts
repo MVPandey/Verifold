@@ -2458,7 +2458,7 @@ interface LabInside {
   };
 }
 
-await test('directions take turns when they outnumber the slots, and an agent at its hourly turns gives its slot', async (t) => {
+await test("directions take turns when they outnumber the slots, an agent at its hourly turns gives its slot, and the person's post wakes it at once", async (t) => {
   const hourly = labLimits.wakeupsPerHour;
   labLimits.wakeupsPerHour = 1;
   t.after(() => {
@@ -2501,6 +2501,24 @@ await test('directions take turns when they outnumber the slots, and an agent at
   const before = await counts();
   await delay(500);
   assert.deepEqual(await counts(), before);
+  // The person's post passes the limit: the agent takes a turn at once, and the turn does not count.
+  const path = join(lab.root, '.verifold', 'lab', 'agents', 'a-1.json');
+  const record = async (): Promise<{
+    readonly handle: string;
+    readonly wakeups: unknown[];
+  }> =>
+    JSON.parse(await readFile(path, 'utf8')) as {
+      readonly handle: string;
+      readonly wakeups: unknown[];
+    };
+  const counted = await record();
+  assert.equal(counted.handle, 'claude-1');
+  await lab.lab.post({ text: '@claude-1 look at layer 12.' });
+  await until(async () =>
+    /look at layer 12/.test((await lab.inputs('d-1-alpha')).at(-1) ?? ''),
+  );
+  assert.equal((await lab.inputs('d-1-alpha')).length, (before[0] ?? 0) + 1);
+  assert.deepEqual((await record()).wakeups, counted.wakeups);
 });
 
 await test('a turn whose process stops brings its posts again, and the resumed conversation reads them', async (t) => {
