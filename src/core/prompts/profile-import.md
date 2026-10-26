@@ -8,7 +8,14 @@ Tell me:
 
 Use only what you know about the person: your own instructions and your memories.
 
-When the input has "memoryFolders", these are the memory folders of the person's projects, the newest first. Look through them yourself with your Glob, Grep and Read tools. Read the notes that help you understand the person's work: what they research, their methods and tools, and how they like to work. A folder's MEMORY.md, when it has one, lists its notes. You do not have to read every note. Look at all the folders, not only the first ones: the person can work on many projects. When the input has "instructions", read that file too.
+When the input has "memoryFolders", these are the memory folders of the person's projects, the newest first. Look through them yourself with your Glob, Grep and Read tools:
+
+- Start with each folder's MEMORY.md, when it has one. It lists the notes of the folder.
+- Open a single note only when it adds something about the person's research, their methods and tools, or how they like to work.
+- Look at all the folders, not only the first ones: the person can work on many projects.
+- Do not read everything. Send your answer in good time.
+
+When the input has "instructions", read that file too.
 
 Do not read session transcripts, credentials, or any other file. Do not run commands, search the web, or change anything.
 

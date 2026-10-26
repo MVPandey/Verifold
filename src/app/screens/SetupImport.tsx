@@ -25,15 +25,12 @@ const importFields = cardFields.filter(({ field }) => field !== 'explore');
  */
 export function ImportPanel({
   state,
-  claude,
   actions,
   refresh,
   cardEdited,
 }: {
   /** Undefined: an older Verifold without the import. */
   readonly state: SetupImport | undefined;
-  /** The import asks Claude Code, so the person can let it read all their projects' memories. */
-  readonly claude: boolean;
   readonly actions: SetupActions;
   readonly refresh: () => void;
   /** The card below has edits that are not saved, which Accept would replace. */
@@ -45,6 +42,7 @@ export function ImportPanel({
   const accept = useAction((_: null, key) => actions.importAccept(key));
   const discard = useAction((_: null, key) => actions.importDiscard(key));
   if (!state) return null;
+  const claude = state.claude === true;
   const run =
     (action: { submit: (value: null) => Promise<boolean> }) => (): void =>
       void action.submit(null).then(refresh);

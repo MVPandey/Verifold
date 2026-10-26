@@ -1234,6 +1234,8 @@ export interface SetupImport {
   readonly busy: string | null;
   /** The harnesses that the running import asks. */
   readonly asking: readonly Harness[];
+  /** The next import asks Claude Code, so the person can let it look through the memories of all their projects. Added after version 1. */
+  readonly claude?: boolean;
   /** Why the last import failed. */
   readonly error: string | null;
   /** The result, until the person accepts or discards it. */

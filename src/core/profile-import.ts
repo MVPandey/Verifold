@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { opendir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -45,8 +46,12 @@ const limits = {
   recentFolders: 10,
   /** The same, when the person lets Claude Code look through all of them. */
   allFolders: 300,
-  /** Entries of a folder that Verifold looks at. */
+  /** Entries of the projects folder that Verifold looks at. */
+  projects: 20_000,
+  /** Entries of a memory folder that Verifold looks at for a note. */
   entries: 2000,
+  /** Memory folders that Verifold looks at, at the same time. */
+  parallel: 16,
   /** Characters of a skill's description in the prompt. */
   description: 300,
   /** Characters of the line on what a harness read. */
@@ -80,25 +85,37 @@ function fail(message: string): never {
   throw new SessionActionError(message);
 }
 
-/** The entries of a folder, at most `limits.entries`. None when it cannot be read. */
-async function entries(
+/** Visit the entries of a folder until `visit` returns false. Nothing when the folder cannot be read. */
+async function walk(
   folder: string,
   signal: AbortSignal,
-): Promise<{ readonly name: string; readonly folder: boolean }[]> {
+  visit: (entry: Dirent) => boolean,
+): Promise<void> {
   const dir = await opendir(folder).catch(() => null);
-  if (!dir) return [];
-  const found: { name: string; folder: boolean }[] = [];
+  if (!dir) return;
   try {
     for await (const entry of dir) {
       signal.throwIfAborted();
-      if (found.length >= limits.entries) break;
-      found.push({ name: entry.name, folder: entry.isDirectory() });
+      if (!visit(entry)) break;
     }
   } finally {
     // A loop that ends early leaves the folder open.
     await dir.close().catch(() => {});
   }
-  return found;
+}
+
+/** The folder holds a `.md` file. The look stops at the first one, or after `limits.entries` entries. */
+async function holdsNote(
+  folder: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  let seen = 0;
+  let note = false;
+  await walk(folder, signal, (entry) => {
+    note = !entry.isDirectory() && entry.name.endsWith('.md');
+    return !note && ++seen < limits.entries;
+  });
+  return note;
 }
 
 async function mtime(path: string): Promise<number> {
@@ -145,28 +162,42 @@ export async function claudeMemory(
   /** CLAUDE.md. Null: it does not exist. */
   readonly instructions: string | null;
   readonly folders: readonly string[];
+  /** Some folders with a note are closed, so Claude Code can meet a refused read. */
+  readonly closed: boolean;
 }> {
   const projects = join(config, 'projects');
-  const found: { readonly path: string; readonly at: number }[] = [];
-  for (const entry of await entries(projects, signal)) {
-    // The folders that Claude Code names hold no rule syntax. Such a name would change the folder's rule.
-    if (!entry.folder || ruleSyntax(entry.name)) continue;
-    const memory = join(projects, entry.name, 'memory');
-    const notes = await entries(memory, signal);
-    if (!notes.some((note) => !note.folder && note.name.endsWith('.md')))
-      continue;
-    // A note changes MEMORY.md, which the folder's own time does not show.
-    found.push({
-      path: memory,
-      at: Math.max(await mtime(memory), await mtime(join(memory, 'MEMORY.md'))),
-    });
-  }
-  const folders = found
-    .sort((a, b) => b.at - a.at)
-    .slice(0, all ? limits.allFolders : limits.recentFolders)
-    .map(({ path }) => path);
+  const names: string[] = [];
+  let seen = 0;
+  await walk(projects, signal, (entry) => {
+    if (entry.isDirectory()) names.push(entry.name);
+    return ++seen < limits.projects;
+  });
+  const found: { readonly name: string; readonly at: number }[] = [];
+  for (let start = 0; start < names.length; start += limits.parallel)
+    await Promise.all(
+      names.slice(start, start + limits.parallel).map(async (name) => {
+        const memory = join(projects, name, 'memory');
+        if (!(await holdsNote(memory, signal))) return;
+        // A note changes MEMORY.md, which the folder's own time does not show.
+        const at = Math.max(
+          await mtime(memory),
+          await mtime(join(memory, 'MEMORY.md')),
+        );
+        found.push({ name, at });
+      }),
+    );
+  found.sort((a, b) => b.at - a.at);
+  const folders = (
+    all
+      ? found.slice(0, limits.allFolders)
+      : // Each folder gets its own rule. The folders that Claude Code names hold no rule syntax and no backslash, which would change the rule.
+        found
+          .filter(({ name }) => !ruleSyntax(name) && !name.includes('\\'))
+          .slice(0, limits.recentFolders)
+  ).map(({ name }) => join(projects, name, 'memory'));
   const instructions = join(config, 'CLAUDE.md');
   return {
+    // A `<folder>/**` rule also opens Glob and Grep with that folder as their path, and they skip its denied files. Probed on Claude Code 2.1.310.
     allow: [
       instructions,
       ...(all
@@ -181,6 +212,7 @@ export async function claudeMemory(
       ? instructions
       : null,
     folders,
+    closed: !all && found.length > folders.length,
   };
 }
 
@@ -322,7 +354,7 @@ export async function importProfile(input: {
           // Skill descriptions come from plugins and catalogs.
           outsideText: true,
           prompt: `${instructions}${
-            memory && !all
+            memory?.closed
               ? '\n\nYou can open only some of your memory folders. A refused read is expected. Go on with the next folder.'
               : ''
           }
@@ -371,7 +403,7 @@ ${JSON.stringify({ drafts: cards.map(({ workOn, talk }) => ({ workOn, talk })) }
           cwd,
           signal,
           timeoutMs: 180_000,
-          idleMs: limits.idleMs,
+          idleMs: 120_000,
           textOnly: true,
           // The drafts hold what the harnesses read.
           outsideText: true,
