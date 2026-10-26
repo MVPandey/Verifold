@@ -30,7 +30,7 @@ export interface ImportedSkill {
 export interface ProfileImport {
   /** The harnesses that answered, the lead first. */
   readonly from: readonly HarnessName[];
-  /** The draft card. A part that no harness knew is empty. */
+  /** The draft card. A part that no harness knew is empty. "To explore" is always empty: the person writes it. */
   readonly card: ProfileCard;
   /** The skills that each answer named. A skill that it left out has no opinion. */
   readonly skills: readonly ImportedSkill[];
@@ -42,17 +42,17 @@ export interface ProfileImport {
 
 const limits = {
   /** The memory folders of Claude Code's projects that the prompt names, the newest first. */
-  memoryFolders: 40,
-  /** Files that the prompt names in a memory folder without MEMORY.md. */
-  memoryFiles: 5,
+  recentFolders: 10,
+  /** The same, when the person lets Claude Code look through all of them. */
+  allFolders: 300,
   /** Entries of a folder that Verifold looks at. */
   entries: 2000,
   /** Characters of a skill's description in the prompt. */
   description: 300,
   /** Characters of the line on what a harness read. */
   read: 200,
-  timeoutMs: 300_000,
-  idleMs: 120_000,
+  timeoutMs: 600_000,
+  idleMs: 180_000,
 } as const;
 
 const empty: ProfileCard = { workOn: '', explore: '', talk: '' };
@@ -105,19 +105,21 @@ async function mtime(path: string): Promise<number> {
   return (await stat(path).catch(() => null))?.mtimeMs ?? 0;
 }
 
+/** A permission rule reads `*`, `?`, `[`, `]`, `{`, `}` and parentheses as syntax, and holds no control character. */
+function ruleSyntax(path: string): boolean {
+  return [...path].some((char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || code === 0x7f || '*?[]{}()'.includes(char);
+  });
+}
+
 /**
  * Claude Code's settings folder, as an absolute path that a permission rule
- * can hold. A rule reads `*`, `?`, `[`, `]`, `{`, `}` and parentheses in it
- * as syntax, so such a path is refused.
+ * can hold. A path with rule syntax is refused.
  */
 export function claudeFolder(config: string): string {
   const path = resolve(config);
-  if (
-    [...path].some((char) => {
-      const code = char.charCodeAt(0);
-      return code < 0x20 || code === 0x7f || '*?[]{}()'.includes(char);
-    })
-  )
+  if (ruleSyntax(path))
     fail(
       'Verifold did not ask Claude Code: the path of its settings folder holds a character that a permission rule cannot hold, such as * or (.',
     );
@@ -125,57 +127,60 @@ export function claudeFolder(config: string): string {
 }
 
 /**
- * What Claude Code may read: its CLAUDE.md and the memory folders of its
- * projects, never the session transcripts and settings beside them. `files`
- * names where to start: CLAUDE.md, then for each memory folder, the newest
- * first, its MEMORY.md, else up to five of its notes.
+ * What Claude Code may look through: its CLAUDE.md and the memory folders of
+ * its projects, never the session transcripts and settings beside them.
+ * Claude Code makes a memory folder for each folder that it runs in, so many
+ * of them are empty. `folders` names the ones that hold a note, the newest
+ * first: 10, or with `all`, up to 300. The prompt must name them, because
+ * Glob and Grep cannot list `projects`. Without `all`, Claude Code may open
+ * only these 10 folders. With it, every memory folder.
  */
 export async function claudeMemory(
   config: string,
+  all: boolean,
   signal: AbortSignal,
 ): Promise<{
   readonly allow: readonly string[];
   readonly deny: readonly string[];
-  readonly files: readonly string[];
+  /** CLAUDE.md. Null: it does not exist. */
+  readonly instructions: string | null;
+  readonly folders: readonly string[];
 }> {
   const projects = join(config, 'projects');
   const found: { readonly path: string; readonly at: number }[] = [];
   for (const entry of await entries(projects, signal)) {
-    if (!entry.folder) continue;
+    // The folders that Claude Code names hold no rule syntax. Such a name would change the folder's rule.
+    if (!entry.folder || ruleSyntax(entry.name)) continue;
     const memory = join(projects, entry.name, 'memory');
-    if (!(await stat(memory).catch(() => null))?.isDirectory()) continue;
+    const notes = await entries(memory, signal);
+    if (!notes.some((note) => !note.folder && note.name.endsWith('.md')))
+      continue;
     // A note changes MEMORY.md, which the folder's own time does not show.
     found.push({
       path: memory,
       at: Math.max(await mtime(memory), await mtime(join(memory, 'MEMORY.md'))),
     });
   }
-  const newest = found
+  const folders = found
     .sort((a, b) => b.at - a.at)
-    .slice(0, limits.memoryFolders);
-  const starts = await Promise.all(
-    newest.map(async ({ path }) => {
-      const index = join(path, 'MEMORY.md');
-      if ((await stat(index).catch(() => null))?.isFile()) return [index];
-      return (await entries(path, signal))
-        .filter((entry) => !entry.folder && entry.name.endsWith('.md'))
-        .slice(0, limits.memoryFiles)
-        .map((entry) => join(path, entry.name));
-    }),
-  );
+    .slice(0, all ? limits.allFolders : limits.recentFolders)
+    .map(({ path }) => path);
   const instructions = join(config, 'CLAUDE.md');
   return {
-    allow: [instructions, join(projects, '*', 'memory', '**')],
+    allow: [
+      instructions,
+      ...(all
+        ? [join(projects, '*', 'memory', '**')]
+        : folders.map((folder) => join(folder, '**'))),
+    ],
     deny: [
       ...claudePrivate.map((path) => join(config, path)),
       ...credentialPaths,
     ],
-    files: [
-      ...((await stat(instructions).catch(() => null))?.isFile()
-        ? [instructions]
-        : []),
-      ...starts.flat(),
-    ],
+    instructions: (await stat(instructions).catch(() => null))?.isFile()
+      ? instructions
+      : null,
+    folders,
   };
 }
 
@@ -196,6 +201,16 @@ export async function codexClosed(
     real,
     ...closed.filter((path) => path !== real && !path.startsWith(`${real}/`)),
   ];
+}
+
+/**
+ * The card of an import: "You work on" and "Talk to me". "To explore" stays
+ * empty, because the person writes it. Null: neither part has text.
+ */
+function importCard(value: unknown): ProfileCard | null {
+  return record(value)
+    ? replyCard({ workOn: value.workOn, talk: value.talk })
+    : null;
 }
 
 /** One harness's answer, checked: the card, its view of each listed skill that it named, and what it read. */
@@ -235,7 +250,7 @@ function answerOf(
     });
   }
   return {
-    card: replyCard(value.card),
+    card: importCard(value.card),
     skills: [...skills.values()],
     read:
       typeof value.read === 'string'
@@ -266,12 +281,15 @@ export async function importProfile(input: {
   readonly skills: readonly OwnSkill[];
   /** Claude Code's settings folder. Tests use a fake one. */
   readonly claudeConfig?: string;
+  /** The person lets Claude Code look through the memories of all their projects, not only the newest. */
+  readonly allMemories?: boolean;
   readonly signal: AbortSignal;
   readonly run?: typeof runHarness;
 }): Promise<ProfileImport> {
   const { signal } = input;
   const run = input.run ?? runHarness;
   const instructions = await loadPrompt('profile-import');
+  const all = input.allMemories === true;
   const answers = await Promise.allSettled(
     input.harnesses.map(async (harness) => {
       const listed = input.skills.filter(
@@ -285,6 +303,7 @@ export async function importProfile(input: {
                   process.env.CLAUDE_CONFIG_DIR ??
                   join(homedir(), '.claude'),
               ),
+              all,
               signal,
             )
           : null;
@@ -302,7 +321,11 @@ export async function importProfile(input: {
           ownFiles,
           // Skill descriptions come from plugins and catalogs.
           outsideText: true,
-          prompt: `${instructions}
+          prompt: `${instructions}${
+            memory && !all
+              ? '\n\nYou can open only some of your memory folders. A refused read is expected. Go on with the next folder.'
+              : ''
+          }
 
 The input, as JSON:
 ${JSON.stringify({
@@ -311,7 +334,8 @@ ${JSON.stringify({
     name,
     description: description.slice(0, limits.description),
   })),
-  ...(memory?.files.length ? { files: memory.files } : {}),
+  ...(memory?.instructions ? { instructions: memory.instructions } : {}),
+  ...(memory?.folders.length ? { memoryFolders: memory.folders } : {}),
 })}`,
         }),
       );
@@ -339,7 +363,7 @@ ${JSON.stringify({
       const prompt = `${await loadPrompt('profile-merge')}
 
 The input, as JSON:
-${JSON.stringify({ drafts: cards })}`;
+${JSON.stringify({ drafts: cards.map(({ workOn, talk }) => ({ workOn, talk })) })}`;
       const result = await inEmptyFolder('import', (cwd) =>
         run({
           host: merger.host,
@@ -356,7 +380,7 @@ ${JSON.stringify({ drafts: cards })}`;
       );
       const value = parseHostJson(result.text);
       card =
-        (record(value) ? replyCard(value.card) : null) ??
+        (record(value) ? importCard(value.card) : null) ??
         fail(`${hostName(merger.host)} did not send a card.`);
     } catch (error) {
       signal.throwIfAborted();

@@ -1240,7 +1240,7 @@ export interface SetupImport {
   readonly result: {
     /** The harnesses that answered, the lead first. */
     readonly from: readonly Harness[];
-    /** The draft card. A part that no harness knew is empty. */
+    /** The draft card. A part that no harness knew is empty. `explore` is always empty: the person writes it. */
     readonly card: ProfileCard;
     /**
      * The skills that the answers named. Accept sets each one that the
@@ -1530,8 +1530,15 @@ export interface ActionBodies {
    */
   'setup-own-skills-list': { readonly again?: boolean; readonly key?: string };
   /** Ask each harness that the person uses what it knows about them. Added after version 1. */
-  'setup-import': { readonly key?: string };
-  /** Accept the import: save its skill choices, and make its card the draft. */
+  'setup-import': {
+    /**
+     * Claude Code looks through the memories of all the person's projects,
+     * not only the 10 newest. Added after version 1.
+     */
+    readonly allMemories?: boolean;
+    readonly key?: string;
+  };
+  /** Accept the import: save its skill choices, and make its card the draft. It keeps the person's "To explore" text. */
   'setup-import-accept': { readonly key?: string };
   /** Discard the import's result, or stop the import while it runs. */
   'setup-import-discard': { readonly key?: string };

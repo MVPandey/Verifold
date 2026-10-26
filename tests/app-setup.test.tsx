@@ -1399,25 +1399,46 @@ await test("the Ask page goes Back to the isolated project's last step, or to th
   assert.match(global, />Change</);
 });
 
-await test('step 2 offers to ask the harnesses: the button with what they read, a line while they answer, then their answer with Accept and Discard', async (t) => {
-  const step = (fields: Partial<SetupAbout>): string =>
-    text(
-      <AboutStep
-        view={view({ about: { ...about, ...fields } })}
-        actions={actions}
-        refresh={quiet}
-        onSaved={quiet}
-        nav={nav}
-      />,
-    );
+await test('step 2 offers to ask the harnesses: the consent for all of Claude Code\'s memories and the button with what they read, a line while they answer, then their answer without "To explore", with Accept and Discard', async (t) => {
+  const element = (
+    fields: Partial<SetupAbout>,
+    tools: readonly AgentTool[] = [claude, codex],
+  ): ReactElement => (
+    <AboutStep
+      view={view({
+        about: { ...about, ...fields },
+        agents: { checking: false, tools },
+      })}
+      actions={actions}
+      refresh={quiet}
+      onSaved={quiet}
+      nav={nav}
+    />
+  );
+  const step = (fields: Partial<SetupAbout>): string => text(element(fields));
   // An older Verifold has no import, so the step shows no button.
   assert.doesNotMatch(step({}), /Get information about me/);
   const idle = { busy: null, asking: [], error: null, result: null } as const;
   const ready = step({ import: idle });
   assert.match(
     ready,
-    /Get information about me from my harnesses Each harness reads its own memories, instructions and skills, read-only\. It doesn’t read your past sessions\. Nothing is saved until you accept\./,
+    /Let Claude Code look through the memories of all your projects, not only the recent ones\. Get information about me from my harnesses Each harness reads its own memories, instructions and skills, read-only\. It doesn’t read your past sessions\. Nothing is saved until you accept\./,
   );
+  // The box starts unticked.
+  assert.match(
+    renderToStaticMarkup(element({ import: idle })),
+    /<input type="checkbox"\/>/,
+  );
+  // Without Claude Code in the import, there is no box.
+  for (const tools of [
+    [{ ...claude, use: false }, codex],
+    [{ ...claude, signedIn: false }, codex],
+    [{ ...claude, installed: false }, codex],
+  ])
+    assert.doesNotMatch(
+      renderToStaticMarkup(element({ import: idle }, tools)),
+      /type="checkbox"|memories of all your projects/,
+    );
   assert.match(
     step({ import: { ...idle, error: 'No agent that you use is signed in.' } }),
     /No agent that you use is signed in\./,
@@ -1467,8 +1488,9 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
   });
   assert.match(
     answered,
-    /What Claude Code knows about you You work on CoT faithfulness\. To explore Not known Talk to me Short\./,
+    /What Claude Code knows about you You work on CoT faithfulness\. Talk to me Short\./,
   );
+  assert.doesNotMatch(answered, /To explore Not known/);
   assert.match(
     answered,
     /Skills that fit your research research-paper-writing · Claude Code For paper drafts\. Not for research: 1 vercel:deploy · Claude Code · You chose Yes/,
@@ -1479,7 +1501,7 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
   );
   assert.match(
     answered,
-    /Accept makes this your draft card\. You can still edit it before you save it\. It also sets the skills that you have not chosen yet: Yes, with the note, for each one that fits, and No for each one that does not\. Accept Discard/,
+    /Accept puts this in your draft card and keeps your “To explore” text\. You can still edit the card before you save it\. It also sets the skills that you have not chosen yet: Yes, with the note, for each one that fits, and No for each one that does not\. Accept Discard/,
   );
   // With card edits that are not saved, Accept waits, and says why.
   const result = {
@@ -1492,6 +1514,7 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
   const held = renderToStaticMarkup(
     <ImportPanel
       state={{ ...idle, result }}
+      claude
       actions={actions}
       refresh={quiet}
       cardEdited
@@ -1506,6 +1529,7 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
     renderToStaticMarkup(
       <ImportPanel
         state={{ ...idle, result }}
+        claude
         actions={actions}
         refresh={quiet}
         cardEdited={false}
@@ -1533,11 +1557,14 @@ await test('step 2 offers to ask the harnesses: the button with what they read, 
     return Promise.resolve(new Response('{"ok":true}', { status: 202 }));
   };
   const live = setupActions('token');
-  await live.importAsk('a'.repeat(32));
+  await live.importAsk(true, 'a'.repeat(32));
   await live.importAccept('b'.repeat(32));
   await live.importDiscard('c'.repeat(32));
   assert.deepEqual(sent, [
-    ['/api/v1/actions/setup-import', { key: 'a'.repeat(32) }],
+    [
+      '/api/v1/actions/setup-import',
+      { allMemories: true, key: 'a'.repeat(32) },
+    ],
     ['/api/v1/actions/setup-import-accept', { key: 'b'.repeat(32) }],
     ['/api/v1/actions/setup-import-discard', { key: 'c'.repeat(32) }],
   ]);
