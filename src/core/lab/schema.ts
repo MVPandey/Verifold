@@ -53,7 +53,7 @@ import {
 
 export const labLimits = {
   directions: planLimits.directions,
-  wakeupsPerHour: 12,
+  wakeupsPerHour: 30,
   /** Lines in one digest. */
   digest: boardLimits.digest,
   /** Events and actions kept in an agent's record. */
