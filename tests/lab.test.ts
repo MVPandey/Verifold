@@ -3747,6 +3747,45 @@ await test("the person's post reaches the planner while it waits for answers, an
   await until(() => lab.lab.view()?.state.plan !== null, 20_000);
 });
 
+await test("Verifold's withdrawal of the planner's questions waits for its hourly turns, and the person's post brings it at once", async (t) => {
+  const hourly = labLimits.wakeupsPerHour;
+  labLimits.wakeupsPerHour = 1;
+  t.after(() => {
+    labLimits.wakeupsPerHour = hourly;
+  });
+  const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
+  await lab.script('d-1-plan-the-lab', [
+    { when: 'You also open the lab', calls: plannerQuestions },
+  ]);
+  await lab.lab.start('Do LLMs store months on circles?', { hours: 8 });
+  await until(() => (lab.lab.view()?.state.calls.length ?? 0) === 2);
+  await until(() => lab.lab.view()?.directions[0]?.status === 'idle');
+  const planner = lab.lab.view()?.directions[0]?.agent;
+  assert.ok(planner);
+  const inside = lab.lab as unknown as LabInside & {
+    withdraw(call: unknown, why: string): Promise<void>;
+  };
+  // The planner has used its one turn of the hour.
+  const at = new Date().toISOString();
+  await inside.update(planner.id, (agent) => ({ ...agent, wakeups: [at] }));
+  for (const call of lab.lab.view()?.state.calls ?? [])
+    await inside.serial(() => inside.withdraw(call, 'The test withdrew it.'));
+  const withdrew = async (): Promise<boolean> =>
+    (await lab.inputs('d-1-plan-the-lab')).some((input) =>
+      input.includes('Verifold withdrew c-2'),
+    );
+  // Verifold's own lines count as a turn, so they wait.
+  await until(() => lab.lab.view()?.directions[0]?.status === 'turns');
+  assert.equal(await withdrew(), false);
+  // The person's post passes the limit and brings the withdrawals. That turn does not count.
+  await lab.lab.post({ text: 'Plan with the 9B model.', direction: 'd-1' });
+  await until(withdrew);
+  const last = (await lab.inputs('d-1-plan-the-lab')).at(-1) ?? '';
+  assert.match(last, /Plan with the 9B model\./);
+  assert.match(last, /Verifold withdrew c-1: The test withdrew it\./);
+  assert.deepEqual(lab.lab.view()?.directions[0]?.agent.wakeups, [at]);
+});
+
 await test("the person answers the planner's questions together, each with an option or words, and the planner hears them once", async (t) => {
   const lab = await fixture(t, { harnesses: ['claude', 'codex'] });
   await lab.script('d-1-plan-the-lab', [

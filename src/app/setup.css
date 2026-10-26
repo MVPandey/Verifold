@@ -930,7 +930,7 @@ button.start:disabled {
   position: relative;
 }
 
-.own-group__switch {
+.own-group__box > .own__switch {
   position: absolute;
   top: 2px;
   right: 19px;
