@@ -21,6 +21,7 @@ import {
   type MonthHooks,
   type MonthView,
 } from './leases.ts';
+import { maxPodsAtOnce } from './pod-limits.ts';
 import { PodShell, podLimits, type PodTarget } from './pod-shell.ts';
 import { PodGoneError, type PodRuns } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
@@ -54,7 +55,7 @@ export interface ComputeSettings {
   readonly maxHoursPerLease: number;
   /** Minutes without a job before Verifold stops a pod. */
   readonly idleMinutes: number;
-  readonly maxRunningPods: 1 | 2;
+  readonly maxRunningPods: number;
   /** RunPod GPU type IDs that a lease can use. */
   readonly gpuTypes: readonly string[];
   /** RunPod images that a lease can use. They start SSH with Verifold's key. */
@@ -277,7 +278,6 @@ export function parseSettings(
     !gpus.every((entry) => typeof entry === 'string' && gpuId.test(entry))
   )
     fail('Verifold got an unreadable GPU list.');
-  const pods = number(input.maxRunningPods, 'the number of pods', 1, 2, true);
   return {
     schemaVersion: 1,
     limitUsd: limit,
@@ -295,7 +295,13 @@ export function parseSettings(
       true,
     ),
     idleMinutes: number(input.idleMinutes, 'the idle minutes', 5, 240, true),
-    maxRunningPods: pods === 2 ? 2 : 1,
+    maxRunningPods: number(
+      input.maxRunningPods,
+      'the number of pods',
+      1,
+      maxPodsAtOnce,
+      true,
+    ),
     gpuTypes: [...new Set(gpus as string[])],
     images: [...new Set(images)],
     diskGb: number(input.diskGb, 'the disk size in GB', 10, 500, true),
@@ -669,6 +675,32 @@ export class Compute {
         return `RunPod did not create the pod of ${lease.id}: ${started.end?.reason ?? 'no reason given'}.`;
     }
     return `Asked the person for ${lease.id}: ${what}. Nothing is created until the person approves it. An event tells you the decision.`;
+  }
+
+  /** The person's limit of pods that run at once. */
+  podsAtOnce(): number {
+    return this.state.settings.maxRunningPods;
+  }
+
+  /**
+   * Set the limit of pods at once, with the checks of the person's own change
+   * in Settings. A lower limit stops no pod. In the settings' queue, so no
+   * other change comes between the read and the save. `only`: change the limit
+   * only while it is this value, as `base` guards `changeSettings`. Returns the
+   * limit before, and whether it changed. Throws when the settings cannot be
+   * saved or `pods` is out of range.
+   */
+  setPodsAtOnce(
+    pods: number,
+    only?: number,
+  ): Promise<{ readonly before: number; readonly changed: boolean }> {
+    return this.serial(async () => {
+      const before = this.state.settings.maxRunningPods;
+      if (only !== undefined && before !== only)
+        return { before, changed: false };
+      await this.saveChanges({ maxRunningPods: pods });
+      return { before, changed: true };
+    });
   }
 
   /** What a lab lease for `input` can cost at most, after the checks of a request. It records nothing. */
@@ -1196,13 +1228,18 @@ export class Compute {
         fail(
           'These settings changed while you edited them. Here is the new version.',
         );
-      const settings = parseSettings(
-        { ...this.state.settings, ...changes },
-        this.state.settings,
-      );
-      await writeComputeSettings(this.root, settings);
-      this.state = { ...this.state, settings };
+      await this.saveChanges(changes);
     });
+  }
+
+  /** Check and save the limits that `changes` names. In the settings' queue. */
+  private async saveChanges(changes: Record<string, unknown>): Promise<void> {
+    const settings = parseSettings(
+      { ...this.state.settings, ...changes },
+      this.state.settings,
+    );
+    await writeComputeSettings(this.root, settings);
+    this.state = { ...this.state, settings };
   }
 
   private async key(): Promise<string> {

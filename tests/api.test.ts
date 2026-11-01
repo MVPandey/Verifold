@@ -254,6 +254,8 @@ function direction(id: string, title: string, agent: string): Direction {
   return {
     id,
     title,
+    job: null,
+    team: null,
     bar: 'The gap shrinks 30% against a length-matched control.',
     runs: 3,
     noise: '±0.02',
@@ -406,6 +408,7 @@ function seededView(): LabView {
     pausedAt: null,
     pausedFor: null,
     handles: { claude: 1, codex: 2 },
+    roles: null,
     directions: [
       direction('d-1', 'The CoT matches what probes read inside', 'a-1'),
       direction('d-2', 'The answer follows what the CoT says', 'a-2'),
@@ -1129,7 +1132,15 @@ await test('a large lab stays inside the snapshot bound and says that it is trim
         direction: 'd-1',
       }),
     );
-  const view: LabView = { ...base, directions, posts };
+  const view: LabView = {
+    ...base,
+    state: {
+      ...base.state,
+      directions: directions.map((entry) => entry.direction),
+    },
+    directions,
+    posts,
+  };
   const json = (await new ApiReader(sources(root, () => view)).build()).json;
   const data = parse(json);
   assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);
@@ -3211,8 +3222,8 @@ await test("the settings page reads the project's pods and settings, and changes
   assert.equal((await compute()).agentsAtOnce, 5);
   assert.equal((await loadWorkspace(root)).agents, 5);
   assert.equal(
-    await refused(await act('compute-agents', { agents: 9 })),
-    'Choose a whole number of agents from 1 to 8.',
+    await refused(await act('compute-agents', { agents: 21 })),
+    'Choose a whole number of agents from 1 to 20.',
   );
 
   // A pod that waits for the person, then its life: approve, stop, start again, and end.

@@ -52,13 +52,14 @@ export interface AwayNews {
 /**
  * The news since `away.since`. `gpu`: what the lab's pods cost so far, or
  * null when this Verifold has no pods. `disputed`: the posts in open
- * dispute.
+ * dispute. `name`: how a line names who opened a direction.
  */
 export function awayNews(
   view: LabView,
   away: Away,
   gpu: number | null,
   disputed: ReadonlySet<string>,
+  name: (author: string) => string = (author) => authorName(view, author),
 ): AwayNews {
   const left = Date.parse(away.since);
   const after = (at: string | null | undefined): boolean =>
@@ -95,7 +96,7 @@ export function awayNews(
         verdict !== 'open' && evidence
           ? `${verdictText(verdict, dispute)} (${evidence.text.replace(/[.!?…]+$/u, '')}).`
           : opened
-            ? `New. ${authorName(view, direction.openedBy)} opened it.`
+            ? `New. ${name(direction.openedBy)} opened it.`
             : 'Not settled yet.',
         missed ? 'A check did not hold.' : '',
         ended

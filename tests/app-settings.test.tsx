@@ -316,7 +316,7 @@ await test('the settings page shows the pods, the limits, the GPUs, and Agents a
     'RTX A5000 24 GB $0.27 Medium',
     'Show every GPU that RunPod lists (4)',
     'Save the GPU settings',
-    'Agents that work at the same time, 1 to 8',
+    'Agents that work at the same time, 1 to 20',
   ])
     assert.ok(page.includes(line), `missing: ${line}\n${page}`);
   assert.ok(!page.includes('RTX A4000'));
@@ -327,6 +327,9 @@ await test('the settings page shows the pods, the limits, the GPUs, and Agents a
     /<button type="button" class="button button--dark" disabled="">Approve, up to \$0\.55<\/button>/,
   );
   assert.match(html, /value="25"/);
+  // Pods at once offers each value up to the limit.
+  assert.match(html, /<option value="1"[^>]*>1<\/option>/);
+  assert.match(html, /<option value="8"[^>]*>8<\/option>/);
   assert.match(html, /value="3"/);
   // Fields that the person does not edit show the newest saved values.
   const newer = render(

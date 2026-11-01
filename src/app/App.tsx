@@ -20,6 +20,7 @@ import type { ActOutcome } from './api.ts';
 import { startActions, type StartActions } from './ask.ts';
 import { ControlsContext, labControls } from './controls.ts';
 import { callOpener, needsTick, typing } from './call.ts';
+import { roleName } from './format.ts';
 import {
   href,
   parseRoute,
@@ -499,16 +500,17 @@ function Page({
       />
     );
   if (route.page === 'agent-turn') {
-    const handle =
-      lab.agents.find((entry) => entry.id === route.agent)?.handle ??
-      route.agent;
+    const shown = lab.agents.find((entry) => entry.id === route.agent);
     return (
       <TurnScreen
         key={`${route.agent}/${route.turn}`}
         snapshot={snapshot}
         lab={lab}
         agentId={route.agent}
-        back={{ href: href.agent(route.agent), label: handle }}
+        back={{
+          href: href.agent(route.agent),
+          label: shown ? roleName(shown.handle) : route.agent,
+        }}
         turnId={route.turn}
         connection={connection}
         now={now}
@@ -574,9 +576,7 @@ function Page({
         answerActions={answers}
       />
     );
-  const handle =
-    lab.agents.find((entry) => entry.id === direction.agent)?.handle ??
-    direction.agent;
+  const shown = lab.agents.find((entry) => entry.id === direction.agent);
   return (
     <TurnScreen
       key={`${direction.id}/${route.turn}`}
@@ -585,7 +585,7 @@ function Page({
       agentId={direction.agent}
       back={{
         href: href.direction(direction.id),
-        label: `${handle}'s direction`,
+        label: `${shown ? roleName(shown.handle) : direction.agent}'s direction`,
       }}
       turnId={route.turn}
       connection={connection}

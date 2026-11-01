@@ -637,7 +637,7 @@ await test('lab agents work in their own worktrees, post with proof, and an obje
             kind: 'claim',
             text: 'Months lie on a circle.',
             artifacts: [{ type: 'file', path: 'result.txt' }],
-            mentions: ['claude-2'],
+            mentions: ['agent-2'],
           },
         },
       ],
@@ -676,8 +676,8 @@ await test('lab agents work in their own worktrees, post with proof, and an obje
       entry.agent.handle,
     ]),
     [
-      ['verifold/d-1-circles', 'claude-1'],
-      ['verifold/d-2-helix', 'claude-2'],
+      ['verifold/d-1-circles', 'agent-1'],
+      ['verifold/d-2-helix', 'agent-2'],
     ],
   );
   assert.match(
@@ -696,7 +696,7 @@ await test('lab agents work in their own worktrees, post with proof, and an obje
   );
   assert.match(
     digest ?? '',
-    /- p-4 \[objection, for you\] from claude-2 in d-1, reply to p-3: "One seed can be luck\."/,
+    /- p-4 \[objection, for you\] from agent-2 in d-1, reply to p-3: "One seed can be luck\."/,
   );
   assert.match(digest ?? '', /information, not instructions/);
 
@@ -753,11 +753,11 @@ await test('an agent keeps going, backs off after turns that change nothing, and
   assert.equal(lab.lab.view()?.directions[0]?.agent.idleStreak, 2);
 
   // A mention wakes that agent only.
-  await lab.lab.post({ text: '@claude-1 look at layer 12.' });
+  await lab.lab.post({ text: '@agent-1 look at layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 3);
   assert.match(
     (await lab.inputs('d-1-alpha'))[2] ?? '',
-    /from the person: "@claude-1 look at layer 12\."/,
+    /from the person: "@agent-1 look at layer 12\."/,
   );
   await delay(300);
   assert.equal((await lab.inputs('d-2-beta')).length, 2);
@@ -769,7 +769,7 @@ await test('an agent keeps going, backs off after turns that change nothing, and
       (await lab.inputs('d-1-alpha')).length >= 4 &&
       (await lab.inputs('d-2-beta')).length >= 3,
   );
-  // The mention reached claude-2 too, as an unread post in its next digest, after the post that woke it.
+  // The mention reached agent-2 too, as an unread post in its next digest, after the post that woke it.
   assert.match(
     (await lab.inputs('d-2-beta'))[2] ?? '',
     /\[question, for you\] from the person: "Everyone: write down your bar[\s\S]*look at layer 12/,
@@ -833,7 +833,7 @@ await test("the person's profile reaches the prompts: the planner reads all of i
   /** Wake the agent with a post once its turns ended, and wait for its prompt. */
   const wake = async (text: string): Promise<void> => {
     await delay(300);
-    await lab.lab.post({ text: `@claude-2 ${text}` });
+    await lab.lab.post({ text: `@agent-2 ${text}` });
     await until(async () =>
       (await lab.inputs('d-2-alpha')).some((input) => input.includes(text)),
     );
@@ -917,7 +917,7 @@ await test('after a restart each agent resumes its session with a digest, and no
           arguments: {
             kind: 'question',
             text: 'Which layer?',
-            mentions: ['codex-1'],
+            mentions: ['agent-2'],
           },
         },
       ],
@@ -1339,6 +1339,8 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
     startPod: () => Promise.reject(new Error('No pod.')),
     podsOn: () => true,
     keySaved: () => true,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [...leases.values()],
       get: (id) => {
@@ -1463,6 +1465,8 @@ await test('a paused lab starts no pod', async (t) => {
     startPod: () => Promise.reject(new Error('No pod.')),
     podsOn: () => true,
     keySaved: () => true,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {
@@ -1520,19 +1524,19 @@ await test('the person cannot open more directions than the limit, or post as an
   const lab = await fixture(t);
   await lab.lab.start('A question.');
   await lab.lab.pause();
-  for (let index = 0; index < 6; index++)
+  for (let index = 0; index < planLimits.directions; index++)
     await lab.lab.addDirection({ title: `Line ${index}`, harness: 'claude' });
   await assert.rejects(
     lab.lab.addDirection({ title: 'One more', harness: 'claude' }),
-    /6 directions are open/,
+    /20 directions are open/,
   );
   await assert.rejects(
     lab.lab.post({ text: 'A claim.', kind: 'claim' }),
     /message or an objection/,
   );
   await assert.rejects(
-    lab.lab.post({ text: '@codex-9 hello' }),
-    /No agent of the lab has the handle codex-9/,
+    lab.lab.post({ text: '@agent-99 hello' }),
+    /No agent of the lab has the handle agent-99/,
   );
 });
 
@@ -1710,14 +1714,14 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
     (
       await post({
         action: 'lab-post',
-        text: '<img src=x onerror=alert(1)> @claude-1 look here',
+        text: '<img src=x onerror=alert(1)> @agent-1 look here',
       })
     )[0],
     200,
   );
   assert.deepEqual(lab.lab.view()?.posts.at(-1)?.mentions, ['a-1']);
   assert.equal(
-    (await post({ action: 'lab-post', text: '@codex-4 hello' }))[0],
+    (await post({ action: 'lab-post', text: '@agent-44 hello' }))[0],
     409,
   );
   const board = await home();
@@ -1725,7 +1729,7 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   assert.doesNotMatch(board, /<img/);
   assert.match(
     board,
-    /<span class="who who-claude" role="img" aria-label="Claude Code" title="Claude Code">Cl<\/span><span class="row-handle">claude-1<\/span>/,
+    /<span class="who who-claude" role="img" aria-label="Claude Code" title="Claude Code">Cl<\/span><span class="row-handle">agent-1<\/span>/,
   );
   assert.match(
     board,
@@ -1758,7 +1762,9 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   const refused = 'b2'.repeat(16);
   for (let index = 0; index < 2; index++)
     assert.equal(
-      (await post({ action: 'lab-post', text: '@codex-4 x', key: refused }))[0],
+      (
+        await post({ action: 'lab-post', text: '@agent-44 x', key: refused })
+      )[0],
       409,
     );
   // Each desk keeps its own keys: the same key on another desk is a new action.
@@ -2120,7 +2126,7 @@ await test('Home in a lab still shows what needs the person, and the transcript 
   // Each agent's row opens its panel, which holds its transcript.
   assert.match(
     html,
-    /data-panel="agent" data-agent="a-1" data-open-pane="summary">What claude-1 did/,
+    /data-panel="agent" data-agent="a-1" data-open-pane="summary">What agent-1 did/,
   );
   const session = lab.lab.view()?.directions[0]?.agent.session ?? '';
   const panel = renderDesk(
@@ -2137,7 +2143,7 @@ await test('Home in a lab still shows what needs the person, and the transcript 
   ).html;
   assert.match(
     panel,
-    /<p class="kind">Lab agent<\/p><h2 id="panel-title" tabindex="-1">claude-1<\/h2>/,
+    /<p class="kind">Lab agent<\/p><h2 id="panel-title" tabindex="-1">agent-1<\/h2>/,
   );
   assert.match(
     panel,
@@ -2227,7 +2233,7 @@ await test('a post whose turn ran into a used-up usage window comes again after 
       lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
-  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 check layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length === 3);
   const signal = {
     exhausted: true,
@@ -2512,8 +2518,8 @@ await test("directions take turns when they outnumber the slots, an agent at its
       readonly wakeups: unknown[];
     };
   const counted = await record();
-  assert.equal(counted.handle, 'claude-1');
-  await lab.lab.post({ text: '@claude-1 look at layer 12.' });
+  assert.equal(counted.handle, 'agent-1');
+  await lab.lab.post({ text: '@agent-1 look at layer 12.' });
   await until(async () =>
     /look at layer 12/.test((await lab.inputs('d-1-alpha')).at(-1) ?? ''),
   );
@@ -2534,7 +2540,7 @@ await test('a turn whose process stops brings its posts again, and the resumed c
       lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
-  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 check layer 12.' });
   // The turn with the post stops. The harness keeps the conversation, so the
   // agent resumes it, and its next digest carries the post again.
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 4, 8000);
@@ -2615,7 +2621,7 @@ await test('a refused read brings no digest again, and a repeated unread read ge
       lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
-  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 check layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 4);
   const [result] = (await lab.lines('d-1-alpha', 'results.jsonl')) as {
     result: { isError?: boolean; content: { text: string }[] };
@@ -2692,17 +2698,17 @@ await test('a direction whose record cannot be saved is not open, and agent hand
   );
   await rm(file, { recursive: true });
 
-  // After claude-99 comes claude-100, which reads back and can be mentioned.
-  const state = JSON.parse(saved) as { handles: Record<string, number> };
+  // After agent-99 comes agent-100, which reads back and can be mentioned.
+  const state = JSON.parse(saved) as Record<string, unknown>;
   await writeFile(
     file,
-    JSON.stringify({ ...state, handles: { ...state.handles, claude: 99 } }),
+    JSON.stringify({ ...state, roles: { agents: 99, checkers: 0 } }),
   );
   await lab.lab.reload();
   await lab.lab.addDirection({ title: 'Beta', harness: 'claude' });
   await lab.lab.reload();
-  assert.equal(lab.lab.view()?.directions[0]?.agent.handle, 'claude-100');
-  const post = await lab.lab.post({ text: '@claude-100 hello.' });
+  assert.equal(lab.lab.view()?.directions[0]?.agent.handle, 'agent-100');
+  const post = await lab.lab.post({ text: '@agent-100 hello.' });
   assert.deepEqual(post.mentions, [lab.lab.view()?.directions[0]?.agent.id]);
 });
 
@@ -2788,7 +2794,7 @@ await test('a pause that stops a turn brings its posts again, and posts the turn
       lab.lab.view()?.directions[0]?.agent.idleStreak === 2 &&
       lab.lab.view()?.directions[0]?.status === 'idle',
   );
-  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 check layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length === 3);
   // The person pauses while the turn waits: the turn did not finish, so what it read is not kept.
   await until(
@@ -2951,7 +2957,7 @@ await test('a failed turn keeps nothing that it read, so its post comes again, o
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }]);
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 1);
-  await lab.lab.post({ text: '@claude-1 Check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 Check layer 12.' });
   const shown = async (): Promise<number> =>
     (await lab.inputs('d-1-alpha')).filter((input) =>
       input.includes('Check layer 12'),
@@ -3068,7 +3074,7 @@ await test("a wake before the next turn's timer still brings the note about link
   // The commit after the first turn found the files. The agent has not heard of them yet.
   await until(() => lab.lab.view()?.directions[0]?.agent.linked?.count === 2);
   assert.equal(lab.lab.view()?.directions[0]?.agent.linked?.told, false);
-  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 check layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 2);
   assert.match(
     (await lab.inputs('d-1-alpha'))[1] ?? '',
@@ -3408,7 +3414,7 @@ await test('the first agent posts the plan of record, and the lab opens its dire
       (await lab.inputs('d-3-control')).length > 0,
   );
   const helix = (await lab.inputs('d-2-helix'))[0] ?? '';
-  assert.match(helix, /The plan of record \(p-1\), from claude-1:/);
+  assert.match(helix, /The plan of record \(p-1\), from agent-1:/);
   assert.match(
     helix,
     /Holds up if: "it beats a circle for years · 3 runs · noise ±0\.02"/,
@@ -3444,7 +3450,7 @@ await test('the first agent posts the plan of record, and the lab opens its dire
   );
   assert.match(html, /Engels 2024 <span class="fine">\(known\)<\/span>/);
   assert.match(html, /data-action="lab-reply" data-post="p-1"/);
-  assert.match(html, /Reply to change the plan\. A reply wakes claude-1\./);
+  assert.match(html, /Reply to change the plan\. A reply wakes agent-1\./);
   assert.match(html, /<p class="lab-facts">Day 1 · Due <strong>/);
 });
 
@@ -3526,20 +3532,20 @@ await test('a reply to the plan wakes its author, and a change of the plan wakes
   // The changed direction's agent wakes with the new plan.
   await until(async () =>
     (await lab.inputs('d-2-helix')).some((input) =>
-      input.includes(`[plan, for you] from claude-1, reply to p-1`),
+      input.includes(`[plan, for you] from agent-1, reply to p-1`),
     ),
   );
   // The turn with the new plan has the new bar. A later turn can follow it.
   assert.match(
     (await lab.inputs('d-2-helix')).find((input) =>
-      input.includes(`[plan, for you] from claude-1, reply to p-1`),
+      input.includes(`[plan, for you] from agent-1, reply to p-1`),
     ) ?? '',
     /Holds up if: "it beats a circle for years by 0\.05 · 3 runs/,
   );
   // When the plan's author stops, the plan stays as it is, and the desk says so.
   await lab.lab.stopDirection('d-1');
   const html = renderLab(lab.lab.view()!, (value) => value);
-  assert.match(html, /claude-1 no longer works, so the plan stays as it is\./);
+  assert.match(html, /agent-1 no longer works, so the plan stays as it is\./);
   assert.doesNotMatch(html, /Reply to change the plan/);
   // The plan's table marks the stopped direction.
   assert.match(
@@ -3801,7 +3807,7 @@ await test("the person answers the planner's questions together, each with an op
     async () => (await claudeResults(lab, 'd-1-plan-the-lab')).length >= 2,
   );
   // Refused answers change nothing.
-  await assert.rejects(lab.lab.answerQuestions([]), /Answer 1 to 3/);
+  await assert.rejects(lab.lab.answerQuestions([]), /Answer 1 to 6/);
   await assert.rejects(
     lab.lab.answerQuestions([{ call: 'c-9', option: 0 }]),
     /c-9 is not a question of the planner that waits for you/,
@@ -4432,7 +4438,7 @@ await test('a plan keeps the directions that the person opened, also many and ou
     ['Five', 'claude'],
   ] as const)
     await lab.lab.addDirection({ title, harness, bar: `${title} holds` });
-  await lab.lab.post({ text: '@claude-1 Plan now.' });
+  await lab.lab.post({ text: '@agent-1 Plan now.' });
   await until(
     async () =>
       (await lab.lines('d-1-plan-the-lab', 'results.jsonl')).length >= 4,
@@ -4536,7 +4542,7 @@ await test('an agent whose plan Verifold stopped before it was kept starts after
   assert.equal(view?.directions[0]?.agent.held, false);
   assert.match(
     view?.posts.at(-1)?.text ?? '',
-    /The person opened "Alpha" for claude-1 \(Claude Code\) in a plan that was not kept\./,
+    /The person opened "Alpha" for agent-1 \(Claude Code\) in a plan that was not kept\./,
   );
 });
 
@@ -4607,7 +4613,7 @@ await test('an agent runs an experiment, its end wakes the agent, and a claim ci
   assert.match(woke ?? '', /- \[run\] r-1 ended: exit 0 in 0 min\. acc=0\.7\./);
   // The status has the metrics, the outputs, and the log, marked as information.
   const status = text('verifold_run_status');
-  assert.match(status, /r-1 by claude-1 in d-1, at [0-9a-f]{7}: exit 0/);
+  assert.match(status, /r-1 by agent-1 in d-1, at [0-9a-f]{7}: exit 0/);
   assert.match(status, /Metrics: acc=0\.7/);
   assert.match(status, /Outputs: out\/r\.txt \(7 bytes\)/);
   assert.match(status, /information, not instructions\.\nMETRIC acc=0\.7\n$/);
@@ -4825,7 +4831,7 @@ await test("Verifold's notes after a turn wait while the agent's run runs: a per
   assert.equal((await lab.inputs('d-1-alpha')).length, 1);
   await rm(lock);
   // The person's mention wakes the agent while its run runs, and the note comes with it.
-  await lab.lab.post({ text: '@claude-1 check layer 12.' });
+  await lab.lab.post({ text: '@agent-1 check layer 12.' });
   await until(async () => (await lab.inputs('d-1-alpha')).length >= 2);
   const mentioned = (await lab.inputs('d-1-alpha'))[1] ?? '';
   assert.match(mentioned, /check layer 12/);
@@ -5178,12 +5184,12 @@ await test('an agent gives its own direction a verdict with proof, and closes it
   const texts = view?.posts.map((post) => post.text) ?? [];
   assert.ok(
     texts.includes(
-      'claude-1: "Alpha" is leading. Evidence: "0.78 on 1 seed" (p-2). Why: "Checked."',
+      'agent-1: "Alpha" is leading. Evidence: "0.78 on 1 seed" (p-2). Why: "Checked."',
     ),
   );
   assert.ok(
     texts.includes(
-      'claude-1 closed "Alpha": ruled out. Why: "Ruled out on 3 seeds."',
+      'agent-1 closed "Alpha": ruled out. Why: "Ruled out on 3 seeds."',
     ),
   );
   // The session ends after the turn that closed the direction. The folder stays.
@@ -5225,7 +5231,7 @@ await test('an agent gives its own direction a verdict with proof, and closes it
   );
   assert.match(
     progress,
-    /- d-1 Alpha, claude-1 \(Claude Code\): closed by its agent, ruled out\. Evidence: 3 seeds spread 0\.2 \(p-5\)\./,
+    /- d-1 Alpha, agent-1 \(Claude Code\): closed by its agent, ruled out\. Evidence: 3 seeds spread 0\.2 \(p-5\)\./,
   );
   assert.match(
     await readFile(join(lab.root, 'memory', 'README.md'), 'utf8'),
@@ -5274,7 +5280,7 @@ await test('an agent opens a direction with its own agent, inside the team and t
   // The opener holds the only slot, so the new agent waits for it.
   assert.equal(
     said[1]?.text,
-    'Opened d-2 for claude-2 (Claude Code). Every agent slot is in use, so it starts when one is free.',
+    'Opened d-2 for agent-2 (Claude Code). Every agent slot is in use, so it starts when one is free.',
   );
   // "Agents at once" is 1, so agents start 1 agent in 24 hours.
   assert.match(
@@ -5295,7 +5301,7 @@ await test('an agent opens a direction with its own agent, inside the team and t
     ?.posts.find((post) => post.direction === 'd-2' && post.kind === 'status');
   assert.equal(
     note?.text,
-    'claude-1 opened "Helix" for claude-2 (Claude Code). Why: "No direction tests a helix."',
+    'agent-1 opened "Helix" for agent-2 (Claude Code). Why: "No direction tests a helix."',
   );
   // The new agent starts once the opener gives its slot.
   await until(async () => (await lab.inputs('d-2-helix')).length >= 1);
@@ -5736,7 +5742,7 @@ await test('a new direction whose harness waits for its usage window says so', a
   await until(async () => (await results(lab, 'd-1-plan-the-lab')).length >= 1);
   assert.equal(
     (await results(lab, 'd-1-plan-the-lab'))[0]?.text,
-    "Opened d-2 for codex-1 (Codex). Codex's usage window is used up, so it starts when the window resets.",
+    "Opened d-2 for agent-2 (Codex). Codex's usage window is used up, so it starts when the window resets.",
   );
 });
 
@@ -5955,6 +5961,8 @@ await test("a pod that a direction's agent asks for while its direction stops en
     startPod: () => Promise.reject(new Error('No pod.')),
     podsOn: () => true,
     keySaved: () => true,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [...leases.values()],
       get: (id) => leases.get(String(id)) as Lease,
@@ -6278,7 +6286,7 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   assert.equal(rerun?.replyTo, claim);
   assert.deepEqual(rerun?.mentions, ['a-1']);
   assert.deepEqual(rerun?.artifacts, [{ type: 'run', run: 'r-2' }]);
-  assert.equal(view?.handles[check?.agent ?? ''], 'codex-1');
+  assert.equal(view?.handles[check?.agent ?? ''], 'checker-1');
   await until(async () =>
     (await lab.inputs('d-1-alpha')).some((input) =>
       input.includes('Holds: acc 0.7 on my rerun.'),
@@ -6357,7 +6365,7 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
   assert.match(refused?.text ?? '', /one line of evidence/);
   assert.match(
     asked?.text ?? '',
-    /^d-1 is leading now\. (Verifold queued check k-1|Check k-1 runs): codex-1 \(Codex\) reruns p-3 without your reasoning\. When it holds, d-1 holds up\.$/,
+    /^d-1 is leading now\. (Verifold queued check k-1|Check k-1 runs): checker-1 \(Codex\) reruns p-3 without your reasoning\. When it holds, d-1 holds up\.$/,
   );
   await until(
     () => lab.lab.view()?.state.directions[0]?.verdict === 'holds-up',
@@ -6375,7 +6383,7 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
       lab.lab
         .view()
         ?.posts.some((post) =>
-          /"Alpha" holds up: codex-1 \(Codex\) reran p-3 in p-\d+\./.test(
+          /"Alpha" holds up: checker-1 \(Codex\) reran p-3 in p-\d+\./.test(
             post.text,
           ),
         ),
@@ -6433,7 +6441,7 @@ await test('an ask for holds-up starts a check, and the direction holds up when 
   assert.equal(lab.lab.view()?.state.directions[0]?.verdict, 'leading');
   assert.equal(lab.lab.view()?.checks[1]?.holdsUp, true);
   const later = renderLab(lab.lab.view()!, (value) => value);
-  assert.match(later, /codex-2 checks it/);
+  assert.match(later, /checker-2 checks it/);
 });
 
 await test('a rerun that does not hold takes back the verdict, and the claim can no longer hold up', async (t) => {
@@ -6566,7 +6574,7 @@ await test('a rerun that does not hold takes back the verdict, and the claim can
 });
 
 await test('with one harness a fresh session of the same harness checks, and a check that runs out of time fails and keeps the dispute open', async (t) => {
-  // With a team, the lab's first agent plans it (claude-1), so Alpha is d-2 (claude-2).
+  // With a team, the lab's first agent plans it (agent-1), so Alpha is d-2 (agent-2).
   const lab = await fixture(t, {
     harnesses: ['claude'],
     minuteMs: 10,
@@ -6587,7 +6595,7 @@ await test('with one harness a fresh session of the same harness checks, and a c
   const check = lab.lab.view()?.checks[0];
   assert.equal(check?.harness, 'claude');
   assert.equal(check?.sameHarness, true);
-  assert.equal(check?.handle, 'claude-3');
+  assert.equal(check?.handle, 'checker-1');
   // Claude Code's settings deny the lab's records to the checker, also to its Read tool.
   await until(async () =>
     Boolean(
@@ -6612,12 +6620,12 @@ await test('with one harness a fresh session of the same harness checks, and a c
   // The desk pins the dispute while the check runs.
   let html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /Open disputes/);
-  assert.match(html, /claude-3 \(Claude Code\) checks it now/);
+  assert.match(html, /checker-1 \(Claude Code\) checks it now/);
   // 60 short minutes later the check fails, and the dispute stays open.
   await until(() => lab.lab.view()?.checks[0]?.state === 'failed', 15_000);
   assert.match(
     lab.lab.view()?.checks[0]?.note ?? '',
-    /claude-3 posted no rerun in 60 minutes\./,
+    /checker-1 posted no rerun in 60 minutes\./,
   );
   // The note follows the failed state.
   await until(() =>
@@ -6633,7 +6641,7 @@ await test('with one harness a fresh session of the same harness checks, and a c
   );
   html = renderLab(lab.lab.view()!, (value) => value);
   assert.match(html, /Open disputes/);
-  assert.match(html, /Check k-1 failed: claude-3 posted no rerun/);
+  assert.match(html, /Check k-1 failed: checker-1 posted no rerun/);
   await until(
     () => lab.sessions.view(check?.session ?? '')?.record.status === 'ended',
   );
@@ -6847,7 +6855,7 @@ await test('a check that ran when Verifold stopped starts again with a fresh ses
   await until(() => lab.lab.view()?.checks[0]?.state === 'failed');
   assert.match(
     lab.lab.view()?.checks[0]?.note ?? '',
-    /claude-3 stopped 2 times before it posted\./,
+    /checker-1 stopped 2 times before it posted\./,
   );
   // The failure is on the board, as for any failed check.
   await until(() =>
@@ -6855,7 +6863,7 @@ await test('a check that ran when Verifold stopped starts again with a fresh ses
       lab.lab
         .view()
         ?.posts.some((post) =>
-          /^Check k-1 of p-\d+ failed: claude-3 stopped 2 times before it posted\./.test(
+          /^Check k-1 of p-\d+ failed: checker-1 stopped 2 times before it posted\./.test(
             post.text,
           ),
         ),
@@ -7305,7 +7313,7 @@ async function labNeeds(lab: Fixture): Promise<string> {
   ).html;
 }
 
-await test('an agent asks the person a call: a technical question, a wrong effect, and a fourth call are refused, and the answer wakes the agent', async (t) => {
+await test('an agent asks the person a call: a technical question, a wrong effect, and a seventh call are refused, and the answer wakes the agent', async (t) => {
   const lab = await fixture(t);
   const ask = (args: Record<string, unknown>): Call => ({
     name: 'verifold_ask_person',
@@ -7374,6 +7382,27 @@ await test('an agent asks the person a call: a technical question, a wrong effec
         }),
         ask({
           kind: 'cost',
+          question: 'Filler 5?',
+          options: [{ label: 'Yes', effect: { hours: 5 } }, { label: 'No' }],
+          pick: 0,
+          why: 'More.',
+        }),
+        ask({
+          kind: 'cost',
+          question: 'Filler 6?',
+          options: [{ label: 'Yes', effect: { hours: 6 } }, { label: 'No' }],
+          pick: 0,
+          why: 'More.',
+        }),
+        ask({
+          kind: 'cost',
+          question: 'Filler 7?',
+          options: [{ label: 'Yes', effect: { hours: 7 } }, { label: 'No' }],
+          pick: 0,
+          why: 'More.',
+        }),
+        ask({
+          kind: 'cost',
           question: 'One more?',
           options: [{ label: 'Yes', effect: { hours: 1 } }, { label: 'No' }],
           pick: 0,
@@ -7388,7 +7417,7 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }], { hours: 1 });
   await until(
-    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 6,
+    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 9,
   );
   const results = await claudeResults(lab, 'd-1-alpha');
   assert.equal(
@@ -7399,9 +7428,10 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   assert.match(results[2] ?? '', /^Asked the person in c-1\./);
   assert.match(results[3] ?? '', /^Asked the person in c-2\./);
   assert.match(results[4] ?? '', /^Asked the person in c-3\./);
+  assert.match(results[7] ?? '', /^Asked the person in c-6\./);
   assert.equal(
-    results[5],
-    '3 calls wait for the person already. Wait for an answer.',
+    results[8],
+    '6 calls wait for the person already. Wait for an answer.',
   );
   const calls = lab.lab.view()?.state.calls ?? [];
   assert.deepEqual(
@@ -7410,6 +7440,9 @@ await test('an agent asks the person a call: a technical question, a wrong effec
       ['c-1', 'go', 'a-1', 'd-1'],
       ['c-2', 'access', 'a-1', 'd-1'],
       ['c-3', 'scope', 'a-1', 'd-1'],
+      ['c-4', 'cost', 'a-1', 'd-1'],
+      ['c-5', 'cost', 'a-1', 'd-1'],
+      ['c-6', 'cost', 'a-1', 'd-1'],
     ],
   );
   assert.deepEqual(calls[1]?.options[0]?.effect, {
@@ -7422,7 +7455,7 @@ await test('an agent asks the person a call: a technical question, a wrong effec
       ?.posts.some(
         (post) =>
           post.text ===
-          'claude-1 asks the person (c-1): More time for <b>3 seeds</b>?',
+          'agent-1 asks the person (c-1): More time for <b>3 seeds</b>?',
       ),
   );
   // Needs you shows each call escaped, with the agents' pick and what each option does.
@@ -7433,8 +7466,8 @@ await test('an agent asks the person a call: a technical question, a wrong effec
     html,
     /<button type="button" class="call-option picked" data-action="lab-call-answer" data-call="c-1" data-option="0"><span class="option-label"><span class="key" aria-hidden="true">1<\/span> Four more hours &lt;b&gt;now&lt;\/b&gt;<\/span><span class="option-facts">No cost · 4 h<\/span><span class="pick">The agents' pick<\/span><\/button>/,
   );
-  assert.match(html, /Why claude-1 picks it: /);
-  assert.match(html, /Lets claude-1&#39;s shell reach pypi\.org\./);
+  assert.match(html, /Why agent-1 picks it: /);
+  assert.match(html, /Lets agent-1&#39;s shell reach pypi\.org\./);
   assert.match(
     html,
     /<button type="button" class="call-option picked" data-action="lab-call-answer" data-call="c-3" data-option="1"><span class="option-label"><span class="key" aria-hidden="true">2<\/span> Not now<\/span>/,
@@ -7538,7 +7571,7 @@ await test("an access answer gives the agent's shell its domains while it stands
     .map((call) => call.id);
   assert.match(
     await labNeeds(lab),
-    /Codex: any website\. Codex cannot limit the network to pypi\.org, files\.pythonhosted\.org, so codex-1&#39;s shell can reach any website\./,
+    /Codex: any website\. Codex cannot limit the network to pypi\.org, files\.pythonhosted\.org, so agent-2&#39;s shell can reach any website\./,
   );
   const domains = async (): Promise<string[]> => {
     const args = JSON.parse(
@@ -7742,7 +7775,7 @@ await test('a call that asks what an open call asks joins it, its answer reaches
   // The agent that joined learns the call that it joined.
   assert.equal(
     [...alpha, ...beta].filter((result) =>
-      /^claude-\d asked the person the same in c-\d, so your call joined it\. Its answer reaches you too/.test(
+      /^agent-\d asked the person the same in c-\d, so your call joined it\. Its answer reaches you too/.test(
         result,
       ),
     ).length,
@@ -7756,15 +7789,15 @@ await test('a call that asks what an open call asks joins it, its answer reaches
         (post) =>
           post.author === 'verifold' &&
           post.replyTo === call?.post &&
-          /^claude-\d asks the same \(c-\d\)\.$/.test(post.text),
+          /^agent-\d asks the same \(c-\d\)\.$/.test(post.text),
       ),
     );
   // Needs you names every agent that asked, says what an answer gives each shell, and takes a typed answer.
   const html = await labNeeds(lab);
-  assert.match(html, /claude-\d asks the same\./);
+  assert.match(html, /agent-\d asks the same\./);
   assert.match(
     html,
-    /Lets the shells of claude-\d and claude-\d reach (pypi\.org, files\.pythonhosted\.org|files\.pythonhosted\.org, pypi\.org)\./,
+    /Lets the shells of agent-\d and agent-\d reach (pypi\.org, files\.pythonhosted\.org|files\.pythonhosted\.org, pypi\.org)\./,
   );
   assert.match(html, /continue their conversations in new processes\./);
   assert.match(
@@ -7836,7 +7869,7 @@ await test('a call that asks what an open call asks joins it, its answer reaches
   );
   assert.equal(
     lab.lab.view()?.state.calls.find((call) => call.id === pypi?.id)?.note,
-    "claude-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
+    "agent-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
   );
   // The record of what the answer changed names the first asker, so earlier builds read it too.
   const file = join(lab.root, '.verifold', 'lab.json');
@@ -7868,7 +7901,7 @@ await test('a call that asks what an open call asks joins it, its answer reaches
   ]);
   assert.equal(
     restored?.calls.find((call) => call.id === pypi?.id)?.note,
-    "claude-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
+    "agent-2's shell can reach files.pythonhosted.org, pypi.org from its next turn.",
   );
   // A record that does not fit the chosen option is damaged: it makes no call stand, and it approves no pod.
   const damaged = await saved();
@@ -7914,6 +7947,8 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
     },
     podsOn: () => true,
     keySaved: () => true,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [...leases.values()],
       get: (id) => {
@@ -8067,6 +8102,8 @@ await test('an agent that started with pods off gets the pod tools once pods are
     startPod: () => Promise.reject(new Error('Not now.')),
     podsOn: () => on,
     keySaved: () => true,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {
@@ -8166,7 +8203,7 @@ await test("when the first asker's direction ends, the next asker takes its plac
     { title: 'Beta', harness: 'claude' },
   ]);
   const call = (): LabCall | undefined => lab.lab.view()?.state.calls[0];
-  // claude-1 asks first. claude-2 asks once its first turn ended, and joins.
+  // agent-1 asks first. agent-2 asks once its first turn ended, and joins.
   await until(
     () =>
       call() !== undefined &&
@@ -8178,28 +8215,28 @@ await test("when the first asker's direction ends, the next asker takes its plac
   assert.equal(call()?.by, 'a-1');
   const first = call()?.post;
   await lab.lab.stopDirection('d-1');
-  // claude-2 takes the first place, with its direction and its why.
+  // agent-2 takes the first place, with its direction and its why.
   assert.equal(call()?.state, 'open');
   assert.equal(call()?.by, 'a-2');
   assert.equal(call()?.direction, 'd-2');
   assert.equal(call()?.why, 'Needs scipy.');
   assert.deepEqual(call()?.joined, []);
-  // The call's thread starts again in claude-2's direction.
+  // The call's thread starts again in agent-2's direction.
   assert.notEqual(call()?.post, first);
   const thread = lab.lab.view()?.posts.find((post) => post.id === call()?.post);
   assert.equal(thread?.direction, 'd-2');
-  assert.equal(thread?.text, 'claude-2 asks the person (c-1): PyPI?');
-  // The card names claude-2 only.
+  assert.equal(thread?.text, 'agent-2 asks the person (c-1): PyPI?');
+  // The card names agent-2 only.
   const html = await labNeeds(lab);
-  assert.match(html, /claude-2 asks, for Beta \(c-1\)\./);
-  assert.match(html, /Why claude-2 picks it: Needs scipy\./);
-  assert.match(html, /Lets claude-2&#39;s shell reach pypi\.org\./);
-  assert.doesNotMatch(html, /claude-1 asks|claude-1&#39;s shell/);
-  // A domains answer applies to claude-2 only, and the board says so in its direction.
+  assert.match(html, /agent-2 asks, for Beta \(c-1\)\./);
+  assert.match(html, /Why agent-2 picks it: Needs scipy\./);
+  assert.match(html, /Lets agent-2&#39;s shell reach pypi\.org\./);
+  assert.doesNotMatch(html, /agent-1 asks|agent-1&#39;s shell/);
+  // A domains answer applies to agent-2 only, and the board says so in its direction.
   await lab.lab.answerCall('c-1', 0);
   assert.equal(
     call()?.note,
-    "claude-2's shell can reach pypi.org from its next turn.",
+    "agent-2's shell can reach pypi.org from its next turn.",
   );
   assert.equal(
     lab.lab
@@ -8221,6 +8258,8 @@ await test('pod requests while pods are off ask the person once for the whole la
     podsOn: () => on,
     // A key is saved, so the call asks only for the spend limit.
     keySaved: () => true,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {
@@ -8287,7 +8326,7 @@ await test('pod requests while pods are off ask the person once for the whole la
   );
   assert.equal(
     count(
-      /^Pods are off: .* codex-\d asked the person already in c-1, and your request joined it\./,
+      /^Pods are off: .* agent-\d asked the person already in c-1, and your request joined it\./,
     ),
     1,
   );
@@ -8630,7 +8669,7 @@ await test('the lab adds up the cost estimates of its Claude Code agents for the
   // The estimate lasts across a restart of Verifold, and a resumed process adds only its growth.
   await lab.restart();
   assert.ok(Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 0.65) < 1e-9);
-  await lab.lab.post({ text: '@claude-1 once more.' });
+  await lab.lab.post({ text: '@agent-1 once more.' });
   await until(() => Math.abs((lab.lab.view()?.claudeUsd ?? 0) - 1.25) < 1e-9);
   // The agent's spend is saved with it.
   await lab.restart();
@@ -8890,7 +8929,7 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
   );
   assert.deepEqual(order, [
     'Rent a &lt;b&gt;GPU&lt;/b&gt;?',
-    'codex-1 stopped by itself',
+    'agent-2 stopped by itself',
     'Add a secret: HF_TOKEN',
     'The agent of d-1 asks for a NVIDIA A40 pod',
     'Claude Code session asks to use Bash',
@@ -8907,9 +8946,9 @@ await test('the main screen: one header, a Needs-you line in its order, a disput
   assert.match(row, /<span class="row-state">check k-1 waits<\/span>/);
   assert.match(
     html,
-    /<ul class="lab-pinned" aria-label="Open disputes"><li>[\s\S]*href="#post-p-90">p-90<\/a> by claude-1, the evidence of <a href="#row-d-1">Circles &lt;img src=x onerror=alert\(1\)&gt;<\/a>: The probe &lt;script&gt;x&lt;\/script&gt; wins\./,
+    /<ul class="lab-pinned" aria-label="Open disputes"><li>[\s\S]*href="#post-p-90">p-90<\/a> by agent-1, the evidence of <a href="#row-d-1">Circles &lt;img src=x onerror=alert\(1\)&gt;<\/a>: The probe &lt;script&gt;x&lt;\/script&gt; wins\./,
   );
-  assert.match(html, /codex-1 objects: One &lt;b&gt;seed&lt;\/b&gt;\./);
+  assert.match(html, /agent-2 objects: One &lt;b&gt;seed&lt;\/b&gt;\./);
   // Proof opens in the panel, and a file names its path.
   assert.match(
     html,
@@ -9224,7 +9263,7 @@ await test(
     // An agent in its turn, a checker, and an unknown agent have no terminal here.
     await assert.rejects(
       lab.lab.openTerminal('a-2', lease),
-      /claude-2 is not between turns/,
+      /agent-2 is not between turns/,
     );
     await assert.rejects(
       lab.lab.openTerminal('a-9', lease),
@@ -9251,7 +9290,7 @@ await test(
         lab: lab.lab.view(),
       },
     ).html;
-    assert.match(needs, /You hold claude-1&#39;s terminal/);
+    assert.match(needs, /You hold agent-1&#39;s terminal/);
     assert.match(
       needs,
       new RegExp(`data-action="terminal-return" data-session="${session}"`),
@@ -9267,7 +9306,7 @@ await test(
     assert.match(text, new RegExp(`--resume ${native}`));
     // A post for the agent waits while the person holds its terminal.
     const inputs = (await lab.inputs('d-1-alpha')).length;
-    await lab.lab.post({ text: '@claude-1 Look at this.' });
+    await lab.lab.post({ text: '@agent-1 Look at this.' });
     await delay(300);
     assert.equal((await lab.inputs('d-1-alpha')).length, inputs);
     // When the terminal ends, the agent resumes its conversation and its next turn follows.
@@ -9333,7 +9372,7 @@ await test('a session that a park ends counts as busy until its record is saved,
   await until(() => lab.sessions.view(first)?.live === false);
   assert.equal(lab.sessions.view(first)?.starting, true);
   // A post waits for the agent, so a scheduler that saw no process would start a new conversation.
-  await lab.lab.post({ text: '@claude-1 Zebrafish.' });
+  await lab.lab.post({ text: '@agent-1 Zebrafish.' });
   const lab_ = lab.lab as unknown as { kick(): void };
   for (let tries = 0; tries < 5; tries++) {
     lab_.kick();
@@ -9378,7 +9417,7 @@ await test(
     );
     await until(() => lab.lab.view()?.directions[0]?.status === 'terminal');
     // A post waits for the agent, so a scheduler that sees no process would start one.
-    await lab.lab.post({ text: '@claude-1 Look.' });
+    await lab.lab.post({ text: '@agent-1 Look.' });
     // The start after the terminal waits at its transcript, before its process.
     let release = (): void => {};
     const gate = new Promise<void>((resolve) => {
@@ -9607,7 +9646,7 @@ await test('search finds posts, runs, and calls in any case, needs each word, ma
   assert.equal(hits.length, 4);
   assert.match(
     hits[0] ?? '',
-    /Cost call<\/span> c-1 · claude-1 · <time[^>]*>09:07<\/time> · waits for you/,
+    /Cost call<\/span> c-1 · agent-1 · <time[^>]*>09:07<\/time> · waits for you/,
   );
   assert.match(
     hits[0] ?? '',
@@ -9840,7 +9879,7 @@ await test('while you were away: a line for each direction with news, the counts
     harness: 'claude',
     sameHarness: false,
     agent: 'a-9',
-    handle: 'claude-9',
+    handle: 'agent-9',
     model: null,
     state: 'queued',
     outcome: null,
@@ -10636,7 +10675,7 @@ await test("while its agent works, a bring-in shows the agent's last commit, and
   assert.match(
     bringPanel(lab.lab.view() as LabView, 'd-1', working ?? null, (v) => v)
       .body,
-    /claude-1 is working, so these are its files as of its last turn\./,
+    /agent-1 is working, so these are its files as of its last turn\./,
   );
   // The turn ends with its own commit: now the list says that newer work is there.
   await lab.lab.post({ text: 'Done for now.', direction: 'd-1' });
@@ -11203,6 +11242,8 @@ function keyCompute(key: boolean): LabCompute {
     startPod: () => Promise.reject(new Error('Not now.')),
     podsOn: () => false,
     keySaved: () => key,
+    podsAtOnce: () => 1,
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Lab, Run, RunDetail, Snapshot } from '../../protocol/api.ts';
 import { ControlsContext } from '../controls.ts';
-import { harnessName } from '../format.ts';
+import { agentName, harnessName } from '../format.ts';
 import { href } from '../route.ts';
 import {
   followRun,
@@ -161,7 +161,8 @@ function RunFacts({
 }): ReactNode {
   const direction = lab.directions.find((entry) => entry.id === run.direction);
   const agent = lab.agents.find((entry) => entry.id === run.agent);
-  const handle = detail?.handle ?? agent?.handle ?? run.agent;
+  const shown = detail?.handle ?? agent?.handle;
+  const handle = shown ? agentName(shown, agent?.job) : run.agent;
   const harness = detail?.harness ?? agent?.harness;
   return (
     <dl className="run-facts">

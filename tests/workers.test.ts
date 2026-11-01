@@ -480,7 +480,7 @@ await test('the terminal names the worker, routes answers by request ID, and sen
   assert.equal(sessions.view(second)?.live, false);
 });
 
-await test('the project record keeps "Agents at once" from 1 to 8', () => {
+await test('the project record keeps "Agents at once" from 1 to 20', () => {
   const base = {
     schemaVersion: 1,
     visibility: 'private',
@@ -497,10 +497,11 @@ await test('the project record keeps "Agents at once" from 1 to 8', () => {
   };
   assert.equal(parseWorkspace(base).agents, undefined);
   assert.equal(parseWorkspace({ ...base, agents: 5 }).agents, 5);
-  for (const agents of [0, 9, 1.5, '3', null])
+  assert.equal(parseWorkspace({ ...base, agents: 20 }).agents, 20);
+  for (const agents of [0, 21, 1.5, '3', null])
     assert.throws(
       () => parseWorkspace({ ...base, agents }),
-      /Agents at once must be a whole number from 1 to 8/,
+      /Agents at once must be a whole number from 1 to 20/,
     );
 });
 

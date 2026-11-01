@@ -9,9 +9,11 @@ How to plan:
    - Otherwise, ask up to 3 questions in this turn, each with `verifold_ask_person` and kind scope. Give each question 2 to 4 options with no effects, each with a one-line `detail`, your pick in `pick`, why you advise it, and the facts behind it in `facts`. Then end your turn with a short message to the person: what you found, and why you ask.
    - Verifold brings you all the answers together, once the person answered or skipped every question. Until then, read more of what the plan needs, and do not post the plan. A skip gives each question your pick. An answer in the person's own words is their decision: follow it.
    - Then post the plan. Ask again only when an answer leaves the plan unclear.
-4. Choose 2 to 4 directions that attack the question in different ways, so that each one can hold up or fail on its own. Give a control direction when one result could have a dull cause, such as word frequency or a data leak.
+4. Choose directions that attack the question in different ways, so that each one can hold up or fail on its own. A line below says how many directions your first plan can have. Give a control direction when one result could have a dull cause, such as word frequency or a data leak.
 5. For each direction, write:
    - a short title.
+   - a job: what its agent does, in one or two words, such as `Controls`. The person reads it beside the agent's name.
+   - a team: one or two words that several directions share, such as `Evidence`. When a plan has more than 6 directions, use teams of 3 to 5.
    - the bar: what makes the direction hold up, in plain words, with its number. Say what the result must beat, such as a baseline or a control.
    - the repeat runs that the bar needs, such as 3 seeds. One run can be luck.
    - the noise: the spread between repeat runs that does not count as a difference, such as ±0.02.

@@ -15,6 +15,12 @@
  */
 export const protocolVersion = 1;
 
+/** The highest "Agents at once" that the person can set. */
+export const agentsAtOnceMost = 20;
+
+/** The highest "Pods at once" that the person can set. */
+export const podsAtOnceMost = 8;
+
 /**
  * A turn's ID: the ID of the turn's first transcript entry, such as
  * `1a2b3c4d.#3` or `1a2b3c4d.toolu_01`. The API and the app's links check it
@@ -90,7 +96,7 @@ export interface PodSettings {
   readonly maxHoursPerLease: number;
   /** Minutes without a job before Verifold stops a pod. */
   readonly idleMinutes: number;
-  readonly maxRunningPods: 1 | 2;
+  readonly maxRunningPods: number;
   /** RunPod GPU type IDs that agents may rent. */
   readonly gpuTypes: readonly string[];
   /** RunPod images that a pod can use. */
@@ -183,7 +189,7 @@ export interface ProjectCompute {
    * edited, and Verifold refuses it when the settings changed since then.
    */
   readonly settingsVersion: string;
-  /** How many agents may work at once, 1 to 8. Null when this process cannot tell. */
+  /** How many agents may work at once, 1 to `agentsAtOnceMost`. Null when this process cannot tell. */
   readonly agentsAtOnce: number | null;
   /** The project's pods against its spend limit. `leftUsd` is null without a limit. */
   readonly budget: {
@@ -329,6 +335,8 @@ export interface Money {
 export interface Asker {
   readonly agent: string;
   readonly handle: string;
+  /** The job of its direction, as on `Agent`. Added after version 1. */
+  readonly job?: string | null;
   readonly direction: string | null;
   readonly why: string;
 }
@@ -358,7 +366,9 @@ export type Effect =
       readonly bar: string;
     }
   | { readonly type: 'stop'; readonly direction: string }
-  | { readonly type: 'domains'; readonly domains: readonly string[] };
+  | { readonly type: 'domains'; readonly domains: readonly string[] }
+  /** Sets the project's limit of pods that run at once. Added after version 1. */
+  | { readonly type: 'podsAtOnce'; readonly pods: number };
 
 export interface CallOption {
   readonly label: string;
@@ -367,6 +377,8 @@ export interface CallOption {
   readonly usd: number | null;
   readonly minutes: number | null;
   readonly effect: Effect | null;
+  /** The option changes no setting: it only tells the agents the person's choice. Added after version 1. */
+  readonly noSetting?: boolean;
 }
 
 /** A question for the person: cost, scope, access, or go. */
@@ -420,6 +432,10 @@ export interface DirectionCounts {
 export interface Direction {
   readonly id: string;
   readonly title: string;
+  /** What its agent does, as a short label. Null or absent: none set, as in an older lab. Added after version 1. */
+  readonly job?: string | null;
+  /** The team of directions that it works with, as a short label. Null or absent: none set. Added after version 1. */
+  readonly team?: string | null;
   /** What makes it hold up, in plain words. */
   readonly bar: string | null;
   /** The repeat runs that the bar needs. */
@@ -535,7 +551,10 @@ export type AgentStatus =
 /** A direction's agent or a checker. */
 export interface Agent {
   readonly id: string;
+  /** Its name on the board: `agent-3` or `checker-1`, or `claude-2` in an older lab. */
   readonly handle: string;
+  /** The job of its direction. Null or absent: none set, or a checker. Added after version 1. */
+  readonly job?: string | null;
   readonly harness: Harness;
   /** The model that the harness reported, or else the one Verifold asked for. */
   readonly model: string | null;
@@ -637,8 +656,10 @@ export interface Post {
   readonly at: string;
   /** `person`, `verifold`, or an agent ID. */
   readonly author: string;
-  /** The agent's handle, such as claude-2. Null for the person and Verifold. */
+  /** The agent's handle, such as agent-2. Null for the person and Verifold. */
   readonly handle: string | null;
+  /** The job of the agent's direction, as on `Agent`. Added after version 1. */
+  readonly job?: string | null;
   readonly harness: Harness | null;
   readonly kind: PostKind;
   readonly direction: string | null;
@@ -955,7 +976,7 @@ export interface FileDiff {
  */
 export interface RunDetail {
   readonly run: Run;
-  /** The handle of the agent that started it, such as claude-2. */
+  /** The handle of the agent that started it, such as agent-2. */
   readonly handle: string | null;
   readonly harness: Harness;
   /** The most minutes that it may run. */
@@ -1270,7 +1291,7 @@ export interface MoneyLimits {
   readonly maxUsdPerHour: number;
   readonly maxHoursPerLease: number;
   readonly idleMinutes: number;
-  readonly maxRunningPods: 1 | 2;
+  readonly maxRunningPods: number;
   /** RunPod GPU type IDs that agents may rent. */
   readonly gpuTypes: readonly string[];
   /** What all projects together may spend in one calendar month. Null: no monthly limit. Added after version 1. */
@@ -1400,7 +1421,7 @@ export interface ActionBodies {
   };
   /** Read RunPod's GPUs and prices again. Added after version 1. */
   'compute-gpus': { readonly key?: string };
-  /** How many agents may work at once, 1 to 8. Added after version 1. */
+  /** How many agents may work at once, 1 to `agentsAtOnceMost`. Added after version 1. */
   'compute-agents': { readonly agents: number; readonly key?: string };
   /** Approve a pod that waits for the person. RunPod bills from then on. Added after version 1. */
   'compute-lease-approve': { readonly lease: string; readonly key?: string };
@@ -1669,8 +1690,10 @@ export interface HistoryDirection {
   readonly verdict: Verdict;
   /** The evidence behind its verdict. */
   readonly evidence: string | null;
-  /** Its agent's handle, such as claude-1. */
+  /** Its agent's handle, such as agent-1. */
   readonly handle: string | null;
+  /** Its job, as on `Agent`. Added after version 1. */
+  readonly job?: string | null;
 }
 
 /** `GET /api/v1/history/:id` for a lab's run. */

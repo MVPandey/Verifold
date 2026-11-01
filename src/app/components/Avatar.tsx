@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import type { Harness } from '../../protocol/api.ts';
-import { harnessName } from '../format.ts';
+import type { Harness, Post } from '../../protocol/api.ts';
+import { authorHead, avatarText, harnessName, roleName } from '../format.ts';
 
 export type Who =
   | { readonly harness: Harness; readonly handle: string }
@@ -28,8 +28,8 @@ export function Avatar({
         ? ['verifold', 'V', 'Verifold']
         : [
             who.harness,
-            who.harness === 'claude' ? 'Cl' : 'Cx',
-            `${harnessName(who.harness)}, ${who.handle}`,
+            avatarText(who),
+            `${harnessName(who.harness)}, ${roleName(who.handle)}`,
           ];
   return (
     <span
@@ -40,5 +40,16 @@ export function Avatar({
     >
       {text}
     </span>
+  );
+}
+
+/** A post's author in its head: the name, then the job and the harness in small text. */
+export function PostAuthor({ post }: { readonly post: Post }): ReactNode {
+  const { name, detail } = authorHead(post);
+  return (
+    <>
+      <b>{name}</b>
+      {detail && <span className="post__job">{detail}</span>}
+    </>
   );
 }

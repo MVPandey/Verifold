@@ -61,6 +61,7 @@ import {
   bringGroups,
   callWords,
   kindLabel,
+  noSetting,
 } from '../core/lab/words.ts';
 import { callLimits } from '../core/lab-tools.ts';
 import type { HarnessName } from '../core/harness.ts';
@@ -147,7 +148,9 @@ import {
   type HistoryTask,
   type HistoryTurns,
 } from '../protocol/api.ts';
+import { agentName } from '../ui/lab-lines.ts';
 import { figureHeaders, figurePixels, imageSize } from './figure.ts';
+import { keptAgents, keptDirections } from './lab-lists.ts';
 import { readJsonBody, record } from './http.ts';
 import type { FirstRun } from './setup.ts';
 
@@ -290,9 +293,10 @@ const levels: readonly [Level, ...Level[]] = [
     posts: 5,
     needsYou: 5,
     answered: 0,
-    directions: 10,
+    // A lab has up to 20 open directions: each still shows when nothing else fits.
+    directions: 20,
     buildsOn: 0,
-    agents: 10,
+    agents: 20,
     disputes: 5,
     facts: 5,
     runs: 0,
@@ -400,10 +404,28 @@ export interface BringSource {
   } | null>;
 }
 
+/** An agent's names on the wire, by agent ID. */
+type AgentNames = (agent: string) => {
+  readonly handle: string;
+  readonly job: string | null;
+};
+
+/** How the wire names the agents of a lab. A checker has no job. */
+function namesOf(view: LabView): AgentNames {
+  const jobs = new Map(
+    view.directions.map((entry) => [entry.agent.id, entry.direction.job]),
+  );
+  return (agent) => ({
+    handle: view.handles[agent] ?? agent,
+    job: jobs.get(agent) ?? null,
+  });
+}
+
 /** A direction's agent or a checker, as the lab records it. */
 interface AgentRef {
   readonly id: string;
   readonly handle: string;
+  readonly job: string | null;
   readonly harness: HarnessName;
   readonly session: string | null;
   readonly status: AgentStatus;
@@ -471,6 +493,7 @@ function directionAgent(entry: LabView['directions'][number]): AgentRef {
   return {
     id: entry.agent.id,
     handle: entry.agent.handle,
+    job: entry.direction.job,
     harness: entry.agent.host,
     session: entry.agent.session,
     status: entry.status,
@@ -486,6 +509,7 @@ function checkAgent(check: LabCheck): AgentRef {
   return {
     id: check.agent,
     handle: check.handle,
+    job: null,
     harness: check.harness,
     session: check.session,
     status: check.state,
@@ -707,12 +731,14 @@ function effect(value: CallEffect, stored: ReadonlySet<string> | null): Effect {
       return { type: 'stop', direction: value.direction };
     case 'domains':
       return { type: 'domains', domains: [...value.domains] };
+    case 'podsAtOnce':
+      return { type: 'podsAtOnce', pods: value.pods };
   }
 }
 
 function call(
   entry: LabCall,
-  handle: (agent: string) => string,
+  who: AgentNames,
   stored: ReadonlySet<string> | null,
 ): Call {
   const options: CallOption[] = entry.options.map((option) => ({
@@ -721,6 +747,7 @@ function call(
     usd: option.usd,
     minutes: option.minutes,
     effect: option.effect ? effect(option.effect, stored) : null,
+    ...(noSetting(entry, option) ? { noSetting: true } : {}),
   }));
   return {
     id: entry.id,
@@ -733,7 +760,7 @@ function call(
       const joined = entry.joined.find((asker) => asker.agent === agent);
       return {
         agent,
-        handle: handle(agent),
+        ...who(agent),
         direction: joined ? joined.direction : entry.direction,
         why: joined ? joined.why : entry.why,
       };
@@ -821,6 +848,8 @@ function direction(
   return {
     id: entry.id,
     title: entry.title,
+    job: entry.job,
+    team: entry.team,
     bar: entry.bar,
     runs: entry.runs,
     noise: entry.noise,
@@ -868,13 +897,13 @@ function proof(artifact: Artifact): Proof {
   }
 }
 
-function post(entry: BoardPost, handle: (agent: string) => string): Post {
+function post(entry: BoardPost, who: AgentNames): Post {
   const agent = entry.author !== 'person' && entry.author !== 'verifold';
   return {
     id: entry.id,
     at: entry.at,
     author: entry.author,
-    handle: agent ? handle(entry.author) : null,
+    ...(agent ? who(entry.author) : { handle: null, job: null }),
     harness: entry.harness ?? null,
     kind: entry.kind,
     direction: entry.direction ?? null,
@@ -896,11 +925,13 @@ function awayOf(
   gpu: number | null,
   disputes: Loaded['disputes'],
 ): NonNullable<Lab['away']> {
+  const who = namesOf(view);
   const news = awayNews(
     view,
     away,
     gpu,
     new Set(disputes.map((dispute) => dispute.target.id)),
+    (author) => agentName(authorName(view, author), who(author).job),
   );
   return {
     since: away.since,
@@ -921,7 +952,7 @@ function awayOf(
 function boardPage(
   posts: readonly BoardPost[],
   size: number,
-  handle: (agent: string) => string,
+  who: AgentNames,
   before?: number,
 ): BoardPage {
   const older =
@@ -930,7 +961,7 @@ function boardPage(
       : posts.filter((entry) => number(entry.id) < before);
   const shown = size ? older.slice(-size) : [];
   return {
-    posts: shown.map((entry) => post(entry, handle)),
+    posts: shown.map((entry) => post(entry, who)),
     more: older.length > shown.length,
   };
 }
@@ -1005,9 +1036,14 @@ function historyEntry(info: HistoryRunInfo): HistoryEntry {
  * a readable record of the lab, its runs and posts only.
  */
 function historyLab(found: LabHistory): HistoryLabRun {
-  const handle = (agent: string): string =>
-    found.agents.get(agent)?.handle ?? agent;
   const state = found.state;
+  const jobs = new Map(
+    state?.directions.map((entry) => [entry.agent, entry.job]),
+  );
+  const who: AgentNames = (agent) => ({
+    handle: found.agents.get(agent)?.handle ?? agent,
+    job: jobs.get(agent) ?? null,
+  });
   const plan = state?.plan ?? null;
   return {
     kind: 'lab',
@@ -1032,9 +1068,10 @@ function historyLab(found: LabHistory): HistoryLabRun {
         ? clip(entry.evidence.text, historyBounds.short)
         : null,
       handle: found.agents.get(entry.agent)?.handle ?? null,
+      job: entry.job,
     })),
     runs: found.runs.map(run),
-    posts: found.posts.map((entry) => post(entry, handle)),
+    posts: found.posts.map((entry) => post(entry, who)),
     olderPosts: found.postCount - found.posts.length,
   };
 }
@@ -1497,7 +1534,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     if (!max) return [];
     return newest ? list.slice(-max) : list.slice(0, max);
   };
-  const handle = (agent: string): string => view.handles[agent] ?? agent;
+  const who = namesOf(view);
   const disputed = (entry: LabDirection): boolean =>
     disputes.some(
       ({ target }) =>
@@ -1515,40 +1552,44 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   };
   const newest = (list: readonly { readonly id: string }[]): string[] =>
     list.slice(-apiLimits.notify).map((entry) => entry.id);
-  const agents: Agent[] = keep(loaded.agents, level.agents, 'agents').map(
-    (ref) => {
-      const turns = loaded.turns.get(ref.id) ?? [];
-      const asked =
-        state.calls
-          .filter((entry) => waiting(entry) && askers(entry).includes(ref.id))
-          .map((entry) => entry.at)
-          .sort()[0] ?? null;
-      return {
-        id: ref.id,
-        handle: ref.handle,
-        harness: ref.harness,
-        model: loaded.models.get(ref.id) ?? ref.model,
-        requestedModel: ref.model ?? loaded.requested.get(ref.id) ?? null,
-        direction: ref.direction,
-        check: ref.check,
+  const directions = keptDirections(state.directions, level.directions);
+  if (directions.length < state.directions.length)
+    omitted.directions = state.directions.length - directions.length;
+  const kept = new Set(directions.map((entry) => entry.id));
+  const shown = keptAgents(loaded.agents, kept, level.agents);
+  if (shown.length < loaded.agents.length)
+    omitted.agents = loaded.agents.length - shown.length;
+  const agents: Agent[] = shown.map((ref) => {
+    const turns = loaded.turns.get(ref.id) ?? [];
+    const asked =
+      state.calls
+        .filter((entry) => waiting(entry) && askers(entry).includes(ref.id))
+        .map((entry) => entry.at)
+        .sort()[0] ?? null;
+    return {
+      id: ref.id,
+      handle: ref.handle,
+      job: ref.job,
+      harness: ref.harness,
+      model: loaded.models.get(ref.id) ?? ref.model,
+      requestedModel: ref.model ?? loaded.requested.get(ref.id) ?? null,
+      direction: ref.direction,
+      check: ref.check,
+      status: ref.status,
+      until: ref.until,
+      live: liveOf({
         status: ref.status,
-        until: ref.until,
-        live: liveOf({
-          status: ref.status,
-          harness: ref.harness,
-          turn: turns.at(-1) ?? null,
-          asked,
-        }),
-        turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
-        spendUsd: ref.spend,
-      };
-    },
-  );
+        harness: ref.harness,
+        turn: turns.at(-1) ?? null,
+        asked,
+      }),
+      turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
+      spendUsd: ref.spend,
+    };
+  });
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
   const brought = broughtByDirection(state.brought);
-  const directions = keep(state.directions, level.directions, 'directions');
-  const kept = new Set(directions.map((entry) => entry.id));
   return {
     question: level.whole
       ? state.question
@@ -1578,7 +1619,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     },
     // The calls that waited longest come first.
     needsYou: keep(state.calls.filter(waiting), level.needsYou, 'needsYou').map(
-      (entry) => call(entry, handle, stored),
+      (entry) => call(entry, who, stored),
     ),
     answered: keep(
       state.calls.filter((entry) => !waiting(entry)),
@@ -1587,7 +1628,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       true,
     )
       .reverse()
-      .map((entry) => call(entry, handle, stored)),
+      .map((entry) => call(entry, who, stored)),
     directions: directions.map((entry) =>
       direction(
         entry,
@@ -1618,7 +1659,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
             changed: plan.changed ?? null,
           }
         : null,
-    board: boardPage(view.posts, level.posts, handle),
+    board: boardPage(view.posts, level.posts, who),
     disputes: keep(disputes, level.disputes, 'disputes').map((entry) => ({
       post: entry.target.id,
       objections: entry.objections.map((objection) => objection.id),
@@ -2051,12 +2092,7 @@ export class ApiReader {
   board(before?: number): BoardPage | null {
     const view = this.sources().lab?.view();
     if (!view) return null;
-    return boardPage(
-      view.posts,
-      apiLimits.posts,
-      (agent) => view.handles[agent] ?? agent,
-      before,
-    );
+    return boardPage(view.posts, apiLimits.posts, namesOf(view), before);
   }
 
   /**
@@ -2077,11 +2113,9 @@ export class ApiReader {
         replies.push(entry);
       }
     const room = apiLimits.posts - 1;
-    const handle = (agent: string): string => view.handles[agent] ?? agent;
+    const who = namesOf(view);
     return {
-      posts: [root, ...replies.slice(0, room)].map((entry) =>
-        post(entry, handle),
-      ),
+      posts: [root, ...replies.slice(0, room)].map((entry) => post(entry, who)),
       more: replies.length > room,
     };
   }
@@ -2097,6 +2131,9 @@ export class ApiReader {
     if (!view) return null;
     const words = searchWords(q);
     const found = words ? searchLab(view, words) : [];
+    const who = namesOf(view);
+    const author = (id: string): string =>
+      agentName(authorName(view, id), who(id).job);
     const hits = !words
       ? []
       : found.slice(0, searchLimit).map((entry): SearchHit => {
@@ -2108,7 +2145,7 @@ export class ApiReader {
               at: post.at,
               kind: post.kind,
               label: kindLabel(post),
-              author: authorName(view, post.author),
+              author: author(post.author),
               direction: post.direction ?? null,
               snippet: snippetParts(post.text, words.any),
             };
@@ -2119,7 +2156,7 @@ export class ApiReader {
               type: 'run',
               id: run.id,
               at,
-              author: authorName(view, run.agent),
+              author: author(run.agent),
               direction: run.direction,
               summary: runSummary(run),
               snippet: snippetParts(run.command, words.any),
@@ -2134,7 +2171,7 @@ export class ApiReader {
             id: call.id,
             at: call.at,
             label: callWords[call.kind],
-            author: authorName(view, call.by),
+            author: author(call.by),
             state: call.state,
             summary: callState(call),
             question: call.question,

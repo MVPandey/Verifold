@@ -1,6 +1,10 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import { markdownHtml } from './markdown.ts';
-import type { Candidate, Workspace } from '../core/contracts.ts';
+import {
+  maxAgents,
+  type Candidate,
+  type Workspace,
+} from '../core/contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from '../server/desk-records.ts';
 import type { ResearchReport } from '../legacy/research.ts';
 import type {
@@ -43,6 +47,7 @@ import {
   type CoordinatorAction,
   type CoordinatorView,
 } from '../legacy/coordinator.ts';
+import { maxPodsAtOnce } from '../core/pod-limits.ts';
 import { defaultAgents } from '../core/workers.ts';
 import type { BringList, LabView } from '../core/lab/schema.ts';
 import { labWorks } from '../core/team.ts';
@@ -2795,7 +2800,7 @@ function renderComputeView(
   agents: number,
 ): string {
   const { key, settings, gpus } = compute;
-  const agentsCard = `<section class="card" aria-labelledby="agents-title"><h2 id="agents-title">Agents at once</h2><p>Up to ${agents} ${agents === 1 ? 'agent runs' : 'agents run'} tasks and sessions at the same time. Each agent uses your Claude Code or Codex plan, so more agents reach the plan's usage limit sooner.</p><details id="agents-edit"><summary>Change it</summary><label class="field" for="team-agents">Agents at once, 1 to 8<input id="team-agents" type="number" min="1" max="8" step="1" value="${agents}"></label><div class="actions"><button type="button" data-action="compute-agents">Save</button></div></details></section>`;
+  const agentsCard = `<section class="card" aria-labelledby="agents-title"><h2 id="agents-title">Agents at once</h2><p>Up to ${agents} ${agents === 1 ? 'agent runs' : 'agents run'} tasks and sessions at the same time. Each agent uses your Claude Code or Codex plan, so more agents reach the plan's usage limit sooner.</p><details id="agents-edit"><summary>Change it</summary><label class="field" for="team-agents">Agents at once, 1 to ${maxAgents}<input id="team-agents" type="number" min="1" max="${maxAgents}" step="1" value="${agents}"></label><div class="actions"><button type="button" data-action="compute-agents">Save</button></div></details></section>`;
   const keyCard = key
     ? `<p>The key is in ${e(placeNames[key.place])}. It ends in <code>${e(key.last4)}</code>.</p>
       ${key.problem ? `<p class="notice">The check at ${e(since(key.checkedAt ?? key.savedAt))} failed. ${e(key.problem)}</p>` : key.checkedAt ? `<p class="notice-ok">It worked at ${e(since(key.checkedAt))}.</p>` : ''}
@@ -2834,7 +2839,7 @@ function renderComputeView(
   // The spend limit leads. The other limits fold, and they stay in the page, so each save sends them all.
   const limitsForm = `<div class="fields">${number('compute-limit', 'Spend limit for this project, USD', settings.limitUsd, 1, 10_000)}</div>
   <details id="compute-more" class="more-fields"><summary>More limits</summary>
-  <div class="fields">${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours for one pod, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods"><option value="1"${settings.maxRunningPods === 1 ? ' selected' : ''}>1</option><option value="2"${settings.maxRunningPods === 2 ? ' selected' : ''}>2</option></select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
+  <div class="fields">${number('compute-rate', 'Highest rate of one pod, USD per hour', settings.maxUsdPerHour, 0.1, 50, 0.01)}${number('compute-hours', 'Hours for one pod, at most', settings.maxHoursPerLease, 1, 24)}${number('compute-idle', 'Stop an idle pod after, in minutes', settings.idleMinutes, 5, 240)}<label class="field" for="compute-pods">Pods at the same time<select id="compute-pods">${Array.from({ length: maxPodsAtOnce }, (_, index) => `<option value="${index + 1}"${settings.maxRunningPods === index + 1 ? ' selected' : ''}>${index + 1}</option>`).join('')}</select></label>${number('compute-disk', 'Disk of each pod, GB', settings.diskGb, 10, 500)}</div>
   <label class="field" for="compute-images">RunPod images that pods can use, one on each line</label><textarea id="compute-images" rows="2" maxlength="2000">${e(settings.images.join('\n'))}</textarea>
   <label class="check" for="compute-ask"><input type="checkbox" id="compute-ask"${settings.askBeforePod ? ' checked' : ''}> Ask me before each pod starts</label>
   <p class="fine">If this is off, a pod that fits these limits starts as soon as the coordinator asks, even while you're away. You can stop it in Compute.</p></details>
