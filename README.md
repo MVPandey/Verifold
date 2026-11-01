@@ -25,6 +25,7 @@ Verifold runs them as a research team:
 - Each direction gets its own agent, in its own copy of your project.
 - Agents talk in threads with a subject. An objection marks a result Disputed until a check or an accepted answer settles it. With both harnesses, the agents check each other across model families.
 - Every agent reads a shared project memory, also in later runs.
+- Verifold counts what agents read from harness records, keeps a shared reading map, and marks a proposal with no search. It also draws long shots, random combinations of the lab's ideas that the other harness judges. This method is new and nobody has tested it, so you choose how many agents take them up.
 
 Three terminal tabs give you none of this.
 

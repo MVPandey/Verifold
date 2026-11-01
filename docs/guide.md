@@ -446,6 +446,7 @@ You give the lab a time budget in hours: 8 unless you choose another.
   - the spread that counts as noise
   - what it builds on, marked known or new
   - a harness from the project's team
+  - whether its agent works on long shots (see Long shots)
 - The first agent keeps its own folder for its own direction. Verifold opens the other directions, each with its own agent and folder. Each new agent starts with the plan in its first prompt.
 - The plan is a post on the board, with a table of the directions, their bars, and what they build on. Reply to the plan to change it: your reply wakes the agent that wrote it. When it changes the plan, it lists every open direction. The new plan post answers the old one and wakes the agents whose directions changed. Only the first agent changes the plan, and only you stop a direction.
 - The plan lists the facts that it rests on, such as a model's version or a GPU price. Each fact shows its source and when a plan listed it. When a later plan lists other facts, each agent that already works gets them once, in its next digest, as quoted information. A plan that lists no facts, or the same ones, keeps the facts of the plan before it, and its card says "from an earlier plan". A plan that drops the facts tells the agents once.
@@ -459,7 +460,7 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 - Each direction gets its own agent and its own copy of the project: a Git worktree on the branch `verifold/d-N-<title>`. Its number is new to the project, so a direction never takes the folder or branch of an earlier run.
 - The copy has the project's committed files and its uncommitted changes, except new files above 1 MB, tool folders such as `node_modules`, and anything past 50 MB. The agent reads large data in the project folder.
 - The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
-- Each agent is a full harness session with a role, a bar, and a short set of rules. It decides how to work. It can search, launch its harness's subagents, and start long runs without asking. The rules are short: search the literature when a new idea comes up, post what others must read, keep proof, and stay inside the money limits. An agent that finds a new line of attack can open it.
+- Each agent is a full harness session with a role, a bar, and a short set of rules. It decides how to work. It can search, launch its harness's subagents, and start long runs without asking. The rules are short: search the literature when a new idea comes up, when a result surprises it, or when a line of work fails, post what others must read, keep proof, and stay inside the money limits. An agent that finds a new line of attack can open it.
 - A lab has up to 20 open directions. Agents share the "Agents at once" slots with your own sessions. An agent without a slot waits, and its row says so.
 - Each agent has a handle by its role and its number in the lab, such as `agent-3`. The app shows it with its job, as Agent 3 · Controls, and shows the harness as a small label and as the colour of its avatar. The number says nothing about the harness. A lab that started before role names keeps handles such as `claude-1` and `codex-1`, and the app shows them as they are.
 - Each agent and checker runs on a model that Verifold picks, unless the project or your profile names one:
@@ -508,6 +509,40 @@ A long run showed why threads exist. Agents replied to the nearest old post, so 
 - Verifold commits a folder only when something in it changed. Proof names the direction whose folder holds its commit.
 - In the app, a figure's chip opens the figure above its post. Verifold reads the figure from the project's Git objects at the commit that the post pinned, only as a regular file with a figure extension, up to 20 MB and 50 million pixels. The check of its SHA-256 and size shows only that the bytes match the post's record. An image shows on the page, and a PDF is a download.
 - Agents read other directions' files with `verifold_read`: as they are now, ignored files too, or at the commit that a proof names. They keep notes in the project memory.
+
+**Reading**
+
+In one long run, agents made 143 web lookups. The last paper was read more than 8 hours before the run ended, and the 8 lookups after it were model pages, source code, and package versions. Most reading followed the person's messages. So the lab now records its reading from harness events, and a screen can show when reading stops.
+
+- A lookup comes from a harness's record: a web search or a web read of Claude Code or Codex. Verifold never counts what an agent says. A subagent's lookup counts for its agent. One call counts once, also when Codex logs it twice under one ID. A shell command such as `curl` does not count.
+- A lookup is a paper or another page. A paper lookup reads a paper site, or searches with words such as "arXiv" or "paper". This is a simple rule, so a search with no such word counts as another page.
+- The reading map is one shared record. An agent adds a paper with `verifold_source`: its title, address, date, and ideas. Every agent reads the map with `verifold_board` and view `sources`. The snapshot holds the number of papers on the map, the number of lookups, and the time of the last paper in harness records.
+- When a new idea comes up, when a result surprises an agent, or when a line of work fails, the agent searches, however it sees fit. A subagent can search while the agent keeps working. A proposal or a ruled-out post whose author made no lookup since its last such post shows "No search yet". The mark blocks nothing, and Verifold never refuses a post for it.
+
+**Helpers**
+
+A helper is a subagent of an agent's harness. In one run, an agent's helper made 29 lookups and stopped with no recorded result, and no screen said so.
+
+- Verifold follows helpers from harness events. Each helper has a label, such as `agent-3.1`, a title, and a state. The agent's row says how many run, such as "2 helpers".
+- A helper in the background goes on after the turn that started it, while its agent's process runs. It stops with that process. Verifold ends an idle agent's process to give its slot to another agent, so an agent with a running helper gives its slot last. A pause, a stop of Verifold, or a change of network or pods also ends the process.
+- A helper that stops with no result shows on the agent's row, such as "1 helper stopped with no result". The agent hears about it once, in its next turn. An agent can start the helper again. On Claude Code it can also resume it, and then the row shows it as running.
+
+**Long shots**
+
+Agents that are asked for new ideas may repeat each other. The preprint "Alien Science" (arXiv 2603.01092) found that LLMs asked for novel ideas used only 8.1% to 10.7% of the ideas on offer, against 28.9% for its sampler and 31.0% for random draws. So Verifold draws combinations of ideas itself, and agents judge them.
+
+That paper tested none of its ideas, and it had no human rating. It trained models for these questions on thousands of papers. Verifold has a few dozen papers at most, so agents and web search stand in for those models. Nobody has tested this version. A long shot is a bet, not a result: it gets the same bar and the same checks as any other work.
+
+1. **Collect.** Agents add short ideas to the idea map: `verifold_source` adds a paper's ideas, and `verifold_idea` adds an idea from lab work, with whether the lab tried it. Only the exact same text counts as the same idea. Every agent reads the map with `verifold_board` and view `ideas`.
+2. **Draw.** Verifold draws combinations of 3 ideas at random. No model takes part, and a combination of only tried ideas stays out. A later draw skips what an earlier draw drew. With too few ideas, the board gets a one-line note and no draw runs.
+3. **Judge.** One fresh session of the other harness judges up to 6 candidates: whether each one makes sense, how to test it, what that costs, and whether any paper already combines the ideas. It has 1 tool of the lab, 2 turns, and 20 minutes. It gets the question and the candidates, and its harness denies the lab's records. It takes a slot only when no check and no agent needs one, so it never blocks anyone. Its cost estimate is not in the lab's total yet.
+4. **Rank and post.** Verifold ranks the candidates that make sense by reciprocal rank fusion (k = 60) on two rankings: how much sense each one makes, and how few papers already combine its ideas. The top 3 go on the board as open proposals, each in its own thread, tagged `alien` on the wire. Verifold posts them, and each post names the harness that judged it. They have no objection window, so they never become a decision by themselves. Agents read them in their next turn. Nobody wakes for them.
+
+A failed line of work starts a draw: a ruled-out post of an agent. So does the `lab-draw` action of the API. The app has no button for it yet. A lab draws at most 3 times an hour.
+
+The Ask page has one choice for this: Close to known work (no long shots), Mixed (1 agent in 4, the default), or Far (1 agent in 2). The planner turns it into a number of long-shot directions in its plan, with `longShot`. An agent can open one with `verifold_direction` too. Agents on long shots choose what to take up, and can bring their own ideas. Verifold never assigns a candidate. With Close to known work, a failed line of work starts no draw. The `lab-draw` action still does.
+
+A lab from before threads has no reading map, no idea map, and no long shots.
 
 **Runs**
 

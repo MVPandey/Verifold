@@ -16,6 +16,7 @@ import {
   codexAppUpdates,
   codexCommand,
   type TranscriptUpdate,
+  codexHelperEnds,
 } from './transcript.ts';
 import type { LimitSignal } from './quota.ts';
 
@@ -1301,9 +1302,17 @@ function codex(options: HostOptions): HostSession {
       typeof value.id === 'string' &&
       Array.isArray(value.receiverThreadIds)
     )
+      // A later call that names the helper, such as a wait, is not its start.
       for (const child of value.receiverThreadIds as unknown[])
-        if (typeof child === 'string' && agents.size < 500)
+        if (
+          typeof child === 'string' &&
+          agents.size < 500 &&
+          !agents.has(child)
+        )
           agents.set(child, local(value.id));
+    if (record(value) && value.type === 'collabAgentToolCall')
+      for (const update of codexHelperEnds(value.agentsStates, agents))
+        emit({ type: 'transcript', update });
     const parent = from ? (agents.get(from) ?? null) : null;
     for (const update of codexAppUpdates(method, value, parent))
       emit({
@@ -1488,6 +1497,19 @@ function codex(options: HostOptions): HostSession {
     if (thread && from && from !== thread) {
       // Only the transcript shows subagent work. Requests and records stay with the main thread.
       if (method && agents.has(from)) transcribe(method, params.item, from);
+      const helper = agents.get(from);
+      if (method === 'turn/completed' && helper !== undefined)
+        emit({
+          type: 'transcript',
+          update: {
+            id: helper,
+            status:
+              record(params.turn) && str(params.turn.status) === 'completed'
+                ? 'done'
+                : 'failed',
+            final: true,
+          },
+        });
       return;
     }
     if (method === 'serverRequest/resolved') {

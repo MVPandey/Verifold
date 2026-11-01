@@ -107,6 +107,7 @@ import {
   type ActionName,
   type Agent,
   type AgentLine,
+  type Helper,
   type AgentStatus,
   type BoardPage,
   type BringGroup,
@@ -457,6 +458,7 @@ interface AgentRef {
   readonly check: string | null;
   readonly spend: number | null;
   readonly line: AgentLine | null;
+  readonly helpers: readonly Helper[];
 }
 
 /** What one snapshot needs, read once: the lab, its pods, and each agent's turns. */
@@ -527,6 +529,11 @@ function directionAgent(entry: LabView['directions'][number]): AgentRef {
     check: null,
     spend: entry.agent.spend?.usd ?? null,
     line: entry.agent.statusLine ?? null,
+    helpers: (entry.helpers ?? []).map(({ label, title, state }) => ({
+      label,
+      title,
+      state,
+    })),
   };
 }
 
@@ -544,6 +551,7 @@ function checkAgent(check: LabCheck): AgentRef {
     check: check.id,
     spend: check.spend?.usd ?? null,
     line: null,
+    helpers: [],
   };
 }
 
@@ -876,6 +884,7 @@ function direction(
     title: entry.title,
     job: entry.job,
     team: entry.team,
+    longShot: entry.longShot,
     bar: entry.bar,
     runs: entry.runs,
     noise: entry.noise,
@@ -944,6 +953,8 @@ function post(
     proof: entry.artifacts.map(proof),
     ...(entry.outcome ? { outcome: entry.outcome } : {}),
     ...(entry.accepts ? { accepts: entry.accepts } : {}),
+    ...(entry.noSearch ? { noSearch: entry.noSearch } : {}),
+    ...(entry.alien ? { alien: entry.alien } : {}),
     ...marks(entry),
   };
 }
@@ -1623,6 +1634,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         asked,
       }),
       line: ref.line,
+      helpers: ref.helpers,
       turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
       spendUsd: ref.spend,
     };
@@ -1637,6 +1649,8 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
     postLimit: boardLimits.personText,
     signoffLimit: labLimits.signoff,
     startedAt: state.startedAt,
+    share: state.share,
+    reading: view.reading ?? null,
     agentsHere: view.runs,
     paused: state.pausedAt
       ? { at: state.pausedAt, reason: state.pausedFor ?? 'person' }
@@ -2670,6 +2684,7 @@ const actionNames = new Set<string>([
   'lab-away-dismiss',
   'lab-look',
   'lab-skip-questions',
+  'lab-draw',
   'lab-questions-answer',
   'compute-settings',
   'compute-gpus',

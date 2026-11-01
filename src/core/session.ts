@@ -208,6 +208,15 @@ export interface SessionManagerOptions {
     record: SessionRecord,
     outcome?: 'completed' | 'interrupted' | 'failed',
   ) => void;
+  /**
+   * One update of a session's transcript, as the harness reported it, with
+   * the record of the launch that reported it. An owner reads what the
+   * harness did here, not what the model says.
+   */
+  readonly onTranscript?: (
+    record: SessionRecord,
+    update: TranscriptUpdate,
+  ) => void;
   /** The harness reported its plan's usage window. The window belongs to the account, not to this session. */
   readonly onLimit?: (host: HarnessName, signal: LimitSignal) => void;
   /** Request IDs come from this counter. Managers that share it cannot show two requests with one ID. */
@@ -656,8 +665,8 @@ function parseRecord(value: unknown): SessionRecord | null {
       ? { network: record.network as string[] }
       : {}),
     ...(typeof record.cwd === 'string' &&
-    // A task's or a direction's folder, or a lab check's.
-    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/k-[1-9]\d{0,5})$/.test(
+    // A task's or a direction's folder, or a lab check's or long-shot session's.
+    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/k-[1-9]\d{0,5}|lab\/long-shots\/l-[1-9]\d{0,5})$/.test(
       record.cwd,
     )
       ? { cwd: record.cwd }
@@ -2107,6 +2116,7 @@ export class SessionManager {
       }
       case 'transcript':
         this.transcript?.apply(event.update);
+        this.options.onTranscript?.(record, event.update);
         break;
     }
   }

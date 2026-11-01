@@ -597,7 +597,17 @@ async function labAction(
 ): Promise<number> {
   switch (body.action) {
     case 'lab-start':
-      await startLabOn(root, lab, body.question, undefined, body.hours);
+      await startLabOn(
+        root,
+        lab,
+        body.question,
+        undefined,
+        body.hours,
+        body.share,
+      );
+      return 200;
+    case 'lab-draw':
+      await lab.drawAgain();
       return 200;
     case 'lab-budget':
       await lab.extend(body.hours);

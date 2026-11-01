@@ -24,7 +24,11 @@ import {
   type SessionRecord,
 } from '../src/core/session.ts';
 import { startDesk } from '../src/server/desk.ts';
-import { codexCommand, TranscriptFile } from '../src/core/transcript.ts';
+import {
+  codexCommand,
+  TranscriptFile,
+  type TranscriptUpdate,
+} from '../src/core/transcript.ts';
 import {
   credentialPaths,
   strictClaudeSettings,
@@ -150,6 +154,7 @@ onLine((line) => {
       out({ method: 'item/completed', params: { threadId: 'child-1', item: { type: 'agentMessage', id: 'msg-c', text: 'The README is short.' } } });
       out({ method: 'item/completed', params: { threadId: 'reviewer-thread', item: { type: 'agentMessage', id: 'msg-r', text: 'Reviewer text' } } });
       out({ method: 'item/completed', params: { threadId: 'thread-1', item: collab('completed') } });
+      out({ method: 'turn/completed', params: { threadId: 'child-1', turn: { id: 'turn-c', status: 'completed' } } });
     }
     out({ method: 'item/started', params: { item: item('inProgress', null) } });
     if (reviewer === 'auto_review') {
@@ -1303,7 +1308,10 @@ require('node:net').createServer((socket) => socket.end('HTTP/1.1 400 Bad Reques
 
 await test('Codex subagent threads nest in the transcript and stay out of the session records', async () => {
   await project(async (root, _executables, create) => {
-    const sessions = create();
+    const heard: TranscriptUpdate[] = [];
+    const sessions = create({
+      onTranscript: (_, update) => heard.push(update),
+    });
     await sessions.start({
       host: 'codex',
       mode: 'ask',
@@ -1333,7 +1341,7 @@ await test('Codex subagent threads nest in the transcript and stay out of the se
     const entries = [...transcript.log.page(null, 0, Infinity).entries].sort(
       (a, b) => a.order - b.order,
     );
-    const agents = entries.find((entry) => entry.name === 'Agents');
+    const agents = entries.find((entry) => entry.name === 'Agent');
     assert.equal(agents?.status, 'done');
     assert.equal(agents?.title, 'Check the README');
     const nested = entries.filter((entry) => entry.parent === agents?.id);
@@ -1350,9 +1358,19 @@ await test('Codex subagent threads nest in the transcript and stay out of the se
     );
     assert.deepEqual(
       main.map((entry) => entry.name),
-      ['Agents', 'Command'],
+      ['Agent', 'Command'],
     );
     assert.ok(!entries.some((entry) => entry.text === 'Reviewer text'));
+    // The owner hears each update, and the end of the helper's own thread.
+    assert.ok(heard.some((update) => update.title === 'cat README.md'));
+    assert.ok(
+      heard.some(
+        (update) =>
+          update.id === 'collab-1' &&
+          update.final === true &&
+          update.status === 'done',
+      ),
+    );
   });
 });
 

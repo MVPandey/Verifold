@@ -239,8 +239,25 @@ export type LabList =
   | 'plan'
   | 'signoff';
 
+/** How far from known work a lab goes: no long shots, 1 agent in 4, or 1 agent in 2. */
+export type LabShare = 'close' | 'mixed' | 'far';
+
+/** What a lab read, from harness records. */
+export interface Reading {
+  /** Papers on the reading map. */
+  readonly papers: number;
+  /** Web lookups in harness records. */
+  readonly lookups: number;
+  /** The last paper in harness records. Null: none yet. */
+  readonly lastPaperAt: string | null;
+}
+
 export interface Lab {
   readonly question: string;
+  /** The person's choice at Ask. Null or absent: a lab from before this choice. Added after version 1. */
+  readonly share?: LabShare | null;
+  /** Null or absent: a lab from before threads. Added after version 1. */
+  readonly reading?: Reading | null;
   /** The most characters that a post by the person may have. Added after version 1. */
   readonly postLimit?: number;
   /** The most characters that the line of a sign-off may have. Added after version 1. */
@@ -449,6 +466,8 @@ export interface Direction {
   readonly job?: string | null;
   /** The team of directions that it works with, as a short label. Null or absent: none set. Added after version 1. */
   readonly team?: string | null;
+  /** Its agent works on long shots. Added after version 1. */
+  readonly longShot?: boolean;
   /** What makes it hold up, in plain words. */
   readonly bar: string | null;
   /** The repeat runs that the bar needs. */
@@ -569,6 +588,15 @@ export interface AgentLine {
   readonly at: string;
 }
 
+/** A subagent of an agent's harness. `lost`: it stopped with no result. */
+export interface Helper {
+  /** Such as `agent-3.1`. */
+  readonly label: string;
+  /** The harness's words. */
+  readonly title: string;
+  readonly state: 'running' | 'done' | 'lost';
+}
+
 /** A direction's agent or a checker. */
 export interface Agent {
   readonly id: string;
@@ -599,6 +627,8 @@ export interface Agent {
    * Added after version 1.
    */
   readonly line?: AgentLine | null;
+  /** The subagents of its harness, from harness events. Added after version 1. */
+  readonly helpers?: readonly Helper[];
   /** Its newest turns. */
   readonly turns: TurnPage;
   /** Claude Code's cost estimate of its sessions. Null for Codex. */
@@ -713,6 +743,10 @@ export interface Post {
   readonly citesDisputed?: string;
   /** The `check` posts that tested this post. Added after version 1. */
   readonly recountedBy?: readonly Recount[];
+  /** A proposal or a ruled-out post whose author made no lookup since its last such post. Added after version 1. */
+  readonly noSearch?: true;
+  /** A long shot: a proposal from Verifold's draw of ideas. Added after version 1. */
+  readonly alien?: true;
 }
 
 /** A `check` post of another agent: who wrote it, and what it found. */
@@ -1468,8 +1502,11 @@ export interface ActionBodies {
   'lab-start': {
     readonly question: string;
     readonly hours?: number;
+    readonly share?: LabShare;
     readonly key?: string;
   };
+  /** The person's Draw again: a new draw of long shots. Added after version 1. */
+  'lab-draw': { readonly key?: string };
   'lab-post': {
     readonly text: string;
     readonly kind?: PostKind;
@@ -1691,6 +1728,8 @@ export interface ActionBodies {
     readonly gpuUsd?: number | null;
     /** The lab's time budget, in whole hours. */
     readonly hours?: number;
+    /** How far from known work. Without it, `mixed`. */
+    readonly share?: LabShare;
     readonly key?: string;
   };
   /**

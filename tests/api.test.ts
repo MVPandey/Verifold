@@ -256,6 +256,7 @@ function direction(id: string, title: string, agent: string): Direction {
     title,
     job: null,
     team: null,
+    longShot: false,
     bar: 'The gap shrinks 30% against a length-matched control.',
     runs: 3,
     noise: '±0.02',
@@ -408,6 +409,7 @@ function seededView(): LabView {
     pausedAt: null,
     pausedFor: null,
     handles: { claude: 1, codex: 2 },
+    share: null,
     roles: null,
     directions: [
       direction('d-1', 'The CoT matches what probes read inside', 'a-1'),
@@ -1974,6 +1976,10 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
       words.push(['questions', answers]);
       return Promise.resolve();
     },
+    drawAgain: () => {
+      words.push(['draw']);
+      return Promise.resolve();
+    },
     skipQuestions: () => {
       words.push(['skip']);
       return Promise.resolve();
@@ -2145,7 +2151,12 @@ await test('the API needs the token, pushes one snapshot for a burst of changes,
   ];
   assert.equal((await action('lab-questions-answer', { answers })).status, 200);
   assert.equal((await action('lab-skip-questions', {})).status, 200);
-  assert.deepEqual(words.slice(1), [['questions', answers], ['skip']]);
+  assert.equal((await action('lab-draw', {})).status, 200);
+  assert.deepEqual(words.slice(1), [
+    ['questions', answers],
+    ['skip'],
+    ['draw'],
+  ]);
   // A desk with a project takes no project start.
   assert.equal(
     (await action('project-start', { question: 'Another?' })).status,

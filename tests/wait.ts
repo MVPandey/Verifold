@@ -4,16 +4,20 @@ import { setTimeout as delay } from 'node:timers/promises';
 /**
  * Wait until `check` holds, for at most `ms`. A test waits for the state it
  * means, such as a saved file or a sent wakeup, not for a fixed time that a
- * busy computer can pass. The limit only ends a test that is stuck.
+ * busy computer can pass. The limit only ends a test that is stuck. `detail`
+ * adds what the failure message needs, read at the moment the wait fails.
  */
 export async function until(
   check: () => boolean | Promise<boolean>,
   ms = 10_000,
+  detail?: () => string,
 ): Promise<void> {
   const end = Date.now() + ms;
   while (!(await check())) {
     if (Date.now() > end)
-      throw new Error(`The condition did not hold in ${ms} ms.`);
+      throw new Error(
+        `The condition did not hold in ${ms} ms.${detail ? ` ${detail()}` : ''}`,
+      );
     await delay(10);
   }
 }

@@ -200,6 +200,14 @@ import { refutation } from './lab/post-rules.ts';
 import { readObject, RecordFile } from './lab/record-file.ts';
 import { threadLine } from './lab/thread-digest.ts';
 import { ThreadStore } from './lab/thread-store.ts';
+import { LiteratureStore } from './lab/literature-store.ts';
+import {
+  LongShots,
+  longShotRole,
+  shareLine,
+  shareOf,
+} from './lab/long-shots.ts';
+import type { TranscriptUpdate } from './transcript.ts';
 
 /**
  * The lab: several harness agents work on one question at the same time. Each
@@ -455,9 +463,11 @@ export async function startLabOn(
   question: unknown,
   autonomy: 'guided' | 'autonomous' = 'autonomous',
   budget: unknown = defaultLabHours,
+  share?: unknown,
 ): Promise<boolean> {
   const planned = await lab.start(question, {
     hours: budget === '' ? defaultLabHours : budget,
+    share,
   });
   // The question becomes the research topic only once the lab runs, so a
   // refused start leaves the project as it was.
@@ -507,6 +517,8 @@ export class Lab {
   private state: LabState | null = null;
   private readonly stateFile: RecordFile;
   private readonly threads: ThreadStore;
+  private readonly literature: LiteratureStore;
+  private readonly longShots: LongShots;
   private readonly agents = new Map<string, AgentRecord>();
   private readonly files = new Map<string, RecordFile>();
   private readonly loops = new Map<string, WakeLoop<LabEvent, AgentRecord>>();
@@ -604,6 +616,24 @@ export class Lab {
       this.board,
       this.timing.objectionMs,
     );
+    this.literature = new LiteratureStore(
+      join(this.folder, 'literature.json'),
+      () => this.suspended,
+    );
+    this.longShots = new LongShots({
+      ...options,
+      root,
+      store: this.literature,
+      threads: this.threads,
+      timing: this.timing,
+      serial: (work) => this.serial(work),
+      free: () => this.free(),
+      team: () => this.team(),
+      nextAgent: () => this.nextAgent(),
+      question: () => this.current().question,
+      add: (fields) => this.add(fields),
+      share: () => this.state?.share ?? null,
+    });
   }
 
   private get folder(): string {
@@ -643,6 +673,7 @@ export class Lab {
     await this.threads.load(
       this.threaded ? (this.state?.startedAt ?? null) : null,
     );
+    await this.literature.load(this.threaded);
     // Only the owner, where agents work, ends the runs of an earlier owner.
     await this.ledger.load(this.runs && this.state !== null);
     if (!this.state) return;
@@ -737,11 +768,7 @@ export class Lab {
       await this.ledger.close();
       await this.serial(async () => {
         for (const loop of this.loops.values()) await loop.close();
-        await Promise.all(
-          [this.stateFile, this.threads, ...this.files.values()].map((file) =>
-            file.flush(),
-          ),
-        );
+        await this.flushRecords();
         this.suspended = true;
       });
       return pausing;
@@ -839,6 +866,7 @@ export class Lab {
       state,
       posts: this.board.list(),
       threads: this.threads.list(),
+      ...(this.threaded ? { reading: this.literature.reading() } : {}),
       handles: Object.fromEntries([
         ...state.checks.map((check) => [check.agent, check.handle] as const),
         ...[...this.agents.values()].map(
@@ -856,7 +884,14 @@ export class Lab {
       directions: state.directions.flatMap((direction) => {
         const agent = this.agents.get(direction.agent);
         return agent
-          ? [{ direction, agent, ...this.status(direction, agent) }]
+          ? [
+              {
+                direction,
+                agent,
+                ...this.status(direction, agent),
+                helpers: this.literature.helpersOf(agent.id),
+              },
+            ]
           : [];
       }),
     };
@@ -904,13 +939,14 @@ export class Lab {
    */
   async start(
     question: unknown,
-    options: { readonly hours?: unknown } = {},
+    options: { readonly hours?: unknown; readonly share?: unknown } = {},
   ): Promise<boolean> {
     await this.serial(async () => {
       if (this.suspended || this.moving) fail(movingText);
       if (this.state) fail('The lab already runs.');
       const asked = text(question, labLimits.question, 'the question');
       const budget = options.hours === undefined ? null : hours(options.hours);
+      const share = shareOf(options.share);
       const take = async (): Promise<void> => {
         const now = Date.now();
         // From the first view of the lab on, until the planner opens or fails below.
@@ -923,6 +959,7 @@ export class Lab {
           pausedFor: null,
           handles: { claude: 0, codex: 0 },
           roles: { agents: 0, checkers: 0 },
+          share,
           directions: [],
           opener: null,
           plan: null,
@@ -1012,6 +1049,7 @@ export class Lab {
       /** From a plan of record or an agent's call, checked there. */
       readonly job?: string | null;
       readonly team?: string | null;
+      readonly longShot?: boolean;
       /** From a plan of record, checked there. */
       readonly runs?: number | null;
       readonly noise?: string | null;
@@ -1047,6 +1085,7 @@ export class Lab {
         ),
         job: input.job ?? null,
         team: input.team ?? null,
+        longShot: input.longShot === true,
         host,
         bar: optionalText(
           input.bar,
@@ -1145,6 +1184,7 @@ export class Lab {
       readonly title: string;
       readonly job: string | null;
       readonly team: string | null;
+      readonly longShot: boolean;
       readonly host: HarnessName;
       readonly bar: string | null;
       readonly runs: number | null;
@@ -1165,7 +1205,7 @@ export class Lab {
     // One agent plans the lab.
     if (options.opener && state.opener)
       fail('The lab has its planner already.');
-    const { title, job, team, host, bar, runs, noise, buildsOn } = input;
+    const { host, ...fields } = input;
     const agent = this.nextAgent();
     const name = nextHandle(state, 'agents', host);
     if (!name || number(agent) > 9999)
@@ -1213,14 +1253,8 @@ export class Lab {
       directions: [
         ...state.directions,
         {
+          ...fields,
           id,
-          title,
-          job,
-          team,
-          bar,
-          runs,
-          noise,
-          buildsOn,
           openedBy: by,
           openedAt: now,
           state: 'open',
@@ -1253,13 +1287,15 @@ export class Lab {
         kind: 'status',
         direction: id,
         text: clip(
-          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(title)} for ${record.handle} (${hostName(host)}).${options.why ? ` Why: ${JSON.stringify(options.why)}` : ''}`,
+          `${this.name(by) === 'the person' ? 'The person' : this.name(by)} opened ${JSON.stringify(fields.title)} for ${record.handle} (${hostName(host)}).${options.why ? ` Why: ${JSON.stringify(options.why)}` : ''}`,
           boardLimits.text,
         ),
         mentions: [],
         artifacts: [],
       }).catch(() => {});
-    this.options.progress?.(`Direction opened: ${title} (${hostName(host)}).`);
+    this.options.progress?.(
+      `Direction opened: ${fields.title} (${hostName(host)}).`,
+    );
     this.options.onChange?.();
     this.kick();
     return id;
@@ -1552,6 +1588,7 @@ export class Lab {
       await this.stateFile.save();
       // A check that runs ends its session and waits for the resume, when a fresh one starts.
       await this.requeueChecks();
+      this.longShots.stop();
       const ids: string[] = [];
       for (const agent of this.agents.values()) {
         this.loops.get(agent.id)?.cancel();
@@ -1786,6 +1823,7 @@ export class Lab {
     outcome?: 'completed' | 'interrupted' | 'failed',
   ): void {
     this.recordSpend(record);
+    if (this.longShots.turnEnded(record)) return;
     // A checker's session: its agent ID is the check's, known before its start returns.
     const check = record.agent
       ? this.state?.checks.find((entry) => entry.agent === record.agent)
@@ -2009,6 +2047,7 @@ export class Lab {
         0,
         ...[...this.agents.keys()].map(number),
         ...(this.state?.checks ?? []).map((check) => number(check.agent)),
+        ...this.literature.draws().map((draw) => number(draw.agent)),
       ) + 1
     }`;
   }
@@ -2223,13 +2262,21 @@ export class Lab {
     await this.settle();
     // A check that this process runs ends its session and waits for the next owner, as for a pause. Verifold stopped it, not its checker, so the stop does not count.
     await this.serial(() => this.requeueChecks());
+    this.longShots.stop();
     // Runs stop as interrupted. Their agents hear it after the next start.
     await this.ledger.close();
     await this.queue;
+    await this.flushRecords();
+  }
+
+  private async flushRecords(): Promise<void> {
     await Promise.all(
-      [this.stateFile, this.threads, ...this.files.values()].map((file) =>
-        file.flush(),
-      ),
+      [
+        this.stateFile,
+        this.threads,
+        this.literature,
+        ...this.files.values(),
+      ].map((file) => file.flush()),
     );
   }
 
@@ -2712,8 +2759,9 @@ export class Lab {
     this.rt(agent.id).style = person?.style ?? null;
     const team = opener ? await this.team().catch(() => []) : [];
     const plan = this.planLines(state);
+    const most = firstPlanMost(this.options.sessions.limit, others.length + 1);
     const role = planning
-      ? `\n\n${await loadPrompt(this.threaded ? 'lab-opener' : 'lab-opener-flat')}\n\nYour first plan can have ${labLimits.firstPlan.min} to ${firstPlanMost(this.options.sessions.limit, others.length + 1)} directions.`
+      ? `\n\n${await loadPrompt(this.threaded ? 'lab-opener' : 'lab-opener-flat')}\n\nYour first plan can have ${labLimits.firstPlan.min} to ${most} directions.${state.share ? ` ${shareLine(state.share, most)}` : ''}`
       : opener
         ? `\n\nYou opened the lab and wrote its plan of record, below. ${this.threaded ? 'An objection to your plan, or a reply from the person, wakes you.' : 'A reply to your plan wakes you.'} Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.`
         : '';
@@ -2728,7 +2776,7 @@ ${state.question}${personText(person, opener, agent.host)}
 
 Your direction: ${direction.id} ${JSON.stringify(direction.title)}
 Holds up if: ${direction.bar ? barText(direction) : planning ? 'set it in your plan.' : 'not set yet. Propose a bar to the person on the board.'}
-You are ${agentLine(agent, direction)}.
+You are ${agentLine(agent, direction)}.${direction.longShot ? ` ${longShotRole}` : ''}
 ${opener ? `The harnesses of this project's team: ${team.map(hostName).join(', ')}.\n` : ''}${others.length ? `The other agents:\n${others.join('\n')}` : 'No other agent works yet.'}${plan.length ? `\n\n${plan.join('\n')}` : ''}${state.budget ? `\nThe lab's time budget ends at ${state.budget.deadline}. Then the lab pauses until the person gives more time.` : ''}
 Your folder: ${direction.workspace.path} in the project${direction.workspace.branch ? `, on the branch ${direction.workspace.branch}` : ''}. The project folder: ${this.root}.${agent.linked?.count ? `\n${linkedNote(agent.linked.paths, agent.linked.count)}` : ''}
 ${this.computeLine()}
@@ -2898,6 +2946,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         return this.serial(() => {
           if (!this.usable(id, generation)) fail(stoppedText);
           return this.threads.follow(id, args.thread);
+        });
+      case 'verifold_source':
+      case 'verifold_idea':
+        return this.serial(() => {
+          if (!this.usable(id, generation)) fail(stoppedText);
+          return name === 'verifold_idea'
+            ? this.literature.addIdea(id, args)
+            : this.literature.addSource(id, args);
         });
       case 'verifold_plan':
         return this.planFor(id, generation, args, key);
@@ -5402,6 +5458,10 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         ...(draft.shape
           ? await this.threads.fields(draft.shape, id, draft.direction)
           : {}),
+        ...(draft.shape &&
+        this.literature.noSearch(id, draft.kind, this.board.list())
+          ? { noSearch: true as const }
+          : {}),
       });
       this.rt(id).posted = true;
       this.rt(id).spoke = true;
@@ -5498,6 +5558,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           planLimits.team,
           'the team of the direction',
         ),
+        longShot: args.longShot === true,
         harness: host,
         bar: text(args.bar, planLimits.bar, 'what makes the direction hold up'),
         runs: args.runs === undefined ? null : repeatRuns(args.runs),
@@ -7077,6 +7138,11 @@ Start now: find the claim's premise, start a run early, and post your rerun once
               ),
             current?.team,
           ),
+          longShot: field(
+            'longShot',
+            (value) => value === true,
+            current?.longShot,
+          ),
           bar: field<string | null>(
             'bar',
             (value) => text(value, planLimits.bar, 'the bar of each direction'),
@@ -7169,6 +7235,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
                 title: entry.title,
                 job: entry.job,
                 team: entry.team,
+                longShot: entry.longShot,
                 harness: entry.harness,
                 bar: entry.bar,
                 runs: entry.runs,
@@ -7218,6 +7285,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
             title: entry.title,
             job: entry.job,
             team: entry.team,
+            longShot: entry.longShot,
             bar: entry.bar,
             runs: entry.runs,
             noise: entry.noise,
@@ -7450,6 +7518,10 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         return this.summary();
       case 'threads':
         return this.threads.lines(limit).join('\n');
+      case 'sources':
+        return this.literature.sourceLines(limit);
+      case 'ideas':
+        return this.literature.ideaLines(limit);
       case 'thread': {
         const whole = this.threads.get(args.thread);
         if (whole)
@@ -7712,6 +7784,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           `Verifold could not queue a check for ${post.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
         ),
       );
+    if (post.kind === 'ruled-out') await this.longShots.ruledOut(post);
     this.kick();
     return post;
   }
@@ -8029,6 +8102,14 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   private async tick(): Promise<void> {
     const state = this.state;
     if (!state || this.closing || this.suspended || this.moving) return;
+    // An agent hears once of a helper that stopped with no result.
+    for (const { agent, line } of this.literature.lostHelpers((id) =>
+      this.liveLaunch(id),
+    )) {
+      const record = this.agents.get(agent);
+      if (record && this.active(record))
+        this.loop(agent).add([{ kind: 'helper', text: line }]);
+    }
     // Pods that the person turned on or off, from the project's settings or a call, reach each live process.
     for (const agent of this.agents.values())
       if (this.active(agent)) this.checkProcess(agent.id);
@@ -8086,6 +8167,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         Date.parse(a.wakeups.at(-1) ?? a.startedAt) -
         Date.parse(b.wakeups.at(-1) ?? b.startedAt),
     )[0];
+    // Long shots take a slot only when no check and no agent needs one.
+    if (!next && checking === 'none') await this.longShots.start();
     // A check waits for a slot: the slot that a park frees goes to it in the next tick.
     if (!next || checking === 'wait') return;
     if (sessions.full && !(await this.free(next.id))) return;
@@ -8095,7 +8178,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   /**
    * Park one agent that had its turn, so another agent or the person's
    * session can use its slot. An agent that waits for its hourly turns goes
-   * first, then the one that worked least recently. An agent whose turn runs,
+   * first, then the one that worked least recently. An agent with a running
+   * helper goes last, because a park stops the helper. An agent whose turn runs,
    * whose posts wait for it, or that has not ended a turn since it started,
    * keeps its slot. Returns true when a slot is free.
    */
@@ -8123,11 +8207,55 @@ Start now: find the claim's premise, start a run early, and post your rerun once
           !run.settling &&
           (run.launch?.turns ?? 1) > 0 &&
           (capped || !this.waiting(agent))
-          ? [{ agent, capped, since: run.endedAt || run.launch?.at || 0 }]
+          ? [
+              {
+                agent,
+                capped,
+                helping: this.literature.helping(agent.id),
+                since: run.endedAt || run.launch?.at || 0,
+              },
+            ]
           : [];
       })
-      .sort((a, b) => Number(b.capped) - Number(a.capped) || a.since - b.since)
+      .sort(
+        (a, b) =>
+          Number(b.capped) - Number(a.capped) ||
+          Number(a.helping) - Number(b.helping) ||
+          a.since - b.since,
+      )
       .map((entry) => entry.agent);
+  }
+
+  /**
+   * One update of a harness. The lab's lookups and its agents' helpers come
+   * from these records, never from what an agent says.
+   */
+  harnessUpdate(record: SessionRecord, update: TranscriptUpdate): void {
+    if (!record.agent || !this.threaded || this.suspended) return;
+    this.literature.heard(
+      record.agent,
+      this.agents.get(record.agent)?.handle ?? null,
+      record.launches.at(-1)?.id ?? '',
+      update,
+      new Date().toISOString(),
+    );
+  }
+
+  /** The process of an agent's session while it runs, or null. */
+  private liveLaunch(id: string): string | null {
+    const session = this.agents.get(id)?.session;
+    const view = session ? this.options.sessions.view(session) : null;
+    return view?.live ? (view.record.launches.at(-1)?.id ?? null) : null;
+  }
+
+  /** The person's Draw again: a new draw of long shots. */
+  drawAgain(): Promise<void> {
+    return this.serial(async () => {
+      this.current();
+      if (!this.threaded) fail('A lab from before threads has no idea map.');
+      await this.longShots.draw('person');
+      this.kick();
+    });
   }
 
   /** An agent can give its slot now, so a start of the person's session finds room. */

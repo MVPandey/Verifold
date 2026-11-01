@@ -255,7 +255,8 @@ export function overturned(thread: Thread): Thread {
  * its thread. A proposal with an objection never decides by itself: its author
  * posts a new proposal. A newer proposal can replace a decision. An answered
  * thread can still get a decision. A proposal in a closed thread stays as it
- * is, and so does one at or before a proposal that the person overturned.
+ * is, and so does one at or before a proposal that the person overturned. A
+ * long shot stays open: agents choose what to take up.
  */
 export function dueProposals(
   posts: readonly Post[],
@@ -272,6 +273,7 @@ export function dueProposals(
   return posts.flatMap((proposal) => {
     const thread = proposal.thread ? byId.get(proposal.thread) : undefined;
     return proposal.kind === 'proposal' &&
+      !proposal.alien &&
       thread &&
       thread.state !== 'closed' &&
       !objected.has(proposal.id) &&
