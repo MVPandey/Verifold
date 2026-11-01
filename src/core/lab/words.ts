@@ -608,6 +608,11 @@ export function slug(id: string, title: string): string {
  */
 export const kindWords: Record<PostKind, string> = {
   plan: 'Plan of record',
+  result: 'Result',
+  check: 'Check',
+  ask: 'Ask',
+  answer: 'Answer',
+  proposal: 'Proposal',
   claim: 'Claim',
   evidence: 'Evidence',
   objection: 'Objection',

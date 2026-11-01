@@ -1,21 +1,20 @@
 import type { Post } from './board.ts';
+import { openObjections } from './lab/post-rules.ts';
 import type { Check, LabView } from './lab/schema.ts';
 import { checkLimits } from './lab-tools.ts';
 
 /**
- * The disputes that a check answers or can answer: each post with the
- * objections that a check took and no check answered yet, and its newest
- * check. The objections of a failed check count while the post can get one
- * more check, which takes them. An objection that no check took, because
- * its post cites no run or had its checks, stays a reply in its thread.
+ * The objections that a check took and no check answered yet, by post, in a
+ * lab from before threads. The objections of a failed check count while the
+ * post can get one more check, which takes them. An objection that no check
+ * took, because its post cites no run or had its checks, stays a reply in its
+ * thread.
  */
-export function openDisputes(view: LabView): {
-  readonly target: Post;
-  readonly objections: readonly Post[];
-  readonly check: Check | null;
-}[] {
+function checkedObjections(
+  view: LabView,
+  checks: readonly Check[],
+): ReadonlyMap<string, readonly Post[]> {
   const posts = new Map(view.posts.map((post) => [post.id, post]));
-  const checks = view.checks.filter((check) => check.state !== 'dropped');
   const answered = new Set(
     checks
       .filter((check) => check.state === 'done')
@@ -37,6 +36,24 @@ export function openDisputes(view: LabView): {
         open.set(check.claim, [...list, objection]);
     }
   }
+  return open;
+}
+
+/**
+ * The open disputes: each post with its objections that stand, and its newest
+ * check. In a lab with threads every objection counts until `openObjections`
+ * ends it.
+ */
+export function openDisputes(view: LabView): {
+  readonly target: Post;
+  readonly objections: readonly Post[];
+  readonly check: Check | null;
+}[] {
+  const posts = new Map(view.posts.map((post) => [post.id, post]));
+  const checks = view.checks.filter((check) => check.state !== 'dropped');
+  const open = view.threads?.length
+    ? openObjections(view.posts, checks)
+    : checkedObjections(view, checks);
   return [...open].flatMap(([id, objections]) => {
     const target = posts.get(id);
     return target

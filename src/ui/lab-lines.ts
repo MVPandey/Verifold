@@ -132,16 +132,22 @@ export interface LiveFields {
  * how long it runs: "Running plant_errors.py · 6 min". Otherwise the
  * evidence for the verdict, with a wait for the person after it: "Gap 34%
  * smaller on seed 1 · waiting for you". Without evidence, the live line.
+ * `doing`: what the agent says that it does, from `verifold_status`. It
+ * replaces the live step while the agent works, with no time: the time
+ * belongs to the live step.
  */
 export function directionLine(
   evidence: string | null,
   live: LiveFields | null,
   now: number,
+  doing: string | null = null,
 ): { readonly working: boolean; readonly text: string } {
   if (live?.state === 'working')
     return {
       working: true,
-      text: live.since ? `${live.text} · ${since(live.since, now)}` : live.text,
+      text:
+        doing ??
+        (live.since ? `${live.text} · ${since(live.since, now)}` : live.text),
     };
   return {
     working: false,

@@ -131,19 +131,23 @@ await test("the lab's prompts send the person to the project's settings, which t
   );
 });
 
-await test('lab agents and checkers write for the person in plain words, with a metric name only when the person needs it', async () => {
-  for (const id of ['lab-peer', 'lab-check'] as const) {
-    const prompt = await corePrompt(id);
-    assert.match(
-      prompt,
+await test('agents and checkers of a lab with threads keep their dense language, and an older lab keeps its rule', async () => {
+  for (const id of ['lab-peer', 'lab-check'] as const)
+    assert.doesNotMatch(
+      await corePrompt(id),
       /The person must understand (them|it) without reading your code\./,
       id,
     );
-    assert.match(prompt, /Say in words what each metric measures\./, id);
-    assert.match(
-      prompt,
-      /only when the person needs the name to find the number in a run/,
-      id,
-    );
-  }
+  assert.match(
+    await corePrompt('lab-peer-flat'),
+    /The person must understand them without reading your code\./,
+  );
+  assert.match(
+    await corePrompt('lab-check-flat'),
+    /The person must understand it without reading your code\./,
+  );
+  assert.match(
+    await corePrompt('lab-opener-flat'),
+    /A reply to your plan post wakes you\./,
+  );
 });

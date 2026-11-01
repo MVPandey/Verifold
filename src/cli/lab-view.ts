@@ -86,7 +86,12 @@ function paint(
  * wait for the person.
  */
 export function rowText(direction: ScreenDirection, now: number): string {
-  const line = directionLine(direction.evidence, direction.live, now);
+  const line = directionLine(
+    direction.evidence,
+    direction.live,
+    now,
+    direction.doing,
+  );
   if (line.working) return line.text;
   return [
     direction.shown === 'open' ? '' : verdictLabels[direction.shown],
@@ -297,7 +302,12 @@ export function plainLines(
     const state = stateOf(direction);
     if (printed.get(direction.id) === state) continue;
     printed.set(direction.id, state);
-    const line = directionLine(direction.evidence, direction.live, now);
+    const line = directionLine(
+      direction.evidence,
+      direction.live,
+      now,
+      direction.doing,
+    );
     lines.push(
       `${fitText(direction.title, 200)}${direction.agent ? ` (${direction.agent})` : ''}: ${[
         verdictLabels[direction.shown],
