@@ -230,6 +230,7 @@ export type LabList =
   | 'buildsOn'
   | 'agents'
   | 'disputes'
+  | 'threads'
   | 'facts'
   | 'runs'
   | 'checks'
@@ -280,8 +281,14 @@ export interface Lab {
   readonly plan: Plan | null;
   /** The newest posts, oldest first. `GET /api/v1/board?before=` pages back. */
   readonly board: BoardPage;
-  /** Posts that an objection disputes and no check settled yet. */
+  /** Posts that an objection disputes and nothing settled yet. */
   readonly disputes: readonly Dispute[];
+  /**
+   * The threads that the snapshot keeps, oldest first: the open ones, then
+   * the newest others. Empty: a lab from before threads. Added after version
+   * 1: an earlier server leaves it out.
+   */
+  readonly threads?: readonly Thread[];
   /** The newest runs, oldest first. */
   readonly runs: readonly Run[];
   /** The newest checks, oldest first. */
@@ -548,6 +555,14 @@ export type AgentStatus =
   | 'failed'
   | 'dropped';
 
+/** What an agent says that it does, why, and what comes next. */
+export interface AgentLine {
+  readonly doing: string;
+  readonly why: string;
+  readonly next: string;
+  readonly at: string;
+}
+
 /** A direction's agent or a checker. */
 export interface Agent {
   readonly id: string;
@@ -572,6 +587,12 @@ export interface Agent {
   /** When a wait ends. */
   readonly until: string | null;
   readonly live: Live;
+  /**
+   * The agent's own line from `verifold_status`: the model's words, unlike
+   * `live`. Null or absent: none yet, a checker, or a lab from before threads.
+   * Added after version 1.
+   */
+  readonly line?: AgentLine | null;
   /** Its newest turns. */
   readonly turns: TurnPage;
   /** Claude Code's cost estimate of its sessions. Null for Codex. */
@@ -625,13 +646,19 @@ export interface TurnDetail {
 
 export type PostKind =
   | 'plan'
-  | 'claim'
-  | 'evidence'
+  | 'result'
+  | 'check'
+  | 'ask'
+  | 'answer'
+  | 'proposal'
   | 'objection'
-  | 'question'
   | 'rerun'
   | 'ruled-out'
-  | 'status';
+  | 'status'
+  // Posts of a lab from before threads, and the person's message as `question`.
+  | 'claim'
+  | 'evidence'
+  | 'question';
 
 /** The proof that a post points to. A path is a path in the direction's folder. */
 export type Proof =
@@ -663,11 +690,63 @@ export interface Post {
   readonly harness: Harness | null;
   readonly kind: PostKind;
   readonly direction: string | null;
+  /** Its thread. Null or absent: a post from before threads. Added after version 1. */
+  readonly thread?: string | null;
   readonly text: string;
   readonly replyTo: string | null;
   /** Agent IDs, `person`, or `all`. */
   readonly mentions: readonly string[];
   readonly proof: readonly Proof[];
+  /** A `check` post: what it found in the post that it replies to. Added after version 1. */
+  readonly outcome?: 'holds' | 'fails';
+  /** An `answer` that accepts the objection it replies to. Added after version 1. */
+  readonly accepts?: true;
+  /** An objection stands against this post. Added after version 1. */
+  readonly disputed?: true;
+  /** The disputed post that this post builds on. Added after version 1. */
+  readonly citesDisputed?: string;
+  /** The handles of the agents whose `check` posts tested this post. Added after version 1. */
+  readonly recountedBy?: readonly string[];
+}
+
+/** How a thread ended. */
+export interface ThreadOutcome {
+  readonly text: string;
+  readonly post: string;
+  /** `person`, `verifold`, or an agent ID. */
+  readonly by: string;
+  readonly at: string;
+}
+
+/** A conversation with a subject. Its posts name it in `Post.thread`. */
+export interface Thread {
+  readonly id: string;
+  readonly title: string;
+  readonly state: 'open' | 'decided' | 'answered' | 'closed';
+  /** One line on why it exists. */
+  readonly why: string;
+  readonly direction: string | null;
+  /** `person`, `verifold`, or an agent ID. */
+  readonly openedBy: string;
+  readonly at: string;
+  readonly outcome: ThreadOutcome | null;
+  /** Agent IDs. */
+  readonly followers: readonly string[];
+  /** Reactions: an agent agreed with a post of the thread. */
+  readonly agreed: readonly {
+    readonly post: string;
+    readonly by: string;
+    readonly at: string;
+  }[];
+}
+
+/** `GET /api/v1/threads/:id`: a thread and its newest posts, oldest first. Added after version 1. */
+export interface ThreadPage {
+  readonly thread: Thread;
+  /** At most 50 posts. */
+  readonly posts: readonly Post[];
+  /** Older posts of the thread exist. */
+  readonly more: boolean;
 }
 
 export interface BoardPage {

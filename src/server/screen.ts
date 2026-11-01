@@ -62,6 +62,8 @@ export interface ScreenDirection {
   readonly live: Live | null;
   /** The evidence for its verdict. */
   readonly evidence: string | null;
+  /** What its agent says that it does. Absent: no line, or the owner of an earlier version. */
+  readonly doing?: string;
 }
 
 export interface ScreenCall {
@@ -142,6 +144,9 @@ export function labScreen(
       evidence: direction.evidence
         ? clip(direction.evidence.text, screenLimits.text)
         : null,
+      ...(agent?.line
+        ? { doing: clip(agent.line.doing, screenLimits.text) }
+        : {}),
     };
   });
   const directions = firstRanked(all, screenLimits.directions);
@@ -243,6 +248,9 @@ function direction(value: unknown): ScreenDirection | null {
         agent: value.agent,
         live: shown,
         evidence: value.evidence,
+        ...(text(value.doing, screenLimits.text * 2)
+          ? { doing: value.doing }
+          : {}),
       }
     : null;
 }

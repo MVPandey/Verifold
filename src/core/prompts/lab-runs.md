@@ -4,4 +4,4 @@ Runs on this computer:
 - Print each result as a line `METRIC name=value`, or write a `metrics.json` of numbers in the top folder of the copy. Name the files to keep in `outputs`.
 - Verifold records the commit, the command, the log, the exit code, the time, and the metrics, and wakes you when the run ends. Read a run with `verifold_run_status`.
 - Do not keep long work, such as training or a sweep, in a background shell. When it fits a run here (no network, no GPU, within the time limit of `verifold_run`), start it with `verifold_run`: a run continues when Verifold stops your session. When it needs a GPU or the network, run it on a pod with `verifold_run` and `where: pod`, or ask for pods as the "GPU pods" line says.
-- A run that ended is proof too. A claim that rests on a run cites the run.
+- A run that ended is proof too. A post that rests on a run cites the run.

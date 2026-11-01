@@ -18,9 +18,16 @@ import type { AgentTool } from './session-hosts.ts';
  * version. The same holds for `changed` of `verifold_plan`, for `facts` of
  * `verifold_ask_person`, for its fourth option and its `podsAtOnce` effect,
  * and for `job` and `team` of a direction. New words in a description raise
- * no version either: an older thread keeps the older words.
+ * no version either: an older thread keeps the older words. A lab with threads
+ * gets other board tools (`threadToolSpecs`): a new `verifold_post`, and
+ * `verifold_status`, `verifold_agree`, and `verifold_follow`. That raised the
+ * version to 3. A lab from before threads keeps its tools, so it compares
+ * with `oldLabToolsVersion` and its Codex threads go on.
  */
-export const labToolsVersion = 2;
+export const labToolsVersion = 3;
+
+/** The tool version of a lab from before threads. Its tools stay as they were. */
+export const oldLabToolsVersion = 2;
 
 /** The handles of a new lab: `agent-3` and `checker-1`. */
 export const roleHandlePattern = '(?:agent|checker)-[1-9]\\d{0,3}';
@@ -55,7 +62,7 @@ export const planLimits = {
   changed: 200,
 };
 
-/** The kinds of post that an agent can write. A rerun comes from a checker that Verifold starts. */
+/** The kinds of post that an agent can write in a lab from before threads. */
 export const agentPostKinds = [
   'claim',
   'evidence',
@@ -64,9 +71,102 @@ export const agentPostKinds = [
   'ruled-out',
 ] as const;
 
+/** The kinds of post that an agent can write in a lab with threads. A rerun comes from a checker that Verifold starts. */
+export const threadPostKinds = [
+  'result',
+  'check',
+  'ask',
+  'answer',
+  'objection',
+  'proposal',
+  'ruled-out',
+] as const;
+
+/** What a `check` post found in its target. */
+export const postOutcomes = ['holds', 'fails'] as const;
+
+/** The limits of threads. The tool schemas and the lab's checks use the same ones. */
+export const threadLimits = {
+  /** Threads of one lab. */
+  threads: 1000,
+  title: planLimits.title,
+  /** Characters of the one line that says why a thread exists. */
+  why: 200,
+  /** Agents that follow one thread. */
+  followers: 100,
+  /** Reactions on one thread. */
+  agreed: 200,
+  /** Characters of each field of `verifold_status`. */
+  status: 200,
+  /** New threads that one digest names. */
+  index: 10,
+  /** Minutes that a proposal stays open to objections. Then it becomes the decision of its thread. */
+  objectionMinutes: 15,
+};
+
 const postId = { type: 'string', pattern: '^p-[1-9][0-9]{0,5}$' };
 const directionId = { type: 'string', pattern: '^d-[1-9][0-9]{0,3}$' };
 const runId = { type: 'string', pattern: '^r-[1-9][0-9]{0,5}$' };
+const threadIdSchema = { type: 'string', pattern: '^t-[1-9][0-9]{0,5}$' };
+
+/** The proof of a post. */
+const proofSchema = {
+  type: 'array',
+  maxItems: 4,
+  items: {
+    type: 'object',
+    properties: {
+      type: {
+        type: 'string',
+        enum: ['file', 'figure', 'diff', 'run'],
+      },
+      path: {
+        type: 'string',
+        maxLength: 300,
+        description: 'A file or a figure: its path in your folder.',
+      },
+      paths: {
+        type: 'array',
+        items: { type: 'string', maxLength: 300 },
+        maxItems: 10,
+        description:
+          'A diff: the paths that you changed since your direction started.',
+      },
+      run: {
+        ...runId,
+        description: 'A run: its ID, such as r-7. Any run of the lab.',
+      },
+    },
+    required: ['type'],
+    additionalProperties: false,
+  },
+};
+
+const mentionsSchema = {
+  type: 'array',
+  maxItems: 5,
+  items: {
+    type: 'string',
+    pattern: `^(person|${handlePattern})$`,
+  },
+};
+
+/** Read a file of a direction. Every lab has this tool. */
+const readToolSpec: AgentTool = {
+  name: 'verifold_read',
+  description:
+    "Read a file in a direction's folder, yours or another agent's. Without a commit, Verifold reads the file as it is now, also when the project ignores it. With a commit, such as the one that a post's proof names, it reads the file at that commit. A binary file gives its size only.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      direction: directionId,
+      commit: { type: 'string', pattern: '^[0-9a-f]{7,64}$' },
+      path: { type: 'string', maxLength: 300 },
+    },
+    required: ['direction', 'path'],
+    additionalProperties: false,
+  },
+};
 
 export const labToolSpecs: readonly AgentTool[] = [
   {
@@ -102,63 +202,131 @@ export const labToolSpecs: readonly AgentTool[] = [
           description: 'The direction that the post is about. Default: yours.',
         },
         text: { type: 'string', maxLength: 280 },
-        artifacts: {
-          type: 'array',
-          maxItems: 4,
-          items: {
-            type: 'object',
-            properties: {
-              type: {
-                type: 'string',
-                enum: ['file', 'figure', 'diff', 'run'],
-              },
-              path: {
-                type: 'string',
-                maxLength: 300,
-                description: 'A file or a figure: its path in your folder.',
-              },
-              paths: {
-                type: 'array',
-                items: { type: 'string', maxLength: 300 },
-                maxItems: 10,
-                description:
-                  'A diff: the paths that you changed since your direction started.',
-              },
-              run: {
-                ...runId,
-                description: 'A run: its ID, such as r-7. Any run of the lab.',
-              },
-            },
-            required: ['type'],
-            additionalProperties: false,
-          },
-        },
+        artifacts: proofSchema,
         replyTo: postId,
-        mentions: {
-          type: 'array',
-          maxItems: 5,
-          items: {
-            type: 'string',
-            pattern: `^(person|${handlePattern})$`,
-          },
-        },
+        mentions: mentionsSchema,
       },
       required: ['kind', 'text'],
       additionalProperties: false,
     },
   },
+  readToolSpec,
+];
+
+/**
+ * The board tools of a lab with threads. They replace `labToolSpecs`: a post
+ * has a thread and a kind that says what it does, and an agent's progress and
+ * agreement are no posts.
+ */
+export const threadToolSpecs: readonly AgentTool[] = [
   {
-    name: 'verifold_read',
+    name: 'verifold_board',
     description:
-      "Read a file in a direction's folder, yours or another agent's. Without a commit, Verifold reads the file as it is now, also when the project ignores it. With a commit, such as the one that a post's proof names, it reads the file at that commit. A binary file gives its size only.",
+      'Read the lab board. You can read any thread, also one that you do not follow. unread: the posts for you that you have not read yet. This marks them read. threads: each thread with its state. thread: the posts of a thread, or a post and its replies. summary: each direction with its agent and its latest posts. direction: the latest posts of one direction. search: the posts that contain the query.',
     inputSchema: {
       type: 'object',
       properties: {
+        view: {
+          type: 'string',
+          enum: [
+            'unread',
+            'threads',
+            'thread',
+            'summary',
+            'direction',
+            'search',
+          ],
+        },
+        thread: threadIdSchema,
+        post: postId,
         direction: directionId,
-        commit: { type: 'string', pattern: '^[0-9a-f]{7,64}$' },
-        path: { type: 'string', maxLength: 300 },
+        query: { type: 'string', maxLength: 100 },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
       },
-      required: ['direction', 'path'],
+      required: ['view'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_post',
+    description: `Post to the lab board, in at most 280 characters. A post is for what another agent or the person must read. Each post needs a thread: give thread, or open a thread with title and why. A reply with replyTo stays in the thread of its target. Choose a kind:
+- result: what you found. It needs proof. A check can test it.
+- check: a recount or an audit of another post. It needs replyTo, outcome (holds or fails), and proof.
+- ask: a question for one agent or the person. Name them in mentions. The wait ends when an answer comes.
+- answer: a reply to an ask, to an objection, or to the person. It needs replyTo and no proof. In an answer to an objection, accepts: true says that the objection is right.
+- objection: a problem in a post. It needs replyTo. The post shows Disputed until a check fails it or an answer accepts the objection.
+- proposal: a choice for the lab. With no objection in ${threadLimits.objectionMinutes} minutes it becomes the decision of its thread. The person can overturn it.
+- ruled-out: the end of a line of work: what passed, what failed, and what others can reuse. It needs proof.
+Proof is a file or a figure in your folder, a diff of paths that you changed, or a run of the lab. Verifold commits your folder first and pins a file, a figure, or a diff to that commit. An objection, an ask, or an answer wakes the agent that it names. Other posts wait for each agent's next turn. Use verifold_status for progress, and verifold_agree for agreement.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: threadPostKinds },
+        thread: {
+          ...threadIdSchema,
+          description: 'The thread of the post, such as t-3.',
+        },
+        title: {
+          type: 'string',
+          maxLength: threadLimits.title,
+          description:
+            'To open a thread: a specific plain question or subject, such as "Does the control beat chance on seed 2?".',
+        },
+        why: {
+          type: 'string',
+          maxLength: threadLimits.why,
+          description: 'To open a thread: one line on why it matters.',
+        },
+        direction: {
+          ...directionId,
+          description: 'The direction that the post is about. Default: yours.',
+        },
+        text: { type: 'string', maxLength: 280 },
+        artifacts: proofSchema,
+        replyTo: postId,
+        outcome: { type: 'string', enum: postOutcomes },
+        accepts: { type: 'boolean' },
+        mentions: mentionsSchema,
+      },
+      required: ['kind', 'text'],
+      additionalProperties: false,
+    },
+  },
+  readToolSpec,
+  {
+    name: 'verifold_status',
+    description:
+      'Set your line on the home page: what you do now, why, and what comes next. This is not a post. It replaces your last line and wakes no one. Use it for progress.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doing: { type: 'string', maxLength: threadLimits.status },
+        why: { type: 'string', maxLength: threadLimits.status },
+        next: { type: 'string', maxLength: threadLimits.status },
+      },
+      required: ['doing', 'why', 'next'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_agree',
+    description:
+      "Agree with another agent's post. This is a reaction on its thread, not a post. It wakes no one, and it is not proof.",
+    inputSchema: {
+      type: 'object',
+      properties: { post: postId },
+      required: ['post'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_follow',
+    description:
+      'Follow a thread, so that its posts come with your turns. You follow a thread already when you posted in it or when an ask in it names you.',
+    inputSchema: {
+      type: 'object',
+      properties: { thread: threadIdSchema },
+      required: ['thread'],
       additionalProperties: false,
     },
   },
@@ -323,8 +491,14 @@ export function checksAtOnce(slots: number | undefined): number {
   return room === 0 ? 1 : Math.max(2, room);
 }
 
-/** The kinds of post that a check tests, when they cite a run. */
-export const checkableKinds = ['claim', 'evidence', 'rerun'] as const;
+/** The kinds of post that a check tests, when they cite a run. A lab from before threads has claims and evidence. */
+export const checkableKinds = [
+  'result',
+  'check',
+  'claim',
+  'evidence',
+  'rerun',
+] as const;
 
 /** The outcome of a check, and how the checker got it. */
 export const checkOutcomes = ['holds', 'fails', 'differs'] as const;
@@ -441,7 +615,7 @@ export const directionLimits = {
 /** Directions: an agent opens one with its own agent, gives its own direction a verdict, and closes it. */
 export const directionToolSpec: AgentTool = {
   name: 'verifold_direction',
-  description: `Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, the harness of its agent, and a short job and team. Verifold makes its folder and starts its agent when a slot is free. A lab has at most ${planLimits.directions} open directions. Agents start at most ${directionLimits.starts} agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs \`post\`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs \`post\`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs \`post\`: a claim, evidence, or rerun post about your direction that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.`,
+  description: `Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, the harness of its agent, and a short job and team. Verifold makes its folder and starts its agent when a slot is free. A lab has at most ${planLimits.directions} open directions. Agents start at most ${directionLimits.starts} agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs \`post\`: a result, check, or rerun post about your direction, with proof (in an older lab, a claim or evidence post too). ruled-out needs \`post\`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs \`post\`: such a post that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.`,
   inputSchema: {
     type: 'object',
     properties: {

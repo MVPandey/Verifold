@@ -26,5 +26,5 @@ How to plan:
 After the plan:
 
 - Work in your own direction like every other agent.
-- A reply to your plan post wakes you. When the person or an agent gives a good reason, change the plan: call `verifold_plan` again and list every open direction with its id, and new directions without an id. Say in `changed`, in one line, what changed and why. Only the person stops a direction.
+- The plan is in the plan thread, `t-1`. An objection to your plan, or a reply from the person, wakes you. When the person or an agent gives a good reason, change the plan: call `verifold_plan` again and list every open direction with its id, and new directions without an id. Say in `changed`, in one line, what changed and why. A change wakes each agent whose direction it changes. Only the person stops a direction.
 - Do not change another direction's bar to make a result pass. A bar changes before the result, never after it.

@@ -522,26 +522,32 @@ button {
 }
 
 .chip--claim,
+.chip--proposal,
 .chip--plan {
   background: var(--accent-tint);
   color: var(--accent-deep);
 }
 
-.chip--objection {
+.chip--objection,
+.chip--disputed {
   background: var(--objection);
   color: var(--need-ink);
 }
 
+.chip--check,
 .chip--rerun {
   background: var(--rerun-bg);
   color: var(--rerun-ink);
 }
 
+.chip--result,
 .chip--evidence {
   background: var(--ok-bg);
   color: var(--ok-ink);
 }
 
+.chip--ask,
+.chip--answer,
 .chip--question,
 .chip--ruled-out {
   background: var(--line-soft);

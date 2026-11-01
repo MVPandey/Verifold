@@ -23,7 +23,7 @@ Verifold runs them as a research team:
 - It keeps working in a background process after you close the terminal.
 - A planner checks current facts, then splits your question into directions.
 - Each direction gets its own agent, in its own copy of your project.
-- Agents object to each other's claims with evidence, and checks settle the disputes. With both harnesses, the agents check each other across model families.
+- Agents talk in threads with a subject. An objection marks a result Disputed until a check or an answer settles it. With both harnesses, the agents check each other across model families.
 - Every agent reads a shared project memory, also in later runs.
 
 Three terminal tabs give you none of this.
@@ -43,7 +43,7 @@ Run `verifold` in an empty folder, or in a folder that already holds your work. 
 
 1. Choose your global settings, or an isolated project with its own. The first time, set up your agents, a short profile, skills, and GPU limits. You can skip each step or go back to one.
 2. Ask your question. The planner checks current facts first, and it can ask you up to three questions. Each one has options and a box for your own words.
-3. The planner posts a plan that splits the question into directions, up to 20. Each direction gets its own agent, with a job, such as Agent 3 · Controls. The agents post what they find on one board and check each other's claims.
+3. The planner posts a plan that splits the question into directions, up to 20. Each direction gets its own agent, with a job, such as Agent 3 · Controls. The agents post what they find in threads on one board and check each other's results.
 4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick and a box for your own words.
 
 You can close the terminal. While it is open, it shows the lab in a few lines. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, the lab page lists what changed.

@@ -14,13 +14,19 @@ import { commitPattern } from './workspaces.ts';
 
 export type PostKind =
   | 'plan'
-  | 'claim'
-  | 'evidence'
+  | 'result'
+  | 'check'
+  | 'ask'
+  | 'answer'
+  | 'proposal'
   | 'objection'
-  | 'question'
   | 'rerun'
   | 'ruled-out'
-  | 'status';
+  | 'status'
+  // Only a lab from before threads writes these. The person's message stays a question.
+  | 'claim'
+  | 'evidence'
+  | 'question';
 
 export type Artifact =
   | {
@@ -52,8 +58,14 @@ export interface Post {
   readonly harness?: 'claude' | 'codex';
   readonly kind: PostKind;
   readonly direction?: string;
+  /** The thread that holds it. A lab from before threads has none. */
+  readonly thread?: string;
   readonly text: string;
   readonly replyTo?: string;
+  /** A `check` post: what the check found in the post that it replies to. */
+  readonly outcome?: 'holds' | 'fails';
+  /** An `answer` to an objection: the author accepts the objection, so it ends. */
+  readonly accepts?: true;
   /** Agent IDs, `person`, or `all`. */
   readonly mentions: readonly string[];
   readonly artifacts: readonly Artifact[];
@@ -90,16 +102,23 @@ export const boardLimits = {
 
 const kinds: readonly PostKind[] = [
   'plan',
-  'claim',
-  'evidence',
+  'result',
+  'check',
+  'ask',
+  'answer',
+  'proposal',
   'objection',
-  'question',
   'rerun',
   'ruled-out',
   'status',
+  'claim',
+  'evidence',
+  'question',
 ];
 /** A post of these kinds states a result, so it must point to its proof. */
 const proofKinds: ReadonlySet<PostKind> = new Set([
+  'result',
+  'check',
   'claim',
   'evidence',
   'rerun',
@@ -110,6 +129,7 @@ const postFile = /^p-[1-9]\d{0,5}\.json$/;
 export const agentId = /^a-[1-9]\d{0,3}$/;
 export const directionId = /^d-[1-9]\d{0,3}$/;
 export const runId = /^r-[1-9]\d{0,5}$/;
+export const threadId = /^t-[1-9]\d{0,5}$/;
 
 /**
  * A post's proof by its place, such as p-12.0: the post and the index of
@@ -245,6 +265,17 @@ function check(entry: Record<string, unknown>): Post | string {
     !(typeof direction === 'string' && directionId.test(direction))
   )
     return 'The direction is not valid.';
+  const thread = entry.thread;
+  if (
+    thread !== undefined &&
+    !(typeof thread === 'string' && threadId.test(thread))
+  )
+    return 'The thread is not valid.';
+  const { outcome, accepts } = entry;
+  if (outcome !== undefined && outcome !== 'holds' && outcome !== 'fails')
+    return 'The outcome is not valid.';
+  if (accepts !== undefined && accepts !== true)
+    return 'The accepts field is not valid.';
   const replyTo = entry.replyTo;
   if (
     replyTo !== undefined &&
@@ -293,8 +324,11 @@ function check(entry: Record<string, unknown>): Post | string {
     ...(harness ? { harness } : {}),
     kind,
     ...(direction ? { direction } : {}),
+    ...(thread ? { thread } : {}),
     text,
     ...(replyTo ? { replyTo } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(accepts ? { accepts } : {}),
     mentions: mentions as string[],
     artifacts: artifacts as Artifact[],
     ...(key ? { key } : {}),
@@ -357,13 +391,33 @@ export function postLine(
   forYou = false,
   fold?: number,
 ): string {
-  return `- ${post.id} [${post.kind}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
+  return `- ${post.id} [${post.kind}${post.outcome ? ` ${post.outcome}` : ''}${post.accepts ? ', accepted' : ''}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.thread ? ` on ${post.thread}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
 }
 
 /** What an agent has read: every post through `readThrough`, and the posts in `seen` after it. */
 export interface ReadState {
   readonly readThrough: number;
   readonly seen: readonly string[];
+}
+
+export interface DigestOptions {
+  readonly limit?: number;
+  readonly name?: (author: string) => string;
+  /** Cut each post's quoted text at this length. */
+  readonly fold?: number;
+  /** Characters of all lines, each with its newline. The first post always shows. */
+  readonly budget?: number;
+  /** The unread posts that the digest carries. The others count as read. Default: all. */
+  readonly shows?: (post: Post) => boolean;
+  /** The posts that come first and say that they are for the agent. Default: the posts that wake it. */
+  readonly forYou?: (post: Post) => boolean;
+}
+
+/** One digest: its lines, the posts in them, and the read state after it. */
+export interface Digest {
+  readonly lines: string[];
+  readonly shown: readonly Post[];
+  readonly read: ReadState;
 }
 
 export class Board {
@@ -520,27 +574,23 @@ export class Board {
   digest(
     agent: BoardAgent,
     read: ReadState,
-    options: {
-      readonly limit?: number;
-      readonly name?: (author: string) => string;
-      /** Cut each post's quoted text at this length. */
-      readonly fold?: number;
-      /** Characters of all lines, each with its newline. The first post always shows. */
-      readonly budget?: number;
-    } = {},
-  ): { readonly lines: string[]; readonly read: ReadState } {
+    options: DigestOptions = {},
+  ): Digest {
     const seen = new Set(read.seen);
+    const shows = options.shows ?? (() => true);
     const unread = this.posts.filter(
       (post) =>
         number(post.id) > read.readThrough &&
         post.author !== agent.id &&
-        !seen.has(post.id),
+        !seen.has(post.id) &&
+        shows(post),
     );
     const limit = options.limit ?? boardLimits.digest;
     // It never takes the only line.
     const room =
       unread.length <= limit ? unread.length : Math.max(1, limit - 1);
-    const waking = new Set(unread.filter((post) => this.wakes(post, agent)));
+    const forYou = options.forYou ?? ((post) => this.wakes(post, agent));
+    const waking = new Set(unread.filter(forYou));
     const ordered = [...waking, ...unread.filter((post) => !waking.has(post))];
     const budget = options.budget ?? Infinity;
     // The line that says how many more wait needs its room too.
@@ -571,6 +621,7 @@ export class Board {
     }
     return {
       lines: [...lines, ...(left.length ? [more(left.length)] : [])],
+      shown,
       read: {
         readThrough: Math.max(read.readThrough, through),
         seen: after,
