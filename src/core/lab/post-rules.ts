@@ -1,0 +1,334 @@
+/**
+ * What each kind of post needs and does in a lab with threads: pure rules,
+ * with no lab. `shapePost` checks a post before Verifold commits its proof,
+ * and a refusal says exactly what to change. `wakeList` says who a post wakes.
+ * `openObjections` says which objections still stand. Together they replace a
+ * switch on kinds in the lab.
+ */
+import type { BoardAgent, Post, PostKind } from '../board.ts';
+import { postOutcomes, threadLimits } from '../lab-tools.ts';
+import { fail, text, type Check, type Thread } from './schema.ts';
+import { checkTitle, planThread, reopeningKinds } from './threads.ts';
+
+/** What the rules read of the lab. */
+export interface PostContext {
+  readonly author: string;
+  readonly kind: PostKind;
+  /** The IDs of the post's mentions. */
+  readonly mentions: readonly string[];
+  /** Proof items of the post. */
+  readonly proof: number;
+  readonly post: (id: string) => Post | undefined;
+  readonly threads: readonly Thread[];
+  /** The agent IDs that work now, so a post can reach them. */
+  readonly working: readonly string[];
+  readonly name: (author: string) => string;
+}
+
+/** A post's place and its fields beyond the text. */
+export interface PostShape extends Pick<Post, 'outcome' | 'accepts'> {
+  /** An existing thread, or the title and the why of a new one. */
+  readonly thread: string | { readonly title: string; readonly why: string };
+}
+
+interface Draft extends PostContext {
+  readonly target: Post | undefined;
+  readonly outcome: Post['outcome'];
+  readonly accepts: boolean;
+}
+
+/** The post that the draft replies to. Refuses a draft with no `replyTo`. */
+function target(draft: Draft, what: string): Post {
+  return draft.target ?? fail(`${what} Give replyTo.`);
+}
+
+function proof(draft: Draft, what: string): void {
+  if (!draft.proof)
+    fail(
+      `${what} needs proof: give a file, a figure, a diff, or a run in artifacts. For progress with no proof, use verifold_status.`,
+    );
+}
+
+/** A post that an answer can reply to: an ask, an objection, or the person's own message. */
+function answerable(post: Post): boolean {
+  return (
+    post.kind === 'ask' ||
+    post.kind === 'objection' ||
+    (post.kind === 'question' && post.author === 'person')
+  );
+}
+
+const rules: Readonly<Partial<Record<PostKind, (draft: Draft) => void>>> = {
+  result: (draft) => proof(draft, 'A result'),
+  check: (draft) => {
+    if (
+      target(draft, 'A check names the post that it tests.').author ===
+      draft.author
+    )
+      fail(
+        'A check tests the work of another author. Post your own new work as a result.',
+      );
+    proof(draft, 'A check');
+    if (!draft.outcome) fail('A check gives an outcome: holds or fails.');
+  },
+  ask: (draft) => {
+    const [named, ...rest] = draft.mentions;
+    if (!named || rest.length)
+      fail(
+        'An ask names one agent or the person. Give exactly one name in mentions.',
+      );
+    if (named !== 'person' && !draft.working.includes(named))
+      fail(
+        `${draft.name(named)} does not work now. Ask an agent that works, or the person.`,
+      );
+  },
+  answer: (draft) => {
+    const replied = target(
+      draft,
+      'An answer replies to an ask, an objection, or a message from the person.',
+    );
+    if (!answerable(replied))
+      fail(
+        `${replied.id} is a ${replied.kind} post, so no answer replies to it. Use verifold_agree to agree, or post an objection to disagree.`,
+      );
+    if (!draft.accepts) return;
+    if (replied.kind !== 'objection')
+      fail('Only an answer to an objection gives accepts.');
+    const aimed = replied.replyTo ? draft.post(replied.replyTo) : undefined;
+    if (draft.author !== aimed?.author && draft.author !== replied.author)
+      fail(
+        `Only the author of ${aimed?.id ?? 'the post'} or of ${replied.id} accepts the objection. Leave accepts out.`,
+      );
+  },
+  objection: (draft) => {
+    target(draft, 'An objection names the post that it targets.');
+  },
+  'ruled-out': (draft) => proof(draft, 'A ruled-out post'),
+};
+
+const oneLine = (value: string): string => value.replace(/\s+/g, ' ');
+
+/**
+ * Where the post goes: its target's thread, a named thread, or a new one. A
+ * reply always has a legal form: it stays in its target's thread, and it opens
+ * a new thread when that thread's record is gone. Only a kind that needs its
+ * reply goes into a closed thread.
+ */
+function place(
+  args: Record<string, unknown>,
+  replied: Post | undefined,
+  context: PostContext,
+): PostShape['thread'] {
+  const named = args.thread;
+  const home = replied?.thread;
+  const record = context.threads.find((entry) => entry.id === home);
+  if (replied && record) {
+    if (args.title !== undefined || (named && named !== home))
+      fail(
+        `A reply stays in its target's thread. ${replied.id} is in ${record.id}. Leave title out, and give thread ${record.id} or none.`,
+      );
+    if (record.state === 'closed' && !reopeningKinds.has(context.kind))
+      fail(
+        `${record.id} is closed. Leave replyTo out, open a new thread with title and why, and name ${replied.id} in the text.`,
+      );
+    return record.id;
+  }
+  if (named !== undefined) {
+    const thread =
+      context.threads.find((entry) => entry.id === named) ??
+      fail(
+        `No thread ${typeof named === 'string' ? named.slice(0, 20) : ''} is in the lab. verifold_board with view threads lists them.`,
+      );
+    if (thread.state === 'closed')
+      fail(
+        `${thread.id} is closed. Open a new thread with title and why, and cite the post that you build on.`,
+      );
+    return thread.id;
+  }
+  if (args.title === undefined)
+    fail(
+      home
+        ? `${home} has no record now. Give title and why to open a new thread for this reply.`
+        : 'Give thread to post in a thread, or title and why to open one. verifold_board with view threads lists them.',
+    );
+  const title = oneLine(
+    text(args.title, threadLimits.title, 'the title of the thread'),
+  );
+  checkTitle(title, context.threads);
+  return {
+    title,
+    why: oneLine(
+      text(args.why, threadLimits.why, 'one line on why it matters'),
+    ),
+  };
+}
+
+/** Check a post of an agent. Throws a refusal that says what to change. */
+export function shapePost(
+  args: Record<string, unknown>,
+  context: PostContext,
+): PostShape {
+  const replied =
+    typeof args.replyTo === 'string'
+      ? (context.post(args.replyTo) ??
+        fail(`No post ${args.replyTo.slice(0, 20)} is on the board.`))
+      : undefined;
+  const outcome =
+    args.outcome === undefined
+      ? undefined
+      : (postOutcomes.find((entry) => entry === args.outcome) ??
+        fail('An outcome is holds or fails.'));
+  if (outcome && context.kind !== 'check')
+    fail('Only a check gives an outcome.');
+  const accepts = args.accepts === true;
+  if (accepts && context.kind !== 'answer')
+    fail('Only an answer to an objection gives accepts.');
+  rules[context.kind]?.({ ...context, target: replied, outcome, accepts });
+  return {
+    thread: place(args, replied, context),
+    ...(outcome ? { outcome } : {}),
+    ...(accepts ? { accepts: true } : {}),
+  };
+}
+
+/** What wakes whom, once a post is on the board. */
+export interface WakeContext {
+  readonly target: Post | undefined;
+  readonly thread: Thread | undefined;
+  /** The agents that work now. */
+  readonly agents: readonly BoardAgent[];
+}
+
+/** Who the person's words are for: who they name, then the followers of the thread. */
+function personWakes(post: Post, context: WakeContext): readonly string[] {
+  const { agents, target, thread } = context;
+  if (post.mentions.includes('all')) return agents.map((agent) => agent.id);
+  const named = [
+    ...post.mentions,
+    ...(target ? [target.author] : []),
+    ...agents
+      .filter((agent) => post.direction && agent.direction === post.direction)
+      .map((agent) => agent.id),
+  ];
+  return post.mentions.length || thread?.id === planThread
+    ? named
+    : [...named, ...(thread?.followers ?? [])];
+}
+
+/**
+ * The agent IDs that a post wakes. An objection wakes the author of its
+ * target, or the owner of its direction when a checker wrote the target. An
+ * ask wakes who it names. An answer wakes who wrote what it answers. The
+ * person's words wake followers, and every agent that works when they would
+ * reach no one, so they always reach someone. A plan, a rerun, and Verifold's
+ * own notes wake who they mention. Other posts wait for each agent's next turn.
+ */
+export function wakeList(post: Post, context: WakeContext): readonly string[] {
+  const { agents, target } = context;
+  const works = new Set(agents.map((agent) => agent.id));
+  const live = (list: readonly string[]): readonly string[] =>
+    [...new Set(list)].filter((id) => id !== post.author && works.has(id));
+  if (post.author === 'person') {
+    const reached = live(personWakes(post, context));
+    return reached.length ? reached : [...works];
+  }
+  if (
+    post.author === 'verifold' ||
+    post.kind === 'plan' ||
+    post.kind === 'rerun' ||
+    post.kind === 'ask'
+  )
+    return live(post.mentions);
+  if (post.kind === 'answer') return live(target ? [target.author] : []);
+  if (post.kind !== 'objection' || !target) return [];
+  return live(
+    works.has(target.author)
+      ? [target.author]
+      : agents
+          .filter((agent) => agent.direction === target.direction)
+          .map((agent) => agent.id),
+  );
+}
+
+/**
+ * The objections that stand, by the post that each one targets, oldest first.
+ * An objection ends with an answer that accepts it, with a check of Verifold
+ * that took it and ended with a rerun, or with a later `check` post that holds
+ * from an agent who wrote neither the target nor the objection. A check that
+ * fails ends nothing: its target stays disputed, and the check shows.
+ */
+export function openObjections(
+  posts: readonly Post[],
+  checks: readonly Check[],
+): ReadonlyMap<string, readonly Post[]> {
+  const ended = new Set([
+    ...checks
+      .filter((check) => check.state === 'done')
+      .flatMap((check) => check.objections),
+    ...posts.flatMap((post) =>
+      post.kind === 'answer' && post.accepts && post.replyTo
+        ? [post.replyTo]
+        : [],
+    ),
+  ]);
+  const authors = new Map(posts.map((post) => [post.id, post.author]));
+  const open = new Map<string, Post[]>();
+  for (const post of posts) {
+    if (!post.replyTo) continue;
+    const list = open.get(post.replyTo) ?? [];
+    if (post.kind === 'objection' && !ended.has(post.id))
+      open.set(post.replyTo, [...list, post]);
+    if (
+      post.kind === 'check' &&
+      post.outcome === 'holds' &&
+      authors.get(post.replyTo) !== post.author
+    ) {
+      const left = list.filter((entry) => entry.author === post.author);
+      if (left.length) open.set(post.replyTo, left);
+      else open.delete(post.replyTo);
+    }
+  }
+  return open;
+}
+
+/** Why a post backs no verdict: it is a check that failed, or a check of it failed. Null when neither holds. */
+export function refutation(post: Post, posts: readonly Post[]): string | null {
+  if (post.kind === 'check' && post.outcome === 'fails')
+    return `${post.id} is a check that failed, so it backs no verdict.`;
+  const failed = posts.find(
+    (entry) =>
+      entry.kind === 'check' &&
+      entry.outcome === 'fails' &&
+      entry.replyTo === post.id,
+  );
+  return failed
+    ? `${post.id} failed the check ${failed.id}, so it backs no verdict.`
+    : null;
+}
+
+/** The kinds that build on a post, so a dispute of that post marks them. */
+const buildsOnKinds: ReadonlySet<PostKind> = new Set([
+  'result',
+  'proposal',
+  'ruled-out',
+  'claim',
+  'evidence',
+]);
+
+/** The disputed post that a post replies to or names in its text, or null. */
+export function citedDispute(
+  post: Post,
+  disputed: ReadonlySet<string>,
+): string | null {
+  if (!buildsOnKinds.has(post.kind)) return null;
+  const cited = [
+    post.replyTo,
+    ...(post.text.match(/\bp-[1-9]\d{0,5}\b/g) ?? []),
+  ];
+  return (
+    cited.find(
+      (id): id is string =>
+        id !== undefined && id !== post.id && disputed.has(id),
+    ) ?? null
+  );
+}

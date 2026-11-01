@@ -1,6 +1,5 @@
 import { useId, useState, type ReactNode } from 'react';
-import type { Harness, Lab, Work } from '../../protocol/api.ts';
-import { checkWords } from '../answer.ts';
+import type { Harness, Lab, Post, Work } from '../../protocol/api.ts';
 import { useControl, type NewDirection } from '../controls.ts';
 import { authorOf, clock, cut, harnessName, roleName } from '../format.ts';
 import { href } from '../route.ts';
@@ -203,12 +202,23 @@ export function WorksLine({ lab }: { readonly lab: Lab }): ReactNode {
   );
 }
 
-/** Where a dispute's check is, in a few words. */
-function checkWhere(lab: Lab, checkId: string | null): string {
+/**
+ * Where a dispute's check is, in a few words. A standing objection is newer
+ * than a check that ended, so that check's result does not answer it. Only a
+ * post that cites a run can get a check.
+ */
+function checkWhere(
+  lab: Lab,
+  checkId: string | null,
+  target: Post | undefined,
+): string {
   const check = checkId
     ? lab.checks.find((entry) => entry.id === checkId)
     : undefined;
-  if (!check) return 'No check yet.';
+  if (!check)
+    return target?.proof.some((proof) => proof.type === 'run')
+      ? 'No check yet.'
+      : '';
   const who = `${roleName(check.handle)} (${harnessName(check.harness)})`;
   switch (check.state) {
     case 'queued':
@@ -219,7 +229,7 @@ function checkWhere(lab: Lab, checkId: string | null): string {
     case 'dropped':
       return `Check ${check.id} did not finish${check.note ? `: ${check.note}` : ''}. Another objection starts a new check.`;
     case 'done':
-      return `${checkWords(check)}.`;
+      return `Check ${check.id} ended before this objection.`;
   }
 }
 
@@ -245,6 +255,7 @@ export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
         const check = dispute.check
           ? lab.checks.find((entry) => entry.id === dispute.check)
           : undefined;
+        const where = checkWhere(lab, dispute.check, target);
         return (
           <li key={dispute.post} className="pinned__item">
             <span className="pinned__mark">
@@ -273,19 +284,21 @@ export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
                     ` (and ${dispute.objections.length - 1} more)`}
                 </p>
               )}
-              <p className="muted">
-                {checkWhere(lab, dispute.check)}
-                {check &&
-                  check.state !== 'queued' &&
-                  agents.has(check.agent) && (
-                    <>
-                      {' '}
-                      <a href={href.agent(check.agent)}>
-                        What {roleName(check.handle)} did
-                      </a>
-                    </>
-                  )}
-              </p>
+              {where && (
+                <p className="muted">
+                  {where}
+                  {check &&
+                    check.state !== 'queued' &&
+                    agents.has(check.agent) && (
+                      <>
+                        {' '}
+                        <a href={href.agent(check.agent)}>
+                          What {roleName(check.handle)} did
+                        </a>
+                      </>
+                    )}
+                </p>
+              )}
             </div>
           </li>
         );

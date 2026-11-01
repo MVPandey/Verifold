@@ -492,6 +492,8 @@ async function fixture(
           }
         : {}),
     });
+    // These tests hold the flat board of a lab from before threads. tests/lab-threads.test.ts covers threads.
+    Object.defineProperty(lab, 'threaded', { value: false });
     owned.lab = lab;
     return { sessions, lab };
   };

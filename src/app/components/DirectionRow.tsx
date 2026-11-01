@@ -8,22 +8,26 @@ import { Verdict } from './Verdict.tsx';
 
 /**
  * One direction: its verdict, title, one line, and its agent. The line is
- * the agent's live step while it works. Otherwise it is the evidence for the
- * verdict, with a wait for the person after it.
+ * the agent's own line or its live step while it works. Otherwise it is the
+ * evidence for the verdict, with a wait for the person after it.
  */
 export function DirectionRow({
   direction,
   agent,
   now,
+  wait = null,
 }: {
   readonly direction: Direction;
   readonly agent: Agent | undefined;
   readonly now: number;
+  /** Who its agent waits on, in one line. */
+  readonly wait?: string | null;
 }): ReactNode {
   const line = directionLine(
     direction.evidence?.text ?? null,
     agent?.live ?? null,
     now,
+    agent?.line?.doing ?? null,
   );
   const detail = agent ? agentDetail(agent) : null;
   return (
@@ -47,6 +51,7 @@ export function DirectionRow({
         ) : (
           <span className="row__line">{line.text}</span>
         )}
+        {wait && <span className="row__line">{wait}</span>}
       </span>
       {agent && (
         <Avatar

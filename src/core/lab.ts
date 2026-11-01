@@ -21,6 +21,9 @@ import {
   postLine,
   proofRef,
   type Artifact,
+  type Digest,
+  type DigestOptions,
+  type NewPost,
   type Post,
   type PostKind,
   type ReadState,
@@ -43,10 +46,14 @@ import {
   directionToolSpec,
   labToolSpecs,
   labToolsVersion,
+  oldLabToolsVersion,
   planLimits,
   planToolSpec,
   labPodToolSpecs,
   runToolSpecs,
+  threadDirectionToolSpec,
+  threadPostKinds,
+  threadToolSpecs,
   verdicts,
 } from './lab-tools.ts';
 import {
@@ -77,7 +84,7 @@ import {
   type SessionRecord,
 } from './session.ts';
 import { restrictions, type AgentTools } from './session-hosts.ts';
-import { changeWorkspace, writePrivateFile } from './storage.ts';
+import { changeWorkspace } from './storage.ts';
 import { memoryText, noteToolSpec, type LabProgress } from './memory.ts';
 import {
   allocate,
@@ -143,8 +150,10 @@ import {
   runArgs,
   sameFacts,
   stands,
+  statusLine,
   text,
   whole,
+  withoutLine,
   works,
 } from './lab/schema.ts';
 import {
@@ -187,6 +196,10 @@ import {
   wordsPost,
 } from './lab/words.ts';
 import { agentLine, mentionPattern, nextHandle } from './lab/names.ts';
+import { refutation } from './lab/post-rules.ts';
+import { readObject, RecordFile } from './lab/record-file.ts';
+import { threadLine } from './lab/thread-digest.ts';
+import { ThreadStore } from './lab/thread-store.ts';
 
 /**
  * The lab: several harness agents work on one question at the same time. Each
@@ -418,74 +431,6 @@ function runtime(): AgentRuntime {
   };
 }
 
-/** A lab record: a JSON object of at most 4 MB, or null for anything else. */
-async function readObject(
-  path: string,
-): Promise<Record<string, unknown> | null> {
-  try {
-    const stats = await lstat(path);
-    if (!stats.isFile() || stats.size > 4_000_000) return null;
-    return object(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Saves of one record. Each save writes the newest value, and saves that come
- * while one writes join the next write, so an older value never lands last.
- * The write loop ends in the same step in which it finds nothing new, so a
- * save that comes after it starts a new write.
- */
-class RecordFile {
-  private dirty = false;
-  private writing: Promise<void> | null = null;
-  private readonly path: string;
-  private readonly value: () => unknown;
-
-  constructor(path: string, value: () => unknown) {
-    this.path = path;
-    this.value = value;
-  }
-
-  save(): Promise<void> {
-    this.dirty = true;
-    this.writing ??= this.write();
-    return this.writing;
-  }
-
-  private async write(): Promise<void> {
-    // The caller keeps this promise before the loop can end.
-    await Promise.resolve();
-    try {
-      while (this.dirty) {
-        this.dirty = false;
-        const value = this.value();
-        // The record is gone, for example after Start over.
-        if (value === null || value === undefined) continue;
-        try {
-          await writePrivateFile(
-            this.path,
-            `${JSON.stringify(value, null, 2)}\n`,
-          );
-        } catch (error) {
-          // The newest value is not on disk: the next save or a flush writes it.
-          this.dirty = true;
-          throw error;
-        }
-      }
-    } finally {
-      this.writing = null;
-    }
-  }
-
-  /** Wait until the newest value is on disk. A write that failed is tried once more. */
-  async flush(): Promise<void> {
-    await this.writing?.catch(() => {});
-    if (this.dirty) await this.save().catch(() => {});
-  }
-}
-
 /**
  * Whether the project's current run has a lab, read the way the owner reads
  * it: an unreadable `lab.json` counts as no lab in both. For CLI commands
@@ -561,6 +506,7 @@ export class Lab {
   private readonly board: Board;
   private state: LabState | null = null;
   private readonly stateFile: RecordFile;
+  private readonly threads: ThreadStore;
   private readonly agents = new Map<string, AgentRecord>();
   private readonly files = new Map<string, RecordFile>();
   private readonly loops = new Map<string, WakeLoop<LabEvent, AgentRecord>>();
@@ -652,6 +598,12 @@ export class Lab {
     this.stateFile = new RecordFile(join(root, '.verifold', 'lab.json'), () =>
       this.suspended ? null : this.state,
     );
+    this.threads = new ThreadStore(
+      join(this.folder, 'threads.json'),
+      () => this.suspended,
+      this.board,
+      this.timing.objectionMs,
+    );
   }
 
   private get folder(): string {
@@ -666,6 +618,11 @@ export class Lab {
   /** The lab names agents by role. False only for a lab from before role names. */
   get roleNames(): boolean {
     return this.state?.roles !== null;
+  }
+
+  /** The lab has threads. False only for a lab from before role names, which keeps its flat board. */
+  private get threaded(): boolean {
+    return Boolean(this.state?.roles);
   }
 
   /** Agents work in this process, the project's owner. */
@@ -683,6 +640,9 @@ export class Lab {
     for (const loop of this.loops.values()) loop.cancel();
     this.loops.clear();
     await this.board.load();
+    await this.threads.load(
+      this.threaded ? (this.state?.startedAt ?? null) : null,
+    );
     // Only the owner, where agents work, ends the runs of an earlier owner.
     await this.ledger.load(this.runs && this.state !== null);
     if (!this.state) return;
@@ -702,6 +662,8 @@ export class Lab {
     }
     // A plan that Verifold stopped before it was kept: its agents start now, and the board says why.
     if (!this.runs) return;
+    const lost = this.threads.lostNote();
+    if (lost) await this.add(lost).catch(() => {});
     for (const agent of this.agents.values())
       if (agent.held) {
         await this.saveAgent({ ...agent, held: false }).catch(() => {});
@@ -776,7 +738,9 @@ export class Lab {
       await this.serial(async () => {
         for (const loop of this.loops.values()) await loop.close();
         await Promise.all(
-          [this.stateFile, ...this.files.values()].map((file) => file.flush()),
+          [this.stateFile, this.threads, ...this.files.values()].map((file) =>
+            file.flush(),
+          ),
         );
         this.suspended = true;
       });
@@ -874,6 +838,7 @@ export class Lab {
     return {
       state,
       posts: this.board.list(),
+      threads: this.threads.list(),
       handles: Object.fromEntries([
         ...state.checks.map((check) => [check.agent, check.handle] as const),
         ...[...this.agents.values()].map(
@@ -983,6 +948,7 @@ export class Lab {
             mode: 0o700,
           });
           await this.stateFile.save();
+          await this.threads.load(this.threaded ? this.state.startedAt : null);
         } catch (error) {
           // The lab did not start: nothing of it stays in memory, so the run is free again.
           this.state = null;
@@ -2261,7 +2227,9 @@ export class Lab {
     await this.ledger.close();
     await this.queue;
     await Promise.all(
-      [this.stateFile, ...this.files.values()].map((file) => file.flush()),
+      [this.stateFile, this.threads, ...this.files.values()].map((file) =>
+        file.flush(),
+      ),
     );
   }
 
@@ -2493,15 +2461,11 @@ export class Lab {
           const room =
             labLimits.digestText -
             this.digestText(agent, events, left, [], ask, restyle, news).length;
-          const digest = this.board.digest(
-            { id, direction: agent.direction },
-            this.readState(agent),
-            {
-              name: (author) => this.name(author),
-              fold: labLimits.digestPost,
-              budget: room,
-            },
-          );
+          const digest = this.digestOf(agent, {
+            name: (author) => this.name(author),
+            fold: labLimits.digestPost,
+            budget: room,
+          });
           const session = agent.session ?? fail('The agent has no session.');
           this.options.sessions.continueTask(
             session,
@@ -2545,6 +2509,16 @@ export class Lab {
     );
     this.loops.set(id, loop);
     return loop;
+  }
+
+  /** The digest of what an agent has not read. */
+  private digestOf(agent: AgentRecord, options: DigestOptions): Digest {
+    const who = { id: agent.id, direction: agent.direction };
+    return (this.threaded ? this.threads : this.board).digest(
+      who,
+      this.readState(agent),
+      options,
+    );
   }
 
   /**
@@ -2702,6 +2676,7 @@ export class Lab {
             ...loose.map((post) => `  ${postLine(post, name)}`),
           ]
         : []),
+      ...(this.threaded ? ['Newest threads:', ...this.threads.lines()] : []),
     ].join('\n');
   }
 
@@ -2738,13 +2713,13 @@ export class Lab {
     const team = opener ? await this.team().catch(() => []) : [];
     const plan = this.planLines(state);
     const role = planning
-      ? `\n\n${await loadPrompt('lab-opener')}\n\nYour first plan can have ${labLimits.firstPlan.min} to ${firstPlanMost(this.options.sessions.limit, others.length + 1)} directions.`
+      ? `\n\n${await loadPrompt(this.threaded ? 'lab-opener' : 'lab-opener-flat')}\n\nYour first plan can have ${labLimits.firstPlan.min} to ${firstPlanMost(this.options.sessions.limit, others.length + 1)} directions.`
       : opener
-        ? '\n\nYou opened the lab and wrote its plan of record, below. A reply to your plan wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.'
+        ? `\n\nYou opened the lab and wrote its plan of record, below. ${this.threaded ? 'An objection to your plan, or a reply from the person, wakes you.' : 'A reply to your plan wakes you.'} Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.`
         : '';
     // Without a sandbox for runs, agents run experiments in their own harness.
     const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.podsOn() ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
-    return `${await loadPrompt('lab-peer')}${runs}${role}
+    return `${await loadPrompt(this.threaded ? 'lab-peer' : 'lab-peer-flat')}${runs}${role}
 
 ${todayLine()}
 
@@ -2773,8 +2748,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   private tools(id: string, generation: string, pods: boolean): AgentTools {
     return {
       specs: [
-        ...labToolSpecs,
-        directionToolSpec,
+        ...(this.threaded ? threadToolSpecs : labToolSpecs),
+        this.threaded ? threadDirectionToolSpec : directionToolSpec,
         askPersonToolSpec,
         ...(this.ledger.sandboxed || pods ? runToolSpecs : []),
         ...(pods ? labPodToolSpecs : []),
@@ -2906,6 +2881,24 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         );
       case 'verifold_post':
         return this.postFor(id, generation, args, key);
+      case 'verifold_status':
+        return this.serial(async () => {
+          if (!this.usable(id, generation)) fail(stoppedText);
+          const line = statusLine(args, new Date().toISOString());
+          await this.update(id, (agent) => ({ ...agent, statusLine: line }));
+          this.options.onChange?.();
+          return 'Your line changed.';
+        });
+      case 'verifold_agree':
+        return this.serial(() => {
+          if (!this.usable(id, generation)) fail(stoppedText);
+          return this.threads.agree(id, args.post);
+        });
+      case 'verifold_follow':
+        return this.serial(() => {
+          if (!this.usable(id, generation)) fail(stoppedText);
+          return this.threads.follow(id, args.thread);
+        });
       case 'verifold_plan':
         return this.planFor(id, generation, args, key);
       case 'verifold_direction':
@@ -5328,26 +5321,41 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   ): Promise<string> {
     const draft = await this.serial(() => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
+      const kinds = this.threaded ? threadPostKinds : agentPostKinds;
       const kind =
-        agentPostKinds.find((entry) => entry === args.kind) ??
-        fail(`Give a kind: ${agentPostKinds.join(', ')}.`);
+        kinds.find((entry) => entry === args.kind) ??
+        fail(`Give a kind: ${kinds.join(', ')}.`);
       this.postLimit(agent);
       // A reply is about the direction of the post that it answers, unless it names one.
       const replied =
         typeof args.replyTo === 'string'
           ? this.board.get(args.replyTo)
           : undefined;
+      const mentions = Array.isArray(args.mentions)
+        ? [...new Set(args.mentions.map((entry) => this.mention(entry)))]
+        : [];
+      const body = text(args.text, boardLimits.text, 'the post');
+      const proof = this.proofRequest(args.artifacts);
       return {
         kind,
         direction:
           this.directionArg(args.direction) ??
           replied?.direction ??
           agent.direction,
-        mentions: Array.isArray(args.mentions)
-          ? [...new Set(args.mentions.map((entry) => this.mention(entry)))]
-          : [],
-        text: text(args.text, boardLimits.text, 'the post'),
-        proof: this.proofRequest(args.artifacts),
+        mentions,
+        text: body,
+        proof,
+        // The rules refuse a post before Verifold commits its proof.
+        shape: this.threaded
+          ? this.threads.shape(args, {
+              author: id,
+              kind,
+              mentions,
+              proof: proof.length,
+              working: this.activeAgents().map((entry) => entry.id),
+              name: (author) => this.name(author),
+            })
+          : null,
         own: this.direction(agent.direction),
         handle: agent.handle,
         host: agent.host,
@@ -5391,11 +5399,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         mentions: draft.mentions,
         artifacts,
         key: `${id}:${key}`,
+        ...(draft.shape
+          ? await this.threads.fields(draft.shape, id, draft.direction)
+          : {}),
       });
       this.rt(id).posted = true;
       this.rt(id).spoke = true;
       await this.quietEnds(id).catch(() => {});
-      return `Posted ${post.id}.`;
+      return `Posted ${post.id}${post.thread ? ` in ${post.thread}` : ''}.`;
     });
   }
 
@@ -5546,7 +5557,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         fail(
           asked === 'ruled-out'
             ? `Ruled out needs a ruled-out post with proof, and ${post.id} is not one. Post one first.`
-            : `${verdictWords[asked]} needs a claim, evidence, or rerun post with proof, and ${post.id} is not one.`,
+            : `${verdictWords[asked]} needs a ${this.threaded ? 'result, check' : 'claim, evidence'}, or rerun post with proof, and ${post.id} is not one.`,
         );
       const state = this.current();
       const checks = state.checks.filter(
@@ -5568,6 +5579,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           fail(
             `${post.id} is a rerun that did not hold, so it is no evidence for ${verdictWords[asked].toLowerCase()}. Post new evidence, and name that post.`,
           );
+        const refuted = refutation(post, this.board.list());
+        if (refuted) fail(`${refuted} Post new evidence, and name that post.`);
       }
       const run = post.artifacts.find((artifact) => artifact.type === 'run');
       // Every argument is checked before a check queues: a refused call queues nothing.
@@ -5636,6 +5649,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         entry.id === direction.id ? { ...entry, verdict, evidence } : entry,
       ),
     };
+    if (verdict !== direction.verdict) await this.clearLine(agent.id);
     try {
       await this.stateFile.save();
     } catch (error) {
@@ -6484,6 +6498,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         entry.id === direction.id ? { ...entry, ...next } : entry,
       ),
     });
+    await this.clearLine(direction.agent);
     await this.add({
       author: 'verifold',
       kind: 'status',
@@ -6664,7 +6679,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       entry.replace(' Other reads are not limited.', ''),
     );
     const person = await this.readPerson();
-    return `${await loadPrompt('lab-check')}
+    return `${await loadPrompt(this.threaded ? 'lab-check' : 'lab-check-flat')}
 
 ${todayLine()}
 
@@ -6962,7 +6977,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       const state = this.current();
       if (state.opener !== id)
         fail(
-          'Only the agent that opened the lab changes its plan. Post a question to it or to the person instead.',
+          `Only the agent that opened the lab changes its plan. ${this.threaded ? 'Ask it or the person on the board' : 'Post a question to it or to the person'} instead.`,
         );
       if (this.planning)
         fail('Your last plan still opens its directions. Wait for its answer.');
@@ -7417,11 +7432,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         : 'No posts.';
     switch (args.view) {
       case 'unread': {
-        const digest = this.board.digest(
-          { id: agent.id, direction: agent.direction },
-          this.readState(agent),
-          { limit, name },
-        );
+        const digest = this.digestOf(agent, { limit, name });
         const answer = digest.lines.length
           ? digest.lines.join('\n')
           : 'No unread posts.';
@@ -7437,10 +7448,20 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       }
       case 'summary':
         return this.summary();
+      case 'threads':
+        return this.threads.lines(limit).join('\n');
       case 'thread': {
+        const whole = this.threads.get(args.thread);
+        if (whole)
+          return `${threadLine(whole)}\n${lines(this.threads.posts(whole))}`;
         const root =
           typeof args.post === 'string' ? this.board.get(args.post) : undefined;
-        if (!root) fail('Name a post on the board, such as p-12.');
+        if (!root)
+          fail(
+            this.threaded
+              ? 'Name a thread, such as t-3, or a post, such as p-12.'
+              : 'Name a post on the board, such as p-12.',
+          );
         const thread = new Set([root.id]);
         for (const post of this.board.list())
           if (post.replyTo && thread.has(post.replyTo)) thread.add(post.id);
@@ -7663,18 +7684,24 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   }
 
   /** Add a post and wake the agents that it is for. */
-  private async add(fields: Parameters<Board['add']>[0]): Promise<Post> {
+  private async add(fields: NewPost): Promise<Post> {
     let post: Post;
     try {
-      post = await this.board.add(fields);
+      post = await this.board.add(
+        this.threaded ? this.threads.place(fields) : fields,
+      );
     } catch (error) {
       fail(
         error instanceof Error ? error.message : 'The board refused the post.',
       );
     }
-    for (const agent of this.agents.values())
+    const active = this.activeAgents();
+    const woken = this.threaded
+      ? await this.threads.posted(post, active)
+      : null;
+    for (const agent of active)
       if (
-        this.active(agent) &&
+        woken?.includes(agent.id) ??
         this.board.wakes(post, { id: agent.id, direction: agent.direction })
       )
         await this.wake(agent, post);
@@ -7687,6 +7714,16 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       );
     this.kick();
     return post;
+  }
+
+  /** A new verdict makes the agent's own line old. */
+  private clearLine(id: string): Promise<void> {
+    return this.update(id, withoutLine).catch(() => {});
+  }
+
+  /** The agents that work now. */
+  private activeAgents(): AgentRecord[] {
+    return [...this.agents.values()].filter((agent) => this.active(agent));
   }
 
   /** A post reaches an agent that it wakes. In the lab's queue. */
@@ -8007,6 +8044,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       return;
     }
     if (state.pausedAt) return;
+    for (const note of await this.threads.decide())
+      await this.add(note).catch(() => {});
     // A check takes the next free slot before any agent.
     const checking = await this.tickChecks(state);
     if (checking === 'started') return;
@@ -8148,7 +8187,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         agent.session &&
         !(
           agent.host === 'codex' &&
-          (agent.toolsVersion < labToolsVersion || (pods && !agent.pods))
+          (agent.toolsVersion <
+            (this.threaded ? labToolsVersion : oldLabToolsVersion) ||
+            (pods && !agent.pods))
         )
           ? await readRecord(this.root, agent.session)
           : null;

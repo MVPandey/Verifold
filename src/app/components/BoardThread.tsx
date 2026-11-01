@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Lab, Post, PostKind, Proof } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
-import type { Thread } from '../board.ts';
+import { outcomeWord, recountWords, type Thread } from '../board.ts';
 import { authorOf, roleName } from '../format.ts';
 import { href } from '../route.ts';
 import { Avatar, PostAuthor, type Who } from './Avatar.tsx';
@@ -9,6 +9,11 @@ import { PlanCard } from './PlanCard.tsx';
 
 const chips: Partial<Record<PostKind, string>> = {
   plan: 'Plan of record',
+  result: 'Result',
+  check: 'Check',
+  ask: 'Ask',
+  answer: 'Answer',
+  proposal: 'Proposal',
   claim: 'Claim',
   evidence: 'Evidence',
   objection: 'Objection',
@@ -81,6 +86,8 @@ function ProofLinks({ post }: { readonly post: Post }): ReactNode {
 
 /** Post kinds that a check reruns, when they cite a run. */
 const checkable: ReadonlySet<PostKind> = new Set([
+  'result',
+  'check',
   'claim',
   'evidence',
   'rerun',
@@ -144,11 +151,21 @@ function PostLines({
       : post.kind === 'plan' && lab?.plan
         ? 'Earlier plan'
         : chips[post.kind];
+  const recounts = recountWords(post);
   return (
     <>
       <div className="post__head">
         <PostAuthor post={post} />
-        {chip && <span className={`chip chip--${post.kind}`}>{chip}</span>}
+        {chip && (
+          <span className={`chip chip--${post.kind}`}>
+            {chip}
+            {post.outcome && `: ${outcomeWord(post.outcome)}`}
+          </span>
+        )}
+        {post.disputed && <span className="chip chip--disputed">Disputed</span>}
+        {post.citesDisputed && (
+          <span className="chip chip--disputed">Cites a disputed post</span>
+        )}
         {onReply && (
           <button
             type="button"
@@ -165,6 +182,7 @@ function PostLines({
         <ProofLinks post={post} />
       </div>
       {lab && <CheckNote post={post} lab={lab} />}
+      {recounts && <span className="post__check">{recounts}</span>}
     </>
   );
 }
