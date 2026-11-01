@@ -1,4 +1,4 @@
-import { maxPodsAtOnce } from './compute.ts';
+import { maxPodsAtOnce } from './pod-limits.ts';
 import { runLimits } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
 
@@ -22,13 +22,14 @@ import type { AgentTool } from './session-hosts.ts';
  */
 export const labToolsVersion = 2;
 
-/**
- * Every handle in a lab. A new lab names agents `agent-3` and checkers
- * `checker-1`, and keeps `coordinator` for one session. A lab from before
- * those names has `claude-2` and `codex-1`.
- */
-export const handlePattern =
-  '(?:(?:agent|checker|claude|codex)-[1-9]\\d{0,3}|coordinator)';
+/** The handles of a new lab: `agent-3` and `checker-1`. */
+export const roleHandlePattern = '(?:agent|checker)-[1-9]\\d{0,3}';
+
+/** The handles of a lab from before role names: `claude-2` and `codex-1`. */
+export const harnessHandlePattern = '(?:claude|codex)-[1-9]\\d{0,3}';
+
+/** Every handle that a lab's records can hold. `coordinator` is kept for one session. */
+export const handlePattern = `(?:${roleHandlePattern}|${harnessHandlePattern}|coordinator)`;
 
 /** The limits of a plan of record. The tool schema and the lab's checks use the same ones. */
 export const planLimits = {
@@ -305,10 +306,8 @@ export const checkLimits = {
   minutes: 60,
   /** Checks of one claim. */
   perClaim: 2,
-  /** Checks that run at once, and when "Agents at once" is at least `widerAt`. */
-  atOnce: 1,
-  wider: 2,
-  widerAt: 5,
+  /** One check runs at once for each of this many of "Agents at once". */
+  agentsPerCheck: 5,
   /** A check whose checker process stopped by itself, whose start or folder failed, or whose owner ended without closing the lab starts again once, then fails. */
   restarts: 1,
   /**
@@ -317,6 +316,11 @@ export const checkLimits = {
    */
   reserved: 16,
 };
+
+/** The checks that run at once: one for each `checkLimits.agentsPerCheck` of "Agents at once", and at least one. */
+export function checksAtOnce(slots: number | undefined): number {
+  return Math.max(1, Math.floor((slots ?? 0) / checkLimits.agentsPerCheck));
+}
 
 /** The kinds of post that a check tests, when they cite a run. */
 export const checkableKinds = ['claim', 'evidence', 'rerun'] as const;
@@ -526,7 +530,7 @@ export const callNeeds = ['pods'] as const;
 /** The limits of a call. The tool schema and the lab's checks use the same ones. */
 export const callLimits = {
   /** Calls that wait for the person at once. Verifold's own deadline call does not count. */
-  open: 3,
+  open: 6,
   question: 160,
   label: 80,
   /** One line under an option's label. */
@@ -584,8 +588,7 @@ const factsSchema = {
 /** A call for the person: cost, scope, access, or go, with options, a pick, and an undo window. */
 export const askPersonToolSpec: AgentTool = {
   name: 'verifold_ask_person',
-  description:
-    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
+  description: `Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most ${callLimits.open} calls wait for the person at once.`,
   inputSchema: {
     type: 'object',
     properties: {

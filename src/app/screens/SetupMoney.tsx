@@ -8,6 +8,7 @@ import {
   useUnsaved,
 } from '../components/StepHeader.tsx';
 import { dayClock, usd } from '../format.ts';
+import { podsAtOnceChoices } from '../pods.ts';
 import { href } from '../route.ts';
 import { newKey } from '../intent.ts';
 import { allowedGpus, type SetupActions, type StepNav } from '../setup.ts';
@@ -19,7 +20,7 @@ interface LimitText {
   readonly maxUsdPerHour: string;
   readonly maxHoursPerLease: string;
   readonly idleMinutes: string;
-  readonly maxRunningPods: '1' | '2';
+  readonly maxRunningPods: string;
   /** Empty: no monthly limit. */
   readonly monthUsd: string;
 }
@@ -55,7 +56,7 @@ function textOf(limits: MoneyLimits): LimitText {
     maxUsdPerHour: String(limits.maxUsdPerHour),
     maxHoursPerLease: String(limits.maxHoursPerLease),
     idleMinutes: String(limits.idleMinutes),
-    maxRunningPods: limits.maxRunningPods === 2 ? '2' : '1',
+    maxRunningPods: String(limits.maxRunningPods),
     monthUsd: String(limits.monthUsd ?? ''),
   };
 }
@@ -140,7 +141,7 @@ export function MoneyStep({
         maxUsdPerHour: values.maxUsdPerHour ?? 0,
         maxHoursPerLease: values.maxHoursPerLease ?? 0,
         idleMinutes: values.idleMinutes ?? 0,
-        maxRunningPods: limits.maxRunningPods === '2' ? 2 : 1,
+        maxRunningPods: Number(limits.maxRunningPods),
         gpuTypes: allowed,
         monthUsd: month,
       })
@@ -423,12 +424,13 @@ export function MoneyStep({
                 id={`${keyField}-pods`}
                 className="select"
                 value={limits.maxRunningPods}
-                onChange={(event) =>
-                  set('maxRunningPods')(event.target.value === '2' ? '2' : '1')
-                }
+                onChange={(event) => set('maxRunningPods')(event.target.value)}
               >
-                <option value="1">1</option>
-                <option value="2">2</option>
+                {podsAtOnceChoices.map((choice) => (
+                  <option key={choice} value={choice}>
+                    {choice}
+                  </option>
+                ))}
               </select>
             </span>
           </div>

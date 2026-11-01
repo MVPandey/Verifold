@@ -1,5 +1,5 @@
 import type { Asker, Harness } from '../protocol/api.ts';
-import { agentName, roleName } from '../ui/lab-lines.ts';
+import { agentName, roleName, roleOf } from '../ui/lab-lines.ts';
 
 /** Dollars, as the desk and the call words write them: "$25", "$11.97". */
 export { usd } from '../ui/call-words.ts';
@@ -70,25 +70,21 @@ export function avatarText(who: {
   readonly harness: Harness;
   readonly handle: string;
 }): string {
-  return (
-    /^(?:agent|checker)-(\d+)$/.exec(who.handle)?.[1] ??
-    (who.harness === 'claude' ? 'Cl' : 'Cx')
-  );
+  return roleOf(who.handle)?.number ?? (who.harness === 'claude' ? 'Cl' : 'Cx');
 }
 
 /**
- * What a name line shows after a role name: the job and the harness, such as
+ * What a name line shows after the name: the job and the harness, such as
  * "Controls · Codex". A handle from an older lab names its harness already,
- * so it shows nothing more: null.
+ * so it shows only its job. Null: nothing to show.
  */
 export function agentDetail(who: {
   readonly handle: string;
   readonly job?: string | null | undefined;
   readonly harness: Harness;
 }): string | null {
-  if (roleName(who.handle) === who.handle) return null;
-  const label = harnessLabel(who.harness);
-  return who.job ? `${who.job} · ${label}` : label;
+  const label = roleOf(who.handle) ? harnessLabel(who.harness) : null;
+  return who.job && label ? `${who.job} · ${label}` : (who.job ?? label);
 }
 
 const families: Readonly<Record<string, string>> = {

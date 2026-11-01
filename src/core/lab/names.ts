@@ -3,11 +3,21 @@
  * `checker-1`. `LabState.roles` holds their counts, so a number says how many
  * came before it and nothing about the harness. A lab from before these names
  * has no `roles`: it keeps `claude-2` and `codex-1`, counted for each harness.
- * `handlePattern` in ../lab-tools.ts accepts both. Nothing here holds state.
+ * The patterns in ../lab-tools.ts accept both. Nothing here holds state.
  */
 import type { HarnessName } from '../harness.ts';
+import { harnessHandlePattern, roleHandlePattern } from '../lab-tools.ts';
 import { hostName } from '../session.ts';
 import type { AgentRecord, Direction, LabState } from './schema.ts';
+
+/**
+ * What a person's `@` can name in this lab: the handles of its own scheme.
+ * The other scheme stays plain text, and so does `coordinator` until a session
+ * has that name.
+ */
+export function mentionPattern(state: Pick<LabState, 'roles'>): string {
+  return state.roles ? roleHandlePattern : harnessHandlePattern;
+}
 
 /** The highest number that `handlePattern` accepts. */
 const mostHandles = 9999;

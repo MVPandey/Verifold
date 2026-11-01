@@ -262,6 +262,7 @@ Code or Codex keeps its own permissions and sessions. Session records are in
 /** The commands of the terminal. A terminal on a background owner only detaches with Ctrl+C. */
 const terminalHelp = (
   background: boolean,
+  roles: boolean,
 ): string => `Commands in this terminal:
 - \`/open\` or \`/app\`: open Verifold in your browser. Add the ID of a call, for example \`/app c-3\`, to open that call.
 - Enter on an empty line, in a lab: open the call that waits for you, or else the lab.
@@ -277,7 +278,7 @@ const terminalHelp = (
 - \`/end\`: end the session.
 - \`/help\`: show these commands.
 
-When the agent of your session waits for you, other text goes to it as a follow-up. Without a session, in a lab, other text goes to the board as your message. Write @claude-2 in it to write to that agent. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
+When the agent of your session waits for you, other text goes to it as a follow-up. Without a session, in a lab, other text goes to the board as your message. Write @${roles ? 'agent-2' : 'claude-2'} in it to write to that agent. ${background ? 'Ctrl+C leaves this terminal, and the team keeps working. To stop it, run verifold stop.' : 'Ctrl+C pauses the session and stops Verifold.'}`;
 
 const requestHint = 'Type a to allow once or d to deny.';
 
@@ -366,7 +367,7 @@ export interface TerminalControls {
   readonly background?: boolean;
   readonly research?: ResearchRunner;
   /** The project's lab. Text that is not a command goes to its board. */
-  readonly lab?: Pick<Lab, 'exists' | 'post'>;
+  readonly lab?: Pick<Lab, 'exists' | 'post'> & Partial<Pick<Lab, 'roleNames'>>;
 }
 
 /**
@@ -443,7 +444,12 @@ export function terminalInput(
     else if (value.startsWith('/desk '))
       io.progress?.('Write /desk alone to open the old desk.');
     else if (value === '/help')
-      io.progress?.(terminalHelp(controls.background === true));
+      io.progress?.(
+        terminalHelp(
+          controls.background === true,
+          controls.lab?.roleNames !== false,
+        ),
+      );
     else if (value === '/cancel') {
       const turns = live.filter((view) => view.record.status !== 'idle');
       // Research and a turn can run together. Then the old desk chooses which one stops.
@@ -502,7 +508,7 @@ export function terminalInput(
       );
       if (id) sessions.send(id, value);
     } else if (controls.lab?.exists)
-      // The same post as the app's box. A mention such as @claude-2 wakes that agent.
+      // The same post as the app's box. A mention such as @agent-2 wakes that agent.
       controls.lab
         .post({ text: value })
         .then(() => io.progress?.('Your message is on the board.'), report);
@@ -1089,7 +1095,8 @@ async function serveDesk(
           deskSignal,
         );
         if (session) {
-          if (io.interactive) io.progress?.(terminalHelp(false));
+          if (io.interactive)
+            io.progress?.(terminalHelp(false, owned.lab?.roleNames !== false));
           await Promise.race([done, desk.closed]);
           const record = owned.session
             ? sessions.view(owned.session)?.record

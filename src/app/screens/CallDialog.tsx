@@ -196,7 +196,7 @@ function OpenCall({
                   )}
                   {cost && <span className="call__cost">{cost}</span>}
                   {option.noSetting && (
-                    <span className="call__detail">{noSettingWords}</span>
+                    <span className="call__no-setting">{noSettingWords}</span>
                   )}
                 </span>
                 {advised && (

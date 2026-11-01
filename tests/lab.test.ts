@@ -1340,7 +1340,7 @@ await test('with pods, an agent asks for a pod for its own direction, runs on it
     podsOn: () => true,
     keySaved: () => true,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [...leases.values()],
       get: (id) => {
@@ -1466,7 +1466,7 @@ await test('a paused lab starts no pod', async (t) => {
     podsOn: () => true,
     keySaved: () => true,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {
@@ -1535,8 +1535,8 @@ await test('the person cannot open more directions than the limit, or post as an
     /message or an objection/,
   );
   await assert.rejects(
-    lab.lab.post({ text: '@codex-9 hello' }),
-    /No agent of the lab has the handle codex-9/,
+    lab.lab.post({ text: '@agent-99 hello' }),
+    /No agent of the lab has the handle agent-99/,
   );
 });
 
@@ -1721,7 +1721,7 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   );
   assert.deepEqual(lab.lab.view()?.posts.at(-1)?.mentions, ['a-1']);
   assert.equal(
-    (await post({ action: 'lab-post', text: '@codex-4 hello' }))[0],
+    (await post({ action: 'lab-post', text: '@agent-44 hello' }))[0],
     409,
   );
   const board = await home();
@@ -1762,7 +1762,9 @@ await test('the desk offers the lab, shows posts escaped, and takes lab actions 
   const refused = 'b2'.repeat(16);
   for (let index = 0; index < 2; index++)
     assert.equal(
-      (await post({ action: 'lab-post', text: '@codex-4 x', key: refused }))[0],
+      (
+        await post({ action: 'lab-post', text: '@agent-44 x', key: refused })
+      )[0],
       409,
     );
   // Each desk keeps its own keys: the same key on another desk is a new action.
@@ -3805,7 +3807,7 @@ await test("the person answers the planner's questions together, each with an op
     async () => (await claudeResults(lab, 'd-1-plan-the-lab')).length >= 2,
   );
   // Refused answers change nothing.
-  await assert.rejects(lab.lab.answerQuestions([]), /Answer 1 to 3/);
+  await assert.rejects(lab.lab.answerQuestions([]), /Answer 1 to 6/);
   await assert.rejects(
     lab.lab.answerQuestions([{ call: 'c-9', option: 0 }]),
     /c-9 is not a question of the planner that waits for you/,
@@ -5960,7 +5962,7 @@ await test("a pod that a direction's agent asks for while its direction stops en
     podsOn: () => true,
     keySaved: () => true,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [...leases.values()],
       get: (id) => leases.get(String(id)) as Lease,
@@ -7311,7 +7313,7 @@ async function labNeeds(lab: Fixture): Promise<string> {
   ).html;
 }
 
-await test('an agent asks the person a call: a technical question, a wrong effect, and a fourth call are refused, and the answer wakes the agent', async (t) => {
+await test('an agent asks the person a call: a technical question, a wrong effect, and a seventh call are refused, and the answer wakes the agent', async (t) => {
   const lab = await fixture(t);
   const ask = (args: Record<string, unknown>): Call => ({
     name: 'verifold_ask_person',
@@ -7380,6 +7382,27 @@ await test('an agent asks the person a call: a technical question, a wrong effec
         }),
         ask({
           kind: 'cost',
+          question: 'Filler 5?',
+          options: [{ label: 'Yes', effect: { hours: 5 } }, { label: 'No' }],
+          pick: 0,
+          why: 'More.',
+        }),
+        ask({
+          kind: 'cost',
+          question: 'Filler 6?',
+          options: [{ label: 'Yes', effect: { hours: 6 } }, { label: 'No' }],
+          pick: 0,
+          why: 'More.',
+        }),
+        ask({
+          kind: 'cost',
+          question: 'Filler 7?',
+          options: [{ label: 'Yes', effect: { hours: 7 } }, { label: 'No' }],
+          pick: 0,
+          why: 'More.',
+        }),
+        ask({
+          kind: 'cost',
           question: 'One more?',
           options: [{ label: 'Yes', effect: { hours: 1 } }, { label: 'No' }],
           pick: 0,
@@ -7394,7 +7417,7 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   ]);
   await open(lab, [{ title: 'Alpha', harness: 'claude' }], { hours: 1 });
   await until(
-    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 6,
+    async () => (await lab.lines('d-1-alpha', 'results.jsonl')).length >= 9,
   );
   const results = await claudeResults(lab, 'd-1-alpha');
   assert.equal(
@@ -7405,9 +7428,10 @@ await test('an agent asks the person a call: a technical question, a wrong effec
   assert.match(results[2] ?? '', /^Asked the person in c-1\./);
   assert.match(results[3] ?? '', /^Asked the person in c-2\./);
   assert.match(results[4] ?? '', /^Asked the person in c-3\./);
+  assert.match(results[7] ?? '', /^Asked the person in c-6\./);
   assert.equal(
-    results[5],
-    '3 calls wait for the person already. Wait for an answer.',
+    results[8],
+    '6 calls wait for the person already. Wait for an answer.',
   );
   const calls = lab.lab.view()?.state.calls ?? [];
   assert.deepEqual(
@@ -7416,6 +7440,9 @@ await test('an agent asks the person a call: a technical question, a wrong effec
       ['c-1', 'go', 'a-1', 'd-1'],
       ['c-2', 'access', 'a-1', 'd-1'],
       ['c-3', 'scope', 'a-1', 'd-1'],
+      ['c-4', 'cost', 'a-1', 'd-1'],
+      ['c-5', 'cost', 'a-1', 'd-1'],
+      ['c-6', 'cost', 'a-1', 'd-1'],
     ],
   );
   assert.deepEqual(calls[1]?.options[0]?.effect, {
@@ -7921,7 +7948,7 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
     podsOn: () => true,
     keySaved: () => true,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [...leases.values()],
       get: (id) => {
@@ -8076,7 +8103,7 @@ await test('an agent that started with pods off gets the pod tools once pods are
     podsOn: () => on,
     keySaved: () => true,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {
@@ -8232,7 +8259,7 @@ await test('pod requests while pods are off ask the person once for the whole la
     // A key is saved, so the call asks only for the spend limit.
     keySaved: () => true,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {
@@ -11216,7 +11243,7 @@ function keyCompute(key: boolean): LabCompute {
     podsOn: () => false,
     keySaved: () => key,
     podsAtOnce: () => 1,
-    setPodsAtOnce: () => Promise.resolve(),
+    setPodsAtOnce: () => Promise.resolve({ before: 1, changed: true }),
     leases: {
       list: () => [],
       get: () => {

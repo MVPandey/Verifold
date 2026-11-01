@@ -1,10 +1,11 @@
-import type {
-  GpuType,
-  Lab,
-  PodLease,
-  PodSettings,
-  PodState,
-  ProjectCompute,
+import {
+  podsAtOnceMost,
+  type GpuType,
+  type Lab,
+  type PodLease,
+  type PodSettings,
+  type PodState,
+  type ProjectCompute,
 } from '../protocol/api.ts';
 import { clock, roleName, usd } from './format.ts';
 import { numberOf, type GpuRow } from './components/Limits.tsx';
@@ -120,13 +121,19 @@ export function allowedNow(
   );
 }
 
+/** The choices of "Pods at once". */
+export const podsAtOnceChoices: readonly string[] = Array.from(
+  { length: podsAtOnceMost },
+  (_, index) => String(index + 1),
+);
+
 /** The pod settings as the person types them. */
 export interface SettingsText {
   readonly limitUsd: string;
   readonly maxUsdPerHour: string;
   readonly maxHoursPerLease: string;
   readonly idleMinutes: string;
-  readonly maxRunningPods: '1' | '2';
+  readonly maxRunningPods: string;
   readonly diskGb: string;
   /** One image on each line. */
   readonly images: string;
@@ -139,7 +146,7 @@ export function settingsText(settings: PodSettings): SettingsText {
     maxUsdPerHour: String(settings.maxUsdPerHour),
     maxHoursPerLease: String(settings.maxHoursPerLease),
     idleMinutes: String(settings.idleMinutes),
-    maxRunningPods: settings.maxRunningPods === 2 ? '2' : '1',
+    maxRunningPods: String(settings.maxRunningPods),
     diskGb: String(settings.diskGb),
     images: settings.images.join('\n'),
     askBeforePod: settings.askBeforePod,
@@ -178,7 +185,7 @@ export function changesOf(
     changes.limitUsd = limit;
   }
   if (edits.maxRunningPods !== undefined)
-    changes.maxRunningPods = edits.maxRunningPods === '2' ? 2 : 1;
+    changes.maxRunningPods = Number(edits.maxRunningPods);
   if (edits.images !== undefined)
     changes.images = edits.images
       .split('\n')

@@ -150,6 +150,7 @@ import {
 } from '../protocol/api.ts';
 import { agentName } from '../ui/lab-lines.ts';
 import { figureHeaders, figurePixels, imageSize } from './figure.ts';
+import { keptAgents, keptDirections } from './lab-lists.ts';
 import { readJsonBody, record } from './http.ts';
 import type { FirstRun } from './setup.ts';
 
@@ -1551,41 +1552,44 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   };
   const newest = (list: readonly { readonly id: string }[]): string[] =>
     list.slice(-apiLimits.notify).map((entry) => entry.id);
-  const agents: Agent[] = keep(loaded.agents, level.agents, 'agents').map(
-    (ref) => {
-      const turns = loaded.turns.get(ref.id) ?? [];
-      const asked =
-        state.calls
-          .filter((entry) => waiting(entry) && askers(entry).includes(ref.id))
-          .map((entry) => entry.at)
-          .sort()[0] ?? null;
-      return {
-        id: ref.id,
-        handle: ref.handle,
-        job: ref.job,
-        harness: ref.harness,
-        model: loaded.models.get(ref.id) ?? ref.model,
-        requestedModel: ref.model ?? loaded.requested.get(ref.id) ?? null,
-        direction: ref.direction,
-        check: ref.check,
+  const directions = keptDirections(state.directions, level.directions);
+  if (directions.length < state.directions.length)
+    omitted.directions = state.directions.length - directions.length;
+  const kept = new Set(directions.map((entry) => entry.id));
+  const shown = keptAgents(loaded.agents, kept, level.agents);
+  if (shown.length < loaded.agents.length)
+    omitted.agents = loaded.agents.length - shown.length;
+  const agents: Agent[] = shown.map((ref) => {
+    const turns = loaded.turns.get(ref.id) ?? [];
+    const asked =
+      state.calls
+        .filter((entry) => waiting(entry) && askers(entry).includes(ref.id))
+        .map((entry) => entry.at)
+        .sort()[0] ?? null;
+    return {
+      id: ref.id,
+      handle: ref.handle,
+      job: ref.job,
+      harness: ref.harness,
+      model: loaded.models.get(ref.id) ?? ref.model,
+      requestedModel: ref.model ?? loaded.requested.get(ref.id) ?? null,
+      direction: ref.direction,
+      check: ref.check,
+      status: ref.status,
+      until: ref.until,
+      live: liveOf({
         status: ref.status,
-        until: ref.until,
-        live: liveOf({
-          status: ref.status,
-          harness: ref.harness,
-          turn: turns.at(-1) ?? null,
-          asked,
-        }),
-        turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
-        spendUsd: ref.spend,
-      };
-    },
-  );
+        harness: ref.harness,
+        turn: turns.at(-1) ?? null,
+        asked,
+      }),
+      turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
+      spendUsd: ref.spend,
+    };
+  });
   const plan = state.plan;
   if (plan && !level.whole) omitted.plan = 1;
   const brought = broughtByDirection(state.brought);
-  const directions = keep(state.directions, level.directions, 'directions');
-  const kept = new Set(directions.map((entry) => entry.id));
   return {
     question: level.whole
       ? state.question

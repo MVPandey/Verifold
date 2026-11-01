@@ -18,6 +18,9 @@ export const protocolVersion = 1;
 /** The highest "Agents at once" that the person can set. */
 export const agentsAtOnceMost = 20;
 
+/** The highest "Pods at once" that the person can set. */
+export const podsAtOnceMost = 8;
+
 /**
  * A turn's ID: the ID of the turn's first transcript entry, such as
  * `1a2b3c4d.#3` or `1a2b3c4d.toolu_01`. The API and the app's links check it
@@ -93,7 +96,7 @@ export interface PodSettings {
   readonly maxHoursPerLease: number;
   /** Minutes without a job before Verifold stops a pod. */
   readonly idleMinutes: number;
-  readonly maxRunningPods: 1 | 2;
+  readonly maxRunningPods: number;
   /** RunPod GPU type IDs that agents may rent. */
   readonly gpuTypes: readonly string[];
   /** RunPod images that a pod can use. */
@@ -1288,7 +1291,7 @@ export interface MoneyLimits {
   readonly maxUsdPerHour: number;
   readonly maxHoursPerLease: number;
   readonly idleMinutes: number;
-  readonly maxRunningPods: 1 | 2;
+  readonly maxRunningPods: number;
   /** RunPod GPU type IDs that agents may rent. */
   readonly gpuTypes: readonly string[];
   /** What all projects together may spend in one calendar month. Null: no monthly limit. Added after version 1. */

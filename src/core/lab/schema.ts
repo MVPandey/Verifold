@@ -775,8 +775,14 @@ export interface LabCompute {
   podCost(input: LabPod): Promise<number>;
   /** The person's limit of pods that run at once. */
   podsAtOnce(): number;
-  /** Set that limit, as a call's answer or its undo does. */
-  setPodsAtOnce(pods: number): Promise<void>;
+  /**
+   * Set that limit, as a call's answer or its undo does. `only`: change it
+   * only while it is this value. Returns the limit before, and whether it changed.
+   */
+  setPodsAtOnce(
+    pods: number,
+    only?: number,
+  ): Promise<{ readonly before: number; readonly changed: boolean }>;
   /** The person picked a pod in a call: the lease starts as one that they approved. */
   startPod(input: LabPod): Promise<Lease>;
   /** A key is stored and the person set a spend limit. */
