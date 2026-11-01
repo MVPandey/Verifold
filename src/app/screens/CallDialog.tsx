@@ -26,8 +26,8 @@ import {
   applyingText,
   type CallView,
 } from '../call.ts';
-import { andList } from '../../ui/call-words.ts';
-import { asked, since, usd } from '../format.ts';
+import { andList, noSettingWords } from '../../ui/call-words.ts';
+import { agentName, asked, roleName, since, usd } from '../format.ts';
 import { href, type Opener } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { AnswerLine } from '../components/AnswerLine.tsx';
@@ -128,7 +128,7 @@ function OpenCall({
     ...call.askers
       .slice(1)
       .filter((asker) => asker.why && asker.why !== call.why)
-      .map((asker) => `${asker.handle}: ${asker.why}`),
+      .map((asker) => `${agentName(asker.handle, asker.job)}: ${asker.why}`),
   ];
   const post = call.post;
   return (
@@ -195,6 +195,9 @@ function OpenCall({
                     <span className="call__detail">{option.detail}</span>
                   )}
                   {cost && <span className="call__cost">{cost}</span>}
+                  {option.noSetting && (
+                    <span className="call__detail">{noSettingWords}</span>
+                  )}
                 </span>
                 {advised && (
                   <span className="call__pick">The agents' pick</span>
@@ -305,7 +308,7 @@ function Settled({
             <blockquote className="call__quote">{view.words}</blockquote>
             <p className="call__fine">
               {view.call.askers.length
-                ? `${andList(view.call.askers.map((asker) => asker.handle))} ${view.call.askers.length === 1 ? 'gets' : 'get'} your words with the next turn. No option applied.`
+                ? `${andList(view.call.askers.map((asker) => roleName(asker.handle)))} ${view.call.askers.length === 1 ? 'gets' : 'get'} your words with the next turn. No option applied.`
                 : 'No option applied.'}
             </p>
           </>

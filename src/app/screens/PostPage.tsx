@@ -3,7 +3,7 @@ import type { Lab, Post, PostThread, Snapshot } from '../../protocol/api.ts';
 import type { Loaded } from '../api.ts';
 import { threads } from '../board.ts';
 import { ControlsContext } from '../controls.ts';
-import { authorOf, clock } from '../format.ts';
+import { authorOf, clock, roleName } from '../format.ts';
 import { mentionNames } from '../mentions.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
@@ -16,7 +16,9 @@ import type { LabActions } from './LabHome.tsx';
 
 function title(post: Post): string {
   const owner =
-    post.author === 'person' ? 'Your' : `${post.handle ?? 'Verifold'}'s`;
+    post.author === 'person'
+      ? 'Your'
+      : `${post.handle ? roleName(post.handle) : 'Verifold'}'s`;
   return `${owner} post at ${clock(post.at)}`;
 }
 

@@ -2,9 +2,9 @@ import type { ReactNode } from 'react';
 import type { Lab, Post, PostKind, Proof } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
 import type { Thread } from '../board.ts';
-import { authorOf } from '../format.ts';
+import { authorOf, roleName } from '../format.ts';
 import { href } from '../route.ts';
-import { Avatar, type Who } from './Avatar.tsx';
+import { Avatar, PostAuthor, type Who } from './Avatar.tsx';
 import { PlanCard } from './PlanCard.tsx';
 
 const chips: Partial<Record<PostKind, string>> = {
@@ -113,7 +113,9 @@ function CheckNote({
         lab.agents.some((agent) => agent.id === check.agent) && (
           <>
             {' '}
-            <a href={href.agent(check.agent)}>What {check.handle} did</a>
+            <a href={href.agent(check.agent)}>
+              What {roleName(check.handle)} did
+            </a>
           </>
         )}
     </span>
@@ -134,7 +136,7 @@ function PostLines({
   readonly onReply?: ((post: Post) => void) | undefined;
 }): ReactNode {
   if (post.kind === 'plan' && lab?.plan?.post === post.id)
-    return <PlanCard plan={lab.plan} lab={lab} />;
+    return <PlanCard plan={lab.plan} post={post} lab={lab} />;
   // The person's posts and Verifold's status lines carry no kind chip.
   const chip =
     post.author === 'person'
@@ -145,7 +147,7 @@ function PostLines({
   return (
     <>
       <div className="post__head">
-        <b>{authorOf(post)}</b>
+        <PostAuthor post={post} />
         {chip && <span className={`chip chip--${post.kind}`}>{chip}</span>}
         {onReply && (
           <button

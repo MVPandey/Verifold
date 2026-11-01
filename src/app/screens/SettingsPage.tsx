@@ -1,10 +1,11 @@
 import { useId, useState, type ReactNode } from 'react';
-import type {
-  Lab,
-  PodLease,
-  PodSettings,
-  ProjectCompute,
-  Snapshot,
+import {
+  agentsAtOnceMost,
+  type Lab,
+  type PodLease,
+  type PodSettings,
+  type ProjectCompute,
+  type Snapshot,
 } from '../../protocol/api.ts';
 import type { ActOutcome } from '../api.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -623,7 +624,8 @@ function AgentsAtOnce({
   const save = useAction((agents: number, key) => onSave(agents, key));
   const text = typed ?? (value === null ? '' : String(value));
   const agents = Number(text);
-  const valid = Number.isInteger(agents) && agents >= 1 && agents <= 8;
+  const valid =
+    Number.isInteger(agents) && agents >= 1 && agents <= agentsAtOnceMost;
   return (
     <section
       className="section settings__section"
@@ -634,7 +636,7 @@ function AgentsAtOnce({
       </h2>
       <div className="limits">
         <LimitField
-          label="Agents that work at the same time, 1 to 8"
+          label={`Agents that work at the same time, 1 to ${agentsAtOnceMost}`}
           value={text}
           onChange={(next) => {
             setTyped(next);

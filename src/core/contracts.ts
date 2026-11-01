@@ -35,7 +35,7 @@ export interface Workspace {
   readonly helper?: 'claude' | 'codex';
   /** The helper's model for this project. Without one, the profile's model for the helper applies. */
   readonly helperModel?: string;
-  /** How many agents may run at the same time, 1 to 8. Absent means the default, 3. */
+  /** How many agents may run at the same time, 1 to `maxAgents`. Absent means the default, 3. */
   readonly agents?: number;
   readonly context?: string;
   /** The project uses its own profile in `.verifold/agency/`, not the global one. */
@@ -111,7 +111,9 @@ export function parseWorkspace(value: unknown): Workspace {
     (name) => name === data.helper && name !== host,
   );
   if (data.agents !== undefined && !validAgents(data.agents))
-    throw new Error('Agents at once must be a whole number from 1 to 8.');
+    throw new Error(
+      `Agents at once must be a whole number from 1 to ${maxAgents}.`,
+    );
   return {
     schemaVersion: 1,
     visibility: 'private',
@@ -133,9 +135,14 @@ export function parseWorkspace(value: unknown): Workspace {
   };
 }
 
-/** A valid "Agents at once" setting: a whole number from 1 to 8. */
+/** The highest "Agents at once" setting. It equals the open directions of a lab. */
+export const maxAgents = 20;
+
+/** A valid "Agents at once" setting: a whole number from 1 to `maxAgents`. */
 export function validAgents(value: unknown): value is number {
-  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 8;
+  return (
+    Number.isInteger(value) && Number(value) >= 1 && Number(value) <= maxAgents
+  );
 }
 
 export function parseContext(value: unknown): string {

@@ -17,7 +17,7 @@ import {
   type Ticks,
 } from '../answer.ts';
 import { DiffReads, type DiffShown } from '../diffs.ts';
-import { clock } from '../format.ts';
+import { clock, roleName } from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { useAction } from '../useAction.ts';
@@ -276,7 +276,7 @@ export function BringPage({
   readonly answerActions: AnswerActions;
 }): ReactNode {
   const agent = lab.agents.find((entry) => entry.id === direction.agent);
-  const agentName = agent?.handle ?? 'Its agent';
+  const agentName = agent ? roleName(agent.handle) : 'Its agent';
   const key = bringKey(lab, direction);
   const [nonce, setNonce] = useState(0);
   const [shown, setShown] = useState<BringRead | null>(null);

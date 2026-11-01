@@ -56,7 +56,7 @@ export interface ScreenDirection {
   readonly id: string;
   readonly title: string;
   readonly shown: ShownVerdict;
-  /** Its agent's handle, such as claude-2. Null when the snapshot left the agent out. */
+  /** Its agent's handle, such as agent-2. Null when the snapshot left the agent out. */
   readonly agent: string | null;
   /** Its agent's live line, which comes from harness events. */
   readonly live: Live | null;

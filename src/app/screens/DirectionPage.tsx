@@ -21,7 +21,14 @@ import type {
 import type { ActOutcome, Loaded, StepQuery } from '../api.ts';
 import { ControlsContext, useControl, type LabControls } from '../controls.ts';
 import { foldQuery, refreshKey, stepTotal, turnSummary } from '../activity.ts';
-import { agentModelName, clock, harnessName, since } from '../format.ts';
+import {
+  agentModelName,
+  agentName,
+  clock,
+  harnessName,
+  roleName,
+  since,
+} from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { byStart, filled, joinTurns, runPlace, type Older } from '../turns.ts';
@@ -87,7 +94,7 @@ function sentence(text: string): string {
   return `${text.trim().replace(/[.!]+$/, '')}.`;
 }
 
-/** "claude-2 · Claude Opus 5.5 (1M) · Holds up if …. 3 runs, noise ±0.02. Now: …." */
+/** "Agent 2 · Controls · Claude Opus 5.5 (1M) · Holds up if …. 3 runs, noise ±0.02. Now: …." */
 function DirectionHead({
   direction,
   agent,
@@ -127,7 +134,7 @@ function DirectionHead({
         </MoreMenu>
       </div>
       <p className="direction-head__meta">
-        <b>{agent?.handle ?? direction.agent}</b>
+        <b>{agent ? agentName(agent.handle, agent.job) : direction.agent}</b>
         {agent && (
           <>
             {' · '}
@@ -391,10 +398,10 @@ export function StartAgain({ agent }: { readonly agent: string }): ReactNode {
 /** When a message to the agent reaches it, from how the lab delivers the person's posts. */
 function reach(agent: Agent, lab: Lab): string {
   if (lab.paused)
-    return `The lab is paused. ${agent.handle} reads your message after you resume it.`;
+    return `The lab is paused. ${roleName(agent.handle)} reads your message after you resume it.`;
   if (agent.live.state === 'working')
-    return `${agent.handle} is working. Your message reaches it during this turn, or at the start of its next one.`;
-  return `${agent.handle} reads your message at the start of its next turn.`;
+    return `${roleName(agent.handle)} is working. Your message reaches it during this turn, or at the start of its next one.`;
+  return `${roleName(agent.handle)} reads your message at the start of its next turn.`;
 }
 
 /**
@@ -510,12 +517,15 @@ export function Turns({
     entry.askers.some((asker) => asker.agent === agent.id),
   );
   return (
-    <section className="turns" aria-label={`What ${agent.handle} did`}>
+    <section
+      className="turns"
+      aria-label={`What ${roleName(agent.handle)} did`}
+    >
       {run && place !== 'shown' && (
         <p role="status" className="turns__none">
           {place === 'older'
             ? `Run ${run} is not in the turns on this page. It may be in an older turn.`
-            : `Run ${run} is not in ${agent.handle}'s turns.`}
+            : `Run ${run} is not in ${roleName(agent.handle)}'s turns.`}
         </p>
       )}
       {more && (
@@ -535,7 +545,9 @@ export function Turns({
         </span>
       )}
       {turns.length === 0 && (
-        <p className="turns__none">{agent.handle} has no turns yet.</p>
+        <p className="turns__none">
+          {roleName(agent.handle)} has no turns yet.
+        </p>
       )}
       {turns.map((turn) => (
         <TurnItem
@@ -614,14 +626,14 @@ export function DirectionPage({
           {ended || !agent ? (
             <p className="composer__hint">
               {agent
-                ? `${agent.handle} has stopped, so messages no longer reach it.`
+                ? `${roleName(agent.handle)} has stopped, so messages no longer reach it.`
                 : 'Messages reach the agents through the lab.'}{' '}
               <a href={href.lab}>Write to the lab</a> instead.
             </p>
           ) : (
             <Composer
-              label={`Message ${agent.handle}`}
-              placeholder={`Message ${agent.handle}`}
+              label={`Message ${roleName(agent.handle)}`}
+              placeholder={`Message ${roleName(agent.handle)}`}
               maxLength={lab.postLimit}
               hint={reach(agent, lab)}
               onSend={(text, key) =>

@@ -29,6 +29,7 @@ import {
   callWords,
   counted,
   kindLabel,
+  noSetting,
   labEnded,
   nameList,
   verdictText,
@@ -70,6 +71,7 @@ import {
   costWords,
   effectWords,
   minutesText,
+  noSettingWords,
   undoWords,
   type EffectWords,
 } from '../ui/call-words.ts';
@@ -815,6 +817,8 @@ function wordsOf(effect: CallEffect): EffectWords {
       return { type: 'stop', direction: effect.direction };
     case 'domains':
       return { type: 'domains', domains: effect.domains };
+    case 'podsAtOnce':
+      return { type: 'podsAtOnce', pods: effect.pods };
   }
 }
 
@@ -854,7 +858,7 @@ function optionHtml(
       : [];
   const facts = costWords(option.usd, option.minutes);
   const pick = call.pick === index;
-  return `<li><button type="button" class="call-option${pick ? ' picked' : ''}" data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}"><span class="option-label"><span class="key" aria-hidden="true">${index + 1}</span> ${e(option.label)}</span>${facts ? `<span class="option-facts">${e(facts)}</span>` : ''}${pick ? '<span class="pick">The agents\' pick</span>' : ''}</button>${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
+  return `<li><button type="button" class="call-option${pick ? ' picked' : ''}" data-action="lab-call-answer" data-call="${e(call.id)}" data-option="${index}"><span class="option-label"><span class="key" aria-hidden="true">${index + 1}</span> ${e(option.label)}</span>${facts ? `<span class="option-facts">${e(facts)}</span>` : ''}${pick ? '<span class="pick">The agents\' pick</span>' : ''}</button>${lines ? `<p class="fine">${e(lines.does)} ${e(lines.undo)}</p>` : ''}${noSetting(call, option) ? `<p class="fine">${e(noSettingWords)}</p>` : ''}${missing.length ? `<p class="fine">Needs ${e(missing.join(' and '))} in Compute first.</p>` : ''}</li>`;
 }
 
 /** The effect of the agents' pick, which the undo line describes before an answer. */

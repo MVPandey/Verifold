@@ -8,7 +8,7 @@ import {
 } from 'react';
 import type { Lab, Snapshot, Step, TurnDetail } from '../../protocol/api.ts';
 import { refreshKey, stepLines, turnSummary } from '../activity.ts';
-import { clock } from '../format.ts';
+import { clock, roleName } from '../format.ts';
 import type { Connection } from '../store.ts';
 import { byIndex, meet } from '../turns.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -59,7 +59,7 @@ export function TurnScreen({
 }): ReactNode {
   // The snapshot of a large lab can leave the agent out. Its turn still loads from the API.
   const agent = lab.agents.find((entry) => entry.id === agentId);
-  const name = agent?.handle ?? agentId;
+  const name = agent ? roleName(agent.handle) : agentId;
   const folded = agent?.turns.turns.find((turn) => turn.id === turnId);
   const [newest, setNewest] = useState<TurnDetail | null>(null);
   const [earlier, setEarlier] = useState<{

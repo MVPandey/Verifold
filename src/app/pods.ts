@@ -6,7 +6,7 @@ import type {
   PodState,
   ProjectCompute,
 } from '../protocol/api.ts';
-import { clock, usd } from './format.ts';
+import { clock, roleName, usd } from './format.ts';
 import { numberOf, type GpuRow } from './components/Limits.tsx';
 
 /** A pod's state in the words of the settings page. */
@@ -34,13 +34,14 @@ export function running(pod: PodLease): boolean {
   return pod.state === 'starting' || pod.state === 'ready';
 }
 
-/** Who asked for a pod: "You", "claude-2", or "The agent of d-2" when the lab does not show its agent. */
+/** Who asked for a pod: "You", "Agent 2", or "The agent of d-2" when the lab does not show its agent. */
 export function podAsker(pod: PodLease, lab: Lab | null): string {
   if (pod.asker === 'person') return 'You';
   if (pod.asker === 'coordinator') return 'The coordinator';
   const handles = pod.directions.map((id) => {
     const direction = lab?.directions.find((entry) => entry.id === id);
-    return lab?.agents.find((entry) => entry.id === direction?.agent)?.handle;
+    const agent = lab?.agents.find((entry) => entry.id === direction?.agent);
+    return agent && roleName(agent.handle);
   });
   if (handles.length && handles.every(Boolean)) return handles.join(' and ');
   return pod.directions.length

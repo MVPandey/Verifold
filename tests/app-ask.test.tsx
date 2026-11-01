@@ -1107,7 +1107,7 @@ await test('the plan of record is a card that leads its thread: the reading, a t
   // The newest plan leads, as the plan of record. The plan before it is an earlier plan.
   assert.match(
     shown,
-    /^ Cl Planner Plan of record · v2 \d\d:\d\d How I read it: Can a cheap fine-tune make the CoT say what drives the answer\?/,
+    /^ Cl claude-1 Plan of record · v2 \d\d:\d\d How I read it: Can a cheap fine-tune make the CoT say what drives the answer\?/,
   );
   assert.match(
     shown,

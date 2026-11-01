@@ -5,6 +5,7 @@ import {
   undoWords,
   type EffectWords,
 } from '../ui/call-words.ts';
+import { roleName } from './format.ts';
 import {
   href,
   parseRoute,
@@ -68,6 +69,8 @@ function wordsOf(effect: Effect, lab: Lab): EffectWords {
       return { type: 'stop', direction: titled(lab, effect.direction) };
     case 'domains':
       return { type: 'domains', domains: effect.domains };
+    case 'podsAtOnce':
+      return { type: 'podsAtOnce', pods: effect.pods };
   }
 }
 
@@ -83,7 +86,7 @@ export function optionLines(
     wordsOf(option.effect, lab),
     direction ? titled(lab, direction) : null,
     call.askers.map((asker) => ({
-      handle: asker.handle,
+      handle: roleName(asker.handle),
       codex:
         lab.agents.find((agent) => agent.id === asker.agent)?.harness ===
         'codex',
@@ -326,7 +329,7 @@ export function backLabel(under: PageRoute | null, lab: Lab): string {
       );
       const agent = lab.agents.find((entry) => entry.id === direction?.agent);
       return agent
-        ? `Back to ${agent.handle}'s direction`
+        ? `Back to ${roleName(agent.handle)}'s direction`
         : 'Back to the direction';
     }
     case 'answer':

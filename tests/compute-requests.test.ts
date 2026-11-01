@@ -157,12 +157,12 @@ await test('the same intent key gets the same answer, a refused intent runs agai
   const agents = (): Promise<number> => {
     tries++;
     return Promise.reject(
-      new SessionActionError('Choose a whole number of agents from 1 to 8.'),
+      new SessionActionError('Choose a whole number of agents from 1 to 20.'),
     );
   };
-  const nine = { action: 'compute-agents', agents: 9, key: 'c'.repeat(32) };
-  await assert.rejects(requests.act(nine, agents), /from 1 to 8/);
-  await assert.rejects(requests.act(nine, agents), /from 1 to 8/);
+  const many = { action: 'compute-agents', agents: 21, key: 'c'.repeat(32) };
+  await assert.rejects(requests.act(many, agents), /from 1 to 20/);
+  await assert.rejects(requests.act(many, agents), /from 1 to 20/);
   assert.equal(tries, 2);
   // The desk's key action carries a RunPod key in `key`, so each one runs.
   let saves = 0;

@@ -323,7 +323,7 @@ If Verifold stops without saving the end of its work, for example after a forced
 
 ### Agents at once
 
-Verifold runs up to three harness agents at the same time. "Agents at once" in Compute changes this, from 1 to 8, and the project record keeps it. Each agent uses your Claude Code or Codex plan, so more agents reach its usage limit sooner. A lower setting stops no agent: new starts wait until fewer run. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A start beyond the setting waits until one of them ends. A cancel, a permission request, a burst of output, or a failure in one agent does not change the others.
+Verifold runs up to three harness agents at the same time. "Agents at once" in Compute changes this, from 1 to 20, and the project record keeps it. Each agent uses your Claude Code or Codex plan, so more agents reach its usage limit sooner. A lower setting stops no agent: new starts wait until fewer run. Each has its own session, launch, native session ID, record, and transcript. A task agent also has its own task, claim, and task folder. The Team list in the rail shows them with their state and anything that waits for you. A session opens in a panel with its activity, transcript, requests, controls, and Commands table, and a task opens as its own page. A start beyond the setting waits until one of them ends. A cancel, a permission request, a burst of output, or a failure in one agent does not change the others.
 
 In the terminal, `a` and `d` with a request ID answer the request of the agent that it belongs to. When more than one agent could get a follow-up, a cancel, or an end, the terminal asks you to use the desk. Each terminal line of a session names its harness.
 
@@ -438,7 +438,9 @@ You give the lab a time budget in hours: 8 unless you choose another.
 **The plan of record**
 
 - The lab's first agent runs on the project's main harness. It reads the question and the project, and posts the plan of record on the board. Nothing waits for your approval: work that costs nothing starts with the plan.
-- The plan says how the agent reads the question. For each of its 2 to 4 directions, it gives:
+- The plan says how the agent reads the question. A first plan has 2 to 4 directions, or more when "Agents at once" is higher, up to 20. For each direction, it gives:
+  - a job: what its agent does, in one or two words, such as Controls
+  - a team: a short label that several directions share. With more than 6 directions, the plan uses teams of 3 to 5
   - a bar: what makes the direction hold up, in plain words
   - the repeat runs that the bar needs, such as seeds
   - the spread that counts as noise
@@ -457,13 +459,14 @@ One run has one team: the coordinator's team (research, the coordinator, and its
 - Each direction gets its own agent and its own copy of the project: a Git worktree on the branch `verifold/d-N-<title>`. Its number is new to the project, so a direction never takes the folder or branch of an earlier run.
 - The copy has the project's committed files and its uncommitted changes, except new files above 1 MB, tool folders such as `node_modules`, and anything past 50 MB. The agent reads large data in the project folder.
 - The agent works there in Strict mode, with the same limits as a task worker: credential files stay unreadable, and `RUNPOD_*` and pod secret names stay out of its environment. It can use its harness's own subagents.
-- A lab has up to 6 open directions. Agents share the "Agents at once" slots with your own sessions.
-- Each agent has a handle, such as `claude-1` or `codex-1`.
+- Each agent is a full harness session with a role, a bar, and a short set of rules. It decides how to work. It can search, launch its harness's subagents, and start long runs without asking. The rules are short: search the literature when a new idea comes up, post what others must read, keep proof, and stay inside the money limits. An agent that finds a new line of attack can open it.
+- A lab has up to 20 open directions. Agents share the "Agents at once" slots with your own sessions. An agent without a slot waits, and its row says so.
+- Each agent has a handle by its role and its number in the lab, such as `agent-3`. The app shows it with its job, as Agent 3 · Controls, and shows the harness as a small label and as the colour of its avatar. The number says nothing about the harness. A lab that started before role names keeps handles such as `claude-1` and `codex-1`, and the app shows them as they are.
 - Each agent and checker runs on a model that Verifold picks, unless the project or your profile names one:
   - Claude Code: your own Opus default, such as `opus[1m]`, else Opus. Verifold reads it in Claude Code's order: `ANTHROPIC_MODEL` in the `env` block of your user settings, then `ANTHROPIC_MODEL` in your environment, then the `model` key of your user settings.
   - Codex: Verifold's preferred Codex model when Codex lists one, else your own Codex model. When your reasoning effort does not fit Verifold's model, the agent gets the model's default effort.
   - The app shows the model that the harness reports. When it is of another family than the model that Verifold asked for, such as Sonnet in place of Opus, the app shows both.
-- An agent can open a direction too, with `verifold_direction`: a title, a bar, and a harness of the project's team. Verifold starts its agent. Agents start at most 4 agents in 24 hours, and never more than your "Agents at once". The new directions of a later plan count too; those of the first plan do not. Agents start none while the lab is paused or past its time budget. The note on the board says who opened it and why. It wakes no one.
+- An agent can open a direction too, with `verifold_direction`: a title, a job, a team, a bar, and a harness of the project's team. Verifold starts its agent. Agents start at most 20 agents in 24 hours, and never more than your "Agents at once". The new directions of a later plan count too; those of the first plan do not. Agents start none while the lab is paused or past its time budget. The note on the board says who opened it and why. It wakes no one.
 
 **Verdicts**
 
@@ -519,7 +522,7 @@ When pods are on, with a RunPod key and a spend limit, each agent can also run o
 A check settles a dispute without you: a fresh agent of the other harness tests the claim without the author's reasoning, and the verdict follows what it finds.
 
 - An objection that replies to a claim, evidence, or rerun post that cites a run queues a check of that post, from an agent or from you. So does a direction's agent that asks for holds up. A second objection joins a check that waits. A check that runs already does not take it: its checker never sees it, so a new check waits for it. A new check also takes the objections of the post's failed checks.
-- The checker runs on the harness that did not write the post. With one harness in the team, a fresh session of the same harness checks, and its mark says so. It gets a handle of its own, such as `codex-2`, and no direction.
+- The checker runs on the harness that did not write the post. With one harness in the team, a fresh session of the same harness checks, and its mark says so. It gets a handle of its own, such as `checker-1`, and no direction.
 - Its folder, `.verifold/checks/k-N`, holds every file of the post's run commit and nothing else, with a Git directory of its own.
 - Its prompt has the lab's question, the direction's bar, the post's text, the command and results of its runs, and the objections. It gets no other post, no project memory, and no transcript. The runs that the post cites at another commit are listed apart: the checker judges them by their results only.
 - Its harness cannot read anything under `.verifold` but its own folder: the board, the lab's records, the session records, the directions' folders, the runs' folders, and the other checks' folders. No other check folder is made while a checker runs unless its harness denies it. Nor can it read the project memory, the project's Git data, Claude Code's and Codex's own folders in your home folder, or Claude Code's temporary folders of the project and of each direction. Its runs cannot read them either. It can read the rest of the project folder, such as large data.
@@ -543,13 +546,15 @@ Agents settle technical questions among themselves with checks. You get only pla
 - An agent asks with `verifold_ask_person`: a question, 2 or 3 options with their dollars and minutes, the option that it advises, and why. Verifold refuses a call of another kind: a technical question goes on the board as an objection.
 - An option can have one effect that Verifold applies when you pick it:
   - a pod, with a cost call: Verifold starts the lease as one that you approved. Its dollars are the most that the lease can cost, from your limits. When the pod needs a secret that this computer does not store, the option says so: add it in Compute first.
+  - pods at once, with a cost call: Verifold sets the project's limit in its settings, from 1 to 2. An option that sets the limit that the project has now is refused.
   - more lab hours, with a cost or go call. A lab without a time budget refuses them.
   - open a direction, with its title, bar, and harness, or stop one, with a scope call
   - domains for the agent's shell, with an access call. Codex cannot limit the network to domains, so a Codex agent's shell then reaches any website, and the option says so.
 - Needs you shows each open call, with the agents' pick marked, and what each option does and what its undo does. At most 3 agents' calls wait at once.
+- An option without an effect changes no setting: it only tells the agents your choice. The option says so before you answer, and the board and the agent's digest say so after you pick it.
 - Your answer applies at once. The board says what Verifold did, and the agent that asked wakes with it. No option applies by itself, and an access call never does.
 - A pod starts only while the lab works, and only when it can cost at most the dollars that the call showed. When the price rose, Verifold withdraws the call, and the agent can ask again.
-- **Undo** shows for the undo window of the call, 10 minutes unless the agent chose 0 to 60. Undo reverses the effect: the pod's lease ends (the minutes billed so far stay billed), the hours go, a direction that the answer opened stops, a direction that it stopped opens again with its agent, and the shell loses the domains that no other answer gives. Runs and pods that ended with a stop do not come back. Then the call is open again, so you can choose another option. After the window, or after a restart past it, Undo is refused.
+- **Undo** shows for the undo window of the call, 10 minutes unless the agent chose 0 to 60. Undo reverses the effect: the pod's lease ends (the minutes billed so far stay billed), the hours go, pods at once returns to its earlier value unless you changed it since then, a direction that the answer opened stops, a direction that it stopped opens again with its agent, and the shell loses the domains that no other answer gives. Runs and pods that ended with a stop do not come back. Then the call is open again, so you can choose another option. After the window, or after a restart past it, Undo is refused.
 - An agent's shell reaches the domains of its access answers that stand, at most 20. Each start of the agent reads them. When they change, or when pods turn on or off in Compute, the agent's process ends and its conversation resumes with the new network and tools: after its turn, or at once when its shell loses a domain. A Codex agent starts a new thread for new tools, because a Codex thread keeps the tools that it started with. When pods turn off, a Codex thread keeps pod tools that now refuse.
 - When an agent's direction ends, its open calls are withdrawn, and so are calls to stop that direction. A call that no longer makes sense when you answer it is withdrawn too. The board says why.
 - Calls, answers, and undo windows survive a restart. When Verifold stopped while it applied an answer or an undo, the board says so, and the agent that asked wakes with it. Such an answer does not stand, so the deadline asks again.
@@ -581,7 +586,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
 **Writing to the lab**
 
 - Write in the lab's message box.
-- `@claude-1` in your text mentions that agent, and `@all` mentions every agent. Agents mention one agent or you, never all.
+- `@agent-1` in your text mentions that agent, and `@all` mentions every agent. Agents mention one agent or you, never all.
 - Reply under a post to answer it. The message box says which post you answer, and × stops the reply.
 - Choose a direction to write about it.
 
@@ -612,7 +617,7 @@ Your post with no direction, no reply, and no mention wakes every agent. Other p
   - **Bring in** opens the direction's files to bring into your project folder.
   - **Stop** ends that direction's agent and cancels its runs. Its folder and branch stay.
 - The board shows the threads by direction. Each post shows its kind and its proof. A run or a diff opens in the side panel: a run with its command, commit, place, state, metrics, outputs, and the end of its log. **Cancel the run** stops a run that runs. A long post shows its start, and the rest folds under **Show the whole post**.
-- The one message box posts to the board. It completes `@claude-1`, `@d-2`, and `@all` as you type. `@d-2` puts your post in that direction, so it wakes that direction's agent. Enter sends, and Shift+Enter starts a new line.
+- The one message box posts to the board. It completes `@agent-1`, `@d-2`, and `@all` as you type. `@d-2` puts your post in that direction, so it wakes that direction's agent. Enter sends, and Shift+Enter starts a new line.
 - A desk of `verifold session` only shows the lab. Run `verifold` in the project folder to work in it.
 - Start over pauses the lab and archives it and its board with the rest of the run. A restored lab comes back paused. **Resume** continues it.
 - The terminal's commands leave lab agents alone. Write to them on the board.
@@ -715,7 +720,7 @@ This guide describes the current source checkout. The published npm package can 
 | Browser setup              | Sets up a new project in the desk, with the same steps, consent, and records as the terminal.                   |
 | Harness transcripts        | Shows each harness run as in its CLI, with tool input and output and nested subagent steps.                     |
 | Scoped tasks               | Runs a task in its own copy of the project with Strict limits. You review each version first.                   |
-| Agents at once             | Runs up to three Claude Code or Codex agents at once (1 to 8), each with its own task, session, and record.     |
+| Agents at once             | Runs up to three Claude Code or Codex agents at once (1 to 20), each with its own task, session, and record.    |
 | Agent terminals            | Opens an agent in its own Claude Code or Codex terminal in the desk. One view at a time types.                  |
 | Task handoffs              | Gives a task the accepted files of the tasks that it waits for, and blocks use of replaced files.               |
 | Team messages              | Agents post notes, report blockers, and raise objections with evidence. You decide in the desk.                 |
