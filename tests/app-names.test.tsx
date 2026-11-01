@@ -14,9 +14,9 @@ import {
   authorOf,
   avatarText,
 } from '../src/app/format.ts';
-import { podAsker } from '../src/app/pods.ts';
+import { changesOf, podAsker, podsAtOnceChoices } from '../src/app/pods.ts';
 import { noSettingWords, undoWords } from '../src/ui/call-words.ts';
-import { agentName, roleName } from '../src/ui/lab-lines.ts';
+import { agentName, roleName, roleOf } from '../src/ui/lab-lines.ts';
 
 const now = Date.UTC(2026, 10, 1, 12, 0);
 const at = new Date(now - 60_000).toISOString();
@@ -76,6 +76,22 @@ function post(more: Partial<Post>): Post {
   };
 }
 
+await test('one parser reads a role handle, and coordinator is a role with no number', () => {
+  assert.deepEqual(roleOf('agent-3'), { word: 'Agent', number: '3' });
+  assert.deepEqual(roleOf('checker-12'), { word: 'Checker', number: '12' });
+  assert.deepEqual(roleOf('coordinator'), {
+    word: 'Coordinator',
+    number: null,
+  });
+  for (const word of ['claude-2', 'codex-1', 'agent-0', 'agent', 'You'])
+    assert.equal(roleOf(word), null, word);
+  assert.equal(avatarText({ harness: 'codex', handle: 'coordinator' }), 'Cx');
+  assert.equal(
+    agentDetail({ handle: 'coordinator', harness: 'claude' }),
+    'Claude Code',
+  );
+});
+
 await test('a role handle reads as a name, and an old handle stays', () => {
   assert.equal(roleName('agent-3'), 'Agent 3');
   assert.equal(roleName('checker-12'), 'Checker 12');
@@ -123,6 +139,11 @@ await test('an old lab shows its old handle, with no job and no harness label', 
   assert.equal(
     agentDetail({ handle: 'claude-2', harness: 'claude', job: null }),
     null,
+  );
+  // An old handle names its harness already, so it keeps only its job.
+  assert.equal(
+    agentDetail({ handle: 'claude-2', harness: 'claude', job: 'Controls' }),
+    'Controls',
   );
   const row = renderToStaticMarkup(
     <DirectionRow
@@ -264,6 +285,13 @@ await test('the call card says what each option does before the person answers',
   );
   assert.match(noSettingWords, /changes no setting/);
   assert.match(undoWords(10, null), /undo it for 10 minutes/);
+});
+
+await test('the control of pods at once offers each value up to the limit', () => {
+  assert.deepEqual(podsAtOnceChoices, ['1', '2', '3', '4', '5', '6', '7', '8']);
+  assert.deepEqual(changesOf({ maxRunningPods: '5' }, null), {
+    maxRunningPods: 5,
+  });
 });
 
 await test('a pod names the agent that asked by its role', () => {

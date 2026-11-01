@@ -10,13 +10,15 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { maxAgents, validAgents } from '../src/core/contracts.ts';
-import { maxPodsAtOnce } from '../src/core/compute.ts';
+import { maxPodsAtOnce } from '../src/core/pod-limits.ts';
 import { Lab } from '../src/core/lab.ts';
 import {
   askPersonToolSpec,
   callLimits,
+  checksAtOnce,
   directionLimits,
   directionToolSpec,
   handlePattern,
@@ -24,12 +26,17 @@ import {
   planLimits,
   planToolSpec,
 } from '../src/core/lab-tools.ts';
-import { agentLine, nextHandle } from '../src/core/lab/names.ts';
+import {
+  agentLine,
+  mentionPattern,
+  nextHandle,
+} from '../src/core/lab/names.ts';
 import {
   callEffect,
   labLimits,
   parseState,
   type Call,
+  type Check,
   type LabCompute,
   type LabSessions,
   type LabState,
@@ -37,14 +44,17 @@ import {
 } from '../src/core/lab/schema.ts';
 import { choiceLine, firstPlanMost, noSetting } from '../src/core/lab/words.ts';
 import { loadPrompt } from '../src/core/prompts.ts';
+import { labRunLimit } from '../src/core/runs.ts';
 import type { AgentTools } from '../src/core/session-hosts.ts';
 import type { Away } from '../src/core/away.ts';
 import type { SessionView } from '../src/core/session.ts';
 import { changeWorkspace } from '../src/core/storage.ts';
 import { gitEnvironment } from '../src/core/workspaces.ts';
 import { ApiReader, apiLimits } from '../src/server/api.ts';
+import { keptAgents, keptDirections } from '../src/server/lab-lists.ts';
 import {
   agentsAtOnceMost,
+  podsAtOnceMost,
   type Lab as Lab_,
   type Snapshot,
 } from '../src/protocol/api.ts';
@@ -53,6 +63,7 @@ import {
   requestUpdate,
   TranscriptWriter,
 } from '../src/core/transcript.ts';
+import { fakePod } from './fake-pod.ts';
 import { until } from './wait.ts';
 
 function git(cwd: string, ...args: string[]): void {
@@ -251,6 +262,17 @@ await test('the handle pattern accepts both schemes and keeps coordinator', () =
     assert.ok(mention.test(handle), handle);
 });
 
+await test("a person's mention follows the lab's own scheme", () => {
+  const person = (state: Pick<LabState, 'roles'>): RegExp =>
+    new RegExp(`^${mentionPattern(state)}$`);
+  const roles = person({ roles: { agents: 1, checkers: 0 } });
+  const old = person({ roles: null });
+  assert.ok(roles.test('agent-3') && roles.test('checker-1'));
+  assert.ok(!roles.test('claude-3') && !roles.test('coordinator'));
+  assert.ok(old.test('claude-3') && old.test('codex-1'));
+  assert.ok(!old.test('agent-3') && !old.test('coordinator'));
+});
+
 await test('a state from before role names has no roles and parses', () => {
   const state = {
     schemaVersion: 1,
@@ -307,6 +329,10 @@ await test('a new lab numbers its agents in the order they open, whatever the ha
     lab.post({ text: '@agent-9 look.' }),
     /No agent of the lab has the handle agent-9/,
   );
+  // The other scheme, and the name that no session has yet, stay plain text.
+  for (const text of ['@claude-1 look.', '@coordinator look.'])
+    assert.deepEqual((await lab.post({ text })).mentions, []);
+  assert.equal(lab.roleNames, true);
 });
 
 await test('an old lab keeps its handles, and its next agent and check count by harness', async (t) => {
@@ -344,6 +370,14 @@ await test('an old lab keeps its handles, and its next agent and check count by 
   ]);
   const post = await later.lab.post({ text: '@claude-2 hello.' });
   assert.equal(post.mentions.length, 1);
+  // The new scheme stays plain text here, and a handle of the lab's scheme still needs an agent.
+  const plain = await later.lab.post({ text: '@agent-1 hello.' });
+  assert.deepEqual(plain.mentions, []);
+  await assert.rejects(
+    later.lab.post({ text: '@claude-9 hello.' }),
+    /No agent of the lab has the handle claude-9/,
+  );
+  assert.equal(later.lab.roleNames, false);
 });
 
 await test('a plan and a new direction set a job and a team, and a later plan keeps them', async (t) => {
@@ -464,6 +498,19 @@ await test('a first plan grows with "Agents at once", and lists at least what is
   assert.equal(firstPlanMost(3, 6), 6);
 });
 
+await test('runs follow "Agents at once" with a floor, and checks run one per 5', () => {
+  assert.equal(labRunLimit(undefined), 3);
+  assert.equal(labRunLimit(1), 3);
+  assert.equal(labRunLimit(3), 3);
+  assert.equal(labRunLimit(20), 20);
+  assert.deepEqual(
+    [undefined, 1, 4, 5, 9, 10, 19, 20].map((slots) => checksAtOnce(slots)),
+    [1, 1, 1, 1, 1, 2, 3, 4],
+  );
+  assert.equal(callLimits.open, 6);
+  assert.match(askPersonToolSpec.description, /At most 6 calls wait/);
+});
+
 await test('a first plan of 20 opens every agent, and agents without a slot wait for one', async (t) => {
   const root = await project(t);
   const { lab, started } = newLab(t, root, 20);
@@ -513,15 +560,20 @@ await test('with few slots a first plan stays small, and a waiting agent shows i
 });
 
 /**
- * A lab of 20 agents on a busy day: each agent has written `turns` turns of a
- * long message to its transcript.
+ * A lab of `count` agents on a busy day: each agent has written `turns` turns
+ * of a long message to its transcript. The first `ended` directions are closed.
  */
-async function busyLab(root: string, turns: number): Promise<LabView> {
+async function busyLab(
+  root: string,
+  turns: number,
+  count = 20,
+  ended = 0,
+): Promise<LabView> {
   const at = '2026-11-01T10:00:00.000Z';
   const session = (index: number): string =>
     `20261101T100000000Z-${String(index + 1).padStart(8, '0')}`;
   const directions = Array.from(
-    { length: 20 },
+    { length: count },
     (_, index): LabState['directions'][number] => ({
       id: `d-${index + 1}`,
       title: 'x'.repeat(planLimits.title),
@@ -533,7 +585,7 @@ async function busyLab(root: string, turns: number): Promise<LabView> {
       buildsOn: [],
       openedBy: 'a-1',
       openedAt: at,
-      state: 'open',
+      state: index < ended ? 'closed' : 'open',
       stoppedAt: null,
       verdict: 'open',
       evidence: null,
@@ -572,7 +624,7 @@ async function busyLab(root: string, turns: number): Promise<LabView> {
   });
   assert.ok(state);
   return {
-    state: { ...state, directions, roles: { agents: 20, checkers: 0 } },
+    state: { ...state, directions, roles: { agents: count, checkers: 0 } },
     posts: [],
     handles: Object.fromEntries(
       directions.map((entry, index) => [entry.agent, `agent-${index + 1}`]),
@@ -638,6 +690,145 @@ await test('a snapshot of 20 busy agents fits its bound, leaves out no direction
   assert.equal(lab.agents[2]?.job, 'Job 3');
 });
 
+await test('a cut list keeps open directions first, then the newest, and each kept row keeps its agent', async (t) => {
+  const row = (id: string, state: string): { id: string; state: string } => ({
+    id,
+    state,
+  });
+  const list = [
+    row('d-1', 'open'),
+    row('d-2', 'closed'),
+    row('d-3', 'stopped'),
+    row('d-4', 'closed'),
+    row('d-5', 'open'),
+  ];
+  const ids = (max: number): string[] =>
+    keptDirections(list, max).map((entry) => entry.id);
+  assert.deepEqual(ids(5), ['d-1', 'd-2', 'd-3', 'd-4', 'd-5']);
+  assert.deepEqual(ids(3), ['d-1', 'd-4', 'd-5']);
+  assert.deepEqual(ids(2), ['d-1', 'd-5']);
+  assert.deepEqual(ids(1), ['d-5']);
+  assert.deepEqual(ids(0), []);
+  const agent = (
+    id: string,
+    direction: string | null,
+    status: string,
+  ): { id: string; direction: string | null; status: string } => ({
+    id,
+    direction,
+    status,
+  });
+  const agents = [
+    agent('a-1', 'd-1', 'idle'),
+    agent('a-2', 'd-2', 'closed'),
+    agent('c-1', null, 'done'),
+    agent('c-2', null, 'running'),
+    agent('c-3', null, 'queued'),
+  ];
+  const kept = (max: number): string[] =>
+    keptAgents(agents, new Set(['d-1']), max).map((entry) => entry.id);
+  assert.deepEqual(kept(3), ['a-1', 'c-2', 'c-3']);
+  // A kept row and a running checker stay past the limit. The smallest snapshot keeps none.
+  assert.deepEqual(kept(1), ['a-1', 'c-2']);
+  assert.deepEqual(kept(0), []);
+
+  const root = await project(t);
+  const busy = await busyLab(root, 0, 115, 110);
+  const at = '2026-11-01T10:00:00.000Z';
+  const check: Check = {
+    id: 'k-1',
+    claim: 'p-1',
+    objections: [],
+    holdsUp: false,
+    direction: 'd-1',
+    run: 'r-1',
+    commit: 'a'.repeat(40),
+    harness: 'codex',
+    sameHarness: false,
+    agent: 'a-900',
+    handle: 'checker-1',
+    model: null,
+    state: 'running',
+    outcome: null,
+    method: null,
+    result: null,
+    note: null,
+    queuedAt: at,
+    startedAt: at,
+    endedAt: null,
+    restarts: 0,
+    session: null,
+    generation: 'g',
+    start: null,
+    blind: true,
+  };
+  const { lab } = await wireLab(root, {
+    ...busy,
+    checks: [check],
+    handles: { ...busy.handles, 'a-900': 'checker-1' },
+  });
+  assert.equal(lab.directions.length, apiLimits.directions);
+  assert.equal(lab.omitted.directions, 115 - apiLimits.directions);
+  // The 5 open directions stay. The ended ones are the newest, so d-1 to d-15 go.
+  assert.deepEqual(lab.directions[0]?.id, 'd-16');
+  assert.equal(lab.directions.at(-1)?.id, 'd-115');
+  assert.equal(
+    lab.directions.filter((entry) => entry.state === 'open').length,
+    5,
+  );
+  const shown = new Set(lab.agents.map((entry) => entry.id));
+  for (const direction of lab.directions)
+    assert.ok(shown.has(direction.agent), `${direction.id} lost its agent`);
+  assert.ok(shown.has('a-900'), 'the running checker stays');
+});
+
+await test('a later plan wakes each agent whose direction changed, past the limit of mentions, and a new label wakes none', async (t) => {
+  const root = await project(t);
+  const { lab, started } = newLab(t, root, 8);
+  await lab.start('Do months sit on a circle?');
+  const planner = await firstStart(started);
+  await postPlan(
+    planner,
+    Array.from({ length: 8 }, (_, index) => entry(`Line ${index + 1}`)),
+  );
+  await until(() => started.length === 8);
+  const ids = statesOf(lab).state.directions.map(({ id }) => id);
+  const plan = async (
+    key: string,
+    change: Record<string, unknown>,
+  ): Promise<string> => {
+    const result = await planner.tools.call(
+      'verifold_plan',
+      {
+        reading: 'R',
+        cost: 'None.',
+        directions: ids.map((id) => ({ id, ...change })),
+        changed: `Change ${key}.`,
+      },
+      key,
+    );
+    assert.equal(result.ok, true, result.text);
+    return statesOf(lab).state.plan?.post ?? '';
+  };
+  const told = (post: string): number =>
+    statesOf(lab)
+      .directions.slice(1)
+      .filter(({ agent }) => agent.events.some((event) => event.post === post))
+      .length;
+  // A new label changes the plan's card and wakes no one.
+  const labels = await plan('labels', { job: 'New', team: 'Other' });
+  assert.equal(
+    statesOf(lab).state.directions[1]?.job,
+    'New',
+    'the plan keeps the label',
+  );
+  await delay(50);
+  assert.equal(told(labels), 0);
+  const bars = await plan('bars', { bar: 'A new bar.' });
+  assert.equal(statesOf(lab).posts.at(-1)?.mentions.length, 5);
+  await until(() => told(bars) === 7);
+});
+
 await test('a post, an away line, and a search hit name an agent with its job', async (t) => {
   const root = await project(t);
   const busy = await busyLab(root, 0);
@@ -694,13 +885,15 @@ await test('the prompts leave the agent free to work, and state the rules', asyn
 
 await test('pods at once is an effect of a cost call, inside the limit of Settings', () => {
   assert.equal(callLimits.podsAtOnce, maxPodsAtOnce);
+  assert.equal(maxPodsAtOnce, 8);
+  assert.equal(podsAtOnceMost, maxPodsAtOnce);
   assert.deepEqual(callEffect({ podsAtOnce: 2 }, 'cost'), {
     type: 'podsAtOnce',
     pods: 2,
   });
   assert.throws(
     () => callEffect({ podsAtOnce: maxPodsAtOnce + 1 }, 'cost'),
-    /pods at once as a whole number from 1 to 2/,
+    /pods at once as a whole number from 1 to 8/,
   );
   assert.throws(
     () => callEffect({ podsAtOnce: 2 }, 'scope'),
@@ -718,10 +911,12 @@ const option = (
   effect: Call['options'][number]['effect'] = null,
 ): Call['options'][number] => ({ label, usd: null, minutes: null, effect });
 
-await test("an option with no effect says so, unless it is Verifold's own", () => {
+await test("an option with no effect says so on a call that a setting serves, and never on Verifold's own", () => {
   const call = {
     id: 'c-1',
     by: 'a-1',
+    kind: 'cost' as const,
+    need: null,
     options: [
       option('Raise it'),
       option('More hours', { type: 'hours', hours: 2 }),
@@ -743,6 +938,14 @@ await test("an option with no effect says so, unless it is Verifold's own", () =
   // "Stop here" on Verifold's deadline call ends the lab, so it does not say so.
   const deadline = { ...call, by: 'verifold' };
   assert.equal(noSetting(deadline, option('Stop here')), false);
+  for (const kind of ['cost', 'access', 'go'] as const)
+    assert.equal(noSetting({ ...call, kind }, option('A')), true, kind);
+  // A scope call shapes the plan, and a need call asks the person to act themselves.
+  assert.equal(noSetting({ ...call, kind: 'scope' }, option('A')), false);
+  assert.equal(
+    noSetting({ ...call, kind: 'access', need: 'pods' }, option('I set it')),
+    false,
+  );
   assert.equal(
     choiceLine(deadline, 0, ''),
     'The person chose "Raise it" on c-1.',
@@ -756,9 +959,11 @@ function fakeCompute(): LabCompute & { pods: number } {
     podsOn: () => true,
     keySaved: () => true,
     podsAtOnce: () => compute.pods,
-    setPodsAtOnce: (pods: number) => {
-      compute.pods = pods;
-      return Promise.resolve();
+    setPodsAtOnce: (pods: number, only?: number) => {
+      const before = compute.pods;
+      const changed = only === undefined || before === only;
+      if (changed) compute.pods = pods;
+      return Promise.resolve({ before, changed });
     },
     podRuns: () => ({}),
   };
@@ -830,6 +1035,101 @@ await test('a call sets pods at once, tells the agent, and undo sets it back', a
     statesOf(lab).posts.at(-1)?.text ?? '',
     /Pods at once stays 1: it changed after the answer\./,
   );
+});
+
+await test('a pick that sets the limit that the project has now is withdrawn, so it says nothing changed and has no undo', async (t) => {
+  const root = await project(t);
+  const compute = fakeCompute();
+  const { lab, started } = newLab(t, root, 4, compute);
+  await lab.start('Do months sit on a circle?');
+  const planner = await firstStart(started);
+  await postPlan(planner, [entry('One'), entry('Two')]);
+  const asked = await planner.tools.call('verifold_ask_person', ask(2), 'ask');
+  assert.equal(asked.ok, true, asked.text);
+  // The person set it in Settings while the call waited.
+  compute.pods = 2;
+  await assert.rejects(
+    lab.answerCall('c-1', 0),
+    /Pods at once is 2 already, so nothing changed\./,
+  );
+  const call = statesOf(lab).state.calls[0];
+  assert.equal(call?.state, 'withdrawn');
+  assert.equal(call?.undoUntil, null);
+  assert.equal(compute.pods, 2);
+});
+
+await test('Compute changes pods at once in its queue: an undo sets the limit only while it is the value of the answer', async (t) => {
+  const { compute } = await fakePod(t);
+  assert.deepEqual(await compute.setPodsAtOnce(8), {
+    before: 1,
+    changed: true,
+  });
+  assert.equal(compute.podsAtOnce(), 8);
+  assert.equal(compute.view().settings.maxRunningPods, 8);
+  // A compare that does not hold changes nothing.
+  assert.deepEqual(await compute.setPodsAtOnce(1, 3), {
+    before: 8,
+    changed: false,
+  });
+  assert.equal(compute.podsAtOnce(), 8);
+  // Two at once take turns: the second sees the value of the first.
+  const both = await Promise.all([
+    compute.setPodsAtOnce(2, 8),
+    compute.setPodsAtOnce(3, 8),
+  ]);
+  assert.deepEqual(
+    both.map(({ changed }) => changed),
+    [true, false],
+  );
+  assert.equal(compute.podsAtOnce(), 2);
+  await assert.rejects(
+    compute.setPodsAtOnce(maxPodsAtOnce + 1),
+    /number of pods as a whole number from 1 to 8/,
+  );
+});
+
+await test('at 8 pods at once, each pod still holds its whole cost against the spend limit', async (t) => {
+  const { compute } = await fakePod(t);
+  await compute.setPodsAtOnce(8);
+  const pod = {
+    gpu: 'NVIDIA RTX A5000',
+    hours: 4,
+    directions: ['d-1'],
+    reason: 'Train the small model.',
+  };
+  const cost = await compute.podCost(pod);
+  // The limit fits two pods and most of a third. Pods at once would allow all three.
+  await compute.changeSettings(
+    { limitUsd: Number((cost * 2.5).toFixed(2)) },
+    undefined,
+  );
+  const started = await Promise.allSettled([
+    compute.startPod(pod),
+    compute.startPod(pod),
+    compute.startPod(pod),
+  ]);
+  assert.equal(
+    started.filter((result) => result.status === 'fulfilled').length,
+    2,
+  );
+  const refused = started.find((result) => result.status === 'rejected');
+  assert.match(String(refused?.reason), /of (the|your) limit is left/);
+  const { left, reserved } = compute.view().budget;
+  assert.ok(left !== null && left >= 0, `left: ${left}`);
+  assert.ok(reserved <= cost * 2 + 0.01);
+});
+
+await test('the lab tools load no pod code', async () => {
+  const tools = await readFile(
+    new URL('../src/core/lab-tools.ts', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(tools, /from '\.\/compute\.ts'/);
+  const leaf = await readFile(
+    new URL('../src/core/pod-limits.ts', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(leaf, /^import /m);
 });
 
 await test('the pick of an option with no effect reaches the post and the agent, and says it changes no setting', async (t) => {

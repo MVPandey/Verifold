@@ -51,7 +51,7 @@ import type { SecretGuard } from './runpod.ts';
  */
 
 export const runLimits = {
-  /** Runs at once: for one agent, and for the whole lab. */
+  /** Runs at once: for one agent, and the least for the whole lab. See `labRunLimit`. */
   perAgent: 2,
   perLab: 3,
   minutes: 240,
@@ -80,6 +80,11 @@ export const runLimits = {
   /** After SIGTERM, a run's processes get this long before SIGKILL. */
   graceMs: 5_000,
 };
+
+/** The runs that a lab has at once: as many as "Agents at once", and at least `runLimits.perLab`. */
+export function labRunLimit(slots: number | undefined): number {
+  return Math.max(runLimits.perLab, slots ?? 0);
+}
 
 export type RunStatus =
   | 'queued'
@@ -818,6 +823,8 @@ export interface RunLedgerOptions {
   readonly podStopMs?: number;
   /** The lab's queue. Every change of a record runs in it. */
   readonly serial: <T>(work: () => T | Promise<T>) => Promise<T>;
+  /** "Agents at once" now. The person can change it while a lab runs. */
+  readonly slots?: () => number | undefined;
   /**
    * A run ended. In the lab's queue. Returns true when its agent heard it.
    * Not called for a run that ended before its `start` call returned: that
@@ -1134,10 +1141,9 @@ export class RunLedger {
       fail(
         `You have ${runLimits.perAgent} runs that run now. Wait until one ends, or cancel one.`,
       );
-    if (this.running() >= runLimits.perLab)
-      fail(
-        `The lab has ${runLimits.perLab} runs that run now. Wait until one ends.`,
-      );
+    const most = labRunLimit(this.options.slots?.());
+    if (this.running() >= most)
+      fail(`The lab has ${most} runs that run now. Wait until one ends.`);
   }
 
   /**

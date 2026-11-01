@@ -1132,7 +1132,15 @@ await test('a large lab stays inside the snapshot bound and says that it is trim
         direction: 'd-1',
       }),
     );
-  const view: LabView = { ...base, directions, posts };
+  const view: LabView = {
+    ...base,
+    state: {
+      ...base.state,
+      directions: directions.map((entry) => entry.direction),
+    },
+    directions,
+    posts,
+  };
   const json = (await new ApiReader(sources(root, () => view)).build()).json;
   const data = parse(json);
   assert.ok(Buffer.byteLength(json) <= apiLimits.snapshot);

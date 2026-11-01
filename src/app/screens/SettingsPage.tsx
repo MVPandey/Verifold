@@ -20,6 +20,7 @@ import {
   gpuName,
   podAsker,
   podState,
+  podsAtOnceChoices,
   running,
   settingsText,
   shownGpus,
@@ -479,13 +480,14 @@ function Limits({
                   className="select"
                   value={text.maxRunningPods}
                   onChange={(event) =>
-                    set('maxRunningPods')(
-                      event.target.value === '2' ? '2' : '1',
-                    )
+                    set('maxRunningPods')(event.target.value)
                   }
                 >
-                  <option value="1">1</option>
-                  <option value="2">2</option>
+                  {podsAtOnceChoices.map((choice) => (
+                    <option key={choice} value={choice}>
+                      {choice}
+                    </option>
+                  ))}
                 </select>
               </span>
             </div>

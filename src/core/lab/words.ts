@@ -21,6 +21,7 @@ import {
 import {
   type Brought,
   type Call,
+  type CallKind,
   type CallOption,
   type Direction,
   type Evidence,
@@ -110,16 +111,25 @@ export function wordsPost(call: Call, words: string): NewPost {
       );
 }
 
+/** The kinds of call where a setting would do the work of an option. */
+const settingKinds: readonly CallKind[] = ['cost', 'access', 'go'];
+
 /**
- * The option's pick changes no setting: it only tells the agents that asked.
- * Verifold's own deadline call is the exception: its option without an effect
- * ends the lab.
+ * The person's pick of this option changes no setting, so they need to know.
+ * Only a call of a kind where a setting does the work says so. A scope call
+ * shapes the plan, a `need` call asks the person to act themselves, and the
+ * option of Verifold's own deadline call without an effect ends the lab.
  */
 export function noSetting(
-  call: Pick<Call, 'by'>,
+  call: Pick<Call, 'by' | 'kind' | 'need'>,
   option: Pick<CallOption, 'effect'>,
 ): boolean {
-  return option.effect === null && call.by !== 'verifold';
+  return (
+    option.effect === null &&
+    call.by !== 'verifold' &&
+    call.need === null &&
+    settingKinds.includes(call.kind)
+  );
 }
 
 /**
@@ -127,7 +137,7 @@ export function noSetting(
  * person chose. `did`: what Verifold changed, in words, or nothing.
  */
 export function choiceLine(
-  call: Pick<Call, 'by' | 'id' | 'options'>,
+  call: Pick<Call, 'by' | 'id' | 'kind' | 'need' | 'options'>,
   picked: number,
   did: string,
 ): string {

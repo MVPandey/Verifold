@@ -327,6 +327,9 @@ await test('the settings page shows the pods, the limits, the GPUs, and Agents a
     /<button type="button" class="button button--dark" disabled="">Approve, up to \$0\.55<\/button>/,
   );
   assert.match(html, /value="25"/);
+  // Pods at once offers each value up to the limit.
+  assert.match(html, /<option value="1"[^>]*>1<\/option>/);
+  assert.match(html, /<option value="8"[^>]*>8<\/option>/);
   assert.match(html, /value="3"/);
   // Fields that the person does not edit show the newest saved values.
   const newer = render(
