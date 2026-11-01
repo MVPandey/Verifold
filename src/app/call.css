@@ -144,6 +144,13 @@
   font-weight: 500;
 }
 
+/* An agent's detail can promise a change, so this line stands out from it. */
+.call__no-setting {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--need-ink);
+}
+
 .call__pick {
   flex: none;
   padding: 3px 10px;

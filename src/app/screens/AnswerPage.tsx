@@ -19,7 +19,7 @@ import {
   yourCalls,
   type Finding,
 } from '../answer.ts';
-import { clock } from '../format.ts';
+import { agentName, clock } from '../format.ts';
 import { afterSend } from '../intent.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
@@ -183,7 +183,7 @@ function StillOpen({ lab }: { readonly lab: Lab }): ReactNode {
               {direction.disputed
                 ? ' is disputed. A rerun by the other harness settles it.'
                 : agent
-                  ? ` · ${agent.handle}: ${agent.live.text}`
+                  ? ` · ${agentName(agent.handle, agent.job)}: ${agent.live.text}`
                   : ''}
             </li>
           );

@@ -1,5 +1,5 @@
 import type { Compute } from '../core/compute.ts';
-import { validAgents } from '../core/contracts.ts';
+import { maxAgents, validAgents } from '../core/contracts.ts';
 import { SessionActionError } from '../core/session.ts';
 import { changeWorkspace } from '../core/storage.ts';
 import type { Work } from '../protocol/api.ts';
@@ -71,7 +71,7 @@ export async function setAgentsAtOnce(
 ): Promise<void> {
   if (!validAgents(agents))
     throw new SessionActionError(
-      'Choose a whole number of agents from 1 to 8.',
+      `Choose a whole number of agents from 1 to ${maxAgents}.`,
     );
   await changeWorkspace(root, (current) => {
     if (!current) throw new SessionActionError('The project has no record.');

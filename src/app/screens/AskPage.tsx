@@ -5,6 +5,7 @@ import type {
   ProjectAgents,
   StartView,
 } from '../../protocol/api.ts';
+import { harnessLabel } from '../format.ts';
 import {
   agentsLabel,
   dueLabel,
@@ -25,9 +26,6 @@ import { Logo } from '../components/Icons.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
 
 type Editing = 'agents' | 'gpu' | 'hours' | 'folder' | null;
-
-const toolName = (harness: Harness): string =>
-  harness === 'claude' ? 'Claude Code' : 'Codex';
 
 /**
  * The project's agents: a Use box and a model menu for each harness on this
@@ -77,14 +75,14 @@ function AgentsEditor({
                   onChange(withUse(agents, tool.harness, event.target.checked))
                 }
               />
-              {toolName(tool.harness)}
+              {harnessLabel(tool.harness)}
               {agents?.host === tool.harness && agents.helper && (
                 <span className="muted"> · plans the lab</span>
               )}
             </label>
             <select
               className="select"
-              aria-label={`Model for ${toolName(tool.harness)}`}
+              aria-label={`Model for ${harnessLabel(tool.harness)}`}
               disabled={!used}
               value={modelOf(tool.harness)}
               onChange={(event) =>

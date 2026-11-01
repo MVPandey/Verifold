@@ -56,7 +56,12 @@ export type EffectWords =
       readonly harness: 'claude' | 'codex';
     }
   | { readonly type: 'stop'; readonly direction: string }
-  | { readonly type: 'domains'; readonly domains: readonly string[] };
+  | { readonly type: 'domains'; readonly domains: readonly string[] }
+  | { readonly type: 'podsAtOnce'; readonly pods: number };
+
+/** An option that changes no setting says so before the person picks it. */
+export const noSettingWords =
+  'This option changes no setting. It only tells the agents your choice.';
 
 /** An agent that asked: its handle, and whether it runs in Codex, which cannot limit the network to domains. */
 export interface AskerWords {
@@ -95,6 +100,11 @@ export function effectWords(
       return {
         does: `Gives the lab ${plural(effect.hours, 'more hour')}.`,
         undo: 'Undo takes the hours back.',
+      };
+    case 'podsAtOnce':
+      return {
+        does: `Sets pods at once to ${effect.pods} in the project's settings.`,
+        undo: 'Undo restores the earlier limit. A running pod does not stop.',
       };
     case 'open':
       return {

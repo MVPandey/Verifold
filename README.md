@@ -43,7 +43,7 @@ Run `verifold` in an empty folder, or in a folder that already holds your work. 
 
 1. Choose your global settings, or an isolated project with its own. The first time, set up your agents, a short profile, skills, and GPU limits. You can skip each step or go back to one.
 2. Ask your question. The planner checks current facts first, and it can ask you up to three questions. Each one has options and a box for your own words.
-3. The planner posts a plan that splits the question into directions. Each direction gets its own agent. The agents post what they find on one board and check each other's claims.
+3. The planner posts a plan that splits the question into directions, up to 20. Each direction gets its own agent, with a job, such as Agent 3 · Controls. The agents post what they find on one board and check each other's claims.
 4. Answer what shows in Needs you. These are plain calls on money, scope, access, or more time, each with the agents' pick and a box for your own words.
 
 You can close the terminal. While it is open, it shows the lab in a few lines. Run `verifold` in the folder to come back, or `verifold stop` to stop the team. After 30 minutes or more away, the lab page lists what changed.
@@ -54,7 +54,7 @@ You can close the terminal. While it is open, it shows the lab in a few lines. R
 
 Verifold is in early development. The [guide](docs/guide.md) describes everything that works in this checkout. Limits to know first:
 
-- Three agents work at the same time unless you change "Agents at once" in the project's Settings (1 to 8).
+- Three agents work at the same time unless you change "Agents at once" in the project's Settings (1 to 20).
 - Verifold needs a terminal and Node. There is no desktop app yet.
 - Verifold's page is a local web page on this computer. Other devices cannot open it.
 - Your harness sends what it reads to its model provider. Verifold keeps its records in your project folder and publishes nothing.

@@ -1,12 +1,13 @@
-import type {
-  GpuType,
-  Lab,
-  PodLease,
-  PodSettings,
-  PodState,
-  ProjectCompute,
+import {
+  podsAtOnceMost,
+  type GpuType,
+  type Lab,
+  type PodLease,
+  type PodSettings,
+  type PodState,
+  type ProjectCompute,
 } from '../protocol/api.ts';
-import { clock, usd } from './format.ts';
+import { clock, roleName, usd } from './format.ts';
 import { numberOf, type GpuRow } from './components/Limits.tsx';
 
 /** A pod's state in the words of the settings page. */
@@ -34,13 +35,14 @@ export function running(pod: PodLease): boolean {
   return pod.state === 'starting' || pod.state === 'ready';
 }
 
-/** Who asked for a pod: "You", "claude-2", or "The agent of d-2" when the lab does not show its agent. */
+/** Who asked for a pod: "You", "Agent 2", or "The agent of d-2" when the lab does not show its agent. */
 export function podAsker(pod: PodLease, lab: Lab | null): string {
   if (pod.asker === 'person') return 'You';
   if (pod.asker === 'coordinator') return 'The coordinator';
   const handles = pod.directions.map((id) => {
     const direction = lab?.directions.find((entry) => entry.id === id);
-    return lab?.agents.find((entry) => entry.id === direction?.agent)?.handle;
+    const agent = lab?.agents.find((entry) => entry.id === direction?.agent);
+    return agent && roleName(agent.handle);
   });
   if (handles.length && handles.every(Boolean)) return handles.join(' and ');
   return pod.directions.length
@@ -119,13 +121,19 @@ export function allowedNow(
   );
 }
 
+/** The choices of "Pods at once". */
+export const podsAtOnceChoices: readonly string[] = Array.from(
+  { length: podsAtOnceMost },
+  (_, index) => String(index + 1),
+);
+
 /** The pod settings as the person types them. */
 export interface SettingsText {
   readonly limitUsd: string;
   readonly maxUsdPerHour: string;
   readonly maxHoursPerLease: string;
   readonly idleMinutes: string;
-  readonly maxRunningPods: '1' | '2';
+  readonly maxRunningPods: string;
   readonly diskGb: string;
   /** One image on each line. */
   readonly images: string;
@@ -138,7 +146,7 @@ export function settingsText(settings: PodSettings): SettingsText {
     maxUsdPerHour: String(settings.maxUsdPerHour),
     maxHoursPerLease: String(settings.maxHoursPerLease),
     idleMinutes: String(settings.idleMinutes),
-    maxRunningPods: settings.maxRunningPods === 2 ? '2' : '1',
+    maxRunningPods: String(settings.maxRunningPods),
     diskGb: String(settings.diskGb),
     images: settings.images.join('\n'),
     askBeforePod: settings.askBeforePod,
@@ -177,7 +185,7 @@ export function changesOf(
     changes.limitUsd = limit;
   }
   if (edits.maxRunningPods !== undefined)
-    changes.maxRunningPods = edits.maxRunningPods === '2' ? 2 : 1;
+    changes.maxRunningPods = Number(edits.maxRunningPods);
   if (edits.images !== undefined)
     changes.images = edits.images
       .split('\n')

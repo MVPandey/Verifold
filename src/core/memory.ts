@@ -191,7 +191,7 @@ export type LabProgress = readonly {
   readonly state: 'open' | 'closed' | 'stopped';
   /** The state in words, such as "open" or "stopped by the person". */
   readonly stateText: string;
-  /** Its agent's handle and harness, such as "claude-1 (Claude Code)". */
+  /** Its agent's handle and harness, such as "agent-1 (Claude Code)". */
   readonly agent: string | null;
   readonly bar: string | null;
   /** In words, such as "leading" or "no verdict yet". */

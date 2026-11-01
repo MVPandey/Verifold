@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import type { Lab, Plan } from '../../protocol/api.ts';
+import type { Lab, Plan, Post } from '../../protocol/api.ts';
 import { onBoard } from '../call.ts';
 import { clock } from '../format.ts';
 import { href } from '../route.ts';
+import { PostAuthor } from './Avatar.tsx';
 import { FactsList } from './FactsList.tsx';
 
 /** "Holds up if" of a direction: its bar, and the runs that it needs. */
@@ -16,13 +17,16 @@ function holds(bar: string | null, runs: number | null): string {
  * The plan of record, as on the v9 canvas ("7 Plan of record"): how the
  * planner reads the question, a table of its directions, what changed from
  * the plan before, the facts that it checked, and what costs money. A reply
- * to it changes it.
+ * to it changes it. `post`: the plan's post, so the card names its author as
+ * every post does.
  */
 export function PlanCard({
   plan,
+  post,
   lab,
 }: {
   readonly plan: Plan;
+  readonly post: Post;
   readonly lab: Lab;
 }): ReactNode {
   const directions = new Map(lab.directions.map((entry) => [entry.id, entry]));
@@ -35,7 +39,7 @@ export function PlanCard({
   return (
     <div className="plan">
       <div className="post__head">
-        <b>Planner</b>
+        <PostAuthor post={post} />
         <span className="chip chip--plan">
           Plan of record{version ? ` · v${version}` : ''}
         </span>

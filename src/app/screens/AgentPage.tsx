@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
-import { agentModelName, harnessName } from '../format.ts';
+import { agentModelName, agentName, harnessName, roleName } from '../format.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
@@ -43,7 +43,12 @@ export function AgentPage({
   const who =
     agent ??
     (check
-      ? { handle: check.handle, harness: check.harness, model: null }
+      ? {
+          handle: check.handle,
+          job: null,
+          harness: check.harness,
+          model: null,
+        }
       : null);
   return (
     <div className="page">
@@ -69,7 +74,9 @@ export function AgentPage({
                   size="lg"
                 />
                 <div className="agent-head__text">
-                  <h1 className="page-title">{who.handle}</h1>
+                  <h1 className="page-title">
+                    {agentName(who.handle, who.job)}
+                  </h1>
                   <p className="direction-head__meta">
                     {harnessName(who.harness)}
                     {who.model && (
@@ -120,8 +127,9 @@ export function AgentPage({
                 />
               ) : (
                 <p className="turns__none">
-                  {who.handle} ended. This view shows only the newest checkers
-                  that ended, so it leaves out what {who.handle} did.
+                  {roleName(who.handle)} ended. This view shows only the newest
+                  checkers that ended, so it leaves out what{' '}
+                  {roleName(who.handle)} did.
                 </p>
               )}
             </>
