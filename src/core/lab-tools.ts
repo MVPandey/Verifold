@@ -306,7 +306,7 @@ export const checkLimits = {
   minutes: 60,
   /** Checks of one claim. */
   perClaim: 2,
-  /** One check runs at once for each of this many of "Agents at once". */
+  /** From this many of "Agents at once", checks run side by side: one for each this many, and at least two. */
   agentsPerCheck: 5,
   /** A check whose checker process stopped by itself, whose start or folder failed, or whose owner ended without closing the lab starts again once, then fails. */
   restarts: 1,
@@ -317,9 +317,10 @@ export const checkLimits = {
   reserved: 16,
 };
 
-/** The checks that run at once: one for each `checkLimits.agentsPerCheck` of "Agents at once", and at least one. */
+/** The checks that run at once: one in a small lab, then two, then one for each `checkLimits.agentsPerCheck` of "Agents at once". */
 export function checksAtOnce(slots: number | undefined): number {
-  return Math.max(1, Math.floor((slots ?? 0) / checkLimits.agentsPerCheck));
+  const room = Math.floor((slots ?? 0) / checkLimits.agentsPerCheck);
+  return room === 0 ? 1 : Math.max(2, room);
 }
 
 /** The kinds of post that a check tests, when they cite a run. */
