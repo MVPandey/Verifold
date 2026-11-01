@@ -15,6 +15,7 @@ import {
   threads,
   type OlderPosts,
 } from '../board.ts';
+import { askedOfYou, waitLine } from '../waits.ts';
 import { ControlsContext } from '../controls.ts';
 import { authorOf, cut } from '../format.ts';
 import { mentionNames } from '../mentions.ts';
@@ -24,6 +25,7 @@ import { AppHeader } from '../components/AppHeader.tsx';
 import { BoardThread, showPost } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
+import { AskLine } from '../components/AskLine.tsx';
 import { DirectionRow } from '../components/DirectionRow.tsx';
 import { NeedsYouLine } from '../components/NeedsYouLine.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
@@ -142,6 +144,7 @@ export function LabHome({
   const asked = new Set(questions.map((call) => call.id));
   const announced = new Set(questions.map((call) => call.post));
   const [first, ...rest] = lab.needsYou.filter((call) => !asked.has(call.id));
+  const [ask, ...moreAsks] = askedOfYou(lab);
   const compute = snapshot.compute;
   const waiting = compute && pods ? waitingPods(compute).length : 0;
   const tools = useContext(ToolsContext);
@@ -187,6 +190,7 @@ export function LabHome({
               failure={failureOf(lab, first)?.text ?? null}
             />
           )}
+          {ask && <AskLine ask={ask} more={moreAsks.length} now={now} />}
           {compute && pods && (
             <PodNeeds compute={compute} lab={lab} now={now} actions={pods} />
           )}
@@ -252,6 +256,7 @@ export function LabHome({
                     direction={direction}
                     agent={agents.get(direction.agent)}
                     now={now}
+                    wait={waitLine(lab, direction.agent)}
                   />
                 ))}
               </div>

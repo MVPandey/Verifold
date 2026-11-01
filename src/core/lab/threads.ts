@@ -8,6 +8,7 @@
 import {
   agentId,
   boardLimits,
+  clip,
   directionId,
   number,
   object,
@@ -15,6 +16,7 @@ import {
   threadId,
   type NewPost,
   type Post,
+  type PostKind,
 } from '../board.ts';
 import { threadLimits } from '../lab-tools.ts';
 import {
@@ -24,6 +26,13 @@ import {
   type ThreadOutcome,
   type ThreadState,
 } from './schema.ts';
+
+/** The kinds that need a reply. One of them to a post in a closed thread opens that thread again. */
+export const reopeningKinds: ReadonlySet<PostKind> = new Set([
+  'objection',
+  'answer',
+  'check',
+]);
 
 /** The plan thread. Every agent reads it. The person's post with no thread lands here. */
 export const planThread = 't-1';
@@ -64,7 +73,7 @@ function parseOutcome(value: unknown): ThreadOutcome | null {
   const entry = object(value);
   return entry &&
     typeof entry.text === 'string' &&
-    entry.text.length <= boardLimits.personText &&
+    entry.text.length <= boardLimits.text &&
     isPost(entry.post) &&
     isAuthor(entry.by) &&
     isTime(entry.at)
@@ -153,10 +162,23 @@ export function followed(thread: Thread, agent: string): Thread {
       };
 }
 
+/** The thread open again, with no outcome. */
+function reopened(thread: Thread): Thread {
+  const open: { -readonly [Key in keyof Thread]: Thread[Key] } = {
+    ...thread,
+    state: 'open',
+  };
+  delete open.outcome;
+  return open;
+}
+
 /**
- * The thread after a post in it. Its author and the agent that an ask names
- * follow it. An answer to the ask that opened the thread answers the thread,
- * and so does the person's own reply to it.
+ * The thread after a post in it, or the same object when the post changes
+ * nothing, so the store writes nothing. Its author and the agent that an ask
+ * names follow it. An answer to the ask that opened the thread answers the
+ * thread, and so does the person's own reply to it. An objection to the
+ * proposal that decided the thread opens it again, and so does a reply of a
+ * `reopeningKinds` kind in a closed thread.
  */
 export function afterPost(
   thread: Thread,
@@ -166,10 +188,17 @@ export function afterPost(
   const asked = post.kind === 'ask' ? post.mentions : [];
   const next = [post.author, ...asked]
     .filter((id) => agentId.test(id))
-    .reduce(followed, {
-      ...thread,
-      ...(thread.opening ? {} : { opening: post.id }),
-    });
+    .reduce(
+      followed,
+      thread.opening ? thread : { ...thread, opening: post.id },
+    );
+  if (
+    (thread.state === 'closed' && reopeningKinds.has(post.kind)) ||
+    (thread.state === 'decided' &&
+      post.kind === 'objection' &&
+      post.replyTo === thread.outcome?.post)
+  )
+    return reopened(next);
   return (post.kind === 'answer' || post.author === 'person') &&
     target?.kind === 'ask' &&
     target.id === thread.opening &&
@@ -178,8 +207,14 @@ export function afterPost(
     : next;
 }
 
+/** A thread's outcome keeps the post's text within a post's limit. The post holds the whole text. */
 function outcomeOf(post: Post, at: string): ThreadOutcome {
-  return { text: post.text, post: post.id, by: post.author, at };
+  return {
+    text: clip(post.text, boardLimits.text),
+    post: post.id,
+    by: post.author,
+    at,
+  };
 }
 
 /** The thread with one more reaction. A repeated reaction changes nothing. */
@@ -218,9 +253,9 @@ export function overturned(thread: Thread): Thread {
 /**
  * The proposals whose objection window ended by `now`, oldest first, each with
  * its thread. A proposal with an objection never decides by itself: its author
- * posts a new proposal. A newer proposal can replace a decision. A proposal
- * in a closed thread stays as it is, and so does one at or before a proposal
- * that the person overturned.
+ * posts a new proposal. A newer proposal can replace a decision. An answered
+ * thread can still get a decision. A proposal in a closed thread stays as it
+ * is, and so does one at or before a proposal that the person overturned.
  */
 export function dueProposals(
   posts: readonly Post[],
@@ -243,7 +278,9 @@ export function dueProposals(
       Date.parse(proposal.at) + windowMs <= now &&
       number(proposal.id) >
         Math.max(
-          number(thread.outcome?.post ?? 'p-0'),
+          number(
+            (thread.state === 'decided' ? thread.outcome?.post : null) ?? 'p-0',
+          ),
           number(thread.overturned ?? 'p-0'),
         )
       ? [{ thread, proposal }]

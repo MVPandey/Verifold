@@ -263,8 +263,13 @@ export function checkMark(
 }
 
 /** Where a dispute's check is, in a few words. */
-function checkWhere(check: Check | null): string {
-  if (!check) return 'No check yet.';
+function checkWhere(check: Check | null, target: Post): string {
+  if (!check)
+    return target.artifacts.some((artifact) => artifact.type === 'run')
+      ? 'No check yet.'
+      : '';
+  if (check.state === 'done')
+    return `Check ${check.id} ended before this objection.`;
   if (check.state === 'failed')
     return `Check ${check.id} failed: ${check.note ?? 'no reason'} Another objection starts a new check.`;
   return check.state === 'running'
@@ -291,7 +296,7 @@ function pinnedDisputes(
       const runs = check
         ? view.ledger.filter((run) => run.agent === check.agent)
         : [];
-      return `<li><span class="verdict v-disputed"><span aria-hidden="true">⚠</span> Disputed</span><div class="pinned-text"><p><a href="#post-${e(target.id)}">${e(target.id)}</a> by ${e(name(target.author))}${row ? `, the evidence of <a href="#row-${e(row.id)}">${e(row.title)}</a>` : ''}: ${e(clip(target.text, 140))}</p>${doubt ? `<p class="fine">${e(name(doubt.author))} objects: ${e(clip(doubt.text, 140))}${objections.length > 1 ? ` (and ${objections.length - 1} more)` : ''}</p>` : ''}<p class="fine">${e(checkWhere(check))}${runs.map((run) => ` ${runButton(run)}`).join('')}${check?.session && check.state !== 'queued' ? ` <button type="button" class="link" data-panel="agent" data-agent="${e(check.agent)}" data-open-pane="summary">What ${e(check.handle)} did</button>` : ''}</p></div></li>`;
+      return `<li><span class="verdict v-disputed"><span aria-hidden="true">⚠</span> Disputed</span><div class="pinned-text"><p><a href="#post-${e(target.id)}">${e(target.id)}</a> by ${e(name(target.author))}${row ? `, the evidence of <a href="#row-${e(row.id)}">${e(row.title)}</a>` : ''}: ${e(clip(target.text, 140))}</p>${doubt ? `<p class="fine">${e(name(doubt.author))} objects: ${e(clip(doubt.text, 140))}${objections.length > 1 ? ` (and ${objections.length - 1} more)` : ''}</p>` : ''}<p class="fine">${e(checkWhere(check, target))}${runs.map((run) => ` ${runButton(run)}`).join('')}${check?.session && check.state !== 'queued' ? ` <button type="button" class="link" data-panel="agent" data-agent="${e(check.agent)}" data-open-pane="summary">What ${e(check.handle)} did</button>` : ''}</p></div></li>`;
     })
     .join('')}</ul>`;
 }

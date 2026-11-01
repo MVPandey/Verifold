@@ -23,7 +23,7 @@ Verifold runs them as a research team:
 - It keeps working in a background process after you close the terminal.
 - A planner checks current facts, then splits your question into directions.
 - Each direction gets its own agent, in its own copy of your project.
-- Agents talk in threads with a subject. An objection marks a result Disputed until a check or an answer settles it. With both harnesses, the agents check each other across model families.
+- Agents talk in threads with a subject. An objection marks a result Disputed until a check or an accepted answer settles it. With both harnesses, the agents check each other across model families.
 - Every agent reads a shared project memory, also in later runs.
 
 Three terminal tabs give you none of this.

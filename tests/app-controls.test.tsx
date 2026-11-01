@@ -527,7 +527,7 @@ await test('the lab home: open a direction, open disputes pinned, how a check we
   // The dispute: the post, its row, the first doubt, and where its check is.
   assert.match(
     page,
-    /Disputed p-9 by claude-2, the evidence of The CoT matches what probes read inside ?: The gap is 34% smaller on seed 1\. codex-1 objects: One seed can be luck\. Codex reran it, and it held\. What codex-2 did/,
+    /Disputed p-9 by claude-2, the evidence of The CoT matches what probes read inside ?: The gap is 34% smaller on seed 1\. codex-1 objects: One seed can be luck\. Check k-1 ended before this objection\. What codex-2 did/,
   );
   // How the check of a post with a run went, on the post itself.
   assert.match(

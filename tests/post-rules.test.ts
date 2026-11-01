@@ -4,6 +4,7 @@ import type { BoardAgent, Post } from '../src/core/board.ts';
 import {
   citedDispute,
   openObjections,
+  refutation,
   shapePost,
   wakeList,
   type PostContext,
@@ -71,6 +72,51 @@ const shaped = (
   args: Record<string, unknown>,
   more: Partial<PostContext> = {},
 ): PostShape => shapePost(args, context(more));
+
+await test('a reply always has a legal form: a closed thread opens for a kind that needs its reply, and a lost thread takes a title', () => {
+  const closedTarget = { replyTo: 'p-5' };
+  for (const kind of ['objection', 'answer', 'check'] as const)
+    assert.deepEqual(
+      shaped(
+        { ...closedTarget, ...(kind === 'check' ? { outcome: 'holds' } : {}) },
+        {
+          kind,
+          post: (id) =>
+            id === 'p-5'
+              ? post('p-5', { thread: 't-3', kind: 'ask', author: 'a-1' })
+              : board.get(id),
+        },
+      ).thread,
+      't-3',
+      kind,
+    );
+  assert.throws(
+    () => shaped(closedTarget),
+    /t-3 is closed\. Leave replyTo out, open a new thread with title and why, and name p-5/,
+  );
+  const lost = post('p-7', { thread: 't-8' });
+  const lostAt = (id: string): Post | undefined =>
+    id === 'p-7' ? lost : board.get(id);
+  assert.throws(
+    () => shaped({ replyTo: 'p-7' }, { post: lostAt }),
+    /t-8 has no record now\. Give title and why/,
+  );
+  assert.deepEqual(
+    shaped(
+      {
+        replyTo: 'p-7',
+        title: 'Does the old result still stand?',
+        why: 'Why.',
+      },
+      { post: lostAt },
+    ).thread,
+    { title: 'Does the old result still stand?', why: 'Why.' },
+  );
+  assert.equal(
+    shaped({ replyTo: 'p-7', thread: 't-2' }, { post: lostAt }).thread,
+    't-2',
+  );
+});
 
 await test('a post names a thread or opens one, and a reply stays in its target’s thread', () => {
   assert.deepEqual(shaped({ thread: 't-2' }), { thread: 't-2' });
@@ -331,12 +377,18 @@ await test("the person's words wake followers, or who they name, or every agent"
     wakes(person({ thread: 't-2', mentions: ['a-9'] }), { thread: followed }),
     ['a-9'],
   );
-  // Who has stopped is not woken.
-  assert.deepEqual(
+  // With no live follower, the words reach every agent that works.
+  assert.equal(
     wakes(person({ thread: 't-2' }), {
       thread: thread('t-2', { followers: ['a-77'] }),
-    }),
-    [],
+    }).length,
+    20,
+  );
+  assert.equal(
+    wakes(person({ thread: 't-2', mentions: ['a-77'] }), {
+      thread: thread('t-2'),
+    }).length,
+    20,
   );
 });
 
@@ -349,7 +401,7 @@ const objection = post('p-2', {
 const doneCheck = (objections: readonly string[]): Check =>
   ({ state: 'done', objections }) as unknown as Check;
 
-await test('an objection stands until a check fails its target, an answer accepts it, or a check of Verifold ends', () => {
+await test('an objection stands until an answer accepts it, a third agent’s check holds its target, or a check of Verifold ends', () => {
   const target = post('p-1');
   const open = (...more: readonly Post[]): readonly string[] =>
     (openObjections([target, objection, ...more], []).get('p-1') ?? []).map(
@@ -365,29 +417,73 @@ await test('an objection stands until a check fails its target, an answer accept
     open(post('p-3', { kind: 'answer', replyTo: 'p-2', accepts: true })),
     [],
   );
+  // A check that fails clears nothing, so the refuted post stays disputed.
   assert.deepEqual(
-    open(post('p-3', { kind: 'check', replyTo: 'p-1', outcome: 'holds' })),
+    open(
+      post('p-3', {
+        kind: 'check',
+        author: 'a-3',
+        replyTo: 'p-1',
+        outcome: 'fails',
+      }),
+    ),
     ['p-2'],
   );
   assert.deepEqual(
-    open(post('p-3', { kind: 'check', replyTo: 'p-1', outcome: 'fails' })),
+    open(
+      post('p-3', {
+        kind: 'check',
+        author: 'a-3',
+        replyTo: 'p-1',
+        outcome: 'holds',
+      }),
+    ),
     [],
+  );
+  // The objector, and the target's author, cannot clear it with a check.
+  assert.deepEqual(
+    open(
+      post('p-3', {
+        kind: 'check',
+        author: 'a-2',
+        replyTo: 'p-1',
+        outcome: 'holds',
+      }),
+    ),
+    ['p-2'],
+  );
+  assert.deepEqual(
+    open(
+      post('p-3', {
+        kind: 'check',
+        author: 'a-1',
+        replyTo: 'p-1',
+        outcome: 'holds',
+      }),
+    ),
+    ['p-2'],
+  );
+  // A check clears only the objections before it, and each objector's own stays.
+  assert.deepEqual(
+    open(
+      post('p-3', {
+        kind: 'objection',
+        author: 'a-3',
+        replyTo: 'p-1',
+      }),
+      post('p-4', {
+        kind: 'check',
+        author: 'a-3',
+        replyTo: 'p-1',
+        outcome: 'holds',
+      }),
+      post('p-5', { kind: 'objection', author: 'a-4', replyTo: 'p-1' }),
+    ),
+    ['p-3', 'p-5'],
   );
   assert.equal(
     openObjections([target, objection], [doneCheck(['p-2'])]).size,
     0,
-  );
-  // A check that came first settles nothing that came after it.
-  assert.equal(
-    openObjections(
-      [
-        target,
-        post('p-2', { kind: 'check', replyTo: 'p-1', outcome: 'fails' }),
-        post('p-3', { kind: 'objection', replyTo: 'p-1' }),
-      ],
-      [],
-    ).size,
-    1,
   );
   // Answers to one objection leave the others.
   assert.deepEqual(
@@ -397,6 +493,27 @@ await test('an objection stands until a check fails its target, an answer accept
     ),
     ['p-3'],
   );
+});
+
+await test('a check that failed backs no verdict, and neither does the post that it failed', () => {
+  const target = post('p-1');
+  const failed = post('p-2', {
+    kind: 'check',
+    author: 'a-3',
+    replyTo: 'p-1',
+    outcome: 'fails',
+  });
+  const held = post('p-3', { kind: 'check', replyTo: 'p-9', outcome: 'holds' });
+  assert.match(
+    refutation(failed, [target, failed]) ?? '',
+    /p-2 is a check that failed/,
+  );
+  assert.match(
+    refutation(target, [target, failed]) ?? '',
+    /p-1 failed the check p-2/,
+  );
+  assert.equal(refutation(target, [target, held]), null);
+  assert.equal(refutation(held, [target, held]), null);
 });
 
 await test('a post that builds on a disputed post says so', () => {
@@ -463,6 +580,16 @@ await test('waits come from the record: who waits on whom, for what, since when'
     'a-2 on a-1: p-2 ask',
     'a-2 on person: p-3 ask',
   ]);
+  // A check that holds ends the wait on an objection, and one that fails does not.
+  assert.deepEqual(
+    waits(post('p-5', { kind: 'check', replyTo: 'p-1', outcome: 'holds' })),
+    ['a-2 on a-1: p-2 ask', 'a-2 on person: p-3 ask'],
+  );
+  assert.equal(
+    waits(post('p-5', { kind: 'check', replyTo: 'p-1', outcome: 'fails' }))
+      .length,
+    3,
+  );
   assert.deepEqual(
     waits(post('p-5', { kind: 'rerun', replyTo: 'p-1', author: 'a-9' })),
     ['a-2 on a-1: p-2 ask', 'a-2 on person: p-3 ask'],

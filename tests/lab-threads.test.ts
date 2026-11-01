@@ -17,11 +17,12 @@ import { Board, type NewPost, type Post } from '../src/core/board.ts';
 import { openDisputes } from '../src/core/disputes.ts';
 import { Lab } from '../src/core/lab.ts';
 import { labToolSpecs, threadLimits } from '../src/core/lab-tools.ts';
-import type {
-  AgentRecord,
-  LabSessions,
-  LabView,
-  Thread,
+import {
+  labLimits,
+  type AgentRecord,
+  type LabSessions,
+  type LabView,
+  type Thread,
 } from '../src/core/lab/schema.ts';
 import { threadDigest } from '../src/core/lab/thread-digest.ts';
 import { ThreadStore } from '../src/core/lab/thread-store.ts';
@@ -50,6 +51,7 @@ import { directionLine } from '../src/ui/lab-lines.ts';
 import { until } from './wait.ts';
 
 const at = '2026-11-01T10:00:00.000Z';
+const windowMs = 900_000;
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync(
@@ -438,6 +440,77 @@ await test('a thread keeps its followers, its first post, and the answer to the 
   assert.ok(follows(followed(thread('t-2'), 'a-9'), 'a-9'));
 });
 
+await test('a post that changes nothing leaves the same record, so the store writes nothing', () => {
+  const opened = afterPost(thread('t-2'), post('p-1'), undefined);
+  assert.equal(afterPost(opened, post('p-2'), undefined), opened);
+  assert.notEqual(
+    afterPost(opened, post('p-3', { author: 'a-2' }), undefined),
+    opened,
+  );
+});
+
+await test('an objection to a decision, and a reply in a closed thread, open the thread again', () => {
+  const proposal = post('p-1', { kind: 'proposal' });
+  const done = decided(thread('t-2', { opening: 'p-1' }), proposal, at);
+  const doubt = post('p-2', {
+    kind: 'objection',
+    author: 'a-2',
+    replyTo: 'p-1',
+  });
+  const again = afterPost(done, doubt, proposal);
+  assert.equal(again.state, 'open');
+  assert.equal(again.outcome, undefined);
+  // The proposal does not decide again, and an objection to another post changes nothing.
+  assert.deepEqual(
+    dueProposals(
+      [proposal, doubt],
+      [again],
+      Date.parse(at) + windowMs,
+      windowMs,
+    ),
+    [],
+  );
+  assert.equal(
+    afterPost(done, { ...doubt, replyTo: 'p-9' }, undefined).state,
+    'decided',
+  );
+  const closed = thread('t-2', {
+    state: 'closed',
+    outcome: { text: 'Done.', post: 'p-1', by: 'a-1', at },
+  });
+  for (const kind of ['objection', 'answer', 'check'] as const)
+    assert.equal(
+      afterPost(closed, post('p-3', { kind, replyTo: 'p-1' }), undefined).state,
+      'open',
+      kind,
+    );
+  assert.equal(
+    afterPost(closed, post('p-3', { kind: 'result' }), undefined).state,
+    'closed',
+  );
+});
+
+await test('an outcome keeps a post-sized text, also from the person’s long reply', () => {
+  const ask = post('p-1', { kind: 'ask', mentions: ['person'] });
+  const reply = post('p-2', {
+    author: 'person',
+    kind: 'question',
+    replyTo: 'p-1',
+    text: 'x'.repeat(4000),
+  });
+  const answered = afterPost(
+    afterPost(thread('t-2'), ask, undefined),
+    reply,
+    ask,
+  );
+  assert.equal(answered.outcome?.text.length, 280);
+  assert.ok(parseThread(answered)?.outcome);
+  assert.equal(
+    parseThread(decided(thread('t-2'), reply, at))?.outcome?.post,
+    'p-2',
+  );
+});
+
 await test('a reaction counts once, and its list stays bounded', () => {
   const once = agreedWith(thread('t-2'), 'p-1', 'a-1', at);
   assert.equal(agreedWith(once, 'p-1', 'a-1', at), once);
@@ -450,7 +523,7 @@ await test('a reaction counts once, and its list stays bounded', () => {
 
 await test('a proposal becomes a decision when its window ends with no objection, by the clock', () => {
   const start = Date.parse(at);
-  const window = 900_000;
+  const window = windowMs;
   const threads = [thread('t-2'), thread('t-3')];
   const proposal = post('p-1', { kind: 'proposal' });
   const posts = [proposal];
@@ -483,6 +556,12 @@ await test('a proposal becomes a decision when its window ends with no objection
   assert.deepEqual(due(start + window, posts, [undone]), []);
   assert.deepEqual(due(start + window, [proposal, newer], [undone]), ['p-2']);
   assert.throws(() => overturned(thread('t-2')), /t-2 has no decision/);
+  // An answered thread can still get a decision, also from a proposal before the answer.
+  const answered = thread('t-2', {
+    state: 'answered',
+    outcome: { text: 'Seed 2.', post: 'p-9', by: 'a-2', at },
+  });
+  assert.deepEqual(due(start + window, posts, [answered]), ['p-1']);
 });
 
 await test('a title needs a subject, and a closed thread frees its title', () => {
@@ -497,7 +576,8 @@ const store = (
   root: string,
   board: Board = new Board(root),
   paused: () => boolean = () => false,
-): ThreadStore => new ThreadStore(join(root, 'threads.json'), paused, board);
+): ThreadStore =>
+  new ThreadStore(join(root, 'threads.json'), paused, board, windowMs);
 
 await test('the store seeds the plan thread of a new lab, holds none for an older lab, and survives a bad file', async (t) => {
   const root = await realpath(
@@ -521,12 +601,11 @@ await test('the store seeds the plan thread of a new lab, holds none for an olde
     [planThread],
   );
 
-  // A bad record is skipped, and its number stays used.
+  // A bad record is skipped.
   await writeFile(
     path,
     JSON.stringify({
       schemaVersion: 1,
-      last: 7,
       threads: [
         thread('t-1'),
         { id: 't-5', title: 3 },
@@ -546,19 +625,13 @@ await test('the store seeds the plan thread of a new lab, holds none for an olde
   } as const;
   assert.deepEqual(await fresh.fields(shape, 'a-1', 'd-1'), {
     accepts: true,
-    thread: 't-8',
+    thread: 't-7',
   });
-  assert.equal(fresh.get('t-8')?.direction, 'd-1');
-  assert.equal(fresh.get('t-8')?.openedBy, 'a-1');
-
-  // A number that no thread can hold, and a link, count for nothing.
-  await writeFile(
-    path,
-    JSON.stringify({ last: 1e15, threads: [thread('t-1')] }),
-  );
-  await fresh.load(at);
-  assert.equal((await fresh.fields(shape, 'a-1', 'd-1')).thread, 't-2');
+  assert.equal(fresh.get('t-7')?.direction, 'd-1');
+  assert.equal(fresh.get('t-7')?.openedBy, 'a-1');
   await fresh.flush();
+
+  // A link and a file past the size limit are not read.
   const away = join(root, 'away.json');
   await writeFile(
     away,
@@ -571,8 +644,6 @@ await test('the store seeds the plan thread of a new lab, holds none for an olde
     fresh.list().map((entry) => entry.id),
     [planThread],
   );
-
-  // A file past the size limit is not read.
   await rm(path);
   await writeFile(
     path,
@@ -598,8 +669,92 @@ await test('the store seeds the plan thread of a new lab, holds none for an olde
   assert.equal(fresh.list().length, threadLimits.threads);
   await assert.rejects(
     fresh.fields(shape, 'a-1', 'd-1'),
-    /The lab holds 1000 threads, the limit/,
+    /The lab holds 500 threads, the limit/,
   );
+});
+
+await test('after a file that Verifold cannot read, the posts keep their threads, no number comes again, and a note says so', async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'verifold-thread-store-')),
+  );
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const board = new Board(root);
+  await board.add({
+    author: 'a-1',
+    kind: 'proposal',
+    thread: 't-7',
+    text: 'Use the old mix.',
+    mentions: [],
+    artifacts: [],
+  });
+  await writeFile(join(root, 'threads.json'), 'not json');
+  const fresh = store(root, board);
+  await fresh.load(at);
+  const note = fresh.lostNote();
+  assert.match(note?.text ?? '', /could not read the records of 1 threads/);
+  assert.match(note?.text ?? '', /t-7/);
+  assert.equal(
+    (
+      await fresh.fields(
+        { thread: { title: 'Does seed 2 agree?', why: 'One line.' } },
+        'a-1',
+        'd-1',
+      )
+    ).thread,
+    't-8',
+  );
+  // A lab with every record says nothing.
+  await board.add({
+    author: 'a-1',
+    kind: 'proposal',
+    thread: 't-1',
+    text: 'Use the old mix.',
+    mentions: [],
+    artifacts: [],
+  });
+  const clean = store(root, new Board(root));
+  await clean.load(at);
+  assert.equal(clean.lostNote(), null);
+});
+
+await test('the threads file at its stated limits stays under the 4 MB that a read takes', () => {
+  // A control character takes 6 bytes in JSON, the most that a character can.
+  const wide = (length: number): string => '\u0001'.repeat(length);
+  const full: Thread = {
+    ...thread('t-999999'),
+    title: wide(threadLimits.title),
+    why: wide(threadLimits.why),
+    direction: 'd-9999',
+    opening: 'p-999999',
+    overturned: 'p-999999',
+    outcome: {
+      text: wide(280),
+      post: 'p-999999',
+      by: 'a-9999',
+      at,
+    },
+    followers: Array.from(
+      { length: threadLimits.followers },
+      (_, index) => `a-${9000 + index}`,
+    ),
+    agreed: Array.from({ length: threadLimits.agreed }, () => ({
+      post: 'p-999999',
+      by: 'a-9999',
+      at,
+    })),
+  };
+  assert.ok(parseThread(full));
+  const bytes = Buffer.byteLength(
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        threads: Array.from({ length: threadLimits.threads }, () => full),
+      },
+      null,
+      2,
+    ),
+  );
+  assert.ok(bytes < 4_000_000, String(bytes));
 });
 
 await test('a store writes nothing while the lab’s records move, and reads back what it wrote', async (t) => {
@@ -680,10 +835,16 @@ await test('a digest carries the threads an agent follows, what is for it, and o
     thread('t-5', { opening: direction.id, openedBy: 'a-1' }),
   ];
   const agent = { id: 'a-1', direction: 'd-1' };
-  const digest = threadDigest(board, threads, agent, {
-    readThrough: 0,
-    seen: [],
-  });
+  const digest = threadDigest(
+    board,
+    threads,
+    agent,
+    {
+      readThrough: 0,
+      seen: [],
+    },
+    windowMs,
+  );
   const shown = digest.shown.map((entry) => entry.id);
   assert.deepEqual(
     [...shown].sort(),
@@ -721,14 +882,18 @@ await test('a digest carries the threads an agent follows, what is for it, and o
     ],
     agent,
     { readThrough: 0, seen: [] },
+    windowMs,
   );
   assert.match(
-    done.lines[0] ?? '',
+    done.lines.find((line) => line.startsWith('- t-2')) ?? '',
     /t-2 \[decided\] "The subject of t-2" Outcome from p-2: "Use the old mix\."/,
   );
   // Every post counts as read, also the ones that it did not show.
   assert.equal(digest.read.readThrough, board.latest());
-  assert.deepEqual(threadDigest(board, threads, agent, digest.read).lines, []);
+  assert.deepEqual(
+    threadDigest(board, threads, agent, digest.read, windowMs).lines,
+    [],
+  );
 });
 
 await test('a digest stays bounded when many threads open at once', async (t) => {
@@ -760,6 +925,7 @@ await test('a digest stays bounded when many threads open at once', async (t) =>
     records,
     { id: 'a-1', direction: 'd-1' },
     { readThrough: 0, seen: [] },
+    windowMs,
   );
   const fresh = digest.lines.filter((line) => line.includes('[new thread]'));
   assert.equal(fresh.length, threadLimits.index);
@@ -775,13 +941,96 @@ await test('a digest stays bounded when many threads open at once', async (t) =>
     records,
     { id: 'a-1', direction: 'd-1' },
     { readThrough: 0, seen: [] },
+    windowMs,
     { budget: 10 },
   );
   assert.equal(tight.shown.length, 1);
+  // Each agent hears of each proposal, with the end of its window, also outside its thread.
+  const proposals = digest.lines.filter((line) =>
+    line.startsWith('- [proposal]'),
+  );
+  assert.equal(proposals.length, threadLimits.index);
+  assert.match(
+    proposals[0] ?? '',
+    /\[proposal\] p-31 on t-32 "The subject of t-32" from a-2: "Use the old mix\." Its objection window ends at 20/,
+  );
+  assert.ok(
+    digest.lines.includes(
+      '- 30 more new proposals. verifold_board with view threads lists their threads.',
+    ),
+  );
+  assert.deepEqual(
+    threadDigest(
+      board,
+      records,
+      { id: 'a-2', direction: 'd-2' },
+      { readThrough: 0, seen: [] },
+      windowMs,
+    ).lines.filter((line) => line.startsWith('- [proposal]')),
+    [],
+  );
+});
+
+await test('a digest stays under its limit at the largest inputs', async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'verifold-thread-digest-')),
+  );
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
+  const board = new Board(root);
+  const wide = (length: number): string => '\u0001'.repeat(length);
+  const paths = Array.from(
+    { length: 10 },
+    (_, index) => `${String(index)}${'x'.repeat(299)}`,
+  );
+  const records: Thread[] = [];
+  for (let index = 2; index < 60; index += 1) {
+    const opened = await board.add({
+      author: 'a-2',
+      kind: 'proposal',
+      thread: `t-${index}`,
+      direction: 'd-1',
+      text: wide(280),
+      mentions: [],
+      artifacts: Array.from({ length: 4 }, () => ({
+        type: 'diff' as const,
+        direction: 'd-1',
+        from: 'a'.repeat(40),
+        to: 'b'.repeat(40),
+        paths,
+      })),
+    });
+    records.push(
+      thread(`t-${index}`, {
+        title: wide(threadLimits.title),
+        why: wide(threadLimits.why),
+        opening: opened.id,
+        openedBy: 'a-2',
+        followers: index % 2 ? ['a-1'] : [],
+        outcome: { text: wide(280), post: opened.id, by: 'a-2', at },
+      }),
+    );
+  }
+  const digest = threadDigest(
+    board,
+    records,
+    { id: 'a-1', direction: 'd-1' },
+    { readThrough: 0, seen: [] },
+    windowMs,
+    { fold: labLimits.digestPost, budget: labLimits.digestText },
+  );
+  const size = digest.lines.reduce((sum, line) => sum + line.length + 1, 0);
+  assert.ok(size <= labLimits.digestText, String(size));
+  assert.ok(digest.shown.length > 0);
 });
 
 await test('verifold_post in a new lab: a thread is required, kinds are new, and a claim is refused', async (t) => {
   const { lab, by, started } = await threeAgents(t);
+  assert.match(
+    started[0]?.tools.specs.find((tool) => tool.name === 'verifold_direction')
+      ?.description ?? '',
+    /a result, check, or rerun post/,
+  );
+  assert.match(started[0]?.prompt ?? '', /The plan is in the plan thread/);
   const names = started[0]?.tools.specs.map((tool) => tool.name);
   for (const name of ['verifold_status', 'verifold_agree', 'verifold_follow'])
     assert.ok(names?.includes(name), name);
@@ -913,7 +1162,7 @@ await test('verifold_status replaces the agent’s line, wakes no one, and survi
   );
 });
 
-await test('a direction’s row shows the agent’s own line in place of the live step and the evidence', () => {
+await test('a direction’s row shows the agent’s own line while it works, with no time, and its evidence otherwise', () => {
   const now = Date.parse(at);
   const live = (state: 'working' | 'waiting' | 'idle' | 'ended') => ({
     state,
@@ -922,17 +1171,16 @@ await test('a direction’s row shows the agent’s own line in place of the liv
   });
   assert.deepEqual(directionLine('Gap 3%', live('working'), now, 'Refit'), {
     working: true,
-    text: 'Refit · 6 min',
+    text: 'Refit',
   });
   assert.deepEqual(directionLine('Gap 3%', live('idle'), now, 'Refit'), {
     working: false,
-    text: 'Refit',
+    text: 'Gap 3%',
   });
   assert.equal(
-    directionLine(null, live('waiting'), now, 'Refit').text,
-    'Refit · waiting for you',
+    directionLine('Gap 3%', live('waiting'), now, 'Refit').text,
+    'Gap 3% · waiting for you',
   );
-  // An ended agent does nothing now, so its evidence shows.
   assert.equal(
     directionLine('Gap 3%', live('ended'), now, 'Refit').text,
     'Gap 3%',
@@ -943,6 +1191,44 @@ await test('a direction’s row shows the agent’s own line in place of the liv
     directionLine(null, live('working'), now).text,
     'Running a.py · 6 min',
   );
+});
+
+await test('a status line resets no quiet counter, and a new verdict clears it', async (t) => {
+  const { lab, by, started } = await threeAgents(t);
+  const id = started[0]?.agent ?? '';
+  const quiet = (lab as unknown as { update: Lab['update'] }).update;
+  await quiet.call(lab, id, (agent) => ({
+    ...agent,
+    quietTurns: 4,
+    quietWork: 9,
+    nudged: true,
+  }));
+  await by(0)('verifold_status', {
+    doing: 'Refitting seed 2',
+    why: 'Seed 1 looks too good.',
+    next: 'Compare with the control.',
+  });
+  const agent = agentOf(lab, 0);
+  assert.equal(agent.quietTurns, 4);
+  assert.equal(agent.nudged, true);
+  assert.equal(agent.statusLine?.doing, 'Refitting seed 2');
+  const proof = await result(lab, by(0), id, open);
+  const same = await by(0)('verifold_direction', {
+    action: 'update',
+    verdict: 'open',
+    why: 'Nothing changed.',
+  });
+  assert.equal(same.ok, true, same.text);
+  assert.equal(agentOf(lab, 0).statusLine?.doing, 'Refitting seed 2');
+  const changed = await by(0)('verifold_direction', {
+    action: 'update',
+    verdict: 'leading',
+    post: proof,
+    evidence: 'Accuracy 0.7.',
+    why: 'It meets the bar.',
+  });
+  assert.equal(changed.ok, true, changed.text);
+  assert.equal(agentOf(lab, 0).statusLine, undefined);
 });
 
 await test('verifold_agree is a reaction: no post, no wake, once for each agent', async (t) => {
@@ -993,8 +1279,9 @@ await test('verifold_follow adds a thread to an agent’s digests, and verifold_
   assert.equal(unknown.ok, false);
   assert.match(unknown.text, /Name a thread, such as t-3, or a post/);
   const unread = await by(1)('verifold_board', { view: 'unread' });
-  assert.doesNotMatch(unread.text, /Use the old mix\./);
+  assert.doesNotMatch(unread.text, /p-\d+ \[proposal\]/);
   assert.match(unread.text, /\[new thread\] t-2/);
+  assert.match(unread.text, /- \[proposal\] p-\d+ on t-2/);
   const follow = await by(1)('verifold_follow', { thread: 't-2' });
   assert.equal(follow.ok, true, follow.text);
   const missing = await by(1)('verifold_follow', { thread: 't-9' });
@@ -1041,30 +1328,68 @@ await test('an objection wakes its target’s author and marks the target Disput
   assert.equal(openDisputes(viewOf(lab)).length, 0);
 });
 
-await test('a check that fails settles a dispute, marks its target, and needs another author', async (t) => {
+await test('a post with file proof and no run: a third agent’s check ends a wrong objection, and a check that fails leaves the dispute and refuses the verdict', async (t) => {
   const { lab, by, started } = await threeAgents(t);
-  const target = await result(lab, by(0), started[0]?.agent ?? '', open);
+  const author = started[0]?.agent ?? '';
+  const third = started[2]?.agent ?? '';
+  const target = await result(lab, by(0), author, open);
   await by(1)('verifold_post', {
     kind: 'objection',
     replyTo: target,
     text: 'Seed 2 leaks.',
   });
-  await result(lab, by(2), started[2]?.agent ?? '', {
+  // The objector's own check does not end its objection.
+  await result(lab, by(1), started[1]?.agent ?? '', {
     kind: 'check',
     replyTo: target,
     outcome: 'holds',
   });
   assert.equal(openDisputes(viewOf(lab)).length, 1);
-  const failed = await result(lab, by(2), started[2]?.agent ?? '', {
+  const held = await result(lab, by(2), third, {
+    kind: 'check',
+    replyTo: target,
+    outcome: 'holds',
+  });
+  assert.equal(openDisputes(viewOf(lab)).length, 0);
+  assert.deepEqual(wokenBy(lab, held), []);
+
+  const second = await by(1)('verifold_post', {
+    kind: 'objection',
+    replyTo: target,
+    text: 'Seed 3 leaks too.',
+  });
+  assert.equal(second.ok, true, second.text);
+  const failed = await result(lab, by(2), third, {
     kind: 'check',
     replyTo: target,
     outcome: 'fails',
+    direction: viewOf(lab).directions[2]?.direction.id,
   });
-  assert.equal(openDisputes(viewOf(lab)).length, 0);
-  assert.deepEqual(wokenBy(lab, failed), []);
+  assert.deepEqual(
+    openDisputes(viewOf(lab)).map((dispute) => dispute.target.id),
+    [target],
+  );
   const made = viewOf(lab).posts.find((entry) => entry.id === failed);
   assert.equal(made?.outcome, 'fails');
   assert.equal(made?.thread, 't-2');
+  const leading = await by(0)('verifold_direction', {
+    action: 'update',
+    verdict: 'leading',
+    post: target,
+    evidence: 'Accuracy 0.7.',
+    why: 'It meets the bar.',
+  });
+  assert.equal(leading.ok, false);
+  assert.match(leading.text, /failed the check p-\d+, so it backs no verdict/);
+  const onCheck = await by(2)('verifold_direction', {
+    action: 'update',
+    verdict: 'leading',
+    post: failed,
+    evidence: 'Accuracy 0.7.',
+    why: 'It meets the bar.',
+  });
+  assert.equal(onCheck.ok, false);
+  assert.match(onCheck.text, /is a check that failed, so it backs no verdict/);
 });
 
 await test('an objection to a post that cites a run starts a check, and a result counts as its claim', async (t) => {
@@ -1165,6 +1490,27 @@ await test("the person's words wake followers past the hourly turns, and a post 
   assert.equal(events[0]?.kind, 'person');
 });
 
+await test("the person's words in a thread with no live follower reach every agent, and each one reads them", async (t) => {
+  const { lab, by, started, sent } = await threeAgents(t);
+  await result(lab, by(0), started[0]?.agent ?? '', open);
+  await lab.stopDirection(viewOf(lab).directions[0]?.direction.id ?? '');
+  const inThread = viewOf(lab).posts.find((entry) => entry.thread === 't-2');
+  const words = await lab.post({
+    text: 'Why this result?',
+    replyTo: inThread?.id,
+  });
+  assert.equal(wokenBy(lab, words.id).length, 2);
+  assert.ok(
+    viewOf(lab)
+      .threads?.find((entry) => entry.id === 't-2')
+      ?.followers.includes(started[1]?.agent ?? ''),
+  );
+  const sessions = (lab as unknown as { options: { sessions: LabSessions } })
+    .options.sessions;
+  sessions.idle = () => true;
+  await until(() => sent.some((text) => text.includes('Why this result?')));
+});
+
 await test('a plan change wakes each agent that it changes, not the others', async (t) => {
   const { lab, started } = await threeAgents(t);
   const planner = started[0];
@@ -1188,7 +1534,7 @@ await test('a plan change wakes each agent that it changes, not the others', asy
   assert.deepEqual(wokenBy(lab, id), [agentOf(lab, 1).handle]);
 });
 
-await test('a proposal becomes a decision on the tick, its followers read it, and the person can overturn it', async (t) => {
+await test('a proposal becomes a decision on the tick, its followers read it, and a later objection opens the thread again', async (t) => {
   const { lab, by } = await threeAgents(t, { objectionMs: 30 });
   const proposal = await by(0)('verifold_post', {
     kind: 'proposal',
@@ -1224,27 +1570,59 @@ await test('a proposal becomes a decision on the tick, its followers read it, an
   assert.match(note?.text ?? '', /is now the decision of t-2/);
   assert.deepEqual(wokenBy(lab, note?.id ?? ''), []);
 
-  await assert.rejects(
-    lab.overturn({ thread: 't-3', text: 'No.' }),
-    /t-3 has no decision to overturn/,
-  );
-  await assert.rejects(
-    lab.overturn({ thread: 't-9', text: 'No.' }),
-    /Name a thread, such as t-3/,
-  );
-  await assert.rejects(lab.overturn({ thread: 't-2', text: '' }));
-  const words = await lab.overturn({
-    thread: 't-2',
-    text: 'The old mix costs too much.',
+  // A later objection opens the thread again, and the proposal does not decide it again.
+  const late = await by(1)('verifold_post', {
+    kind: 'objection',
+    replyTo: id,
+    text: 'The old mix leaks.',
   });
-  assert.equal(words.author, 'person');
-  assert.equal(words.thread, 't-2');
+  assert.equal(late.ok, true, late.text);
   assert.equal(threadOf('t-2')?.state, 'open');
   assert.equal(threadOf('t-2')?.outcome, undefined);
-  assert.deepEqual(wokenBy(lab, words.id), [agentOf(lab, 0).handle]);
-  // The next ticks leave it open.
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(threadOf('t-2')?.state, 'open');
+});
+
+await test('a board after a lost record has a note, once, and a reply there can open a new thread', async (t) => {
+  const { lab, by, started, root } = await threeAgents(t);
+  const target = await result(lab, by(0), started[0]?.agent ?? '', open);
+  await lab.close();
+  await writeFile(join(root, '.verifold', 'lab', 'threads.json'), 'not json');
+  const again = newLab(t, root);
+  await again.lab.load();
+  const notes = (): number =>
+    viewOf(again.lab).posts.filter((entry) =>
+      entry.text.includes('could not read the records'),
+    ).length;
+  assert.equal(notes(), 1);
+  await again.lab.close();
+  const third = newLab(t, root);
+  await third.lab.load();
+  assert.equal(
+    viewOf(third.lab).posts.filter((entry) =>
+      entry.text.includes('could not read the records'),
+    ).length,
+    1,
+  );
+  third.lab.resumeAll();
+  await until(() => third.started.length > 0);
+  const call = toolsOf(third.started)(0);
+  const refused = await call('verifold_post', {
+    kind: 'objection',
+    replyTo: target,
+    text: 'Seed 2 leaks.',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /t-2 has no record now/);
+  const reply = await call('verifold_post', {
+    kind: 'objection',
+    replyTo: target,
+    text: 'Seed 2 leaks.',
+    title: 'Does seed 2 leak into the test set?',
+    why: 'The result rests on it.',
+  });
+  assert.equal(reply.ok, true, reply.text);
+  assert.match(reply.text, /in t-3\./);
 });
 
 await test('a digest that goes out holds the thread lines', async (t) => {
@@ -1302,6 +1680,15 @@ await test('an older lab keeps its kinds, tools, wakes, and prompt, and holds no
   assert.ok(!first.tools.specs.some((tool) => tool.name === 'verifold_status'));
   assert.match(first.prompt, /`claim`: a result of your direction/);
   assert.match(first.prompt, /The person must understand them/);
+  assert.match(first.prompt, /A reply to your plan post wakes you\./);
+  assert.doesNotMatch(first.prompt, /`t-1`/);
+  const direction = first.tools.specs.find(
+    (tool) => tool.name === 'verifold_direction',
+  );
+  assert.match(
+    direction?.description ?? '',
+    /a claim, evidence, or rerun post/,
+  );
   const question = await first.tools.call(
     'verifold_post',
     { kind: 'question', text: 'Which layer?', mentions: ['codex-1'] },
@@ -1326,10 +1713,6 @@ await test('an older lab keeps its kinds, tools, wakes, and prompt, and holds no
   const words = await lab.post({ text: 'Stop.' });
   assert.equal(words.thread, undefined);
   assert.equal(wokenBy(lab, words.id).length, viewOf(lab).directions.length);
-  await assert.rejects(
-    lab.overturn({ thread: 't-1', text: 'No.' }),
-    /Name a thread/,
-  );
   // An objection that no check took stays a reply here.
   await first.tools.call(
     'verifold_post',
@@ -1358,6 +1741,55 @@ const reader = (root: string, view: LabView): ApiReader =>
     works: [],
   }));
 
+await test('an ask that names the person shows on the wire first, and their reply ends it', async (t) => {
+  const { lab, by, root } = await threeAgents(t);
+  const doubt = await by(0)('verifold_post', {
+    kind: 'ask',
+    mentions: [agentOf(lab, 1).handle],
+    text: 'Which seed leaks?',
+    ...open,
+  });
+  assert.equal(doubt.ok, true, doubt.text);
+  const ask = await by(0)('verifold_post', {
+    kind: 'ask',
+    mentions: ['person'],
+    text: 'Is the budget firm?',
+    title: 'Is the money limit firm?',
+    why: 'It sets the seeds.',
+  });
+  assert.equal(ask.ok, true, ask.text);
+  const id = posted(ask.text);
+  const wire = async (): Promise<import('../src/protocol/api.ts').Lab> =>
+    (
+      JSON.parse((await reader(root, viewOf(lab)).build()).json) as {
+        lab: import('../src/protocol/api.ts').Lab;
+      }
+    ).lab;
+  const waits = (await wire()).waits ?? [];
+  assert.deepEqual(waits[0], {
+    waiter: agentOf(lab, 0).id,
+    waiterHandle: 'agent-1',
+    on: 'person',
+    onHandle: null,
+    post: id,
+    reason: 'ask',
+    thread: 't-3',
+    subject: 'Is the money limit firm?',
+    text: 'Is the budget firm?',
+    since: viewOf(lab).posts.find((entry) => entry.id === id)?.at,
+  });
+  assert.equal(waits.length, 2);
+  await lab.post({ text: 'Yes, it is firm.', replyTo: id });
+  assert.deepEqual(
+    ((await wire()).waits ?? []).map((wait) => wait.on),
+    [agentOf(lab, 1).id],
+  );
+  assert.equal(
+    viewOf(lab).threads?.find((entry) => entry.id === 't-3')?.state,
+    'answered',
+  );
+});
+
 await test('a snapshot carries threads, an agent’s line, and marks on posts, and a thread reads as a page', async (t) => {
   const { lab, by, root, started } = await threeAgents(t);
   const target = await result(lab, by(0), started[0]?.agent ?? '', open);
@@ -1373,8 +1805,8 @@ await test('a snapshot carries threads, an agent’s line, and marks on posts, a
   await result(lab, by(2), started[2]?.agent ?? '', {
     kind: 'check',
     replyTo: target,
-    outcome: 'holds',
-    text: 'The recount agrees.',
+    outcome: 'fails',
+    text: 'The recount differs.',
   });
   await by(1)('verifold_status', {
     doing: 'Refitting seed 2',
@@ -1390,7 +1822,9 @@ await test('a snapshot carries threads, an agent’s line, and marks on posts, a
   const shown = new Map(wire.board.posts.map((entry) => [entry.id, entry]));
   assert.equal(shown.get(target)?.disputed, true);
   assert.equal(shown.get(target)?.thread, 't-2');
-  assert.deepEqual(shown.get(target)?.recountedBy, ['agent-3']);
+  assert.deepEqual(shown.get(target)?.recountedBy, [
+    { handle: 'agent-3', outcome: 'fails' },
+  ]);
   assert.equal(shown.get(cited)?.citesDisputed, target);
   assert.equal(shown.get(cited)?.disputed, undefined);
   const threads = wire.threads ?? [];
@@ -1405,8 +1839,17 @@ await test('a snapshot carries threads, an agent’s line, and marks on posts, a
     wire.agents.find((agent) => agent.id === started[1]?.agent)?.line?.doing,
     'Refitting seed 2',
   );
-  assert.equal(wire.disputes[0]?.post, target);
+  assert.equal(wire.disputes.length, 1);
   assert.equal(wire.directions[0]?.disputed, true);
+  assert.deepEqual(
+    wire.waits?.map(({ reason, waiterHandle, onHandle, subject }) => [
+      reason,
+      waiterHandle,
+      onHandle,
+      subject,
+    ]),
+    [['objection', 'agent-2', 'agent-1', open.title]],
+  );
   const page = reader(root, view).threadPage('t-2');
   assert.equal(page?.thread.id, 't-2');
   assert.ok(page?.posts.every((entry) => entry.thread === 't-2'));

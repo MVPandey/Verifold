@@ -158,6 +158,7 @@ import {
   noMarks,
   postMarks,
   threadItem,
+  waitItems,
   type PostMarks,
 } from './lab-threads.ts';
 import { readJsonBody, record } from './http.ts';
@@ -196,6 +197,7 @@ export const apiLimits = {
   agents: 50,
   disputes: 50,
   threads: 100,
+  waits: 50,
   facts: 50,
   runs: 30,
   checks: 30,
@@ -249,6 +251,7 @@ interface Level {
   readonly agents: number;
   readonly disputes: number;
   readonly threads: number;
+  readonly waits: number;
   readonly facts: number;
   readonly runs: number;
   readonly checks: number;
@@ -268,6 +271,7 @@ const full: Level = {
   agents: apiLimits.agents,
   disputes: apiLimits.disputes,
   threads: apiLimits.threads,
+  waits: apiLimits.waits,
   facts: apiLimits.facts,
   runs: apiLimits.runs,
   checks: apiLimits.checks,
@@ -295,6 +299,7 @@ const levels: readonly [Level, ...Level[]] = [
     agents: 20,
     disputes: 20,
     threads: 30,
+    waits: 20,
     facts: 20,
     runs: 10,
     checks: 10,
@@ -312,6 +317,7 @@ const levels: readonly [Level, ...Level[]] = [
     agents: 20,
     disputes: 5,
     threads: 5,
+    waits: 5,
     facts: 5,
     runs: 0,
     checks: 0,
@@ -329,6 +335,7 @@ const levels: readonly [Level, ...Level[]] = [
     agents: 0,
     disputes: 0,
     threads: 0,
+    waits: 0,
     facts: 0,
     runs: 0,
     checks: 0,
@@ -1699,6 +1706,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
       check: entry.check?.id ?? null,
     })),
     threads: keptThreads.map(threadItem),
+    waits: keep(waitItems(view), level.waits, 'waits'),
     runs: keep(view.ledger, level.runs, 'runs', true).map(run),
     checks: keep(view.checks, level.checks, 'checks', true).map(check),
     // A sign-off is small, so every level keeps it: the answer never looks unsigned.
