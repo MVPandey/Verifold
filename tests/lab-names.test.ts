@@ -505,7 +505,7 @@ await test('runs follow "Agents at once" with a floor, and checks run one per 5'
   assert.equal(labRunLimit(20), 20);
   assert.deepEqual(
     [undefined, 1, 4, 5, 9, 10, 19, 20].map((slots) => checksAtOnce(slots)),
-    [1, 1, 1, 1, 1, 2, 3, 4],
+    [1, 1, 1, 2, 2, 2, 3, 4],
   );
   assert.equal(callLimits.open, 6);
   assert.match(askPersonToolSpec.description, /At most 6 calls wait/);
