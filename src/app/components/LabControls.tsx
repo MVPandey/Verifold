@@ -2,7 +2,7 @@ import { useId, useState, type ReactNode } from 'react';
 import type { Harness, Lab, Work } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
 import { useControl, type NewDirection } from '../controls.ts';
-import { authorOf, clock, cut, harnessName } from '../format.ts';
+import { authorOf, clock, cut, harnessName, roleName } from '../format.ts';
 import { href } from '../route.ts';
 import { Warning } from './Icons.tsx';
 
@@ -209,7 +209,7 @@ function checkWhere(lab: Lab, checkId: string | null): string {
     ? lab.checks.find((entry) => entry.id === checkId)
     : undefined;
   if (!check) return 'No check yet.';
-  const who = `${check.handle} (${harnessName(check.harness)})`;
+  const who = `${roleName(check.handle)} (${harnessName(check.harness)})`;
   switch (check.state) {
     case 'queued':
       return `Check ${check.id} waits for ${who}.`;
@@ -281,7 +281,7 @@ export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
                     <>
                       {' '}
                       <a href={href.agent(check.agent)}>
-                        What {check.handle} did
+                        What {roleName(check.handle)} did
                       </a>
                     </>
                   )}

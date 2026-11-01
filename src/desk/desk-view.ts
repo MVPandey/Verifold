@@ -1,6 +1,10 @@
 import { escapeHtml as e } from '../ui/dom.ts';
 import { markdownHtml } from './markdown.ts';
-import type { Candidate, Workspace } from '../core/contracts.ts';
+import {
+  maxAgents,
+  type Candidate,
+  type Workspace,
+} from '../core/contracts.ts';
 import type { DeskSnapshot, DeskAttempt } from '../server/desk-records.ts';
 import type { ResearchReport } from '../legacy/research.ts';
 import type {
@@ -2795,7 +2799,7 @@ function renderComputeView(
   agents: number,
 ): string {
   const { key, settings, gpus } = compute;
-  const agentsCard = `<section class="card" aria-labelledby="agents-title"><h2 id="agents-title">Agents at once</h2><p>Up to ${agents} ${agents === 1 ? 'agent runs' : 'agents run'} tasks and sessions at the same time. Each agent uses your Claude Code or Codex plan, so more agents reach the plan's usage limit sooner.</p><details id="agents-edit"><summary>Change it</summary><label class="field" for="team-agents">Agents at once, 1 to 8<input id="team-agents" type="number" min="1" max="8" step="1" value="${agents}"></label><div class="actions"><button type="button" data-action="compute-agents">Save</button></div></details></section>`;
+  const agentsCard = `<section class="card" aria-labelledby="agents-title"><h2 id="agents-title">Agents at once</h2><p>Up to ${agents} ${agents === 1 ? 'agent runs' : 'agents run'} tasks and sessions at the same time. Each agent uses your Claude Code or Codex plan, so more agents reach the plan's usage limit sooner.</p><details id="agents-edit"><summary>Change it</summary><label class="field" for="team-agents">Agents at once, 1 to ${maxAgents}<input id="team-agents" type="number" min="1" max="${maxAgents}" step="1" value="${agents}"></label><div class="actions"><button type="button" data-action="compute-agents">Save</button></div></details></section>`;
   const keyCard = key
     ? `<p>The key is in ${e(placeNames[key.place])}. It ends in <code>${e(key.last4)}</code>.</p>
       ${key.problem ? `<p class="notice">The check at ${e(since(key.checkedAt ?? key.savedAt))} failed. ${e(key.problem)}</p>` : key.checkedAt ? `<p class="notice-ok">It worked at ${e(since(key.checkedAt))}.</p>` : ''}

@@ -21,6 +21,7 @@ import {
 import {
   type Brought,
   type Call,
+  type CallOption,
   type Direction,
   type Evidence,
   type LabEvent,
@@ -107,6 +108,46 @@ export function wordsPost(call: Call, words: string): NewPost {
         call,
         `The person answered ${call.id} in their own words: ${JSON.stringify(words)}`,
       );
+}
+
+/**
+ * The option's pick changes no setting: it only tells the agents that asked.
+ * Verifold's own deadline call is the exception: its option without an effect
+ * ends the lab.
+ */
+export function noSetting(
+  call: Pick<Call, 'by'>,
+  option: Pick<CallOption, 'effect'>,
+): boolean {
+  return option.effect === null && call.by !== 'verifold';
+}
+
+/**
+ * What the board and the agents that asked read of the option that the
+ * person chose. `did`: what Verifold changed, in words, or nothing.
+ */
+export function choiceLine(
+  call: Pick<Call, 'by' | 'id' | 'options'>,
+  picked: number,
+  did: string,
+): string {
+  const option = call.options[picked];
+  const note =
+    did ||
+    (option && noSetting(call, option)
+      ? 'This choice changes no setting by itself.'
+      : '');
+  return `The person chose ${JSON.stringify(option?.label ?? '')} on ${call.id}.${note ? ` ${note}` : ''}`;
+}
+
+/**
+ * The most entries of a first plan. "Agents at once" (`slots`) raises it from
+ * `labLimits.firstPlan.low` up to its `max`. A plan lists every open direction,
+ * so it is never less than `open`.
+ */
+export function firstPlanMost(slots: number | undefined, open: number): number {
+  const { low, max } = labLimits.firstPlan;
+  return Math.max(low, open, Math.min(slots ?? low, max));
 }
 
 /** What the agents that asked hear about an answer in the person's words. */

@@ -16,7 +16,7 @@ import type {
 import { shownVerdict, verdictLabels } from '../../ui/lab-lines.ts';
 import { turnSummary } from '../activity.ts';
 import type { ActOutcome, Loaded } from '../api.ts';
-import { authorOf, clock, harnessName } from '../format.ts';
+import { agentName, authorOf, clock, harnessName } from '../format.ts';
 import {
   archivedAt,
   counted,
@@ -347,7 +347,10 @@ export function LabRun({ run }: { readonly run: HistoryLabRun }): ReactNode {
                   </span>{' '}
                   <b>{direction.title}</b>
                   {direction.handle && (
-                    <span className="muted"> · {direction.handle}</span>
+                    <span className="muted">
+                      {' · '}
+                      {agentName(direction.handle, direction.job)}
+                    </span>
                   )}
                   {direction.bar && (
                     <div className="muted">Holds up if: {direction.bar}</div>

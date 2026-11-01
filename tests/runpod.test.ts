@@ -564,14 +564,14 @@ await test('the desk stores a key and limits through actions, and no reply holds
   );
   assert.equal((await post({ action: 'compute-key-remove' })).status, 200);
   assert.equal((await post({ action: 'compute-unknown' })).status, 400);
-  // "Agents at once" needs the token, takes 1 to 8, and holds for the next start.
+  // "Agents at once" needs the token, takes 1 to 20, and holds for the next start.
   const anonymous = await fetch(`${url.origin}/api/action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'compute-agents', agents: 4 }),
   });
   assert.equal(anonymous.status, 401);
-  for (const agents of [0, 9, 2.5, '4'])
+  for (const agents of [0, 21, 2.5, '4'])
     assert.equal(
       (await post({ action: 'compute-agents', agents })).status,
       409,

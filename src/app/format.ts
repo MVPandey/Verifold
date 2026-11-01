@@ -1,9 +1,12 @@
 import type { Asker, Harness } from '../protocol/api.ts';
+import { agentName, roleName } from '../ui/lab-lines.ts';
 
 /** Dollars, as the desk and the call words write them: "$25", "$11.97". */
 export { usd } from '../ui/call-words.ts';
 /** Durations and deadlines, in the words that the terminal uses too. */
 export { span, since, due } from '../ui/lab-lines.ts';
+/** An agent's names, in the words that the server's lines use too. */
+export { agentName, roleName };
 
 /** A clock time: "22:41". */
 export function clock(at: string): string {
@@ -45,9 +48,9 @@ export function dayClock(at: string, now = Date.now()): string {
   return `on ${date.getDate()} ${months[date.getMonth()] ?? ''}${year} at ${clock(at)}`;
 }
 
-/** Who asked: "claude-2 asked", "claude-2 and codex-2 asked". */
+/** Who asked: "Agent 2 · Controls asked", "claude-2 and codex-2 asked". */
 export function asked(askers: readonly Asker[]): string {
-  const names = askers.map((asker) => asker.handle);
+  const names = askers.map((asker) => agentName(asker.handle, asker.job));
   if (!names.length) return 'Verifold asks';
   const last = names.pop() ?? '';
   return `${names.length ? `${names.join(', ')} and ` : ''}${last} asked`;
@@ -55,6 +58,37 @@ export function asked(askers: readonly Asker[]): string {
 
 export function harnessName(harness: Harness): string {
   return harness === 'claude' ? 'Claude' : 'Codex';
+}
+
+/** A harness by the name of its tool, as an agent's small label says it. */
+export function harnessLabel(harness: Harness): string {
+  return harness === 'claude' ? 'Claude Code' : 'Codex';
+}
+
+/** The mark in an agent's avatar: its number, or "Cl" or "Cx" for a handle from an older lab. */
+export function avatarText(who: {
+  readonly harness: Harness;
+  readonly handle: string;
+}): string {
+  return (
+    /^(?:agent|checker)-(\d+)$/.exec(who.handle)?.[1] ??
+    (who.harness === 'claude' ? 'Cl' : 'Cx')
+  );
+}
+
+/**
+ * What a name line shows after a role name: the job and the harness, such as
+ * "Controls · Codex". A handle from an older lab names its harness already,
+ * so it shows nothing more: null.
+ */
+export function agentDetail(who: {
+  readonly handle: string;
+  readonly job?: string | null | undefined;
+  readonly harness: Harness;
+}): string | null {
+  if (roleName(who.handle) === who.handle) return null;
+  const label = harnessLabel(who.harness);
+  return who.job ? `${who.job} · ${label}` : label;
 }
 
 const families: Readonly<Record<string, string>> = {
@@ -140,10 +174,31 @@ export function cut(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
-/** Who wrote a post, as a name: "You", an agent's handle, or "Verifold". */
+/** Who wrote a post, as a name: "You", an agent's name, or "Verifold". */
 export function authorOf(post: {
   readonly author: string;
   readonly handle: string | null;
+  readonly job?: string | null | undefined;
 }): string {
-  return post.author === 'person' ? 'You' : (post.handle ?? 'Verifold');
+  if (post.author === 'person') return 'You';
+  return post.handle ? agentName(post.handle, post.job) : 'Verifold';
+}
+
+/** A post's author in two parts for its head: a name in bold, and the job and harness after it. */
+export function authorHead(post: {
+  readonly author: string;
+  readonly handle: string | null;
+  readonly job?: string | null | undefined;
+  readonly harness: Harness | null;
+}): { readonly name: string; readonly detail: string | null } {
+  return post.handle && post.harness
+    ? {
+        name: roleName(post.handle),
+        detail: agentDetail({
+          ...post,
+          handle: post.handle,
+          harness: post.harness,
+        }),
+      }
+    : { name: authorOf(post), detail: null };
 }

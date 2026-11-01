@@ -65,6 +65,9 @@ export interface ComputeSettings {
   readonly askBeforePod: boolean;
 }
 
+/** The highest "Pods at once" of a project. */
+export const maxPodsAtOnce = 2;
+
 export const computeDefaults: ComputeSettings = {
   schemaVersion: 1,
   limitUsd: null,
@@ -277,7 +280,13 @@ export function parseSettings(
     !gpus.every((entry) => typeof entry === 'string' && gpuId.test(entry))
   )
     fail('Verifold got an unreadable GPU list.');
-  const pods = number(input.maxRunningPods, 'the number of pods', 1, 2, true);
+  const pods = number(
+    input.maxRunningPods,
+    'the number of pods',
+    1,
+    maxPodsAtOnce,
+    true,
+  );
   return {
     schemaVersion: 1,
     limitUsd: limit,
@@ -669,6 +678,20 @@ export class Compute {
         return `RunPod did not create the pod of ${lease.id}: ${started.end?.reason ?? 'no reason given'}.`;
     }
     return `Asked the person for ${lease.id}: ${what}. Nothing is created until the person approves it. An event tells you the decision.`;
+  }
+
+  /** The person's limit of pods that run at once. */
+  podsAtOnce(): number {
+    return this.state.settings.maxRunningPods;
+  }
+
+  /**
+   * Set the limit of pods at once, with the checks of the person's own change
+   * in Settings. A lower limit stops no pod. Saves the settings. Throws when
+   * they cannot be saved or `pods` is out of range.
+   */
+  setPodsAtOnce(pods: number): Promise<void> {
+    return this.changeSettings({ maxRunningPods: pods }, undefined);
   }
 
   /** What a lab lease for `input` can cost at most, after the checks of a request. It records nothing. */

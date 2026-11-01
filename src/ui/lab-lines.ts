@@ -9,6 +9,27 @@ import { usd } from './call-words.ts';
 
 const minute = 60_000;
 
+/**
+ * A lab handle as a person reads it: "agent-3" is "Agent 3", "checker-1" is
+ * "Checker 1". A handle from an older lab, such as "claude-2", and any word
+ * that is no handle, stays as it is.
+ */
+export function roleName(handle: string): string {
+  if (handle === 'coordinator') return 'Coordinator';
+  const role = /^(agent|checker)-(\d+)$/.exec(handle);
+  return role
+    ? `${role[1] === 'agent' ? 'Agent' : 'Checker'} ${role[2]}`
+    : handle;
+}
+
+/** An agent's full name: "Agent 3 · Controls", or "Agent 3" without a job. */
+export function agentName(
+  handle: string,
+  job: string | null | undefined,
+): string {
+  return job ? `${roleName(handle)} · ${job}` : roleName(handle);
+}
+
 /** A duration in plain words: "40 s", "6 min", "1 h 20 min", "3 days". */
 export function span(ms: number): string {
   const minutes = Math.floor(Math.max(0, ms) / minute);

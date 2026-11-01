@@ -24,6 +24,7 @@ import {
   checkMethods,
   checkOutcomes,
   directionLimits,
+  handlePattern,
   planLimits,
   verdicts,
 } from '../lab-tools.ts';
@@ -76,10 +77,11 @@ export const labLimits = {
   title: 120,
   bar: boardLimits.text,
   /**
-   * Entries of the first plan of record. A plan lists every open direction,
-   * so a first plan has more when the person opened more.
+   * Entries of the first plan of record. `low` holds at any "Agents at once".
+   * A higher setting allows a first plan up to `max`, and a plan lists every
+   * open direction, so a first plan has more when the person opened more.
    */
-  firstPlan: { min: 2, max: 4 },
+  firstPlan: { min: 2, low: 4, max: planLimits.directions },
   /** Hours of one time budget, or of one extension. */
   hours: 168,
   /** Turns in a row without a post, after which an agent's next turn asks it to post. */
@@ -136,6 +138,10 @@ export interface Evidence {
 export interface Direction {
   readonly id: string;
   readonly title: string;
+  /** What its agent does, as a short label. Null: none set, as in a lab from before jobs. */
+  readonly job: string | null;
+  /** The team of directions that it works with, as a short label. Null: none set. */
+  readonly team: string | null;
   /** What makes the direction hold up, in plain words. */
   readonly bar: string | null;
   /** The repeat runs that the bar needs, such as seeds. */
@@ -204,8 +210,17 @@ export interface LabState {
   readonly pausedAt: string | null;
   /** `deadline`: the time budget ended. The person gives more time to resume. */
   readonly pausedFor: 'person' | 'deadline' | null;
-  /** The last handle number of each harness: claude-1, codex-1, and so on. */
+  /** The last handle number of each harness: claude-1, codex-1, and so on. Only a lab without `roles` counts here. */
   readonly handles: Readonly<Record<HarnessName, number>>;
+  /**
+   * The last number of each role: agent-3, checker-1. Null: a lab from
+   * before role names, which keeps its handles for each harness. See
+   * names.ts.
+   */
+  readonly roles: {
+    readonly agents: number;
+    readonly checkers: number;
+  } | null;
   readonly directions: readonly Direction[];
   /** The agent that opened the lab. It posts and changes the plan of record. */
   readonly opener: string | null;
@@ -405,7 +420,9 @@ export type CallEffect =
       readonly bar: string;
     }
   | { readonly type: 'stop'; readonly direction: string }
-  | { readonly type: 'domains'; readonly domains: readonly string[] };
+  | { readonly type: 'domains'; readonly domains: readonly string[] }
+  /** The project's limit of pods that run at once. */
+  | { readonly type: 'podsAtOnce'; readonly pods: number };
 
 export interface CallOption {
   readonly label: string;
@@ -434,7 +451,13 @@ export type CallApplied =
    * the answer stands. `agent`: the agent that asked first. Earlier builds
    * read a record only with it, and no code here reads it.
    */
-  | { readonly type: 'domains'; readonly agent: string };
+  | { readonly type: 'domains'; readonly agent: string }
+  /** `before`: the limit before the answer, which an undo sets again. */
+  | {
+      readonly type: 'podsAtOnce';
+      readonly pods: number;
+      readonly before: number;
+    };
 
 /**
  * A call for the person: cost, scope, access, or go. An agent asks with
@@ -521,7 +544,7 @@ export interface LabAction {
 export interface AgentRecord {
   readonly schemaVersion: 1;
   readonly id: string;
-  /** The name on the board, such as claude-1. */
+  /** The name on the board, such as agent-3, or claude-1 in an older lab. */
   readonly handle: string;
   readonly host: HarnessName;
   readonly model: string | null;
@@ -637,7 +660,7 @@ export interface LabView {
   readonly state: LabState;
   readonly directions: readonly DirectionView[];
   readonly posts: readonly Post[];
-  /** The handle of each agent, such as claude-1, by agent ID. */
+  /** The handle of each agent, such as agent-3, by agent ID. */
   readonly handles: Readonly<Record<string, string>>;
   /** Agents work in this process. False: it only shows the lab, and the person works in it with the project's owner. */
   readonly runs: boolean;
@@ -750,6 +773,10 @@ export interface LabCompute {
   }): Promise<string>;
   /** What a lease of lab directions can cost at most, after the checks of a request. It records nothing. */
   podCost(input: LabPod): Promise<number>;
+  /** The person's limit of pods that run at once. */
+  podsAtOnce(): number;
+  /** Set that limit, as a call's answer or its undo does. */
+  setPodsAtOnce(pods: number): Promise<void>;
   /** The person picked a pod in a call: the lease starts as one that they approved. */
   startPod(input: LabPod): Promise<Lease>;
   /** A key is stored and the person set a spend limit. */
@@ -934,16 +961,18 @@ function wholeOr(
 }
 
 /**
- * The effect of an option, checked against the kind of its call: a pod goes
- * with cost, hours with cost or go, a direction with scope, and domains with
- * access. A refusal says why.
+ * The effect of an option, checked against the kind of its call: a pod and
+ * pods at once go with cost, hours with cost or go, a direction with scope,
+ * and domains with access. A refusal says why.
  */
 export function callEffect(value: unknown, kind: CallKind): CallEffect | null {
   if (value === undefined || value === null) return null;
   const effect = object(value) ?? fail('Give an effect as an object.');
   const keys = Object.keys(effect);
   if (keys.length !== 1)
-    fail('Give one effect for each option: pod, hours, direction, or domains.');
+    fail(
+      'Give one effect for each option: pod, podsAtOnce, hours, direction, or domains.',
+    );
   const goes = (kinds: readonly CallKind[], what: string): void => {
     if (!kinds.includes(kind))
       fail(`${what} goes with a ${kinds.join(' or ')} call, not ${kind}.`);
@@ -956,6 +985,13 @@ export function callEffect(value: unknown, kind: CallKind): CallEffect | null {
       gpuType: text(pod.gpuType, 100, 'the GPU type of the pod'),
       hours: whole(pod.hours, 1, callLimits.podHours, "the pod's hours"),
       secrets: secretNames(pod.secrets),
+    };
+  }
+  if (effect.podsAtOnce !== undefined) {
+    goes(['cost'], 'Pods at once');
+    return {
+      type: 'podsAtOnce',
+      pods: whole(effect.podsAtOnce, 1, callLimits.podsAtOnce, 'pods at once'),
     };
   }
   if (effect.hours !== undefined) {
@@ -1014,7 +1050,7 @@ export function callEffect(value: unknown, kind: CallKind): CallEffect | null {
       fail(`Give 1 to ${callLimits.domains} domains, such as pypi.org.`);
     return { type: 'domains', domains: [...new Set(domains)] };
   }
-  return fail('Give an effect: pod, hours, direction, or domains.');
+  return fail('Give an effect: pod, podsAtOnce, hours, direction, or domains.');
 }
 
 /** An effect as `lab.json` keeps it, checked as the agent's input was. */
@@ -1036,6 +1072,8 @@ function storedEffect(value: unknown, kind: CallKind): CallEffect | null {
       );
     case 'hours':
       return callEffect({ hours: effect.hours }, kind);
+    case 'podsAtOnce':
+      return callEffect({ podsAtOnce: effect.pods }, kind);
     case 'open':
       return callEffect(
         {
@@ -1143,6 +1181,16 @@ function parseApplied(
   )
     return { type: entry.type, direction: entry.direction };
   if (entry.type === 'domains') return { type: 'domains', agent: by };
+  if (
+    entry.type === 'podsAtOnce' &&
+    Number.isSafeInteger(entry.pods) &&
+    Number.isSafeInteger(entry.before)
+  )
+    return {
+      type: 'podsAtOnce',
+      pods: entry.pods as number,
+      before: entry.before as number,
+    };
   return null;
 }
 
@@ -1312,9 +1360,6 @@ export function runArgs(
   };
 }
 
-/** Agent handles such as claude-12. */
-export const handlePattern = '(?:claude|codex)-[1-9]\\d{0,3}';
-
 /** A whole value that is an agent handle. */
 const handleId = new RegExp(`^${handlePattern}$`);
 
@@ -1349,6 +1394,13 @@ function parseDirection(value: unknown): Direction | null {
   return {
     id: entry.id,
     title: entry.title.slice(0, labLimits.title),
+    // A direction from before jobs and teams has neither.
+    job:
+      typeof entry.job === 'string' ? entry.job.slice(0, planLimits.job) : null,
+    team:
+      typeof entry.team === 'string'
+        ? entry.team.slice(0, planLimits.team)
+        : null,
     bar:
       typeof entry.bar === 'string' ? entry.bar.slice(0, labLimits.bar) : null,
     runs:
@@ -1483,9 +1535,10 @@ export function parseState(
   )
     return null;
   const handles = object(value.handles);
-  const count = (host: HarnessName): number =>
-    Number.isSafeInteger(handles?.[host]) && (handles?.[host] as number) >= 0
-      ? (handles?.[host] as number)
+  const roles = object(value.roles);
+  const count = (number: unknown): number =>
+    Number.isSafeInteger(number) && (number as number) >= 0
+      ? (number as number)
       : 0;
   const pausedAt = typeof value.pausedAt === 'string' ? value.pausedAt : null;
   const plan = object(value.plan);
@@ -1501,7 +1554,11 @@ export function parseState(
       : value.pausedFor === 'deadline'
         ? 'deadline'
         : 'person',
-    handles: { claude: count('claude'), codex: count('codex') },
+    handles: { claude: count(handles?.claude), codex: count(handles?.codex) },
+    // A lab from before role names has none, and keeps its handles.
+    roles: roles
+      ? { agents: count(roles.agents), checkers: count(roles.checkers) }
+      : null,
     directions: value.directions.flatMap((entry) => {
       const direction = parseDirection(entry);
       return direction ? [direction] : [];

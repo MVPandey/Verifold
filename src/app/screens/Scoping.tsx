@@ -6,7 +6,7 @@ import type {
   Lab,
   QuestionAnswer,
 } from '../../protocol/api.ts';
-import { agentModelName, harnessName } from '../format.ts';
+import { agentModelName, harnessName, roleName } from '../format.ts';
 import { href } from '../route.ts';
 import { useAction } from '../useAction.ts';
 import { Avatar } from '../components/Avatar.tsx';
@@ -146,7 +146,7 @@ export function Scoping({
         <div className="scoping__head">
           <b>Planner</b>
           <span className="muted">
-            {planner.handle} · {harnessName(planner.harness)}
+            {roleName(planner.handle)} · {harnessName(planner.harness)}
             {planner.model &&
               ` ${agentModelName(planner.model, planner.requestedModel)}`}
           </span>
@@ -233,7 +233,7 @@ export function PlannerComposer({
       label="Write to the planner"
       placeholder="Answer, or add anything"
       maxLength={lab.postLimit}
-      hint={`${planner.handle} reads your message during its turn, or at the start of its next one.`}
+      hint={`${roleName(planner.handle)} reads your message during its turn, or at the start of its next one.`}
       onSend={(text, key) => agentActions.message(direction.id, text, key)}
     />
   );

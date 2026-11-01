@@ -1,3 +1,4 @@
+import { maxPodsAtOnce } from './compute.ts';
 import { runLimits } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
 
@@ -15,18 +16,30 @@ import type { AgentTool } from './session-hosts.ts';
  * check; its schema did not change, so no version either. `facts` of
  * `verifold_plan` is optional, so the plans of an older thread stay valid: no
  * version. The same holds for `changed` of `verifold_plan`, for `facts` of
- * `verifold_ask_person`, and for its fourth option. New words in a description
- * raise no version either: an older thread keeps the older words.
+ * `verifold_ask_person`, for its fourth option and its `podsAtOnce` effect,
+ * and for `job` and `team` of a direction. New words in a description raise
+ * no version either: an older thread keeps the older words.
  */
 export const labToolsVersion = 2;
+
+/**
+ * Every handle in a lab. A new lab names agents `agent-3` and checkers
+ * `checker-1`, and keeps `coordinator` for one session. A lab from before
+ * those names has `claude-2` and `codex-1`.
+ */
+export const handlePattern =
+  '(?:(?:agent|checker|claude|codex)-[1-9]\\d{0,3}|coordinator)';
 
 /** The limits of a plan of record. The tool schema and the lab's checks use the same ones. */
 export const planLimits = {
   /** Open directions of a lab, and so entries of a plan. */
-  directions: 6,
+  directions: 20,
   reading: 600,
   cost: 200,
   title: 120,
+  /** Short labels of a direction: what its agent does, and the group that it works with. */
+  job: 40,
+  team: 40,
   bar: 280,
   runs: 20,
   noise: 120,
@@ -78,7 +91,7 @@ export const labToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_post',
     description:
-      "Post to the lab board, in at most 280 characters. A claim, evidence, or ruled-out post needs proof: a file or a figure in your folder, a diff of paths that you changed, or a run of the lab. Verifold commits your folder first and pins a file, a figure, or a diff to that commit. Reply to a post with replyTo. Mention agents by handle (such as claude-1) or the person. A reply, a mention, or an objection in a direction wakes the agent that it is for. A post without one waits for each agent's next read.",
+      "Post to the lab board, in at most 280 characters. A claim, evidence, or ruled-out post needs proof: a file or a figure in your folder, a diff of paths that you changed, or a run of the lab. Verifold commits your folder first and pins a file, a figure, or a diff to that commit. Reply to a post with replyTo. Mention agents by handle (such as agent-2) or the person. A reply, a mention, or an objection in a direction wakes the agent that it is for. A post without one waits for each agent's next read.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -125,7 +138,7 @@ export const labToolSpecs: readonly AgentTool[] = [
           maxItems: 5,
           items: {
             type: 'string',
-            pattern: '^(person|(claude|codex)-[1-9][0-9]{0,3})$',
+            pattern: `^(person|${handlePattern})$`,
           },
         },
       },
@@ -417,14 +430,13 @@ export const directionLimits = {
   evidence: 120,
   why: 280,
   /** Agents that agents start in 24 hours, and never more than "Agents at once". */
-  starts: 4,
+  starts: planLimits.directions,
 };
 
 /** Directions: an agent opens one with its own agent, gives its own direction a verdict, and closes it. */
 export const directionToolSpec: AgentTool = {
   name: 'verifold_direction',
-  description:
-    "Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, and the harness of its agent. Verifold makes its folder and starts its agent when a slot is free. A lab has at most 6 open directions. Agents start at most 4 agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs `post`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs `post`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs `post`: a claim, evidence, or rerun post about your direction that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.",
+  description: `Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, the harness of its agent, and a short job and team. Verifold makes its folder and starts its agent when a slot is free. A lab has at most ${planLimits.directions} open directions. Agents start at most ${directionLimits.starts} agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs \`post\`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs \`post\`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs \`post\`: a claim, evidence, or rerun post about your direction that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -433,6 +445,17 @@ export const directionToolSpec: AgentTool = {
         type: 'string',
         maxLength: planLimits.title,
         description: 'open: a short title.',
+      },
+      job: {
+        type: 'string',
+        maxLength: planLimits.job,
+        description:
+          'open: what its agent does, in one or two words, such as Controls.',
+      },
+      team: {
+        type: 'string',
+        maxLength: planLimits.team,
+        description: 'open: the team that it joins, in one or two words.',
       },
       bar: {
         type: 'string',
@@ -519,6 +542,8 @@ export const callLimits = {
   hours: 72,
   /** Pod hours of one option. */
   podHours: 24,
+  /** The highest "Pods at once" that one option can set, the most that Settings allows. */
+  podsAtOnce: maxPodsAtOnce,
   undoMinutes: 60,
   defaultUndo: 10,
   /** The hours of Verifold's own call at the end of a time budget. */
@@ -560,7 +585,7 @@ const factsSchema = {
 export const askPersonToolSpec: AgentTool = {
   name: 'verifold_ask_person',
   description:
-    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, hours with cost or go, direction with scope, and domains with access. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
+    "Ask the person for a call that only they make: cost (money, such as a GPU pod or more lab hours), scope (open or stop a direction, or, before the plan of record, a choice that changes the plan), access (network for your shell, or GPU pods), or go (more time for the lab). Never ask the person to settle a technical question: post an objection on the board, and a check settles it. Give 2 to 4 options, each with its dollars and minutes when you know them, and an effect that Verifold applies when the person picks it. pod goes with cost, podsAtOnce with cost, hours with cost or go, direction with scope, and domains with access. An option without an effect changes no setting: the person's pick only tells you their choice, and Verifold says so to the person. When an option promises a change, give it the effect that makes the change. A scope call before the plan has no effects: the plan opens the directions. pick is the option that you advise, and why says why. facts lists the facts behind the call that change over time, each with its source and the source's date. The person's answer applies at once, and they can undo it within undoMinutes (default 10). The person can also answer in their own words instead of an option: then no option applies, and their words are the decision. When another agent's open call asks for the same thing (the same kind and need, or the same effects), your call joins it, and its answer reaches you too. Verifold wakes you with the answer. At most 3 calls wait for the person at once.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -634,6 +659,13 @@ export const askPersonToolSpec: AgentTool = {
                   maximum: callLimits.hours,
                   description: "More hours for the lab's time budget.",
                 },
+                podsAtOnce: {
+                  type: 'integer',
+                  minimum: 1,
+                  maximum: callLimits.podsAtOnce,
+                  description:
+                    "The project's limit of pods that run at once. It stays set until the person changes it. Undo sets it back. verifold_compute shows it.",
+                },
                 direction: {
                   type: 'object',
                   properties: {
@@ -693,7 +725,7 @@ export const askPersonToolSpec: AgentTool = {
 export const planToolSpec: AgentTool = {
   name: 'verifold_plan',
   description:
-    "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id, and say in changed what changed and why. A plan without facts keeps the facts of the plan before it.",
+    "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a job, a team, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id, and say in changed what changed and why. A plan without facts keeps the facts of the plan before it.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -715,6 +747,18 @@ export const planToolSpec: AgentTool = {
                 'An open direction. Leave it out for a new direction.',
             },
             title: { type: 'string', maxLength: planLimits.title },
+            job: {
+              type: 'string',
+              maxLength: planLimits.job,
+              description:
+                'What its agent does, in one or two words, such as Controls.',
+            },
+            team: {
+              type: 'string',
+              maxLength: planLimits.team,
+              description:
+                'The team of directions that it works with, in one or two words.',
+            },
             bar: {
               type: 'string',
               maxLength: planLimits.bar,

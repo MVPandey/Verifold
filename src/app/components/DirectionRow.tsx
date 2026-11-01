@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Agent, Direction } from '../../protocol/api.ts';
 import { directionLine, shownVerdict } from '../../ui/lab-lines.ts';
+import { agentDetail, roleName } from '../format.ts';
 import { href } from '../route.ts';
 import { Avatar } from './Avatar.tsx';
 import { Verdict } from './Verdict.tsx';
@@ -24,6 +25,7 @@ export function DirectionRow({
     agent?.live ?? null,
     now,
   );
+  const detail = agent ? agentDetail(agent) : null;
   return (
     <a
       className={`row${shownVerdict(direction) === 'disputed' ? ' row--disputed' : ''}`}
@@ -32,6 +34,11 @@ export function DirectionRow({
       <Verdict direction={direction} />
       <span className="row__body">
         <b>{direction.title}</b>
+        {agent && detail && (
+          <span className="row__who">
+            {roleName(agent.handle)} · {detail}
+          </span>
+        )}
         {line.working ? (
           <span className="row__live">
             <span className="dot" aria-hidden="true" />

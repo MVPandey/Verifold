@@ -6,14 +6,20 @@ Verifold's screens, terminal lines, and errors follow two skills: humanizer, and
 
 | Thing                                             | Word        | Not                   |
 | ------------------------------------------------- | ----------- | --------------------- |
-| A unit of work that one agent does                | task        | job, assignment       |
+| A unit of work that one agent does                | task        | assignment            |
 | The Claude Code or Codex process that does a task | agent       | worker (in the desk)  |
 | An agent that the person drives without a task    | session     | chat                  |
+| What an agent does in a lab, as a short label     | job         | role, title           |
+| Directions that work together, as a short label   | team        | group, squad          |
 | The agent that plans and reviews tasks            | coordinator | lead, manager         |
 | The saved result of one turn of an agent          | version     | output, snapshot      |
 | A GPU machine on RunPod                           | pod         | lease (in the desk)   |
 | Something that waits for the person               | Needs you   | inbox, alerts         |
 | The coordinator's request to the person           | question    | blocker (in the desk) |
+
+## Agent names
+
+In a lab, call an agent by its role and number: Agent 3, Checker 1. Add its job where the person looks for who it is: Agent 3 · Controls. In a sentence, the short name reads better: "Agent 3 reads your message." The harness is a small label, Claude Code or Codex, beside the name. A lab from before these names keeps handles such as `claude-2`, and the screens show them as they are.
 
 ## Task states
 
