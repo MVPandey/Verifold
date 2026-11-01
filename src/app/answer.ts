@@ -48,8 +48,14 @@ export interface Finding {
   } | null;
 }
 
-/** Post kinds that a check reruns: a claim, evidence, or a rerun that cites a run. */
-const checkable = new Set<Post['kind']>(['claim', 'evidence', 'rerun']);
+/** Post kinds that a check reruns, when they cite a run. */
+const checkable = new Set<Post['kind']>([
+  'result',
+  'check',
+  'claim',
+  'evidence',
+  'rerun',
+]);
 
 /** Verdicts that settle a direction, in the order the answer lists them. */
 const settled: Readonly<Partial<Record<Verdict, number>>> = {

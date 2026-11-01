@@ -9,6 +9,11 @@ import { PlanCard } from './PlanCard.tsx';
 
 const chips: Partial<Record<PostKind, string>> = {
   plan: 'Plan of record',
+  result: 'Result',
+  check: 'Check',
+  ask: 'Ask',
+  answer: 'Answer',
+  proposal: 'Proposal',
   claim: 'Claim',
   evidence: 'Evidence',
   objection: 'Objection',
@@ -81,6 +86,8 @@ function ProofLinks({ post }: { readonly post: Post }): ReactNode {
 
 /** Post kinds that a check reruns, when they cite a run. */
 const checkable: ReadonlySet<PostKind> = new Set([
+  'result',
+  'check',
   'claim',
   'evidence',
   'rerun',
@@ -149,6 +156,10 @@ function PostLines({
       <div className="post__head">
         <PostAuthor post={post} />
         {chip && <span className={`chip chip--${post.kind}`}>{chip}</span>}
+        {post.disputed && <span className="chip chip--disputed">Disputed</span>}
+        {post.citesDisputed && (
+          <span className="chip chip--disputed">Cites a disputed post</span>
+        )}
         {onReply && (
           <button
             type="button"
@@ -165,6 +176,12 @@ function PostLines({
         <ProofLinks post={post} />
       </div>
       {lab && <CheckNote post={post} lab={lab} />}
+      {post.recountedBy && (
+        <span className="post__check">
+          Recounted by {[...new Set(post.recountedBy)].map(roleName).join(', ')}
+          .
+        </span>
+      )}
     </>
   );
 }

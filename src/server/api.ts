@@ -19,6 +19,7 @@ import {
   postId,
   proofRef,
   runId,
+  threadId,
   type Artifact,
   type Post as BoardPost,
 } from '../core/board.ts';
@@ -105,6 +106,7 @@ import {
   turnIdPattern,
   type ActionName,
   type Agent,
+  type AgentLine,
   type AgentStatus,
   type BoardPage,
   type BringGroup,
@@ -136,6 +138,7 @@ import {
   type StartView,
   type Step,
   type Text,
+  type ThreadPage,
   type Turn,
   type TurnPage,
   type Work,
@@ -151,6 +154,12 @@ import {
 import { agentName } from '../ui/lab-lines.ts';
 import { figureHeaders, figurePixels, imageSize } from './figure.ts';
 import { keptAgents, keptDirections } from './lab-lists.ts';
+import {
+  noMarks,
+  postMarks,
+  threadItem,
+  type PostMarks,
+} from './lab-threads.ts';
 import { readJsonBody, record } from './http.ts';
 import type { FirstRun } from './setup.ts';
 
@@ -186,6 +195,7 @@ export const apiLimits = {
   buildsOn: 10,
   agents: 50,
   disputes: 50,
+  threads: 100,
   facts: 50,
   runs: 30,
   checks: 30,
@@ -238,6 +248,7 @@ interface Level {
   readonly buildsOn: number;
   readonly agents: number;
   readonly disputes: number;
+  readonly threads: number;
   readonly facts: number;
   readonly runs: number;
   readonly checks: number;
@@ -256,6 +267,7 @@ const full: Level = {
   buildsOn: apiLimits.buildsOn,
   agents: apiLimits.agents,
   disputes: apiLimits.disputes,
+  threads: apiLimits.threads,
   facts: apiLimits.facts,
   runs: apiLimits.runs,
   checks: apiLimits.checks,
@@ -282,6 +294,7 @@ const levels: readonly [Level, ...Level[]] = [
     buildsOn: 3,
     agents: 20,
     disputes: 20,
+    threads: 30,
     facts: 20,
     runs: 10,
     checks: 10,
@@ -298,6 +311,7 @@ const levels: readonly [Level, ...Level[]] = [
     buildsOn: 0,
     agents: 20,
     disputes: 5,
+    threads: 5,
     facts: 5,
     runs: 0,
     checks: 0,
@@ -314,6 +328,7 @@ const levels: readonly [Level, ...Level[]] = [
     buildsOn: 0,
     agents: 0,
     disputes: 0,
+    threads: 0,
     facts: 0,
     runs: 0,
     checks: 0,
@@ -434,6 +449,7 @@ interface AgentRef {
   readonly direction: string | null;
   readonly check: string | null;
   readonly spend: number | null;
+  readonly line: AgentLine | null;
 }
 
 /** What one snapshot needs, read once: the lab, its pods, and each agent's turns. */
@@ -444,6 +460,7 @@ interface Loaded {
   /** The lab's GPU spend and limit. Null without pods to read. */
   readonly gpu: ReturnType<typeof labGpu> | null;
   readonly disputes: ReturnType<typeof openDisputes>;
+  readonly marks: PostMarks;
   readonly works: readonly Work[];
   readonly away: Lab['away'];
   readonly turns: ReadonlyMap<string, readonly ActivityTurn[]>;
@@ -502,6 +519,7 @@ function directionAgent(entry: LabView['directions'][number]): AgentRef {
     direction: entry.direction.id,
     check: null,
     spend: entry.agent.spend?.usd ?? null,
+    line: entry.agent.statusLine ?? null,
   };
 }
 
@@ -518,6 +536,7 @@ function checkAgent(check: LabCheck): AgentRef {
     direction: null,
     check: check.id,
     spend: check.spend?.usd ?? null,
+    line: null,
   };
 }
 
@@ -897,7 +916,11 @@ function proof(artifact: Artifact): Proof {
   }
 }
 
-function post(entry: BoardPost, who: AgentNames): Post {
+function post(
+  entry: BoardPost,
+  who: AgentNames,
+  marks: PostMarks = noMarks,
+): Post {
   const agent = entry.author !== 'person' && entry.author !== 'verifold';
   return {
     id: entry.id,
@@ -907,10 +930,14 @@ function post(entry: BoardPost, who: AgentNames): Post {
     harness: entry.harness ?? null,
     kind: entry.kind,
     direction: entry.direction ?? null,
+    thread: entry.thread ?? null,
     text: entry.text,
     replyTo: entry.replyTo ?? null,
     mentions: [...entry.mentions],
     proof: entry.artifacts.map(proof),
+    ...(entry.outcome ? { outcome: entry.outcome } : {}),
+    ...(entry.accepts ? { accepts: entry.accepts } : {}),
+    ...marks(entry),
   };
 }
 
@@ -953,6 +980,7 @@ function boardPage(
   posts: readonly BoardPost[],
   size: number,
   who: AgentNames,
+  marks: PostMarks,
   before?: number,
 ): BoardPage {
   const older =
@@ -961,7 +989,7 @@ function boardPage(
       : posts.filter((entry) => number(entry.id) < before);
   const shown = size ? older.slice(-size) : [];
   return {
-    posts: shown.map((entry) => post(entry, who)),
+    posts: shown.map((entry) => post(entry, who, marks)),
     more: older.length > shown.length,
   };
 }
@@ -1556,6 +1584,10 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
   if (directions.length < state.directions.length)
     omitted.directions = state.directions.length - directions.length;
   const kept = new Set(directions.map((entry) => entry.id));
+  const threads = view.threads ?? [];
+  const keptThreads = keptDirections(threads, level.threads);
+  if (keptThreads.length < threads.length)
+    omitted.threads = threads.length - keptThreads.length;
   const shown = keptAgents(loaded.agents, kept, level.agents);
   if (shown.length < loaded.agents.length)
     omitted.agents = loaded.agents.length - shown.length;
@@ -1583,6 +1615,7 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
         turn: turns.at(-1) ?? null,
         asked,
       }),
+      line: ref.line,
       turns: pageOfTurns(ref, turns, level.turns, level.message, proof),
       spendUsd: ref.spend,
     };
@@ -1659,12 +1692,13 @@ function shapeLab(loaded: Loaded, level: Level): Lab {
             changed: plan.changed ?? null,
           }
         : null,
-    board: boardPage(view.posts, level.posts, who),
+    board: boardPage(view.posts, level.posts, who, loaded.marks),
     disputes: keep(disputes, level.disputes, 'disputes').map((entry) => ({
       post: entry.target.id,
       objections: entry.objections.map((objection) => objection.id),
       check: entry.check?.id ?? null,
     })),
+    threads: keptThreads.map(threadItem),
     runs: keep(view.ledger, level.runs, 'runs', true).map(run),
     checks: keep(view.checks, level.checks, 'checks', true).map(check),
     // A sign-off is small, so every level keeps it: the answer never looks unsigned.
@@ -1938,6 +1972,7 @@ export class ApiReader {
       compute,
       gpu,
       disputes,
+      marks: postMarks(view, disputes),
       works: sources.works,
       away: away ? awayOf(view, away, gpu?.spent ?? null, disputes) : null,
       turns,
@@ -2092,7 +2127,30 @@ export class ApiReader {
   board(before?: number): BoardPage | null {
     const view = this.sources().lab?.view();
     if (!view) return null;
-    return boardPage(view.posts, apiLimits.posts, namesOf(view), before);
+    return boardPage(
+      view.posts,
+      apiLimits.posts,
+      namesOf(view),
+      postMarks(view, openDisputes(view)),
+      before,
+    );
+  }
+
+  /** A thread and its newest posts, at most `apiLimits.posts`. Null without a lab, or when the lab has no such thread. */
+  threadPage(id: string): ThreadPage | null {
+    const view = this.sources().lab?.view();
+    const thread = view?.threads?.find((entry) => entry.id === id);
+    if (!view || !thread) return null;
+    const who = namesOf(view);
+    const marks = postMarks(view, openDisputes(view));
+    const posts = view.posts.filter((entry) => entry.thread === id);
+    return {
+      thread: threadItem(thread),
+      posts: posts
+        .slice(-apiLimits.posts)
+        .map((entry) => post(entry, who, marks)),
+      more: posts.length > apiLimits.posts,
+    };
   }
 
   /**
@@ -2114,8 +2172,11 @@ export class ApiReader {
       }
     const room = apiLimits.posts - 1;
     const who = namesOf(view);
+    const marks = postMarks(view, openDisputes(view));
     return {
-      posts: [root, ...replies.slice(0, room)].map((entry) => post(entry, who)),
+      posts: [root, ...replies.slice(0, room)].map((entry) =>
+        post(entry, who, marks),
+      ),
       more: replies.length > room,
     };
   }
@@ -2879,6 +2940,16 @@ export async function answerApi(
     }
     const thread = reader.thread(second);
     if (thread) json(response, 200, thread);
+    else response.writeHead(404).end();
+    return;
+  }
+  if (first === 'threads' && parts.length === 2 && !keys.length) {
+    if (!second || !threadId.test(second)) {
+      response.writeHead(400).end();
+      return;
+    }
+    const page = reader.threadPage(second);
+    if (page) json(response, 200, page);
     else response.writeHead(404).end();
     return;
   }

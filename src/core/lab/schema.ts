@@ -26,6 +26,7 @@ import {
   directionLimits,
   handlePattern,
   planLimits,
+  threadLimits,
   verdicts,
 } from '../lab-tools.ts';
 import type { LabPod } from '../compute.ts';
@@ -118,6 +119,8 @@ export const labTiming = {
   minuteMs: 60_000,
   /** The time between two reads of a pod run's job. */
   podPollMs: 20_000,
+  /** The time that a proposal stays open to objections. Then it becomes the decision of its thread. */
+  objectionMs: threadLimits.objectionMinutes * 60_000,
 };
 
 /** Work that a direction builds on: known work, or new in this lab. */
@@ -541,6 +544,52 @@ export interface LabAction {
   readonly result: string;
 }
 
+export type ThreadState = 'open' | 'decided' | 'answered' | 'closed';
+
+/** How a thread ended: what, from which post, who, and when. A closed thread shows it first. */
+export interface ThreadOutcome {
+  readonly text: string;
+  readonly post: string;
+  readonly by: string;
+  readonly at: string;
+}
+
+/** A reaction from `verifold_agree`. It is no post. */
+export interface Agreement {
+  readonly post: string;
+  readonly by: string;
+  readonly at: string;
+}
+
+export interface Thread {
+  /** `t-N`. */
+  readonly id: string;
+  readonly title: string;
+  readonly state: ThreadState;
+  /** One line on why the thread exists. */
+  readonly why: string;
+  readonly direction?: string;
+  /** `person`, `verifold`, or an agent ID. */
+  readonly openedBy: string;
+  readonly at: string;
+  /** The first post. Absent until it lands. */
+  readonly opening?: string;
+  readonly outcome?: ThreadOutcome;
+  /** Agent IDs: who posted in it, who an ask in it names, and who chose to follow. */
+  readonly followers: readonly string[];
+  readonly agreed: readonly Agreement[];
+  /** The newest proposal that the person overturned. It and older proposals never become a decision. */
+  readonly overturned?: string;
+}
+
+/** The agent's own line from `verifold_status`: what it does, why, and what comes next. */
+export interface StatusLine {
+  readonly doing: string;
+  readonly why: string;
+  readonly next: string;
+  readonly at: string;
+}
+
 export interface AgentRecord {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -625,6 +674,8 @@ export interface AgentRecord {
   readonly factsPost?: string;
   /** Claude Code's cost estimate of the agent's sessions. */
   readonly spend?: Spend;
+  /** Its newest `verifold_status`. Absent: none yet, or a lab from before threads. */
+  readonly statusLine?: StatusLine;
 }
 
 /** What the desk shows of one direction. */
@@ -672,6 +723,8 @@ export interface LabView {
   readonly claudeUsd: number;
   /** The lab opens its planner now. */
   readonly openingPlanner?: boolean;
+  /** The threads, oldest first. Absent or empty: a lab from before threads. */
+  readonly threads?: readonly Thread[];
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -1377,6 +1430,33 @@ export function text(value: unknown, limit: number, what: string): string {
     : fail(`Write ${what}, up to ${limit} characters.`);
 }
 
+/** The `verifold_status` of an agent at `at`. Throws when a field is missing or too long. */
+export function statusLine(
+  args: Record<string, unknown>,
+  at: string,
+): StatusLine {
+  return {
+    doing: text(args.doing, threadLimits.status, 'what you do now'),
+    why: text(args.why, threadLimits.status, 'why you do it'),
+    next: text(args.next, threadLimits.status, 'what comes next'),
+    at,
+  };
+}
+
+function parseStatusLine(value: unknown): StatusLine | null {
+  const entry = object(value);
+  const field = (name: string): string | null => {
+    const item = entry?.[name];
+    return typeof item === 'string' && item.length <= threadLimits.status
+      ? item
+      : null;
+  };
+  const [doing, why, next, at] = ['doing', 'why', 'next', 'at'].map(field);
+  return doing && why && next && at && !Number.isNaN(Date.parse(at))
+    ? { doing, why, next, at }
+    : null;
+}
+
 function parseDirection(value: unknown): Direction | null {
   const entry = object(value);
   const workspace = parseWorkspace(entry?.workspace);
@@ -1859,6 +1939,7 @@ export function parseAgent(
       ? value.factsPost
       : null;
   const linked = object(value.linked);
+  const line = parseStatusLine(value.statusLine);
   return {
     schemaVersion: 1,
     id: value.id,
@@ -1970,6 +2051,7 @@ export function parseAgent(
     pods: value.pods !== false,
     ...(factsPost ? { factsPost } : {}),
     ...spendOf(value.spend),
+    ...(line ? { statusLine: line } : {}),
   };
 }
 

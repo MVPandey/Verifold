@@ -27,6 +27,7 @@ export async function readPrompt(
 /** The prompts of the lab and the first run, in `src/core/prompts/`. */
 export const promptIds = [
   'lab-peer',
+  'lab-peer-flat',
   'lab-opener',
   'lab-runs',
   'lab-pods',

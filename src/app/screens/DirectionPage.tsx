@@ -157,6 +157,11 @@ function DirectionHead({
 
 const postNames: Record<PostKind, string> = {
   plan: 'Plan',
+  result: 'Result',
+  check: 'Check',
+  ask: 'Ask',
+  answer: 'Answer',
+  proposal: 'Proposal',
   claim: 'Claim',
   evidence: 'Evidence',
   objection: 'Objection',

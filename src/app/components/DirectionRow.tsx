@@ -8,8 +8,9 @@ import { Verdict } from './Verdict.tsx';
 
 /**
  * One direction: its verdict, title, one line, and its agent. The line is
- * the agent's live step while it works. Otherwise it is the evidence for the
- * verdict, with a wait for the person after it.
+ * the agent's own line when it set one. Otherwise it is the live step while
+ * the agent works, then the evidence for the verdict, with a wait for the
+ * person after it.
  */
 export function DirectionRow({
   direction,
@@ -24,6 +25,7 @@ export function DirectionRow({
     direction.evidence?.text ?? null,
     agent?.live ?? null,
     now,
+    agent?.line?.doing ?? null,
   );
   const detail = agent ? agentDetail(agent) : null;
   return (
