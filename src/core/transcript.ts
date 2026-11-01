@@ -44,6 +44,8 @@ export interface TranscriptUpdate {
   readonly output?: string;
   readonly status?: TranscriptEntry['status'];
   readonly text?: string;
+  /** The work of this tool call ended, also when the call itself ended before, as for a helper in the background. */
+  readonly final?: true;
 }
 
 /** An update with its final ID and time, as one line of a transcript file. */
@@ -135,6 +137,19 @@ export function claudeUpdates(event: unknown): TranscriptUpdate[] {
         kind: 'note',
         parent,
         text: `Claude Code session started${typeof event.model === 'string' ? ` with ${event.model}` : ''}.`,
+      },
+    ];
+  // A task in the background ended: done, or failed or stopped.
+  if (
+    event.type === 'system' &&
+    event.subtype === 'task_notification' &&
+    typeof event.tool_use_id === 'string'
+  )
+    return [
+      {
+        id: event.tool_use_id,
+        status: event.status === 'completed' ? 'done' : 'failed',
+        final: true,
       },
     ];
   if (event.type === 'result')
@@ -298,7 +313,10 @@ function codexItem(
     case 'collab_tool_call':
     case 'collabAgentToolCall':
       return tool(
-        'Agents',
+        // A spawn starts a helper, as Claude Code's Agent tool does.
+        typeof item.tool === 'string' && /^spawn/i.test(item.tool)
+          ? 'Agent'
+          : 'Agents',
         item.prompt ?? item.tool,
         item.agentsStates,
         item.status === 'failed',
@@ -325,6 +343,30 @@ export function codexExecUpdates(event: unknown): TranscriptUpdate[] {
       { kind: 'note', parent: null, text: 'Codex reported a failed turn.' },
     ];
   return [];
+}
+
+/**
+ * The updates that say how Codex's helpers ended, from `agentsStates` of a
+ * collaboration item, by thread. `helpers`: each helper's thread and the call
+ * that started it.
+ */
+export function codexHelperEnds(
+  states: unknown,
+  helpers: ReadonlyMap<string, string>,
+): TranscriptUpdate[] {
+  if (!record(states)) return [];
+  return [...helpers].flatMap(([thread, id]): TranscriptUpdate[] => {
+    const state = states[thread];
+    const status = record(state) ? state.status : undefined;
+    return status === 'completed'
+      ? [{ id, status: 'done', final: true }]
+      : status === 'errored' ||
+          status === 'interrupted' ||
+          status === 'shutdown' ||
+          status === 'notFound'
+        ? [{ id, status: 'failed', final: true }]
+        : [];
+  });
 }
 
 /** Transcript updates from one `codex app-server` item notification. `parent` nests subagent threads. */

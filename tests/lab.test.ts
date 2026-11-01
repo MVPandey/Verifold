@@ -458,6 +458,8 @@ async function fixture(
         codex: join(base, 'fake-codex'),
       },
       onTurnEnd: (record, outcome) => owned.lab?.turnEnded(record, outcome),
+      onTranscript: (record, update) =>
+        owned.lab?.harnessUpdate(record, update),
       onLimit: (host, signal) => {
         quota.record(host, signal);
         owned.lab?.limited(host, signal);
@@ -6300,6 +6302,12 @@ await test("an objection to a claim with a run starts a fresh checker of the oth
   // The checker's session ended after its post.
   await until(
     () => lab.sessions.view(check?.session ?? '')?.record.status === 'ended',
+    10_000,
+    () => {
+      const now = lab.lab.view()?.checks[0];
+      const worker = lab.sessions.view(now?.session ?? '');
+      return `Check: ${now?.state}, session ${now?.session}. Session record: ${worker?.record.status}, live ${worker?.live}.`;
+    },
   );
 });
 

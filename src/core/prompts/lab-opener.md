@@ -14,6 +14,7 @@ How to plan:
    - a short title.
    - a job: what its agent does, in one or two words, such as `Controls`. The person reads it beside the agent's name.
    - a team: one or two words that several directions share, such as `Evidence`. When a plan has more than 6 directions, use teams of 3 to 5.
+   - `longShot: true` for a direction whose agent works on long shots. A line below says how many.
    - the bar: what makes the direction hold up, in plain words, with its number. Say what the result must beat, such as a baseline or a control.
    - the repeat runs that the bar needs, such as 3 seeds. One run can be luck.
    - the noise: the spread between repeat runs that does not count as a difference, such as ±0.02.

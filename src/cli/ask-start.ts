@@ -10,7 +10,14 @@ import {
 import type { Workspace } from '../core/contracts.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
-import { defaultLabHours, hours, labLimits, text } from '../core/lab/schema.ts';
+import { shareOf } from '../core/lab/long-shots.ts';
+import {
+  defaultLabHours,
+  hours,
+  labLimits,
+  text,
+  type LabShare,
+} from '../core/lab/schema.ts';
 import {
   isolationProblem,
   ownProfileCopied,
@@ -28,11 +35,12 @@ import {
   homeShown,
 } from './project.ts';
 
-/** A project that the Ask page started: its folder, the question, and the lab's hours. */
+/** A project that the Ask page started: its folder, the question, the lab's hours, and how far from known work. */
 export interface Begun {
   readonly root: string;
   readonly question: string;
   readonly hours: number;
+  readonly share: LabShare;
 }
 
 /** What a new project starts with unless the Ask page changes it. */
@@ -225,6 +233,7 @@ export function askStart(options: {
                 );
         const budget =
           body.hours === undefined ? defaultLabHours : hours(body.hours);
+        const share = shareOf(body.share);
         const fallback = await defaults(
           own ? ownProfileFolder(folder) : options.agency,
         );
@@ -287,7 +296,7 @@ export function askStart(options: {
           (await isolationProblem(options.agency, folder)) === null
         )
           await removeTree(ownProfileFolder(folder)).catch(() => {});
-        settle({ root: folder, question, hours: budget });
+        settle({ root: folder, question, hours: budget, share });
         return 202;
       } finally {
         busy = false;

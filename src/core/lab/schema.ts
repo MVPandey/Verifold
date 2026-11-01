@@ -25,6 +25,7 @@ import {
   checkOutcomes,
   directionLimits,
   handlePattern,
+  labShares,
   planLimits,
   threadLimits,
   verdicts,
@@ -131,6 +132,8 @@ export interface BuildsOn {
 
 export type Verdict = (typeof verdicts)[number];
 
+export type LabShare = (typeof labShares)[number];
+
 /** The one line of evidence of a verdict, with the post that has the proof and the run that it cites. */
 export interface Evidence {
   readonly text: string;
@@ -145,6 +148,8 @@ export interface Direction {
   readonly job: string | null;
   /** The team of directions that it works with, as a short label. Null: none set. */
   readonly team: string | null;
+  /** Its agent works on long shots, far from known work. */
+  readonly longShot: boolean;
   /** What makes the direction hold up, in plain words. */
   readonly bar: string | null;
   /** The repeat runs that the bar needs, such as seeds. */
@@ -225,6 +230,8 @@ export interface LabState {
     readonly checkers: number;
   } | null;
   readonly directions: readonly Direction[];
+  /** How far from known work the person wants the lab to go. Null: a lab from before this choice. */
+  readonly share: LabShare | null;
   /** The agent that opened the lab. It posts and changes the plan of record. */
   readonly opener: string | null;
   readonly plan: PlanOfRecord | null;
@@ -523,7 +530,8 @@ export interface LabEvent {
     | 'continue'
     | 'run'
     | 'pod'
-    | 'call';
+    | 'call'
+    | 'helper';
   readonly text: string;
   /** The post that the event is about. */
   readonly post?: string;
@@ -580,6 +588,33 @@ export interface Thread {
   readonly agreed: readonly Agreement[];
   /** The newest proposal that the person overturned. It and older proposals never become a decision. */
   readonly overturned?: string;
+}
+
+export type HelperState = 'running' | 'done' | 'lost';
+
+/** A subagent of an agent's harness. `lost`: it stopped with no result. */
+export interface Helper {
+  /** The harness's ID of the call that started it. */
+  readonly id: string;
+  /** Such as `agent-3.1`. */
+  readonly label: string;
+  readonly title: string;
+  readonly state: HelperState;
+  readonly at: string;
+  /** The process that it runs in. */
+  readonly launch: string;
+  /** Its agent heard that it stopped with no result. */
+  readonly told?: true;
+}
+
+/** What a screen shows of the lab's reading. */
+export interface Reading {
+  /** Papers on the reading map. */
+  readonly papers: number;
+  /** Lookups in harness records. */
+  readonly lookups: number;
+  /** The last paper in harness records. */
+  readonly lastPaperAt: string | null;
 }
 
 /** The agent's own line from `verifold_status`: what it does, why, and what comes next. */
@@ -705,6 +740,8 @@ export interface DirectionView {
     | 'crashed';
   /** When a wait ends. */
   readonly until: string | null;
+  /** The subagents of its harness. */
+  readonly helpers?: readonly Helper[];
 }
 
 export interface LabView {
@@ -725,6 +762,8 @@ export interface LabView {
   readonly openingPlanner?: boolean;
   /** The threads, oldest first. Absent or empty: a lab from before threads. */
   readonly threads?: readonly Thread[];
+  /** What the lab read. Absent: a lab from before threads. */
+  readonly reading?: Reading;
 }
 
 /** The harness sessions of the lab: the project's worker slots. */
@@ -805,6 +844,8 @@ export interface LabOptions {
    * the project's owner.
    */
   readonly runs?: boolean;
+  /** The source of a draw of long shots: a number from 0 up to 1. Default: `Math.random`. */
+  readonly random?: () => number;
   /** The sandbox of agents' runs. Default: this computer's. Null: local runs are refused. */
   readonly sandbox?: Sandbox | null;
   /** The project's GPU pods. Without it, agents get no pod tools, and pod runs are refused. */
@@ -1496,6 +1537,7 @@ function parseDirection(value: unknown): Direction | null {
       typeof entry.team === 'string'
         ? entry.team.slice(0, planLimits.team)
         : null,
+    longShot: entry.longShot === true,
     bar:
       typeof entry.bar === 'string' ? entry.bar.slice(0, labLimits.bar) : null,
     runs:
@@ -1654,6 +1696,7 @@ export function parseState(
     roles: roles
       ? { agents: count(roles.agents), checkers: count(roles.checkers) }
       : null,
+    share: labShares.find((entry) => entry === value.share) ?? null,
     directions: value.directions.flatMap((entry) => {
       const direction = parseDirection(entry);
       return direction ? [direction] : [];
@@ -1999,6 +2042,7 @@ export function parseAgent(
           'run',
           'pod',
           'call',
+          'helper',
         ].includes(event.kind as string)
         ? [event as unknown as QueuedEvent<LabEvent>]
         : [];

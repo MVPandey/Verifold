@@ -34,6 +34,7 @@ export const promptIds = [
   'lab-pods',
   'lab-check',
   'lab-check-flat',
+  'lab-long-shot',
   'profile-card',
   'profile-import',
   'profile-merge',
