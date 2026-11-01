@@ -51,6 +51,7 @@ import {
   planToolSpec,
   labPodToolSpecs,
   runToolSpecs,
+  threadDirectionToolSpec,
   threadPostKinds,
   threadToolSpecs,
   verdicts,
@@ -152,6 +153,7 @@ import {
   statusLine,
   text,
   whole,
+  withoutLine,
   works,
 } from './lab/schema.ts';
 import {
@@ -194,6 +196,7 @@ import {
   wordsPost,
 } from './lab/words.ts';
 import { agentLine, mentionPattern, nextHandle } from './lab/names.ts';
+import { refutation } from './lab/post-rules.ts';
 import { readObject, RecordFile } from './lab/record-file.ts';
 import { threadLine } from './lab/thread-digest.ts';
 import { ThreadStore } from './lab/thread-store.ts';
@@ -599,6 +602,7 @@ export class Lab {
       join(this.folder, 'threads.json'),
       () => this.suspended,
       this.board,
+      this.timing.objectionMs,
     );
   }
 
@@ -658,6 +662,8 @@ export class Lab {
     }
     // A plan that Verifold stopped before it was kept: its agents start now, and the board says why.
     if (!this.runs) return;
+    const lost = this.threads.lostNote();
+    if (lost) await this.add(lost).catch(() => {});
     for (const agent of this.agents.values())
       if (agent.held) {
         await this.saveAgent({ ...agent, held: false }).catch(() => {});
@@ -2707,9 +2713,9 @@ export class Lab {
     const team = opener ? await this.team().catch(() => []) : [];
     const plan = this.planLines(state);
     const role = planning
-      ? `\n\n${await loadPrompt('lab-opener')}\n\nYour first plan can have ${labLimits.firstPlan.min} to ${firstPlanMost(this.options.sessions.limit, others.length + 1)} directions.`
+      ? `\n\n${await loadPrompt(this.threaded ? 'lab-opener' : 'lab-opener-flat')}\n\nYour first plan can have ${labLimits.firstPlan.min} to ${firstPlanMost(this.options.sessions.limit, others.length + 1)} directions.`
       : opener
-        ? '\n\nYou opened the lab and wrote its plan of record, below. An objection to your plan, or a reply from the person, wakes you. Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.'
+        ? `\n\nYou opened the lab and wrote its plan of record, below. ${this.threaded ? 'An objection to your plan, or a reply from the person, wakes you.' : 'A reply to your plan wakes you.'} Change the plan with verifold_plan only for a good reason: list every open direction with its id. Only the person stops a direction, and an agent closes only its own. A bar changes before a result, never after it.`
         : '';
     // Without a sandbox for runs, agents run experiments in their own harness.
     const runs = `${this.ledger.sandboxed ? `\n\n${await loadPrompt('lab-runs')}` : ''}${this.podsOn() ? `\n\n${await loadPrompt('lab-pods')}` : ''}`;
@@ -2743,7 +2749,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     return {
       specs: [
         ...(this.threaded ? threadToolSpecs : labToolSpecs),
-        directionToolSpec,
+        this.threaded ? threadDirectionToolSpec : directionToolSpec,
         askPersonToolSpec,
         ...(this.ledger.sandboxed || pods ? runToolSpecs : []),
         ...(pods ? labPodToolSpecs : []),
@@ -2880,7 +2886,6 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           if (!this.usable(id, generation)) fail(stoppedText);
           const line = statusLine(args, new Date().toISOString());
           await this.update(id, (agent) => ({ ...agent, statusLine: line }));
-          await this.quietEnds(id).catch(() => {});
           this.options.onChange?.();
           return 'Your line changed.';
         });
@@ -5406,28 +5411,6 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
   }
 
   /**
-   * The person overturns the decision of a thread: the thread opens again, its
-   * proposal never decides it again, and their words wake its followers.
-   */
-  overturn(input: {
-    readonly thread: unknown;
-    readonly text: unknown;
-  }): Promise<Post> {
-    return this.serial(async () => {
-      this.current();
-      const body = text(input.text, boardLimits.personText, 'your reason');
-      return this.add({
-        author: 'person',
-        kind: 'question',
-        thread: await this.threads.overturn(input.thread),
-        text: body,
-        mentions: [],
-        artifacts: [],
-      });
-    });
-  }
-
-  /**
    * `verifold_direction`. `open` opens a direction with its own agent, as the
    * person does, inside the limits of agent starts. `update` gives the
    * agent's own direction a verdict with one line of evidence, and `close`
@@ -5596,6 +5579,8 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           fail(
             `${post.id} is a rerun that did not hold, so it is no evidence for ${verdictWords[asked].toLowerCase()}. Post new evidence, and name that post.`,
           );
+        const refuted = refutation(post, this.board.list());
+        if (refuted) fail(`${refuted} Post new evidence, and name that post.`);
       }
       const run = post.artifacts.find((artifact) => artifact.type === 'run');
       // Every argument is checked before a check queues: a refused call queues nothing.
@@ -5664,6 +5649,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         entry.id === direction.id ? { ...entry, verdict, evidence } : entry,
       ),
     };
+    if (verdict !== direction.verdict) await this.clearLine(agent.id);
     try {
       await this.stateFile.save();
     } catch (error) {
@@ -6512,6 +6498,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         entry.id === direction.id ? { ...entry, ...next } : entry,
       ),
     });
+    await this.clearLine(direction.agent);
     await this.add({
       author: 'verifold',
       kind: 'status',
@@ -6692,7 +6679,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       entry.replace(' Other reads are not limited.', ''),
     );
     const person = await this.readPerson();
-    return `${await loadPrompt('lab-check')}
+    return `${await loadPrompt(this.threaded ? 'lab-check' : 'lab-check-flat')}
 
 ${todayLine()}
 
@@ -6990,7 +6977,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       const state = this.current();
       if (state.opener !== id)
         fail(
-          'Only the agent that opened the lab changes its plan. Ask it or the person on the board instead.',
+          `Only the agent that opened the lab changes its plan. ${this.threaded ? 'Ask it or the person on the board' : 'Post a question to it or to the person'} instead.`,
         );
       if (this.planning)
         fail('Your last plan still opens its directions. Wait for its answer.');
@@ -7729,6 +7716,11 @@ Start now: find the claim's premise, start a run early, and post your rerun once
     return post;
   }
 
+  /** A new verdict makes the agent's own line old. */
+  private clearLine(id: string): Promise<void> {
+    return this.update(id, withoutLine).catch(() => {});
+  }
+
   /** The agents that work now. */
   private activeAgents(): AgentRecord[] {
     return [...this.agents.values()].filter((agent) => this.active(agent));
@@ -8052,7 +8044,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
       return;
     }
     if (state.pausedAt) return;
-    for (const note of await this.threads.decide(this.timing.objectionMs))
+    for (const note of await this.threads.decide())
       await this.add(note).catch(() => {});
     // A check takes the next free slot before any agent.
     const checking = await this.tickChecks(state);

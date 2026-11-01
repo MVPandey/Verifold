@@ -18,7 +18,7 @@ export interface Wait {
   readonly since: string;
 }
 
-/** The reply that ends a wait on `post`: an answer, the person's own reply to an ask, or for an objection a check of its target. */
+/** The reply that ends a wait on `post`: an answer, the person's own reply to an ask, or for an objection a rerun of its target or a check that holds it. */
 function ends(reply: Post, post: Post): boolean {
   if (reply.kind === 'answer') return reply.replyTo === post.id;
   if (post.kind === 'ask')
@@ -26,7 +26,7 @@ function ends(reply: Post, post: Post): boolean {
   return (
     post.replyTo === reply.replyTo &&
     (reply.kind === 'rerun' ||
-      (reply.kind === 'check' && reply.outcome === 'fails'))
+      (reply.kind === 'check' && reply.outcome === 'holds'))
   );
 }
 

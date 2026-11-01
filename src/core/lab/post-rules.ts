@@ -8,7 +8,7 @@
 import type { BoardAgent, Post, PostKind } from '../board.ts';
 import { postOutcomes, threadLimits } from '../lab-tools.ts';
 import { fail, text, type Check, type Thread } from './schema.ts';
-import { checkTitle, planThread } from './threads.ts';
+import { checkTitle, planThread, reopeningKinds } from './threads.ts';
 
 /** What the rules read of the lab. */
 export interface PostContext {
@@ -108,7 +108,12 @@ const rules: Readonly<Partial<Record<PostKind, (draft: Draft) => void>>> = {
 
 const oneLine = (value: string): string => value.replace(/\s+/g, ' ');
 
-/** Where the post goes: its target's thread, a named thread, or a new one. */
+/**
+ * Where the post goes: its target's thread, a named thread, or a new one. A
+ * reply always has a legal form: it stays in its target's thread, and it opens
+ * a new thread when that thread's record is gone. Only a kind that needs its
+ * reply goes into a closed thread.
+ */
 function place(
   args: Record<string, unknown>,
   replied: Post | undefined,
@@ -116,16 +121,23 @@ function place(
 ): PostShape['thread'] {
   const named = args.thread;
   const home = replied?.thread;
-  if (home && (args.title !== undefined || (named && named !== home)))
-    fail(
-      `A reply stays in its target's thread. ${replied.id} is in ${home}. Leave title out, and give thread ${home} or none.`,
-    );
-  const id = home ?? named;
-  if (id !== undefined) {
-    const thread =
-      context.threads.find((entry) => entry.id === id) ??
+  const record = context.threads.find((entry) => entry.id === home);
+  if (replied && record) {
+    if (args.title !== undefined || (named && named !== home))
       fail(
-        `No thread ${typeof id === 'string' ? id.slice(0, 20) : ''} is in the lab. verifold_board with view threads lists them.`,
+        `A reply stays in its target's thread. ${replied.id} is in ${record.id}. Leave title out, and give thread ${record.id} or none.`,
+      );
+    if (record.state === 'closed' && !reopeningKinds.has(context.kind))
+      fail(
+        `${record.id} is closed. Leave replyTo out, open a new thread with title and why, and name ${replied.id} in the text.`,
+      );
+    return record.id;
+  }
+  if (named !== undefined) {
+    const thread =
+      context.threads.find((entry) => entry.id === named) ??
+      fail(
+        `No thread ${typeof named === 'string' ? named.slice(0, 20) : ''} is in the lab. verifold_board with view threads lists them.`,
       );
     if (thread.state === 'closed')
       fail(
@@ -135,7 +147,9 @@ function place(
   }
   if (args.title === undefined)
     fail(
-      'Give thread to post in a thread, or title and why to open one. verifold_board with view threads lists them.',
+      home
+        ? `${home} has no record now. Give title and why to open a new thread for this reply.`
+        : 'Give thread to post in a thread, or title and why to open one. verifold_board with view threads lists them.',
     );
   const title = oneLine(
     text(args.title, threadLimits.title, 'the title of the thread'),
@@ -185,10 +199,10 @@ export interface WakeContext {
   readonly agents: readonly BoardAgent[];
 }
 
-/** The person's words reach who they name, then the thread's followers. A post to nobody in the plan thread reaches every agent. */
+/** Who the person's words are for: who they name, then the followers of the thread. */
 function personWakes(post: Post, context: WakeContext): readonly string[] {
   const { agents, target, thread } = context;
-  const everyone = agents.map((agent) => agent.id);
+  if (post.mentions.includes('all')) return agents.map((agent) => agent.id);
   const named = [
     ...post.mentions,
     ...(target ? [target.author] : []),
@@ -196,9 +210,7 @@ function personWakes(post: Post, context: WakeContext): readonly string[] {
       .filter((agent) => post.direction && agent.direction === post.direction)
       .map((agent) => agent.id),
   ];
-  if (post.mentions.includes('all')) return everyone;
-  if (thread?.id === planThread) return named.length ? named : everyone;
-  return post.mentions.length
+  return post.mentions.length || thread?.id === planThread
     ? named
     : [...named, ...(thread?.followers ?? [])];
 }
@@ -207,32 +219,43 @@ function personWakes(post: Post, context: WakeContext): readonly string[] {
  * The agent IDs that a post wakes. An objection wakes the author of its
  * target, or the owner of its direction when a checker wrote the target. An
  * ask wakes who it names. An answer wakes who wrote what it answers. The
- * person's words wake followers. A plan, a rerun, and Verifold's own notes wake
- * who they mention. Other posts wait for each agent's next turn.
+ * person's words wake followers, and every agent that works when they would
+ * reach no one, so they always reach someone. A plan, a rerun, and Verifold's
+ * own notes wake who they mention. Other posts wait for each agent's next turn.
  */
 export function wakeList(post: Post, context: WakeContext): readonly string[] {
   const { agents, target } = context;
   const works = new Set(agents.map((agent) => agent.id));
-  const owner = (direction: string | undefined): string[] =>
-    agents
-      .filter((agent) => agent.direction === direction)
-      .map((agent) => agent.id);
-  let list: readonly string[] = [];
-  if (post.author === 'person') list = personWakes(post, context);
-  else if (post.author === 'verifold') list = post.mentions;
-  else if (post.kind === 'plan' || post.kind === 'rerun' || post.kind === 'ask')
-    list = post.mentions;
-  else if (post.kind === 'answer') list = target ? [target.author] : [];
-  else if (post.kind === 'objection' && target)
-    list = works.has(target.author) ? [target.author] : owner(target.direction);
-  return [...new Set(list)].filter((id) => id !== post.author && works.has(id));
+  const live = (list: readonly string[]): readonly string[] =>
+    [...new Set(list)].filter((id) => id !== post.author && works.has(id));
+  if (post.author === 'person') {
+    const reached = live(personWakes(post, context));
+    return reached.length ? reached : [...works];
+  }
+  if (
+    post.author === 'verifold' ||
+    post.kind === 'plan' ||
+    post.kind === 'rerun' ||
+    post.kind === 'ask'
+  )
+    return live(post.mentions);
+  if (post.kind === 'answer') return live(target ? [target.author] : []);
+  if (post.kind !== 'objection' || !target) return [];
+  return live(
+    works.has(target.author)
+      ? [target.author]
+      : agents
+          .filter((agent) => agent.direction === target.direction)
+          .map((agent) => agent.id),
+  );
 }
 
 /**
- * The objections that stand, by the post that each one targets, oldest
- * first. An objection ends with an answer that accepts it, with a later
- * `check` post that fails its target, or with a check of Verifold that took
- * it and ended with a rerun, whatever the rerun found.
+ * The objections that stand, by the post that each one targets, oldest first.
+ * An objection ends with an answer that accepts it, with a check of Verifold
+ * that took it and ended with a rerun, or with a later `check` post that holds
+ * from an agent who wrote neither the target nor the objection. A check that
+ * fails ends nothing: its target stays disputed, and the check shows.
  */
 export function openObjections(
   posts: readonly Post[],
@@ -248,14 +271,39 @@ export function openObjections(
         : [],
     ),
   ]);
+  const authors = new Map(posts.map((post) => [post.id, post.author]));
   const open = new Map<string, Post[]>();
   for (const post of posts) {
-    if (post.kind === 'objection' && post.replyTo && !ended.has(post.id))
-      open.set(post.replyTo, [...(open.get(post.replyTo) ?? []), post]);
-    if (post.kind === 'check' && post.outcome === 'fails' && post.replyTo)
-      open.delete(post.replyTo);
+    if (!post.replyTo) continue;
+    const list = open.get(post.replyTo) ?? [];
+    if (post.kind === 'objection' && !ended.has(post.id))
+      open.set(post.replyTo, [...list, post]);
+    if (
+      post.kind === 'check' &&
+      post.outcome === 'holds' &&
+      authors.get(post.replyTo) !== post.author
+    ) {
+      const left = list.filter((entry) => entry.author === post.author);
+      if (left.length) open.set(post.replyTo, left);
+      else open.delete(post.replyTo);
+    }
   }
   return open;
+}
+
+/** Why a post backs no verdict: it is a check that failed, or a check of it failed. Null when neither holds. */
+export function refutation(post: Post, posts: readonly Post[]): string | null {
+  if (post.kind === 'check' && post.outcome === 'fails')
+    return `${post.id} is a check that failed, so it backs no verdict.`;
+  const failed = posts.find(
+    (entry) =>
+      entry.kind === 'check' &&
+      entry.outcome === 'fails' &&
+      entry.replyTo === post.id,
+  );
+  return failed
+    ? `${post.id} failed the check ${failed.id}, so it backs no verdict.`
+    : null;
 }
 
 /** The kinds that build on a post, so a dispute of that post marks them. */

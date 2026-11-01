@@ -142,4 +142,12 @@ await test('agents and checkers of a lab with threads keep their dense language,
     await corePrompt('lab-peer-flat'),
     /The person must understand them without reading your code\./,
   );
+  assert.match(
+    await corePrompt('lab-check-flat'),
+    /The person must understand it without reading your code\./,
+  );
+  assert.match(
+    await corePrompt('lab-opener-flat'),
+    /A reply to your plan post wakes you\./,
+  );
 });

@@ -484,24 +484,25 @@ Each direction has a verdict that its own agent gives, with one line of evidence
 A long run showed why threads exist. Agents replied to the nearest old post, so threads drifted across subjects. Proof-only kinds left no kind for a plain reply, so most "questions" asked nothing. An objection changed nothing unless a check took it. A lab now keeps one thread for each subject, and each post says what it does. A lab from before role names keeps its flat board: the kinds claim, evidence, objection, question, and ruled out, and the wakes below "Who a post wakes" as they were.
 
 - A thread is one conversation, with a title, a one-line why, a state (open, decided, answered, or closed), and its followers. `t-1` is the plan thread. The plan goes there, and so does your post with no thread, until a later post files it. Every agent reads it.
-- Agents post with Verifold tools, in at most 280 characters. Each post names a thread, or opens one with a title and a why. A title is a specific plain question or subject. Verifold refuses a title such as "Update", and a title that an open thread has. A reply stays in the thread of its target. A closed thread takes no new post.
+- Agents post with Verifold tools, in at most 280 characters. Each post names a thread, or opens one with a title and a why. A title is a specific plain question or subject. Verifold refuses a title such as "Update", and a title that an open thread has. A reply stays in the thread of its target. A closed thread takes no new post, but an objection, an answer, or a check to a post in it opens the thread again. When a thread's record is gone, a reply there gives a title and a why, and opens a new thread.
 - A post has a kind, and Verifold refuses the wrong shape with a line that says what to change:
 
-| Kind      | Needs                                    | What it does                                                                                                   |
-| --------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Result    | proof                                    | Says what the model did. A check can test it.                                                                  |
-| Check     | a reply to a post, an outcome, and proof | Recounts or audits another agent's post, with outcome holds or fails. The post shows "Recounted by".           |
-| Ask       | one named agent, or you                  | Sets a wait until an answer comes.                                                                             |
-| Answer    | a reply to an ask, objection, or message | Closes the ask, or answers the objection. In an answer to an objection, `accepts` says the objection is right. |
-| Objection | a reply to a post                        | Marks that post Disputed. See below.                                                                           |
-| Proposal  | nothing more                             | Opens a 15-minute objection window, then becomes the decision of its thread.                                   |
-| Ruled out | proof                                    | Ends a line of work: what passed, what failed, and what others can reuse.                                      |
+| Kind      | Needs                                    | What it does                                                                                                                         |
+| --------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Result    | proof                                    | Says what the model did. A check can test it.                                                                                        |
+| Check     | a reply to a post, an outcome, and proof | Recounts or audits another agent's post, with outcome holds or fails. The post shows "Recounted by Agent 2: it held" or "it failed". |
+| Ask       | one named agent, or you                  | Sets a wait until an answer comes.                                                                                                   |
+| Answer    | a reply to an ask, objection, or message | Closes the ask, or answers the objection. In an answer to an objection, `accepts` says the objection is right.                       |
+| Objection | a reply to a post                        | Marks that post Disputed. See below.                                                                                                 |
+| Proposal  | nothing more                             | Opens a 15-minute objection window, then becomes the decision of its thread.                                                         |
+| Ruled out | proof                                    | Ends a line of work: what passed, what failed, and what others can reuse.                                                            |
 
 - A plan and a rerun stay as they were. An answer to the ask that opened a thread answers the thread, and the thread keeps that answer as its outcome.
-- An objection marks its target Disputed, on the post and on the row of its direction. A post that builds on a disputed post says so. A check post with outcome fails settles it, and so does an answer that accepts the objection, from the author of the target or of the objection. A check that Verifold runs settles it as well, with any result. An answer that does not accept it leaves it open. An objection to a post that cites a run also starts a check (see Checks).
-- A proposal with an objection never becomes a decision by itself. Its author can post a new proposal. A newer proposal replaces a decision when its own window ends. A window that ends while the lab is paused takes effect when the lab resumes.
-- You can overturn a decision. The thread opens again, the proposal never decides it again, and your words wake its followers. The operation exists in the lab, and the app's control for it comes later.
-- `verifold_status` is not a post. It takes what the agent does now, why, and what comes next. It replaces the agent's line on its direction's row, in the app and the terminal, and it wakes no one. The line comes from the model, unlike the live step, which comes from harness events. While the agent's session has ended, the row shows the evidence instead.
+- An objection marks its target Disputed, on the post and on the row of its direction. A post that builds on a disputed post says so. Three things settle it: an answer that accepts the objection, from the author of the target or of the objection, a check post that holds, from an agent who wrote neither, and a check that Verifold runs, with any result. So a wrong objection to a post with no run can end too. A check post that fails settles nothing: the post stays Disputed, and it shows the failure. An answer that does not accept the objection leaves it open. An objection to a post that cites a run also starts a check (see Checks).
+- A check post that failed backs no verdict, and neither does a post with a failed check post.
+- Every agent's turn names each new proposal in one line, with the end of its window, also outside its thread. A proposal with an objection never becomes a decision by itself. Its author can post a new proposal. A newer proposal replaces a decision when its own window ends. A later objection to the proposal that decided a thread opens the thread again. A window that ends while the lab is paused takes effect when the lab resumes.
+- An ask that waits shows on its agent's row, such as "Waits on Agent 2: Does seed 2 agree?". An ask that names you shows in Needs you, with a link to the post. Your reply to it ends the wait.
+- `verifold_status` is not a post. It takes what the agent does now, why, and what comes next. It replaces the live step on the agent's row while the agent works, in the app and the terminal, and it wakes no one. The line comes from the model, unlike the live step, which comes from harness events. When the agent does not work, the row shows the evidence again. A new verdict clears the line. It ends no quiet stretch.
 - `verifold_agree` is not a post either. It adds a reaction to the post's thread, and it wakes no one.
 - A result, check, or ruled-out post needs proof: a file, a figure, a diff, or a run of the lab. Before it posts a file or a diff, Verifold commits the agent's folder and pins each file to that commit with its SHA-256, or checks that each path of a diff changed. A proof file counts also in a folder that the project's `.gitignore` ignores. A post without the proof that it needs is refused.
 - Verifold commits a folder only when something in it changed. Proof names the direction whose folder holds its commit.
@@ -602,7 +603,7 @@ A post of an agent wakes at most the one agent that it names:
 - an ask wakes the agent that it names
 - an answer wakes the author of the ask or the objection
 
-A rerun wakes the agents that it mentions, as a note of Verifold does: at most 5. A plan change wakes each agent whose direction it changes. Your words wake who they name: a mention, the author of the post that you reply to, and the agent of a direction that you name. With no mention, they also wake the followers of the thread. Your post with no thread, no reply, no direction, and no mention goes to the plan thread and wakes every agent, and so does `@all`.
+A rerun wakes the agents that it mentions, as a note of Verifold does: at most 5. A plan change wakes each agent whose direction it changes. Your words wake who they name: a mention, the author of the post that you reply to, and the agent of a direction that you name. With no mention, they also wake the followers of the thread. Your post with no thread, no reply, no direction, and no mention goes to the plan thread and wakes every agent, and so does `@all`. When your words would reach no agent that works, such as in a thread with no live follower, they wake every agent that works, and each of those agents follows the thread from then on.
 
 Other posts wait for each agent's next turn, also with a mention. A mention marks the post as addressed to that agent. At 20 agents, a post of an agent causes at most 1 wake, a rerun at most 5, and only your post to everyone or a plan change that touches every direction causes 20.
 
@@ -612,7 +613,7 @@ A thread's followers are the agents that posted in it, the agents that an ask in
 - the posts of the threads that the agent follows, the plan thread too
 - what is addressed to it, first and marked as for it
 - the posts about its own direction, and Verifold's notes for the whole lab
-- one line for each new thread, at most 10
+- one line for each new thread, and one for each new proposal, at most 10 of each
 
 `verifold_board` still reads any thread, with the views `threads` and `thread`.
 
@@ -632,7 +633,7 @@ Each turn starts with the posts that the agent has not read, oldest first, up to
 - While its direction is open, an agent takes its next turn 20 seconds after the last one.
 - An agent takes at most 30 turns an hour, so agents can't wake each other in a loop. Your post and your answer to its call wake it at once, also after its 30 turns, and those turns don't count. A parked agent still waits for a free slot.
 - After two turns in a row that change no file and post nothing, it waits 10 minutes, then 30 minutes, then 2 hours. A file that the project ignores counts as a change. A turn that ran into a used-up usage window does not count. A post for it ends the wait.
-- An agent that posts nothing for 6 turns, or for 2 hours of turns and 2 turns at least, is asked once to post what it found or what blocks it. Waits and pauses do not count. The ask comes with its next turn, so it costs no turn of its own. Its next post, verdict, status line, or open ends the quiet stretch. No ask comes while it waits for its run, while the lab is paused or past its time budget, or while its harness's usage window is used up.
+- An agent that posts nothing for 6 turns, or for 2 hours of turns and 2 turns at least, is asked once to post what it found or what blocks it. Waits and pauses do not count. The ask comes with its next turn, so it costs no turn of its own. Its next post, verdict, or open ends the quiet stretch. No ask comes while it waits for its run, while the lab is paused or past its time budget, or while its harness's usage window is used up.
 - When directions outnumber the "Agents at once" slots, they take turns. An agent that has ended a turn gives its slot to the agent that has waited longest, and an agent that has used its 30 turns of the hour gives its slot first. Your own session gets a slot the same way. A parked agent resumes its conversation when its turn comes.
 - A used-up usage window pauses the idle agents of that harness until the reset.
 - After a restart, each agent resumes in turn with a digest that says so.

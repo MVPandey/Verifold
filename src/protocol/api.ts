@@ -231,6 +231,7 @@ export type LabList =
   | 'agents'
   | 'disputes'
   | 'threads'
+  | 'waits'
   | 'facts'
   | 'runs'
   | 'checks'
@@ -289,6 +290,11 @@ export interface Lab {
    * 1: an earlier server leaves it out.
    */
   readonly threads?: readonly Thread[];
+  /**
+   * Who waits on whom now, waits on the person first, then the oldest. Added
+   * after version 1: an earlier server leaves it out.
+   */
+  readonly waits?: readonly Wait[];
   /** The newest runs, oldest first. */
   readonly runs: readonly Run[];
   /** The newest checks, oldest first. */
@@ -705,8 +711,35 @@ export interface Post {
   readonly disputed?: true;
   /** The disputed post that this post builds on. Added after version 1. */
   readonly citesDisputed?: string;
-  /** The handles of the agents whose `check` posts tested this post. Added after version 1. */
-  readonly recountedBy?: readonly string[];
+  /** The `check` posts that tested this post. Added after version 1. */
+  readonly recountedBy?: readonly Recount[];
+}
+
+/** A `check` post of another agent: who wrote it, and what it found. */
+export interface Recount {
+  readonly handle: string;
+  readonly outcome: 'holds' | 'fails';
+}
+
+/** An ask or an objection that waits for a reply. */
+export interface Wait {
+  /** `person`, or an agent ID. */
+  readonly waiter: string;
+  /** The waiter's handle. Null for the person. */
+  readonly waiterHandle: string | null;
+  /** `person`, or an agent ID. */
+  readonly on: string;
+  /** The handle of who it waits on. Null for the person. */
+  readonly onHandle: string | null;
+  /** The post that waits. */
+  readonly post: string;
+  readonly reason: 'ask' | 'objection';
+  readonly thread: string | null;
+  /** The thread's title, or the start of the post with no thread. */
+  readonly subject: string;
+  /** The start of the post. */
+  readonly text: string;
+  readonly since: string;
 }
 
 /** How a thread ended. */

@@ -1,6 +1,24 @@
 import type { Lab, Post } from '../protocol/api.ts';
+import { roleName } from '../ui/lab-lines.ts';
 import { onBoard } from './call.ts';
 import { href } from './route.ts';
+
+/** What a `check` found, in a word. */
+export function outcomeWord(outcome: 'holds' | 'fails'): string {
+  return outcome === 'holds' ? 'held' : 'failed';
+}
+
+/** Who recounted a post and what they found: "Recounted by Agent 2: it held." Null with no recount. */
+export function recountWords(post: Post): string | null {
+  return post.recountedBy?.length
+    ? post.recountedBy
+        .map(
+          ({ handle, outcome }) =>
+            `Recounted by ${roleName(handle)}: it ${outcomeWord(outcome)}.`,
+        )
+        .join(' ')
+    : null;
+}
 
 export interface Thread {
   readonly root: Post;

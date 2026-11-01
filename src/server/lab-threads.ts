@@ -2,11 +2,12 @@
  * Threads and post marks on the wire. These shape records for a snapshot or a
  * thread page, and hold no state.
  */
-import type { Post as BoardPost } from '../core/board.ts';
 import type { openDisputes } from '../core/disputes.ts';
+import { clip, type Post as BoardPost } from '../core/board.ts';
 import { citedDispute } from '../core/lab/post-rules.ts';
+import { openWaits } from '../core/lab/waits.ts';
 import type { LabView, Thread as LabThread } from '../core/lab/schema.ts';
-import type { Post, Thread } from '../protocol/api.ts';
+import type { Post, Recount, Thread, Wait } from '../protocol/api.ts';
 
 /** The marks of a post on the wire. */
 export type PostMarks = (
@@ -31,6 +32,34 @@ export function threadItem(entry: LabThread): Thread {
   };
 }
 
+/** Characters of a wait's subject and text. */
+const waitText = 160;
+
+/**
+ * The waits of a lab on the wire, waits on the person first, so a smaller
+ * snapshot keeps them. A lab from before threads has none.
+ */
+export function waitItems(view: LabView): Wait[] {
+  const threads = view.threads ?? [];
+  if (!threads.length) return [];
+  const titles = new Map(threads.map((entry) => [entry.id, entry.title]));
+  const posts = new Map(view.posts.map((post) => [post.id, post]));
+  const items = openWaits(view.posts, threads).map((wait): Wait => {
+    const text = clip(posts.get(wait.post)?.text ?? '', waitText);
+    return {
+      ...wait,
+      waiterHandle: view.handles[wait.waiter] ?? null,
+      onHandle: view.handles[wait.on] ?? null,
+      subject: titles.get(wait.thread ?? '') ?? text,
+      text,
+    };
+  });
+  return [
+    ...items.filter((wait) => wait.on === 'person'),
+    ...items.filter((wait) => wait.on !== 'person'),
+  ];
+}
+
 /**
  * The marks of a lab's posts: disputed, cites a disputed post, and recounted
  * by. A lab from before threads shows as it did, with no marks.
@@ -41,12 +70,15 @@ export function postMarks(
 ): PostMarks {
   if (!view.threads?.length) return noMarks;
   const disputed = new Set(disputes.map((dispute) => dispute.target.id));
-  const recounts = new Map<string, string[]>();
+  const recounts = new Map<string, Recount[]>();
   for (const post of view.posts)
-    if (post.kind === 'check' && post.replyTo)
+    if (post.kind === 'check' && post.replyTo && post.outcome)
       recounts.set(post.replyTo, [
         ...(recounts.get(post.replyTo) ?? []),
-        view.handles[post.author] ?? post.author,
+        {
+          handle: view.handles[post.author] ?? post.author,
+          outcome: post.outcome,
+        },
       ]);
   return (post) => {
     const cites = citedDispute(post, disputed);

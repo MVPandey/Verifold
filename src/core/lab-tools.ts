@@ -87,19 +87,21 @@ export const postOutcomes = ['holds', 'fails'] as const;
 
 /** The limits of threads. The tool schemas and the lab's checks use the same ones. */
 export const threadLimits = {
-  /** Threads of one lab. */
-  threads: 1000,
+  /** Threads of one lab. With the other limits, the threads file stays under the 4 MB that a read takes. */
+  threads: 500,
   title: planLimits.title,
   /** Characters of the one line that says why a thread exists. */
   why: 200,
   /** Agents that follow one thread. */
-  followers: 100,
+  followers: 30,
   /** Reactions on one thread. */
-  agreed: 200,
+  agreed: 25,
   /** Characters of each field of `verifold_status`. */
   status: 200,
-  /** New threads that one digest names. */
+  /** New threads, and new proposals, that one digest names. */
   index: 10,
+  /** Characters of a proposal's text in its digest line. */
+  proposalLine: 140,
   /** Minutes that a proposal stays open to objections. Then it becomes the decision of its thread. */
   objectionMinutes: 15,
 };
@@ -249,13 +251,13 @@ export const threadToolSpecs: readonly AgentTool[] = [
   },
   {
     name: 'verifold_post',
-    description: `Post to the lab board, in at most 280 characters. A post is for what another agent or the person must read. Each post needs a thread: give thread, or open a thread with title and why. A reply with replyTo stays in the thread of its target. Choose a kind:
+    description: `Post to the lab board, in at most 280 characters. A post is for what another agent or the person must read. Each post needs a thread: give thread, or open a thread with title and why. A reply with replyTo stays in the thread of its target. An objection, an answer, or a check to a post in a closed thread opens that thread again. Choose a kind:
 - result: what you found. It needs proof. A check can test it.
 - check: a recount or an audit of another post. It needs replyTo, outcome (holds or fails), and proof.
 - ask: a question for one agent or the person. Name them in mentions. The wait ends when an answer comes.
 - answer: a reply to an ask, to an objection, or to the person. It needs replyTo and no proof. In an answer to an objection, accepts: true says that the objection is right.
-- objection: a problem in a post. It needs replyTo. The post shows Disputed until a check fails it or an answer accepts the objection.
-- proposal: a choice for the lab. With no objection in ${threadLimits.objectionMinutes} minutes it becomes the decision of its thread. The person can overturn it.
+- objection: a problem in a post. It needs replyTo. The post shows Disputed until an answer accepts the objection, a check of a third agent holds the post, or a check of Verifold ends. A check that fails leaves it Disputed.
+- proposal: a choice for the lab. With no objection in ${threadLimits.objectionMinutes} minutes it becomes the decision of its thread. A later objection to it opens the thread again.
 - ruled-out: the end of a line of work: what passed, what failed, and what others can reuse. It needs proof.
 Proof is a file or a figure in your folder, a diff of paths that you changed, or a run of the lab. Verifold commits your folder first and pins a file, a figure, or a diff to that commit. An objection, an ask, or an answer wakes the agent that it names. Other posts wait for each agent's next turn. Use verifold_status for progress, and verifold_agree for agreement.`,
     inputSchema: {
@@ -615,7 +617,7 @@ export const directionLimits = {
 /** Directions: an agent opens one with its own agent, gives its own direction a verdict, and closes it. */
 export const directionToolSpec: AgentTool = {
   name: 'verifold_direction',
-  description: `Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, the harness of its agent, and a short job and team. Verifold makes its folder and starts its agent when a slot is free. A lab has at most ${planLimits.directions} open directions. Agents start at most ${directionLimits.starts} agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs \`post\`: a result, check, or rerun post about your direction, with proof (in an older lab, a claim or evidence post too). ruled-out needs \`post\`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs \`post\`: such a post that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.`,
+  description: `Open a direction, give your direction a verdict, or close your direction. open: a new direction with its title, its bar, the harness of its agent, and a short job and team. Verifold makes its folder and starts its agent when a slot is free. A lab has at most ${planLimits.directions} open directions. Agents start at most ${directionLimits.starts} agents in 24 hours, and never more than the person's setting of agents at once. update: the verdict of your own direction, with one line of evidence. leading needs \`post\`: a claim, evidence, or rerun post about your direction, with proof. ruled-out needs \`post\`: a ruled-out post about your direction, with proof. open takes the verdict back. holds-up needs \`post\`: a claim, evidence, or rerun post about your direction that cites a run. Verifold then starts a check: a fresh agent of the other harness reruns it without your reasoning, and your direction holds up when it holds. close: end your direction after its verdict is ruled-out. Your session ends after this turn, and your folder and branch stay.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -694,6 +696,15 @@ export const directionToolSpec: AgentTool = {
     required: ['action', 'why'],
     additionalProperties: false,
   },
+};
+
+/** `verifold_direction` in a lab with threads, where a result or a check holds the proof. */
+export const threadDirectionToolSpec: AgentTool = {
+  ...directionToolSpec,
+  description: directionToolSpec.description.replaceAll(
+    'a claim, evidence, or rerun post',
+    'a result, check, or rerun post',
+  ),
 };
 
 /** The kinds of call for the person. A technical question goes on the board, and a check settles it. */

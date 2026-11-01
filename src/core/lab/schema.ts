@@ -1443,6 +1443,15 @@ export function statusLine(
   };
 }
 
+/** The agent without its own line, which a new verdict makes old. */
+export function withoutLine(agent: AgentRecord): AgentRecord {
+  const next: { -readonly [Key in keyof AgentRecord]: AgentRecord[Key] } = {
+    ...agent,
+  };
+  delete next.statusLine;
+  return next;
+}
+
 function parseStatusLine(value: unknown): StatusLine | null {
   const entry = object(value);
   const field = (name: string): string | null => {

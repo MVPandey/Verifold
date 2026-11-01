@@ -7,7 +7,9 @@
  * file is parsed with care and a bad record is skipped.
  */
 import {
-  threadId,
+  boardLimits,
+  clip,
+  number,
   type Board,
   type BoardAgent,
   type Digest,
@@ -25,46 +27,48 @@ import {
 } from './post-rules.ts';
 import { readObject, RecordFile } from './record-file.ts';
 import { fail, type Thread } from './schema.ts';
-import { threadDigest, threadLine } from './thread-digest.ts';
+import { threadDigest, threadLines } from './thread-digest.ts';
 import {
   afterPost,
   agreedWith,
   decided,
   dueProposals,
   followed,
-  overturned,
   parseThread,
   placed,
+  planThread,
   planThreadRecord,
 } from './threads.ts';
 
 export class ThreadStore {
   private threads: readonly Thread[] = [];
-  /** The highest thread number ever used, so a skipped record never gives its number to a new thread. */
+  /** The highest thread number that a record or a post uses, so no new thread takes the number of a lost record. */
   private last = 0;
   private readonly path: string;
   private readonly file: RecordFile;
   private readonly board: Pick<Board, 'digest' | 'get' | 'list'>;
+  /** Milliseconds that a proposal stays open to objections. */
+  private readonly objectionMs: number;
 
   /** `paused`: the lab's records moved, so nothing writes until the next load. */
   constructor(
     path: string,
     paused: () => boolean,
     board: Pick<Board, 'digest' | 'get' | 'list'>,
+    objectionMs: number,
   ) {
     this.path = path;
     this.board = board;
+    this.objectionMs = objectionMs;
     this.file = new RecordFile(path, () =>
-      paused()
-        ? null
-        : { schemaVersion: 1, last: this.last, threads: this.threads },
+      paused() ? null : { schemaVersion: 1, threads: this.threads },
     );
   }
 
   /**
-   * Read the records. `started`: when a lab with threads started, so it gets
-   * its plan thread if the file has none. Null: a lab from before threads, or
-   * no lab, which holds no thread.
+   * Read the records, after the board. `started`: when a lab with threads
+   * started, so it gets its plan thread if the file has none. Null: a lab from
+   * before threads, or no lab, which holds no thread.
    */
   async load(started: string | null): Promise<void> {
     const saved = started === null ? null : await readObject(this.path);
@@ -72,17 +76,38 @@ export class ThreadStore {
     const threads = list
       .slice(0, threadLimits.threads)
       .flatMap((entry) => parseThread(entry) ?? []);
-    const numbers = threads.map((thread) => Number(thread.id.slice(2)));
-    const last = saved?.last;
-    this.last = Math.max(
-      typeof last === 'number' && threadId.test(`t-${last}`) ? last : 0,
-      ...numbers,
-    );
     this.threads = threads;
-    if (started !== null && !numbers.includes(1)) {
+    if (started !== null && !this.get(planThread))
       this.threads = [planThreadRecord(started), ...threads];
-      this.last = Math.max(this.last, 1);
-    }
+    this.last = Math.max(
+      ...this.threads.map((thread) => number(thread.id)),
+      ...this.board.list().map((post) => number(post.thread ?? 't-0')),
+      0,
+    );
+  }
+
+  /**
+   * Verifold's note when posts name threads that have no record, as after a
+   * file that it could not read: the lab must not look as if it had no threads.
+   * Null when each thread has its record. Its key keeps it to one note.
+   */
+  lostNote(): NewPost | null {
+    const lost = [
+      ...new Set(this.board.list().flatMap((post) => post.thread ?? [])),
+    ].filter((id) => !this.get(id));
+    return lost.length
+      ? {
+          author: 'verifold',
+          kind: 'status',
+          text: clip(
+            `Verifold could not read the records of ${lost.length} threads, so they have no title, state, or followers now. Their posts stay on the board: ${lost.join(', ')}`,
+            boardLimits.text,
+          ),
+          mentions: [],
+          artifacts: [],
+          key: `threads-lost-${lost.length}`,
+        }
+      : null;
   }
 
   /** All threads, oldest first. */
@@ -95,11 +120,10 @@ export class ThreadStore {
   }
 
   /** The newest threads that are not closed, one line each. */
-  lines(limit = 20): string[] {
-    return this.threads
-      .filter((thread) => thread.state !== 'closed')
-      .slice(-limit)
-      .map(threadLine);
+  lines(limit = 20): readonly string[] {
+    return threadLines(
+      this.threads.filter((thread) => thread.state !== 'closed').slice(-limit),
+    );
   }
 
   /** The posts of a thread, oldest first. */
@@ -133,7 +157,14 @@ export class ThreadStore {
     read: ReadState,
     options: DigestOptions = {},
   ): Digest {
-    return threadDigest(this.board, this.threads, agent, read, options);
+    return threadDigest(
+      this.board,
+      this.threads,
+      agent,
+      read,
+      this.objectionMs,
+      options,
+    );
   }
 
   /** Open a thread. Refuses when the lab holds the most threads. */
@@ -210,7 +241,13 @@ export class ThreadStore {
         afterPost(thread, post, target),
       ).catch(() => {});
     const thread = post.thread ? this.get(post.thread) : undefined;
-    return wakeList(post, { target, thread, agents });
+    const woken = wakeList(post, { target, thread, agents });
+    // Whoever the person's words wake reads them, also from outside the thread.
+    if (post.author === 'person' && thread && thread.id !== planThread)
+      await this.change(thread.id, (entry) =>
+        woken.reduce(followed, entry),
+      ).catch(() => {});
+    return woken;
   }
 
   /** `verifold_follow`. Returns the reply to the agent. */
@@ -235,26 +272,19 @@ export class ThreadStore {
     return `You agree with ${post.id}.`;
   }
 
-  /** The person overturns a thread's decision. Returns the thread's ID. Refuses a thread with no decision. */
-  async overturn(id: unknown): Promise<string> {
-    const thread = this.get(id) ?? fail('Name a thread, such as t-3.');
-    await this.change(thread.id, overturned);
-    return thread.id;
-  }
-
   /**
-   * Each proposal whose objection window of `windowMs` ended becomes the
-   * decision of its thread. Returns Verifold's notes for the board: followers
-   * read them in their next turn.
+   * Each proposal whose objection window ended becomes the decision of its
+   * thread. Returns Verifold's notes for the board: followers read them in
+   * their next turn.
    */
-  async decide(windowMs: number): Promise<readonly NewPost[]> {
+  async decide(): Promise<readonly NewPost[]> {
     const now = Date.now();
     const notes: NewPost[] = [];
     for (const { thread, proposal } of dueProposals(
       this.board.list(),
       this.threads,
       now,
-      windowMs,
+      this.objectionMs,
     )) {
       await this.change(thread.id, (entry) =>
         decided(entry, proposal, new Date(now).toISOString()),
