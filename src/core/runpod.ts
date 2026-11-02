@@ -436,6 +436,15 @@ export class RunPod {
   }
 }
 
+/**
+ * RunPod had no machine with the requested GPU free: the words of its answer
+ * to a create, such as "There are no longer any instances available with the
+ * requested specifications". Another GPU type can still start.
+ */
+export function noCapacity(reason: string): boolean {
+  return /no longer any instances available/i.test(reason);
+}
+
 /** Text with each secret value replaced by its name in brackets. */
 export function hideSecrets(
   text: string,
