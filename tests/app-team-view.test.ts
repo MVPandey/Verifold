@@ -249,10 +249,12 @@ await test('a lost helper is trouble', () => {
   assert.match(first?.line ?? '', /agent-5\.1 stopped with no result: Search/);
 });
 
+const endedRun = { active: false, ended: { run: 'r-132', at: ago(40) } };
+
 await test('silence after a run ended is trouble, with its age', () => {
   const silent = twenty(
-    { runs: [run('a-17', {})] },
-    new Map([[17, { line: null, lastPostAt: ago(120) }]]),
+    {},
+    new Map([[17, { line: null, lastPostAt: ago(120), runState: endedRun }]]),
   );
   const [first] = troubles(silent, 'simple', now);
   assert.equal(first?.kind, 'silent');
@@ -265,21 +267,25 @@ await test('silence after a run ended is trouble, with its age', () => {
   );
 });
 
-await test('a long run with no post is not silence', () => {
+await test('a long run with no post is not silence, at 20 agents, when the run left the snapshot', () => {
+  // The snapshot keeps the newest runs, and 19 agents have filled it.
+  const runs = Array.from({ length: 30 }, (_, index) =>
+    run('a-1', { id: `r-${index + 100}` }),
+  );
   assert.deepEqual(
     troubles(
       twenty(
-        {
-          runs: [
-            run('a-3', {
-              status: 'running',
-              startedAt: ago(49),
-              endedAt: null,
-            }),
-            run('a-3', { id: 'r-2' }),
+        { runs },
+        new Map([
+          [
+            3,
+            {
+              line: null,
+              lastPostAt: ago(120),
+              runState: { ...endedRun, active: true },
+            },
           ],
-        },
-        new Map([[3, { line: null, lastPostAt: ago(120) }]]),
+        ]),
       ),
       'simple',
       now,
@@ -289,11 +295,10 @@ await test('a long run with no post is not silence', () => {
 });
 
 await test('a word after the run ended, a short silence, or a paused lab is no silence', () => {
-  const quiet = new Map([[17, { line: null, lastPostAt: ago(120) }]]);
-  const runs = [run('a-17', {})];
+  const quiet = { line: null, lastPostAt: ago(120), runState: endedRun };
   assert.deepEqual(
     troubles(
-      twenty({ runs }, new Map([[17, { line: null, lastPostAt: ago(10) }]])),
+      twenty({}, new Map([[17, { ...quiet, lastPostAt: ago(10) }]])),
       'simple',
       now,
     ),
@@ -301,7 +306,21 @@ await test('a word after the run ended, a short silence, or a paused lab is no s
   );
   assert.deepEqual(
     troubles(
-      twenty({ runs: [run('a-17', { endedAt: ago(10) })] }, quiet),
+      twenty(
+        {},
+        new Map([
+          [
+            17,
+            {
+              ...quiet,
+              runState: {
+                active: false,
+                ended: { run: 'r-132', at: ago(10) },
+              },
+            },
+          ],
+        ]),
+      ),
       'simple',
       now,
     ),
@@ -309,7 +328,19 @@ await test('a word after the run ended, a short silence, or a paused lab is no s
   );
   assert.deepEqual(
     troubles(
-      twenty({ runs, paused: { at: ago(50), reason: 'person' } }, quiet),
+      twenty(
+        { paused: { at: ago(50), reason: 'person' } },
+        new Map([[17, quiet]]),
+      ),
+      'simple',
+      now,
+    ),
+    [],
+  );
+  // A server from before this fact says nothing of runs, so nothing shows.
+  assert.deepEqual(
+    troubles(
+      twenty({}, new Map([[17, { line: null, lastPostAt: ago(120) }]])),
       'simple',
       now,
     ),

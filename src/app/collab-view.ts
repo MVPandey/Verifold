@@ -23,20 +23,28 @@ const whose = (handle: string | null, author: string): string => {
   return name === 'You' ? 'your' : `${name}'s`;
 };
 
-/** What the newest check of a disputed post did, as the record says. */
+/** What the newest check of a disputed post did, in the record's words and no more. */
 function checkLine(check: Disagreement['check']): string {
   if (!check) return 'No check yet.';
+  const how =
+    check.method === 'code-read'
+      ? 'A code check'
+      : check.method === 'rerun'
+        ? 'A rerun'
+        : 'A check';
   switch (check.state) {
     case 'queued':
       return 'A check waits to start.';
     case 'running':
       return 'A check runs now.';
-    case 'done': {
-      const how = check.method === 'code-read' ? 'A code check' : 'A rerun';
+    case 'done':
       return check.outcome === 'holds'
-        ? `${how} held before this objection.`
-        : `${how} did not hold. No verdict yet.`;
-    }
+        ? `${how} held.`
+        : check.outcome === 'differs'
+          ? `${how} got a different result.`
+          : check.outcome === 'fails'
+            ? `${how} did not hold.`
+            : `${how} ended.`;
     default:
       return 'Its check did not finish.';
   }

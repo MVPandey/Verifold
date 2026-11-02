@@ -4,7 +4,7 @@
  * `reachOf` says, so the line under the box and the wakes are one answer. The
  * app reaches this through `GET /api/v1/reach`.
  */
-import type { BoardAgent, Post } from '../board.ts';
+import { directionId, type BoardAgent, type Post } from '../board.ts';
 import type { DirectionView, Thread } from './schema.ts';
 import { planThread } from './threads.ts';
 
@@ -99,12 +99,10 @@ export interface LabReach {
   readonly slotsFull: boolean;
 }
 
-/** Why an agent reads nothing. These states are the agents that `Lab.active` leaves out. */
-function missOf(agent: ReachAgent): ReachMiss | null {
-  return agent.status === 'closed' ||
-    agent.status === 'stopped' ||
-    agent.status === 'crashed'
-    ? agent.status
+/** Why an agent reads nothing. These states are the agents that `Lab.active` leaves out. Null: it works. */
+export function endedWhy(status: ReachAgent['status']): ReachMiss | null {
+  return status === 'closed' || status === 'stopped' || status === 'crashed'
+    ? status
     : null;
 }
 
@@ -135,7 +133,7 @@ export function reachOf(
   place: Pick<WordsPlace, 'target' | 'thread'>,
   lab: LabReach,
 ): Reach {
-  const working = lab.agents.filter((agent) => !missOf(agent));
+  const working = lab.agents.filter((agent) => !endedWhy(agent.status));
   const readers = new Set(personReaders(words, { ...place, agents: working }));
   const named = addressed(words, { ...place, agents: lab.agents });
   return {
@@ -147,7 +145,7 @@ export function reachOf(
         until: agent.status === 'usage' ? agent.until : null,
       })),
     missed: lab.agents.flatMap((agent) => {
-      const why = missOf(agent);
+      const why = endedWhy(agent.status);
       return why && (!named.length || named.includes(agent.id))
         ? [{ handle: agent.handle, why }]
         : [];
@@ -166,6 +164,12 @@ export function namedIn(text: string, handles: string): readonly string[] {
   ].map((match) => match[1] ?? '');
 }
 
+/** `@d-2` in the person's post: the direction's ID, from its own pattern. */
+const mentionedDirection = new RegExp(
+  `(?:^|\\s)@(${directionId.source.slice(1, -1)})\\b`,
+  'g',
+);
+
 /** The first `@d-N` in the person's text that names an open direction. */
 export function directionNamedIn(
   text: string,
@@ -176,7 +180,7 @@ export function directionNamedIn(
       .filter((direction) => direction.state === 'open')
       .map((direction) => direction.id),
   );
-  return [...text.matchAll(/(?:^|\s)@(d-[1-9]\d{0,3})\b/g)]
+  return [...text.matchAll(mentionedDirection)]
     .map((match) => match[1] ?? '')
     .find((id) => open.has(id));
 }

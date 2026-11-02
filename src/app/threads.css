@@ -796,6 +796,25 @@ a.lit:hover {
   color: var(--accent-ink);
 }
 
+/* A post's controls are quiet text, so a long thread stays readable. */
+.acts--post {
+  gap: 2px 14px;
+  padding-top: 2px;
+}
+
+.acts--post button {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--accent-ink);
+}
+
+.acts--post button:hover {
+  text-decoration: underline;
+}
+
 .acts__why {
   color: var(--muted);
   font-size: 13px;
@@ -885,6 +904,7 @@ a.lit:hover {
     justify-self: start;
   }
 
+  .acts--post button,
   .row2__link,
   .answer .proof {
     min-height: 44px;

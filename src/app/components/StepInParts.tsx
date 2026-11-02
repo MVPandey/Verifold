@@ -5,6 +5,7 @@ import { useControl } from '../controls.ts';
 import { href } from '../route.ts';
 import {
   answerHead,
+  checksForYou,
   newestQuestions,
   noticesForYou,
   postActs,
@@ -30,7 +31,7 @@ export function PostActs({
   );
   const { object, canCheck, why } = postActs(post);
   return (
-    <div className="acts">
+    <div className="acts acts--post">
       <button type="button" onClick={() => onAct({ kind: 'reply', post })}>
         Reply
       </button>
@@ -160,15 +161,26 @@ export function NoticeLines({
   readonly thread?: string;
 }): ReactNode {
   const { mode } = useView();
-  return noticesForYou(lab, mode, thread).map((notice) => (
-    <p key={notice.id} className="later">
-      <IdText text={notice.text} />
-      {notice.thread && notice.thread !== thread && (
-        <>
-          {' '}
-          <a href={href.thread(notice.thread)}>Thread</a>
-        </>
-      )}
-    </p>
-  ));
+  return (
+    <>
+      {noticesForYou(lab, mode, thread).map((notice) => (
+        <p key={notice.id} className="later">
+          <IdText text={notice.text} />
+          {notice.thread && notice.thread !== thread && (
+            <>
+              {' '}
+              <a href={href.thread(notice.thread)}>Thread</a>
+            </>
+          )}
+        </p>
+      ))}
+      {!thread &&
+        checksForYou(lab, mode).map((check) => (
+          <p key={check.id} className="later">
+            <IdText text={check.text} />{' '}
+            <a href={href.post(check.post)}>The post</a>
+          </p>
+        ))}
+    </>
+  );
 }

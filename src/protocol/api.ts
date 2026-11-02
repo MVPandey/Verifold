@@ -748,6 +748,13 @@ export interface Agent {
   readonly helpers?: readonly Helper[];
   /** The time of its newest post. Null or absent: none yet. Added after version 1. */
   readonly lastPostAt?: string | null;
+  /** Its runs in one fact, from all of the lab's runs, unlike the snapshot's cut `runs`. Added after version 1. */
+  readonly runState?: {
+    /** A run of it waits or runs. */
+    readonly active: boolean;
+    /** Its newest run that ended. */
+    readonly ended: { readonly run: string; readonly at: string } | null;
+  };
   /** Its newest turns. */
   readonly turns: TurnPage;
   /** Claude Code's cost estimate of its sessions. Null for Codex. */
@@ -1064,6 +1071,8 @@ export interface IdeaPage {
   readonly stopped: boolean;
   /** A draw runs now, or waits for a free slot. */
   readonly drawing: 'running' | 'waiting' | null;
+  /** The harness of the session that judges now. */
+  readonly judge: Harness | null;
 }
 
 /** A `check` post of another agent: who wrote it, and what it found. */
@@ -1246,6 +1255,8 @@ export interface CheckItem {
   /** The checker's rerun post. */
   readonly result: string | null;
   readonly note: string | null;
+  /** The person asked for this check. Added after version 1. */
+  readonly byPerson?: true;
   readonly queuedAt: string;
   readonly startedAt: string | null;
   readonly endedAt: string | null;

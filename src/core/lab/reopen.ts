@@ -2,7 +2,7 @@
  * Reopen: the person brings an ended direction's agent back. Its folder, its
  * branch, its verdict, and its posts stay as they are, and only its agent
  * changes the verdict. Its conversation goes on when it can resume, and a new
- * one starts when it cannot. Reopen is the lab's only way back from an end.
+ * one starts when it cannot. Either way the agent hears why, and which thread.
  */
 import { boardLimits, clip, type NewPost } from '../board.ts';
 import {
@@ -58,10 +58,8 @@ export interface ReopenHost {
   agent(id: string): AgentRecord | undefined;
   /** Its session still ends. */
   ending(agent: AgentRecord): boolean;
-  /** Refuses when the lab has no room for one more open direction, or one more start. */
+  /** Refuses when the lab cannot start this agent: it has no room for one more open direction, or it is paused. */
   room(): void;
-  /** The starts of the last 24 hours. */
-  starts(state: LabState): readonly string[];
   save(next: LabState): Promise<void>;
   change(
     agent: string,
@@ -69,15 +67,18 @@ export interface ReopenHost {
   ): Promise<void>;
   readonly threads: Pick<ThreadStore, 'get' | 'follow'>;
   add(fields: NewPost): Promise<unknown>;
-  /** The agent hears a line, and starts when a slot is free. */
+  /** The agent hears a line in the person's name, also in a new conversation, and starts when a slot is free. */
   wake(agent: string, text: string): void;
 }
 
 /**
- * The person brings back an ended direction's agent, inside the limits of open
- * directions and of starts. `thread`: the thread that it comes back to: it
- * follows that thread. Runs in the lab's queue. A save that fails changes
- * nothing. Refuses, with a reason that the person can read.
+ * The person brings back an ended direction's agent, inside the limit of open
+ * directions. The agents' allowance of starts does not count: this is the
+ * person's act. The agent takes a free slot like any other. `thread`: the
+ * thread that it comes back to: it follows that thread. Runs in the lab's
+ * queue. A save of the agent or the direction that fails changes nothing. Past
+ * those saves nothing can strand the agent: it hears why in any case. Refuses,
+ * with a reason that the person can read.
  */
 export async function reopenDirection(
   host: ReopenHost,
@@ -105,7 +106,6 @@ export async function reopenDirection(
   await host
     .save({
       ...state,
-      agentStarts: [...host.starts(state), new Date().toISOString()],
       directions: state.directions.map((entry) =>
         entry === direction
           ? { ...entry, state: 'open', stoppedAt: null }
@@ -116,7 +116,8 @@ export async function reopenDirection(
       await host.change(agent.id, () => agent).catch(() => {});
       throw error;
     });
-  if (named) await host.threads.follow(agent.id, named.id);
+  // A failed save comes again with the thread's next change.
+  if (named) await host.threads.follow(agent.id, named.id).catch(() => {});
   const { note, heard } = reopenWords(direction, agent, named);
   // A full board refuses the note. The agent hears it all the same.
   await host

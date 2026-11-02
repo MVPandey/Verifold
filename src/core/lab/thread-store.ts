@@ -241,11 +241,22 @@ export class ThreadStore {
     await this.change(id, (thread) => closed(thread, post, at));
   }
 
-  /** The person overturned the thread's decision. Returns the decision's post. Refuses a thread with no decision. */
+  /**
+   * The person overturned the thread's decision. Returns the decision's post.
+   * Refuses a thread with no decision. Unlike `change`, a save that fails
+   * changes nothing, so the person can try again.
+   */
   async overturn(id: string): Promise<string | undefined> {
-    const post = this.get(id)?.outcome?.post;
-    await this.change(id, overturned);
-    return post;
+    const thread = this.get(id);
+    if (!thread) return undefined;
+    const next = overturned(thread);
+    const before = this.threads;
+    this.threads = before.map((entry) => (entry === thread ? next : entry));
+    await this.file.save().catch((error: unknown) => {
+      this.threads = before;
+      throw error;
+    });
+    return thread.outcome?.post;
   }
 
   /**

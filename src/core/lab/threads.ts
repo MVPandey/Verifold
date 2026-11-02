@@ -200,7 +200,8 @@ function reopened(thread: Thread): Thread {
  * The thread after a post in it, or the same object when the post changes
  * nothing, so the store writes nothing. Its author and the agent that an ask
  * names follow it. An answer to the ask that opened the thread answers the
- * thread, and so does the person's own reply to it. An objection to the
+ * thread, and so does the person's own reply to it, unless that reply objects.
+ * An objection to the
  * proposal that decided the thread opens it again, and so does a reply of a
  * `reopeningKinds` kind in a closed thread.
  */
@@ -223,7 +224,8 @@ export function afterPost(
       post.replyTo === thread.outcome?.post)
   )
     return reopened(next);
-  return (post.kind === 'answer' || post.author === 'person') &&
+  return (post.kind === 'answer' ||
+    (post.author === 'person' && post.kind !== 'objection')) &&
     target?.kind === 'ask' &&
     target.id === thread.opening &&
     thread.state === 'open'

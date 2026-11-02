@@ -78,38 +78,37 @@ function waitTrouble(
     : null;
 }
 
-/** The newest ended run of an agent with no run that goes on, and no word from it since. */
-function silentSince(agent: Agent, lab: Lab) {
-  const runs = lab.runs.filter((run) => run.agent === agent.id);
-  if (runs.some((run) => run.status === 'running' || run.status === 'queued'))
-    return null;
-  const last = runs.findLast((run) => run.endedAt !== null);
-  if (!last?.endedAt) return null;
-  const word = [agent.line?.at, agent.lastPostAt]
-    .flatMap((at) => at ?? [])
-    .some((at) => Date.parse(at) >= Date.parse(last.endedAt ?? ''));
-  return word ? null : last;
-}
-
-/** A long run with no post is not silence: only the time after a run counts, and only for an agent that could speak. */
+/**
+ * Silence after a run ended. A long run with no post is not silence: the
+ * server's `runState` covers all of the agent's runs, also those that a
+ * snapshot's `runs` left out. Only an agent that could speak counts.
+ */
 function silentTrouble(
   agent: Agent,
   lab: Lab,
   mode: ViewMode,
   now: number,
 ): Trouble | null {
-  if (lab.paused || !['working', 'idle', 'starting'].includes(agent.status))
+  const ended = agent.runState?.ended;
+  if (
+    !ended ||
+    agent.runState?.active ||
+    lab.paused ||
+    !['working', 'idle', 'starting'].includes(agent.status) ||
+    !old(ended.at, now) ||
+    [agent.line?.at, agent.lastPostAt].some(
+      (at) => at && Date.parse(at) >= Date.parse(ended.at),
+    )
+  )
     return null;
-  const run = silentSince(agent, lab);
-  if (!run?.endedAt || !old(run.endedAt, now)) return null;
   return {
     agent,
     kind: 'silent',
     line:
       mode === 'technical'
-        ? `no status or post since ${run.id} ended.`
+        ? `no status or post since ${ended.run} ended.`
         : 'has said nothing since its run ended.',
-    chip: { label: since(run.endedAt, now), tone: 'wait' },
+    chip: { label: since(ended.at, now), tone: 'wait' },
   };
 }
 

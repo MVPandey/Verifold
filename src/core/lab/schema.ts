@@ -349,6 +349,8 @@ export interface Check {
   readonly objections: readonly string[];
   /** The direction's agent asked for holds-up on this claim. */
   readonly holdsUp: boolean;
+  /** The person asked for this check. */
+  readonly byPerson?: true;
   readonly direction: string;
   /** The claim's run. The checker's folder holds the files of its commit. */
   readonly run: string;
@@ -1074,6 +1076,7 @@ function parseCheck(value: unknown): Check | null {
           .slice(-20)
       : [],
     holdsUp: entry.holdsUp === true,
+    ...(entry.byPerson === true ? { byPerson: true as const } : {}),
     direction: entry.direction,
     run: entry.run,
     commit: entry.commit,

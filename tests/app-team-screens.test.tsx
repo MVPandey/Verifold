@@ -13,6 +13,7 @@ import type {
 } from '../src/protocol/api.ts';
 import { Screen } from '../src/app/App.tsx';
 import { AgentList } from '../src/app/components/AgentList.tsx';
+import { sameSend } from '../src/app/components/Composer.tsx';
 import {
   Answers,
   NoticeLines,
@@ -21,6 +22,7 @@ import {
 } from '../src/app/components/StepInParts.tsx';
 import { ControlsContext, labControls } from '../src/app/controls.ts';
 import type { Route } from '../src/app/route.ts';
+import { targetKey } from '../src/app/step-in.ts';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import {
@@ -332,6 +334,25 @@ await test('a notice for the person links to its thread', () => {
   assert.doesNotMatch(
     inView(shown, 'simple', <NoticeLines lab={shown} thread="t-2" />),
     /href=/,
+  );
+});
+
+await test('the same text to another target is another intent, and a retry to the same target is not', () => {
+  const to = (agent: string): string =>
+    targetKey({ action: 'to', thread: 't-2', to: agent });
+  assert.equal(
+    sameSend(
+      { text: 'Look.', to: to('a-3') },
+      { text: 'Look.', to: to('a-4') },
+    ),
+    false,
+  );
+  assert.equal(
+    sameSend(
+      { text: 'Look.', to: to('a-3') },
+      { text: 'Look.', to: to('a-3') },
+    ),
+    true,
   );
 });
 

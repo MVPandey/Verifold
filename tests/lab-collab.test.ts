@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import type { Post } from '../src/core/board.ts';
 import type { Lease } from '../src/core/leases.ts';
 import { collabOf } from '../src/core/lab/collab.ts';
+import { noticeStands } from '../src/core/lab/coordinator-rules.ts';
 import type { Call, Check, Thread } from '../src/core/lab/schema.ts';
 import type { RunRecord } from '../src/core/runs.ts';
+import { agentRunStates } from '../src/server/lab-threads.ts';
 
 const at = (minute: number): string =>
   new Date(Date.UTC(2026, 10, 1, 16, minute)).toISOString();
@@ -203,4 +205,43 @@ await test('a lab with no records has nothing to say', () => {
   assert.deepEqual(collab.needs, []);
   assert.equal(collab.objections.total, 0);
   assert.equal(collab.gpu.idle, null);
+});
+
+await test('a notice stops showing when the record no longer holds it', () => {
+  const answered = {
+    kind: 'missing-answer',
+    posts: ['p-1'],
+    to: ['a-1'],
+  } as const;
+  const works = new Set(['a-1', 'a-2']);
+  assert.equal(noticeStands(answered, [{ post: 'p-1' }], works), true);
+  assert.equal(noticeStands(answered, [{ post: 'p-9' }], works), false);
+  const overlap = {
+    kind: 'overlap',
+    posts: ['p-1'],
+    to: ['a-1', 'a-2'],
+  } as const;
+  assert.equal(noticeStands(overlap, [], works), true);
+  assert.equal(noticeStands(overlap, [], new Set(['a-1'])), false);
+  assert.equal(
+    noticeStands({ kind: 'no-search', posts: ['p-1'], to: [] }, [], works),
+    true,
+  );
+});
+
+await test('each agent has one run fact from the whole ledger', () => {
+  const states = agentRunStates([
+    run({ id: 'r-1', agent: 'a-1', endedAt: at(5), status: 'done' }),
+    run({ id: 'r-2', agent: 'a-1', endedAt: at(9), status: 'done' }),
+    run({ id: 'r-3', agent: 'a-1', endedAt: at(7), status: 'failed' }),
+    run({ id: 'r-4', agent: 'a-2', endedAt: null, status: 'running' }),
+    run({ id: 'r-5', agent: 'a-3', endedAt: null, status: 'queued' }),
+  ]);
+  assert.deepEqual(states.get('a-1'), {
+    active: false,
+    ended: { run: 'r-2', at: at(9) },
+  });
+  assert.deepEqual(states.get('a-2'), { active: true, ended: null });
+  assert.equal(states.get('a-3')?.active, true);
+  assert.equal(states.get('a-4'), undefined);
 });

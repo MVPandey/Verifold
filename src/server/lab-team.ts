@@ -6,7 +6,13 @@ import { boardLimits, clip } from '../core/board.ts';
 import type { ComputeView } from '../core/compute.ts';
 import { collabOf } from '../core/lab/collab.ts';
 import type { IdeaMapView } from '../core/lab/long-shots.ts';
-import { directionNamedIn, namedIn, reachOf } from '../core/lab/reach.ts';
+import { mentionPattern } from '../core/lab/names.ts';
+import {
+  directionNamedIn,
+  endedWhy,
+  namedIn,
+  reachOf,
+} from '../core/lab/reach.ts';
 import type { LabView, Thread as LabThread } from '../core/lab/schema.ts';
 import type { RunRecord } from '../core/runs.ts';
 import type {
@@ -42,8 +48,6 @@ export interface ReachQuery {
   readonly named?: string;
 }
 
-const handlesPattern = '[a-z]+-[1-9]\\d{0,3}';
-
 /** A read's query, or null when it is not valid. */
 export function reachQuery(params: URLSearchParams): ReachQuery | null {
   const query: Record<string, string> = {};
@@ -67,7 +71,7 @@ export function reachItem(view: LabView, query: ReachQuery): Reach {
   const mentions = [
     ...new Set([
       ...(query.to ? [query.to] : []),
-      ...namedIn(named, handlesPattern).flatMap((name) =>
+      ...namedIn(named, mentionPattern(view.state)).flatMap((name) =>
         name === 'all' || name === 'person' ? [name] : (ids.get(name) ?? []),
       ),
     ]),
@@ -129,11 +133,10 @@ export function collabPage(
   });
   const waits = new Map(waitItems(view).map((wait) => [wait.post, wait]));
   const ended = new Map(
-    view.directions.flatMap(({ agent, status }) =>
-      status === 'closed' || status === 'stopped' || status === 'crashed'
-        ? [[agent.id, status] as const]
-        : [],
-    ),
+    view.directions.flatMap(({ agent, status }) => {
+      const why = endedWhy(status);
+      return why ? [[agent.id, why] as const] : [];
+    }),
   );
   const gpuRun = (run: RunRecord): GpuRun => ({
     run: run.id,
@@ -225,5 +228,6 @@ export function ideaPage(map: IdeaMapView): IdeaPage {
       })),
     stopped: map.stopped,
     drawing: map.drawing,
+    judge: map.judge,
   };
 }
