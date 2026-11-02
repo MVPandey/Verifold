@@ -36,6 +36,7 @@ import {
   isOpen,
   isRunning,
   maxCost,
+  personNotice,
   spent,
   usd,
   type Lease,
@@ -1610,12 +1611,13 @@ function needsOf(snapshot: DeskSnapshot, live: DeskSession): Need[] {
           since: lease.requestedAt,
           body: leaseRequest(lease, compute, tasks),
         });
-      if (lease.notice)
+      const notice = personNotice(lease);
+      if (notice)
         items.push({
           key: `lease-notice:${lease.id}:${lease.history.at(-1)?.at ?? ''}`,
           view: 'compute',
           kind: 'GPU pod',
-          title: lease.notice,
+          title: notice,
           why: 'Verifold changed a pod. Dismiss this when you have read it.',
           since: lease.history.at(-1)?.at ?? null,
           body: `<div class="actions"><button type="button" data-action="compute-lease-dismiss" data-lease="${e(lease.id)}">Dismiss</button><button type="button" data-view="compute">Open Compute</button></div>`,

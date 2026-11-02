@@ -158,6 +158,19 @@ export function isOpen(lease: Lease): boolean {
   );
 }
 
+/**
+ * The lease's notice for the person. A lab lease whose pod RunPod never
+ * created has none: the agent of its direction hears of it, and so does the
+ * call that asked for it, so the person has nothing to act on.
+ */
+export function personNotice(lease: Lease): string | null {
+  return lease.state === 'failed' &&
+    lease.podId === null &&
+    (lease.directions ?? []).length > 0
+    ? null
+    : lease.notice;
+}
+
 export function isRunning(lease: Lease): boolean {
   return lease.state === 'starting' || lease.state === 'ready';
 }

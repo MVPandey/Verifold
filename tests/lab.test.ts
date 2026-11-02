@@ -7996,7 +7996,7 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   const results = await claudeResults(lab, 'd-1-alpha');
   assert.equal(
     results[0],
-    "The lab's first GPU pod waits for the person: Verifold asked them in c-1, with the most that it can cost, $3.20. Nothing is billed before they answer. Verifold wakes you with the answer.",
+    'Verifold asked the person in c-1 to allow GPU pods in this lab, starting with yours, at most $3.20. Nothing is billed before they answer. Verifold wakes you with the answer.',
   );
   assert.equal(
     results[1],
@@ -8007,7 +8007,7 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
   assert.equal(call?.kind, 'cost');
   assert.equal(
     call?.question,
-    "The lab's first GPU pod: NVIDIA A40 for 2 hours?",
+    'Allow GPU pods in this lab? After this, agents pick GPUs inside your limits.',
   );
   assert.equal(call?.options[0]?.usd, 3.2);
   assert.match(
@@ -8051,41 +8051,27 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
     'Your call c-1 waits for the person already. Verifold wakes you with the answer.',
   );
   assert.deepEqual(asked, []);
-  await lab.lab.answerCall('c-1', 0);
-  assert.equal(started.length, 2);
-  // After an approved pod, a request follows the Compute limits.
-  assert.equal(
-    (
-      await agentCall(lab.lab, 'a-1', 'verifold_request_pod', {
-        gpuType: 'NVIDIA A40',
-        hours: 2,
-        why: 'Train 3 seeds.',
-      })
-    ).text,
-    'Started lease-2.',
-  );
-  // A pod that got dearer than the call showed does not start: the call is withdrawn.
+  // While pods wait for the person, a call for another pod says which secret
+  // it needs, and one that got dearer than it showed is withdrawn.
+  const second = {
+    kind: 'cost',
+    question: 'A second pod?',
+    options: [
+      {
+        label: 'Rent it',
+        effect: {
+          pod: { gpuType: 'NVIDIA A40', hours: 2, secrets: ['HF_TOKEN'] },
+        },
+      },
+      { label: 'No' },
+    ],
+    pick: 0,
+    why: 'Seed 3.',
+  };
   assert.match(
-    (
-      await agentCall(lab.lab, 'a-1', 'verifold_ask_person', {
-        kind: 'cost',
-        question: 'A second pod?',
-        options: [
-          {
-            label: 'Rent it',
-            effect: {
-              pod: { gpuType: 'NVIDIA A40', hours: 2, secrets: ['HF_TOKEN'] },
-            },
-          },
-          { label: 'No' },
-        ],
-        pick: 0,
-        why: 'Seed 3.',
-      })
-    ).text,
+    (await agentCall(lab.lab, 'a-1', 'verifold_ask_person', second)).text,
     /^Asked the person in c-2\./,
   );
-  // The call says which secret the pod needs before the person answers.
   const needs = (stored: string[]): string =>
     labCallNeeds(lab.lab.view()!, stored)
       .map((need) => need.body)
@@ -8098,6 +8084,24 @@ await test("the lab's first GPU pod asks the person: the answer starts the lease
     /Verifold withdrew c-2: The pod can now cost up to \$5\.70, more than the \$3\.20 in the call\. Ask again\./,
   );
   assert.equal(lab.lab.view()?.state.calls[1]?.state, 'withdrawn');
+  quote = 3.2;
+  await lab.lab.answerCall('c-1', 0);
+  assert.equal(started.length, 2);
+  // After the person allows pods, a request follows the Compute limits, and a call for a pod is refused.
+  assert.equal(
+    (
+      await agentCall(lab.lab, 'a-1', 'verifold_request_pod', {
+        gpuType: 'NVIDIA A40',
+        hours: 2,
+        why: 'Train 3 seeds.',
+      })
+    ).text,
+    'Started lease-2.',
+  );
+  assert.match(
+    (await agentCall(lab.lab, 'a-1', 'verifold_ask_person', second)).text,
+    /^GPU pods are allowed in this lab\. Ask for the pod with verifold_request_pod/,
+  );
   assert.equal(started.length, 2);
   assert.deepEqual(asked, [
     {
@@ -8175,9 +8179,11 @@ await test('an agent that started with pods off gets the pod tools once pods are
   on = true;
   const calls = lab.lab.view()?.state.calls ?? [];
   for (const call of calls) await lab.lab.answerCall(call.id, 0);
-  // Each agent's next pod request reaches Verifold: the lab's first pod is a call.
+  // Each agent's next pod request reaches Verifold: the first asks the person to allow pods, and the second joins it.
   const first = (text: string): boolean =>
-    text.startsWith("The lab's first GPU pod waits for the person");
+    /^Verifold asked the person in c-\d+ to allow GPU pods|asked the person already in c-\d+ to allow GPU pods/.test(
+      text,
+    );
   await until(async () => (await claudeResults(lab, 'd-1-alpha')).some(first));
   await until(async () => (await codex()).some(first));
   // Claude Code resumed its conversation with the new tools; Codex started a new thread for them.
@@ -8189,7 +8195,9 @@ await test('an agent that started with pods off gets the pod tools once pods are
   // An answer that changes no tool keeps the Codex thread.
   const pod = lab.lab
     .view()
-    ?.state.calls.find((call) => call.by === 'a-2' && call.kind === 'cost');
+    ?.state.calls.find(
+      (call) => call.kind === 'cost' && askers(call).includes('a-2'),
+    );
   await lab.lab.answerCall(pod?.id, 1);
   await delay(400);
   assert.deepEqual(await threads(), ['start', 'start']);

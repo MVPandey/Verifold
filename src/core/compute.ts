@@ -710,8 +710,10 @@ export class Compute {
 
   /**
    * The person picked a pod in a lab's call: the lease starts as one that the
-   * person approved, when it can cost at most `most`. A start that fails
-   * withdraws the request, so nothing waits, and the error says why.
+   * person approved, when it can cost at most `most`. A request that fails
+   * before RunPod is asked is withdrawn, so nothing waits, and the error says
+   * why. A pod that RunPod does not create, such as one that it has none of
+   * now, comes back as a failed lease: nothing was billed, and its end says why.
    */
   async startPod(input: LabPod): Promise<Lease> {
     const { most, ...pod } = input;
@@ -730,10 +732,6 @@ export class Compute {
         .catch(() => {});
       throw error;
     }
-    if (started.state === 'failed')
-      fail(
-        `RunPod did not create the pod of ${started.id}: ${started.end?.reason ?? 'no reason given'}.`,
-      );
     return started;
   }
 

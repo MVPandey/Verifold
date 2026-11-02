@@ -51,6 +51,7 @@ import {
   leaseLimits,
   maxCost,
   diskRate,
+  personNotice,
   spent,
   type Lease,
 } from '../core/leases.ts';
@@ -1459,8 +1460,9 @@ function podLease(
   now: number,
 ): PodLease {
   const secrets = lease.secrets ?? [];
+  const notice = personNotice(lease);
   // Records from before `noticeAt` give the time of their last change.
-  const noticeAt = lease.notice
+  const noticeAt = notice
     ? (lease.noticeAt ?? lease.history.at(-1)?.at ?? null)
     : null;
   return {
@@ -1482,7 +1484,7 @@ function podLease(
         ? Math.max(0, Math.floor((now - Date.parse(lease.activeAt)) / 60_000))
         : null,
     ended: lease.end ? { at: lease.end.at, reason: lease.end.reason } : null,
-    notice: lease.notice,
+    notice,
     noticeAt,
     secrets,
     missingSecrets: secrets.filter((name) => !stored.has(name)),
@@ -1547,7 +1549,7 @@ function shapeCompute(
   const current: Lease[] = [];
   const earlier: Lease[] = [];
   for (const lease of [...view.leases].reverse())
-    (isOpen(lease) || lease.state === 'requested' || lease.notice
+    (isOpen(lease) || lease.state === 'requested' || personNotice(lease)
       ? current
       : earlier
     ).push(lease);
