@@ -742,7 +742,7 @@ await test('the page says who works on long shots, and what draws do now', () =>
   ] as Direction[];
   assert.match(
     shareLine({ directions, share: 'far' }),
-    /^1 of 2 agents work on long shots.*You chose Far when you asked\.$/,
+    /^Of the 2 agents with open work, 1 works on long shots\. This count leaves out 1 agent whose work ended\. Agents on long shots choose.*You chose Far when you asked\.$/,
   );
   assert.match(shareLine({ directions, share: null }), /no share/);
   assert.equal(
@@ -755,7 +755,7 @@ await test('the page says who works on long shots, and what draws do now', () =>
   );
   assert.match(
     drawState({ stopped: false, drawing: 'waiting', judge: null }) ?? '',
-    /may never run/,
+    /waits for the Coordinator to finish/,
   );
   assert.match(
     drawState({ stopped: true, drawing: null, judge: null }) ?? '',

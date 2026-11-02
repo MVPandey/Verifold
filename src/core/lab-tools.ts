@@ -151,7 +151,7 @@ export const longShotLimits = {
   batch: 6,
   /** The best candidates that go on the board. */
   top: 3,
-  /** Draws in one hour of the lab's clock. */
+  /** Draws in one hour of the lab's clock, each one session in the reserved place. */
   perHour: 3,
   /** Draws that a lab keeps on record. */
   draws: 40,
@@ -176,7 +176,9 @@ export const longShotLimits = {
 export const briefLimits = {
   /**
    * Sessions in one hour of the lab's clock: at most 20, with the questions.
-   * Stories have their own budget, so they never use an update of the brief.
+   * Long-shot sessions share the place, with `longShotLimits.perHour` more, so
+   * the place holds at most 23 sessions in an hour. Stories have their own
+   * budget, so they never use an update of the brief.
    */
   updatesPerHour: 4,
   checksPerHour: 6,
@@ -193,7 +195,13 @@ export const briefLimits = {
   /** Newest posts in a session's first prompt, and characters of each. */
   promptPosts: 120,
   promptPost: 1000,
-  /** Lines of one brief or story, and posts that one line cites. */
+  /** Newest ideas with no tried mark in an update's first prompt. */
+  promptIdeas: 100,
+  /** Lines of record facts in a line check's prompt. */
+  recordFacts: 80,
+  /** Lines of one brief. A person reads this on one screen. */
+  briefLines: 5,
+  /** Lines of one story or line check, and posts that one line cites. */
   lines: 12,
   linePosts: 6,
   /** Stories that a lab keeps, threads that one session tells, and posts of each that its prompt holds. */
@@ -957,10 +965,10 @@ const citedPosts = {
 
 /**
  * The tools of the Coordinator: it reads the board, keeps the threads, writes
- * the brief, tells agents about overlap and missing answers, and answers the
- * person. No tool of it opens or stops a direction, starts a run, asks the
- * person, changes a plan, or settles a dispute. Its session is always new, so
- * these need no version.
+ * the brief, tells agents about overlap and missing answers, answers the
+ * person, and marks the ideas that the lab tried. No tool of it opens or stops
+ * a direction, starts a run, asks the person, changes a plan, or settles a
+ * dispute. Its session is always new, so these need no version.
  */
 export const labCoordinatorToolSpecs: readonly AgentTool[] = [
   {
@@ -1018,14 +1026,14 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
   },
   {
     name: 'verifold_brief',
-    description: `Give the brief for the person, in up to ${briefLimits.lines} plain lines. Each line cites the posts that it rests on. Verifold quotes those posts, writes the evidence label, and has a second session check each line. A new call replaces your last one.`,
+    description: `Give the brief for the person, in at most ${briefLimits.briefLines} plain lines, the most important first. It replaces the last brief, so give the whole state of the lab. Each line cites the posts that it rests on. Verifold quotes those posts, writes the evidence label, and has a second session check each line. held: a result. Verifold shows "Held up" only when the record shows a rerun that held. A new call replaces your last one.`,
     inputSchema: {
       type: 'object',
       properties: {
         lines: {
           type: 'array',
           minItems: 1,
-          maxItems: briefLimits.lines,
+          maxItems: briefLimits.briefLines,
           items: {
             type: 'object',
             properties: {
@@ -1107,6 +1115,20 @@ export const labCoordinatorToolSpecs: readonly AgentTool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'verifold_tried',
+    description:
+      'Mark an idea of the idea map as tried, and cite the result, check, rerun, or ruled-out post that tried it. The draw of long shots reads this mark. It holds no plain words, so no line check follows, and it changes nothing else.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        idea: { type: 'string', pattern: '^i-[1-9][0-9]{0,5}$' },
+        post: postId,
+      },
+      required: ['idea', 'post'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /** The one tool of a line check. Its session is always new, so it needs no version. */
@@ -1114,7 +1136,7 @@ export const lineCheckToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_line_check',
     description:
-      'Give your check of each line, once. Split each line into its claims, and judge each claim against the cited posts. supported: the posts say it. added-fact: the posts do not say it. raised-certainty: the line is more certain than the posts. number-out-of-scope: the number is in the posts, but it describes something else. In dropped, list each caveat of the posts that the line leaves out and that changes its meaning.',
+      'Give your check of each line, once. Split each line into its claims, and judge each claim against the cited posts and the record facts. supported: the posts say it, the record facts show it, or it is a plain definition of a term. added-fact: neither says it. raised-certainty: the line is more certain than the posts. number-out-of-scope: the number is in the posts, but it describes something else. In dropped, list each caveat of the posts that the line leaves out and that would change what a reader concludes. Leave out detail.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -150,6 +150,7 @@ export async function planned(
   let seed = 0;
   const lab = new Lab(root, {
     sessions: fake.sessions,
+    reserved: fake.sessions,
     sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
     harnesses: () => Promise.resolve(['claude', 'codex']),
     random: () => {

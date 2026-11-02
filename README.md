@@ -57,7 +57,7 @@ You can close the terminal. While it is open, it shows the lab in a few lines. R
 
 Verifold is in early development. The [guide](docs/guide.md) describes everything that works in this checkout. Limits to know first:
 
-- Three agents work at the same time unless you change "Agents at once" in the project's Settings (1 to 20).
+- Four agents work at the same time unless you change "Agents at once" in the project's Settings (1 to 20).
 - Verifold needs a terminal and Node. There is no desktop app yet.
 - Verifold's page is a local web page on this computer. Other devices cannot open it.
 - Your harness sends what it reads to its model provider. Verifold keeps its records in your project folder and publishes nothing.

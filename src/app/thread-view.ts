@@ -7,7 +7,6 @@ import type {
   ThreadPage,
 } from '../protocol/api.ts';
 import { agentsWord, type Chip } from './agent-rows.ts';
-import { lineText } from './brief-view.ts';
 import { roleName, shortTime } from './format.ts';
 import type { ViewMode } from './view-mode.ts';
 
@@ -177,7 +176,7 @@ function laterItems(
               key: `line-${index}`,
               line,
               who: null,
-              text: lineText(line, mode, false),
+              text: line.plain ?? '',
               post: null,
             },
           ]

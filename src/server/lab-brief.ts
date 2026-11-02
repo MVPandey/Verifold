@@ -1,17 +1,22 @@
 /**
  * The brief, the notices, and the questions on the wire. Verifold builds the
- * quote, the evidence label, and the top line here from the records as they
- * are now, so a label follows a later check. Plain words go out only once they
- * passed their check: a line that failed, or that waits, carries its quote.
+ * quote, the evidence label, the tag of a line, and the top line here from the
+ * records as they are now, so they follow a later check. Plain words go out
+ * only once they passed their check: a line that failed, or that waits, carries
+ * its quote. An answer goes to the person who asked as written, with how its
+ * check went.
  */
 import type { Post as BoardPost } from '../core/board.ts';
 import {
   briefTop,
   briefTopIds,
+  checkReason,
   evidenceLabel,
   evidencePosts,
   plainNumbersMatch,
   quotesOf,
+  shownKind,
+  wholePost,
 } from '../core/lab/brief.ts';
 import { noticeStands } from '../core/lab/coordinator-rules.ts';
 import { endedWhy } from '../core/lab/reach.ts';
@@ -45,7 +50,11 @@ function concernsPerson(
 /** Which notices the records still hold. It reads the records only when a lab has notices. */
 function standingNotices(view: LabView): (notice: StoredNotice) => boolean {
   if (!view.brief?.notices.length) return () => false;
-  const waits = openWaits(view.posts, view.threads ?? []);
+  const waits = openWaits(
+    view.posts,
+    view.threads ?? [],
+    view.state.directions,
+  );
   const working = new Set(
     view.directions
       .filter(({ status }) => !endedWhy(status))
@@ -60,22 +69,35 @@ function lineItem(
   view: LabView,
   posts: ReadonlyMap<string, BoardPost>,
 ): BriefLine {
-  const cited = line.posts.flatMap((id) => posts.get(id) ?? []);
+  const cited = line.posts.flatMap((id) => {
+    const post = posts.get(id);
+    return post ? wholePost(post, view.state.plan) : [];
+  });
   const { by, sameHarness } = line.check;
   // The file can change after a check, so the numbers are tested again on the way out.
   const state =
     line.check.state === 'passed' && !plainNumbersMatch(line.plain, cited)
       ? 'numbers'
       : line.check.state;
+  const answer = line.kind === 'answer';
+  const record = evidencePosts(cited, view.posts);
   return {
-    kind: line.kind,
+    kind: shownKind(line.kind, record, view.checks),
     at: line.at,
-    plain: state === 'passed' ? line.plain : null,
+    plain:
+      state === 'passed' || (answer && state !== 'withheld')
+        ? line.plain
+        : null,
     quotes: quotesOf(cited),
     posts: [...line.posts],
     thread: cited.find((post) => post.thread)?.thread ?? null,
-    evidence: evidenceLabel(evidencePosts(cited, view.posts), view.checks),
-    check: { state, by, sameHarness },
+    evidence: evidenceLabel(record, view.checks),
+    check: {
+      state,
+      by,
+      sameHarness,
+      ...(answer ? { reason: checkReason(state, line.check.problems) } : {}),
+    },
   };
 }
 

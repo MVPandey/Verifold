@@ -206,20 +206,25 @@ await test('plain lines refuse internal IDs, and each list keeps its kinds', () 
     'It ran on lease-4.',
   ])
     assert.throws(
-      () => parseLines(lines(plain), post, true, storyKinds),
+      () => parseLines(lines(plain), post, true, storyKinds, 12),
       /Leave out IDs such as p-12 or d-3/,
     );
   assert.equal(
-    parseLines(lines('Agent 3 kept the top-5 set.'), post, true, storyKinds)[0]
-      ?.kind,
+    parseLines(
+      lines('Agent 3 kept the top-5 set.'),
+      post,
+      true,
+      storyKinds,
+      12,
+    )[0]?.kind,
     'step',
   );
   assert.throws(
-    () => parseLines(lines('It ran.', 'step'), post, true, briefKinds),
+    () => parseLines(lines('It ran.', 'step'), post, true, briefKinds, 5),
     /A line's kind is one of: decided, failed, held, open, new/,
   );
   assert.equal(
-    parseLines(lines('', 'later'), post, false, storyKinds)[0]?.plain,
+    parseLines(lines('', 'later'), post, false, storyKinds, 12)[0]?.plain,
     '',
   );
 });
@@ -444,6 +449,9 @@ async function rig(
     summary: () => '- d-1 "A line of work": open.',
     board,
     checks: () => [],
+    plan: () => null,
+    ideas: () => [],
+    markTried: () => Promise.resolve(''),
     name: (author) => author,
     team: () => Promise.resolve(['claude', 'codex']),
     usedUp: () => false,

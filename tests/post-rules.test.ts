@@ -551,10 +551,10 @@ await test('waits come from the record: who waits on whom, for what, since when'
   });
   const posts = [post('p-1'), ask, toPerson, doubt];
   const waits = (...more: readonly Post[]): readonly string[] =>
-    openWaits([...posts, ...more], [thread('t-2')]).map(
+    openWaits([...posts, ...more], [thread('t-2')], []).map(
       (wait) => `${wait.waiter} on ${wait.on}: ${wait.post} ${wait.reason}`,
     );
-  assert.deepEqual(openWaits(posts, [])[0], {
+  assert.deepEqual(openWaits(posts, [], [])[0], {
     waiter: 'a-2',
     on: 'a-1',
     post: 'p-2',
@@ -596,7 +596,7 @@ await test('waits come from the record: who waits on whom, for what, since when'
   );
   // A closed thread ends its waits.
   assert.deepEqual(
-    openWaits(posts, [thread('t-3', { state: 'closed' })]).map(
+    openWaits(posts, [thread('t-3', { state: 'closed' })], []).map(
       (wait) => wait.post,
     ),
     ['p-2', 'p-4'],
@@ -610,6 +610,7 @@ await test('waits come from the record: who waits on whom, for what, since when'
         post('p-3', { author: 'a-2' }),
         post('p-4', { kind: 'objection', author: 'a-2', replyTo: 'p-3' }),
       ],
+      [],
       [],
     ),
     [],

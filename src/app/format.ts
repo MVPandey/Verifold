@@ -72,12 +72,14 @@ export function harnessLabel(harness: Harness): string {
   return harness === 'claude' ? 'Claude Code' : 'Codex';
 }
 
-/** The mark in an agent's avatar: its number, or "Cl" or "Cx" for a handle from an older lab. */
+/** The mark in an agent's avatar: its number, "C1" for a checker, or "Cl" or "Cx" for a handle from an older lab. */
 export function avatarText(who: {
   readonly harness: Harness;
   readonly handle: string;
 }): string {
-  return roleOf(who.handle)?.number ?? (who.harness === 'claude' ? 'Cl' : 'Cx');
+  const role = roleOf(who.handle);
+  if (!role?.number) return who.harness === 'claude' ? 'Cl' : 'Cx';
+  return role.word === 'Checker' ? `C${role.number}` : role.number;
 }
 
 /**
