@@ -22,6 +22,7 @@ import {
 import { usd } from '../core/leases.ts';
 import {
   askers,
+  asksForPod,
   authorName,
   barSummary,
   bringGroups,
@@ -70,9 +71,11 @@ import {
   andList,
   costWords,
   effectWords,
+  heldWordsText,
   minutesText,
   noSettingWords,
   undoWords,
+  wordsBoxLabel,
   type EffectWords,
 } from '../ui/call-words.ts';
 
@@ -905,6 +908,13 @@ export function labCallNeeds(
         (asker) => view.handles[asker.agent] ?? asker.agent,
       );
       const words = `lab-call-words-${call.id}`;
+      const held = call.words
+        ? heldWordsText(
+            call.by === 'verifold',
+            asksForPod(call),
+            askers(call).map((id) => view.handles[id] ?? id),
+          )
+        : null;
       return {
         key: `lab-call:${call.id}`,
         kind: callWords[call.kind],
@@ -914,7 +924,7 @@ export function labCallNeeds(
         body: `<p class="call-why">${call.pick === null ? `${e(asker)} says: ` : `Why ${e(asker)} picks it: `}${e(call.why)}</p>
   <ul class="call-options">${call.options.map((option, index) => optionHtml(call, option, index, view, stored)).join('')}</ul>
   <p class="fine">${e(undoWords(call.undoMinutes, pickEffect(call)))}</p>
-  ${call.by === 'verifold' && call.words ? '<p class="fine" role="status">Your words went to the lab. Pick an option to give it more time or end it.</p>' : ''}<div class="call-words"><label class="field" for="${e(words)}">Or tell them what to do instead</label><textarea id="${e(words)}" rows="2" maxlength="${callLimits.words}"></textarea><div class="actions"><button type="button" data-action="lab-call-words" data-call="${e(call.id)}">Send answer</button></div></div>`,
+  ${held ? `<p class="fine" role="status">${e(held)}</p>` : ''}<div class="call-words"><label class="field" for="${e(words)}">${e(wordsBoxLabel(asksForPod(call)))}</label><textarea id="${e(words)}" rows="2" maxlength="${callLimits.words}"></textarea><div class="actions"><button type="button" data-action="lab-call-words" data-call="${e(call.id)}">Send answer</button></div></div>`,
       };
     });
 }

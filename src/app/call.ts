@@ -1,9 +1,10 @@
 import type { Call, CallOption, Effect, Lab } from '../protocol/api.ts';
 import {
-  andList,
   costWords,
   effectWords,
+  heldWordsText,
   undoWords,
+  wordsBoxLabel,
   type EffectWords,
 } from '../ui/call-words.ts';
 import { roleName } from './format.ts';
@@ -110,28 +111,25 @@ export function footLine(call: Call, lab: Lab): string {
   return undoWords(call.undoMinutes, effect ? wordsOf(effect, lab) : null);
 }
 
-/**
- * The box under the options. Words start no pod, so on a call with a pod
- * option they reach the agents and the call stays open.
- */
-export function wordsLabel(call: Call): string {
-  return call.options.some((option) => option.effect?.type === 'pod')
-    ? 'Or write to them. Only an option starts a pod.'
-    : 'Or tell them what to do instead';
+/** A call with a pod option: words on it start no pod, and it stays open. */
+function asksForPod(call: Call): boolean {
+  return call.options.some((option) => option.effect?.type === 'pod');
 }
 
-/**
- * The line after the person's words on a call that still waits for an
- * option: Verifold's own call, or one with a pod option. Null for any other.
- */
+/** The label of the box under the options. */
+export function wordsLabel(call: Call): string {
+  return wordsBoxLabel(asksForPod(call));
+}
+
+/** The line after the person's words on a call that still waits for an option, or null. */
 export function heldWordsLine(call: Call): string | null {
-  if (!call.words) return null;
-  if (call.byVerifold)
-    return 'Your words went to the lab. Pick an option to give it more time or end it.';
-  if (!call.options.some((option) => option.effect?.type === 'pod'))
-    return null;
-  const names = call.askers.map((asker) => roleName(asker.handle));
-  return `Your words went to ${andList(names)}. Words start no pod, so pick an option above to answer.`;
+  return call.words
+    ? heldWordsText(
+        call.byVerifold,
+        asksForPod(call),
+        call.askers.map((asker) => roleName(asker.handle)),
+      )
+    : null;
 }
 
 /**

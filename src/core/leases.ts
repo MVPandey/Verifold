@@ -10,7 +10,13 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ComputeSettings } from './compute.ts';
-import { RunPodError, type GpuOffer, type Pod, type RunPod } from './runpod.ts';
+import {
+  noCapacity,
+  RunPodError,
+  type GpuOffer,
+  type Pod,
+  type RunPod,
+} from './runpod.ts';
 import { SessionActionError } from './session.ts';
 import { validSecretName } from './credentials.ts';
 
@@ -159,14 +165,17 @@ export function isOpen(lease: Lease): boolean {
 }
 
 /**
- * The lease's notice for the person. A lab lease whose pod RunPod never
- * created has none: the agent of its direction hears of it, and so does the
- * call that asked for it, so the person has nothing to act on.
+ * The lease's notice for the person. A lab lease that RunPod did not create
+ * because it had no such GPU free has none: the agent of its direction hears
+ * of it and picks another GPU, so the person has nothing to act on. The
+ * record keeps the notice. Any other failure, such as a key that RunPod
+ * refuses, still reaches the person.
  */
 export function personNotice(lease: Lease): string | null {
   return lease.state === 'failed' &&
     lease.podId === null &&
-    (lease.directions ?? []).length > 0
+    (lease.directions ?? []).length > 0 &&
+    noCapacity(lease.end?.reason ?? '')
     ? null
     : lease.notice;
 }

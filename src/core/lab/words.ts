@@ -211,6 +211,20 @@ export function asksForPod(call: Pick<Call, 'options'>): boolean {
   return call.options.some((option) => option.effect?.type === 'pod');
 }
 
+/** A call whose only effects are pods. Once the person allows pods, the agents start them, so it has nothing left for the person. */
+export function onlyPods(call: Pick<Call, 'options'>): boolean {
+  return (
+    asksForPod(call) &&
+    call.options.every(
+      (option) => option.effect === null || option.effect.type === 'pod',
+    )
+  );
+}
+
+/** The question of the call that allows GPU pods in a lab. A pod request joins an open call that asks it. */
+export const allowPodsQuestion =
+  'Allow GPU pods in this lab? After this, agents pick GPUs inside your limits.';
+
 /** The person approved a GPU pod in an answer that stands. Until then, each pod request of an agent is a call. */
 export function gpuApproved(state: LabState): boolean {
   return state.calls.some(

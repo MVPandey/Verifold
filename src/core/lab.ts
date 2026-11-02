@@ -64,6 +64,7 @@ import {
   type Lease,
 } from './leases.ts';
 import { loadPrompt } from './prompts.ts';
+import { noCapacity } from './runpod.ts';
 import type { LimitSignal } from './quota.ts';
 import {
   localSandbox,
@@ -159,6 +160,7 @@ import {
 } from './lab/schema.ts';
 import {
   addSpend,
+  allowPodsQuestion,
   askerDirections,
   askers,
   asksForPod,
@@ -180,6 +182,7 @@ import {
   movingText,
   nameList,
   networkOf,
+  onlyPods,
   personal,
   podWordsLine,
   type PodsState,
@@ -3297,14 +3300,6 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         'Settle this on the board: post an objection, and a check breaks the tie.',
       );
     const options = callOptions(args.options, kind);
-    // Once the person allows pods, the agent picks its pod: a call would only wait for them.
-    if (
-      asksForPod({ options }) &&
-      (await this.serial(() => gpuApproved(this.current())))
-    )
-      fail(
-        'GPU pods are allowed in this lab. Ask for the pod with verifold_request_pod: a pod inside the limits starts with no call.',
-      );
     const need =
       args.need === undefined || args.need === null
         ? null
@@ -3357,6 +3352,11 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     const { call, joined } = await this.serial(async () => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
       const state = this.current();
+      // Once the person allows pods, the agent picks its pod: a call would only wait for them.
+      if (asksForPod({ options: priced }) && gpuApproved(state))
+        fail(
+          'GPU pods are allowed in this lab. Ask for the pod with verifold_request_pod: a pod inside the limits starts with no call.',
+        );
       for (const { effect } of priced) {
         if (effect?.type === 'open' && !team.includes(effect.harness))
           fail(
@@ -3511,8 +3511,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         : {
             kind: 'cost',
             need: null,
-            question:
-              'Allow GPU pods in this lab? After this, agents pick GPUs inside your limits.',
+            question: allowPodsQuestion,
             options: [
               {
                 label: 'Allow GPU pods',
@@ -3526,6 +3525,11 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
     ) satisfies Pick<Call, 'kind' | 'need' | 'question' | 'options'>;
     const { call, joined } = await this.serial(async () => {
       const agent = this.usable(id, generation) ?? fail(stoppedText);
+      // The person can allow pods while Verifold quotes this one.
+      if (!off && gpuApproved(this.current()))
+        fail(
+          'The person allowed GPU pods just now. Ask again: a request inside the limits starts with no call.',
+        );
       const waiting = this.current().calls.find(
         (entry) =>
           entry.state === 'open' &&
@@ -3538,14 +3542,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         fail(
           `Your call ${waiting.id} waits for the person already. Verifold wakes you with the answer.`,
         );
-      // The person allows pods once for the lab, so a pod request joins any open pod call.
+      // The person allows pods once for the lab, so a pod request joins the open call that asks it.
       const same = off
         ? this.sameOpenCall(ask)
         : this.current().calls.find(
             (entry) =>
               entry.state === 'open' &&
               entry.by !== 'verifold' &&
-              asksForPod(entry),
+              entry.question === allowPodsQuestion,
           );
       if (same) {
         await this.joinCall(same, agent, clip(why, callLimits.why));
@@ -3855,7 +3859,14 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       }
       if (asksForPod(call)) {
         await this.changeCall(call.id, (entry) => ({ ...entry, words: body }));
-        await this.add(wordsPost(call, body)).catch(() => null);
+        await this.add(
+          call.post
+            ? wordsPost(call, body)
+            : callStatus(
+                call,
+                `The person wrote on ${call.id}: ${JSON.stringify(body)}. It still waits for an option.`,
+              ),
+        ).catch(() => null);
         this.wakeAskers(call, podWordsLine(call, body), true);
         return;
       }
@@ -4074,7 +4085,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
       // Pods are allowed now, so the agents start the pods of the other calls themselves.
       if (applied?.type === 'pod')
         for (const other of this.current().calls)
-          if (other.state === 'open' && asksForPod(other))
+          if (other.state === 'open' && onlyPods(other))
             await this.withdraw(
               other,
               `The person allowed GPU pods in ${call.id}. Ask for this pod with verifold_request_pod: it starts inside the limits.`,
@@ -4264,10 +4275,13 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         const lease = this.options.compute?.leases
           .list()
           .find((entry) => entry.id === applied.lease);
-        // The agent hears RunPod's reason with the lease's change.
-        return lease?.state === 'failed'
-          ? `RunPod did not create the pod of ${lease.id}, so nothing was billed. ${allowed}`
-          : `Verifold started ${applied.lease}. ${allowed}`;
+        if (lease?.state !== 'failed')
+          return `Verifold started ${applied.lease}. ${allowed}`;
+        const reason = lease.end?.reason ?? '';
+        // RunPod's own "refresh and try again" would invite a click that cannot help.
+        return noCapacity(reason)
+          ? `RunPod had no ${lease.gpu} free, so no pod started and nothing was billed. ${allowed}`
+          : `RunPod did not create the pod of ${lease.id}, so nothing was billed: ${reason} ${allowed}`;
       }
       case 'hours':
         return `The lab has ${applied.hours} more ${applied.hours === 1 ? 'hour' : 'hours'}, until ${applied.deadline ?? 'its new deadline'}.`;

@@ -160,3 +160,27 @@ export function undoWords(
     ? `Undo within ${plural(undoMinutes, 'minute')} stops the GPU, and you pay only the minutes used. If you don't answer, nothing is bought.`
     : `Your answer applies at once. You can undo it for ${plural(undoMinutes, 'minute')}. If you don't answer, nothing happens.`;
 }
+
+/** The label of the box for the person's words. Words start no pod, so on a call with a pod option the label says so. */
+export function wordsBoxLabel(pod: boolean): string {
+  return pod
+    ? 'Or write to them. Only an option starts a pod.'
+    : 'Or tell them what to do instead';
+}
+
+/**
+ * The line after the person's words on a call that still waits for an
+ * option: Verifold's own call, or one with a pod option. `names`: the agents
+ * that asked. Null for any other call: words answer it.
+ */
+export function heldWordsText(
+  byVerifold: boolean,
+  pod: boolean,
+  names: readonly string[],
+): string | null {
+  if (byVerifold)
+    return 'Your words went to the lab. Pick an option to give it more time or end it.';
+  return pod
+    ? `Your words went to ${andList(names)}. Words start no pod, so pick an option above to answer.`
+    : null;
+}
