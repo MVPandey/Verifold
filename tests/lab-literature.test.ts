@@ -4,22 +4,22 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Post } from '../src/core/board.ts';
-import { longShotLimits, readingLimits } from '../src/core/lab-tools.ts';
+import { readingLimits } from '../src/core/lab-tools.ts';
 import {
+  afterRead,
   isPaperLookup,
   labLookups,
-  lookupOf,
   noLookups,
   noSearchYet,
   parseLookups,
   parseSource,
-  withLookup,
   type LookupRecord,
 } from '../src/core/lab/literature.ts';
 import { LiteratureStore } from '../src/core/lab/literature-store.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
+  webRead,
   type TranscriptUpdate,
 } from '../src/core/transcript.ts';
 import { until } from './wait.ts';
@@ -39,12 +39,33 @@ function folded(
   launch = 'run-1',
 ): LookupRecord {
   return updates.reduce((record, update) => {
-    const lookup = lookupOf(update);
-    return lookup
-      ? withLookup(record, `${launch}:${lookup.id}`, lookup.title, at)
-      : record;
+    const read = webRead(update);
+    return read ? afterRead(record, `${launch}:${read.id}`, read, at) : record;
   }, noLookups);
 }
+
+/** One successful read, by its key. */
+const counted = (
+  record: LookupRecord,
+  key: string,
+  title: string,
+  when = at,
+): LookupRecord =>
+  afterRead(record, key, { id: key, title, status: 'done', named: true }, when);
+
+const claudeResult = (id: string, failed = false): unknown => ({
+  type: 'user',
+  message: {
+    content: [
+      {
+        type: 'tool_result',
+        tool_use_id: id,
+        content: 'text',
+        is_error: failed,
+      },
+    ],
+  },
+});
 
 const claudeTool = (
   name: string,
@@ -70,6 +91,10 @@ await test('a paper lookup is a paper site or a search for papers, and nothing e
     'recent papers on sparse coding',
     '2603.01092',
     'arxiv.org',
+    'openreview.net',
+    'dl.acm.org',
+    'www.nature.com',
+    'arxiv.org/abs/2603.01092',
   ])
     assert.equal(isPaperLookup(paper), true, paper);
   for (const other of [
@@ -79,6 +104,9 @@ await test('a paper lookup is a paper site or a search for papers, and nothing e
     'https://raw.githubusercontent.com/acme/tool/main/x.py',
     'site.pypi.org/project/accelerate/ accelerate October 2026',
     'GPU prices today',
+    'pypi.org',
+    'not-openreview.net',
+    'Cyber',
     'https://not-arxiv.org/abs/1',
     'http://',
     '',
@@ -99,12 +127,15 @@ await test('lookups come from harness tool events, and text that an agent writes
     ...claudeUpdates(
       claudeTool('Bash', { command: 'curl https://arxiv.org/abs/1' }),
     ),
+    ...claudeUpdates(claudeResult('id-Bash')),
     ...claudeUpdates(
       claudeTool('WebSearch', { query: 'sparse coding papers' }),
     ),
+    ...claudeUpdates(claudeResult('id-WebSearch')),
     ...claudeUpdates(
       claudeTool('WebFetch', { url: 'https://arxiv.org/abs/2603.01092' }),
     ),
+    ...claudeUpdates(claudeResult('id-WebFetch')),
   ];
   const record = folded(updates);
   assert.equal(record.count, 2);
@@ -112,17 +143,26 @@ await test('lookups come from harness tool events, and text that an agent writes
   assert.equal(record.last?.title, 'https://arxiv.org/abs/2603.01092');
 });
 
-await test('a result without a name, a tool result, is no second lookup', () => {
+await test('a lookup counts when its result succeeds, not when the call is reported', () => {
   const call = claudeUpdates(claudeTool('WebFetch', { url: 'https://a.io' }));
-  const result = claudeUpdates({
-    type: 'user',
-    message: {
-      content: [
-        { type: 'tool_result', tool_use_id: 'id-WebFetch', content: 'page' },
-      ],
-    },
-  });
-  assert.equal(folded([...call, ...result]).count, 1);
+  const waiting = folded(call);
+  assert.equal(waiting.count, 0);
+  assert.equal(waiting.pending.length, 1);
+  const done = folded([...call, ...claudeUpdates(claudeResult('id-WebFetch'))]);
+  assert.equal(done.count, 1);
+  assert.deepEqual(done.pending, []);
+  assert.equal(done.last?.title, 'https://a.io');
+});
+
+await test('a denied or failed call read nothing, and its result of another tool changes nothing', () => {
+  const failed = folded([
+    ...claudeUpdates(claudeTool('WebFetch', { url: 'https://a.io' })),
+    ...claudeUpdates(claudeResult('id-WebFetch', true)),
+  ]);
+  assert.equal(failed.count, 0);
+  assert.deepEqual(failed.pending, []);
+  // A tool result names no tool. Without a waiting call, it is about something else.
+  assert.equal(folded(claudeUpdates(claudeResult('id-Read'))), noLookups);
 });
 
 await test('Codex logs one search twice under one ID, and it counts once', () => {
@@ -141,8 +181,27 @@ await test('Codex logs one search twice under one ID, and it counts once', () =>
   assert.equal(record.count, 1);
   assert.equal(record.papers, 1);
   assert.equal(record.last?.title, 'sparse coding papers');
-  // A start that reports its query logs the same call again at its end.
-  assert.equal(folded([...completed, ...completed]).count, 1);
+  assert.equal(folded([...started, ...completed, ...completed]).count, 1);
+});
+
+await test('a Codex item that failed read nothing', () => {
+  const failed = codexAppUpdates(
+    'item/completed',
+    { type: 'webSearch', id: 'exec-1', query: 'q', status: 'failed' },
+    null,
+  );
+  assert.equal(failed[0]?.status, 'failed');
+  assert.equal(
+    folded([
+      ...codexAppUpdates(
+        'item/started',
+        { type: 'webSearch', id: 'exec-1', query: '' },
+        null,
+      ),
+      ...failed,
+    ]).count,
+    0,
+  );
 });
 
 await test('a Codex read with no query counts, with the site of its result', () => {
@@ -157,38 +216,44 @@ await test('a Codex read with no query counts, with the site of its result', () 
     null,
   );
   assert.ok(update);
-  assert.deepEqual(lookupOf(update), { id: 'exec-2', title: 'arxiv.org' });
+  assert.equal(webRead(update)?.title, 'arxiv.org');
   assert.equal(folded([update]).papers, 1);
 });
 
 await test('a harness can use an ID again in a new process, and that is a new lookup', () => {
-  const call = claudeUpdates(claudeTool('WebSearch', { query: 'q' }));
-  const first = folded(call, 'run-1');
-  const lookup = lookupOf(call[0] ?? {});
-  assert.ok(lookup);
-  assert.equal(
-    withLookup(first, `run-2:${lookup.id}`, lookup.title, at).count,
-    2,
-  );
+  const first = counted(noLookups, 'run-1:x', 'q');
+  assert.equal(counted(first, 'run-2:x', 'q').count, 2);
+  assert.equal(counted(first, 'run-1:x', 'q'), first);
 });
 
-await test('a record keeps a bounded list of calls, and a lookup keeps a bounded query', () => {
+await test('a record keeps bounded lists of calls, and a lookup keeps a bounded query', () => {
   const many = Array.from(
     { length: readingLimits.seen * 3 },
     (_, index) => index,
-  ).reduce(
-    (record, index) => withLookup(record, `call-${index}`, 'q', at),
-    noLookups,
-  );
+  ).reduce((record, index) => counted(record, `call-${index}`, 'q'), noLookups);
   assert.equal(many.count, readingLimits.seen * 3);
   assert.equal(many.seen.length, readingLimits.seen);
-  const long = withLookup(noLookups, 'x', 'q'.repeat(5000), at);
+  const open = Array.from(
+    { length: readingLimits.seen * 3 },
+    (_, index) => index,
+  ).reduce(
+    (record, index) =>
+      afterRead(
+        record,
+        `call-${index}`,
+        { id: 'x', title: 'q', status: 'running', named: true },
+        at,
+      ),
+    noLookups,
+  );
+  assert.equal(open.pending.length, readingLimits.seen);
+  const long = counted(noLookups, 'x', 'q'.repeat(5000));
   assert.ok((long.last?.title.length ?? 0) <= readingLimits.lookup);
 });
 
 await test('the lab record adds up its agents, with the newest lookup and paper', () => {
-  const one = withLookup(noLookups, 'a', 'https://arxiv.org/abs/1', at);
-  const two = withLookup(noLookups, 'b', 'GPU prices', later);
+  const one = counted(noLookups, 'a', 'https://arxiv.org/abs/1');
+  const two = counted(noLookups, 'b', 'GPU prices', later);
   assert.deepEqual(
     (({ count, papers }) => ({ count, papers }))(labLookups([one, two])),
     { count: 2, papers: 1 },
@@ -220,6 +285,7 @@ await test('saved records keep what is valid and drop what is not', () => {
       papers: -1,
       last: { at, title: 'q', paper: true },
       lastPaper: { at: 'never', title: 'q' },
+      pending: ['x'],
       seen: ['x'],
     }),
     {
@@ -227,6 +293,7 @@ await test('saved records keep what is valid and drop what is not', () => {
       papers: 0,
       last: { at, title: 'q', paper: true },
       lastPaper: null,
+      pending: [],
       seen: [],
     },
   );
@@ -249,13 +316,29 @@ await test('saved records keep what is valid and drop what is not', () => {
     assert.equal(parseSource(bad), null);
 });
 
-await test('the store counts subagent lookups for their agent, and saves them without the call list', async (t) => {
+/** One web read that succeeded, as a harness reports it. */
+const read: TranscriptUpdate = {
+  id: 'x',
+  kind: 'tool',
+  name: 'WebSearch',
+  title: 'q',
+  status: 'done',
+};
+
+await test('the store counts subagent lookups for their agent, and saves them without the call lists', async (t) => {
   const path = join(await folder(t), 'literature.json');
   const store = new LiteratureStore(path, () => false);
-  for (const update of claudeUpdates(
-    claudeTool('WebFetch', { url: 'https://arxiv.org/abs/1' }, 'toolu-helper'),
-  ))
-    store.heard('a-1', 'agent-1', 'run-1', update, at);
+  for (const update of [
+    ...claudeUpdates(
+      claudeTool(
+        'WebFetch',
+        { url: 'https://arxiv.org/abs/1' },
+        'toolu-helper',
+      ),
+    ),
+    ...claudeUpdates(claudeResult('id-WebFetch')),
+  ])
+    store.heard('a-1', 'run-1', update, at);
   assert.deepEqual(store.reading(), {
     papers: 0,
     lookups: 1,
@@ -265,7 +348,9 @@ await test('the store counts subagent lookups for their agent, and saves them wi
     (await readFile(path, 'utf8').catch(() => '')).includes('arxiv'),
   );
   await store.flush();
-  assert.doesNotMatch(await readFile(path, 'utf8'), /"seen"/);
+  const saved = await readFile(path, 'utf8');
+  assert.doesNotMatch(saved, /"seen"/);
+  assert.doesNotMatch(saved, /"pending"/);
   const again = new LiteratureStore(path, () => false);
   await again.load(true);
   assert.equal(again.reading().lookups, 1);
@@ -359,17 +444,8 @@ await test('the reading map and the agents stay bounded', async (t) => {
     /holds 300 papers/,
   );
   for (let index = 1; index <= readingLimits.agents + 5; index++)
-    store.heard(
-      `a-${index}`,
-      null,
-      'run-1',
-      { id: 'x', kind: 'tool', name: 'WebSearch', title: 'q' },
-      at,
-    );
+    store.heard(`a-${index}`, 'run-1', read, at);
   assert.equal(store.reading().lookups, readingLimits.agents);
-  for (let index = 0; index < longShotLimits.draws + 5; index++)
-    store.addDraw({ at, by: 'person', agent: `a-${index + 1}`, drawn: [] });
-  assert.equal(store.draws().length, longShotLimits.draws);
 });
 
 await test('a broken or a hostile file leaves a store that works', async (t) => {
@@ -387,18 +463,14 @@ await test('a broken or a hostile file leaves a store that works', async (t) => 
         { agent: 'a-1', count: 2, papers: 1 },
         7,
       ],
-      helpers: [{ agent: 'a-1', helpers: [{ id: 'x' }, 7] }],
       sources: [{ id: 'nope' }],
       ideas: 'none',
-      draws: [{ at, by: 'nobody', agent: 'a-1', drawn: [] }],
     }),
   );
   const hostile = new LiteratureStore(path, () => false);
   await hostile.load(true);
   assert.equal(hostile.reading().lookups, 2);
-  assert.deepEqual(hostile.helpersOf('a-1'), []);
   assert.deepEqual(hostile.ideas(), []);
-  assert.deepEqual(hostile.draws(), []);
 });
 
 await test('a lab from before threads reads no records, and a suspended lab writes none', async (t) => {
@@ -406,13 +478,7 @@ await test('a lab from before threads reads no records, and a suspended lab writ
   await writeFile(path, JSON.stringify({ sources: [] }));
   const store = new LiteratureStore(path, () => true);
   await store.load(false);
-  store.heard(
-    'a-1',
-    null,
-    'run-1',
-    { id: 'x', kind: 'tool', name: 'WebSearch', title: 'q' },
-    at,
-  );
+  store.heard('a-1', 'run-1', read, at);
   await store.flush();
   assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { sources: [] });
 });
@@ -433,13 +499,7 @@ await test('the record of a post holds its marks, and the mark comes from the st
     artifacts: [],
   });
   assert.equal(store.noSearch('a-1', 'proposal', []), true);
-  store.heard(
-    'a-1',
-    null,
-    'run-1',
-    { id: 'x', kind: 'tool', name: 'WebSearch', title: 'q' },
-    at,
-  );
+  store.heard('a-1', 'run-1', read, at);
   assert.equal(store.noSearch('a-1', 'proposal', []), false);
   // An agent's earlier result, or another agent's proposal, does not count as its last such post.
   assert.equal(

@@ -8,14 +8,8 @@
  */
 import { clip, object } from '../board.ts';
 import { readingLimits } from '../lab-tools.ts';
-import type { TranscriptUpdate } from '../transcript.ts';
+import type { HelperEvent } from '../transcript.ts';
 import type { Helper } from './schema.ts';
-
-/** The tool that starts a helper. Claude Code calls it `Agent`, and `Task` before that. Verifold's transcript gives Codex's spawn the same name. */
-const helperTools: ReadonlySet<string> = new Set(['Agent', 'Task']);
-
-/** Claude Code answers a helper in the background at once, with this text. The helper goes on. */
-const backgroundAnswer = /^Async agent launched/;
 
 /** The next label of an agent's helpers. */
 function nextLabel(helpers: readonly Helper[], handle: string): string {
@@ -27,55 +21,17 @@ function nextLabel(helpers: readonly Helper[], handle: string): string {
 }
 
 /**
- * An agent's helpers after one update of its harness. Returns the same list
- * when the update is about no helper, so the caller saves nothing. `handle`:
- * the agent's name. `launch`: its process.
+ * The list with room for one more, or null when the list is full of what must
+ * stay. A helper that ended goes first, then a lost one that its agent heard
+ * of. A helper that runs, or a lost one that its agent has not heard of, never
+ * goes.
  */
-export function helpersAfter(
-  helpers: readonly Helper[],
-  update: TranscriptUpdate,
-  handle: string,
-  launch: string,
-  at: string,
-): readonly Helper[] {
-  const known = helpers.find(
-    (helper) => helper.id === update.id || helper.id === update.parent,
-  );
-  if (!known) {
-    if (!update.id || !update.name || !helperTools.has(update.name))
-      return helpers;
-    return [
-      ...helpers,
-      {
-        id: update.id,
-        label: nextLabel(helpers, handle),
-        title: clip(update.title ?? '', readingLimits.helper),
-        state: 'running' as const,
-        at,
-        launch,
-      },
-    ].slice(-readingLimits.helpers);
-  }
-  // The agent resumed it, or it works on: its own work has the helper as its parent.
-  if (known.id === update.parent)
-    return known.state === 'running' && known.launch === launch
-      ? helpers
-      : replaced(helpers, known, { state: 'running', at, launch });
-  // A call's first report, or Codex's report of the spawn. The helper goes on.
-  if (update.name && update.status !== 'failed') return helpers;
-  if (known.state === 'done') return helpers;
-  if (update.final)
-    return replaced(helpers, known, {
-      state: update.status === 'done' ? 'done' : 'lost',
-      at,
-    });
-  if (update.status === undefined) return helpers;
-  if (update.output !== undefined && backgroundAnswer.test(update.output))
-    return helpers;
-  return replaced(helpers, known, {
-    state: update.status === 'done' && update.output ? 'done' : 'lost',
-    at,
-  });
+function withRoom(helpers: readonly Helper[]): readonly Helper[] | null {
+  if (helpers.length < readingLimits.helpers) return helpers;
+  const gone =
+    helpers.find((helper) => helper.state === 'done') ??
+    helpers.find((helper) => helper.state === 'lost' && helper.told);
+  return gone ? helpers.filter((helper) => helper !== gone) : null;
 }
 
 function replaced(
@@ -88,6 +44,46 @@ function replaced(
   return helpers.map((helper) =>
     helper === known ? { ...rest, ...change, ...kept } : helper,
   );
+}
+
+/**
+ * An agent's helpers after one event. Returns the same list when the event
+ * changes nothing, so the caller saves nothing. A list full of what must stay
+ * takes no new helper. `handle`: the agent's name. `launch`: its process.
+ */
+export function helpersAfter(
+  helpers: readonly Helper[],
+  event: HelperEvent,
+  handle: string,
+  launch: string,
+  at: string,
+): readonly Helper[] {
+  const known = helpers.find((helper) => helper.id === event.id);
+  if (event.type === 'started') {
+    const room = known ? null : withRoom(helpers);
+    return room
+      ? [
+          ...room,
+          {
+            id: event.id,
+            label: nextLabel(helpers, handle),
+            title: clip(event.title, readingLimits.helper),
+            state: 'running',
+            at,
+            launch,
+          },
+        ]
+      : helpers;
+  }
+  if (!known) return helpers;
+  // The agent resumed it, or it works on.
+  if (event.type === 'working')
+    return known.state === 'running' && known.launch === launch
+      ? helpers
+      : replaced(helpers, known, { state: 'running', at, launch });
+  return known.state === 'done'
+    ? helpers
+    : replaced(helpers, known, { state: event.result ? 'done' : 'lost', at });
 }
 
 /** The helpers once `live` is the process that runs now, or null for none: what ran in an earlier process is lost. */

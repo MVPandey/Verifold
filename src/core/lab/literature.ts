@@ -1,12 +1,14 @@
 /**
  * What the lab read, from harness records: pure folds, with no lab. A lookup
- * comes from a harness's tool event, never from what an agent says. A harness
- * can log one call twice under one ID, so a lookup counts once for each call.
- * The reading map is what agents add with `verifold_source`.
+ * comes from a harness's report of a web read, never from what an agent says.
+ * It counts when its result succeeds: a call that a harness denied or that
+ * failed read nothing. A harness can log one call twice under one ID, so a
+ * lookup counts once for each call. The reading map is what agents add with
+ * `verifold_source`.
  */
 import { clip, object, type PostKind } from '../board.ts';
 import { readingLimits } from '../lab-tools.ts';
-import type { TranscriptUpdate } from '../transcript.ts';
+import type { WebRead } from '../transcript.ts';
 
 export interface Lookup {
   readonly at: string;
@@ -21,7 +23,8 @@ export interface LookupRecord {
   readonly papers: number;
   readonly last: Lookup | null;
   readonly lastPaper: Lookup | null;
-  /** The newest calls, by launch and ID. Not saved: a call logs twice within one process. */
+  /** Calls with no result yet, and the newest calls that counted, by launch and ID. Not saved: a call logs within one process. */
+  readonly pending: readonly { readonly key: string; readonly title: string }[];
   readonly seen: readonly string[];
 }
 
@@ -30,15 +33,9 @@ export const noLookups: LookupRecord = {
   papers: 0,
   last: null,
   lastPaper: null,
+  pending: [],
   seen: [],
 };
-
-/** The tools that read the web, by the names that the harnesses report. */
-const lookupTools: ReadonlySet<string> = new Set([
-  'WebSearch',
-  'WebFetch',
-  'Web search',
-]);
 
 /** Sites that hold papers, and their subdomains. A model page or a price page is not a paper. */
 const paperHost =
@@ -48,44 +45,51 @@ const paperHost =
 const paperQuery =
   /\b(?:arxiv|preprints?|papers?|literature|et al|proceedings|neurips|icml|iclr|aclweb|doi|\d{4}\.\d{4,5})\b/i;
 
-/** Whether a lookup reads a paper or searches for one: its address is on a paper site, or its query asks for papers. */
-export function isPaperLookup(title: string): boolean {
-  if (!/^https?:\/\//i.test(title)) return paperQuery.test(title);
+/** The address in a lookup with or without its scheme, or null for words that are no address. */
+function addressOf(title: string): URL | null {
+  if (!title || /\s/.test(title)) return null;
   try {
-    const url = new URL(title);
-    return (
-      paperHost.test(url.hostname) ||
-      (url.hostname === 'huggingface.co' && url.pathname.startsWith('/papers'))
-    );
+    return new URL(/^https?:\/\//i.test(title) ? title : `https://${title}`);
   } catch {
-    return false;
+    return null;
   }
 }
 
-/**
- * The call and its query, when a harness update reports a web lookup. Codex
- * starts a search with no query and gives it with the end of the call, so a
- * running call with no query waits for that update. A call that opens a page
- * can end with no query: it counts, with the site of its result.
- */
-export function lookupOf(
-  update: TranscriptUpdate,
-): { readonly id: string; readonly title: string } | null {
-  if (!update.id || !update.name || !lookupTools.has(update.name)) return null;
-  const title =
-    update.title ||
-    (/"domain":\s*"([^"]+)"/.exec(update.output ?? '')?.[1] ?? '');
-  return title || update.status !== 'running' ? { id: update.id, title } : null;
+/** Whether a lookup reads a paper or searches for one: its address or bare site is a paper site, or its query asks for papers. */
+export function isPaperLookup(title: string): boolean {
+  const url = addressOf(title);
+  if (
+    url &&
+    (paperHost.test(url.hostname) ||
+      (url.hostname === 'huggingface.co' && url.pathname.startsWith('/papers')))
+  )
+    return true;
+  return !/^https?:\/\//i.test(title) && paperQuery.test(title);
 }
 
-/** The record with one more lookup, or the same record for a call that it counted. `key` tells a call from every other call of the agent. */
-export function withLookup(
+/**
+ * The record after one report of a web read. `key` tells a call from every
+ * other call of the agent. A call waits with its query until its result: a
+ * success counts, and a failure drops it. A result of any other tool, or of a
+ * call that counted, changes nothing and returns the same record.
+ */
+export function afterRead(
   record: LookupRecord,
   key: string,
-  title: string,
+  read: WebRead,
   at: string,
 ): LookupRecord {
   if (record.seen.includes(key)) return record;
+  const waiting = record.pending.find((entry) => entry.key === key);
+  if (!read.named && !waiting) return record;
+  const pending = record.pending.filter((entry) => entry !== waiting);
+  const title = read.title || (waiting?.title ?? '');
+  if (read.status === 'running')
+    return {
+      ...record,
+      pending: [...pending, { key, title }].slice(-readingLimits.seen),
+    };
+  if (read.status === 'failed') return { ...record, pending };
   const paper = isPaperLookup(title);
   const lookup: Lookup = {
     at,
@@ -97,6 +101,7 @@ export function withLookup(
     papers: record.papers + (paper ? 1 : 0),
     last: lookup,
     lastPaper: paper ? lookup : record.lastPaper,
+    pending,
     seen: [...record.seen, key].slice(-readingLimits.seen),
   };
 }
@@ -112,6 +117,7 @@ export function labLookups(records: readonly LookupRecord[]): LookupRecord {
       papers: lab.papers + record.papers,
       last: newer(lab.last, record.last),
       lastPaper: newer(lab.lastPaper, record.lastPaper),
+      pending: [],
       seen: [],
     }),
     noLookups,
@@ -161,6 +167,7 @@ export function parseLookups(value: unknown): LookupRecord | null {
         papers: count(entry.papers),
         last: parseLookup(entry.last),
         lastPaper: parseLookup(entry.lastPaper),
+        pending: [],
         seen: [],
       }
     : null;

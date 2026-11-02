@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,12 +10,13 @@ import {
   parseHelper,
 } from '../src/core/lab/helpers.ts';
 import type { Helper } from '../src/core/lab/schema.ts';
-import { LiteratureStore } from '../src/core/lab/literature-store.ts';
+import { HelperStore } from '../src/core/lab/helper-store.ts';
 import { readingLimits } from '../src/core/lab-tools.ts';
 import {
   claudeUpdates,
   codexAppUpdates,
   codexHelperEnds,
+  helperEvent,
   type TranscriptUpdate,
 } from '../src/core/transcript.ts';
 import { helperLine } from '../src/app/helpers.ts';
@@ -27,10 +28,12 @@ const fold = (
   from: readonly Helper[] = [],
   launch = 'run-1',
 ): readonly Helper[] =>
-  updates.reduce(
-    (helpers, update) => helpersAfter(helpers, update, 'agent-3', launch, at),
-    from,
-  );
+  updates.reduce((helpers, update) => {
+    const event = helperEvent(update);
+    return event
+      ? helpersAfter(helpers, event, 'agent-3', launch, at)
+      : helpers;
+  }, from);
 
 /** An Agent call as Claude Code streams it. */
 const agentCall = (id: string, background = false): unknown => ({
@@ -133,28 +136,47 @@ await test('updates of other tools, and of unknown helpers, change nothing', () 
     { id: 'x', kind: 'tool' as const, name: 'Bash', title: 'ls' },
     { kind: 'text' as const, text: 'I started 9 helpers.' },
   ])
-    assert.equal(
-      helpersAfter(running, update, 'agent-3', 'run-1', at),
-      running,
-    );
+    assert.equal(fold([update], running), running);
 });
 
-await test('labels count up for each agent, and the list stays bounded', () => {
-  const many = fold(
+await test('labels count up for each agent, and the bound takes helpers that ended first', () => {
+  const start = (count: number, from = 0): readonly unknown[] =>
+    Array.from({ length: count }, (_, index) => agentCall(`t${from + index}`));
+  const ended = fold(
     events(
-      ...Array.from({ length: readingLimits.helpers + 3 }, (_, index) =>
+      ...start(readingLimits.helpers),
+      agentResult('t0', 'Done.'),
+      agentResult('t1', 'Done.'),
+    ),
+  );
+  const next = fold(events(agentCall('new')), ended);
+  assert.equal(next.length, readingLimits.helpers);
+  assert.equal(next.at(-1)?.label, `agent-3.${readingLimits.helpers + 1}`);
+  // The helper that ended went, and the other that ended is next.
+  assert.ok(!next.some((helper) => helper.id === 't0'));
+  assert.ok(next.some((helper) => helper.id === 't1'));
+});
+
+await test('the bound never drops a helper that runs, or a lost one that its agent has not heard of', () => {
+  const full = fold(
+    events(
+      ...Array.from({ length: readingLimits.helpers }, (_, index) =>
         agentCall(`t${index}`),
       ),
     ),
   );
-  assert.equal(many.length, readingLimits.helpers);
-  assert.equal(many.at(-1)?.label, `agent-3.${readingLimits.helpers + 3}`);
-  assert.equal(
-    fold(events(agentCall('next')), many)
-      .at(-1)
-      ?.label.split('.')[1],
-    String(readingLimits.helpers + 4),
+  // Every one runs, so the list takes no new one, and it stays bounded.
+  assert.equal(fold(events(agentCall('new')), full), full);
+  const lost = afterProcess(full, null, at);
+  assert.equal(fold(events(agentCall('new')), lost), lost);
+  // A lost helper that its agent heard of can go.
+  const told = lost.map((helper, index) =>
+    index === 3 ? { ...helper, told: true as const } : helper,
   );
+  const next = fold(events(agentCall('new')), told);
+  assert.equal(next.length, readingLimits.helpers);
+  assert.ok(!next.some((helper) => helper.id === 't3'));
+  assert.ok(next.some((helper) => helper.id === 'new'));
 });
 
 await test("a helper that runs when its agent's process ends stopped with no result", () => {
@@ -271,48 +293,87 @@ await test('a saved helper keeps what is valid and drops what is not', () => {
 await test('the store tells an agent once of a helper that stopped with no result', async (t) => {
   const base = await mkdtemp(join(tmpdir(), 'verifold-helpers-'));
   t.after(() => rm(base, { recursive: true, force: true, maxRetries: 5 }));
-  const store = new LiteratureStore(join(base, 'literature.json'), () => false);
+  const path = join(base, 'helpers.json');
+  const store = new HelperStore(path, () => false);
+  const told: { agent: string; line: string }[] = [];
+  const tell = (agent: string, line: string): boolean => {
+    told.push({ agent, line });
+    return true;
+  };
   for (const update of events(agentCall('t1', true)))
     store.heard('a-3', 'agent-3', 'run-1', update, at);
   assert.equal(store.helping('a-3'), true);
   // It runs while its process runs.
-  assert.deepEqual(
-    store.lostHelpers(() => 'run-1'),
-    [],
-  );
-  const lines = store.lostHelpers(() => null);
-  assert.equal(lines.length, 1);
-  assert.equal(lines[0]?.agent, 'a-3');
-  assert.match(lines[0]?.line ?? '', /agent-3\.1/);
+  store.sweep(() => 'run-1', tell);
+  assert.equal(told.length, 0);
+  store.sweep(() => null, tell);
+  assert.equal(told.length, 1);
+  assert.equal(told[0]?.agent, 'a-3');
+  assert.match(told[0]?.line ?? '', /agent-3\.1/);
   assert.equal(store.helping('a-3'), false);
-  assert.deepEqual(
-    store.lostHelpers(() => null),
-    [],
-  );
-  // Its harness can say so too: the agent hears once more only of a new one.
+  store.sweep(() => null, tell);
+  assert.equal(told.length, 1);
+  // Its harness can say so too: the agent hears only of the new one.
   for (const update of events(
     agentCall('t2', true),
     notification('t2', 'failed'),
   ))
     store.heard('a-3', 'agent-3', 'run-1', update, at);
-  assert.equal(store.lostHelpers(() => 'run-1').length, 1);
+  store.sweep(() => 'run-1', tell);
+  assert.equal(told.length, 2);
   await store.flush();
-  const again = new LiteratureStore(join(base, 'literature.json'), () => false);
+  const again = new HelperStore(path, () => false);
   await again.load(true);
-  assert.deepEqual(
-    again.lostHelpers(() => null),
-    [],
-  );
+  again.sweep(() => null, tell);
+  assert.equal(told.length, 2);
   assert.equal(again.helpersOf('a-3').length, 2);
 });
 
-await test('a session that owns no direction has no helpers', async (t) => {
+await test('a notice that does not reach the agent stays untold, and comes again', async (t) => {
   const base = await mkdtemp(join(tmpdir(), 'verifold-helpers-'));
   t.after(() => rm(base, { recursive: true, force: true, maxRetries: 5 }));
-  const store = new LiteratureStore(join(base, 'literature.json'), () => false);
-  for (const update of events(agentCall('t1')))
-    store.heard('a-9', null, 'run-1', update, at);
-  assert.deepEqual(store.helpersOf('a-9'), []);
+  const store = new HelperStore(join(base, 'helpers.json'), () => false);
+  for (const update of events(agentCall('t1', true)))
+    store.heard('a-3', 'agent-3', 'run-1', update, at);
+  let tries = 0;
+  store.sweep(
+    () => null,
+    () => {
+      tries += 1;
+      return false;
+    },
+  );
+  assert.equal(tries, 1);
+  assert.equal(store.helpersOf('a-3')[0]?.state, 'lost');
+  assert.equal(store.helpersOf('a-3')[0]?.told, undefined);
+  store.sweep(
+    () => null,
+    () => {
+      tries += 1;
+      return true;
+    },
+  );
+  assert.equal(tries, 2);
+  assert.equal(store.helpersOf('a-3')[0]?.told, true);
+});
+
+await test('a broken helper file leaves a store that works', async (t) => {
+  const base = await mkdtemp(join(tmpdir(), 'verifold-helpers-'));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 5 }));
+  const path = join(base, 'helpers.json');
+  await writeFile(
+    path,
+    JSON.stringify({
+      helpers: [
+        { agent: '../evil', helpers: [] },
+        { agent: 'a-1', helpers: [{ id: 'x' }, 7] },
+      ],
+    }),
+  );
+  const store = new HelperStore(path, () => false);
+  await store.load(true);
+  assert.deepEqual(store.helpersOf('a-1'), []);
+  assert.deepEqual(store.helpersOf('../evil'), []);
 });
 
 await test("an agent's row says one line of its helpers", () => {

@@ -54,6 +54,8 @@ export interface WakeOwner<E extends WakeEvent, R extends WakeRecord<E>> {
   parked?(record: R): string | null;
   /** The event holds the person's own words. It wakes the agent past the hourly limit, and that wakeup does not count. */
   person?(event: E): boolean;
+  /** The event joins the next digest, and starts no turn by itself. */
+  quiet?(event: E): boolean;
   /** Read what the digest needs, just before it is sent. */
   prepare?(): Promise<void>;
   /** Send one digest as a turn. Throw when nothing was sent: the events then wait for the next wakeup. */
@@ -93,10 +95,15 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     return next;
   }
 
-  /** Add events for the next wakeup, and wake after `delay`. */
+  /** Add events that join the next digest, whenever that comes. They wake no one. */
+  hold(events: readonly E[]): void {
+    this.add(events, null);
+  }
+
+  /** Add events for the next wakeup, and wake after `delay`. Null: no wakeup. */
   add(
     events: readonly (E & { readonly again?: true | 'limit' })[],
-    delay: number = this.limits.debounceMs,
+    delay: number | null = this.limits.debounceMs,
   ): void {
     this.serial(async () => {
       const record = this.owner.record();
@@ -118,7 +125,7 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
           })),
         ].slice(-this.limits.events),
       });
-      this.schedule(delay);
+      if (delay !== null) this.schedule(delay);
       await saving;
     }).catch(() => {
       /* The next save writes the events. */
@@ -235,8 +242,12 @@ export class WakeLoop<E extends WakeEvent, R extends WakeRecord<E>> {
     const record = this.owner.record();
     if (!record) return;
     const waiting = record.events.filter((event) => event.seq > record.cursor);
-    // A busy session gets the events when its turn ends.
-    if (!waiting.length || !this.owner.ready(record)) return;
+    // A busy session gets the events when its turn ends. Events that wake no one wait for one that does.
+    if (
+      !waiting.some((event) => !this.owner.quiet?.(event)) ||
+      !this.owner.ready(record)
+    )
+      return;
     // A turn in a used-up usage window fails at once, so the events wait for the reset.
     const parked = this.owner.parked?.(record);
     if (parked) {

@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement } from 'react';
-import type { Agent, Direction, StartView } from '../src/protocol/api.ts';
+import type { Agent, Direction, Post, StartView } from '../src/protocol/api.ts';
 import { shareChoices, shareLabel } from '../src/app/ask.ts';
+import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import { DirectionRow } from '../src/app/components/DirectionRow.tsx';
 import { AskForm, ShareChoice } from '../src/app/screens/AskPage.tsx';
 
@@ -60,6 +61,34 @@ await test('the three choices say what each one does, and the chosen one is chec
   assert.match(page, /Mixed · 1 agent in 4 works on long shots\./);
   assert.match(page, /Far · 1 agent in 2 works on long shots\./);
   assert.match(page, /Verifold draws them at random/);
+});
+
+await test('a board post shows "No search yet" and the long-shot tag, and a plain post shows neither', () => {
+  const post = (more: Partial<Post>): string =>
+    renderToStaticMarkup(
+      <BoardThread
+        thread={{
+          root: {
+            id: 'p-1',
+            at: '2026-11-01T10:00:00.000Z',
+            author: 'a-1',
+            handle: 'agent-1',
+            harness: 'claude',
+            kind: 'proposal',
+            direction: null,
+            text: 'Use the old mix.',
+            replyTo: null,
+            mentions: [],
+            proof: [],
+            ...more,
+          },
+          replies: [],
+        }}
+      />,
+    );
+  assert.match(post({ noSearch: true }), /chip--search">No search yet</);
+  assert.match(post({ alien: true }), /Long shot · Alien</);
+  assert.doesNotMatch(post({}), /No search yet|Long shot/);
 });
 
 const direction = {

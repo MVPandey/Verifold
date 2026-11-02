@@ -4,11 +4,14 @@
  * sense, how to test it, what that costs, and whether any paper already
  * combines the ideas. The top candidates go on the board as open proposals,
  * each in its own thread, and agents choose what to take up. Verifold assigns
- * nothing, and the session never blocks anyone: it takes a slot only when no
- * check and no agent needs one, and it ends within `longShotLimits`.
+ * nothing. The session is the lowest priority of the lab: it starts only in a
+ * slot that is free while nothing else waits for one, it parks no one, and
+ * anything that needs its slot ends it, so a full lab may never run a draw.
+ * The records of draws are in `.verifold/lab/long-shots.json`.
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { newestArchived } from '../archive.ts';
 import {
   boardLimits,
   clip,
@@ -18,7 +21,8 @@ import {
   type Post,
 } from '../board.ts';
 import type { HarnessName } from '../harness.ts';
-import { labShares, longShotLimits, longShotToolSpecs } from '../lab-tools.ts';
+import { labShares, type LabShare } from '../lab-share.ts';
+import { longShotLimits, longShotToolSpecs } from '../lab-tools.ts';
 import { loadPrompt } from '../prompts.ts';
 import { hostName, type SessionRecord } from '../session.ts';
 import type { AgentTools } from '../session-hosts.ts';
@@ -29,15 +33,8 @@ import {
   rankCandidates,
   type Idea,
 } from './ideas.ts';
-import type { LiteratureStore } from './literature-store.ts';
-import {
-  fail,
-  text,
-  type LabOptions,
-  type LabSessions,
-  type LabShare,
-  type labTiming,
-} from './schema.ts';
+import { readObject, RecordFile } from './record-file.ts';
+import { fail, text, type LabSessions, type labTiming } from './schema.ts';
 import type { ThreadStore } from './thread-store.ts';
 import { stoppedText, todayLine } from './words.ts';
 
@@ -62,35 +59,11 @@ interface Judged {
   readonly closest: string;
 }
 
-/** The share of directions that each choice gives to long shots. */
-const shares: Readonly<Record<LabShare, number>> = {
-  close: 0,
-  mixed: 1 / 4,
-  far: 1 / 2,
-};
-
-/** Long-shot directions in a plan of `directions`, at least one when the share is not zero. */
-export function longShotCount(share: LabShare, directions: number): number {
-  return shares[share]
-    ? Math.max(1, Math.round(directions * shares[share]))
-    : 0;
-}
-
-/** The share that the person chose at Ask, or `mixed` when they chose nothing. */
-export function shareOf(value: unknown): LabShare {
-  if (value === undefined) return 'mixed';
-  return (
-    labShares.find((entry) => entry === value) ??
-    fail('Choose how far from known work: close, mixed, or far.')
-  );
-}
-
-/** What the planner hears of the person's choice, as a number of directions. */
-export function shareLine(share: LabShare, most: number): string {
-  const at = longShotCount(share, most);
-  return share === 'close'
-    ? 'The person chose work close to known work, so no direction of your plan is a long shot.'
-    : `The person chose ${share === 'far' ? '1 direction in 2' : '1 direction in 4'} as long shots: give about ${at} of ${most} directions \`longShot: true\`, and fewer in a smaller plan.`;
+/** The share of the newest archived lab, for a start that gives none, as after Start over. */
+export async function lastShare(root: string): Promise<LabShare | undefined> {
+  const path = await newestArchived(root, 'lab.json');
+  const saved = path ? await readObject(path) : null;
+  return labShares.find((share) => share === saved?.share);
 }
 
 /** What a long-shot agent hears in its first prompt. */
@@ -196,25 +169,67 @@ function proposalOf(
   };
 }
 
+/** One draw of long shots. */
+export interface DrawRecord {
+  readonly at: string;
+  /** `ruled-out`: a failed line of work started it. */
+  readonly by: 'person' | 'ruled-out';
+  /** The agent ID of its session. */
+  readonly agent: string;
+  /** The combinations that it drew, by key. */
+  readonly drawn: readonly string[];
+}
+
+function parseDraw(value: unknown): DrawRecord | null {
+  const entry = object(value);
+  return entry &&
+    typeof entry.at === 'string' &&
+    !Number.isNaN(Date.parse(entry.at)) &&
+    (entry.by === 'person' || entry.by === 'ruled-out') &&
+    typeof entry.agent === 'string' &&
+    /^a-[1-9]\d{0,3}$/.test(entry.agent) &&
+    Array.isArray(entry.drawn)
+    ? {
+        at: entry.at,
+        by: entry.by,
+        agent: entry.agent,
+        drawn: entry.drawn
+          .filter(
+            (key): key is string => typeof key === 'string' && key.length < 40,
+          )
+          .slice(0, longShotLimits.batch),
+      }
+    : null;
+}
+
 /** What the lab gives its long shots. */
-export interface LongShotHost
-  extends Pick<LabOptions, 'denyRead' | 'model' | 'quota' | 'random'> {
+export interface LongShotHost {
   readonly root: string;
-  readonly sessions: LabSessions;
-  readonly store: Pick<LiteratureStore, 'ideas' | 'draws' | 'addDraw'>;
+  readonly sessions: Pick<
+    LabSessions,
+    'full' | 'view' | 'startAgent' | 'continueTask' | 'endTask'
+  >;
   readonly threads: Pick<ThreadStore, 'open'>;
   readonly timing: Pick<typeof labTiming, 'hourMs' | 'minuteMs'>;
-  /** The lab's state: the share that the person chose. */
+  /** A number from 0 up to 1. */
+  random(): number;
+  /** The lab's records moved, so nothing writes until the next load. */
+  paused(): boolean;
+  ideas(): readonly Idea[];
+  /** The share that the person chose. */
   share(): LabShare | null;
   /** The lab's queue. */
   serial<T>(work: () => T | Promise<T>): Promise<T>;
-  /** Park an agent that had its turn. True when a slot is free. */
-  free(): Promise<boolean>;
   /** The harnesses of the team, the main one first. */
   team(): Promise<readonly HarnessName[]>;
+  /** A harness whose usage window is used up starts no session. */
+  usedUp(host: HarnessName): boolean;
+  model(host: HarnessName): Promise<string | null>;
   nextAgent(): string;
   /** The question of the lab. */
   question(): string;
+  /** What the session of the folder `id` under `.verifold/checks` cannot read. */
+  denied(id: string): Promise<readonly string[]>;
   /** Add a post to the board. */
   add(fields: NewPost): Promise<Post>;
 }
@@ -224,6 +239,8 @@ interface WaitingDraw {
   /** The harness of the agent whose line failed. The session uses another one. */
   readonly author: HarnessName | null;
   readonly candidates: readonly Candidate[];
+  /** A draw whose session gave its slot keeps its agent ID, and it is on record. */
+  readonly agent?: string;
 }
 
 interface RunningDraw extends WaitingDraw {
@@ -238,10 +255,40 @@ interface RunningDraw extends WaitingDraw {
 export class LongShots {
   private waiting: WaitingDraw | null = null;
   private running: RunningDraw | null = null;
+  private list: readonly DrawRecord[] = [];
+  private readonly path: string;
+  private readonly file: RecordFile;
   private readonly host: LongShotHost;
 
   constructor(host: LongShotHost) {
     this.host = host;
+    this.path = join(host.root, '.verifold', 'lab', 'long-shots.json');
+    this.file = new RecordFile(this.path, () =>
+      host.paused() ? null : { schemaVersion: 1, draws: this.list },
+    );
+  }
+
+  /** Read the records. `on`: a lab with threads. Any other lab holds none. */
+  async load(on: boolean): Promise<void> {
+    const saved = on ? await readObject(this.path) : null;
+    this.list = (Array.isArray(saved?.draws) ? saved.draws : [])
+      .slice(-longShotLimits.draws)
+      .flatMap((item) => parseDraw(item) ?? []);
+  }
+
+  /** Wait until the newest records are on disk. */
+  flush(): Promise<void> {
+    return this.file.flush();
+  }
+
+  /** The draws, oldest first. */
+  draws(): readonly DrawRecord[] {
+    return this.list;
+  }
+
+  /** The session holds a slot now, so `giveSlot` can free it. */
+  get holdsSlot(): boolean {
+    return this.running !== null;
   }
 
   /** One line on the board. It wakes no one. `key` keeps it to one note. */
@@ -256,6 +303,14 @@ export class LongShots {
         ...(key ? { key } : {}),
       })
       .catch(() => {});
+  }
+
+  /** A draw that waits says so once: it gets a slot only when nothing else needs one. */
+  private waitNote(): Promise<void> {
+    return this.note(
+      'A draw of long shots waits for a free slot. In a full lab it may never run.',
+      `long-shots-wait-${this.list.length}`,
+    );
   }
 
   /** Post a long shot in its own thread. */
@@ -290,15 +345,15 @@ export class LongShots {
 
   /**
    * Draw candidates, in the lab's queue. The session starts when a slot is
-   * free. `person`: a draw that cannot happen refuses, with the reason. A
-   * failed line of work starts no draw then, and says nothing. Too few ideas
-   * give a note on the board instead of a draw.
+   * free and nothing else needs one. `person`: a draw that cannot happen
+   * refuses, with the reason. A failed line of work starts no draw then, and
+   * says nothing. Too few ideas give a note on the board instead of a draw.
    */
   async draw(
     by: WaitingDraw['by'],
     author: HarnessName | null = null,
   ): Promise<void> {
-    const { store, timing } = this.host;
+    const { sessions, timing } = this.host;
     const refused = (why: string): void => {
       if (by === 'person') fail(why);
     };
@@ -306,45 +361,50 @@ export class LongShots {
       return refused('A draw runs now. Its proposals come first.');
     const hour = Date.now() - timing.hourMs;
     if (
-      store.draws().filter((draw) => Date.parse(draw.at) > hour).length >=
+      this.list.filter((draw) => Date.parse(draw.at) > hour).length >=
       longShotLimits.perHour
     )
       return refused(
         `The lab drew ${longShotLimits.perHour} times in the last hour. Draw again later.`,
       );
+    const ideas = this.host.ideas();
     const combinations = drawCombinations(
-      store.ideas(),
+      ideas,
       longShotLimits.batch,
-      this.host.random ?? Math.random,
-      new Set(store.draws().flatMap((draw) => draw.drawn)),
+      () => this.host.random(),
+      new Set(this.list.flatMap((draw) => draw.drawn)),
     );
     if (!combinations.length) {
       await this.note(
         `Verifold drew no long shots: the idea map needs ${longShotLimits.size} ideas in a new combination, with at least one that the lab has not tried.`,
-        `long-shots-few-${store.ideas().length}`,
+        `long-shots-few-${ideas.length}`,
       );
       return;
     }
     this.waiting = {
       by,
       author,
-      candidates: combinations.map((ideas, index) => ({
+      candidates: combinations.map((picked, index) => ({
         id: `c-${index + 1}`,
-        ideas,
+        ideas: picked,
       })),
     };
+    if (sessions.full) await this.waitNote();
   }
 
-  /** Start the session of a draw that waits, in the lab's queue, once no check and no agent needs a slot. */
+  /**
+   * Start the session of a draw that waits, in the lab's queue, once no check
+   * and no agent needs a slot. It takes only a slot that is free: it parks no
+   * one.
+   */
   async start(): Promise<void> {
     const draw = this.waiting;
-    const { sessions, store } = this.host;
-    if (!draw || this.running) return;
+    const { sessions } = this.host;
+    if (!draw || this.running || sessions.full) return;
     const team = await this.host.team();
     const harness = team.find((host) => host !== draw.author) ?? team[0];
-    if (!harness || this.host.quota?.parked(harness)) return;
-    if (sessions.full && !(await this.host.free())) return;
-    const agent = this.host.nextAgent();
+    if (!harness || this.host.usedUp(harness)) return;
+    const agent = draw.agent ?? this.host.nextAgent();
     if (number(agent) > 9999) {
       this.waiting = null;
       return;
@@ -358,18 +418,13 @@ export class LongShots {
       judged: false,
       timer: undefined,
     };
-    const folder = join(
-      this.host.root,
-      '.verifold',
-      'lab',
-      'long-shots',
-      `l-${number(agent)}`,
-    );
+    const name = `l-${number(agent)}`;
+    const folder = join(this.host.root, '.verifold', 'checks', name);
     this.waiting = null;
     this.running = run;
     try {
       await mkdir(folder, { recursive: true, mode: 0o700 });
-      const model = (await this.host.model?.(harness)) ?? null;
+      const model = await this.host.model(harness);
       run.session = await sessions.startAgent({
         host: harness,
         ...(model ? { model } : {}),
@@ -377,31 +432,22 @@ export class LongShots {
         cwd: folder,
         agent,
         tools: this.tools(run),
-        // It judges ideas alone, so it reads none of the lab's records. Its own folder is under `lab`.
-        denyRead: [
-          ...(this.host.denyRead ?? []),
-          join(this.host.root, 'memory'),
-          ...[
-            'board',
-            'checks',
-            'lab.json',
-            'lab/agents',
-            'lab/literature.json',
-            'lab/runs',
-            'lab/threads.json',
-            'sessions',
-            'workspaces',
-          ].map((name) => join(this.host.root, '.verifold', name)),
-        ],
+        denyRead: [...(await this.host.denied(name))],
       });
-      store.addDraw({
-        at: new Date().toISOString(),
-        by: draw.by,
-        agent,
-        drawn: draw.candidates.map((candidate) =>
-          combinationKey(candidate.ideas),
-        ),
-      });
+      if (!draw.agent) {
+        this.list = [
+          ...this.list,
+          {
+            at: new Date().toISOString(),
+            by: draw.by,
+            agent,
+            drawn: draw.candidates.map((candidate) =>
+              combinationKey(candidate.ideas),
+            ),
+          },
+        ].slice(-longShotLimits.draws);
+        void this.file.save().catch(() => {});
+      }
       run.timer = setTimeout(
         () =>
           void this.host
@@ -424,6 +470,27 @@ export class LongShots {
           `Verifold could not start the long-shot check: ${error instanceof Error ? error.message : 'unknown error'}`,
         );
     }
+  }
+
+  /**
+   * Something else needs a slot, in the lab's queue. The session ends, and its
+   * draw waits for the next chance with the same candidates. Returns whether
+   * the session held a slot.
+   */
+  async giveSlot(): Promise<boolean> {
+    const run = this.running;
+    if (!run) return false;
+    this.endSession(run);
+    if (!run.judged) {
+      this.waiting = {
+        by: run.by,
+        author: run.author,
+        candidates: run.candidates,
+        agent: run.agent,
+      };
+      await this.waitNote();
+    }
+    return true;
   }
 
   /** The one tool of the session. A call of an earlier session changes nothing. */

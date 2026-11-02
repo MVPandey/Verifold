@@ -1,5 +1,6 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { object } from '../board.ts';
+import { readingLimits } from '../lab-tools.ts';
 import { writePrivateFile } from '../storage.ts';
 
 /** A lab record: a JSON object of at most 4 MB, or null for anything else. */
@@ -13,6 +14,38 @@ export async function readObject(
   } catch {
     return null;
   }
+}
+
+/** The newest entries of a saved list, by the agent that each one names. A harness can write in the project, so a bad entry is skipped. */
+export function agentEntries<T>(
+  value: unknown,
+  parse: (entry: Record<string, unknown>) => T | null,
+): Map<string, T> {
+  return new Map(
+    (Array.isArray(value) ? value : [])
+      .slice(-readingLimits.agents)
+      .flatMap((item) => {
+        const entry = object(item);
+        const parsed = entry ? parse(entry) : null;
+        return parsed !== null &&
+          typeof entry?.agent === 'string' &&
+          /^a-[1-9]\d{0,3}$/.test(entry.agent)
+          ? [[entry.agent, parsed] as const]
+          : [];
+      }),
+  );
+}
+
+/** Set an agent's entry, and drop the agent that changed longest ago when the map is full. */
+export function putAgent<T>(
+  map: Map<string, T>,
+  agent: string,
+  value: T,
+): void {
+  map.delete(agent);
+  map.set(agent, value);
+  for (const old of [...map.keys()].slice(0, -readingLimits.agents))
+    map.delete(old);
 }
 
 /**

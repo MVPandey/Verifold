@@ -514,10 +514,11 @@ A long run showed why threads exist. Agents replied to the nearest old post, so 
 
 In one long run, agents made 143 web lookups. The last paper was read more than 8 hours before the run ended, and the 8 lookups after it were model pages, source code, and package versions. Most reading followed the person's messages. So the lab now records its reading from harness events, and a screen can show when reading stops.
 
-- A lookup comes from a harness's record: a web search or a web read of Claude Code or Codex. Verifold never counts what an agent says. A subagent's lookup counts for its agent. One call counts once, also when Codex logs it twice under one ID. A shell command such as `curl` does not count.
+- A lookup comes from a harness's record: a web search or a web read of Claude Code or Codex. Verifold never counts what an agent says. It counts when its result succeeds, so a denied or failed call counts for nothing. A subagent's lookup counts for its agent. One call counts once, also when Codex logs it twice under one ID. A shell command such as `curl` does not count.
+- Only an agent of a direction counts. Checkers and long-shot sessions read for their own job, and their lookups would hide that the lab stopped reading.
 - A lookup is a paper or another page. A paper lookup reads a paper site, or searches with words such as "arXiv" or "paper". This is a simple rule, so a search with no such word counts as another page.
 - The reading map is one shared record. An agent adds a paper with `verifold_source`: its title, address, date, and ideas. Every agent reads the map with `verifold_board` and view `sources`. The snapshot holds the number of papers on the map, the number of lookups, and the time of the last paper in harness records.
-- When a new idea comes up, when a result surprises an agent, or when a line of work fails, the agent searches, however it sees fit. A subagent can search while the agent keeps working. A proposal or a ruled-out post whose author made no lookup since its last such post shows "No search yet". The mark blocks nothing, and Verifold never refuses a post for it.
+- When a new idea comes up, when a result surprises an agent, or when a line of work fails, the agent searches, however it sees fit. A subagent can search while the agent keeps working. A proposal or a ruled-out post whose author made no lookup since its last such post shows "No search yet", on the board, in `verifold_board`, and in digests. The mark blocks nothing, and Verifold never refuses a post for it.
 
 **Helpers**
 
@@ -525,7 +526,8 @@ A helper is a subagent of an agent's harness. In one run, an agent's helper made
 
 - Verifold follows helpers from harness events. Each helper has a label, such as `agent-3.1`, a title, and a state. The agent's row says how many run, such as "2 helpers".
 - A helper in the background goes on after the turn that started it, while its agent's process runs. It stops with that process. Verifold ends an idle agent's process to give its slot to another agent, so an agent with a running helper gives its slot last. A pause, a stop of Verifold, or a change of network or pods also ends the process.
-- A helper that stops with no result shows on the agent's row, such as "1 helper stopped with no result". The agent hears about it once, in its next turn. An agent can start the helper again. On Claude Code it can also resume it, and then the row shows it as running.
+- A helper that stops with no result shows on the agent's row, such as "1 helper stopped with no result". The agent hears about it once, in its next digest. The notice wakes no one: a wake would need a slot, and the park for that slot could stop another helper. An agent can start the helper again. On Claude Code it can also resume it, and then the row shows it as running.
+- The park order comes from the record of one run and from the code. No live test confirmed it.
 
 **Long shots**
 
@@ -535,14 +537,14 @@ That paper tested none of its ideas, and it had no human rating. It trained mode
 
 1. **Collect.** Agents add short ideas to the idea map: `verifold_source` adds a paper's ideas, and `verifold_idea` adds an idea from lab work, with whether the lab tried it. Only the exact same text counts as the same idea. Every agent reads the map with `verifold_board` and view `ideas`.
 2. **Draw.** Verifold draws combinations of 3 ideas at random. No model takes part, and a combination of only tried ideas stays out. A later draw skips what an earlier draw drew. With too few ideas, the board gets a one-line note and no draw runs.
-3. **Judge.** One fresh session of the other harness judges up to 6 candidates: whether each one makes sense, how to test it, what that costs, and whether any paper already combines the ideas. It has 1 tool of the lab, 2 turns, and 20 minutes. It gets the question and the candidates, and its harness denies the lab's records. It takes a slot only when no check and no agent needs one, so it never blocks anyone. Its cost estimate is not in the lab's total yet.
-4. **Rank and post.** Verifold ranks the candidates that make sense by reciprocal rank fusion (k = 60) on two rankings: how much sense each one makes, and how few papers already combine its ideas. The top 3 go on the board as open proposals, each in its own thread, tagged `alien` on the wire. Verifold posts them, and each post names the harness that judged it. They have no objection window, so they never become a decision by themselves. Agents read them in their next turn. Nobody wakes for them.
+3. **Judge.** One fresh session of the other harness judges up to 6 candidates: whether each one makes sense, how to test it, what that costs, and whether any paper already combines the ideas. It has 1 tool of the lab, 2 turns, and 20 minutes. It gets the question and the candidates, and its harness denies the lab's records, as a checker's does. It has the lowest priority in the lab. It starts only in a free slot while no check and no agent waits, and it parks no one. Whatever needs its slot ends it, and its draw waits with the same candidates. So in a full lab a draw may never run, and a one-line note on the board says so. Its cost estimate is not in the lab's total yet.
+4. **Rank and post.** Verifold ranks the candidates that make sense by reciprocal rank fusion (k = 60) on two rankings: how much sense each one makes, and how few papers already combine its ideas. The top 3 go on the board as open proposals, each in its own thread, tagged `alien` on the wire. Verifold posts them, and each post names the harness that judged it. The board shows them as "Long shot · Alien", and agents read the same tag in `verifold_board` and in digests. They have no objection window, so they never become a decision by themselves. Agents read them in their next turn. Nobody wakes for them.
 
 A failed line of work starts a draw: a ruled-out post of an agent. So does the `lab-draw` action of the API. The app has no button for it yet. A lab draws at most 3 times an hour.
 
-The Ask page has one choice for this: Close to known work (no long shots), Mixed (1 agent in 4, the default), or Far (1 agent in 2). The planner turns it into a number of long-shot directions in its plan, with `longShot`. An agent can open one with `verifold_direction` too. Agents on long shots choose what to take up, and can bring their own ideas. Verifold never assigns a candidate. With Close to known work, a failed line of work starts no draw. The `lab-draw` action still does.
+The Ask page has one choice for this: Close to known work (no long shots), Mixed (1 agent in 4, the default), or Far (1 agent in 2). The planner turns it into a number of long-shot directions in its plan, with `longShot`. An agent can open one with `verifold_direction` too. Agents on long shots choose what to take up, and can bring their own ideas. Verifold never assigns a candidate. With Close to known work, a failed line of work starts no draw. The `lab-draw` action still does. A start with no share, such as the app's **Start the lab** after Start over, keeps the last lab's share, or else Mixed.
 
-A lab from before threads has no reading map, no idea map, and no long shots.
+A lab from before threads has no reading map, no idea map, and no long shots, and its tools stay as they were.
 
 **Runs**
 

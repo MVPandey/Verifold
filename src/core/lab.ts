@@ -52,6 +52,7 @@ import {
   labPodToolSpecs,
   runToolSpecs,
   threadDirectionToolSpec,
+  threadPlanToolSpec,
   threadPostKinds,
   threadToolSpecs,
   verdicts,
@@ -200,13 +201,10 @@ import { refutation } from './lab/post-rules.ts';
 import { readObject, RecordFile } from './lab/record-file.ts';
 import { threadLine } from './lab/thread-digest.ts';
 import { ThreadStore } from './lab/thread-store.ts';
+import { HelperStore } from './lab/helper-store.ts';
 import { LiteratureStore } from './lab/literature-store.ts';
-import {
-  LongShots,
-  longShotRole,
-  shareLine,
-  shareOf,
-} from './lab/long-shots.ts';
+import { lastShare, LongShots, longShotRole } from './lab/long-shots.ts';
+import { shareLine, shareOf, shareProblem } from './lab-share.ts';
 import type { TranscriptUpdate } from './transcript.ts';
 
 /**
@@ -518,6 +516,7 @@ export class Lab {
   private readonly stateFile: RecordFile;
   private readonly threads: ThreadStore;
   private readonly literature: LiteratureStore;
+  private readonly helpers: HelperStore;
   private readonly longShots: LongShots;
   private readonly agents = new Map<string, AgentRecord>();
   private readonly files = new Map<string, RecordFile>();
@@ -620,19 +619,30 @@ export class Lab {
       join(this.folder, 'literature.json'),
       () => this.suspended,
     );
+    this.helpers = new HelperStore(
+      join(this.folder, 'helpers.json'),
+      () => this.suspended,
+    );
     this.longShots = new LongShots({
-      ...options,
       root,
-      store: this.literature,
+      sessions: options.sessions,
       threads: this.threads,
       timing: this.timing,
+      random: options.random ?? Math.random,
+      paused: () => this.suspended,
+      ideas: () => this.literature.ideas(),
+      share: () => this.state?.share ?? null,
       serial: (work) => this.serial(work),
-      free: () => this.free(),
       team: () => this.team(),
+      usedUp: (host) => Boolean(options.quota?.parked(host)),
+      model: async (host) => (await options.model?.(host)) ?? null,
       nextAgent: () => this.nextAgent(),
       question: () => this.current().question,
+      denied: async (id) => [
+        ...(options.denyRead ?? []),
+        ...(await this.checkDenials({ id })).harness,
+      ],
       add: (fields) => this.add(fields),
-      share: () => this.state?.share ?? null,
     });
   }
 
@@ -674,6 +684,8 @@ export class Lab {
       this.threaded ? (this.state?.startedAt ?? null) : null,
     );
     await this.literature.load(this.threaded);
+    await this.helpers.load(this.threaded);
+    await this.longShots.load(this.threaded);
     // Only the owner, where agents work, ends the runs of an earlier owner.
     await this.ledger.load(this.runs && this.state !== null);
     if (!this.state) return;
@@ -768,6 +780,8 @@ export class Lab {
       await this.ledger.close();
       await this.serial(async () => {
         for (const loop of this.loops.values()) await loop.close();
+        // A draw that waits belongs to this run: its ideas must not reach the next one.
+        this.longShots.stop();
         await this.flushRecords();
         this.suspended = true;
       });
@@ -792,6 +806,7 @@ export class Lab {
     await this.serial(async () => {
       this.forget();
       this.forgetChecks();
+      this.longShots.stop();
       this.applied.clear();
       this.bringAt.clear();
       await this.load();
@@ -889,7 +904,7 @@ export class Lab {
                 direction,
                 agent,
                 ...this.status(direction, agent),
-                helpers: this.literature.helpersOf(agent.id),
+                helpers: this.helpers.helpersOf(agent.id),
               },
             ]
           : [];
@@ -946,8 +961,11 @@ export class Lab {
       if (this.state) fail('The lab already runs.');
       const asked = text(question, labLimits.question, 'the question');
       const budget = options.hours === undefined ? null : hours(options.hours);
-      const share = shareOf(options.share);
+      if (shareOf(options.share) === null) fail(shareProblem);
       const take = async (): Promise<void> => {
+        // A start with no share keeps the lab's last one, as after Start over. This read waits, so it comes after the lock.
+        const share =
+          shareOf(options.share ?? (await lastShare(this.root))) ?? 'mixed';
         const now = Date.now();
         // From the first view of the lab on, until the planner opens or fails below.
         this.openingPlanner = Boolean(this.runs && this.options.harnesses);
@@ -2047,7 +2065,7 @@ export class Lab {
         0,
         ...[...this.agents.keys()].map(number),
         ...(this.state?.checks ?? []).map((check) => number(check.agent)),
-        ...this.literature.draws().map((draw) => number(draw.agent)),
+        ...this.longShots.draws().map((draw) => number(draw.agent)),
       ) + 1
     }`;
   }
@@ -2275,6 +2293,8 @@ export class Lab {
         this.stateFile,
         this.threads,
         this.literature,
+        this.helpers,
+        this.longShots,
         ...this.files.values(),
       ].map((file) => file.flush()),
     );
@@ -2482,6 +2502,7 @@ export class Lab {
             )),
         parked: (agent) => this.options.quota?.parked(agent.host) ?? null,
         person: personal,
+        quiet: (event) => event.kind === 'helper',
         // The profile as it is now, so a changed "Talk to me" comes with this digest.
         prepare: async () => {
           await this.readPerson();
@@ -2801,7 +2822,9 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
         askPersonToolSpec,
         ...(this.ledger.sandboxed || pods ? runToolSpecs : []),
         ...(pods ? labPodToolSpecs : []),
-        ...(this.state?.opener === id ? [planToolSpec] : []),
+        ...(this.state?.opener === id
+          ? [this.threaded ? threadPlanToolSpec : planToolSpec]
+          : []),
         ...(this.options.memory ? [noteToolSpec] : []),
       ],
       call: (name, input, callId) =>
@@ -5558,7 +5581,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
           planLimits.team,
           'the team of the direction',
         ),
-        longShot: args.longShot === true,
+        longShot: this.threaded && args.longShot === true,
         harness: host,
         bar: text(args.bar, planLimits.bar, 'what makes the direction hold up'),
         runs: args.runs === undefined ? null : repeatRuns(args.runs),
@@ -6603,7 +6626,7 @@ ${planning ? 'Start now: read the question and the project, and check the facts.
    * rules read as patterns, `harness` holds none of its paths, and the check
    * is not `blind`.
    */
-  private async checkDenials(check: Check): Promise<Denials> {
+  private async checkDenials(check: Pick<Check, 'id'>): Promise<Denials> {
     const real = await realpath(this.root).catch(() => this.root);
     const roots = [...new Set([this.root, real])];
     const blind = roots.every(expressible);
@@ -7138,11 +7161,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
               ),
             current?.team,
           ),
-          longShot: field(
-            'longShot',
-            (value) => value === true,
-            current?.longShot,
-          ),
+          longShot:
+            this.threaded &&
+            field('longShot', (value) => value === true, current?.longShot),
           bar: field<string | null>(
             'bar',
             (value) => text(value, planLimits.bar, 'the bar of each direction'),
@@ -8061,7 +8082,9 @@ Start now: find the claim's premise, start a run early, and post your rerun once
 
   /** Events that wait for the agent's next digest. */
   private waiting(agent: AgentRecord): number {
-    return agent.events.filter((event) => event.seq > agent.cursor).length;
+    return agent.events.filter(
+      (event) => event.seq > agent.cursor && event.kind !== 'helper',
+    ).length;
   }
 
   /** Check for agents to start at once, instead of at the next tick. */
@@ -8102,14 +8125,16 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   private async tick(): Promise<void> {
     const state = this.state;
     if (!state || this.closing || this.suspended || this.moving) return;
-    // An agent hears once of a helper that stopped with no result.
-    for (const { agent, line } of this.literature.lostHelpers((id) =>
-      this.liveLaunch(id),
-    )) {
-      const record = this.agents.get(agent);
-      if (record && this.active(record))
-        this.loop(agent).add([{ kind: 'helper', text: line }]);
-    }
+    // A lost helper's notice joins its agent's next digest, and wakes no one: a wake would need a slot, and a park for it could stop another helper.
+    this.helpers.sweep(
+      (id) => this.liveLaunch(id),
+      (id, line) => {
+        const agent = this.agents.get(id);
+        if (!agent || !this.active(agent)) return false;
+        this.loop(id).hold([{ kind: 'helper', text: line }]);
+        return true;
+      },
+    );
     // Pods that the person turned on or off, from the project's settings or a call, reach each live process.
     for (const agent of this.agents.values())
       if (this.active(agent)) this.checkProcess(agent.id);
@@ -8184,6 +8209,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    * keeps its slot. Returns true when a slot is free.
    */
   private async free(except?: string): Promise<boolean> {
+    // A long-shot session is the lowest priority: it goes first, and its draw waits.
+    if (await this.longShots.giveSlot()) return !this.options.sessions.full;
     const agent = this.yieldable(except)[0];
     if (!agent?.session) return false;
     await this.options.sessions.park(agent.session);
@@ -8211,7 +8238,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
               {
                 agent,
                 capped,
-                helping: this.literature.helping(agent.id),
+                helping: this.helpers.helping(agent.id),
                 since: run.endedAt || run.launch?.at || 0,
               },
             ]
@@ -8231,14 +8258,13 @@ Start now: find the claim's premise, start a run early, and post your rerun once
    * from these records, never from what an agent says.
    */
   harnessUpdate(record: SessionRecord, update: TranscriptUpdate): void {
-    if (!record.agent || !this.threaded || this.suspended) return;
-    this.literature.heard(
-      record.agent,
-      this.agents.get(record.agent)?.handle ?? null,
-      record.launches.at(-1)?.id ?? '',
-      update,
-      new Date().toISOString(),
-    );
+    // Checkers and long-shot sessions read for their own job: their lookups must not hide that the lab stopped reading.
+    const agent = record.agent ? this.agents.get(record.agent) : undefined;
+    if (!agent || !this.threaded || this.suspended) return;
+    const launch = record.launches.at(-1)?.id ?? '';
+    const at = new Date().toISOString();
+    this.literature.heard(agent.id, launch, update, at);
+    this.helpers.heard(agent.id, agent.handle, launch, update, at);
   }
 
   /** The process of an agent's session while it runs, or null. */
@@ -8251,7 +8277,8 @@ Start now: find the claim's premise, start a run early, and post your rerun once
   /** The person's Draw again: a new draw of long shots. */
   drawAgain(): Promise<void> {
     return this.serial(async () => {
-      this.current();
+      if (this.current().pausedAt)
+        fail('The lab is paused, so no draw starts.');
       if (!this.threaded) fail('A lab from before threads has no idea map.');
       await this.longShots.draw('person');
       this.kick();
@@ -8265,7 +8292,7 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         !this.suspended &&
         !this.moving &&
         !this.closing &&
-        this.yieldable().length,
+        (this.longShots.holdsSlot || this.yieldable().length),
     );
   }
 

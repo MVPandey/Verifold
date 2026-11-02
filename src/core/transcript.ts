@@ -298,7 +298,12 @@ function codexItem(
       );
     case 'web_search':
     case 'webSearch':
-      return tool('Web search', item.query, item.results, false);
+      return tool(
+        'Web search',
+        item.query,
+        item.results,
+        item.status === 'failed' || item.status === 'declined',
+      );
     case 'mcp_tool_call':
     case 'mcpToolCall':
     case 'dynamicToolCall':
@@ -384,6 +389,77 @@ export function codexAppUpdates(
 /** The text that Verifold or the person sent to the harness. */
 export function requestUpdate(text: string): TranscriptUpdate {
   return { kind: 'request', parent: null, text: bounded(text) };
+}
+
+/** The tools that read the web, by the names that the harnesses report. */
+const webTools: ReadonlySet<string> = new Set([
+  'WebSearch',
+  'WebFetch',
+  'Web search',
+]);
+
+/** One report of a web read, in words that no harness owns. */
+export interface WebRead {
+  readonly id: string;
+  /** Its query or address. Empty: the report does not say yet. */
+  readonly title: string;
+  readonly status: NonNullable<TranscriptEntry['status']>;
+  /** The report names a web tool. A bare tool result names no tool, so only its ID ties it to a read. */
+  readonly named: boolean;
+}
+
+/**
+ * What an update says of a web read, or null when it says nothing. Codex
+ * starts a search with no query and gives it with the end of the call. A
+ * call that opens a page can end with no query: its result names the site.
+ */
+export function webRead(update: TranscriptUpdate): WebRead | null {
+  if (!update.id || update.status === undefined) return null;
+  const named = update.name !== undefined && webTools.has(update.name);
+  if (update.name !== undefined && !named) return null;
+  return {
+    id: update.id,
+    title:
+      update.title ||
+      (/"domain":\s*"([^"]+)"/.exec(update.output ?? '')?.[1] ?? ''),
+    status: update.status,
+    named,
+  };
+}
+
+/** One event of a helper, a subagent of a harness, in words that no harness owns. */
+export type HelperEvent =
+  | { readonly type: 'started'; readonly id: string; readonly title: string }
+  /** Its own work reported, so it runs. */
+  | { readonly type: 'working'; readonly id: string }
+  /** `result`: it ended with a result. */
+  | { readonly type: 'ended'; readonly id: string; readonly result: boolean };
+
+/** The tool that starts a helper. Claude Code calls it `Agent`, and `Task` before that. `codexItem` gives Codex's spawn the same name. */
+const helperTools: ReadonlySet<string> = new Set(['Agent', 'Task']);
+
+/** Claude Code answers a helper in the background at once, with this text. The helper goes on. */
+const backgroundAnswer = /^Async agent launched/;
+
+/**
+ * What an update says of a helper, or null when it says nothing. A report of
+ * the call that names the tool is no end: Codex reports its spawn as done
+ * while the helper runs on. A bare tool result ends a helper in the
+ * foreground, also with an empty result, which is no result.
+ */
+export function helperEvent(update: TranscriptUpdate): HelperEvent | null {
+  if (update.parent) return { type: 'working', id: update.parent };
+  const { id, name, output, status, title: words } = update;
+  if (!id) return null;
+  if (update.final) return { type: 'ended', id, result: status === 'done' };
+  if (name !== undefined) {
+    if (!helperTools.has(name)) return null;
+    return status === 'failed'
+      ? { type: 'ended', id, result: false }
+      : { type: 'started', id, title: words ?? '' };
+  }
+  if (status === undefined || backgroundAnswer.test(output ?? '')) return null;
+  return { type: 'ended', id, result: status === 'done' && Boolean(output) };
 }
 
 /** Pass each harness run of `run` to `sink` too, beside the caller's own transcript callback. */

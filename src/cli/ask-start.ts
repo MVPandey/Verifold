@@ -10,14 +10,8 @@ import {
 import type { Workspace } from '../core/contracts.ts';
 import { detectHarnesses, type HarnessStatus } from '../core/detect.ts';
 import { validateModel, type HarnessName } from '../core/harness.ts';
-import { shareOf } from '../core/lab/long-shots.ts';
-import {
-  defaultLabHours,
-  hours,
-  labLimits,
-  text,
-  type LabShare,
-} from '../core/lab/schema.ts';
+import { shareOf, shareProblem, type LabShare } from '../core/lab-share.ts';
+import { defaultLabHours, hours, labLimits, text } from '../core/lab/schema.ts';
 import {
   isolationProblem,
   ownProfileCopied,
@@ -233,7 +227,7 @@ export function askStart(options: {
                 );
         const budget =
           body.hours === undefined ? defaultLabHours : hours(body.hours);
-        const share = shareOf(body.share);
+        const share = shareOf(body.share) ?? fail(shareProblem);
         const fallback = await defaults(
           own ? ownProfileFolder(folder) : options.agency,
         );
