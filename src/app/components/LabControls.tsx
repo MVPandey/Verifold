@@ -3,6 +3,7 @@ import type { Harness, Lab, Post, Work } from '../../protocol/api.ts';
 import { useControl, type NewDirection } from '../controls.ts';
 import { authorOf, clock, cut, harnessName, roleName } from '../format.ts';
 import { href } from '../route.ts';
+import { showsIds, useView } from '../view-mode.ts';
 import { Warning } from './Icons.tsx';
 
 /** The most characters of a direction's title and bar, as the lab checks them. */
@@ -211,6 +212,7 @@ function checkWhere(
   lab: Lab,
   checkId: string | null,
   target: Post | undefined,
+  ids: boolean,
 ): string {
   const check = checkId
     ? lab.checks.find((entry) => entry.id === checkId)
@@ -220,16 +222,17 @@ function checkWhere(
       ? 'No check yet.'
       : '';
   const who = `${roleName(check.handle)} (${harnessName(check.harness)})`;
+  const name = ids ? `Check ${check.id}` : 'Its check';
   switch (check.state) {
     case 'queued':
-      return `Check ${check.id} waits for ${who}.`;
+      return `${name} waits for ${who}.`;
     case 'running':
       return `${who} checks it now, without the author's reasoning.`;
     case 'failed':
     case 'dropped':
-      return `Check ${check.id} did not finish${check.note ? `: ${check.note}` : ''}. Another objection starts a new check.`;
+      return `${name} did not finish${check.note ? `: ${check.note}` : ''}. Another objection starts a new check.`;
     case 'done':
-      return `Check ${check.id} ended before this objection.`;
+      return `${name} ended before this objection.`;
   }
 }
 
@@ -238,6 +241,7 @@ function checkWhere(
  * doubt about it, where its check is, and what the checker did.
  */
 export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
+  const ids = showsIds(useView());
   if (!lab.disputes.length) return null;
   const posts = new Map(lab.board.posts.map((post) => [post.id, post]));
   // A checker that ended long ago is not in the snapshot, so it has no page to link.
@@ -255,7 +259,7 @@ export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
         const check = dispute.check
           ? lab.checks.find((entry) => entry.id === dispute.check)
           : undefined;
-        const where = checkWhere(lab, dispute.check, target);
+        const where = checkWhere(lab, dispute.check, target, ids);
         return (
           <li key={dispute.post} className="pinned__item">
             <span className="pinned__mark">
@@ -263,7 +267,9 @@ export function Disputes({ lab }: { readonly lab: Lab }): ReactNode {
             </span>
             <div className="pinned__text">
               <p>
-                <a href={href.board(dispute.post)}>{dispute.post}</a>
+                <a href={href.board(dispute.post)}>
+                  {ids ? dispute.post : 'A post'}
+                </a>
                 {target &&
                   ` by ${target.author === 'person' ? 'you' : authorOf(target)}`}
                 {row && (

@@ -2,9 +2,11 @@ import type { ReactNode } from 'react';
 import type { Lab, Post, PostKind, Proof } from '../../protocol/api.ts';
 import { checkWords } from '../answer.ts';
 import { outcomeWord, recountWords, type Thread } from '../board.ts';
-import { authorOf, roleName } from '../format.ts';
+import { authorOf, roleName, shortTime } from '../format.ts';
 import { href } from '../route.ts';
+import { showsIds, useView } from '../view-mode.ts';
 import { Avatar, PostAuthor, type Who } from './Avatar.tsx';
+import { IdText } from './IdText.tsx';
 import { PlanCard } from './PlanCard.tsx';
 
 const chips: Partial<Record<PostKind, string>> = {
@@ -30,15 +32,16 @@ export function showPost(post: string): void {
   element.focus({ preventScroll: true });
 }
 
-function who(post: Post): Who {
+export function who(post: Post): Who {
   if (post.author === 'person') return 'person';
   if (post.harness && post.handle)
     return { harness: post.harness, handle: post.handle };
   return 'verifold';
 }
 
-function proofLabel(proof: Proof): string {
-  if (proof.type === 'run') return `Run ${proof.run}`;
+/** A chip's words. A lab's Simple view shows no run ID. */
+function proofLabel(proof: Proof, ids: boolean): string {
+  if (proof.type === 'run') return ids ? `Run ${proof.run}` : 'Run';
   if (proof.type === 'diff') return 'Diff';
   const name = proof.path.split('/').at(-1) ?? proof.path;
   // A figure's chip reads as its page's heading.
@@ -66,17 +69,18 @@ export function proofHref(
 
 /** A post's proof, as chips that lead to it. */
 function ProofLinks({ post }: { readonly post: Post }): ReactNode {
+  const ids = showsIds(useView());
   return (
     <>
       {post.proof.map((proof, index) => {
         const to = proofHref(post, proof, index);
         return to ? (
           <a key={index} className="proof" href={to}>
-            {proofLabel(proof)}
+            {proofLabel(proof, ids)}
           </a>
         ) : (
           <span key={index} className="proof">
-            {proofLabel(proof)}
+            {proofLabel(proof, ids)}
           </span>
         );
       })}
@@ -131,9 +135,10 @@ function CheckNote({
 
 /**
  * A post's name line and text, with its kind and its proof as chips. The
- * plan of record shows as its card. A plan before it is an earlier plan.
+ * plan of record shows as its card. A plan before it is an earlier plan. In a
+ * lab with threads, each post shows its time, so it reads alone.
  */
-function PostLines({
+export function PostLines({
   post,
   lab,
   onReply,
@@ -142,6 +147,7 @@ function PostLines({
   readonly lab?: Lab | undefined;
   readonly onReply?: ((post: Post) => void) | undefined;
 }): ReactNode {
+  const { mode, threaded } = useView();
   if (post.kind === 'plan' && lab?.plan?.post === post.id)
     return <PlanCard plan={lab.plan} post={post} lab={lab} />;
   // The person's posts and Verifold's status lines carry no kind chip.
@@ -162,8 +168,15 @@ function PostLines({
             {post.outcome && `: ${outcomeWord(post.outcome)}`}
           </span>
         )}
+        {threaded && <span className="post__time">{shortTime(post.at)}</span>}
         {post.alien && (
-          <span className="chip chip--proposal">Long shot · Alien</span>
+          <span className="chip chip--proposal">
+            {!threaded
+              ? 'Long shot · Alien'
+              : mode === 'simple'
+                ? 'Long shot'
+                : 'Alien'}
+          </span>
         )}
         {post.noSearch && (
           <span className="chip chip--search">No search yet</span>
@@ -184,7 +197,9 @@ function PostLines({
         )}
       </div>
       <div className="post__text">
-        <span>{post.text}</span>
+        <span>
+          <IdText text={post.text} />
+        </span>
         <ProofLinks post={post} />
       </div>
       {lab && <CheckNote post={post} lab={lab} />}
@@ -209,6 +224,7 @@ export function BoardThread({
   /** Reply to a post of the thread. Without it, posts have no Reply. */
   readonly onReply?: (post: Post) => void;
 }): ReactNode {
+  const { threaded } = useView();
   // A changed plan replies to the plan before it. The plan of record leads its thread.
   const current = lab?.plan?.post;
   const promoted = thread.replies.find((reply) => reply.id === current);
@@ -234,8 +250,9 @@ export function BoardThread({
               <Avatar who={who(reply)} size="xs" />
               <span>
                 <span className="ack__name">{authorOf(reply)}</span>
+                {threaded && ` · ${shortTime(reply.at)}`}
                 {' · '}
-                {reply.text}
+                <IdText text={reply.text} />
                 <ProofLinks post={reply} />
               </span>
             </div>

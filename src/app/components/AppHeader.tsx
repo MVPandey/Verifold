@@ -6,12 +6,16 @@ import { href } from '../route.ts';
 import { onMac, searchKey } from '../search.ts';
 import { ToolsContext } from '../tools.ts';
 import { useAction } from '../useAction.ts';
+import { useView } from '../view-mode.ts';
+import { span } from '../format.ts';
 import { Logo, Magnifier } from './Icons.tsx';
 import { MoreMenu } from './MoreMenu.tsx';
+import { ViewSwitch } from './ViewSwitch.tsx';
 
 /**
- * The top bar: the project, the money line, search, pause, and links to the
- * project's settings and the person's profile. The project switcher comes
+ * The top bar: the project, the money line, the Simple and Technical switch
+ * of a lab with threads, search, pause, and links to the project's settings
+ * and the person's profile. The project switcher comes
  * with a later slice of #282, so the bar shows none until it works. Search
  * shows when the app gives it, as it does for a lab. In a narrow window,
  * Settings and Profile move into the ⋯ menu, and the money line goes under
@@ -34,12 +38,14 @@ export function AppHeader({
   const pause = useAction(onPause);
   const tools = useContext(ToolsContext);
   const key = searchKey(onMac);
+  const { threaded } = useView();
   return (
     <header className="header header--app">
       <Logo />
       <span className="header__project">{project}</span>
       <div className="header__spacer" />
       {lab && <MoneyLine lab={lab} now={now} />}
+      {lab && threaded && <ViewSwitch />}
       {lab && tools && (
         <button
           type="button"
@@ -100,7 +106,7 @@ export function AppHeader({
   );
 }
 
-/** "Due Fri 18:00 · ≈$3.10 plans · $4.20 of $25 GPU" */
+/** "Due Fri 18:00 · ≈$3.10 plans · $4.20 of $25 GPU", after the lab's time so far when it has threads. */
 export function MoneyLine({
   lab,
   now,
@@ -109,8 +115,14 @@ export function MoneyLine({
   readonly now: number;
 }): ReactNode {
   const parts = moneyLine(lab.money, lab.budget?.deadline ?? null, now);
+  const { threaded } = useView();
   return (
     <span className="header__money">
+      {threaded && (
+        <span className="muted">
+          {span(now - Date.parse(lab.startedAt))} in ·{' '}
+        </span>
+      )}
       {parts.map((part, index) => (
         <Fragment key={index}>
           {index > 0 && ' · '}

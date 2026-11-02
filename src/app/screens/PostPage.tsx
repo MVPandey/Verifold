@@ -7,6 +7,7 @@ import { authorOf, clock, roleName } from '../format.ts';
 import { mentionNames } from '../mentions.ts';
 import { href } from '../route.ts';
 import type { Connection } from '../store.ts';
+import { useView } from '../view-mode.ts';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { BoardThread, showPost } from '../components/BoardThread.tsx';
 import { Composer } from '../components/Composer.tsx';
@@ -48,6 +49,7 @@ export function PostPage({
   ) => Promise<Loaded<PostThread>>;
 }): ReactNode {
   const controls = useContext(ControlsContext);
+  const { threaded } = useView();
   const [loaded, setLoaded] = useState<Loaded<PostThread> | null>(null);
   // A reply that went through reads the thread again, so it shows.
   const [replies, setReplies] = useState(0);
@@ -88,6 +90,11 @@ export function PostPage({
           )}
           {thread && (
             <section className="section section--board">
+              {post?.thread && threaded && (
+                <a className="more" href={href.thread(post.thread)}>
+                  Open its thread
+                </a>
+              )}
               {post?.replyTo && (
                 <a className="more" href={href.post(post.replyTo)}>
                   It answers an earlier post

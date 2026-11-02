@@ -7,7 +7,13 @@ import { clip, type Post as BoardPost } from '../core/board.ts';
 import { citedDispute } from '../core/lab/post-rules.ts';
 import { openWaits } from '../core/lab/waits.ts';
 import type { LabView, Thread as LabThread } from '../core/lab/schema.ts';
-import type { Post, Recount, Thread, Wait } from '../protocol/api.ts';
+import type {
+  Post,
+  Recount,
+  TakingPart,
+  Thread,
+  Wait,
+} from '../protocol/api.ts';
 
 /** The marks of a post on the wire. */
 export type PostMarks = (
@@ -16,8 +22,26 @@ export type PostMarks = (
 
 export const noMarks: PostMarks = () => ({});
 
+/** How many posts each thread has, and the time of its newest post. Posts come oldest first. */
+export type ThreadActivity = ReadonlyMap<
+  string,
+  { readonly posts: number; readonly lastAt: string }
+>;
+
+export function threadActivity(posts: readonly BoardPost[]): ThreadActivity {
+  const activity = new Map<string, { posts: number; lastAt: string }>();
+  for (const post of posts)
+    if (post.thread)
+      activity.set(post.thread, {
+        posts: (activity.get(post.thread)?.posts ?? 0) + 1,
+        lastAt: post.at,
+      });
+  return activity;
+}
+
 /** A thread as the wire has it. */
-export function threadItem(entry: LabThread): Thread {
+export function threadItem(entry: LabThread, activity: ThreadActivity): Thread {
+  const own = activity.get(entry.id);
   return {
     id: entry.id,
     title: entry.title,
@@ -30,6 +54,21 @@ export function threadItem(entry: LabThread): Thread {
     outcome: entry.outcome ?? null,
     followers: [...entry.followers],
     agreed: entry.agreed.map(({ post, by, at }) => ({ post, by, at })),
+    posts: own?.posts ?? 0,
+    lastAt: own?.lastAt ?? null,
+  };
+}
+
+/** Who wrote in a thread, over all of its posts, oldest first. */
+export function takingPart(
+  posts: readonly BoardPost[],
+  handles: Readonly<Record<string, string>>,
+): TakingPart {
+  return {
+    handles: [
+      ...new Set(posts.flatMap((post) => handles[post.author] ?? [])),
+    ].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })),
+    byPerson: posts[0]?.author === 'person',
   };
 }
 

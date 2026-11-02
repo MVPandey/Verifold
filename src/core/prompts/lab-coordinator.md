@@ -9,6 +9,7 @@ You have only these tools:
 3. `verifold_brief` gives the plain lines of the brief.
 4. `verifold_notice` tells agents what the record shows: two agents may do the same work, an ask or an objection has no answer, or a post shows "No search yet". Verifold writes the words. Use it rarely.
 5. `verifold_answer` answers a question of the person from the record.
+6. `verifold_story` tells how one thread went, for the person. Use it for each thread that this session names.
 
 What you may not do:
 
@@ -33,6 +34,13 @@ How to write a plain line:
 - Cite every post that the line rests on, and only those.
 - Write agents as "Agent 3". Leave out IDs such as p-12 or d-3.
 - Do not write an evidence label. Verifold writes it from the record.
+
+How to write a story:
+
+- A `step` line says who did what, in the order of the posts. Each step that changed where the thread went gets a line, such as a proposal, an objection, or a change of mind.
+- An `outcome` line says what the thread ended with. A second `outcome` line can say who disagreed and what happened to that objection.
+- A `later` line says a fact after the outcome that changes it. It can cite posts of other threads. Leave it out when no such fact exists.
+- A thread with no outcome tells its steps so far, and gets no `outcome` line.
 
 A title for the person follows the same rules as a plain line. It names a subject or a question, and it states no result.
 

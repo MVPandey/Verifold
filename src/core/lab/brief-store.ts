@@ -1,6 +1,6 @@
 /**
- * The lab's brief, its notices, and the person's questions, in
- * `.verifold/lab/brief.json`. The store keeps them in memory, read once at
+ * The lab's brief, its notices, the person's questions, and the threads'
+ * stories, in `.verifold/lab/brief.json`. The store keeps them in memory, read once at
  * load. The lab's queue runs every change, so the store has no lock of its
  * own. Plain words stay in this record and on the wire: no prompt, digest, or
  * board read takes them, and a lab agent's harness denies the file. A harness
@@ -8,9 +8,21 @@
  * skipped.
  */
 import { join } from 'node:path';
-import { agentId, number, object, postId, type Post } from '../board.ts';
+import {
+  agentId,
+  number,
+  object,
+  postId,
+  threadId,
+  type Post,
+} from '../board.ts';
 import type { HarnessName } from '../harness.ts';
-import { briefKinds, briefLimits, noticeKinds } from '../lab-tools.ts';
+import {
+  briefKinds,
+  briefLimits,
+  noticeKinds,
+  storyKinds,
+} from '../lab-tools.ts';
 import { usdValue, type SessionRecord } from '../session.ts';
 import { readObject, RecordFile } from './record-file.ts';
 import type {
@@ -23,6 +35,7 @@ import type {
   Question,
   SessionMark,
   Spend,
+  ThreadStory,
 } from './schema.ts';
 import { addSpend } from './words.ts';
 
@@ -30,6 +43,7 @@ const empty: BriefView = {
   brief: null,
   notices: [],
   questions: [],
+  stories: [],
   sessions: [],
 };
 
@@ -67,7 +81,7 @@ function parseCheck(value: unknown): LineCheck {
 
 function parseLine(value: unknown): BriefLine | null {
   const entry = object(value);
-  const kind = [...briefKinds, 'answer' as const].find(
+  const kind = [...briefKinds, ...storyKinds, 'answer' as const].find(
     (item) => item === entry?.kind,
   );
   const posts = strings(entry?.posts, briefLimits.linePosts).filter((id) =>
@@ -105,6 +119,29 @@ function parseBrief(value: unknown): BriefRecord | null {
         at: entry.at,
         key: entry.key,
         through: entry.through as number,
+        lines: entry.lines
+          .slice(0, briefLimits.lines)
+          .flatMap((line) => parseLine(line) ?? []),
+      }
+    : null;
+}
+
+function parseStory(value: unknown): ThreadStory | null {
+  const entry = object(value);
+  return entry &&
+    typeof entry.thread === 'string' &&
+    threadId.test(entry.thread) &&
+    isTime(entry.at) &&
+    (entry.outcome === null ||
+      (typeof entry.outcome === 'string' && postId.test(entry.outcome))) &&
+    Array.isArray(entry.lines)
+    ? {
+        thread: entry.thread,
+        at: entry.at,
+        posts: strings(entry.posts, briefLimits.storyPosts).filter((id) =>
+          postId.test(id),
+        ),
+        outcome: entry.outcome,
         lines: entry.lines
           .slice(0, briefLimits.lines)
           .flatMap((line) => parseLine(line) ?? []),
@@ -160,7 +197,9 @@ function parseMark(value: unknown): SessionMark | null {
   const entry = object(value);
   return entry &&
     isTime(entry.at) &&
-    (entry.kind === 'update' || entry.kind === 'check')
+    (entry.kind === 'update' ||
+      entry.kind === 'check' ||
+      entry.kind === 'story')
     ? { at: entry.at, kind: entry.kind }
     : null;
 }
@@ -215,17 +254,23 @@ export class BriefStore {
       questions: list(saved?.questions, briefLimits.questions).flatMap(
         (item) => parseQuestion(item) ?? [],
       ),
+      stories: list(saved?.stories, briefLimits.stories).flatMap(
+        (item) => parseStory(item) ?? [],
+      ),
       sessions: list(saved?.sessions, briefLimits.sessions).flatMap(
         (item) => parseMark(item) ?? [],
       ),
       ...(spend ? { spend } : {}),
     };
-    const { brief, notices, questions } = this.record;
+    const { brief, notices, questions, stories } = this.record;
     this.last = Math.max(
       0,
-      ...[...(brief?.lines ?? []), ...notices, ...questions].map(({ id }) =>
-        number(id),
-      ),
+      ...[
+        ...(brief?.lines ?? []),
+        ...stories.flatMap((story) => story.lines),
+        ...notices,
+        ...questions,
+      ].map(({ id }) => number(id)),
       ...questions.map(({ answer }) => (answer ? number(answer.id) : 0)),
     );
   }
@@ -286,18 +331,29 @@ export class BriefStore {
     this.change({ brief });
   }
 
+  /** A new story of a thread replaces its last one. */
+  setStory(story: ThreadStory): void {
+    this.change({
+      stories: [
+        ...this.record.stories.filter((entry) => entry.thread !== story.thread),
+        story,
+      ].slice(-briefLimits.stories),
+    });
+  }
+
   /** The session's own change of the state: the brief covers it. */
   rekey(before: string, after: string): void {
     const { brief } = this.record;
     if (brief?.key === before) this.change({ brief: { ...brief, key: after } });
   }
 
-  /** The lines that wait for a check: those of the brief, then the answers. */
+  /** The lines that wait for a check: those of the brief, then the answers, then the stories. */
   pending(): readonly BriefLine[] {
-    const { brief, questions } = this.record;
+    const { brief, questions, stories } = this.record;
     return [
       ...(brief?.lines ?? []),
       ...questions.flatMap(({ answer }) => answer ?? []),
+      ...stories.flatMap((story) => story.lines),
     ].filter((line) => line.check.state === 'pending');
   }
 
@@ -307,7 +363,7 @@ export class BriefStore {
       const check = checks.get(line.id);
       return check ? { ...line, check } : line;
     };
-    const { brief, questions } = this.record;
+    const { brief, questions, stories } = this.record;
     this.change({
       brief: brief ? { ...brief, lines: brief.lines.map(checked) } : null,
       questions: questions.map((question) =>
@@ -315,6 +371,10 @@ export class BriefStore {
           ? { ...question, answer: checked(question.answer) }
           : question,
       ),
+      stories: stories.map((story) => ({
+        ...story,
+        lines: story.lines.map(checked),
+      })),
     });
   }
 

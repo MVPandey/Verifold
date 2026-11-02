@@ -1818,10 +1818,15 @@ export class Lab {
     readonly kind?: unknown;
     readonly direction?: unknown;
     readonly replyTo?: unknown;
+    readonly thread?: unknown;
   }): Promise<Post> {
     return this.serial(async () => {
       this.current();
       const body = text(input.text, boardLimits.personText, 'your post');
+      const thread =
+        input.thread === undefined || !this.threaded
+          ? undefined
+          : (this.threads.get(input.thread) ?? fail('This thread is gone.'));
       const kind: PostKind =
         input.kind === undefined || input.kind === null || input.kind === ''
           ? 'question'
@@ -1860,6 +1865,7 @@ export class Lab {
         kind,
         ...(direction ? { direction } : {}),
         ...(replyTo ? { replyTo } : {}),
+        ...(thread ? { thread: thread.id } : {}),
         text: body,
         mentions,
         artifacts: [],
@@ -8350,6 +8356,15 @@ Start now: find the claim's premise, start a run early, and post your rerun once
         fail('The lab is paused, so no session starts.');
       if (!this.threaded) fail('A lab from before threads has no Coordinator.');
       this.coordinator.ask(text);
+      this.kick();
+    });
+  }
+
+  /** The person opened a thread with no story that covers its posts. It wakes no agent. */
+  wantStory(thread: unknown): Promise<void> {
+    return this.serial(() => {
+      if (!this.threaded) fail('A lab from before threads has no stories.');
+      this.coordinator.wantStory(thread);
       this.kick();
     });
   }
