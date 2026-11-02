@@ -317,10 +317,10 @@ await test('the call opens as a modal dialog over the lab: who asked and when, t
     page,
     /Qwen3\.5-9B has official SAEs · unverified \(no source\)/,
   );
-  // The words box: a labelled multiline composer with the server's limit.
+  // The words box: a labelled multiline composer with the server's limit. Words start no pod, and the label says so.
   assert.match(
     box,
-    /<label for="[^"]+" class="composer__label">Or tell them what to do instead<\/label>/,
+    /<label for="[^"]+" class="composer__label">Or write to them\. Only an option starts a pod\.<\/label>/,
   );
   assert.match(box, /<textarea[^>]*maxLength="2000"/);
   // The last line says how to take back the agents' pick, a pod.
@@ -431,6 +431,24 @@ await test("Verifold's deadline call says who asks, and after words it says that
   );
   assert.match(page, /Your answer applies at once, and it has no undo\./);
   assert.doesNotMatch(page, /See the thread/);
+});
+
+await test('words on a pod call leave it open: the dialog says who got them and that an option still answers it', () => {
+  const pod = call({ words: 'Get whichever GPU is free.' });
+  const page = text(
+    dialog(render(snapshot({ needsYou: [pod] }), '#/call/c-4')),
+  );
+  assert.match(
+    page,
+    /Your words went to claude-2 and codex-2\. Words start no pod, so pick an option above to answer\./,
+  );
+  assert.match(page, /Rent 1 H100 for 3 hours/);
+  // A call with no pod option keeps the usual box, and words on it answer it.
+  const scope = call({
+    options: [{ label: 'Stop it', usd: null, minutes: null, effect: null }],
+  });
+  const box = dialog(render(snapshot({ needsYou: [scope] }), '#/call/c-4'));
+  assert.match(box, /Or tell them what to do instead/);
 });
 
 await test('a pod option says when a pod secret must be stored first, with a command for each', () => {
