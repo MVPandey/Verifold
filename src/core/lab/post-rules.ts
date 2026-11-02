@@ -395,8 +395,9 @@ export type HeldCheck = Pick<
 /**
  * The one test of "held up", for a direction's verdict and a line's tag, so the
  * two cannot disagree. It needs a blind rerun of Verifold that held on `post`.
- * After that rerun, no check of any form failed, and no objection was accepted.
- * Nothing refutes the rerun, and no dispute stands. An agent's own `check` post
+ * No check of Verifold failed on `post` at any time, as a verdict refuses. After
+ * that rerun, no check post failed it and no objection was accepted. Nothing
+ * refutes the rerun, and no dispute stands. An agent's own `check` post
  * never holds a post up, whatever its method. `posts`: the lab's, or what
  * `evidencePosts` gives. A check that waits is the verdict's own concern.
  */
@@ -425,9 +426,7 @@ export function heldUp(
     entry?.replyTo !== undefined && targets.has(entry.replyTo);
   const open = openObjections(posts, checks);
   return !(
-    own.some(
-      (check) => check.outcome !== 'holds' && when(check.endedAt) > since,
-    ) ||
+    own.some((check) => check.outcome !== 'holds') ||
     posts.some(
       (entry) =>
         when(entry.at) > since &&

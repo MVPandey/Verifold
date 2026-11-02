@@ -608,7 +608,7 @@ await test('a brief has at most 5 lines, and a later brief replaces the last one
   );
 });
 
-await test('"Held up" needs a blind rerun of Verifold that held, and nothing since against it', () => {
+await test('"Held up" needs a blind rerun of Verifold that held, and no check that failed', () => {
   const one = [postOf('p-1')];
   const two = [postOf('p-1'), postOf('p-2')];
   const later = '2026-11-01T12:05:00.000Z';
@@ -622,7 +622,7 @@ await test('"Held up" needs a blind rerun of Verifold that held, and nothing sin
     { blind: false },
   ] as const)
     assert.equal(shownKind('held', one, [checkOf(more)]), 'result');
-  // A later failed check of any form takes it back, and an earlier one does not.
+  // A failed check of any form takes it back, before or after the rerun.
   for (const form of ['rerun', 'code-read'] as const)
     assert.equal(
       shownKind('held', one, [
@@ -636,7 +636,7 @@ await test('"Held up" needs a blind rerun of Verifold that held, and nothing sin
       checkOf({ outcome: 'differs', endedAt: '2026-11-01T11:00:00.000Z' }),
       checkOf(),
     ]),
-    'held',
+    'result',
   );
   // Each result needs its own.
   assert.equal(shownKind('held', two, [checkOf()]), 'result');
@@ -663,6 +663,18 @@ await test("an agent's own check post never holds a post up, whatever its method
     'result',
   );
   assert.equal(heldUp(one, [one, reran], []), false);
+});
+
+await test('a check that failed keeps a post from holding up, even when a later rerun held, as a verdict refuses', () => {
+  const claim = postOf('p-1');
+  const held = checkOf({ endedAt: '2026-11-01T12:10:00.000Z' });
+  const failed = checkOf({
+    outcome: 'fails',
+    endedAt: '2026-11-01T12:00:00.000Z',
+  });
+  assert.equal(heldUp(claim, [claim], [held]), true);
+  assert.equal(heldUp(claim, [claim], [failed, held]), false);
+  assert.equal(shownKind('held', [claim], [failed, held]), 'result');
 });
 
 await test('a held rerun stops holding after a refutation, an accepted objection, or a dispute', () => {
