@@ -35,7 +35,7 @@ export interface Workspace {
   readonly helper?: 'claude' | 'codex';
   /** The helper's model for this project. Without one, the profile's model for the helper applies. */
   readonly helperModel?: string;
-  /** How many agents may run at the same time, 1 to `maxAgents`. Absent means the default, 3. */
+  /** How many agents may run at the same time, 1 to `maxAgents`. Absent means the default, 4. */
   readonly agents?: number;
   readonly context?: string;
   /** The project uses its own profile in `.verifold/agency/`, not the global one. */

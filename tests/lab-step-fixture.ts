@@ -150,6 +150,7 @@ export async function planned(
   let seed = 0;
   const lab = new Lab(root, {
     sessions: fake.sessions,
+    reserved: fake.sessions,
     sandbox: (spec) => ({ file: '/bin/sh', args: ['-c', spec.command] }),
     harnesses: () => Promise.resolve(['claude', 'codex']),
     random: () => {
@@ -164,6 +165,10 @@ export async function planned(
     },
   });
   t.after(() => lab.close());
+  // A draw here runs at once: a real Coordinator keeps an update scheduled for 3 minutes.
+  (
+    lab as unknown as { coordinator: { idle(): Promise<boolean> } }
+  ).coordinator.idle = () => Promise.resolve(true);
   const view = (): LabView => {
     const shown = lab.view();
     assert.ok(shown);

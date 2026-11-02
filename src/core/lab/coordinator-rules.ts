@@ -8,7 +8,14 @@
  * thread's title quotes the person, for the same reason. A refusal says what
  * to change.
  */
-import { agentId, clip, object, postId, type Post } from '../board.ts';
+import {
+  agentId,
+  clip,
+  object,
+  postId,
+  type Post,
+  type PostKind,
+} from '../board.ts';
 import {
   briefLimits,
   claimVerdicts,
@@ -22,6 +29,7 @@ import {
   text,
   type Check,
   type LineCheck,
+  type LineProblem,
   type NoticeKind,
   type Thread,
   type Notice,
@@ -68,19 +76,16 @@ function plainWords(value: unknown, limit: number, what: string): string {
   return words;
 }
 
-/** The lines of `verifold_brief` or `verifold_story`, checked. `kinds`: what a line can be. */
+/** The lines of `verifold_brief` or `verifold_story`, checked. `kinds`: what a line can be. `most`: how many it can have. */
 export function parseLines<Kind extends string>(
   value: unknown,
   post: (id: string) => Post | undefined,
   keepPlain: boolean,
   kinds: readonly Kind[],
+  most: number,
 ): readonly DraftLine<Kind>[] {
-  if (
-    !Array.isArray(value) ||
-    !value.length ||
-    value.length > briefLimits.lines
-  )
-    fail(`Give 1 to ${briefLimits.lines} lines.`);
+  if (!Array.isArray(value) || !value.length || value.length > most)
+    fail(`Give 1 to ${most} lines, the most important first.`);
   return value.map((item) => {
     const entry = object(item) ?? {};
     return {
@@ -121,7 +126,7 @@ export function parseChecks(
       fail(`Split ${id} into its claims.`);
     if (entry.claims.length > briefLimits.claims)
       fail(`Give ${id} at most ${briefLimits.claims} claims.`);
-    const problems = entry.claims.flatMap((claim): readonly string[] => {
+    const problems = entry.claims.flatMap((claim): readonly LineProblem[] => {
       const part = object(claim) ?? {};
       const verdict =
         claimVerdicts.find((known) => known === part.verdict) ??
@@ -129,12 +134,17 @@ export function parseChecks(
       return verdict === 'supported'
         ? []
         : [
-            `${verdict}: ${oneLine(text(part.claim, briefLimits.claim, 'the claim'))}`,
+            {
+              kind: verdict,
+              claim: oneLine(text(part.claim, briefLimits.claim, 'the claim')),
+            },
           ];
     });
     const dropped = entry.dropped.map(
-      (caveat) =>
-        `dropped-caveat: ${oneLine(text(caveat, briefLimits.claim, 'the caveat'))}`,
+      (caveat): LineProblem => ({
+        kind: 'dropped-caveat',
+        claim: oneLine(text(caveat, briefLimits.claim, 'the caveat')),
+      }),
     );
     const found = [...problems, ...dropped].slice(0, briefLimits.claims);
     checks.set(id, {
@@ -145,6 +155,25 @@ export function parseChecks(
   const left = ids.filter((id) => !checks.has(id));
   if (left.length) fail(`Check each line. These are left: ${left.join(', ')}.`);
   return checks;
+}
+
+/** The kinds of post that say what a run or a check did. A plan, an ask, or a proposal tried nothing. */
+const triedKinds: ReadonlySet<PostKind> = new Set([
+  'result',
+  'check',
+  'rerun',
+  'ruled-out',
+  'claim',
+  'evidence',
+]);
+
+/** The post that `verifold_tried` cites, checked. */
+export function triedPost(post: Post | undefined): Post {
+  return post && triedKinds.has(post.kind)
+    ? post
+    : fail(
+        'Cite a result, check, rerun, or ruled-out post that is on the board.',
+      );
 }
 
 /** A title for the person. It reaches no agent, and it holds no number that the posts do not hold. */

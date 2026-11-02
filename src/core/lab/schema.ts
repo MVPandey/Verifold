@@ -26,6 +26,7 @@ import {
   checkOutcomes,
   directionLimits,
   handlePattern,
+  type lineProblems,
   noticeKinds,
   planLimits,
   storyKinds,
@@ -645,6 +646,12 @@ export type LineState =
   | 'numbers'
   | 'withheld';
 
+/** One thing that a line's check found: its kind, and the check's words or a number. */
+export interface LineProblem {
+  readonly kind: (typeof lineProblems)[number];
+  readonly claim: string;
+}
+
 export interface LineCheck {
   readonly state: LineState;
   /** The harness of the session that checked it. */
@@ -652,7 +659,7 @@ export interface LineCheck {
   /** A fresh session of the writer's own harness checked it: the team has one. */
   readonly sameHarness: boolean;
   /** What a failed check found, or the numbers that no post holds. */
-  readonly problems: readonly string[];
+  readonly problems: readonly LineProblem[];
 }
 
 /** A plain line with what it rests on. */
@@ -925,7 +932,8 @@ export interface LabOptions {
   readonly sessions: LabSessions;
   /**
    * The place of the Coordinator and its line check, outside "Agents at once":
-   * one session at a time. Without it, a lab has no Coordinator.
+   * one session at a time. A long-shot session uses it when the Coordinator
+   * leaves it free. Without it, a lab has no Coordinator and runs no draw.
    */
   readonly reserved?: Pick<
     LabSessions,

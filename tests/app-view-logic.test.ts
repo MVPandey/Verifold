@@ -26,9 +26,9 @@ import {
   decisionCount,
   hasOriginal,
   lineHref,
-  lineText,
   quietWords,
-  quoteText,
+  quoteTexts,
+  shownPlain,
   topLine,
 } from '../src/app/brief-view.ts';
 import { clock, shortTime } from '../src/app/format.ts';
@@ -427,34 +427,31 @@ await test('Needs you lists each call, then each ask to the person, and leaves o
 
 await test('Technical quotes unchanged, and Simple shows plain words, or the quote', () => {
   const line = briefLine();
-  assert.equal(
-    lineText(line, 'technical', false),
-    'Seed 0 gives 55%. (p-155) Seed 1 gives 60%. (p-156)',
-  );
-  assert.equal(lineText(line, 'simple', false), 'It looks open.');
-  assert.equal(
-    lineText(line, 'simple', true),
-    'Seed 0 gives 55%. Seed 1 gives 60%.',
-  );
-  assert.equal(
-    lineText({ ...line, plain: null }, 'simple', false),
-    'Seed 0 gives 55%. Seed 1 gives 60%.',
-  );
+  assert.deepEqual(quoteTexts(line, 'technical'), [
+    'Seed 0 gives 55%. (p-155)',
+    'Seed 1 gives 60%. (p-156)',
+  ]);
+  assert.deepEqual(quoteTexts(line, 'simple'), [
+    'Seed 0 gives 55%.',
+    'Seed 1 gives 60%.',
+  ]);
+  assert.equal(shownPlain(line, 'technical', false), null);
+  assert.equal(shownPlain(line, 'simple', false), 'It looks open.');
+  assert.equal(shownPlain(line, 'simple', true), null);
+  assert.equal(shownPlain({ ...line, plain: null }, 'simple', false), null);
   assert.equal(hasOriginal(line, 'simple'), true);
   assert.equal(hasOriginal(line, 'technical'), false);
-  assert.equal(hasOriginal({ plain: null }, 'simple'), false);
+  assert.equal(hasOriginal({ ...line, plain: null }, 'simple'), false);
 });
 
 await test('an agent’s own IDs stay in its words in both views', () => {
   const quotes = [{ post: 'p-9', text: 'This builds on p-1 (p-2) and r-7.' }];
-  assert.equal(
-    quoteText({ quotes }, 'simple'),
+  assert.deepEqual(quoteTexts({ quotes }, 'simple'), [
     'This builds on p-1 (p-2) and r-7.',
-  );
-  assert.equal(
-    quoteText({ quotes }, 'technical'),
+  ]);
+  assert.deepEqual(quoteTexts({ quotes }, 'technical'), [
     'This builds on p-1 (p-2) and r-7. (p-9)',
-  );
+  ]);
 });
 
 await test('a line links to its thread, or to its post in a lab with no thread for it', () => {

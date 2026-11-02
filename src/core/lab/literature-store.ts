@@ -185,6 +185,19 @@ export class LiteratureStore {
     return `The idea is on the map, as ${next.find((entry) => entry.text === idea)?.id ?? 'a new idea'}.`;
   }
 
+  /** `verifold_tried`: one idea gets its tried mark, with the post that tried it. Returns the reply to the session. */
+  async markTried(id: unknown, post: string): Promise<string> {
+    const idea =
+      this.ideaMap.find((entry) => entry.id === id) ??
+      fail('Name an idea of the map, such as i-3.');
+    if (idea.tried) return `${idea.id} has its tried mark already.`;
+    this.ideaMap = this.ideaMap.map((entry) =>
+      entry === idea ? { ...entry, tried: true, post } : entry,
+    );
+    await this.file.save().catch(() => {});
+    return `${idea.id} is marked tried, with ${post}.`;
+  }
+
   /** The reading map, newest last, one line each. Agents wrote its texts, so they are quoted. */
   sourceLines(limit: number): string {
     return (
@@ -205,7 +218,7 @@ export class LiteratureStore {
         .slice(-limit)
         .map(
           (idea) =>
-            `- ${idea.id} [${idea.tried ? 'tried' : 'not tried'}] ${JSON.stringify(idea.text)}${idea.sources.length ? ` from ${idea.sources.join(', ')}` : ''}`,
+            `- ${idea.id} [${idea.tried ? `tried${idea.post ? ` in ${idea.post}` : ''}` : 'not tried'}] ${JSON.stringify(idea.text)}${idea.sources.length ? ` from ${idea.sources.join(', ')}` : ''}`,
         )
         .join('\n') || 'The idea map holds no idea yet.'
     );

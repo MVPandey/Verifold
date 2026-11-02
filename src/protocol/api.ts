@@ -255,6 +255,18 @@ export interface Reading {
   readonly lastPaperAt: string | null;
 }
 
+/** One thing that a line's check found. */
+export interface LineProblem {
+  readonly kind:
+    | 'added-fact'
+    | 'raised-certainty'
+    | 'number-out-of-scope'
+    | 'dropped-caveat'
+    | 'stray-number';
+  /** The check's words, or a number that no cited post holds. */
+  readonly claim: string;
+}
+
 /** The check of a plain line. */
 export interface LineCheck {
   /**
@@ -268,6 +280,11 @@ export interface LineCheck {
   readonly by: Harness | null;
   /** A fresh session of the writer's own harness checked it, because the team has one. */
   readonly sameHarness: boolean;
+  /** An answer that failed its check: what the check found first, and how many problems it found. Added after version 1. */
+  readonly failure?: {
+    readonly first: LineProblem | null;
+    readonly count: number;
+  };
 }
 
 /** One cited post, unchanged, apart from its ID. */
@@ -278,10 +295,12 @@ export interface Quote {
 
 /** One line of a brief, or an answer of the Coordinator. */
 export interface BriefLine {
+  /** `held` needs a rerun that held, on the record. Without one, the line is a `result`. */
   readonly kind:
     | 'decided'
     | 'failed'
     | 'held'
+    | 'result'
     | 'open'
     | 'new'
     | 'answer'
@@ -290,7 +309,7 @@ export interface BriefLine {
     | 'later';
   /** The time of its newest post. */
   readonly at: string;
-  /** The plain words, only once they passed their check. Null: show `quotes`. */
+  /** The plain words, once they passed their check. An answer to the person has them at any state of its check. Null: show `quotes`. */
   readonly plain: string | null;
   /** The cited posts unchanged, each apart from its ID. Verifold builds them. */
   readonly quotes: readonly Quote[];
@@ -1069,7 +1088,7 @@ export interface IdeaPage {
   }[];
   /** The person stopped long shots, until their next Draw again. */
   readonly stopped: boolean;
-  /** A draw runs now, or waits for a free slot. */
+  /** A draw runs now, or waits for the Coordinator's place. */
   readonly drawing: 'running' | 'waiting' | null;
   /** The harness of the session that judges now. */
   readonly judge: Harness | null;

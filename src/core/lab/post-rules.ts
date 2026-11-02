@@ -379,6 +379,70 @@ export function refutation(post: Post, posts: readonly Post[]): string | null {
     : null;
 }
 
+/** What `heldUp` reads of a check. */
+export type HeldCheck = Pick<
+  Check,
+  | 'claim'
+  | 'state'
+  | 'outcome'
+  | 'method'
+  | 'blind'
+  | 'result'
+  | 'endedAt'
+  | 'objections'
+>;
+
+/**
+ * The one test of "held up", for a direction's verdict and a line's tag, so the
+ * two cannot disagree. It needs a blind rerun of Verifold that held on `post`.
+ * No check of Verifold failed on `post` at any time, as a verdict refuses. After
+ * that rerun, no check post failed it and no objection was accepted. Nothing
+ * refutes the rerun, and no dispute stands. An agent's own `check` post
+ * never holds a post up, whatever its method. `posts`: the lab's, or what
+ * `evidencePosts` gives. A check that waits is the verdict's own concern.
+ */
+export function heldUp(
+  post: Pick<Post, 'id'>,
+  posts: readonly Post[],
+  checks: readonly HeldCheck[],
+): boolean {
+  const when = (at: string | null): number => Date.parse(at ?? '');
+  const own = checks.filter(
+    (check) => check.claim === post.id && check.state === 'done',
+  );
+  const rerun = own
+    .filter(
+      (check) =>
+        check.outcome === 'holds' && check.method === 'rerun' && check.blind,
+    )
+    .sort((a, b) => when(b.endedAt) - when(a.endedAt))[0];
+  if (!rerun) return false;
+  const byId = new Map(posts.map((entry) => [entry.id, entry]));
+  const reran = rerun.result ? byId.get(rerun.result) : undefined;
+  if (reran && refutation(reran, posts)) return false;
+  const since = when(rerun.endedAt);
+  const targets = new Set([post.id, ...(reran ? [reran.id] : [])]);
+  const aimed = (entry: Post | undefined): boolean =>
+    entry?.replyTo !== undefined && targets.has(entry.replyTo);
+  const open = openObjections(posts, checks);
+  return !(
+    own.some((check) => check.outcome !== 'holds') ||
+    posts.some(
+      (entry) =>
+        when(entry.at) > since &&
+        ((entry.kind === 'check' &&
+          entry.outcome === 'fails' &&
+          aimed(entry)) ||
+          (entry.kind === 'answer' &&
+            entry.accepts === true &&
+            entry.replyTo !== undefined &&
+            byId.get(entry.replyTo)?.kind === 'objection' &&
+            aimed(byId.get(entry.replyTo)))),
+    ) ||
+    [...targets].some((id) => open.has(id))
+  );
+}
+
 /** The kinds that build on a post, so a dispute of that post marks them. */
 const buildsOnKinds: ReadonlySet<PostKind> = new Set([
   'result',

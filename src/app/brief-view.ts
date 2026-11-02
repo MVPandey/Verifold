@@ -8,6 +8,7 @@ export const lineWords: Readonly<Record<BriefLine['kind'], string>> = {
   decided: 'Decided',
   failed: 'Failed',
   held: 'Held up',
+  result: 'Result',
   open: 'Open',
   new: 'New',
   answer: 'Answer',
@@ -16,39 +17,38 @@ export const lineWords: Readonly<Record<BriefLine['kind'], string>> = {
   later: 'Later',
 };
 
-/** The cited posts, each unchanged. Technical adds each post's ID after it, and an agent's own IDs stay in both views. */
-export function quoteText(
+/** The cited posts, each its own quote and unchanged. Technical adds each post's ID after it, and an agent's own IDs stay in both views. */
+export function quoteTexts(
   line: Pick<BriefLine, 'quotes'>,
   mode: ViewMode,
-): string {
-  return line.quotes
-    .map(({ post, text }) =>
-      mode === 'technical' ? `${text} (${post})` : text,
-    )
-    .join(' ');
+): readonly string[] {
+  return line.quotes.map(({ post, text }) =>
+    mode === 'technical' ? `${text} (${post})` : text,
+  );
 }
 
 /**
- * The words that a line shows. Technical quotes its posts. Simple shows the
- * plain words, or the quote when the line has no plain words yet, or when the
+ * The plain words that a line shows. Null: it shows its quotes. Technical
+ * quotes its posts, but the person's own question gets its answer as written
+ * in both views. Simple shows the plain words, unless the line has none or the
  * person asked for the original.
  */
-export function lineText(
-  line: Pick<BriefLine, 'plain' | 'quotes'>,
+export function shownPlain(
+  line: Pick<BriefLine, 'kind' | 'plain'>,
   mode: ViewMode,
   original: boolean,
-): string {
-  return mode === 'technical' || original || line.plain === null
-    ? quoteText(line, mode)
+): string | null {
+  return original || (mode === 'technical' && line.kind !== 'answer')
+    ? null
     : line.plain;
 }
 
-/** A line has a way to its quote only where it shows plain words. */
+/** A line has a way to its quote only where it shows plain words and has a post to quote. */
 export function hasOriginal(
-  line: Pick<BriefLine, 'plain'>,
+  line: Pick<BriefLine, 'kind' | 'plain' | 'quotes'>,
   mode: ViewMode,
 ): boolean {
-  return mode === 'simple' && line.plain !== null;
+  return shownPlain(line, mode, false) !== null && line.quotes.length > 0;
 }
 
 /** Where a line's Thread link leads: its thread, or its first post in a lab's older posts. */

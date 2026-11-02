@@ -33,6 +33,8 @@ Verifold's screens, terminal lines, and errors follow two skills: humanizer, and
 | What a person reads of the lab, from posts         | brief        | summary, digest       |
 | A brief's line for a reader outside the field      | plain line   | rewrite, TL;DR        |
 | The cited posts, unchanged, under a plain line     | quote        | source, technical     |
+| A line's tag when a rerun held on the record       | Held up      | verified, confirmed   |
+| A line's tag for one model's report                | Result       | finding, held         |
 | How strong the record behind a line is             | label        | confidence, score     |
 | A second session that tests a plain line           | line check   | fact check, review    |
 | How one thread went, in plain lines                | story        | recap, timeline       |

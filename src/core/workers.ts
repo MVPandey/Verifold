@@ -14,7 +14,7 @@ import {
 } from './session.ts';
 
 /** "Agents at once" when the project does not set it. */
-export const defaultAgents = 3;
+export const defaultAgents = 4;
 
 function fail(message: string): never {
   throw new SessionActionError(message);

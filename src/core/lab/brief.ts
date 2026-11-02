@@ -1,14 +1,14 @@
 /**
  * What a person reads of a lab: pure functions over records, with no lab and
  * no model. A summary is the weakest layer of a research system, so the parts
- * that can come from the record do: the top line, the evidence label, and the
- * quote. The Coordinator writes only the plain words, and `plainNumbersMatch`
- * and a line check test those words against their posts.
+ * that can come from the record do: the top line, the evidence label, a line's
+ * tag, and the quote. The Coordinator writes only the plain words, and
+ * `plainNumbersMatch` and a line check test those words against their posts.
  */
 import { number, type Post, type PostKind } from '../board.ts';
 import { runActive, type RunRecord } from '../runs.ts';
-import { openObjections } from './post-rules.ts';
-import type { Call, Check, Direction, Thread } from './schema.ts';
+import { heldUp, openObjections } from './post-rules.ts';
+import type { Call, Check, Direction, PlanOfRecord, Thread } from './schema.ts';
 import { askerDirections } from './words.ts';
 
 const smallNumbers =
@@ -165,6 +165,18 @@ export function stateKey(
   ]);
 }
 
+/**
+ * A post with its whole text. The board clips a plan's post, and the plan of
+ * record keeps the whole reading, so a quote, a number test, and a line check
+ * read that. An earlier plan's post stays clipped: no record holds the rest.
+ */
+export function wholePost<T extends Pick<Post, 'id' | 'text'>>(
+  post: T,
+  plan: Pick<PlanOfRecord, 'post' | 'reading'> | null,
+): T {
+  return post.id === plan?.post ? { ...post, text: plan.reading } : post;
+}
+
 /** The cited posts quoted unchanged, each apart from its ID, so a view can show the ID or leave it out and touch no agent's words. Verifold builds this, and no model touches it. */
 export function quotesOf(
   posts: readonly Pick<Post, 'id' | 'text'>[],
@@ -296,16 +308,22 @@ function postClock(at: string): string {
 /**
  * The numbers of a plain line that its posts do not hold, each as it counts
  * here, such as "91.5%". A percent needs a percent in a post: 12 of 60 does
- * not back 20%. A time can be the time of a post.
+ * not back 20%. A time can be the time of a post. `facts`: the line's record
+ * facts, so a true count of the record passes. A line check still fails such a
+ * number in a claim about a result.
  */
 export function strayNumbers(
   plain: string,
   posts: readonly Pick<Post, 'text' | 'at'>[],
+  facts: readonly string[] = [],
 ): readonly string[] {
-  const known = posts.flatMap((post) => [
-    ...figures(post.text),
-    { value: postClock(post.at), percent: false },
-  ]);
+  const known = [
+    ...posts.flatMap((post) => [
+      ...figures(post.text),
+      { value: postClock(post.at), percent: false },
+    ]),
+    ...facts.flatMap(figures),
+  ];
   return figures(plain)
     .filter(
       (figure) =>
@@ -433,6 +451,24 @@ function noCheckYet(subjects: readonly Post[]): string {
   const results = subjects.every((post) => resultKinds.has(post.kind));
   const noun = `${results ? 'result' : 'post'}${subjects.length > 1 ? 's' : ''}`;
   return `${capitalized(numberWord(authors.size))} agent${authors.size > 1 ? "s'" : "'s"} ${noun}. No check yet.`;
+}
+
+/**
+ * A line's tag, from the record. The writer's `held` stands only when `heldUp`
+ * holds for each of its results, so a tag cannot say more than a verdict can.
+ * Any other `held` shows as `result`: one model's report. `posts`: what
+ * `evidencePosts` gives.
+ */
+export function shownKind<Kind extends string>(
+  kind: Kind,
+  posts: readonly Post[],
+  checks: readonly EvidenceCheck[],
+): Kind | 'result' {
+  if (kind !== 'held') return kind;
+  const results = posts.filter((post) => resultKinds.has(post.kind));
+  return results.length && results.every((post) => heldUp(post, posts, checks))
+    ? kind
+    : 'result';
 }
 
 /**

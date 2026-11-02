@@ -20,6 +20,7 @@ import type { HarnessName } from '../harness.ts';
 import {
   briefKinds,
   briefLimits,
+  lineProblems,
   noticeKinds,
   storyKinds,
 } from '../lab-tools.ts';
@@ -30,6 +31,7 @@ import type {
   BriefRecord,
   BriefView,
   LineCheck,
+  LineProblem,
   LineState,
   Notice,
   Question,
@@ -58,6 +60,19 @@ const strings = (value: unknown, limit: number): readonly string[] =>
     .filter((item): item is string => typeof item === 'string')
     .slice(0, limit);
 
+/** The problems of a check. An earlier version wrote each as a string, and those are skipped: the state stays. */
+function parseProblems(value: unknown): readonly LineProblem[] {
+  return (Array.isArray(value) ? value : [])
+    .slice(0, briefLimits.claims)
+    .flatMap((item): readonly LineProblem[] => {
+      const entry = object(item);
+      const kind = lineProblems.find((known) => known === entry?.kind);
+      return kind && typeof entry?.claim === 'string'
+        ? [{ kind, claim: entry.claim.slice(0, briefLimits.claim) }]
+        : [];
+    });
+}
+
 function parseCheck(value: unknown): LineCheck {
   const entry = object(value);
   const states: readonly LineState[] = [
@@ -74,7 +89,7 @@ function parseCheck(value: unknown): LineCheck {
         state,
         by: isHarness(entry.by) ? entry.by : null,
         sameHarness: entry.sameHarness === true,
-        problems: strings(entry.problems, briefLimits.claims),
+        problems: parseProblems(entry.problems),
       }
     : { state: 'pending', by: null, sameHarness: false, problems: [] };
 }
@@ -94,7 +109,7 @@ function parseLine(value: unknown): BriefLine | null {
     isTime(entry.at) &&
     typeof entry.plain === 'string' &&
     entry.plain.length <= briefLimits.answer &&
-    posts.length &&
+    (posts.length || kind === 'answer') &&
     isHarness(entry.writer)
     ? {
         id: entry.id,
@@ -321,7 +336,7 @@ export class BriefStore {
             : 'pending',
         by: null,
         sameHarness: false,
-        problems: stray,
+        problems: stray.map((claim) => ({ kind: 'stray-number', claim })),
       },
     };
   }

@@ -37,7 +37,9 @@ function ends(reply: Post, post: Post): boolean {
 /**
  * The waits now, oldest first. An ask waits on who it names. An objection
  * waits on the author of its target. A closed thread ends its waits. An
- * objection to a post of Verifold, or of its own author, waits on no one.
+ * objection to a post of Verifold, or of its own author, waits on no one. This
+ * is the full record, so move and close rules read it as it stands. A screen
+ * of who waits leaves out an agent that ended.
  */
 export function openWaits(
   posts: readonly Post[],

@@ -337,7 +337,7 @@ await test('a line passes only when each claim is supported and no caveat droppe
     ['passed', 'failed', 'failed', 'failed', 'failed'],
   );
   assert.deepEqual(checks.get('l-5')?.problems, [
-    'dropped-caveat: Part (a) passed in two seeds.',
+    { kind: 'dropped-caveat', claim: 'Part (a) passed in two seeds.' },
   ]);
   assert.throws(
     () => parseChecks([], ['l-1']),
@@ -387,6 +387,7 @@ await test('the tools reach nothing that assigns, stops, starts, asks, plans, or
       'verifold_story',
       'verifold_notice',
       'verifold_answer',
+      'verifold_tried',
     ],
   );
   assert.deepEqual(
@@ -446,7 +447,7 @@ interface Rig extends ReturnType<typeof fakePlace> {
   readonly store: BriefStore;
   readonly board: Board;
   readonly threads: ThreadStore;
-  readonly directions: Pick<Direction, 'id' | 'state' | 'verdict'>[];
+  readonly directions: Pick<Direction, 'id' | 'agent' | 'state' | 'verdict'>[];
   readonly held: { readonly agent: string; readonly line: string }[];
   readonly notes: Map<string, string>;
   readonly post: (fields: Partial<NewPost>) => Promise<Post>;
@@ -463,8 +464,9 @@ interface Rig extends ReturnType<typeof fakePlace> {
 const direction = (
   id: string,
   verdict: Direction['verdict'] = 'open',
-): Pick<Direction, 'id' | 'state' | 'verdict'> => ({
+): Pick<Direction, 'id' | 'agent' | 'state' | 'verdict'> => ({
   id,
+  agent: id.replace('d-', 'a-'),
   state: 'open',
   verdict,
 });
@@ -513,6 +515,10 @@ async function rig(
     summary: () => '- d-1 "A line of work": open.',
     board,
     checks: () => [],
+    plan: () => null,
+    ideas: () => [],
+    markTried: () => Promise.resolve(''),
+    freePlace: () => {},
     name: (author) => author,
     team: () => Promise.resolve(more.team ?? ['claude', 'codex']),
     usedUp: (name) => more.usedUp?.(name) ?? false,
@@ -589,6 +595,7 @@ const anyLine = (posts: readonly string[], plain = 'It works.') => ({
 await test('a state change starts one update after the delay, and a busy lab does not push it back', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse(at) });
   const lab = await rig(t, { delayMs: 180_000 });
+  await lab.post({});
   lab.directions.push(direction('d-1'));
   await lab.tick();
   assert.equal(lab.started.length, 0);
@@ -765,13 +772,13 @@ await test('a line check runs on the other harness, and its result decides what 
       { state: 'passed', problems: [], by: 'codex', sameHarness: false },
       {
         state: 'numbers',
-        problems: ['91.5%'],
+        problems: [{ kind: 'stray-number', claim: '91.5%' }],
         by: null,
         sameHarness: false,
       },
       {
         state: 'failed',
-        problems: ['added-fact: It may pass.'],
+        problems: [{ kind: 'added-fact', claim: 'It may pass.' }],
         by: 'codex',
         sameHarness: false,
       },
@@ -826,6 +833,7 @@ await test('the other harness out of usage leaves lines pending, and an update s
 
 await test('a session has its turns and its minutes, and work that it owes comes again after a wait', async (t) => {
   const lab = await rig(t, { delayMs: 60_000, minuteMs: 1 });
+  await lab.post({});
   lab.directions.push(direction('d-1'));
   await lab.tick();
   assert.equal(lab.started.length, 0);
@@ -857,6 +865,7 @@ await test('a session has its turns and its minutes, and work that it owes comes
 
 await test('a process that stops ends the session, and the update comes again', async (t) => {
   const lab = await rig(t);
+  await lab.post({});
   lab.directions.push(direction('d-1'));
   await lab.tick();
   await lab.endTurn('failed');
@@ -937,6 +946,7 @@ await test('the person asks: a session answers from the record with its sources,
 
 await test('a question with no answer says so, and the questions stay within their limits', async (t) => {
   const lab = await rig(t);
+  await lab.post({});
   const question = lab.coordinator.ask('First?');
   await lab.tick();
   await lab.endTurn('ended');
@@ -1265,6 +1275,7 @@ await test('moves survive a reload, because a record applies them on read', asyn
 
 await test('stop ends the session, and the work waits for the next tick', async (t) => {
   const lab = await rig(t);
+  await lab.post({});
   lab.directions.push(direction('d-1'));
   const question = lab.coordinator.ask('Still there?');
   await lab.tick();
@@ -1470,6 +1481,7 @@ await test('the snapshot keeps the first lines of a brief, tests numbers again, 
   const view = {
     state: { directions: [], calls: [] },
     posts,
+    handles: {},
     ledger: [],
     checks: [],
     brief: {

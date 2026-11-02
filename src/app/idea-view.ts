@@ -62,13 +62,19 @@ const shareWords: Readonly<Record<LabShare, string>> = {
   far: 'Far',
 };
 
-/** Who works on long shots, and on what terms. */
+/** Who works on long shots, and on what terms. It counts the agents of open directions, and says so. */
 export function shareLine(lab: Pick<Lab, 'directions' | 'share'>): string {
   const open = lab.directions.filter((entry) => entry.state === 'open');
   const shots = open.filter((entry) => entry.longShot).length;
+  const ended = lab.directions.length - open.length;
   return [
-    `${shots} of ${open.length} agents work on long shots, and they choose what to take up.`,
-    'An agent sets a pass mark before any run, and its results get the same checks as every other result.',
+    `Of the ${open.length} ${open.length === 1 ? 'agent' : 'agents'} with open work, ${shots} ${shots === 1 ? 'works' : 'work'} on long shots.`,
+    ...(ended
+      ? [
+          `This count leaves out ${ended} ${ended === 1 ? 'agent' : 'agents'} whose work ended.`,
+        ]
+      : []),
+    'Agents on long shots choose what to take up. An agent sets a pass mark before any run, and its results get the same checks as every other result.',
     lab.share
       ? `You chose ${shareWords[lab.share]} when you asked.`
       : 'This lab has no share, because it started before that choice.',
@@ -84,7 +90,7 @@ export function drawState(
       ? `A ${harnessName(page.judge)} session judges a draw now.`
       : 'A session judges a draw now.';
   if (page.drawing === 'waiting')
-    return 'A draw waits for a free slot. In a full lab it may never run.';
+    return "A draw waits for the Coordinator to finish. It takes no agent's slot.";
   return page.stopped
     ? 'You stopped long shots. A failed line of work starts no draw until you draw again.'
     : null;

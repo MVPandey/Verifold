@@ -6,7 +6,6 @@ import {
   decisionCount,
   hasOriginal,
   lineHref,
-  lineText,
   lineWords,
   topLine,
 } from '../brief-view.ts';
@@ -17,6 +16,7 @@ import { useView } from '../view-mode.ts';
 import type { ActOutcome } from '../api.ts';
 import { AwayNews } from './AwayDigest.tsx';
 import { IdText } from './IdText.tsx';
+import { LineWords } from './LineWords.tsx';
 import { PlainToggle } from './PlainToggle.tsx';
 
 /** One line: its kind and time, its words, how strong the record is, and its thread. */
@@ -36,7 +36,7 @@ function BriefRow({
         <small>{shortTime(line.at, now)}</small>
       </span>
       <div className="brief__text">
-        <IdText text={lineText(line, mode, original)} />
+        <LineWords line={line} original={original} />
       </div>
       <div className="brief__links">
         <span className="cue">{line.evidence}</span>
@@ -106,15 +106,18 @@ export function BriefCard({
 }): ReactNode {
   const { mode } = useView();
   const foot = briefFoot(brief.lines, mode);
+  const decisions = decisionCount(lab.threads);
   return (
     <section aria-labelledby="brief">
       <div className="section-head">
         <h2 id="brief" className="section-title">
           {briefHead({ away: lab.away, brief }, now)}
         </h2>
-        <a className="section-link" href={href.threads}>
-          Decisions ({decisionCount(lab.threads)})
-        </a>
+        {decisions > 0 && (
+          <a className="section-link" href={href.threads}>
+            Decisions ({decisions})
+          </a>
+        )}
       </div>
       <div className="card">
         <p className="brief__top">

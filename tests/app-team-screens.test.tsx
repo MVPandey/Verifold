@@ -304,7 +304,8 @@ await test('an answer shows with its source posts, and says that no agent was di
     'technical',
     <Answers lab={shown} now={now} />,
   );
-  assert.match(technical, /Use the old mix\./);
+  assert.match(technical, /Agent 3 objected, and Agent 1 agreed\./);
+  assert.match(technical, /Original posts/);
   const waiting = lab(1, {
     questions: [question({ state: 'waiting', answer: null })],
   });

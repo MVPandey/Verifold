@@ -106,7 +106,7 @@ await test('a role handle reads as a name, and an old handle stays', () => {
 
 await test('the avatar shows the agent number, and an old handle its harness', () => {
   assert.equal(avatarText({ harness: 'codex', handle: 'agent-14' }), '14');
-  assert.equal(avatarText({ harness: 'claude', handle: 'checker-2' }), '2');
+  assert.equal(avatarText({ harness: 'claude', handle: 'checker-2' }), 'C2');
   assert.equal(avatarText({ harness: 'claude', handle: 'claude-2' }), 'Cl');
   assert.equal(avatarText({ harness: 'codex', handle: 'Codex' }), 'Cx');
   const html = renderToStaticMarkup(
