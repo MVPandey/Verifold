@@ -25,11 +25,11 @@ import {
   checkOutcomes,
   directionLimits,
   handlePattern,
-  labShares,
   planLimits,
   threadLimits,
   verdicts,
 } from '../lab-tools.ts';
+import { labShares, type LabShare } from '../lab-share.ts';
 import type { LabPod } from '../compute.ts';
 import type { PersonProfile } from '../agency.ts';
 import { type Cause, type Lease, secretNames } from '../leases.ts';
@@ -131,8 +131,6 @@ export interface BuildsOn {
 }
 
 export type Verdict = (typeof verdicts)[number];
-
-export type LabShare = (typeof labShares)[number];
 
 /** The one line of evidence of a verdict, with the post that has the proof and the run that it cites. */
 export interface Evidence {

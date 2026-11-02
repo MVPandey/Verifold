@@ -40,7 +40,7 @@ A lab uses Result, Check, Ask, Answer, Objection, Proposal, and Ruled out. A pos
 
 ## Long shots
 
-Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text.
+Long shot is the plain word. Alien is the technical word, from the paper that gave Verifold the idea. Technical text and the wire can say alien. Simple text says long shot, because readers who tested the word alone did not understand it. Do not call a long shot an alien idea in Simple text. The board's tag shows both, "Long shot · Alien", until the app has its Simple and Technical views.
 
 "No search yet" is the mark on a post. It says what the record shows, so never write that an agent did not search: the agent can use a tool that Verifold does not count.
 

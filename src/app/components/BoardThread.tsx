@@ -162,6 +162,12 @@ function PostLines({
             {post.outcome && `: ${outcomeWord(post.outcome)}`}
           </span>
         )}
+        {post.alien && (
+          <span className="chip chip--proposal">Long shot · Alien</span>
+        )}
+        {post.noSearch && (
+          <span className="chip chip--search">No search yet</span>
+        )}
         {post.disputed && <span className="chip chip--disputed">Disputed</span>}
         {post.citesDisputed && (
           <span className="chip chip--disputed">Cites a disputed post</span>

@@ -13,7 +13,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Lab, startLabOn } from '../src/core/lab.ts';
-import { longShotLimits } from '../src/core/lab-tools.ts';
+import { archiveRun } from '../src/core/archive.ts';
+import {
+  directionToolSpec,
+  longShotLimits,
+  planToolSpec,
+  threadDirectionToolSpec,
+  threadPlanToolSpec,
+} from '../src/core/lab-tools.ts';
 import {
   parseState,
   type LabSessions,
@@ -284,7 +291,7 @@ async function ruledOut(built: Built): Promise<void> {
 }
 
 const isJudge = (started: Started): boolean =>
-  started.cwd.includes('/lab/long-shots/');
+  /\/\.verifold\/checks\/l-\d+$/.test(started.cwd);
 
 const judges = (built: Built): number => built.started.filter(isJudge).length;
 
@@ -351,7 +358,7 @@ await test('a failed line of work starts a draw that a fresh session of the othe
     judge.tools.specs.map((tool) => tool.name),
     ['verifold_judge'],
   );
-  assert.match(judge.cwd, /\.verifold\/lab\/long-shots\/l-\d+$/);
+  assert.match(judge.cwd, /\.verifold\/checks\/l-\d+$/);
   assert.equal((await stat(judge.cwd)).isDirectory(), true);
   // It gets the question and the candidates, and nothing else of the lab.
   assert.match(judge.prompt, /Do months sit on a circle\?/);
@@ -361,18 +368,18 @@ await test('a failed line of work starts a draw that a fresh session of the othe
   );
   assert.match(judge.prompt, /Today is /);
   assert.doesNotMatch(judge.prompt, /The line failed its bar/);
-  for (const name of [
-    'board',
-    'workspaces',
-    'sessions',
-    'lab.json',
-    join('lab', 'threads.json'),
-  ])
+  // It has the checkers' denials, and no other folder under `.verifold` stays open.
+  for (const name of ['board', 'workspaces', 'sessions', 'lab', 'lab.json'])
     assert.ok(
       judge.denyRead.includes(join(built.root, '.verifold', name)),
       name,
     );
   assert.ok(judge.denyRead.includes(join(built.root, 'memory')));
+  assert.ok(judge.denyRead.includes(join(built.root, '.git')));
+  assert.ok(
+    judge.denyRead.includes(join(built.root, '.verifold', 'checks', 'k-1')),
+  );
+  assert.ok(!judge.denyRead.includes(judge.cwd));
   // Its session is no agent of the lab, and the next agent takes another ID.
   assert.ok(
     !built.view().directions.some(({ agent }) => agent.id === judge.agent),
@@ -431,6 +438,12 @@ await test('the best candidates go on the board as open long shots, each in its 
     /^Long shot, judged by Codex: Idea number .*Test: Run it on one seed\. Cost: About 2 hours of GPU\. Closest paper: none found\./,
   );
   assert.ok(!threads.some((thread) => thread?.title.startsWith('Does c-3')));
+  // Agents read the tag too, on the board and in their turns.
+  const board = await built.call(1, 'verifold_board', {
+    view: 'thread',
+    thread: shots[0]?.thread ?? '',
+  });
+  assert.match(board.text, /\[proposal, long shot\]/);
   // A second judgment changes nothing.
   assert.match(
     (await judge.tools.call('verifold_judge', { candidates: [] }, 'judge-2'))
@@ -658,19 +671,63 @@ await test('later draws skip the combinations of earlier draws', async (t) => {
   assert.ok(combinations(second.prompt).every((key) => !old.has(key)));
 });
 
-await test('agents and checks take slots first: a long shot starts only when no one needs one', async (t) => {
+await test('in a full lab a draw parks no one, says so once, and may never run', async (t) => {
   const built = await planned(t, { limit: 3 });
-  await ideas(built, 4);
-  // Every slot runs a turn, so no agent can give its slot.
-  await built.lab.drawAgain();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(judgeOf(built), undefined);
-  // An agent that had its turn gives its slot to the draw.
+  await ideas(built, 8);
+  // An agent that had its turn could give its slot, but a long shot takes none.
   const agent = built.started[1];
   assert.ok(agent);
   endTurn(built, agent);
+  await until(
+    () =>
+      (built.lab as unknown as { yieldable(): unknown[] }).yieldable().length >
+      0,
+  );
+  await built.lab.drawAgain();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(judgeOf(built), undefined);
+  assert.equal(built.live.has(agent.id), true);
+  const waits = statusPosts(built).filter((text) => /may never run/.test(text));
+  assert.equal(waits.length, 1);
+  // A slot that comes free takes the draw.
+  await built.sessions.park(agent.id);
+  built.lab.turnEnded({
+    id: agent.id,
+    agent: agent.agent,
+    status: 'paused',
+    launches: [],
+  } as unknown as SessionRecord);
   await until(() => judgeOf(built) !== undefined);
-  assert.equal(built.live.has(agent.id), false);
+});
+
+await test('whatever needs a slot ends the session first, and its draw waits with the same candidates', async (t) => {
+  const built = await planned(t, { limit: 4 });
+  await ideas(built, 8);
+  await built.lab.drawAgain();
+  await until(() => judgeOf(built) !== undefined);
+  const judge = judgeOf(built);
+  assert.ok(judge);
+  assert.equal(built.sessions.full, true);
+  assert.equal(built.lab.canYield(), true);
+  // The person's session asks for a slot: no agent parks.
+  assert.equal(await built.lab.yieldSlot(), true);
+  assert.equal(built.live.has(judge.id), false);
+  assert.equal(built.live.size, 3);
+  assert.ok(statusPosts(built).some((text) => /may never run/.test(text)));
+  // The draw comes back in a free slot, on record once, with the same agent.
+  await until(() => judges(built) === 2);
+  const again = built.started.at(-1);
+  assert.equal(again?.agent, judge.agent);
+  assert.deepEqual(
+    again?.prompt.match(/c-\d: .+/g),
+    judge.prompt.match(/c-\d: .+/g),
+  );
+  assert.equal(
+    (
+      built.lab as unknown as { longShots: { draws(): unknown[] } }
+    ).longShots.draws().length,
+    1,
+  );
 });
 
 await test('a pause ends the session, and a draw can start after the resume', async (t) => {
@@ -686,6 +743,23 @@ await test('a pause ends the session, and a draw can start after the resume', as
   await built.lab.resume();
   await built.lab.drawAgain();
   await until(() => judges(built) === 2);
+});
+
+await test('a draw refuses while the lab is paused, and a draw that waits does not reach the next run', async (t) => {
+  const built = await planned(t, { limit: 3 });
+  await ideas(built, 8);
+  await built.lab.pause();
+  await assert.rejects(built.lab.drawAgain(), /paused/);
+  await built.lab.resume();
+  await until(() => !built.lab.view()?.state.pausedAt);
+  // A full lab keeps the draw waiting.
+  await built.lab.drawAgain();
+  await built.lab.suspend();
+  await assert.rejects(built.lab.drawAgain());
+  const shots = (built.lab as unknown as { longShots: { waiting: unknown } })
+    .longShots;
+  assert.equal(shots.waiting, null);
+  await built.lab.reload();
 });
 
 await test('Close to known work starts no draw by itself, and the person can still draw', async (t) => {
@@ -816,13 +890,10 @@ await test("a session's record keeps the folder of a long-shot session", async (
     reportedMode: null,
     status: 'ended',
     startedAt: '2026-11-01T10:00:00.000Z',
-    cwd: '.verifold/lab/long-shots/l-5',
+    cwd: '.verifold/checks/l-5',
   };
   await writeFile(path, JSON.stringify(record));
-  assert.equal(
-    (await readSessionRecord(path))?.cwd,
-    '.verifold/lab/long-shots/l-5',
-  );
+  assert.equal((await readSessionRecord(path))?.cwd, '.verifold/checks/l-5');
   await writeFile(
     path,
     JSON.stringify({ ...record, cwd: '.verifold/lab/agents' }),
@@ -867,6 +938,11 @@ await test('a proposal or a ruled-out post with no lookup shows "No search yet",
     },
   }))
     built.lab.harnessUpdate(record, update);
+  built.lab.harnessUpdate(record, {
+    id: 'toolu-1',
+    output: 'x',
+    status: 'done',
+  });
   const second = await built.call(0, 'verifold_post', {
     kind: 'proposal',
     title: 'Which seed should the lab use first?',
@@ -888,6 +964,9 @@ await test('a proposal or a ruled-out post with no lookup shows "No search yet",
   // Only these kinds carry the mark.
   const wire = await onWire(built);
   assert.equal(wire.board.posts.filter((post) => post.noSearch).length, 2);
+  // Agents read the mark too, on the board and in their turns.
+  const board = await built.call(1, 'verifold_board', { view: 'unread' });
+  assert.match(board.text, /\[proposal, no search yet\]/);
 });
 
 await test('reading shows on the wire, from harness records and the map', async (t) => {
@@ -918,6 +997,7 @@ await test('reading shows on the wire, from harness records and the map', async 
       kind: 'tool',
       name: 'WebFetch',
       title: 'https://arxiv.org/abs/1',
+      status: 'done',
     },
   );
   const wire = await onWire(built);
@@ -1014,8 +1094,18 @@ await test('helpers show on the wire with their labels, and a lost helper tells 
       },
     },
   ]);
-  assert.equal(built.view().reading?.lookups, 1);
   // The process stops: the helper is lost, and its agent hears once.
+  helper(built, started, [
+    {
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu-2', content: 'found' },
+        ],
+      },
+    },
+  ]);
+  assert.equal(built.view().reading?.lookups, 1);
   await built.sessions.park(started.id);
   await until(() => row()?.helpers?.[0]?.state === 'lost');
   await until(() =>
@@ -1035,21 +1125,76 @@ await test('helpers show on the wire with their labels, and a lost helper tells 
   );
 });
 
-await test("a checker's or a judge's session has no helpers, and its lookups count for the lab", async (t) => {
+await test('a notice of a lost helper wakes no one, so a park cannot start a chain of parks', async (t) => {
   const built = await planned(t);
-  built.lab.harnessUpdate(
-    { agent: 'a-99', launches: [{ id: 'run-1' }] } as unknown as SessionRecord,
-    { id: 'x', kind: 'tool', name: 'WebSearch', title: 'papers on it' },
+  const started = built.started[1];
+  assert.ok(started);
+  const row = (): LabView['directions'][number] | undefined =>
+    built.view().directions.find(({ agent }) => agent.id === started.agent);
+  helper(built, started, [background('toolu-1')]);
+  await built.sessions.park(started.id);
+  await until(() =>
+    (row()?.agent.events ?? []).some((event) => event.kind === 'helper'),
   );
-  assert.equal(built.view().reading?.lookups, 1);
-  // A session that is no agent of the lab, such as the person's own, counts for nothing.
-  built.lab.harnessUpdate({ launches: [] } as unknown as SessionRecord, {
-    id: 'y',
+  // Its session stays parked: the tick does not count the notice as work that waits.
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(built.live.has(started.id), false);
+  assert.equal(
+    (built.lab as unknown as { waiting(agent: unknown): number }).waiting(
+      row()?.agent,
+    ),
+    0,
+  );
+});
+
+await test("only an agent of a direction counts: a checker's or a judge's lookups do not move the lab's reading", async (t) => {
+  const built = await planned(t);
+  const done = {
+    id: 'x',
     kind: 'tool',
     name: 'WebSearch',
-    title: 'q',
-  });
+    title: 'papers on it',
+    status: 'done',
+  } as const;
+  built.lab.harnessUpdate(
+    { agent: 'a-99', launches: [{ id: 'run-1' }] } as unknown as SessionRecord,
+    done,
+  );
+  built.lab.harnessUpdate({ launches: [] } as unknown as SessionRecord, done);
+  assert.equal(built.view().reading?.lookups, 0);
+  const agent = built.started[1];
+  assert.ok(agent);
+  built.lab.harnessUpdate(
+    {
+      agent: agent.agent,
+      launches: [{ id: 'run-1' }],
+    } as unknown as SessionRecord,
+    done,
+  );
   assert.equal(built.view().reading?.lookups, 1);
+});
+
+await test('a lab from before threads keeps its exact tool schemas', async (t) => {
+  const has = (spec: unknown): boolean =>
+    JSON.stringify(spec).includes('longShot');
+  assert.equal(has(directionToolSpec), false);
+  assert.equal(has(planToolSpec), false);
+  assert.equal(has(threadDirectionToolSpec), true);
+  assert.equal(has(threadPlanToolSpec), true);
+  const built = await planned(t);
+  assert.ok(has(built.started[0]?.tools.specs));
+});
+
+await test('Start over keeps the share of the last lab, and a first lab with no share gets the default', async (t) => {
+  const built = newLab(t, await project(t));
+  await built.lab.start('Q?', { share: 'far' });
+  await until(() => built.started.length > 0);
+  await built.lab.suspend();
+  await archiveRun(built.root);
+  await built.lab.reload(true);
+  assert.equal(built.lab.view(), null);
+  await built.lab.start('Q again?');
+  assert.equal(built.view().state.share, 'far');
 });
 
 await test('a park takes an agent with no running helper first', async (t) => {

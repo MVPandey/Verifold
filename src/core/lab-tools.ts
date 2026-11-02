@@ -24,7 +24,8 @@ import type { AgentTool } from './session-hosts.ts';
  * version to 3. A lab from before threads keeps its tools, so it compares
  * with `oldLabToolsVersion` and its Codex threads go on. `verifold_source`,
  * `verifold_idea`, the `sources` and `ideas` views of `verifold_board`, and
- * `longShot` add to the tools, so they raise no version either.
+ * `longShot` add to the tools of a lab with threads, so they raise no version
+ * either. A lab from before threads keeps its exact schemas.
  */
 export const labToolsVersion = 3;
 
@@ -107,9 +108,6 @@ export const threadLimits = {
   /** Minutes that a proposal stays open to objections. Then it becomes the decision of its thread. */
   objectionMinutes: 15,
 };
-
-/** How far from known work a lab goes, as the person chose at Ask. */
-export const labShares = ['close', 'mixed', 'far'] as const;
 
 /** The limits of the lab's reading. The tool schemas and the store use the same ones. */
 export const readingLimits = {
@@ -729,11 +727,6 @@ export const directionToolSpec: AgentTool = {
         maxLength: planLimits.team,
         description: 'open: the team that it joins, in one or two words.',
       },
-      longShot: {
-        type: 'boolean',
-        description:
-          'open: its agent works on long shots, far from known work.',
-      },
       bar: {
         type: 'string',
         maxLength: planLimits.bar,
@@ -794,13 +787,24 @@ export const directionToolSpec: AgentTool = {
   },
 };
 
-/** `verifold_direction` in a lab with threads, where a result or a check holds the proof. */
+/** `verifold_direction` in a lab with threads, where a result or a check holds the proof and a direction can be a long shot. */
 export const threadDirectionToolSpec: AgentTool = {
   ...directionToolSpec,
   description: directionToolSpec.description.replaceAll(
     'a claim, evidence, or rerun post',
     'a result, check, or rerun post',
   ),
+  inputSchema: {
+    ...directionToolSpec.inputSchema,
+    properties: {
+      ...(directionToolSpec.inputSchema.properties as object),
+      longShot: {
+        type: 'boolean',
+        description:
+          'open: its agent works on long shots, far from known work.',
+      },
+    },
+  },
 };
 
 /**
@@ -1056,8 +1060,8 @@ export const askPersonToolSpec: AgentTool = {
   },
 };
 
-/** The plan of record. Only the agent that opened the lab gets this tool. */
-export const planToolSpec: AgentTool = {
+/** The plan of record, with `entry` as more fields of each direction. */
+const planSpec = (entry: Record<string, unknown>): AgentTool => ({
   name: 'verifold_plan',
   description:
     "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a job, a team, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id, and say in changed what changed and why. A plan without facts keeps the facts of the plan before it.",
@@ -1094,11 +1098,7 @@ export const planToolSpec: AgentTool = {
               description:
                 'The team of directions that it works with, in one or two words.',
             },
-            longShot: {
-              type: 'boolean',
-              description:
-                'Its agent works on long shots, far from known work.',
-            },
+            ...entry,
             bar: {
               type: 'string',
               maxLength: planLimits.bar,
@@ -1172,4 +1172,15 @@ export const planToolSpec: AgentTool = {
     required: ['reading', 'directions', 'cost'],
     additionalProperties: false,
   },
-};
+});
+
+/** The plan of record. Only the agent that opened the lab gets this tool. */
+export const planToolSpec: AgentTool = planSpec({});
+
+/** The plan of record in a lab with threads, where a direction can be a long shot. */
+export const threadPlanToolSpec: AgentTool = planSpec({
+  longShot: {
+    type: 'boolean',
+    description: 'Its agent works on long shots, far from known work.',
+  },
+});

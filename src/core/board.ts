@@ -402,7 +402,7 @@ export function postLine(
   forYou = false,
   fold?: number,
 ): string {
-  return `- ${post.id} [${post.kind}${post.outcome ? ` ${post.outcome}` : ''}${post.accepts ? ', accepted' : ''}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.thread ? ` on ${post.thread}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
+  return `- ${post.id} [${post.kind}${post.outcome ? ` ${post.outcome}` : ''}${post.accepts ? ', accepted' : ''}${post.noSearch ? ', no search yet' : ''}${post.alien ? ', long shot' : ''}${forYou ? ', for you' : ''}] from ${name(post.author)}${post.direction ? ` in ${post.direction}` : ''}${post.thread ? ` on ${post.thread}` : ''}${post.replyTo ? `, reply to ${post.replyTo}` : ''}: ${quoted(post, fold)}${post.artifacts.length ? ` Proof: ${post.artifacts.map(artifactText).join('; ')}.` : ''}`;
 }
 
 /** What an agent has read: every post through `readThrough`, and the posts in `seen` after it. */

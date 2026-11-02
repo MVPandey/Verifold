@@ -8,7 +8,7 @@ import {
   withIdea,
   type Idea,
 } from '../src/core/lab/ideas.ts';
-import { longShotCount, shareLine } from '../src/core/lab/long-shots.ts';
+import { longShotCount, shareLine, shareOf } from '../src/core/lab-share.ts';
 import { longShotLimits, readingLimits } from '../src/core/lab-tools.ts';
 
 const at = '2026-11-01T10:00:00.000Z';
@@ -179,6 +179,9 @@ await test('a candidate must do well on both rankings, and ties keep their order
 });
 
 await test('the share of long shots becomes a number of directions', () => {
+  assert.equal(shareOf(undefined), 'mixed');
+  assert.equal(shareOf('far'), 'far');
+  assert.equal(shareOf('wild'), null);
   assert.equal(longShotCount('close', 20), 0);
   assert.equal(longShotCount('mixed', 20), 5);
   assert.equal(longShotCount('mixed', 4), 1);

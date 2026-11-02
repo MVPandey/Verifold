@@ -666,7 +666,7 @@ function parseRecord(value: unknown): SessionRecord | null {
       : {}),
     ...(typeof record.cwd === 'string' &&
     // A task's or a direction's folder, or a lab check's or long-shot session's.
-    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/k-[1-9]\d{0,5}|lab\/long-shots\/l-[1-9]\d{0,5})$/.test(
+    /^\.verifold\/(?:workspaces\/[a-z0-9][a-z0-9-]{0,80}|checks\/[kl]-[1-9]\d{0,5})$/.test(
       record.cwd,
     )
       ? { cwd: record.cwd }

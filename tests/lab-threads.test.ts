@@ -1281,7 +1281,7 @@ await test('verifold_follow adds a thread to an agent’s digests, and verifold_
   const unread = await by(1)('verifold_board', { view: 'unread' });
   assert.doesNotMatch(unread.text, /p-\d+ \[proposal\]/);
   assert.match(unread.text, /\[new thread\] t-2/);
-  assert.match(unread.text, /- \[proposal\] p-\d+ on t-2/);
+  assert.match(unread.text, /- \[proposal, no search yet\] p-\d+ on t-2/);
   const follow = await by(1)('verifold_follow', { thread: 't-2' });
   assert.equal(follow.ok, true, follow.text);
   const missing = await by(1)('verifold_follow', { thread: 't-9' });

@@ -105,7 +105,7 @@ function proposalLines(
     (post) => {
       const title = post.thread ? threads.get(post.thread)?.title : undefined;
       const end = new Date(Date.parse(post.at) + objectionMs).toISOString();
-      return `- [${post.alien ? 'long shot' : 'proposal'}] ${post.id}${post.thread ? ` on ${post.thread}` : ''}${title ? ` ${JSON.stringify(title)}` : ''} from ${name(post.author)}: ${JSON.stringify(clip(post.text, threadLimits.proposalLine))} ${post.alien ? 'It stays open. Take it up if you work on long shots.' : `Its objection window ends at ${end}.`}`;
+      return `- [${post.alien ? 'long shot' : post.noSearch ? 'proposal, no search yet' : 'proposal'}] ${post.id}${post.thread ? ` on ${post.thread}` : ''}${title ? ` ${JSON.stringify(title)}` : ''} from ${name(post.author)}: ${JSON.stringify(clip(post.text, threadLimits.proposalLine))} ${post.alien ? 'It stays open. Take it up if you work on long shots.' : `Its objection window ends at ${end}.`}`;
     },
     'more new proposals. verifold_board with view threads lists their threads.',
   );
