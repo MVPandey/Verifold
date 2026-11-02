@@ -39,6 +39,8 @@ import { DirectionPage, type AgentActions } from './screens/DirectionPage.tsx';
 import { LabHome, type LabActions } from './screens/LabHome.tsx';
 import { ThreadHome } from './screens/ThreadHome.tsx';
 import { ThreadPage } from './screens/ThreadPage.tsx';
+import { IdeaMapPage } from './screens/IdeaMapPage.tsx';
+import { TeamPage } from './screens/TeamPage.tsx';
 import { ThreadsPage } from './screens/ThreadsPage.tsx';
 import { NoLab, NotFound, Notice } from './screens/Notice.tsx';
 import { AppHeader } from './components/AppHeader.tsx';
@@ -450,10 +452,25 @@ function Page({
       />
     );
   if (
-    (route.page === 'thread' || route.page === 'threads') &&
+    (route.page === 'thread' ||
+      route.page === 'threads' ||
+      route.page === 'team' ||
+      route.page === 'ideas') &&
     !threadedLab(lab)
   )
     return <NotFound />;
+  if (route.page === 'team' || route.page === 'ideas') {
+    const Page = route.page === 'team' ? TeamPage : IdeaMapPage;
+    return (
+      <Page
+        snapshot={snapshot}
+        lab={lab}
+        connection={connection}
+        now={now}
+        actions={actions}
+      />
+    );
+  }
   if (route.page === 'threads')
     return (
       <ThreadsPage

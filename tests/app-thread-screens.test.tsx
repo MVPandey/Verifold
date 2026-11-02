@@ -20,8 +20,10 @@ import { AwayDigest } from '../src/app/components/AwayDigest.tsx';
 import { BoardThread } from '../src/app/components/BoardThread.tsx';
 import { IdText } from '../src/app/components/IdText.tsx';
 import { Disputes } from '../src/app/components/LabControls.tsx';
-import { ThreadBody, ThreadBox } from '../src/app/screens/ThreadPage.tsx';
+import { StepInBox } from '../src/app/components/StepInBox.tsx';
+import { ThreadBody } from '../src/app/screens/ThreadPage.tsx';
 import type { Route } from '../src/app/route.ts';
+import type { BoxAct } from '../src/app/step-in.ts';
 import type { LabActions } from '../src/app/screens/LabHome.tsx';
 import type { AgentActions } from '../src/app/screens/DirectionPage.tsx';
 import {
@@ -248,7 +250,7 @@ const threadPage = (more: Partial<ThreadPage> = {}): ThreadPage => ({
 const body = (
   shown: ThreadPage,
   mode: ViewMode,
-  more: { readonly onReply?: (post: Post) => void } = {},
+  more: { readonly onAct?: (act: BoxAct) => void } = {},
 ): string =>
   inView(
     lab(),
@@ -271,7 +273,7 @@ await test('a lab with threads gets the new home, top to bottom', () => {
     'Who is doing what',
     'Reading map: 14 papers.',
     'Open threads',
-    'Write to the lab',
+    'Write to the lab, or ask the Coordinator',
   ].map((text) => html.indexOf(text));
   assert.ok(order.every((at) => at >= 0));
   assert.deepEqual(
@@ -279,7 +281,6 @@ await test('a lab with threads gets the new home, top to bottom', () => {
     [...order].sort((a, b) => a - b),
   );
   assert.doesNotMatch(html, /section--board|class="row"/);
-  assert.match(html, /Agents? 2 reads? this after/);
 });
 
 await test('an old lab keeps its home, with no switch, whatever the browser chose', () => {
@@ -456,7 +457,7 @@ await test('open threads show the title of the view, the state, the count, and a
   assert.match(home({}, 'technical'), /Does the agents’ title hold\?/);
   // The answer stays one link away, and a page that links nowhere stays out.
   assert.match(html, /href="#\/answer"/);
-  assert.doesNotMatch(html, /How they work together/);
+  assert.match(html, /How they work together/);
 });
 
 await test('all threads go by state, open first', () => {
@@ -606,32 +607,33 @@ await test('a dispute in Simple shows no ID of Verifold’s', () => {
 });
 
 await test('each post of a thread has Reply, and a thread has a box that writes to it', () => {
-  const html = body(threadPage(), 'technical', { onReply: () => {} });
+  const html = body(threadPage(), 'technical', { onAct: () => {} });
   assert.equal(html.match(/>Reply</g)?.length, 2);
   assert.doesNotMatch(body(threadPage(), 'technical'), />Reply</);
+  const open = thread();
   const box = inView(
     lab(),
     'simple',
-    <ThreadBox
+    <StepInBox
       lab={lab()}
-      replyTo={null}
-      onWrite={() => Promise.resolve({ ok: true })}
-      onReply={() => Promise.resolve({ ok: true })}
-      onStop={() => {}}
-      onSent={() => {}}
+      thread={open}
+      posts={[]}
+      act={null}
+      tick="now"
+      now={now}
     />,
   );
-  assert.match(box, /Write to this thread/);
+  assert.match(box, /This thread/);
   const replying = inView(
     lab(),
     'simple',
-    <ThreadBox
+    <StepInBox
       lab={lab()}
-      replyTo={post('p-3')}
-      onWrite={() => Promise.resolve({ ok: true })}
-      onReply={() => Promise.resolve({ ok: true })}
-      onStop={() => {}}
-      onSent={() => {}}
+      thread={open}
+      posts={[]}
+      act={{ kind: 'reply', post: post('p-3') }}
+      tick="now"
+      now={now}
     />,
   );
   assert.match(replying, /Agent 2 · Controls/);

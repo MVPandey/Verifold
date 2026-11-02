@@ -24,6 +24,7 @@ import {
   type LineCheck,
   type NoticeKind,
   type Thread,
+  type Notice,
 } from './schema.ts';
 import { checkTitle, dueProposals, planThread } from './threads.ts';
 import type { Wait } from './waits.ts';
@@ -254,6 +255,24 @@ export function closeRefusal(
   return open
     ? `${open.id} is an open proposal, so the thread stays open.`
     : null;
+}
+
+/**
+ * A notice still holds: the wait that it named stands, or two of the agents
+ * that may overlap still work. `waits`: the waits now. `working`: the agents
+ * that work now. It reads records only, so a stale notice needs no cleanup.
+ */
+export function noticeStands(
+  notice: Pick<Notice, 'kind' | 'posts' | 'to'>,
+  waits: readonly Pick<Wait, 'post'>[],
+  working: ReadonlySet<string>,
+): boolean {
+  if (notice.kind === 'overlap')
+    return notice.to.filter((agent) => working.has(agent)).length >= 2;
+  return (
+    notice.kind !== 'missing-answer' ||
+    notice.posts.some((post) => waits.some((wait) => wait.post === post))
+  );
 }
 
 /** A notice as agents read it: Verifold's words, and who gets it. */

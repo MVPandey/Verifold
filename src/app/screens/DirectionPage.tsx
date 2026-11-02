@@ -36,6 +36,7 @@ import { ActivityFold } from '../components/ActivityFold.tsx';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { Avatar } from '../components/Avatar.tsx';
 import { Composer } from '../components/Composer.tsx';
+import { canReopen } from '../step-in.ts';
 import { ConfirmButton } from '../components/ConfirmButton.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import { DecideLink } from '../components/DecideLink.tsx';
@@ -129,6 +130,14 @@ function DirectionHead({
               label="Stop this direction"
               confirm="Click again to stop it"
               run={(key) => controls.stopDirection(direction.id, key)}
+            />
+          )}
+          {controls && canReopen(lab, direction) && (
+            <ConfirmButton
+              className="more-menu__item"
+              label="Reopen this direction"
+              confirm="Click again to reopen it"
+              run={(key) => controls.reopenDirection(direction.id, null, key)}
             />
           )}
         </MoreMenu>

@@ -1,3 +1,4 @@
+import { boardLimits } from './board.ts';
 import { maxPodsAtOnce } from './pod-limits.ts';
 import { runLimits } from './runs.ts';
 import type { AgentTool } from './session-hosts.ts';
@@ -25,8 +26,9 @@ import type { AgentTool } from './session-hosts.ts';
  * with `oldLabToolsVersion` and its Codex threads go on. `verifold_source`,
  * `verifold_idea`, the `sources` and `ideas` views of `verifold_board`, and
  * `longShot` add to the tools of a lab with threads, so they raise no version
- * either. `method` and `raters` of a check post are optional too. A lab from
- * before threads keeps its exact schemas.
+ * either. `method` and `raters` of a check post are optional too, and so is
+ * `prior` of a proposal or a ruled-out post. A lab from before threads keeps
+ * its exact schemas.
  */
 export const labToolsVersion = 3;
 
@@ -382,8 +384,8 @@ export const threadToolSpecs: readonly AgentTool[] = [
 - ask: a question for one agent or the person. Name them in mentions. The wait ends when an answer comes.
 - answer: a reply to an ask, to an objection, or to the person. It needs replyTo and no proof. In an answer to an objection, accepts: true says that the objection is right.
 - objection: a problem in a post. It needs replyTo. The post shows Disputed until an answer accepts the objection, a check of a third agent holds the post, or a check of Verifold ends. A check that fails leaves it Disputed.
-- proposal: a choice for the lab. With no objection in ${threadLimits.objectionMinutes} minutes it becomes the decision of its thread. A later objection to it opens the thread again.
-- ruled-out: the end of a line of work: what passed, what failed, and what others can reuse. It needs proof.
+- proposal: a choice for the lab. With no objection in ${threadLimits.objectionMinutes} minutes it becomes the decision of its thread. A later objection to it opens the thread again. prior says what you found on earlier work.
+- ruled-out: the end of a line of work: what passed, what failed, and what others can reuse. It needs proof. prior says what you found on earlier work.
 Proof is a file or a figure in your folder, a diff of paths that you changed, or a run of the lab. Verifold commits your folder first and pins a file, a figure, or a diff to that commit. An objection, an ask, or an answer wakes the agent that it names. Other posts wait for each agent's next turn. Use verifold_status for progress, and verifold_agree for agreement.`,
     inputSchema: {
       type: 'object',
@@ -415,6 +417,17 @@ Proof is a file or a figure in your folder, a diff of paths that you changed, or
         method: { type: 'string', enum: postMethods },
         raters: { type: 'integer', minimum: 1, maximum: threadLimits.raters },
         accepts: { type: 'boolean' },
+        prior: {
+          type: 'object',
+          description:
+            'On a proposal or a ruled-out post: the closest work with its date, what you could not find, and what this adds. Verifold counts your lookups itself.',
+          properties: {
+            closest: { type: 'string', maxLength: boardLimits.prior },
+            notFound: { type: 'string', maxLength: boardLimits.prior },
+            newHere: { type: 'string', maxLength: boardLimits.prior },
+          },
+          additionalProperties: false,
+        },
         mentions: mentionsSchema,
       },
       required: ['kind', 'text'],

@@ -1,8 +1,6 @@
 import { useContext, useEffect, type ReactNode } from 'react';
 import type { Lab, Snapshot } from '../../protocol/api.ts';
-import { reachLine } from '../agent-rows.ts';
 import { signedOff } from '../answer.ts';
-import { mentionNames } from '../mentions.ts';
 import { needRows } from '../needs.ts';
 import { waitingPods } from '../pods.ts';
 import { href, replaceRoute } from '../route.ts';
@@ -13,7 +11,6 @@ import { AgentList } from '../components/AgentList.tsx';
 import { AnswerLine } from '../components/AnswerLine.tsx';
 import { AppHeader } from '../components/AppHeader.tsx';
 import { BriefCard } from '../components/BriefCard.tsx';
-import { Composer } from '../components/Composer.tsx';
 import { ConnectionBar } from '../components/ConnectionBar.tsx';
 import {
   Disputes,
@@ -25,6 +22,8 @@ import { NeedsList } from '../components/NeedsList.tsx';
 import { NotifyLine } from '../components/NotifyLine.tsx';
 import { PodNeeds, PodsLine, type PodActions } from '../components/Pods.tsx';
 import { StatusBar } from '../components/StatusBar.tsx';
+import { StepInBox } from '../components/StepInBox.tsx';
+import { Answers, NoticeLines } from '../components/StepInParts.tsx';
 import { ThreadRows } from '../components/ThreadRows.tsx';
 import type { LabActions } from './LabHome.tsx';
 
@@ -112,6 +111,7 @@ export function ThreadHome({
               onDismiss={tools?.dismissAway ?? null}
             />
           )}
+          <NoticeLines lab={lab} />
           <AgentList
             lab={lab}
             now={now}
@@ -140,13 +140,15 @@ export function ThreadHome({
               This lab is large, so this page leaves out some older items.
             </span>
           )}
-          <Composer
-            label="Write to the lab"
-            placeholder="Write to the lab"
-            hint={reachLine(lab)}
-            maxLength={lab.postLimit}
-            names={mentionNames(lab)}
-            onSend={actions.post}
+          <Answers lab={lab} now={now} />
+          <StepInBox
+            lab={lab}
+            thread={null}
+            posts={[]}
+            act={null}
+            tick={snapshot.at}
+            now={now}
+            onPost={actions.post}
           />
           {lab.agentsHere && <OpenDirection />}
           <NotifyLine />

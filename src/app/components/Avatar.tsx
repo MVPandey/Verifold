@@ -5,7 +5,8 @@ import { authorHead, avatarText, harnessName, roleName } from '../format.ts';
 export type Who =
   | { readonly harness: Harness; readonly handle: string }
   | 'person'
-  | 'verifold';
+  | 'verifold'
+  | 'coordinator';
 
 /**
  * A round mark for an agent, the person, or Verifold. `labelled`: the avatar
@@ -26,11 +27,13 @@ export function Avatar({
       ? ['you', 'You', 'You']
       : who === 'verifold'
         ? ['verifold', 'V', 'Verifold']
-        : [
-            who.harness,
-            avatarText(who),
-            `${harnessName(who.harness)}, ${roleName(who.handle)}`,
-          ];
+        : who === 'coordinator'
+          ? ['coordinator', 'C', 'Coordinator']
+          : [
+              who.harness,
+              avatarText(who),
+              `${harnessName(who.harness)}, ${roleName(who.handle)}`,
+            ];
   return (
     <span
       className={`avatar avatar--${size} avatar--${kind}`}

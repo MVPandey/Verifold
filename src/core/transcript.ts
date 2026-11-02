@@ -406,6 +406,8 @@ export interface WebRead {
   readonly status: NonNullable<TranscriptEntry['status']>;
   /** The report names a web tool. A bare tool result names no tool, so only its ID ties it to a read. */
   readonly named: boolean;
+  /** The helper that made it, by its ID. Absent: the agent itself. */
+  readonly helper?: string;
 }
 
 /**
@@ -424,6 +426,7 @@ export function webRead(update: TranscriptUpdate): WebRead | null {
       (/"domain":\s*"([^"]+)"/.exec(update.output ?? '')?.[1] ?? ''),
     status: update.status,
     named,
+    ...(update.parent ? { helper: update.parent } : {}),
   };
 }
 
