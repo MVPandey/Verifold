@@ -44,6 +44,8 @@ export interface TranscriptUpdate {
   readonly output?: string;
   readonly status?: TranscriptEntry['status'];
   readonly text?: string;
+  /** The work of this tool call ended, also when the call itself ended before, as for a helper in the background. */
+  readonly final?: true;
 }
 
 /** An update with its final ID and time, as one line of a transcript file. */
@@ -135,6 +137,19 @@ export function claudeUpdates(event: unknown): TranscriptUpdate[] {
         kind: 'note',
         parent,
         text: `Claude Code session started${typeof event.model === 'string' ? ` with ${event.model}` : ''}.`,
+      },
+    ];
+  // A task in the background ended: done, or failed or stopped.
+  if (
+    event.type === 'system' &&
+    event.subtype === 'task_notification' &&
+    typeof event.tool_use_id === 'string'
+  )
+    return [
+      {
+        id: event.tool_use_id,
+        status: event.status === 'completed' ? 'done' : 'failed',
+        final: true,
       },
     ];
   if (event.type === 'result')
@@ -283,7 +298,12 @@ function codexItem(
       );
     case 'web_search':
     case 'webSearch':
-      return tool('Web search', item.query, item.results, false);
+      return tool(
+        'Web search',
+        item.query,
+        item.results,
+        item.status === 'failed' || item.status === 'declined',
+      );
     case 'mcp_tool_call':
     case 'mcpToolCall':
     case 'dynamicToolCall':
@@ -298,7 +318,10 @@ function codexItem(
     case 'collab_tool_call':
     case 'collabAgentToolCall':
       return tool(
-        'Agents',
+        // A spawn starts a helper, as Claude Code's Agent tool does.
+        typeof item.tool === 'string' && /^spawn/i.test(item.tool)
+          ? 'Agent'
+          : 'Agents',
         item.prompt ?? item.tool,
         item.agentsStates,
         item.status === 'failed',
@@ -327,6 +350,30 @@ export function codexExecUpdates(event: unknown): TranscriptUpdate[] {
   return [];
 }
 
+/**
+ * The updates that say how Codex's helpers ended, from `agentsStates` of a
+ * collaboration item, by thread. `helpers`: each helper's thread and the call
+ * that started it.
+ */
+export function codexHelperEnds(
+  states: unknown,
+  helpers: ReadonlyMap<string, string>,
+): TranscriptUpdate[] {
+  if (!record(states)) return [];
+  return [...helpers].flatMap(([thread, id]): TranscriptUpdate[] => {
+    const state = states[thread];
+    const status = record(state) ? state.status : undefined;
+    return status === 'completed'
+      ? [{ id, status: 'done', final: true }]
+      : status === 'errored' ||
+          status === 'interrupted' ||
+          status === 'shutdown' ||
+          status === 'notFound'
+        ? [{ id, status: 'failed', final: true }]
+        : [];
+  });
+}
+
 /** Transcript updates from one `codex app-server` item notification. `parent` nests subagent threads. */
 export function codexAppUpdates(
   method: string,
@@ -342,6 +389,77 @@ export function codexAppUpdates(
 /** The text that Verifold or the person sent to the harness. */
 export function requestUpdate(text: string): TranscriptUpdate {
   return { kind: 'request', parent: null, text: bounded(text) };
+}
+
+/** The tools that read the web, by the names that the harnesses report. */
+const webTools: ReadonlySet<string> = new Set([
+  'WebSearch',
+  'WebFetch',
+  'Web search',
+]);
+
+/** One report of a web read, in words that no harness owns. */
+export interface WebRead {
+  readonly id: string;
+  /** Its query or address. Empty: the report does not say yet. */
+  readonly title: string;
+  readonly status: NonNullable<TranscriptEntry['status']>;
+  /** The report names a web tool. A bare tool result names no tool, so only its ID ties it to a read. */
+  readonly named: boolean;
+}
+
+/**
+ * What an update says of a web read, or null when it says nothing. Codex
+ * starts a search with no query and gives it with the end of the call. A
+ * call that opens a page can end with no query: its result names the site.
+ */
+export function webRead(update: TranscriptUpdate): WebRead | null {
+  if (!update.id || update.status === undefined) return null;
+  const named = update.name !== undefined && webTools.has(update.name);
+  if (update.name !== undefined && !named) return null;
+  return {
+    id: update.id,
+    title:
+      update.title ||
+      (/"domain":\s*"([^"]+)"/.exec(update.output ?? '')?.[1] ?? ''),
+    status: update.status,
+    named,
+  };
+}
+
+/** One event of a helper, a subagent of a harness, in words that no harness owns. */
+export type HelperEvent =
+  | { readonly type: 'started'; readonly id: string; readonly title: string }
+  /** Its own work reported, so it runs. */
+  | { readonly type: 'working'; readonly id: string }
+  /** `result`: it ended with a result. */
+  | { readonly type: 'ended'; readonly id: string; readonly result: boolean };
+
+/** The tool that starts a helper. Claude Code calls it `Agent`, and `Task` before that. `codexItem` gives Codex's spawn the same name. */
+const helperTools: ReadonlySet<string> = new Set(['Agent', 'Task']);
+
+/** Claude Code answers a helper in the background at once, with this text. The helper goes on. */
+const backgroundAnswer = /^Async agent launched/;
+
+/**
+ * What an update says of a helper, or null when it says nothing. A report of
+ * the call that names the tool is no end: Codex reports its spawn as done
+ * while the helper runs on. A bare tool result ends a helper in the
+ * foreground, also with an empty result, which is no result.
+ */
+export function helperEvent(update: TranscriptUpdate): HelperEvent | null {
+  if (update.parent) return { type: 'working', id: update.parent };
+  const { id, name, output, status, title: words } = update;
+  if (!id) return null;
+  if (update.final) return { type: 'ended', id, result: status === 'done' };
+  if (name !== undefined) {
+    if (!helperTools.has(name)) return null;
+    return status === 'failed'
+      ? { type: 'ended', id, result: false }
+      : { type: 'started', id, title: words ?? '' };
+  }
+  if (status === undefined || backgroundAnswer.test(output ?? '')) return null;
+  return { type: 'ended', id, result: status === 'done' && Boolean(output) };
 }
 
 /** Pass each harness run of `run` to `sink` too, beside the caller's own transcript callback. */

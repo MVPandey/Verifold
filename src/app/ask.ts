@@ -1,6 +1,7 @@
 import type {
   ActionBodies,
   Harness,
+  LabShare,
   ProjectAgents,
   StartView,
 } from '../protocol/api.ts';
@@ -135,6 +136,38 @@ export function agentsLabel(agents: ProjectAgents): string {
   return agents.helper
     ? `${lead} and ${agentName(agents.helper, agents.helperModel)}`
     : lead;
+}
+
+/** How far from known work a lab goes, as the Ask page offers it. */
+export const shareChoices: readonly {
+  readonly value: LabShare;
+  readonly label: string;
+  readonly chip: string;
+  readonly detail: string;
+}[] = [
+  {
+    value: 'close',
+    label: 'Close to known work',
+    chip: 'Close to known work',
+    detail: 'No agent works on long shots.',
+  },
+  {
+    value: 'mixed',
+    label: 'Mixed',
+    chip: 'Long shots: 1 agent in 4',
+    detail: '1 agent in 4 works on long shots.',
+  },
+  {
+    value: 'far',
+    label: 'Far',
+    chip: 'Long shots: 1 agent in 2',
+    detail: '1 agent in 2 works on long shots.',
+  },
+];
+
+/** The share chip. */
+export function shareLabel(share: LabShare): string {
+  return shareChoices.find((choice) => choice.value === share)?.chip ?? '';
 }
 
 /** The GPU chip: "GPUs up to $25", or "No GPUs". */

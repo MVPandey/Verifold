@@ -22,7 +22,10 @@ import type { AgentTool } from './session-hosts.ts';
  * gets other board tools (`threadToolSpecs`): a new `verifold_post`, and
  * `verifold_status`, `verifold_agree`, and `verifold_follow`. That raised the
  * version to 3. A lab from before threads keeps its tools, so it compares
- * with `oldLabToolsVersion` and its Codex threads go on.
+ * with `oldLabToolsVersion` and its Codex threads go on. `verifold_source`,
+ * `verifold_idea`, the `sources` and `ideas` views of `verifold_board`, and
+ * `longShot` add to the tools of a lab with threads, so they raise no version
+ * either. A lab from before threads keeps its exact schemas.
  */
 export const labToolsVersion = 3;
 
@@ -104,6 +107,56 @@ export const threadLimits = {
   proposalLine: 140,
   /** Minutes that a proposal stays open to objections. Then it becomes the decision of its thread. */
   objectionMinutes: 15,
+};
+
+/** The limits of the lab's reading. The tool schemas and the store use the same ones. */
+export const readingLimits = {
+  /** Agents whose lookups and helpers a lab keeps. */
+  agents: 200,
+  /** Newest calls of an agent, so a call that a harness logs twice counts once. */
+  seen: 64,
+  /** Characters of a lookup's query or address. */
+  lookup: 200,
+  /** Papers on the reading map. */
+  sources: 300,
+  title: 200,
+  url: 500,
+  date: planLimits.sourceDate,
+  /** Ideas on the idea map, and characters of each one. */
+  ideas: 1000,
+  idea: 160,
+  /** Ideas of one paper, and papers of one idea. */
+  ideasPerSource: 12,
+  sourcesPerIdea: 8,
+  /** Helpers that a lab keeps for one agent, and characters of a helper's title. */
+  helpers: 12,
+  helper: 120,
+};
+
+/** The limits of a long-shot draw: one fresh session judges a batch of drawn candidates. */
+export const longShotLimits = {
+  /** Ideas in one candidate. */
+  size: 3,
+  /** Candidates that one session judges. */
+  batch: 6,
+  /** The best candidates that go on the board. */
+  top: 3,
+  /** Draws in one hour of the lab's clock. */
+  perHour: 3,
+  /** Draws that a lab keeps on record. */
+  draws: 40,
+  /** The lowest score that a candidate needs to go on the board. */
+  sense: 3,
+  /** Turns and minutes of the session. */
+  turns: 2,
+  minutes: 20,
+  /** Characters of the session's answers. */
+  question: planLimits.title,
+  test: 200,
+  cost: 80,
+  closest: 160,
+  /** The most papers that an answer counts as combining the ideas. */
+  prior: 99,
 };
 
 const postId = { type: 'string', pattern: '^p-[1-9][0-9]{0,5}$' };
@@ -224,7 +277,7 @@ export const threadToolSpecs: readonly AgentTool[] = [
   {
     name: 'verifold_board',
     description:
-      'Read the lab board. You can read any thread, also one that you do not follow. unread: the posts for you that you have not read yet. This marks them read. threads: each thread with its state. thread: the posts of a thread, or a post and its replies. summary: each direction with its agent and its latest posts. direction: the latest posts of one direction. search: the posts that contain the query.',
+      'Read the lab board. You can read any thread, also one that you do not follow. unread: the posts for you that you have not read yet. This marks them read. threads: each thread with its state. thread: the posts of a thread, or a post and its replies. summary: each direction with its agent and its latest posts. direction: the latest posts of one direction. search: the posts that contain the query. sources: the reading map, the papers that the lab read. ideas: the idea map.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -237,6 +290,8 @@ export const threadToolSpecs: readonly AgentTool[] = [
             'summary',
             'direction',
             'search',
+            'sources',
+            'ideas',
           ],
         },
         thread: threadIdSchema,
@@ -329,6 +384,40 @@ Proof is a file or a figure in your folder, a diff of paths that you changed, or
       type: 'object',
       properties: { thread: threadIdSchema },
       required: ['thread'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_source',
+    description:
+      'Add a paper to the lab\'s reading map, which every agent reads with verifold_board view sources. Give its title, its address, its date as the source gives it, and its ideas: short phrases that make sense alone, such as "Category residuals". Its ideas join the idea map. The same address adds its new ideas to the paper that the map has.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', maxLength: readingLimits.title },
+        url: { type: 'string', maxLength: readingLimits.url },
+        date: { type: 'string', maxLength: readingLimits.date },
+        ideas: {
+          type: 'array',
+          maxItems: readingLimits.ideasPerSource,
+          items: { type: 'string', maxLength: readingLimits.idea },
+        },
+      },
+      required: ['title', 'url', 'date', 'ideas'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verifold_idea',
+    description:
+      'Add an idea from your work to the idea map, in a short phrase that makes sense alone. tried: true when the lab tried it. The same text again marks that idea as tried. Verifold draws long shots from this map.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', maxLength: readingLimits.idea },
+        tried: { type: 'boolean' },
+      },
+      required: ['text', 'tried'],
       additionalProperties: false,
     },
   },
@@ -698,14 +787,75 @@ export const directionToolSpec: AgentTool = {
   },
 };
 
-/** `verifold_direction` in a lab with threads, where a result or a check holds the proof. */
+/** `verifold_direction` in a lab with threads, where a result or a check holds the proof and a direction can be a long shot. */
 export const threadDirectionToolSpec: AgentTool = {
   ...directionToolSpec,
   description: directionToolSpec.description.replaceAll(
     'a claim, evidence, or rerun post',
     'a result, check, or rerun post',
   ),
+  inputSchema: {
+    ...directionToolSpec.inputSchema,
+    properties: {
+      ...(directionToolSpec.inputSchema.properties as object),
+      longShot: {
+        type: 'boolean',
+        description:
+          'open: its agent works on long shots, far from known work.',
+      },
+    },
+  },
 };
+
+/**
+ * The one tool of a long-shot session. Its thread is always new, so it needs
+ * no version.
+ */
+export const longShotToolSpecs: readonly AgentTool[] = [
+  {
+    name: 'verifold_judge',
+    description:
+      'Give your judgment of the candidates, once. For each candidate: a plain question that it would answer, a score from 1 (makes no sense) to 5 (clearly makes sense), the smallest test that could fail, its cost, how many papers already combine its ideas, and the closest paper with its date.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        candidates: {
+          type: 'array',
+          minItems: 1,
+          maxItems: longShotLimits.batch,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', pattern: '^c-[1-9]$' },
+              question: { type: 'string', maxLength: longShotLimits.question },
+              sense: { type: 'integer', minimum: 1, maximum: 5 },
+              test: { type: 'string', maxLength: longShotLimits.test },
+              cost: { type: 'string', maxLength: longShotLimits.cost },
+              prior: {
+                type: 'integer',
+                minimum: 0,
+                maximum: longShotLimits.prior,
+              },
+              closest: { type: 'string', maxLength: longShotLimits.closest },
+            },
+            required: [
+              'id',
+              'question',
+              'sense',
+              'test',
+              'cost',
+              'prior',
+              'closest',
+            ],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['candidates'],
+      additionalProperties: false,
+    },
+  },
+];
 
 /** The kinds of call for the person. A technical question goes on the board, and a check settles it. */
 export const callKinds = ['cost', 'scope', 'access', 'go'] as const;
@@ -910,8 +1060,8 @@ export const askPersonToolSpec: AgentTool = {
   },
 };
 
-/** The plan of record. Only the agent that opened the lab gets this tool. */
-export const planToolSpec: AgentTool = {
+/** The plan of record, with `entry` as more fields of each direction. */
+const planSpec = (entry: Record<string, unknown>): AgentTool => ({
   name: 'verifold_plan',
   description:
     "Post the plan of record: how you read the question, the directions that attack it, and the facts that it rests on. A new direction has a title, a job, a team, a pass bar in plain words, the repeat runs that the bar needs, the spread that counts as noise, what it builds on (known work or new), and the harness of its agent. Your own direction is `mine`, the index in the list; Verifold opens the others, each with its own agent and folder. facts lists what changes over time and what the plan uses, such as a model or a GPU price, each with its source and the source's date. Later, call it again to change the plan: list every open direction with its id, with only the fields that change, and new directions without an id, and say in changed what changed and why. A plan without facts keeps the facts of the plan before it.",
@@ -948,6 +1098,7 @@ export const planToolSpec: AgentTool = {
               description:
                 'The team of directions that it works with, in one or two words.',
             },
+            ...entry,
             bar: {
               type: 'string',
               maxLength: planLimits.bar,
@@ -1021,4 +1172,15 @@ export const planToolSpec: AgentTool = {
     required: ['reading', 'directions', 'cost'],
     additionalProperties: false,
   },
-};
+});
+
+/** The plan of record. Only the agent that opened the lab gets this tool. */
+export const planToolSpec: AgentTool = planSpec({});
+
+/** The plan of record in a lab with threads, where a direction can be a long shot. */
+export const threadPlanToolSpec: AgentTool = planSpec({
+  longShot: {
+    type: 'boolean',
+    description: 'Its agent works on long shots, far from known work.',
+  },
+});
