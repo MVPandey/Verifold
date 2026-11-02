@@ -1,5 +1,6 @@
 import type { Call, CallOption, Effect, Lab } from '../protocol/api.ts';
 import {
+  andList,
   costWords,
   effectWords,
   undoWords,
@@ -107,6 +108,30 @@ export function footLine(call: Call, lab: Lab): string {
   const index = call.answer?.option ?? call.pick;
   const effect = index === null ? null : call.options[index]?.effect;
   return undoWords(call.undoMinutes, effect ? wordsOf(effect, lab) : null);
+}
+
+/**
+ * The box under the options. Words start no pod, so on a call with a pod
+ * option they reach the agents and the call stays open.
+ */
+export function wordsLabel(call: Call): string {
+  return call.options.some((option) => option.effect?.type === 'pod')
+    ? 'Or write to them. Only an option starts a pod.'
+    : 'Or tell them what to do instead';
+}
+
+/**
+ * The line after the person's words on a call that still waits for an
+ * option: Verifold's own call, or one with a pod option. Null for any other.
+ */
+export function heldWordsLine(call: Call): string | null {
+  if (!call.words) return null;
+  if (call.byVerifold)
+    return 'Your words went to the lab. Pick an option to give it more time or end it.';
+  if (!call.options.some((option) => option.effect?.type === 'pod'))
+    return null;
+  const names = call.askers.map((asker) => roleName(asker.handle));
+  return `Your words went to ${andList(names)}. Words start no pod, so pick an option above to answer.`;
 }
 
 /**

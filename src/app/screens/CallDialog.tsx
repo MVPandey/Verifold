@@ -13,6 +13,7 @@ import {
   costLine,
   failureOf,
   footLine,
+  heldWordsLine,
   leaveCall,
   missingSecrets,
   onBoard,
@@ -24,6 +25,7 @@ import {
   typing,
   undoLeft,
   applyingText,
+  wordsLabel,
   type CallView,
 } from '../call.ts';
 import { andList, noSettingWords } from '../../ui/call-words.ts';
@@ -134,6 +136,7 @@ function OpenCall({
       .map((asker) => `${agentName(asker.handle, asker.job)}: ${asker.why}`),
   ];
   const post = call.post;
+  const held = heldWordsLine(call);
   return (
     <div className="call__body">
       <Top
@@ -240,15 +243,14 @@ function OpenCall({
         </p>
       )}
       <Facts lab={lab} call={call} />
-      {call.byVerifold && call.words && (
+      {held && (
         <p role="status" className="call__sent">
-          Your words went to the lab. Pick an option to give it more time or end
-          it.
+          {held}
         </p>
       )}
       <Composer
         multiline
-        label="Or tell them what to do instead"
+        label={wordsLabel(call)}
         placeholder="Say it in your own words"
         maxLength={call.wordsLimit}
         onSend={(text, key) => onWords(call.id, text, key)}
