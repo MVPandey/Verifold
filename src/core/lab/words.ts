@@ -162,6 +162,11 @@ export function firstPlanMost(slots: number | undefined, open: number): number {
   return Math.max(low, open, Math.min(slots ?? low, max));
 }
 
+/** What the askers of a pod call hear when the person writes on it. Words start no pod, so the call stays open. */
+export function podWordsLine(call: Call, words: string): string {
+  return `The person wrote on ${call.id}: ${JSON.stringify(words)}. Words start no pod, so ${call.id} still waits for their choice. Do not ask again: Verifold wakes you with it.`;
+}
+
 /** What the agents that asked hear about an answer in the person's words. */
 export function wordsLine(call: Call, words: string): string {
   return `The person answered ${call.id} in their own words, so no option applies: ${JSON.stringify(words)}. This is their decision: follow it, or ask again with new options when it is unclear.`;
@@ -200,6 +205,25 @@ export function sameAsk(
     first.join('\n') === second.join('\n')
   );
 }
+
+/** A call with a pod option: until the person allows GPU pods, each pod request is one. */
+export function asksForPod(call: Pick<Call, 'options'>): boolean {
+  return call.options.some((option) => option.effect?.type === 'pod');
+}
+
+/** A call whose only effects are pods. Once the person allows pods, the agents start them, so it has nothing left for the person. */
+export function onlyPods(call: Pick<Call, 'options'>): boolean {
+  return (
+    asksForPod(call) &&
+    call.options.every(
+      (option) => option.effect === null || option.effect.type === 'pod',
+    )
+  );
+}
+
+/** The question of the call that allows GPU pods in a lab. A pod request joins an open call that asks it. */
+export const allowPodsQuestion =
+  'Allow GPU pods in this lab? After this, agents pick GPUs inside your limits.';
 
 /** The person approved a GPU pod in an answer that stands. Until then, each pod request of an agent is a call. */
 export function gpuApproved(state: LabState): boolean {
